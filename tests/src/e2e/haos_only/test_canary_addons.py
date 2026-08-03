@@ -96,14 +96,14 @@ async def test_hacs_bootstrap_completed(mcp_client: Any) -> None:
         {"action": "search", "installed_only": True, "max_results": 1},
     )
     payload = parse_mcp_result(raw)
-    # ha_get_hacs_info wraps the payload as {"data": {"success": True, ...}}
-    # — the nested ``data`` envelope is the post-tool-formatter shape,
-    # and ``success`` lives inside it. If HACS isn't loaded, the tool
-    # raises ToolError (parse_mcp_result then surfaces it as
-    # {"success": False, "error": ...} at the top level), so we accept
-    # either shape and only fail when neither is present.
-    inner = payload.get("data", payload)
-    assert inner.get("success"), (
+    # ha_get_hacs_info returns {"success": True, "data": {...}, "metadata":
+    # {...}} — ``success`` at the TOP level above the timezone wrapper (the
+    # PR #2124 envelope). The legacy nested {"data": {"success": ...}} shape
+    # is accepted too so this canary spans the transition. If HACS isn't
+    # loaded, the tool raises ToolError (parse_mcp_result surfaces it as
+    # {"success": False, "error": ...}), which fails both checks.
+    inner = payload.get("data", payload) if isinstance(payload, dict) else {}
+    assert payload.get("success") or inner.get("success"), (
         f"HACS integration not reachable via ha_get_hacs_info — "
         f"bootstrap from 'Get HACS' addon may have silently failed. "
         f"Response: {payload}"
