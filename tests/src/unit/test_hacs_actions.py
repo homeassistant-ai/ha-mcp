@@ -206,9 +206,21 @@ class TestManageHacsAddRepository:
         ws.send_command.assert_not_awaited()
 
 
+def _remove_ws(*, installed: bool = True, remove_response: dict | None = None):
+    """A WS client scripted for the remove path: info probe, then remove."""
+    ws = AsyncMock()
+    ws.send_command = AsyncMock(
+        side_effect=[
+            {"success": True, "result": {"installed": installed}},
+            remove_response or {"success": True, "result": {}},
+        ]
+    )
+    return ws
+
+
 class TestManageHacsRemove:
     async def test_remove_by_numeric_id_sends_remove_command(self, tools):
-        ws = _ws({})
+        ws = _remove_ws()
         with _patched_hacs(ws):
             result = await tools.ha_manage_hacs(
                 action="remove", repository_id="401454435"
@@ -221,14 +233,14 @@ class TestManageHacsRemove:
         # does not unload an integration.
         assert "restart" in result["note"]
         # A numeric id needs no owner/repo resolution round-trip, so with the
-        # availability probe patched out by the fixture the remove is the
-        # only WS call left.
-        ws.send_command.assert_awaited_once()
-        assert ws.send_command.await_args.args[0] == "hacs/repository/remove"
+        # availability probe patched out by the fixture the WS traffic is
+        # exactly the installed-state probe followed by the remove.
+        commands = [c.args[0] for c in ws.send_command.await_args_list]
+        assert commands == ["hacs/repository/info", "hacs/repository/remove"]
         assert ws.send_command.await_args.kwargs["repository"] == "401454435"
 
     async def test_remove_by_owner_repo_resolves_first(self, tools):
-        ws = _ws({})
+        ws = _remove_ws()
         registered = {
             "id": "555",
             "full_name": "hif2k1/battery_sim",
@@ -258,12 +270,49 @@ class TestManageHacsRemove:
         assert "repository_id" in str(excinfo.value)
         ws.send_command.assert_not_awaited()
 
+    async def test_remove_store_only_repository_raises_not_found(self, tools):
+        # HACS's own remove command reports success for a repository that was
+        # never downloaded (its uninstall no-ops without local files) — the
+        # tool must reject instead of claiming "Successfully removed".
+        ws = _remove_ws(installed=False)
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="remove", repository_id="401454435")
+
+        assert "RESOURCE_NOT_FOUND" in str(excinfo.value)
+        assert "not downloaded" in str(excinfo.value)
+        # The remove command must never be sent for a store-only repo.
+        commands = [c.args[0] for c in ws.send_command.await_args_list]
+        assert commands == ["hacs/repository/info"]
+
     async def test_remove_surfaces_backend_failure(self, tools):
-        ws = AsyncMock()
-        ws.send_command = AsyncMock(return_value={"success": False, "error": "boom"})
+        ws = _remove_ws(remove_response={"success": False, "error": "boom"})
         with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
             await tools.ha_manage_hacs(action="remove", repository_id="401454435")
         assert "remove" in str(excinfo.value).lower()
+
+    async def test_remove_returns_top_level_success_envelope(self, tools):
+        # AGENTS.md response contract: {"success": True, "data": ...} at the
+        # TOP level. add_timezone_metadata wraps its payload under "data", so
+        # the handler must hoist success above the wrapper — with the real
+        # wrapper shape (not the identity stand-in) the envelope holds.
+        async def _wrapping_timezone(_client, data):
+            return {"data": data, "metadata": {"home_assistant_timezone": "UTC"}}
+
+        ws = _remove_ws()
+        with (
+            _patched_hacs(ws),
+            patch(
+                "ha_mcp.tools.tools_hacs.add_timezone_metadata",
+                new=_wrapping_timezone,
+            ),
+        ):
+            result = await tools.ha_manage_hacs(
+                action="remove", repository_id="401454435"
+            )
+
+        assert result["success"] is True
+        assert result["data"]["repository_id"] == "401454435"
+        assert "metadata" in result
 
 
 class TestDispatcherErrorRouting:
