@@ -411,7 +411,10 @@ async def _handle_flow_steps(
     submit_fn: Any = None,
     helper_type: str | None = None,
 ) -> dict[str, Any]:
-    """Walk a multi-step config flow handling menu and form steps (max 10 steps).
+    """Walk a multi-step config flow handling menu and form steps.
+
+    The step budget comes from :func:`_flow_step_budget`: a base of 10
+    steps plus two per caller-supplied menu selection.
 
     HA flows can present steps in sequence:
     - ``menu``: caller supplies selection via ``group_type``/``next_step_id`` key
