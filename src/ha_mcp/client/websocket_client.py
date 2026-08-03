@@ -1251,10 +1251,25 @@ class WebSocketManager:
                 self._last_used[key] = time.monotonic()
                 return existing
 
-            # Remove stale client if present
+            # Remove stale client if present. Disconnect it too: a client
+            # whose connection dropped can still own a parked reader task and
+            # a half-open socket, and simply dropping the reference abandons
+            # both to garbage collection — the GC's asyncgen finalizer then
+            # acloses the reader's ``Connection.__aiter__`` mid-``__anext__``
+            # and logs ``aclose(): asynchronous generator is already
+            # running`` (issue #2127). Same-loop by construction: a loop
+            # change already detached the pool above, so ``existing`` was
+            # built on ``current_loop`` and can be awaited here.
             if existing:
                 self._clients.pop(key, None)
                 self._last_used.pop(key, None)
+                try:
+                    await existing.disconnect()
+                except (OSError, RuntimeError, asyncio.CancelledError):
+                    logger.warning(
+                        "Error disconnecting stale WebSocket client",
+                        exc_info=True,
+                    )
 
             factory = self._client_factory or HomeAssistantWebSocketClient
             client = (
