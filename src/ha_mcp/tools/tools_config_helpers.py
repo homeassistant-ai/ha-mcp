@@ -695,6 +695,10 @@ def _extract_menu_choice_from_config(
         return None
     for key in _MENU_CHOICE_CONFIG_KEYS:
         value = config_dict.get(key)
+        # A selection key may carry a list of successive selections (flows
+        # that revisit menus, issue #2116) — the first one names the branch.
+        if isinstance(value, list) and value:
+            value = value[0]
         if isinstance(value, str) and value:
             return value
     return None
@@ -4603,6 +4607,10 @@ class HelperConfigTools:
           menu-rooted helpers like `template`/`group` when no sub-type is
           chosen yet) so a follow-up call can self-correct without a
           separate schema-discovery round-trip.
+        - Flows that present more than one menu (e.g. an MQTT device
+          subentry reconfigure looping through its summary menu) take
+          `next_step_id` as a LIST of successive selections, consumed one
+          per menu encounter.
 
         EXAMPLES (menu-based types + tod, where first-call payload is non-obvious):
         - template sensor:

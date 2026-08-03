@@ -2010,3 +2010,247 @@ class TestAllKeysIgnoredIsAnError:
             "Ignored config keys not declared by the Home Assistant flow "
             "schema: name, source"
         ]
+
+
+def _cyclic_menu_step() -> dict[str, Any]:
+    """The battery_sim options-flow menu (issue #2116): re-shown after every branch."""
+    return {
+        "type": "menu",
+        "flow_id": "flow-2116",
+        "step_id": "init",
+        "menu_options": [
+            "main_params",
+            "input_sensors",
+            "delete_leftover_entities",
+            "all_done",
+        ],
+    }
+
+
+def _main_params_form() -> dict[str, Any]:
+    return {
+        "type": "form",
+        "flow_id": "flow-2116",
+        "step_id": "main_params",
+        "data_schema": [
+            {
+                "name": "charge_efficiency",
+                "required": True,
+                "description": {"suggested_value": 0.85},
+            },
+            {
+                "name": "discharge_efficiency",
+                "required": True,
+                "description": {"suggested_value": 0.85},
+            },
+        ],
+    }
+
+
+class TestCyclicMenuFlows:
+    """Flows that revisit a menu step (issue #2116).
+
+    battery_sim's options flow loops menu → branch form → menu until
+    'all_done' is chosen. A single menu selection key is consumed by the
+    first menu, so the walker previously raised a misleading "Menu step
+    requires a selection" on the revisit — with the caller's selection
+    already forwarded. Menu selection keys now accept a list of successive
+    selections, consumed one per menu encounter.
+    """
+
+    async def test_selection_list_drives_successive_menus(self) -> None:
+        final_entry = {
+            "type": "create_entry",
+            "flow_id": "flow-2116",
+            "result": {"entry_id": "e-batt", "title": "batt", "domain": "battery_sim"},
+        }
+        submit_fn = AsyncMock(
+            side_effect=[_main_params_form(), _cyclic_menu_step(), final_entry]
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2116",
+            initial_step=_cyclic_menu_step(),
+            config={
+                "next_step_id": ["main_params", "all_done"],
+                "charge_efficiency": 0.92,
+                "discharge_efficiency": 0.90,
+            },
+            submit_fn=submit_fn,
+        )
+
+        assert result["success"] is True
+        submissions = [c.args[1] for c in submit_fn.await_args_list]
+        assert submissions == [
+            {"next_step_id": "main_params"},
+            {"charge_efficiency": 0.92, "discharge_efficiency": 0.90},
+            {"next_step_id": "all_done"},
+        ]
+        assert "warnings" not in result
+
+    async def test_selection_list_does_not_mutate_caller_config(self) -> None:
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        submit_fn = AsyncMock(
+            side_effect=[_main_params_form(), _cyclic_menu_step(), final_entry]
+        )
+        config = {
+            "next_step_id": ["main_params", "all_done"],
+            "charge_efficiency": 0.92,
+            "discharge_efficiency": 0.90,
+        }
+
+        await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2116",
+            initial_step=_cyclic_menu_step(),
+            config=config,
+            submit_fn=submit_fn,
+        )
+
+        assert config["next_step_id"] == ["main_params", "all_done"]
+
+    async def test_re_encountered_menu_error_explains_list_syntax(self) -> None:
+        """The revisit error must not claim no selection was supplied."""
+        import json
+
+        from fastmcp.exceptions import ToolError
+
+        submit_fn = AsyncMock(side_effect=[_main_params_form(), _cyclic_menu_step()])
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_flow_steps(
+                client=None,
+                flow_id="flow-2116",
+                initial_step=_cyclic_menu_step(),
+                config={"next_step_id": "main_params"},
+                submit_fn=submit_fn,
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
+        assert "list of successive" in body["error"]["message"]
+        assert "main_params" in body["error"]["message"]
+        assert body["consumed_menu_selections"] == ["main_params"]
+        assert body["menu_options"] == _cyclic_menu_step()["menu_options"]
+        # The concrete example continues from what was already consumed.
+        assert any(
+            "main_params" in s and "next_step_id" in s
+            for s in body["error"]["suggestions"]
+        )
+
+    async def test_scalar_selection_on_linear_flow_unchanged(self) -> None:
+        """A menu-rooted flow that ends after one branch keeps working."""
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        submit_fn = AsyncMock(side_effect=[_main_params_form(), final_entry])
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2116",
+            initial_step=_cyclic_menu_step(),
+            config={
+                "next_step_id": "main_params",
+                "charge_efficiency": 0.92,
+                "discharge_efficiency": 0.90,
+            },
+            submit_fn=submit_fn,
+        )
+
+        assert result["success"] is True
+        assert submit_fn.await_args_list[0].args[1] == {"next_step_id": "main_params"}
+        assert "warnings" not in result
+
+    async def test_first_menu_without_selection_keeps_original_error(self) -> None:
+        import json
+
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_flow_steps(
+                client=None,
+                flow_id="flow-2116",
+                initial_step=_cyclic_menu_step(),
+                config={},
+                submit_fn=AsyncMock(),
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["message"].startswith("Menu step requires a selection")
+
+    async def test_empty_selection_list_is_treated_as_missing(self) -> None:
+        import json
+
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_flow_steps(
+                client=None,
+                flow_id="flow-2116",
+                initial_step=_cyclic_menu_step(),
+                config={"next_step_id": []},
+                submit_fn=AsyncMock(),
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["message"].startswith("Menu step requires a selection")
+
+    async def test_unused_selection_list_items_warn(self) -> None:
+        """Selections beyond the menus actually shown surface as a warning."""
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        submit_fn = AsyncMock(side_effect=[_main_params_form(), final_entry])
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2116",
+            initial_step=_cyclic_menu_step(),
+            config={
+                "next_step_id": ["main_params", "all_done"],
+                "charge_efficiency": 0.92,
+                "discharge_efficiency": 0.90,
+            },
+            submit_fn=submit_fn,
+        )
+
+        assert result["success"] is True
+        assert any(
+            "no matching menu step" in w and "next_step_id" in w
+            for w in result["warnings"]
+        )
+
+    async def test_subentry_walker_accepts_selection_list(self) -> None:
+        """MQTT device-subentry reconfigure loops through summary_menu."""
+        summary_menu = {
+            "type": "menu",
+            "flow_id": "flow-sub-2116",
+            "step_id": "summary_menu",
+            "menu_options": ["entity", "update_entity", "device", "save_changes"],
+        }
+        device_form = {
+            "type": "form",
+            "flow_id": "flow-sub-2116",
+            "step_id": "device",
+            "data_schema": [{"name": "model"}],
+        }
+        done = {"type": "abort", "reason": "reconfigure_successful"}
+        client = AsyncMock()
+        client.submit_config_subentry_flow_step = AsyncMock(
+            side_effect=[device_form, summary_menu, done]
+        )
+
+        result = await _handle_config_subentry_flow_steps(
+            client,
+            "flow-sub-2116",
+            summary_menu,
+            {"next_step_id": ["device", "save_changes"], "model": "M1"},
+            is_reconfigure=True,
+        )
+
+        assert result["operation"] == "reconfigured"
+        submissions = [
+            c.args[1] for c in client.submit_config_subentry_flow_step.await_args_list
+        ]
+        assert submissions == [
+            {"next_step_id": "device"},
+            {"model": "M1"},
+            {"next_step_id": "save_changes"},
+        ]

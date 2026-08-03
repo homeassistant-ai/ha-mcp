@@ -18,6 +18,7 @@ flows through ``set_config_subentry``.
 
 import asyncio
 import copy
+import json
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -114,20 +115,74 @@ def _handle_menu_step(
     flow_id: str,
     current_step: dict[str, Any],
     remaining_config: dict[str, Any],
+    consumed_selections: list[str] | None = None,
 ) -> str:
     """Extract menu selection from config, raising on missing selection.
 
-    Returns the menu choice string. Mutates remaining_config to pop
-    the consumed selection key.
+    Returns the menu choice string. Mutates remaining_config to pop the
+    consumed selection key. A selection key may carry a list of successive
+    selections — one is consumed per menu encounter, so flows that revisit a
+    menu (issue #2116: battery_sim loops menu → branch form → menu until
+    'all_done') can be driven to completion. The caller's list object is
+    never mutated; the un-consumed tail replaces the key in
+    remaining_config.
+
+    ``consumed_selections`` (when provided by the walker) accumulates every
+    selection consumed during the walk, so a menu revisited after the
+    selections ran dry can raise an error that names what was already
+    consumed instead of claiming no selection was supplied.
     """
     menu_choice = None
     for key in _MENU_SELECTION_KEYS:
-        if key in remaining_config:
+        if key not in remaining_config:
+            continue
+        value = remaining_config[key]
+        if isinstance(value, list):
+            if not value:
+                # Empty list = no selection supplied under this key; another
+                # selection key may still carry one.
+                remaining_config.pop(key)
+                continue
+            menu_choice = value[0]
+            rest = list(value[1:])
+            if rest:
+                remaining_config[key] = rest
+            else:
+                remaining_config.pop(key)
+        else:
             menu_choice = remaining_config.pop(key)
-            break
+        break
 
     if not menu_choice:
         menu_options = current_step.get("menu_options", [])
+        context = {
+            "flow_id": flow_id,
+            "step_id": current_step.get("step_id"),
+            "menu_options": menu_options,
+        }
+        if consumed_selections:
+            next_option = next(
+                (str(o) for o in menu_options if o not in consumed_selections),
+                "<next-selection>",
+            )
+            example = json.dumps([*consumed_selections, next_option])
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
+                    "Flow presented another menu after the supplied "
+                    f"selection(s) ({', '.join(map(repr, consumed_selections))}) "
+                    "were consumed. Pass 'next_step_id' as a list of successive "
+                    "selections to drive flows that revisit menus.",
+                    suggestions=[
+                        f"Available options: {menu_options}",
+                        f'Example: {{"next_step_id": {example}}}',
+                    ],
+                    context={
+                        **context,
+                        "consumed_menu_selections": list(consumed_selections),
+                    },
+                )
+            )
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
@@ -137,15 +192,14 @@ def _handle_menu_step(
                     f"Available options: {menu_options}",
                     'Example: {"group_type": "light", "name": "My Group", ...}',
                 ],
-                context={
-                    "flow_id": flow_id,
-                    "step_id": current_step.get("step_id"),
-                    "menu_options": menu_options,
-                },
+                context=context,
             )
         )
 
-    return str(menu_choice)
+    choice = str(menu_choice)
+    if consumed_selections is not None:
+        consumed_selections.append(choice)
+    return choice
 
 
 def iter_schema_fields(data_schema: Any) -> Iterator[dict[str, Any]]:
@@ -1158,7 +1212,10 @@ async def _handle_flow_steps(
         flow_id: Flow ID from start_config_flow or start_options_flow
         initial_step: The first step returned by the flow start call
         config: Full caller-provided config dict. Menu selection keys are
-            consumed by menu steps; remaining keys are submitted on the first
+            consumed by menu steps — a key may carry a single selection or a
+            list of successive selections, consumed one per menu encounter
+            (flows can revisit a menu after each branch; issue #2116).
+            Remaining keys are submitted on the first
             form step whose schema declares them or, when HA omits the schema,
             on the first form step outright. A later step that redeclares an
             already-consumed field gets that value resubmitted once, with a
@@ -1187,6 +1244,7 @@ async def _handle_flow_steps(
     remaining_config = dict(config)
     current_step = initial_step
     last_menu_choice: str | None = None
+    consumed_menu_selections: list[str] = []
     ignored_config_keys: set[str] = set()
     reuse_state = _ReuseState()
     supplied_keys = sorted(k for k in config if k not in _MENU_SELECTION_KEYS)
@@ -1213,7 +1271,9 @@ async def _handle_flow_steps(
             _raise_flow_abort(flow_id, current_step)
 
         if result_type == _FlowType.MENU:
-            menu_choice = _handle_menu_step(flow_id, current_step, remaining_config)
+            menu_choice = _handle_menu_step(
+                flow_id, current_step, remaining_config, consumed_menu_selections
+            )
             last_menu_choice = menu_choice
             logger.debug(
                 f"Flow step {step_num}: menu '{menu_choice}' "
@@ -1315,6 +1375,7 @@ async def _handle_config_subentry_flow_steps(
     remaining_config = dict(config)
     current_step = initial_step
     last_menu_choice: str | None = None
+    consumed_menu_selections: list[str] = []
     ignored_config_keys: set[str] = set()
     reuse_state = _ReuseState()
     max_steps = 10
@@ -1358,7 +1419,9 @@ async def _handle_config_subentry_flow_steps(
             )
 
         if result_type == _FlowType.MENU:
-            menu_choice = _handle_menu_step(flow_id, current_step, remaining_config)
+            menu_choice = _handle_menu_step(
+                flow_id, current_step, remaining_config, consumed_menu_selections
+            )
             last_menu_choice = menu_choice
             logger.debug(
                 "Config subentry flow step %s: menu %s (step_id=%s)",
