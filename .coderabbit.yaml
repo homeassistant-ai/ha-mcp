@@ -45,11 +45,12 @@ issue_enrichment:
     # false by default — without it CodeRabbit only *suggests* labels in the
     # enrichment comment instead of applying them.
     auto_apply_labels: true
-    # The instruction set mirrors what the old triage bot classified plus the
-    # bug-class/scope taxonomy from AGENTS.md § Issue Labels. Issue templates
-    # already self-apply their labels; these instructions mostly cover blank
-    # issues and misfiled templates. Labels must match existing repo labels
-    # exactly — CodeRabbit does not create them.
+    # The instruction set mirrors the old triage bot's classifications —
+    # minus `invalid`, dropped deliberately: spam gets closed, not labeled —
+    # plus the bug-class/scope taxonomy from AGENTS.md § Issue Labels. Issue
+    # templates already self-apply their labels; these instructions mostly
+    # cover blank issues and misfiled templates. Labels must match existing
+    # repo labels exactly — CodeRabbit does not create them.
     labeling_instructions:
       - label: bug
         instructions: >-

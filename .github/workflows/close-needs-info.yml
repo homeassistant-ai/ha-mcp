@@ -135,15 +135,20 @@ jobs:
                   if (err.status !== 404) core.warning(`  Failed to remove needs-info on #${issueNumber}: ${err.message}`);
                 }
 
-                await github.rest.issues.update({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issueNumber,
-                  state: 'closed',
-                  state_reason: 'not_planned',
-                });
-
-                core.info(`  Closed issue #${issueNumber}`);
+                try {
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    state: 'closed',
+                    state_reason: 'not_planned',
+                  });
+                  core.info(`  Closed issue #${issueNumber}`);
+                } catch (err) {
+                  // The closing comment is already posted, so the state is
+                  // self-describing to a maintainer; keep the batch going.
+                  core.warning(`  Failed to close #${issueNumber}: ${err.message}`);
+                }
                 continue;
               }
 
@@ -167,15 +172,26 @@ jobs:
               }
 
               const isFinal = day === WARNING_DAYS[WARNING_DAYS.length - 1];
-              const daysLeft = Math.max(1, Math.round(DAYS_BEFORE_CLOSE - daysSince));
+              // ceil, not round: the close lands on the first daily run where
+              // daysSince >= DAYS_BEFORE_CLOSE, i.e. ceil(remaining) runs from
+              // now — round undercounts by one for any issue labeled in the
+              // half-day after the 09:00 UTC cron.
+              const daysLeft = Math.max(1, Math.ceil(DAYS_BEFORE_CLOSE - daysSince));
               const notice = isFinal
                 ? `⚠️ **Final reminder** — this issue will be closed automatically **tomorrow** unless the requested information is provided.`
                 : `⏳ **Reminder** — this issue is still awaiting the requested information and will be closed automatically in about ${daysLeft} day${daysLeft === 1 ? '' : 's'}.`;
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issueNumber,
-                body: `Hi @${issue.user.login} — ${notice}\n\nReplying with the requested details keeps it open.\n\n*🤖 Automated by Issue Bot*\n${warningMarker(day)}`,
-              });
-              core.info(`  Posted day-${day} reminder`);
+              // Guarded like the close-path comment: one rejected write (e.g. a
+              // secondary rate limit) must not abort the rest of the batch and
+              // fail the step.
+              try {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: `Hi @${issue.user.login} — ${notice}\n\nReplying with the requested details keeps it open.\n\n*🤖 Automated by Issue Bot*\n${warningMarker(day)}`,
+                });
+                core.info(`  Posted day-${day} reminder`);
+              } catch (err) {
+                core.warning(`  Failed to post day-${day} reminder on #${issueNumber}: ${err.message}`);
+              }
             }
