@@ -15,8 +15,13 @@ from dataclasses import field as dc_field
 from typing import Any
 
 from ..errors import ErrorCode, create_error_response
-from .config_entry_flow_menu import _MENU_SELECTION_KEY_ORDER, _MENU_SELECTION_KEYS
+from .config_entry_flow_menu import _MENU_SELECTION_KEY_ORDER
 from .helpers import raise_tool_error
+
+# Membership form of the canonical selection-key order — defined here, in the
+# module that checks membership on every form field, and imported onward by
+# the walker.
+_MENU_SELECTION_KEYS = frozenset(_MENU_SELECTION_KEY_ORDER)
 
 _MISSING_DEFAULT = object()
 # "Submit nothing for this field" — see _redeclared_field_submission.

@@ -17,13 +17,13 @@ from typing import Any, NoReturn
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
 from .config_entry_flow_form import (
+    _MENU_SELECTION_KEYS,
     _auto_confirm_form_payload,
     _handle_form_step,
     _ReuseState,
     _success_warnings,
 )
 from .config_entry_flow_menu import (
-    _MENU_SELECTION_KEYS,
     _flow_step_budget,
     _handle_menu_step,
 )

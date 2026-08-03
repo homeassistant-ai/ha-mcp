@@ -16,11 +16,11 @@ from .helpers import raise_tool_error
 # Keys used to specify a menu selection — stripped before submitting form data.
 # The tuple fixes the multi-key precedence (frozenset iteration order is
 # hash-randomized per process, so consuming in set order would make a config
-# carrying two selection keys nondeterministic); the frozenset serves the
-# membership checks. Mirrored by ``_MENU_CHOICE_CONFIG_KEYS`` in
+# carrying two selection keys nondeterministic). The membership frozenset
+# built from it (``_MENU_SELECTION_KEYS``) lives in config_entry_flow_form,
+# its heaviest user. Mirrored by ``_MENU_CHOICE_CONFIG_KEYS`` in
 # tools_config_helpers.py.
 _MENU_SELECTION_KEY_ORDER = ("group_type", "next_step_id", "menu_option")
-_MENU_SELECTION_KEYS = frozenset(_MENU_SELECTION_KEY_ORDER)
 
 
 def _handle_menu_step(
