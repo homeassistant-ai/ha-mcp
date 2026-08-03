@@ -12,8 +12,8 @@ reviews:
     # 2 for busy branches. Taken anyway because running out is loud and cheap —
     # a rate-limited push gets a comment plus a deliberately-passing "Review
     # rate limited" check, never blocks merge, and neither consumes a review nor
-    # delays the next one. `@coderabbitai rate limit` reports what is left
-    # without spending a review. OSS projects sit on a 1-10/hour band that
+    # delays the next one. The `rate limit` command reports whether reviews are
+    # available without spending one. OSS projects sit on a 1-10/hour band that
     # varies with project popularity, so the real headroom here is unknown.
     auto_pause_after_reviewed_commits: 0
     # Dependency and automation PRs go unreviewed today, but nothing configured

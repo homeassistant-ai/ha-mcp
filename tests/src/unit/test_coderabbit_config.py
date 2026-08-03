@@ -27,11 +27,6 @@ AGENTS_MD = REPO_ROOT / "AGENTS.md"
 CODEX_DELIVERY = REPO_ROOT / ".github" / "workflows" / "pr-codex-review-delivery.yml"
 STYLEGUIDE = ".gemini/styleguide.md"
 
-# ``applyTo`` has to keep the styleguide repo-wide, and minimatch's ``dot:
-# false`` means each class of path needs its own pattern. Asserted separately
-# rather than as one exact string: dropping any single one silently removes a
-# whole class of files from the styleguide's scope, and that is the failure
-# worth naming. Adding further patterns is fine.
 # Bot identities whose PRs have never been reviewed. Exact logins: CodeRabbit
 # matches ``ignore_usernames`` case-sensitively with no wildcard support.
 BOT_AUTHORS = {
@@ -40,6 +35,11 @@ BOT_AUTHORS = {
     "github-actions[bot]",
 }
 
+# ``applyTo`` has to keep the styleguide repo-wide, and minimatch's ``dot:
+# false`` means each class of path needs its own pattern. Asserted separately
+# rather than as one exact string: dropping any single one silently removes a
+# whole class of files from the styleguide's scope, and that is the failure
+# worth naming. Adding further patterns is fine.
 REQUIRED_SCOPE = {
     "**": "non-dot paths at any depth",
     "**/.*": "dotfiles at any depth, including the repo root",
@@ -53,19 +53,50 @@ def _config() -> dict[str, Any]:
     return loaded
 
 
-def _agents_md_subsection(title: str) -> str:
-    """The body of one ``### `` subsection of AGENTS.md.
+def _subsection(text: str, title: str) -> str | None:
+    """The body of one ``### `` subsection, or ``None`` when absent.
 
-    Scoped rather than grepping the whole file, for the reason given in
+    Scoped rather than grepping the whole document, for the reason given in
     ``test_locale_parity.py::_agents_md_section``: a whole-file grep answers a
     question about the file, not about the section it claims to guard.
+
+    Terminates on any heading of level 1-3 or end of input. Both bounds matter:
+    stopping only at ``##``/``###`` would report a section that ends the file as
+    missing, and would run a following ``#`` section's text into the body, so a
+    value assertion could pass on prose from somewhere else entirely. ``####``
+    and deeper stay inside the body, being parts of this section.
     """
-    text = AGENTS_MD.read_text("utf-8")
     match = re.search(
-        rf"^### {re.escape(title)}$(.*?)(?=^#{{2,3}} )", text, re.MULTILINE | re.DOTALL
+        rf"^### {re.escape(title)}$(.*?)(?=^#{{1,3}} |\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
     )
-    assert match, f"AGENTS.md has no '### {title}' section — this test guards it"
-    return match.group(1)
+    return match.group(1) if match else None
+
+
+def _agents_md_subsection(title: str) -> str:
+    """``_subsection`` against AGENTS.md, asserting the section exists."""
+    body = _subsection(AGENTS_MD.read_text("utf-8"), title)
+    assert body is not None, (
+        f"AGENTS.md has no '### {title}' section — this test guards it"
+    )
+    return body
+
+
+def test_subsection_bounds_hold_at_every_edge() -> None:
+    """The extractor decides what every prose assertion below is reading."""
+    assert _subsection("### A\nbody\n### B\nother\n", "A") == "\nbody\n"
+    assert _subsection("### A\nbody\n## B\nother\n", "A") == "\nbody\n"
+    # A following h1 must terminate it — otherwise the next top-level section's
+    # prose lands in the body and a value assertion can pass on the wrong text.
+    assert _subsection("### A\nbody\n# B\nother\n", "A") == "\nbody\n"
+    # Last section in the file: the ##/###-only bound reported this as missing.
+    assert _subsection("### A\nbody\n", "A") == "\nbody\n"
+    # Deeper headings belong to the section.
+    assert _subsection("### A\nbody\n#### A1\nmore\n### B\n", "A") == (
+        "\nbody\n#### A1\nmore\n"
+    )
+    assert _subsection("### A\nbody\n", "Missing") is None
 
 
 def test_draft_reviews_are_enabled() -> None:
