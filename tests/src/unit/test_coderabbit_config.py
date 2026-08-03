@@ -208,12 +208,14 @@ def test_the_manual_review_escape_hatch_survives() -> None:
     """The `/review` comment path must keep admitting promote PRs.
 
     The auto-exclusion of ``github-actions[bot]`` is defensible only because a
-    maintainer can still summon Codex on a promote PR with `/review` — which
-    works solely because the ``issue_comment`` admission list omits that login.
-    The two ``fromJSON`` lists sit six lines apart and differ by one entry, so
-    an edit harmonising them would read as tidying while removing the lever.
-    This pins the comment-path list to its own expected set, making the
-    asymmetry a recorded decision.
+    maintainer can still summon Codex on a promote PR with `/review`.
+    Admission is a several-way conjunction; this test pins one piece of it —
+    the ``issue_comment`` list omitting that login — because it is the piece
+    that can die silently: the two ``fromJSON`` lists sit six lines apart and
+    differ by one entry, so harmonising them reads as tidying. The other
+    conjuncts (the trigger, the command literal, the author gate) are shared,
+    repo-wide machinery whose breakage is loud on the next `/review` anywhere,
+    and are deliberately not pinned here.
     """
     text = CODEX_REQUEST.read_text("utf-8")
     comment_anchor = "github.event_name == 'issue_comment'"
@@ -233,11 +235,19 @@ def test_the_manual_review_escape_hatch_survives() -> None:
     )
 
     comment_skips = set(json.loads(raw_lists[0]))
-    assert comment_skips == COMMENT_PATH_SKIPS, (
-        f"{CODEX_REQUEST.name}'s issue_comment skip list {sorted(comment_skips)} "
-        f"no longer matches COMMENT_PATH_SKIPS {sorted(COMMENT_PATH_SKIPS)}. "
-        "Adding github-actions[bot] here removes the manual /review lever on "
-        "promote PRs that the auto-exclusion rationale depends on."
+
+    extras = comment_skips - COMMENT_PATH_SKIPS
+    assert not extras, (
+        f"{CODEX_REQUEST.name}'s issue_comment skip list gained {sorted(extras)} "
+        "— that removes the manual /review lever on those authors' PRs, which "
+        "for github-actions[bot] is the escape hatch the auto-exclusion "
+        "rationale depends on."
+    )
+    missing = COMMENT_PATH_SKIPS - comment_skips
+    assert not missing, (
+        f"{CODEX_REQUEST.name}'s issue_comment skip list no longer covers "
+        f"{sorted(missing)} — a maintainer /review on those bots' dependency "
+        "PRs would start dispatching Codex."
     )
 
 

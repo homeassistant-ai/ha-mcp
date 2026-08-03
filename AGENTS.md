@@ -123,8 +123,9 @@ Dependabot, Renovate, and the `github-actions[bot]` webhook-proxy promote PRs
 Enforced in `.coderabbit.yaml` `ignore_usernames` and the `pull_request_target`
 admission list in `pr-codex-review-request.yml`, pinned to each other by
 `test_coderabbit_config.py`. A maintainer can still summon a review on a
-promote PR: `@coderabbitai review`, or `/review` for Codex — the `issue_comment`
-admission list deliberately omits `github-actions[bot]` to keep that lever.
+promote PR: `@coderabbitai review`, or for Codex a comment that is exactly
+`/review` (or `@ghhamcp review`) — the `issue_comment` admission list
+deliberately omits `github-actions[bot]` to keep that lever.
 
 **Division of Labor:**
 - **Codex (automatic)**: Code quality, test coverage, generic security, MCP conventions
