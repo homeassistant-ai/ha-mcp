@@ -237,6 +237,9 @@ class TestManageHacsRemove:
         # exactly the installed-state probe followed by the remove.
         commands = [c.args[0] for c in ws.send_command.await_args_list]
         assert commands == ["hacs/repository/info", "hacs/repository/remove"]
+        # HACS's WS API is asymmetric: info takes repository_id, remove takes
+        # repository — pin both so neither regresses (e2e caught the mixup).
+        assert ws.send_command.await_args_list[0].kwargs["repository_id"] == "401454435"
         assert ws.send_command.await_args.kwargs["repository"] == "401454435"
 
     async def test_remove_by_owner_repo_resolves_first(self, tools):

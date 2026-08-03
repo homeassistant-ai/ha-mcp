@@ -591,8 +591,11 @@ class HacsTools:
         # repository name for numeric IDs, which the resolve short-circuit
         # echoes back verbatim — without it the response could not confirm
         # WHICH repository the ID identified.
+        # NOTE: HACS's WS API is asymmetric — info takes ``repository_id``
+        # while remove takes ``repository`` (caught by the e2e contract
+        # tests; the unit mocks cannot see the real schema).
         info = await ws_client.send_command(
-            "hacs/repository/info", repository=actual_id
+            "hacs/repository/info", repository_id=actual_id
         )
         info_result = info.get("result") or {}
         if info.get("success"):
