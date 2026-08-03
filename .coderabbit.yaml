@@ -16,20 +16,22 @@ reviews:
     # available without spending one. OSS projects sit on a 1-10/hour band that
     # varies with project popularity, so the real headroom here is unknown.
     auto_pause_after_reviewed_commits: 0
-    # Dependency-update PRs go unreviewed today, but nothing configured says
-    # so — `@coderabbitai configuration` reports every value as coming from
-    # defaults, so the current behaviour rests on undocumented CodeRabbit
-    # bot-author handling. Stated explicitly here so it survives a change to
-    # that handling. Exact, case-sensitive logins — no wildcards.
-    #
-    # Deliberately the same two logins as the Codex skip list in
-    # pr-codex-review-request.yml, and nothing more. github-actions[bot] is
-    # absent on purpose: that login authors the webhook-proxy promote PRs,
-    # which are reviewed today (Codex reviewed #1936/#2037, humans approved
-    # them, and #1977 folded in real fixes) and must stay reviewed.
+    # Bot-authored PRs are knowingly excluded from automatic review. Nothing
+    # configured produced today's skips — `@coderabbitai configuration`
+    # reports all defaults — so they rested on undocumented bot-author
+    # handling; stated explicitly here so they survive a change to it.
+    # dependabot/renovate PRs have never been reviewed. github-actions[bot]
+    # authors the webhook-proxy promote PRs: dev -> stable copies whose
+    # content was already reviewed in the dev PRs, so an automatic second
+    # pass duplicates it. A promote that folds in more than a version bump
+    # (the #1977 case) gets `@coderabbitai review` on demand — this key only
+    # gates auto_review. Mirrors the Codex auto-admission skip list in
+    # pr-codex-review-request.yml (pinned by test_coderabbit_config.py).
+    # Exact, case-sensitive logins — no wildcards.
     ignore_usernames:
       - "dependabot[bot]"
       - "ha-mcp-renovate[bot]"
+      - "github-actions[bot]"
 knowledge_base:
   code_guidelines:
     # AGENTS.md is auto-detected; a guideline file is scoped to its own

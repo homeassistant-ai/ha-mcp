@@ -15,6 +15,7 @@ the tree) and ``test_locale_parity.py::test_agents_md_states_the_current_ceiling
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -25,18 +26,21 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 CODERABBIT_YAML = REPO_ROOT / ".coderabbit.yaml"
 AGENTS_MD = REPO_ROOT / "AGENTS.md"
 CODEX_DELIVERY = REPO_ROOT / ".github" / "workflows" / "pr-codex-review-delivery.yml"
+CODEX_REQUEST = REPO_ROOT / ".github" / "workflows" / "pr-codex-review-request.yml"
 STYLEGUIDE = ".gemini/styleguide.md"
 
-# The exact skip list, mirroring the Codex list in
-# pr-codex-review-request.yml. Dependency-update PRs are the one class that
-# genuinely goes unreviewed. github-actions[bot] must NOT appear here: it
-# authors the webhook-proxy promote PRs, which are reviewed today (Codex and
-# humans; #1977 folded in real fixes) — ignoring the login would silently
-# extend the dependency-PR policy to them. Exact logins: CodeRabbit matches
-# ``ignore_usernames`` case-sensitively with no wildcard support.
+# The exact auto-review skip list, mirrored by the Codex auto-admission list
+# in pr-codex-review-request.yml. dependabot/renovate PRs have never been
+# reviewed. github-actions[bot] authors the webhook-proxy promote PRs — dev ->
+# stable copies whose content was already reviewed in the dev PRs — excluded
+# knowingly (maintainer decision on #2118); a promote that folds in more than
+# a version bump still gets `@coderabbitai review` on demand. Exact logins:
+# CodeRabbit matches ``ignore_usernames`` case-sensitively with no wildcard
+# support.
 BOT_AUTHORS = {
     "dependabot[bot]",
     "ha-mcp-renovate[bot]",
+    "github-actions[bot]",
 }
 
 # ``applyTo`` has to keep the styleguide repo-wide, and minimatch's ``dot:
@@ -125,15 +129,15 @@ def test_draft_reviews_are_enabled() -> None:
 def test_bot_authors_stay_unreviewed() -> None:
     """The skip list is exact in both directions.
 
-    Dropping a login floods dependency PRs with reviews: nothing configured
+    Dropping a login floods that bot's PRs with reviews: nothing configured
     produces today's skip — the resolved config is entirely defaults — so it
     rests on undocumented CodeRabbit bot-author handling, and
     ``ignore_usernames`` defaults to ``[]``.
 
-    Adding a login silently widens the policy: ``github-actions[bot]`` was
-    listed here once, which would have excluded the webhook-proxy promote PRs
-    that Codex and humans actually review. An addition must change
-    ``BOT_AUTHORS`` too, where the comment forces the promote-PR question.
+    Adding a login silently widens the policy — every PR that author opens
+    loses automatic review. Each entry here is a recorded decision (see the
+    ``BOT_AUTHORS`` comment); an addition must change both places, which is
+    what forces the rationale to be written down.
     """
     configured = set(_config()["reviews"]["auto_review"]["ignore_usernames"])
 
@@ -148,6 +152,32 @@ def test_bot_authors_stay_unreviewed() -> None:
         f"ignore_usernames gained {sorted(extras)} — every PR that login "
         "authors silently loses CodeRabbit review. If that is intended, add "
         "it to BOT_AUTHORS with the rationale recorded in the comment there."
+    )
+
+
+def test_codex_auto_skip_matches_the_coderabbit_ignore_list() -> None:
+    """One auto-review skip policy, two enforcement points; no silent drift.
+
+    The lists were unequal once — Codex admitted the webhook-proxy promote
+    PRs that CodeRabbit ignored — and the divergence was invisible until a
+    reviewer diffed the two files by hand. Only the ``pull_request_target``
+    admission list must match: the ``issue_comment`` list stays narrower on
+    purpose, so a maintainer's explicit `/review` on a promote PR still
+    dispatches Codex (the on-demand lever the exclusion rationale relies on).
+    """
+    text = CODEX_REQUEST.read_text("utf-8")
+    bot_lists = [
+        set(json.loads(raw))
+        for raw in re.findall(r"fromJSON\('(\[[^']*\])'\)", text)
+        if "[bot]" in raw
+    ]
+    assert bot_lists, f"no bot skip list found in {CODEX_REQUEST.name}"
+
+    auto_admission = bot_lists[0]
+    assert auto_admission == BOT_AUTHORS, (
+        f"{CODEX_REQUEST.name}'s auto-admission skip list {sorted(auto_admission)} "
+        f"differs from .coderabbit.yaml's ignore_usernames {sorted(BOT_AUTHORS)} — "
+        "the two tools would again disagree on which bot PRs get automatic review."
     )
 
 
