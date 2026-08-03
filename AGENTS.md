@@ -117,6 +117,15 @@ PR making it: on open-source repos CodeRabbit honours only the base branch's
 config, so the PR reports `Configuration used: defaults` and the change takes
 effect on merge.
 
+**Bot-authored PRs are excluded from automatic review by both tools** —
+Dependabot, Renovate, and the `github-actions[bot]` webhook-proxy promote PRs
+(dev → stable copies whose content was already reviewed in their dev PRs).
+Enforced in `.coderabbit.yaml` `ignore_usernames` and the `pull_request_target`
+admission list in `pr-codex-review-request.yml`, pinned to each other by
+`test_coderabbit_config.py`. A maintainer can still summon a review on a
+promote PR: `@coderabbitai review`, or `/review` for Codex — the `issue_comment`
+admission list deliberately omits `github-actions[bot]` to keep that lever.
+
 **Division of Labor:**
 - **Codex (automatic)**: Code quality, test coverage, generic security, MCP conventions
 - **CodeRabbit (automatic, drafts included)**: Line-level review against `AGENTS.md` and `.gemini/styleguide.md`, PR walkthrough and summary

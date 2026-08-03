@@ -43,6 +43,16 @@ BOT_AUTHORS = {
     "github-actions[bot]",
 }
 
+# The issue_comment `/review` admission list is DELIBERATELY narrower than
+# BOT_AUTHORS: github-actions[bot] must stay off it, or a maintainer loses the
+# on-demand Codex lever on promote PRs — the escape hatch the auto-exclusion
+# rationale rests on. Harmonising the two lists would read as tidying while
+# quietly turning "excluded from automatic review" into "not reviewed at all".
+COMMENT_PATH_SKIPS = {
+    "dependabot[bot]",
+    "ha-mcp-renovate[bot]",
+}
+
 # ``applyTo`` has to keep the styleguide repo-wide, and minimatch's ``dot:
 # false`` means each class of path needs its own pattern. Asserted separately
 # rather than as one exact string: dropping any single one silently removes a
@@ -191,6 +201,43 @@ def test_codex_auto_skip_matches_the_coderabbit_ignore_list() -> None:
         f"{CODEX_REQUEST.name}'s auto-admission skip list {sorted(auto_admission)} "
         f"differs from .coderabbit.yaml's ignore_usernames {sorted(BOT_AUTHORS)} — "
         "the two tools would again disagree on which bot PRs get automatic review."
+    )
+
+
+def test_the_manual_review_escape_hatch_survives() -> None:
+    """The `/review` comment path must keep admitting promote PRs.
+
+    The auto-exclusion of ``github-actions[bot]`` is defensible only because a
+    maintainer can still summon Codex on a promote PR with `/review` — which
+    works solely because the ``issue_comment`` admission list omits that login.
+    The two ``fromJSON`` lists sit six lines apart and differ by one entry, so
+    an edit harmonising them would read as tidying while removing the lever.
+    This pins the comment-path list to its own expected set, making the
+    asymmetry a recorded decision.
+    """
+    text = CODEX_REQUEST.read_text("utf-8")
+    comment_anchor = "github.event_name == 'issue_comment'"
+    assert comment_anchor in text, (
+        f"{CODEX_REQUEST.name} no longer has an issue_comment branch — rebind "
+        "this test to the new structure."
+    )
+    comment_branch = text.split(comment_anchor, 1)[1]
+    raw_lists = [
+        raw
+        for raw in re.findall(r"fromJSON\('(\[[^']*\])'\)", comment_branch)
+        if "[bot]" in raw
+    ]
+    assert len(raw_lists) == 1, (
+        f"expected exactly one bot skip list in {CODEX_REQUEST.name}'s "
+        f"issue_comment branch, found {len(raw_lists)}"
+    )
+
+    comment_skips = set(json.loads(raw_lists[0]))
+    assert comment_skips == COMMENT_PATH_SKIPS, (
+        f"{CODEX_REQUEST.name}'s issue_comment skip list {sorted(comment_skips)} "
+        f"no longer matches COMMENT_PATH_SKIPS {sorted(COMMENT_PATH_SKIPS)}. "
+        "Adding github-actions[bot] here removes the manual /review lever on "
+        "promote PRs that the auto-exclusion rationale depends on."
     )
 
 
