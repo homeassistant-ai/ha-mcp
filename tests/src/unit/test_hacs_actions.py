@@ -296,6 +296,24 @@ class TestManageHacsRemove:
         assert "boom" in str(excinfo.value)
         assert "remove" in str(excinfo.value).lower()
 
+    async def test_remove_command_error_keeps_command_context(self, tools):
+        # The WS client RAISES HomeAssistantCommandError on a failed result
+        # frame (it never returns success=False), so the raised path is the
+        # one real HACS failures take — the command context must survive it.
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            side_effect=[
+                {"success": True, "result": {"installed": True}},
+                HomeAssistantCommandError("Command failed: kaboom", "unknown_error"),
+            ]
+        )
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="remove", repository_id="401454435")
+        assert "kaboom" in str(excinfo.value)
+        assert "hacs/repository/remove" in str(excinfo.value)
+
     async def test_remove_timeout_says_outcome_is_unknown(self, tools):
         # HACS force-refreshes from GitHub before uninstalling; when that
         # blows the WS wait the uninstall usually still completes, so a

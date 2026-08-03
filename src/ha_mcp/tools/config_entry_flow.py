@@ -122,6 +122,7 @@ def _handle_menu_step(
     current_step: dict[str, Any],
     remaining_config: dict[str, Any],
     consumed_selections: list[str] | None = None,
+    consumed_selection_keys: list[str] | None = None,
 ) -> str:
     """Extract menu selection from config, raising on missing selection.
 
@@ -136,7 +137,9 @@ def _handle_menu_step(
     ``consumed_selections`` (when provided by the walker) accumulates every
     selection consumed during the walk, so a menu revisited after the
     selections ran dry can raise an error that names what was already
-    consumed instead of claiming no selection was supplied.
+    consumed instead of claiming no selection was supplied;
+    ``consumed_selection_keys`` records which selection key served each one,
+    so that error's example uses the caller's own key.
     """
     menu_choice = None
     for key in _MENU_SELECTION_KEY_ORDER:
@@ -182,54 +185,76 @@ def _handle_menu_step(
         break
 
     if not menu_choice:
-        menu_options = current_step.get("menu_options", [])
-        context = {
-            "flow_id": flow_id,
-            "step_id": current_step.get("step_id"),
-            "menu_options": menu_options,
-        }
-        if consumed_selections:
-            # "<next-selection>" is a placeholder on purpose: cyclic flows
-            # routinely need the SAME option again (battery_sim's create flow
-            # picks 'no_tariff_info' once per meter), so no concrete option
-            # can be suggested without guessing the caller's path.
-            example = json.dumps([*consumed_selections, "<next-selection>"])
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
-                    "Flow presented another menu after the supplied "
-                    f"selection(s) ({', '.join(map(repr, consumed_selections))}) "
-                    "were consumed. Pass your menu selection key "
-                    "('next_step_id', 'group_type', or 'menu_option') as a "
-                    "list of successive selections to drive flows that "
-                    "revisit menus.",
-                    suggestions=[
-                        f"Available options: {menu_options}",
-                        f'Example: {{"next_step_id": {example}}}',
-                    ],
-                    context={
-                        **context,
-                        "consumed_menu_selections": list(consumed_selections),
-                    },
-                )
-            )
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
-                "Menu step requires a selection. "
-                "Add 'group_type' or 'next_step_id' to your config.",
-                suggestions=[
-                    f"Available options: {menu_options}",
-                    'Example: {"group_type": "light", "name": "My Group", ...}',
-                ],
-                context=context,
-            )
+        _raise_missing_menu_selection(
+            flow_id, current_step, consumed_selections, consumed_selection_keys
         )
 
     choice = str(menu_choice)
     if consumed_selections is not None:
         consumed_selections.append(choice)
+    if consumed_selection_keys is not None:
+        consumed_selection_keys.append(key)
     return choice
+
+
+def _raise_missing_menu_selection(
+    flow_id: str,
+    current_step: dict[str, Any],
+    consumed_selections: list[str] | None,
+    consumed_selection_keys: list[str] | None,
+) -> NoReturn:
+    """Raise the no-selection error for a menu step.
+
+    Distinguishes a revisited menu whose selections ran dry (name what was
+    consumed, show the list syntax under the caller's own key) from a first
+    menu given no selection at all (the original guidance).
+    """
+    menu_options = current_step.get("menu_options", [])
+    context = {
+        "flow_id": flow_id,
+        "step_id": current_step.get("step_id"),
+        "menu_options": menu_options,
+    }
+    if consumed_selections:
+        # "<next-selection>" is a placeholder on purpose: cyclic flows
+        # routinely need the SAME option again (battery_sim's create flow
+        # picks 'no_tariff_info' once per meter), so no concrete option
+        # can be suggested without guessing the caller's path.
+        example = json.dumps([*consumed_selections, "<next-selection>"])
+        example_key = (
+            consumed_selection_keys[-1] if consumed_selection_keys else "next_step_id"
+        )
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
+                "Flow presented another menu after the supplied "
+                f"selection(s) ({', '.join(map(repr, consumed_selections))}) "
+                "were consumed. Pass your menu selection key "
+                "('next_step_id', 'group_type', or 'menu_option') as a "
+                "list of successive selections to drive flows that "
+                "revisit menus.",
+                suggestions=[
+                    f"Available options: {menu_options}",
+                    f'Example: {{"{example_key}": {example}}}',
+                ],
+                context={
+                    **context,
+                    "consumed_menu_selections": list(consumed_selections),
+                },
+            )
+        )
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
+            "Menu step requires a selection. "
+            "Add 'group_type' or 'next_step_id' to your config.",
+            suggestions=[
+                f"Available options: {menu_options}",
+                'Example: {"group_type": "light", "name": "My Group", ...}',
+            ],
+            context=context,
+        )
+    )
 
 
 def _flow_step_budget(config: dict[str, Any]) -> int:
@@ -1323,6 +1348,7 @@ async def _handle_flow_steps(
     current_step = initial_step
     last_menu_choice: str | None = None
     consumed_menu_selections: list[str] = []
+    consumed_menu_selection_keys: list[str] = []
     ignored_config_keys: set[str] = set()
     reuse_state = _ReuseState()
     supplied_keys = sorted(k for k in config if k not in _MENU_SELECTION_KEYS)
@@ -1350,7 +1376,11 @@ async def _handle_flow_steps(
 
         if result_type == _FlowType.MENU:
             menu_choice = _handle_menu_step(
-                flow_id, current_step, remaining_config, consumed_menu_selections
+                flow_id,
+                current_step,
+                remaining_config,
+                consumed_menu_selections,
+                consumed_menu_selection_keys,
             )
             last_menu_choice = menu_choice
             logger.debug(
@@ -1458,6 +1488,7 @@ async def _handle_config_subentry_flow_steps(
     current_step = initial_step
     last_menu_choice: str | None = None
     consumed_menu_selections: list[str] = []
+    consumed_menu_selection_keys: list[str] = []
     ignored_config_keys: set[str] = set()
     reuse_state = _ReuseState()
     max_steps = _flow_step_budget(config)
@@ -1502,7 +1533,11 @@ async def _handle_config_subentry_flow_steps(
 
         if result_type == _FlowType.MENU:
             menu_choice = _handle_menu_step(
-                flow_id, current_step, remaining_config, consumed_menu_selections
+                flow_id,
+                current_step,
+                remaining_config,
+                consumed_menu_selections,
+                consumed_menu_selection_keys,
             )
             last_menu_choice = menu_choice
             logger.debug(

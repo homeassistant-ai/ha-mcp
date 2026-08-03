@@ -13,7 +13,10 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..client.rest_client import HomeAssistantCommandTimeout
+from ..client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
 from ..errors import ErrorCode, create_error_response
 from .hacs_registration import (
     CATEGORY_MAP,
@@ -637,6 +640,19 @@ class HacsTools:
                     "verify with ha_get_hacs_info(action='info', "
                     f"repository_id='{actual_id}') before retrying",
                 ],
+                raise_error=True,
+            )
+        except HomeAssistantCommandError as cmd_err:
+            # The WS client RAISES on a failed "result" response (it never
+            # returns success=False), so this — not the dict branch below,
+            # which serves stubbed/alternative clients — is where a real
+            # HACS remove failure lands; keep the command context attached.
+            exception_to_structured_error(
+                cmd_err,
+                context={
+                    "command": "hacs/repository/remove",
+                    "repository_id": repository_id,
+                },
                 raise_error=True,
             )
 

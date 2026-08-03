@@ -167,7 +167,7 @@ async def _find_repo_in_list_by_full_name(
     """Return the HACS repo entry matching ``full_name_lower``, or None."""
     list_response = await ws_client.send_command("hacs/repositories/list")
     for repo in list_response.get("result", []):
-        if repo.get("full_name", "").lower() == full_name_lower:
+        if (repo.get("full_name") or "").lower() == full_name_lower:
             # ``ws_client`` is ``Any`` so mypy can't narrow the result
             # entry. The HACS wire shape (``custom_components/hacs/
             # websocket/repositories.py``) always emits a dict per repo,
@@ -215,7 +215,7 @@ async def _repo_from_matching_dispatch(
     payload = event.get("event") or {}
     if not (
         isinstance(payload, dict)
-        and payload.get("repository", "").lower() == full_name_lower
+        and (payload.get("repository") or "").lower() == full_name_lower
     ):
         return None
 

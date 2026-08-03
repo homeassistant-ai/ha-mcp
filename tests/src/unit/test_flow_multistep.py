@@ -2143,6 +2143,29 @@ class TestCyclicMenuFlows:
             in body["error"]["suggestions"]
         )
 
+    async def test_exhausted_error_example_uses_the_callers_key(self) -> None:
+        """A group_type caller sees a group_type example, not next_step_id."""
+        import json
+
+        from fastmcp.exceptions import ToolError
+
+        submit_fn = AsyncMock(side_effect=[_main_params_form(), _cyclic_menu_step()])
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_flow_steps(
+                client=None,
+                flow_id="flow-2116",
+                initial_step=_cyclic_menu_step(),
+                config={"group_type": ["main_params"]},
+                submit_fn=submit_fn,
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert (
+            'Example: {"group_type": ["main_params", "<next-selection>"]}'
+            in body["error"]["suggestions"]
+        )
+
     async def test_scalar_selection_on_linear_flow_unchanged(self) -> None:
         """A menu-rooted flow that ends after one branch keeps working."""
         final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
