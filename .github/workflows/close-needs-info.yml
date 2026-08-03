@@ -20,7 +20,9 @@ jobs:
         uses: actions/github-script@v9
         with:
           script: |
-            // HTML anchors embedded by issue-triage.yml — drift-resistant vs matching display text
+            // HTML anchors the retired issue-triage.yml bot embedded in its comments.
+            // Still matched so issues it flagged before retirement keep aging out;
+            // issues labeled needs-info manually (no bot comment) are skipped below.
             const BOT_COMMENT_MARKER = '<!-- triage-bot:info-needed -->';
             const DUPLICATE_COMMENT_MARKER = '<!-- triage-bot:duplicate -->';
             const BOT_LOGIN = 'github-actions[bot]';
@@ -65,10 +67,10 @@ jobs:
 
               core.info(`  Bot comment is ${daysSinceBot.toFixed(1)} days old`);
 
-              // Only the issue author replying resets the clock — matches issue-triage.yml which
-              // only re-runs triage on author comments. A maintainer/bystander comment must not
-              // remove needs-info without triggering re-triage, or the issue silently escapes
-              // the stale-close path with the requested info still missing.
+              // Only the issue author replying resets the clock (the retired triage bot
+              // used the same rule). A maintainer/bystander comment must not remove
+              // needs-info, or the issue silently escapes the stale-close path with the
+              // requested info still missing.
               const repliesAfterBot = comments.filter(c =>
                 c.user.type !== 'Bot' &&
                 c.user.login === issue.user.login &&

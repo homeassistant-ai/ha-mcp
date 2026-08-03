@@ -135,7 +135,7 @@ deliberately omits `github-actions[bot]` to keep that lever.
 
 ### Issue Labels
 
-**Triage-state labels** (applied by `issue-triage.yml` or manual triage):
+**Triage-state labels** (applied during manual triage):
 
 | Label | Meaning |
 |-------|---------|
@@ -143,11 +143,11 @@ deliberately omits `github-actions[bot]` to keep that lever.
 | `needs-choices` | Multiple approaches, needs stakeholder input |
 | `needs-info` | Awaiting clarification from reporter |
 | `priority: high/medium/low` | Relative priority |
-| `triaged` | Automated triage complete |
-| `triage-failed` | Automated triage failed; circuit breaker that blocks retrigger on comments. Clear it (or run via `workflow_dispatch`) to retry |
+| `triaged` | Automated triage complete (historical — applied by the retired `issue-triage.yml` bot) |
+| `triage-failed` | Automated triage failed (historical — applied by the retired `issue-triage.yml` bot) |
 | `issue-analyzed` | Deep Claude analysis complete |
 
-**Bug-class labels** (applied via `.github/ISSUE_TEMPLATE/` form selection or manual triage):
+**Bug-class labels** (applied via `.github/ISSUE_TEMPLATE/` form selection, CodeRabbit auto-labeling, or manual triage):
 
 | Label | Meaning |
 |-------|---------|
@@ -178,7 +178,7 @@ deliberately omits `github-actions[bot]` to keep that lever.
 
 ### Issue Analysis Workflow
 
-- **Automated Triage**: Runs on new issues via `.github/workflows/issue-triage.yml` (GitHub Models). Adds `triaged` label.
+- **Automated Triage (CodeRabbit)**: `issue_enrichment` in `.coderabbit.yaml`. On new and edited issues CodeRabbit posts an enrichment comment (possible duplicates, related issues and PRs, suggested assignees) and auto-applies labels per `labeling_instructions`. Plans are manual: comment `@coderabbitai plan` on an issue, or tick the Create Plan checkbox in the enrichment comment. (Replaces the retired GitHub Models `issue-triage.yml` bot.)
 - **Deep Analysis (Claude)**: When user says "analyze issues", list issues missing `issue-analyzed` label, then invoke `/issue-analysis <number>` for each sequentially (the skill drafts analysis for user approval before posting).
 
 ```bash
