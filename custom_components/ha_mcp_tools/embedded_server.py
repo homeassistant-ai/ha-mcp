@@ -116,6 +116,13 @@ _READY_POLL_INTERVAL_SECONDS = 0.5
 # leaking it rather than blocking HA shutdown.
 _STOP_JOIN_TIMEOUT_SECONDS = 10.0
 
+# Budget for each teardown phase (the _serve resource cleanup and the
+# worker-loop pending-task sweep). Mirrors the CLI runner's
+# SHUTDOWN_TIMEOUT_SECONDS: both phases together must finish well inside
+# _STOP_JOIN_TIMEOUT_SECONDS, or async_stop declares the worker orphaned
+# while the old thread is still executing shared ha_mcp modules.
+_TEARDOWN_TIMEOUT_SECONDS = 2.0
+
 # Per-download HTTP timeout for a forced reinstall. The first install pulls the
 # whole fastmcp tree, well beyond HA's 60s requirements default.
 _PIP_INSTALL_TIMEOUT_SECONDS = 300
@@ -1405,7 +1412,7 @@ class EmbeddedServerManager:
             # loop, while it still runs — otherwise the reader tasks are only
             # cancelled by the thread's loop teardown and their sockets are
             # abandoned to garbage collection (issue #2127).
-            await _shutdown_server_resources(server)
+            await _shutdown_server_resources_bounded(server)
 
     def _progress_signature(self) -> tuple[int, str]:
         """Snapshot the observable startup progress of the worker thread.
@@ -1519,6 +1526,23 @@ _IMPORTING_WORKERS_LOCK = threading.Lock()
 _IMPORTING_WORKERS: set[threading.Thread] = set()
 
 
+async def _shutdown_server_resources_bounded(server: Any) -> None:
+    """Run :func:`_shutdown_server_resources` inside the teardown budget.
+
+    Bounded like the CLI's ``wait_for``: an unresponsive peer's close
+    handshake (websockets' 10s default close_timeout) must not eat the whole
+    ``_STOP_JOIN_TIMEOUT_SECONDS`` join budget; on timeout the remaining
+    cleanup is abandoned to the thread's loop teardown, which sweeps it.
+    """
+    try:
+        await asyncio.wait_for(
+            _shutdown_server_resources(server),
+            timeout=_TEARDOWN_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        _LOGGER.warning("Embedded resource cleanup timed out")
+
+
 async def _shutdown_server_resources(server: Any) -> None:
     """Release the served stack's Home Assistant connections on its own loop.
 
@@ -1572,8 +1596,19 @@ def _cancel_pending_tasks(loop: asyncio.AbstractEventLoop) -> None:
         return
     for task in pending:
         task.cancel()
-    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-    for task in pending:
+    # Bounded, unlike asyncio.runners: async_stop joins this worker for only
+    # _STOP_JOIN_TIMEOUT_SECONDS, so a task that ignores cancellation gets
+    # logged and abandoned rather than hanging the join (the CLI's
+    # _cancel_tasks does the same, issue #2027 precedent).
+    done, still_pending = loop.run_until_complete(
+        asyncio.wait(pending, timeout=_TEARDOWN_TIMEOUT_SECONDS)
+    )
+    if still_pending:
+        _LOGGER.warning(
+            "%d task(s) ignored cancellation during worker-loop teardown",
+            len(still_pending),
+        )
+    for task in done:
         if task.cancelled():
             continue
         exc = task.exception()

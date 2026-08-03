@@ -17,6 +17,7 @@ imports neither), monkeypatched at its own module seams.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock
@@ -131,6 +132,40 @@ def test_teardown_survives_a_task_that_raises_on_cancel() -> None:
     assert isinstance(tasks["defiant"].exception(), RuntimeError)
 
 
+def test_teardown_bounds_a_task_that_ignores_cancellation(monkeypatch, caplog) -> None:
+    """A task that swallows cancellation is logged and abandoned, not joined.
+
+    ``async_stop`` joins the worker thread for a fixed deadline, so the sweep
+    must give up on stragglers after ``_TEARDOWN_TIMEOUT_SECONDS``. Against an
+    unbounded sweep this test does not fail an assertion — it hangs until the
+    suite's timeout kills it, which is exactly the production hang it pins.
+    """
+    monkeypatch.setattr(es, "_TEARDOWN_TIMEOUT_SECONDS", 0.1)
+    loop = asyncio.new_event_loop()
+
+    tasks: dict[str, asyncio.Task[Any]] = {}
+
+    async def stubborn() -> None:
+        while True:
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                continue
+
+    async def start() -> None:
+        tasks["stubborn"] = asyncio.ensure_future(stubborn())
+        await asyncio.sleep(0)
+
+    loop.run_until_complete(start())
+
+    with caplog.at_level(logging.WARNING, logger=es._LOGGER.name):
+        es._teardown_worker_loop(loop)
+
+    assert loop.is_closed()
+    assert not tasks["stubborn"].done()
+    assert "ignored cancellation during worker-loop teardown" in caplog.text
+
+
 async def test_shutdown_server_resources_runs_every_step(monkeypatch) -> None:
     """Listener stop, pool disconnect, and server close are all awaited."""
     import ha_mcp.client.websocket_client as ws_client
@@ -148,6 +183,30 @@ async def test_shutdown_server_resources_runs_every_step(monkeypatch) -> None:
     stop_listener.assert_awaited_once()
     pool_disconnect.assert_awaited_once()
     server.close.assert_awaited_once()
+
+
+async def test_shutdown_server_resources_bounded_gives_up_on_a_hang(
+    monkeypatch, caplog
+) -> None:
+    """A hung cleanup step is abandoned at the teardown budget, not joined.
+
+    ``async_stop`` joins the worker thread for a fixed deadline; an
+    unresponsive peer's close handshake must not consume it. Against an
+    unbounded cleanup this test hangs until the suite's timeout kills it.
+    """
+    import ha_mcp.client.websocket_listener as ws_listener
+
+    monkeypatch.setattr(es, "_TEARDOWN_TIMEOUT_SECONDS", 0.05)
+
+    async def hang() -> None:
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(ws_listener, "stop_websocket_listener", hang)
+
+    with caplog.at_level(logging.WARNING, logger=es._LOGGER.name):
+        await es._shutdown_server_resources_bounded(AsyncMock(name="server"))
+
+    assert "Embedded resource cleanup timed out" in caplog.text
 
 
 async def test_shutdown_server_resources_isolates_step_failures(

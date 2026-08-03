@@ -1265,7 +1265,13 @@ class WebSocketManager:
                 self._last_used.pop(key, None)
                 try:
                     await existing.disconnect()
-                except (OSError, RuntimeError, asyncio.CancelledError):
+                except asyncio.CancelledError:
+                    # The caller itself was cancelled mid-cleanup: propagate.
+                    # Swallowing here would let a cancelled operation keep
+                    # doing network I/O and leave a fresh connection retained
+                    # in the pool.
+                    raise
+                except (OSError, RuntimeError):
                     logger.warning(
                         "Error disconnecting stale WebSocket client",
                         exc_info=True,

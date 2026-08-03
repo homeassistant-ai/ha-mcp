@@ -128,3 +128,32 @@ async def test_stale_client_disconnect_failure_does_not_block_replacement(
     assert second is fresh
     assert stale.disconnect_calls == 1
     assert list(manager._clients.values()) == [fresh]
+
+
+async def test_stale_client_disconnect_cancellation_propagates(manager):
+    """A caller cancelled mid-cleanup must not keep building a replacement.
+
+    Swallowing ``CancelledError`` here would let the cancelled operation carry
+    on with network I/O (a fresh ``connect()``) and retain the result in the
+    pool. The factory-call count is the discriminating half: against the
+    swallow, a replacement is constructed and pooled.
+    """
+    stale = StubWebSocketClient(disconnect_error=asyncio.CancelledError())
+    constructed: list[StubWebSocketClient] = []
+
+    def factory(url: str, token: str) -> StubWebSocketClient:
+        constructed.append(stale)
+        return stale
+
+    manager.configure(client_factory=factory)
+
+    first = await manager.get_client(url="http://ha.local", token="t")
+    assert first is stale
+
+    stale.is_connected = False
+
+    with pytest.raises(asyncio.CancelledError):
+        await manager.get_client(url="http://ha.local", token="t")
+
+    assert len(constructed) == 1
+    assert manager._clients == {}
