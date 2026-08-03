@@ -107,8 +107,13 @@ def test_the_k_filters_name_real_tests() -> None:
 
 
 def test_push_blocks_on_content_failure_and_not_on_staleness() -> None:
-    """The push predicate is the whole safety story; pin its three clauses."""
-    condition = str(_workflow()["jobs"]["push"]["if"])
+    """The push predicate is the whole safety story; pin its three clauses.
+
+    The blocking clause is asserted as the full NEGATED expression, not its
+    fragments: dropping the ``!`` inverts the safety property — pushing only
+    the corrupt case — while every fragment still appears verbatim.
+    """
+    condition = " ".join(str(_workflow()["jobs"]["push"]["if"]).split())
     assert "always()" in condition, (
         "the push job must use always() or a failed translate job's partial "
         "progress never lands (the resumability story)"
@@ -117,12 +122,12 @@ def test_push_blocks_on_content_failure_and_not_on_staleness() -> None:
         "the push job must require an exported patch"
     )
     assert (
-        "needs.translate.outputs.translate_outcome == 'success'" in condition
-        and "needs.translate.outputs.verify_outcome == 'failure'" in condition
+        "!(needs.translate.outputs.translate_outcome == 'success' && "
+        "needs.translate.outputs.verify_outcome == 'failure')" in condition
     ), (
-        "the push job must refuse a clean run whose content verification "
-        "failed — that is the only gate between corrupt machine output and "
-        "master"
+        "the push job must refuse — negation included — a clean run whose "
+        "content verification failed; that is the only gate between corrupt "
+        "machine output and master"
     )
     assert "staleness" not in condition, (
         "the push job must NOT consult the staleness outcome — a held "
@@ -137,6 +142,11 @@ def test_the_push_allowlist_covers_exactly_the_pipeline_outputs() -> None:
     The export step's ``git add`` list and the push job's case-statement
     allowlist are the same contract written twice; a path added to one side
     only either never lands (export-only) or is dead weight (allowlist-only).
+    The allowlist is compared as an exact SET, so a widened arm — admitting
+    paths the export never legitimately stages — fails just like a dropped
+    one. settings.js is deliberately absent from both sides: its generated
+    block derives from en.json alone, so the sync never changes it, and its
+    absence is what keeps executable code off the patch entirely.
     """
     jobs = _workflow()["jobs"]
     # Only the step that stages the patch: the verify steps also name
@@ -147,10 +157,27 @@ def test_the_push_allowlist_covers_exactly_the_pipeline_outputs() -> None:
         for step in jobs["translate"]["steps"]
         if "git add" in str(step.get("run", ""))
     )
-    allowlist = "\n".join(str(step.get("run", "")) for step in jobs["push"]["steps"])
+    push_run = "\n".join(str(step.get("run", "")) for step in jobs["push"]["steps"])
+    labels = {
+        match.group(1)
+        for match in re.finditer(r"^\s*([^\s\"$(]+)\)\s*(?:;;)?\s*$", push_run, re.M)
+    }
+    assert labels == {
+        "src/ha_mcp/settings_ui/locales/*",
+        "custom_components/ha_mcp_tools/translations/*",
+        "homeassistant-addon/translations/*",
+        "homeassistant-addon-dev/translations/*",
+        "tests/src/unit/locale_source_baseline.json",
+        "tests/src/unit/locale_sync_progress.json",
+        "*",
+    }, (
+        f"the push job's allowlist arms are {sorted(labels)} — they must be "
+        "exactly the pipeline's data-only outputs plus the refusing "
+        "catch-all; a widened or narrowed arm changes what the bypass "
+        "credential will push"
+    )
     for path in (
         "src/ha_mcp/settings_ui/locales",
-        "src/ha_mcp/settings_ui/settings.js",
         "custom_components/ha_mcp_tools/translations",
         "homeassistant-addon/translations",
         "homeassistant-addon-dev/translations",
@@ -161,27 +188,59 @@ def test_the_push_allowlist_covers_exactly_the_pipeline_outputs() -> None:
             f"the export step no longer stages {path!r} — pipeline output "
             "there would silently never land"
         )
-        assert path in allowlist, (
-            f"the push job's allowlist no longer accepts {path!r} — the "
-            "patch would be refused"
-        )
-    assert "FEATURE_META" in allowlist, (
-        "the push job no longer confines settings.js changes to the "
-        "generated FEATURE_META block — it is the one non-catalog file on "
-        "the allowlist, and it is served as client-side JS"
+    assert "settings.js" not in export, (
+        "the export step stages settings.js — the one executable file the "
+        "old allowlist carried; the sync never legitimately changes it (its "
+        "generated block derives from en.json alone), and staging it "
+        "reopens the code-smuggling channel"
     )
 
 
 def test_dispatch_on_a_non_default_ref_fails_loudly() -> None:
-    """A wrong-ref dispatch must go red, not silently skip green."""
+    """A wrong-ref dispatch must go red, not silently skip green.
+
+    The actual comparison is pinned, not just the ``exit 1``: a guard whose
+    condition was hollowed out (``if false``) still carries the exit.
+    """
     steps = _workflow()["jobs"]["translate"]["steps"]
     # The ref and default branch reach the script through env (never
     # expanded into shell), so match on the whole step, not just its run.
     guard = "\n".join(
         str(step.get("run", "")) for step in steps if "default_branch" in str(step)
     )
+    assert '"$GITHUB_REF" != "refs/heads/${DEFAULT_BRANCH}"' in guard, (
+        f"{_WORKFLOW.name} no longer compares the FULL dispatched ref "
+        "against the default branch — a tag named after the branch would "
+        "push its older tree to master"
+    )
     assert "exit 1" in guard, (
         f"{_WORKFLOW.name} no longer refuses workflow_dispatch on a "
         "non-default ref — translating an arbitrary tree and pushing it to "
         "master must fail visibly"
     )
+
+
+def test_verification_steps_consume_their_junit_reports() -> None:
+    """Every junit report written must be checked for silent skips.
+
+    Deleting the ``assert_nothing_skipped`` call sites (or the staleness
+    step's inline check) would leave pytest's exit code as the only signal,
+    which is 0 when every gated test skipped — the fail-open hole the
+    reports exist to close.
+    """
+    for step in _verification_steps():
+        run = str(step.get("run", ""))
+        reports = run.count("--junitxml")
+        assert reports > 0, (
+            f"step {step.get('name')!r} no longer writes a junit report — "
+            "nothing detects an all-skipped (vacuously green) suite"
+        )
+        if "assert_nothing_skipped" in run:
+            consumed = len(re.findall(r'assert_nothing_skipped "', run))
+        else:
+            consumed = reports if 'skipped="0"' in run else 0
+        assert consumed == reports, (
+            f"step {step.get('name')!r} writes {reports} junit report(s) "
+            f"but checks {consumed} — an unchecked report is the fail-open "
+            "hole again"
+        )

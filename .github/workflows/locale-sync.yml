@@ -44,9 +44,11 @@ name: Locale Sync
 # holds no credential beyond the free-tier Gemini key; the push job runs on
 # a fresh runner, executes only git against a fresh clone (no hooks, no
 # project code), and refuses any patch that touches files outside the locale
-# allowlist. A compromised dependency in the translate job can therefore
-# corrupt at most the locale files the pipeline legitimately writes — never
-# reach the ruleset-bypassing push credential.
+# allowlist — data-only catalog files; settings.js is deliberately not
+# exportable (see the export step). A compromised dependency in the
+# translate job can therefore corrupt at most the locale catalogs the
+# pipeline legitimately writes — never reach the ruleset-bypassing push
+# credential and never land executable code.
 #
 # The push deliberately carries NO [skip ci], unlike sync-tool-docs.yml:
 # sync-integration-mirror, publish-dev and addon-publish-dev reacting to it
@@ -137,8 +139,13 @@ jobs:
 
     - name: Export changes as a patch
       id: export
+      # settings.js is deliberately NOT staged: its generated FEATURE_META
+      # block derives from en.json alone, which this pipeline never touches
+      # — PR CI's ungated derived-catalogs check keeps it current — so the
+      # sync never legitimately changes the file, and excluding it means no
+      # executable file can ride the patch at all.
       run: |
-        git add src/ha_mcp/settings_ui/locales src/ha_mcp/settings_ui/settings.js \
+        git add src/ha_mcp/settings_ui/locales \
                 custom_components/ha_mcp_tools/translations \
                 homeassistant-addon/translations homeassistant-addon-dev/translations \
                 tests/src/unit/locale_source_baseline.json
@@ -363,7 +370,6 @@ jobs:
         while IFS= read -r f; do
           case "$f" in
             src/ha_mcp/settings_ui/locales/*) ;;
-            src/ha_mcp/settings_ui/settings.js) ;;
             custom_components/ha_mcp_tools/translations/*) ;;
             homeassistant-addon/translations/*) ;;
             homeassistant-addon-dev/translations/*) ;;
@@ -375,32 +381,6 @@ jobs:
               ;;
           esac
         done < /tmp/staged-files
-        # settings.js is served client-side JS, and the pipeline only ever
-        # legitimately rewrites its generated FEATURE_META block —
-        # generate_locales preserves everything else as read from disk, so
-        # a hijacked translate job could smuggle arbitrary code through the
-        # one non-catalog file on the allowlist. Outside the marker region
-        # (markers included), the patched file must be byte-identical to
-        # master's.
-        js=src/ha_mcp/settings_ui/settings.js
-        strip_generated() {
-          awk '
-            index($0, "// FEATURE_META:BEGIN GENERATED") == 1 { inblock = 1; begins++; next }
-            index($0, "// FEATURE_META:END GENERATED") == 1   { inblock = 0; ends++; next }
-            !inblock { print }
-            END { if (begins != 1 || ends != 1) exit 9 }
-          ' "$1"
-        }
-        git show "HEAD:$js" > /tmp/settings-js-base
-        if ! strip_generated /tmp/settings-js-base > /tmp/outside-base \
-          || ! strip_generated "$js" > /tmp/outside-new; then
-          echo "::error::settings.js does not carry exactly one FEATURE_META marker pair; refusing."
-          exit 1
-        fi
-        if ! cmp -s /tmp/outside-base /tmp/outside-new; then
-          echo "::error::patch modifies settings.js outside the generated FEATURE_META block; refusing."
-          exit 1
-        fi
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git commit -m "chore(internal): machine-translate locale updates"
