@@ -233,7 +233,7 @@ async def _raise_flow_api_error(
     menu_choice: str | None,
     current_step: dict[str, Any] | None,
     submitted: dict[str, Any] | None,
-) -> None:
+) -> NoReturn:
     """Translate an HA 4xx during a flow submit into a structured ToolError.
 
     For 400/422 responses, parses ``response_data`` for field-level info
