@@ -107,14 +107,25 @@ def test_bot_authors_stay_unreviewed() -> None:
     )
 
 
-def test_agents_md_documents_the_real_draft_setting() -> None:
-    """The prose is where a contributor learns the behaviour; pin it."""
-    section = _agents_md_subsection("Automated Code Review")
-    drafts = _config()["reviews"]["auto_review"]["drafts"]
+def test_agents_md_documents_the_real_auto_review_settings() -> None:
+    """The prose is where a contributor learns the behaviour; pin it.
 
-    assert f"reviews.auto_review.drafts: {str(drafts).lower()}" in section, (
-        "AGENTS.md § Automated Code Review must state the drafts value that "
-        f"`.coderabbit.yaml` actually sets ({drafts!r}). Update the prose."
+    Both settings, not just ``drafts``: the pause is the one carrying an
+    operational cost (it spends the per-developer review allowance), so prose
+    that documented only ``drafts`` described the cheaper half of the change.
+    """
+    section = _agents_md_subsection("Automated Code Review")
+    auto_review = _config()["reviews"]["auto_review"]
+    documented = {
+        f"reviews.auto_review.drafts: {str(auto_review['drafts']).lower()}",
+        f"auto_pause_after_reviewed_commits: "
+        f"{auto_review['auto_pause_after_reviewed_commits']}",
+    }
+    missing = {claim for claim in documented if claim not in section}
+
+    assert not missing, (
+        "AGENTS.md § Automated Code Review must state the values "
+        f"`.coderabbit.yaml` actually sets. Missing: {sorted(missing)}."
     )
 
 

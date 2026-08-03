@@ -103,7 +103,11 @@ at it explicitly, and the Claude review skills below apply it.
 
 **CodeRabbit** (GitHub app, posts as `coderabbitai[bot]`) reviews drafts too —
 `.coderabbit.yaml` sets `reviews.auto_review.drafts: true`, since every PR here
-opens as a draft. It auto-detects `AGENTS.md` as review criteria;
+opens as a draft, and `auto_pause_after_reviewed_commits: 0` so it keeps
+reviewing every push instead of going quiet after five. That spends the
+per-developer hourly review allowance faster; a rate-limited push says so in a
+comment and never blocks merge, and `@coderabbitai rate limit` reports what is
+left without consuming a review. It auto-detects `AGENTS.md` as review criteria;
 `.gemini/styleguide.md` is added through
 `knowledge_base.code_guidelines.filePatterns` (see the comment there). Repo YAML
 outranks the UI settings (only org/workspace Global Overrides beat it) and does

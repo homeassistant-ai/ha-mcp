@@ -39,6 +39,10 @@ Review PR #$ARGUMENTS from external contributor for safety, quality, and readine
 # --paginate: both endpoints page at 30, and an iterating PR outruns that.
 gh api --paginate /repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/reviews --jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]" or .user.login == "coderabbitai[bot]") | {author: .user.login, state: .state, body: .body}'
 gh api --paginate /repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/comments --jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]" or .user.login == "coderabbitai[bot]") | {author: .user.login, path: .path, line: .line, body: .body}'
+# CodeRabbit posts its walkthrough and summary as a top-level comment, which
+# neither endpoint above returns — fetch that channel by author too.
+gh api --paginate /repos/homeassistant-ai/ha-mcp/issues/$ARGUMENTS/comments --jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]" or .user.login == "coderabbitai[bot]") | {author: .user.login, body: .body}'
+# Keyword scan stays, for humans raising security concerns in conversation.
 gh pr view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json comments --jq '.comments[] | select(.body | contains("security") or contains("Security")) | {author: .author.login, body: .body}'
 ```
 
