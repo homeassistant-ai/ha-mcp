@@ -101,7 +101,7 @@ class HacsTools:
     read path keeps ``readOnlyHint`` and is never flagged ``destructive``:
 
     - ``ha_get_hacs_info`` (read): ``search`` the store / ``info`` for one repo.
-    - ``ha_manage_hacs`` (write): ``download`` install/update / ``add_repository``.
+    - ``ha_manage_hacs`` (write): ``download`` install/update / ``remove`` / ``add_repository``.
     """
 
     def __init__(self, client: Any) -> None:
@@ -224,13 +224,21 @@ class HacsTools:
     async def ha_manage_hacs(
         self,
         action: Annotated[
-            Literal["download", "add_repository"],
-            Field(description="'download' to install/update, or 'add_repository'"),
+            Literal["download", "add_repository", "remove"],
+            Field(
+                description=(
+                    "'download' to install/update, 'add_repository' to register "
+                    "a custom repo, or 'remove' to uninstall a downloaded repo"
+                )
+            ),
         ],
         repository_id: Annotated[
             str | None,
             Field(
-                description="Numeric HACS ID or 'owner/repo' path (action='download')"
+                description=(
+                    "Numeric HACS ID or 'owner/repo' path "
+                    "(action='download' / action='remove')"
+                )
             ),
         ] = None,
         version: Annotated[
@@ -249,9 +257,10 @@ class HacsTools:
             Field(description="Repository category (action='add_repository')"),
         ] = None,
     ) -> dict[str, Any]:
-        """Manage HACS (Home Assistant Community Store) — install/update or add custom repositories.
+        """Manage HACS (Home Assistant Community Store) — install/update, remove, or add custom repositories.
 
-        Use ``action="download"`` to install or update a repository, or
+        Use ``action="download"`` to install or update a repository,
+        ``action="remove"`` to uninstall a downloaded repository, or
         ``action="add_repository"`` to register a custom GitHub repository with HACS. This
         tool performs writes; to search the store or read repository details use
         ``ha_get_hacs_info``.
@@ -259,16 +268,22 @@ class HacsTools:
         **Examples:**
         - Install latest: ha_manage_hacs(action="download", repository_id="441028036")
         - Install a version: ha_manage_hacs(action="download", repository_id="piitaya/lovelace-mushroom", version="v4.0.0")
+        - Remove: ha_manage_hacs(action="remove", repository_id="owner/repo")
         - Add a custom repo: ha_manage_hacs(action="add_repository", repository="owner/repo", category="lovelace")
 
         **Caveats:** Installing an integration usually needs a Home Assistant restart to
         activate; new Lovelace cards need a browser cache clear. ``repository_id`` accepts a
         numeric HACS ID or an ``owner/repo`` path; ``add_repository`` requires ``owner/repo``
-        format plus a matching ``category``.
+        format plus a matching ``category``. Removing an integration deletes its files but
+        the loaded module persists until the next Home Assistant restart — delete its config
+        entries first (``ha_remove_helpers_integrations``).
         """
         try:
             if action == "download":
                 return await self._hacs_download(repository_id, version)
+
+            if action == "remove":
+                return await self._hacs_remove(repository_id)
 
             # action == "add_repository"
             repository = validate_identifier_not_empty(
@@ -295,7 +310,7 @@ class HacsTools:
                 context={"tool": "ha_manage_hacs", "action": action},
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
-                    "For action='download', pass a valid repository_id (use ha_get_hacs_info(action='search') to find it)",
+                    "For action='download' or action='remove', pass a valid repository_id (use ha_get_hacs_info(action='search') to find it)",
                     "For action='add_repository', use 'owner/repo' format and a matching category",
                 ],
             )
@@ -511,6 +526,55 @@ class HacsTools:
                 + (f" version {version}" if version else ""),
                 "note": "For integrations, restart Home Assistant to activate. For Lovelace cards, clear browser cache.",
                 "data": result,
+            },
+        )
+
+    async def _hacs_remove(self, repository_id: str | None) -> dict[str, Any]:
+        # Same up-front guard as ``_hacs_download``: an empty identifier
+        # must fail before any destructive WS call.
+        repository_id = validate_identifier_not_empty(
+            repository_id,
+            "repository_id",
+            suggestions=[
+                "Use ha_get_hacs_info(action='search', installed_only=True) "
+                "to list downloaded repositories",
+                "Or pass a GitHub path like 'owner/repo' to remove by name",
+            ],
+        )
+        await _assert_hacs_available()
+
+        from ..client.websocket_client import get_websocket_client
+
+        ws_client = await get_websocket_client()
+
+        actual_id, repo_name = await _resolve_hacs_repo_id(ws_client, repository_id)
+
+        response = await ws_client.send_command(
+            "hacs/repository/remove", repository=actual_id
+        )
+
+        if not response.get("success"):
+            exception_to_structured_error(
+                Exception(f"HACS remove request failed: {response}"),
+                context={
+                    "command": "hacs/repository/remove",
+                    "repository_id": repository_id,
+                },
+                raise_error=True,
+            )
+
+        return await add_timezone_metadata(
+            self._client,
+            {
+                "success": True,
+                "repository_id": actual_id,
+                "repository": repo_name,
+                "message": f"Successfully removed {repo_name}",
+                "note": (
+                    "Files are deleted, but an already-loaded integration "
+                    "module persists until the next Home Assistant restart."
+                ),
+                "data": response.get("result", {}),
             },
         )
 

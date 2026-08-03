@@ -349,6 +349,33 @@ class TestManageServer:
         assert result["data"]["applied"] == {"channel": "dev"}
         assert result["data"]["previous"]["channel"] == "stable"
 
+    async def test_update_source_clear_aliases_empty_pip_spec(self):
+        # Clearing the override must not require sending "" — some MCP
+        # clients mangle empty-string arguments in transit (issue #2116
+        # session: clearing a pin needed a raw-HTTP shim around this tool).
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        await DevTools(client).ha_dev_manage_server(
+            action="update_source", channel="stable", pip_spec="clear"
+        )
+        client.submit_options_flow_step.assert_awaited_once_with(
+            "flow-1", {"channel": "stable", "pip_spec": ""}
+        )
+
+    async def test_update_source_clear_alias_is_case_insensitive_and_lone(self):
+        # 'Clear' alone (no channel) is a valid call shape: drop the pin,
+        # fall back to the entry's already-configured channel.
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        await DevTools(client).ha_dev_manage_server(
+            action="update_source", pip_spec="Clear"
+        )
+        client.submit_options_flow_step.assert_awaited_once_with(
+            "flow-1", {"pip_spec": ""}
+        )
+
     async def test_update_source_preserves_url_and_secret_overrides(self):
         # update_source drives the component's options flow, whose optional text
         # fields pre-fill via suggested_value so the UI can clear them. A sparse

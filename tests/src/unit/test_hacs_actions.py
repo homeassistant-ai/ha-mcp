@@ -206,6 +206,64 @@ class TestManageHacsAddRepository:
         ws.send_command.assert_not_awaited()
 
 
+class TestManageHacsRemove:
+    async def test_remove_by_numeric_id_sends_remove_command(self, tools):
+        ws = _ws({})
+        with _patched_hacs(ws):
+            result = await tools.ha_manage_hacs(
+                action="remove", repository_id="401454435"
+            )
+
+        assert result["success"] is True
+        assert result["repository_id"] == "401454435"
+        assert "Successfully removed" in result["message"]
+        # Loaded-module caveat must reach the caller — file removal alone
+        # does not unload an integration.
+        assert "restart" in result["note"]
+        # A numeric id needs no resolution round-trip — exactly one WS call.
+        ws.send_command.assert_awaited_once()
+        assert ws.send_command.await_args.args[0] == "hacs/repository/remove"
+        assert ws.send_command.await_args.kwargs["repository"] == "401454435"
+
+    async def test_remove_by_owner_repo_resolves_first(self, tools):
+        ws = _ws({})
+        registered = {
+            "id": "555",
+            "full_name": "hif2k1/battery_sim",
+            "name": "Battery Sim",
+        }
+        with (
+            _patched_hacs(ws),
+            patch(
+                "ha_mcp.tools.tools_hacs.wait_for_repo_registration",
+                new_callable=AsyncMock,
+            ) as wait_mock,
+        ):
+            wait_mock.return_value = registered
+            result = await tools.ha_manage_hacs(
+                action="remove", repository_id="hif2k1/battery_sim"
+            )
+
+        assert result["success"] is True
+        assert result["repository"] == "Battery Sim"
+        assert ws.send_command.await_args.args[0] == "hacs/repository/remove"
+        assert ws.send_command.await_args.kwargs["repository"] == "555"
+
+    async def test_remove_rejects_empty_repository_id_before_ws(self, tools):
+        ws = _ws({})
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="remove", repository_id="   ")
+        assert "repository_id" in str(excinfo.value)
+        ws.send_command.assert_not_awaited()
+
+    async def test_remove_surfaces_backend_failure(self, tools):
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(return_value={"success": False, "error": "boom"})
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="remove", repository_id="401454435")
+        assert "remove" in str(excinfo.value).lower()
+
+
 class TestDispatcherErrorRouting:
     async def test_unexpected_handler_error_is_wrapped_with_action_context(self, tools):
         # A non-ToolError escaping a handler must be converted to a structured
