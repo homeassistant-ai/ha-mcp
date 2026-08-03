@@ -1068,12 +1068,19 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
   }
 
   // Smooth scroll to a section with a slight delay for the animation
-  function scrollToSection(sectionId, delay = 100) {
+  function scrollToSection(sectionId, delay = 100, moveFocus = false) {
     if (restoringState) return;
     setTimeout(() => {
       const section = document.getElementById(sectionId);
       if (section && !section.classList.contains('hidden')) {
         section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (moveFocus) {
+          const heading = section.querySelector('h2, h3');
+          if (heading instanceof HTMLElement) {
+            heading.tabIndex = -1;
+            heading.focus({ preventScroll: true });
+          }
+        }
       }
     }, delay);
   }
@@ -2772,15 +2779,17 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
       && clickChoice('data-client', requested.client)) {
       const scopeRestored = state.method === 'stdio-local'
         || clickChoice('data-scope', requested.scope);
-      if (scopeRestored && needsPlatform()) clickChoice('data-platform', requested.platform);
-      if (scopeRestored && state.scope === 'remote' && remotePathsForMethod(state.method).includes(requested.remotePath)) {
+      const platformRestored = !needsPlatform()
+        || (scopeRestored && clickChoice('data-platform', requested.platform));
+      if (scopeRestored && platformRestored && state.scope === 'remote'
+        && remotePathsForMethod(state.method).includes(requested.remotePath)) {
         clickChoice('data-remote-path', requested.remotePath);
       }
     }
 
     restoringState = false;
     syncSetupUrl('replace');
-    if (shouldPositionWizard) scrollToSection(currentSetupSection(), 0);
+    if (shouldPositionWizard) scrollToSection(currentSetupSection(), 0, true);
   }
 
   restoreStateFromUrl();
