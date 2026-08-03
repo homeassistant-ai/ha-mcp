@@ -690,11 +690,18 @@ async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
             logger.error("Server task cancelled without a shutdown signal")
             raise
     finally:
-        try:
-            await asyncio.wait_for(
-                _cleanup_resources(), timeout=SHUTDOWN_TIMEOUT_SECONDS
-            )
-        except TimeoutError:
+        # Cancel-and-abandon, not wait_for: wait_for awaits the cancelled
+        # coroutine before raising, and the cleanup stack swallows
+        # CancelledError at several layers (per-client in
+        # WebSocketManager.disconnect, in client.disconnect's own task-cancel
+        # guard), so a hung close handshake could block shutdown past the
+        # budget. A straggler is left to the runner's own task sweep.
+        cleanup_task = asyncio.ensure_future(_cleanup_resources())
+        _done, cleanup_pending = await asyncio.wait(
+            {cleanup_task}, timeout=SHUTDOWN_TIMEOUT_SECONDS
+        )
+        if cleanup_pending:
+            cleanup_task.cancel()
             logger.warning("Resource cleanup timed out")
 
         try:

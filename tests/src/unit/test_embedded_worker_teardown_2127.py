@@ -185,28 +185,44 @@ async def test_shutdown_server_resources_runs_every_step(monkeypatch) -> None:
     server.close.assert_awaited_once()
 
 
-async def test_shutdown_server_resources_bounded_gives_up_on_a_hang(
+async def test_shutdown_server_resources_bounded_abandons_a_swallowing_hang(
     monkeypatch, caplog
 ) -> None:
-    """A hung cleanup step is abandoned at the teardown budget, not joined.
+    """A hung step that swallows cancellation is abandoned, never joined.
 
-    ``async_stop`` joins the worker thread for a fixed deadline; an
-    unresponsive peer's close handshake must not consume it. Against an
-    unbounded cleanup this test hangs until the suite's timeout kills it.
+    ``async_stop`` joins the worker thread for a fixed deadline, and the real
+    cleanup stack swallows ``CancelledError`` at several layers — so the
+    bound must cancel-and-abandon. Against the ``wait_for`` form this test
+    hangs until the suite's timeout kills it: ``wait_for`` awaits the
+    cancelled coroutine, and this step — like the real stack — eats the
+    cancellation.
     """
+    import ha_mcp.client.websocket_client as ws_client
     import ha_mcp.client.websocket_listener as ws_listener
 
     monkeypatch.setattr(es, "_TEARDOWN_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(ws_client.websocket_manager, "disconnect", AsyncMock())
+    release = asyncio.Event()
 
-    async def hang() -> None:
-        await asyncio.sleep(3600)
+    async def swallowing_hang() -> None:
+        while True:
+            try:
+                await release.wait()
+                return
+            except asyncio.CancelledError:
+                continue
 
-    monkeypatch.setattr(ws_listener, "stop_websocket_listener", hang)
+    monkeypatch.setattr(ws_listener, "stop_websocket_listener", swallowing_hang)
 
     with caplog.at_level(logging.WARNING, logger=es._LOGGER.name):
         await es._shutdown_server_resources_bounded(AsyncMock(name="server"))
 
     assert "Embedded resource cleanup timed out" in caplog.text
+
+    # Unblock and drain the abandoned task so it cannot leak past this test.
+    release.set()
+    for _ in range(10):
+        await asyncio.sleep(0)
 
 
 async def test_shutdown_server_resources_isolates_step_failures(

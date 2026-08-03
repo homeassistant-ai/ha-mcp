@@ -1529,17 +1529,19 @@ _IMPORTING_WORKERS: set[threading.Thread] = set()
 async def _shutdown_server_resources_bounded(server: Any) -> None:
     """Run :func:`_shutdown_server_resources` inside the teardown budget.
 
-    Bounded like the CLI's ``wait_for``: an unresponsive peer's close
-    handshake (websockets' 10s default close_timeout) must not eat the whole
-    ``_STOP_JOIN_TIMEOUT_SECONDS`` join budget; on timeout the remaining
-    cleanup is abandoned to the thread's loop teardown, which sweeps it.
+    An unresponsive peer's close handshake (websockets' 10s default
+    close_timeout) must not eat the whole ``_STOP_JOIN_TIMEOUT_SECONDS`` join
+    budget. Cancel-and-abandon, not ``wait_for``: ``wait_for`` awaits the
+    cancelled coroutine before raising, and the cleanup stack swallows
+    ``CancelledError`` at several layers (per-client in
+    ``WebSocketManager.disconnect``, in ``client.disconnect``'s own
+    task-cancel guard), so a straggler must be left to the thread's loop
+    teardown sweep instead of being joined here.
     """
-    try:
-        await asyncio.wait_for(
-            _shutdown_server_resources(server),
-            timeout=_TEARDOWN_TIMEOUT_SECONDS,
-        )
-    except TimeoutError:
+    task = asyncio.ensure_future(_shutdown_server_resources(server))
+    _done, pending = await asyncio.wait({task}, timeout=_TEARDOWN_TIMEOUT_SECONDS)
+    if pending:
+        task.cancel()
         _LOGGER.warning("Embedded resource cleanup timed out")
 
 
@@ -1637,7 +1639,16 @@ def _teardown_worker_loop(loop: asyncio.AbstractEventLoop) -> None:
         )
     for _label, _coro_factory in (
         ("asyncgen", loop.shutdown_asyncgens),
-        ("executor", loop.shutdown_default_executor),
+        # The executor join is bounded too: a stuck executor thread must not
+        # keep the worker alive past the join deadline (abandoning it emits
+        # a RuntimeWarning instead of hanging).
+        (
+            "executor",
+            partial(
+                loop.shutdown_default_executor,
+                timeout=_TEARDOWN_TIMEOUT_SECONDS,
+            ),
+        ),
     ):
         try:
             loop.run_until_complete(_coro_factory())
