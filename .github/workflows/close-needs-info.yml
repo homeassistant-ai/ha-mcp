@@ -63,7 +63,12 @@ jobs:
                 core.warning(`  needs-info present but no labeled event found — skipping`);
                 continue;
               }
-              const labeledDate = new Date(labelEvents[labelEvents.length - 1].created_at);
+              // Newest by timestamp, not array position — the events endpoint
+              // documents no sort order, and anchoring on the wrong event after
+              // a remove-and-reapply would restart (or expire) the clock wrongly.
+              const labeledDate = new Date(Math.max(
+                ...labelEvents.map(e => new Date(e.created_at).getTime())
+              ));
               const daysSince = (Date.now() - labeledDate.getTime()) / MS_PER_DAY;
               core.info(`  needs-info applied ${daysSince.toFixed(1)} days ago`);
 
