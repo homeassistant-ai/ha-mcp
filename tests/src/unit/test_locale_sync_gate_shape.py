@@ -176,6 +176,14 @@ def test_the_push_allowlist_covers_exactly_the_pipeline_outputs() -> None:
         "catch-all; a widened or narrowed arm changes what the bypass "
         "credential will push"
     )
+    # The arm SET says the catch-all exists; this says it still refuses — a
+    # gutted `*) ;;` keeps the set identical while admitting every path,
+    # and that exit 1 is the entire allowlist.
+    assert re.search(
+        r"\*\)\s*\n\s*echo \"::error::[^\"]*outside the locale allowlist"
+        r"[^\"]*\"\s*\n\s*exit 1",
+        push_run,
+    ), "the catch-all arm no longer refuses — the allowlist admits every path"
     for path in (
         "src/ha_mcp/settings_ui/locales",
         "custom_components/ha_mcp_tools/translations",
@@ -194,6 +202,27 @@ def test_the_push_allowlist_covers_exactly_the_pipeline_outputs() -> None:
         "generated block derives from en.json alone), and staging it "
         "reopens the code-smuggling channel"
     )
+
+
+def test_the_translate_checkout_persists_no_credential() -> None:
+    """The translate job's no-credential claim is structural, so pin it.
+
+    ``permissions: contents: read`` already keeps a persisted GITHUB_TOKEN
+    from pushing; what this backs is the narrower property the workflow
+    header states outright — the job that executes the resolved dependency
+    tree holds no ambient credential at all beyond the Gemini key.
+    """
+    steps = _workflow()["jobs"]["translate"]["steps"]
+    checkouts = [
+        step for step in steps if "actions/checkout" in str(step.get("uses", ""))
+    ]
+    assert checkouts, "the translate job no longer checks out the repository"
+    for step in checkouts:
+        assert (step.get("with") or {}).get("persist-credentials") is False, (
+            "the translate job's checkout persists a credential — the job "
+            "that executes the resolved dependency tree must hold nothing "
+            "beyond the Gemini key"
+        )
 
 
 def test_dispatch_on_a_non_default_ref_fails_loudly() -> None:
