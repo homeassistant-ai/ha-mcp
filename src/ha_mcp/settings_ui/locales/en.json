@@ -184,7 +184,7 @@
     "errors.stop_failed": "Stop failed",
     "errors.restart_failed": "Restart failed",
     "errors.failed_detail": "Failed: {detail}",
-    "errors.addon_not_back": "App (add-on) did not come back online. Reload manually",
+    "errors.addon_not_back": "App (add-on) did not come back online. Reload the page manually.",
     "errors.unparseable_suffix": " (response body unparseable)",
     "common.operation_failed": "{operation} failed: {detail}",
     "common.enabled": "enabled",
