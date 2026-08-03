@@ -74,7 +74,13 @@ FLOW_HELPER_TYPES: frozenset[str] = frozenset(
 )
 
 # Keys used to specify a menu selection — stripped before submitting form data.
-_MENU_SELECTION_KEYS = frozenset({"group_type", "next_step_id", "menu_option"})
+# The tuple fixes the multi-key precedence (frozenset iteration order is
+# hash-randomized per process, so consuming in set order would make a config
+# carrying two selection keys nondeterministic); the frozenset serves the
+# membership checks. Mirrored by ``_MENU_CHOICE_CONFIG_KEYS`` in
+# tools_config_helpers.py.
+_MENU_SELECTION_KEY_ORDER = ("group_type", "next_step_id", "menu_option")
+_MENU_SELECTION_KEYS = frozenset(_MENU_SELECTION_KEY_ORDER)
 
 # Flow step types an MCP client cannot drive: external steps need a browser
 # (OAuth / cloud authorization), progress steps wait on HA-side async work.
@@ -119,13 +125,13 @@ def _handle_menu_step(
 ) -> str:
     """Extract menu selection from config, raising on missing selection.
 
-    Returns the menu choice string. Mutates remaining_config to pop the
-    consumed selection key. A selection key may carry a list of successive
-    selections — one is consumed per menu encounter, so flows that revisit a
-    menu (issue #2116: battery_sim loops menu → branch form → menu until
-    'all_done') can be driven to completion. The caller's list object is
-    never mutated; the un-consumed tail replaces the key in
-    remaining_config.
+    Returns the menu choice string. Mutates remaining_config: a scalar
+    selection is popped outright; a list of successive selections yields one
+    element per menu encounter, the un-consumed tail replacing the key until
+    it runs dry. Lists let flows that revisit a menu (issue #2116:
+    battery_sim loops menu → branch form → menu until 'all_done') be walked
+    within the step budget the walkers derive from the selection count. The
+    caller's list object is never mutated.
 
     ``consumed_selections`` (when provided by the walker) accumulates every
     selection consumed during the walk, so a menu revisited after the
@@ -133,7 +139,7 @@ def _handle_menu_step(
     consumed instead of claiming no selection was supplied.
     """
     menu_choice = None
-    for key in _MENU_SELECTION_KEYS:
+    for key in _MENU_SELECTION_KEY_ORDER:
         if key not in remaining_config:
             continue
         value = remaining_config[key]
@@ -161,18 +167,20 @@ def _handle_menu_step(
             "menu_options": menu_options,
         }
         if consumed_selections:
-            next_option = next(
-                (str(o) for o in menu_options if o not in consumed_selections),
-                "<next-selection>",
-            )
-            example = json.dumps([*consumed_selections, next_option])
+            # "<next-selection>" is a placeholder on purpose: cyclic flows
+            # routinely need the SAME option again (battery_sim's create flow
+            # picks 'no_tariff_info' once per meter), so no concrete option
+            # can be suggested without guessing the caller's path.
+            example = json.dumps([*consumed_selections, "<next-selection>"])
             raise_tool_error(
                 create_error_response(
                     ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
                     "Flow presented another menu after the supplied "
                     f"selection(s) ({', '.join(map(repr, consumed_selections))}) "
-                    "were consumed. Pass 'next_step_id' as a list of successive "
-                    "selections to drive flows that revisit menus.",
+                    "were consumed. Pass your menu selection key "
+                    "('next_step_id', 'group_type', or 'menu_option') as a "
+                    "list of successive selections to drive flows that "
+                    "revisit menus.",
                     suggestions=[
                         f"Available options: {menu_options}",
                         f'Example: {{"next_step_id": {example}}}',
@@ -200,6 +208,28 @@ def _handle_menu_step(
     if consumed_selections is not None:
         consumed_selections.append(choice)
     return choice
+
+
+def _flow_step_budget(config: dict[str, Any]) -> int:
+    """Step allowance for one flow walk.
+
+    The historical cap of 10 guarded against runaway flows, but a cyclic
+    flow driven by an N-item selection list legitimately costs about two
+    steps per selection (the menu plus the branch step it opens) —
+    battery_sim's create flow spends 8 of the 10 on a minimal two-meter
+    setup, and one fixed-tariff branch more would starve it. Grant every
+    caller-supplied selection its two steps on top of the base; the budget
+    stays bounded by the caller's own input, so the runaway protection is
+    intact.
+    """
+    selections = 0
+    for key in _MENU_SELECTION_KEY_ORDER:
+        value = config.get(key)
+        if isinstance(value, list):
+            selections += len(value)
+        elif value is not None:
+            selections += 1
+    return 10 + 2 * selections
 
 
 def iter_schema_fields(data_schema: Any) -> Iterator[dict[str, Any]]:
@@ -1250,7 +1280,7 @@ async def _handle_flow_steps(
     supplied_keys = sorted(k for k in config if k not in _MENU_SELECTION_KEYS)
     saw_form_step = False
     any_form_key_consumed = False
-    max_steps = 10
+    max_steps = _flow_step_budget(config)
 
     for step_num in range(max_steps):
         result_type = current_step.get("type")
@@ -1352,7 +1382,11 @@ async def _handle_flow_steps(
         create_error_response(
             ErrorCode.TIMEOUT_OPERATION,
             f"Flow exceeded {max_steps} steps",
-            context={"flow_id": flow_id, "max_steps": max_steps},
+            context={
+                "flow_id": flow_id,
+                "max_steps": max_steps,
+                "consumed_menu_selections": consumed_menu_selections,
+            },
         )
     )
 
@@ -1378,7 +1412,7 @@ async def _handle_config_subentry_flow_steps(
     consumed_menu_selections: list[str] = []
     ignored_config_keys: set[str] = set()
     reuse_state = _ReuseState()
-    max_steps = 10
+    max_steps = _flow_step_budget(config)
 
     for step_num in range(max_steps):
         result_type = current_step.get("type")
@@ -1490,7 +1524,11 @@ async def _handle_config_subentry_flow_steps(
         create_error_response(
             ErrorCode.TIMEOUT_OPERATION,
             f"Config subentry flow exceeded {max_steps} steps",
-            context={"flow_id": flow_id, "max_steps": max_steps},
+            context={
+                "flow_id": flow_id,
+                "max_steps": max_steps,
+                "consumed_menu_selections": consumed_menu_selections,
+            },
         )
     )
 

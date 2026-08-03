@@ -1751,10 +1751,11 @@ class DevTools:
                     "Explicit pip requirement for update_source — a version pin "
                     "(ha-mcp==7.9.0) or a GitHub tarball URL such as "
                     "https://github.com/homeassistant-ai/ha-mcp/archive/refs/"
-                    "pull/<PR>/head.tar.gz. Pass the literal string 'clear' "
-                    "(or an empty string) to clear the override and fall back "
-                    "to the release channel — prefer 'clear': some MCP clients "
-                    "mangle empty-string arguments in transit."
+                    "pull/<PR>/head.tar.gz. 'clear' (case-insensitive, so it "
+                    "can never name a pip package) clears the override and "
+                    "falls back to the release channel; an empty string also "
+                    "clears but some MCP clients mangle it in transit — "
+                    "prefer 'clear'."
                 ),
             ),
         ] = None,
@@ -1812,10 +1813,10 @@ class DevTools:
             if action == "info":
                 return await self._server_info()
             if action == "update_source":
-                # 'clear' aliases the empty string: clearing the override must
-                # not require sending "" — some MCP clients mangle empty-string
-                # arguments in transit (the only prior way to clear a pin was
-                # a raw-HTTP shim around this tool).
+                # 'clear' (case-insensitive) aliases the empty string: some
+                # MCP clients mangle empty-string arguments in transit, which
+                # left this tool unable to clear its own pin over such a
+                # client (the entry's HA options UI always could).
                 if pip_spec is not None and pip_spec.strip().lower() == "clear":
                     pip_spec = ""
                 return await self._update_source(channel, pip_spec)

@@ -1,8 +1,8 @@
 """Unit tests for the consolidated HACS action tools.
 
 Exercise the per-action handler success paths (``_hacs_info`` /
-``_hacs_download`` / ``_hacs_add_repository``) and the dispatcher's
-error-routing with a mocked WebSocket client. Complements the
+``_hacs_download`` / ``_hacs_remove`` / ``_hacs_add_repository``) and the
+dispatcher's error-routing with a mocked WebSocket client. Complements the
 validation-guard tests in ``test_identifier_validation_family.py`` and the
 ctx/progress test in ``test_context_injection.py``.
 """
@@ -220,7 +220,9 @@ class TestManageHacsRemove:
         # Loaded-module caveat must reach the caller — file removal alone
         # does not unload an integration.
         assert "restart" in result["note"]
-        # A numeric id needs no resolution round-trip — exactly one WS call.
+        # A numeric id needs no owner/repo resolution round-trip, so with the
+        # availability probe patched out by the fixture the remove is the
+        # only WS call left.
         ws.send_command.assert_awaited_once()
         assert ws.send_command.await_args.args[0] == "hacs/repository/remove"
         assert ws.send_command.await_args.kwargs["repository"] == "401454435"

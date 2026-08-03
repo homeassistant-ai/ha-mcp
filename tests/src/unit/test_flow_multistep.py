@@ -2254,3 +2254,63 @@ class TestCyclicMenuFlows:
             {"model": "M1"},
             {"next_step_id": "save_changes"},
         ]
+
+    async def test_long_selection_list_extends_the_step_budget(self) -> None:
+        """Six menu cycles cost more than the historical 10-step cap.
+
+        The budget scales with the caller's selection count (2 steps per
+        selection), so a legitimate long cyclic walk completes instead of
+        raising TIMEOUT_OPERATION mid-flow.
+        """
+        selections = [f"branch_{i}" for i in range(6)] + ["all_done"]
+        form = {
+            "type": "form",
+            "flow_id": "flow-2116",
+            "step_id": "branch",
+            "data_schema": [],
+        }
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        # menu(initial) -> [form -> menu] x6 -> create_entry: 13 walker steps.
+        side_effects: list[dict[str, Any]] = []
+        for _ in range(6):
+            side_effects.append(dict(form))
+            side_effects.append(_cyclic_menu_step())
+        side_effects.append(final_entry)
+        submit_fn = AsyncMock(side_effect=side_effects)
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2116",
+            initial_step=_cyclic_menu_step(),
+            config={"next_step_id": selections},
+            submit_fn=submit_fn,
+        )
+
+        assert result["success"] is True
+        assert submit_fn.await_count == 13
+
+    async def test_multi_key_precedence_is_deterministic(self) -> None:
+        """group_type outranks next_step_id at a menu, per the shared
+        canonical order (_MENU_SELECTION_KEY_ORDER) — a config carrying two
+        selection keys must not consume them in per-process hash order.
+        """
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        submit_fn = AsyncMock(side_effect=[_main_params_form(), final_entry])
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2116",
+            initial_step=_cyclic_menu_step(),
+            config={
+                "group_type": "main_params",
+                "next_step_id": "input_sensors",
+                "charge_efficiency": 0.92,
+                "discharge_efficiency": 0.90,
+            },
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[0].args[1] == {"next_step_id": "main_params"}
+        assert result["success"] is True
+        # The unconsumed next_step_id surfaces through the leftover warning.
+        assert any("next_step_id" in w for w in result["warnings"])

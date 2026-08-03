@@ -537,7 +537,7 @@ class HacsTools:
             "repository_id",
             suggestions=[
                 "Use ha_get_hacs_info(action='search', installed_only=True) "
-                "to list downloaded repositories",
+                + "to list downloaded repositories",
                 "Or pass a GitHub path like 'owner/repo' to remove by name",
             ],
         )

@@ -351,8 +351,8 @@ class TestManageServer:
 
     async def test_update_source_clear_aliases_empty_pip_spec(self):
         # Clearing the override must not require sending "" — some MCP
-        # clients mangle empty-string arguments in transit (issue #2116
-        # session: clearing a pin needed a raw-HTTP shim around this tool).
+        # clients mangle empty-string arguments in transit, leaving this
+        # tool unable to clear its own pin over such a client.
         client = _mock_client(
             entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
         )
