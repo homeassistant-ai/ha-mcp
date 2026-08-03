@@ -13,6 +13,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import HomeAssistantCommandTimeout
 from ..errors import ErrorCode, create_error_response
 from .hacs_registration import (
     CATEGORY_MAP,
@@ -81,6 +82,32 @@ async def _assert_hacs_available() -> None:
             ],
         )
     )
+
+
+def _reject_foreign_params(action: str, **per_action: dict[str, Any]) -> None:
+    """Raise when a parameter belonging to a different action was supplied.
+
+    ``per_action`` maps each action name to the {param_name: value} pairs
+    that are FOREIGN to it; a non-None value among them is a caller mixing
+    action vocabularies (e.g. ``version`` with ``action="remove"``), which
+    silently ignoring would let a call do something other than what its
+    arguments describe.
+    """
+    foreign = {
+        name: value
+        for name, value in per_action.get(action, {}).items()
+        if value is not None
+    }
+    if foreign:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Parameter(s) {sorted(foreign)} do not apply to "
+                f"action='{action}' and would be ignored — remove them or "
+                "switch action.",
+                context={"action": action, "foreign_parameters": sorted(foreign)},
+            )
+        )
 
 
 class HacsTools:
@@ -268,6 +295,22 @@ class HacsTools:
         entries first (``ha_remove_helpers_integrations``).
         """
         try:
+            # Reject parameters that don't belong to the chosen action rather
+            # than silently discarding them — ha_manage_hacs(action="remove",
+            # version="v4.0.0") plausibly means "uninstall this version",
+            # which remove cannot honor, and dropping it would remove the
+            # whole repository while reporting plain success.
+            _reject_foreign_params(
+                action,
+                download={"repository": repository, "category": category},
+                remove={
+                    "version": version,
+                    "repository": repository,
+                    "category": category,
+                },
+                add_repository={"repository_id": repository_id, "version": version},
+            )
+
             if action == "download":
                 return await self._hacs_download(repository_id, version)
 
@@ -486,9 +529,11 @@ class HacsTools:
         if version:
             download_kwargs["version"] = version
 
-        # Download/install the repository
+        # Download/install the repository. Same 60 s budget as remove: HACS
+        # refreshes from GitHub before acting, and a slow GitHub past the
+        # 30 s default reports a false failure for work that completes.
         response = await ws_client.send_command(
-            "hacs/repository/download", **download_kwargs
+            "hacs/repository/download", _wait_timeout=60.0, **download_kwargs
         )
 
         if not response.get("success"):
@@ -542,11 +587,18 @@ class HacsTools:
         # uninstall no-ops when no files are downloaded), which would report
         # "Successfully removed" for something never installed. Check the
         # installed state first; an info failure falls through so the remove
-        # itself surfaces the real error.
+        # itself surfaces the real error. The same probe supplies the real
+        # repository name for numeric IDs, which the resolve short-circuit
+        # echoes back verbatim — without it the response could not confirm
+        # WHICH repository the ID identified.
         info = await ws_client.send_command(
             "hacs/repository/info", repository=actual_id
         )
         info_result = info.get("result") or {}
+        if info.get("success"):
+            repo_name = (
+                info_result.get("full_name") or info_result.get("name") or repo_name
+            )
         if info.get("success") and not info_result.get("installed"):
             raise_tool_error(
                 create_error_response(
@@ -560,9 +612,30 @@ class HacsTools:
                 )
             )
 
-        response = await ws_client.send_command(
-            "hacs/repository/remove", repository=actual_id
-        )
+        # HACS refreshes the repository from GitHub (forced) before
+        # uninstalling, so a slow or rate-limited GitHub can push the
+        # round-trip past the 30 s default — and a timeout here is a FALSE
+        # failure that invites a destructive retry, because HACS finishes
+        # the uninstall regardless. Give it the same 60 s the add path got
+        # (#1623) and say the outcome is unknown when it still trips.
+        try:
+            response = await ws_client.send_command(
+                "hacs/repository/remove", repository=actual_id, _wait_timeout=60.0
+            )
+        except HomeAssistantCommandTimeout as timeout_err:
+            exception_to_structured_error(
+                timeout_err,
+                context={
+                    "command": "hacs/repository/remove",
+                    "repository_id": repository_id,
+                },
+                suggestions=[
+                    "The removal may still have completed on the HACS side — "
+                    "verify with ha_get_hacs_info(action='info', "
+                    f"repository_id='{actual_id}') before retrying",
+                ],
+                raise_error=True,
+            )
 
         if not response.get("success"):
             exception_to_structured_error(

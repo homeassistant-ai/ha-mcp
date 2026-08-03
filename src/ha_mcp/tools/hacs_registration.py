@@ -144,7 +144,10 @@ HACS_ADD_REGISTRATION_TIMEOUT = 10.0
 
 # Wall-clock budget for ``_resolve_hacs_repo_id`` (the ``owner/repo`` lookup
 # behind read-only ``ha_get_hacs_info(action="info")`` and
-# ``ha_manage_hacs(action="download")``). A plain info/download lookup targets a
+# ``ha_manage_hacs(action="download")`` / ``(action="remove")``; a remove
+# targets an already-installed repo, so for it the wait only ever burns
+# wall-clock on a typo'd name — the same 10 s bound caps that stall).
+# A plain info/download lookup targets a
 # repo that should ALREADY be in HACS's index: default repos always are, and
 # ``ha_manage_hacs(action="add_repository")`` blocks until registration is
 # confirmed before returning (within its own ``HACS_ADD_REGISTRATION_TIMEOUT``

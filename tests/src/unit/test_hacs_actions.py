@@ -288,7 +288,74 @@ class TestManageHacsRemove:
         ws = _remove_ws(remove_response={"success": False, "error": "boom"})
         with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
             await tools.ha_manage_hacs(action="remove", repository_id="401454435")
+        # HACS's own error text must survive the wrap — the context command
+        # name alone would satisfy a bare "remove" check.
+        assert "boom" in str(excinfo.value)
         assert "remove" in str(excinfo.value).lower()
+
+    async def test_remove_timeout_says_outcome_is_unknown(self, tools):
+        # HACS force-refreshes from GitHub before uninstalling; when that
+        # blows the WS wait the uninstall usually still completes, so a
+        # plain "failed" would invite a destructive retry. The error must
+        # say the outcome is unverified and point at the info probe.
+        from ha_mcp.client.rest_client import HomeAssistantCommandTimeout
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            side_effect=[
+                {"success": True, "result": {"installed": True}},
+                HomeAssistantCommandTimeout("Command timeout"),
+            ]
+        )
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="remove", repository_id="401454435")
+        assert "may still have completed" in str(excinfo.value)
+
+    async def test_remove_numeric_id_reports_real_name_from_info(self, tools):
+        # The resolve short-circuit echoes a numeric id back as the "name";
+        # the installed-state probe carries the real identity, and the
+        # response must use it so the caller can verify WHICH repository
+        # the id meant.
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            side_effect=[
+                {
+                    "success": True,
+                    "result": {"installed": True, "full_name": "hif2k1/battery_sim"},
+                },
+                {"success": True, "result": {}},
+            ]
+        )
+        with _patched_hacs(ws):
+            result = await tools.ha_manage_hacs(
+                action="remove", repository_id="401454435"
+            )
+        assert result["repository"] == "hif2k1/battery_sim"
+        assert "hif2k1/battery_sim" in result["message"]
+
+    async def test_foreign_params_are_rejected_not_ignored(self, tools):
+        # A parameter belonging to another action must fail loudly —
+        # ha_manage_hacs(action="remove", version=...) plausibly means
+        # "uninstall this version", which remove cannot honor; silently
+        # dropping it would remove the whole repository.
+        ws = _ws({})
+        cases = [
+            {"action": "remove", "repository_id": "1", "version": "v4.0.0"},
+            {"action": "remove", "repository_id": "1", "repository": "o/r"},
+            {"action": "download", "repository_id": "1", "category": "theme"},
+            {
+                "action": "add_repository",
+                "repository": "o/r",
+                "category": "theme",
+                "repository_id": "1",
+            },
+        ]
+        for kwargs in cases:
+            with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+                await tools.ha_manage_hacs(**kwargs)
+            assert "VALIDATION_INVALID_PARAMETER" in str(excinfo.value), kwargs
+            assert "do not apply" in str(excinfo.value), kwargs
+        ws.send_command.assert_not_awaited()
 
     async def test_remove_returns_top_level_success_envelope(self, tools):
         # AGENTS.md response contract: {"success": True, "data": ...} at the

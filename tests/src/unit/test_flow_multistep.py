@@ -760,8 +760,11 @@ class TestSubentryFlowIgnoredKeys:
 
         submitted = client.submit_config_subentry_flow_step.await_args_list[0].args[1]
         assert "next_step_id" not in submitted
+        # The warning names the value too — an un-consumed selection means
+        # that branch was never configured.
         assert result["warnings"] == [
-            "Ignored menu selection key(s) with no matching menu step: next_step_id"
+            "Ignored menu selection key(s) with no matching menu step: "
+            "next_step_id='conversation'"
         ]
 
 
@@ -769,7 +772,9 @@ def _reuse_warning(dotted: str, step_id: str) -> str:
     """The warning a resubmitted key adds to the walk's success response."""
     return (
         f"Resubmitted '{dotted}' at step '{step_id}': supplied once "
-        "but declared at more than one site in this flow"
+        "but requested by more than one step encounter in this flow "
+        "(a later step redeclaring the field, or the same step revisited "
+        "via a menu loop — per-visit values cannot be expressed)"
     )
 
 
@@ -843,10 +848,7 @@ class TestRedeclaredFieldReuse:
         assert result == {
             "success": True,
             "entry": final_entry,
-            "warnings": [
-                "Resubmitted 'friendly_name' at step 'details': supplied once "
-                "but declared at more than one site in this flow"
-            ],
+            "warnings": [_reuse_warning("friendly_name", "details")],
         }
         assert submit_fn.await_args_list[0].args[1] == {
             "friendly_name": "Device1",
@@ -2133,10 +2135,12 @@ class TestCyclicMenuFlows:
         assert "main_params" in body["error"]["message"]
         assert body["consumed_menu_selections"] == ["main_params"]
         assert body["menu_options"] == _cyclic_menu_step()["menu_options"]
-        # The concrete example continues from what was already consumed.
-        assert any(
-            "main_params" in s and "next_step_id" in s
-            for s in body["error"]["suggestions"]
+        # The example continues from what was consumed and ends in an
+        # explicit placeholder — cyclic flows legitimately repeat options,
+        # so no concrete "next" can be suggested without guessing.
+        assert (
+            'Example: {"next_step_id": ["main_params", "<next-selection>"]}'
+            in body["error"]["suggestions"]
         )
 
     async def test_scalar_selection_on_linear_flow_unchanged(self) -> None:
@@ -2212,8 +2216,10 @@ class TestCyclicMenuFlows:
         )
 
         assert result["success"] is True
+        # The warning must name the dropped selection values — those branches
+        # were never configured, which the key name alone would hide.
         assert any(
-            "no matching menu step" in w and "next_step_id" in w
+            "no matching menu step" in w and "next_step_id=['all_done']" in w
             for w in result["warnings"]
         )
 
@@ -2314,3 +2320,286 @@ class TestCyclicMenuFlows:
         assert result["success"] is True
         # The unconsumed next_step_id surfaces through the leftover warning.
         assert any("next_step_id" in w for w in result["warnings"])
+
+    async def test_falsy_list_element_raises_distinct_validation_error(self) -> None:
+        """A falsy element is a malformed call, not an exhausted list."""
+        import json
+
+        from fastmcp.exceptions import ToolError
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_flow_steps(
+                client=None,
+                flow_id="flow-2116",
+                initial_step=_cyclic_menu_step(),
+                config={"next_step_id": ["", "all_done"]},
+                submit_fn=AsyncMock(),
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "empty element" in body["error"]["message"]
+        # It must NOT claim no selection was supplied — that is the exact
+        # misdiagnosis issue #2116 was filed about.
+        assert "Menu step requires a selection" not in body["error"]["message"]
+
+    async def test_falsy_element_midlist_is_not_reported_as_exhaustion(self) -> None:
+        import json
+
+        from fastmcp.exceptions import ToolError
+
+        submit_fn = AsyncMock(side_effect=[_main_params_form(), _cyclic_menu_step()])
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_flow_steps(
+                client=None,
+                flow_id="flow-2116",
+                initial_step=_cyclic_menu_step(),
+                config={"next_step_id": ["main_params", None, "all_done"]},
+                submit_fn=submit_fn,
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert "empty element" in body["error"]["message"]
+        assert "were consumed" not in body["error"]["message"]
+
+    async def test_nonstring_list_element_is_coerced_like_scalars(self) -> None:
+        """str() coercion applies to list elements exactly as to scalars."""
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        submit_fn = AsyncMock(side_effect=[final_entry])
+
+        await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2116",
+            initial_step=_cyclic_menu_step(),
+            config={"next_step_id": [123]},
+            submit_fn=submit_fn,
+        )
+
+        assert submit_fn.await_args_list[0].args[1] == {"next_step_id": "123"}
+
+    async def test_group_type_and_menu_option_lists_work_identically(self) -> None:
+        """All three selection keys accept lists through the same branch."""
+        for key in ("group_type", "menu_option"):
+            final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+            submit_fn = AsyncMock(
+                side_effect=[_main_params_form(), _cyclic_menu_step(), final_entry]
+            )
+
+            result = await _handle_flow_steps(
+                client=None,
+                flow_id="flow-2116",
+                initial_step=_cyclic_menu_step(),
+                config={key: ["main_params", "all_done"]},
+                submit_fn=submit_fn,
+            )
+
+            assert result["success"] is True, key
+            selections = [
+                c.args[1]["next_step_id"]
+                for c in submit_fn.await_args_list
+                if "next_step_id" in c.args[1]
+            ]
+            assert selections == ["main_params", "all_done"], key
+
+    async def test_empty_list_falls_through_to_next_selection_key(self) -> None:
+        """An empty list under one key must not mask a selection under another."""
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        submit_fn = AsyncMock(side_effect=[_main_params_form(), final_entry])
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2116",
+            initial_step=_cyclic_menu_step(),
+            config={"next_step_id": [], "group_type": "main_params"},
+            submit_fn=submit_fn,
+        )
+
+        assert result["success"] is True
+        assert submit_fn.await_args_list[0].args[1] == {"next_step_id": "main_params"}
+
+    async def test_subentry_walker_exhausted_selections_error(self) -> None:
+        """The revisited-menu error exists on the subentry walker too."""
+        import json
+
+        from fastmcp.exceptions import ToolError
+
+        summary_menu = {
+            "type": "menu",
+            "flow_id": "flow-sub-2116",
+            "step_id": "summary_menu",
+            "menu_options": ["entity", "device", "save_changes"],
+        }
+        device_form = {
+            "type": "form",
+            "flow_id": "flow-sub-2116",
+            "step_id": "device",
+            "data_schema": [{"name": "model"}],
+        }
+        client = AsyncMock()
+        client.submit_config_subentry_flow_step = AsyncMock(
+            side_effect=[device_form, dict(summary_menu)]
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_config_subentry_flow_steps(
+                client,
+                "flow-sub-2116",
+                summary_menu,
+                {"next_step_id": "device", "model": "M1"},
+                is_reconfigure=True,
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert "list of successive" in body["error"]["message"]
+        assert body["consumed_menu_selections"] == ["device"]
+
+    async def test_over_budget_timeout_names_consumed_selections(self) -> None:
+        """A walk that exhausts its budget says what it consumed on the way."""
+        import json
+
+        from fastmcp.exceptions import ToolError
+
+        form = {
+            "type": "form",
+            "flow_id": "flow-2116",
+            "step_id": "again",
+            "data_schema": [],
+        }
+        # One selection -> budget 12: the menu + 11 endless forms.
+        submit_fn = AsyncMock(side_effect=[dict(form) for _ in range(30)])
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_flow_steps(
+                client=None,
+                flow_id="flow-2116",
+                initial_step=_cyclic_menu_step(),
+                config={"next_step_id": "main_params"},
+                submit_fn=submit_fn,
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "TIMEOUT_OPERATION"
+        assert body["max_steps"] == 12
+        assert body["consumed_menu_selections"] == ["main_params"]
+
+    async def test_repeated_selection_revisits_branch_with_reuse_semantics(
+        self,
+    ) -> None:
+        """Revisiting a branch resubmits the first visit's values, loudly.
+
+        Per-visit values cannot be expressed in the flat config namespace;
+        the second visit gets the recorded values plus a warning.
+        """
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        submit_fn = AsyncMock(
+            side_effect=[
+                _main_params_form(),
+                _cyclic_menu_step(),
+                _main_params_form(),
+                _cyclic_menu_step(),
+                final_entry,
+            ]
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2116",
+            initial_step=_cyclic_menu_step(),
+            config={
+                "next_step_id": ["main_params", "main_params", "all_done"],
+                "charge_efficiency": 0.92,
+                "discharge_efficiency": 0.90,
+            },
+            submit_fn=submit_fn,
+        )
+
+        assert result["success"] is True
+        # Visit 1 gets the caller's values; visit 2 gets the step's own
+        # served suggestions (in real HA those are re-serialized with the
+        # first visit's writes, so this is idempotent) — the caller-value
+        # resubmission is reserved for fields with no step-owned value.
+        assert submit_fn.await_args_list[1].args[1] == {
+            "charge_efficiency": 0.92,
+            "discharge_efficiency": 0.90,
+        }
+        assert submit_fn.await_args_list[3].args[1] == {
+            "charge_efficiency": 0.85,
+            "discharge_efficiency": 0.85,
+        }
+        assert "warnings" not in result
+
+    async def test_revisited_suggestionless_branch_resubmits_caller_values(
+        self,
+    ) -> None:
+        """A revisited step with bare required fields reuses the caller's
+        values — once, with the reuse warning naming the step encounter."""
+
+        def bare_form() -> dict[str, Any]:
+            return {
+                "type": "form",
+                "flow_id": "flow-2116",
+                "step_id": "main_params",
+                "data_schema": [
+                    {"name": "charge_efficiency", "required": True},
+                    {"name": "discharge_efficiency", "required": True},
+                ],
+            }
+
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        submit_fn = AsyncMock(
+            side_effect=[
+                bare_form(),
+                _cyclic_menu_step(),
+                bare_form(),
+                _cyclic_menu_step(),
+                final_entry,
+            ]
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2116",
+            initial_step=_cyclic_menu_step(),
+            config={
+                "next_step_id": ["main_params", "main_params", "all_done"],
+                "charge_efficiency": 0.92,
+                "discharge_efficiency": 0.90,
+            },
+            submit_fn=submit_fn,
+        )
+
+        assert result["success"] is True
+        values = {"charge_efficiency": 0.92, "discharge_efficiency": 0.90}
+        assert submit_fn.await_args_list[1].args[1] == values
+        assert submit_fn.await_args_list[3].args[1] == values
+        assert any(
+            "Resubmitted" in w and "step encounter" in w for w in result["warnings"]
+        )
+
+    async def test_schemaless_sweep_with_queued_selections_warns(self) -> None:
+        """A schema-less step swallowing branch values must be visible."""
+        schemaless_form = {
+            "type": "form",
+            "flow_id": "flow-2116",
+            "step_id": "mystery",
+            # no data_schema at all -> legacy consume-everything fallback
+        }
+        final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
+        submit_fn = AsyncMock(
+            side_effect=[dict(schemaless_form), _cyclic_menu_step(), final_entry]
+        )
+
+        result = await _handle_flow_steps(
+            client=None,
+            flow_id="flow-2116",
+            initial_step=_cyclic_menu_step(),
+            config={
+                "next_step_id": ["main_params", "all_done"],
+                "later_branch_field": 1,
+            },
+            submit_fn=submit_fn,
+        )
+
+        assert result["success"] is True
+        assert any("still queued" in w for w in result["warnings"])

@@ -150,6 +150,28 @@ def _handle_menu_step(
                 remaining_config.pop(key)
                 continue
             menu_choice = value[0]
+            if not menu_choice:
+                # A falsy element mid-list is a malformed call, not an
+                # exhausted list — without this check it would raise the
+                # "ran dry" error while later selections sit unconsumed,
+                # pointing the caller at a problem they don't have.
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Menu selection list under '{key}' contains an "
+                        f"empty element ({menu_choice!r}) — every element "
+                        "must be a menu option name.",
+                        suggestions=[
+                            f"Available options: "
+                            f"{current_step.get('menu_options', [])}",
+                        ],
+                        context={
+                            "flow_id": flow_id,
+                            "step_id": current_step.get("step_id"),
+                            "selection_key": key,
+                        },
+                    )
+                )
             rest = list(value[1:])
             if rest:
                 remaining_config[key] = rest
@@ -331,7 +353,9 @@ class _ReuseState:
         self.fired.add(key)
         self.notes.append(
             f"Resubmitted '{dotted}' at step '{self.step_id}': supplied once "
-            "but declared at more than one site in this flow"
+            "but requested by more than one step encounter in this flow "
+            "(a later step redeclaring the field, or the same step revisited "
+            "via a menu loop — per-visit values cannot be expressed)"
         )
         return True
 
@@ -407,9 +431,15 @@ def _ignored_keys_warnings(
         )
     leftover_menu_keys = _MENU_SELECTION_KEYS & remaining_config.keys()
     if leftover_menu_keys:
+        # Name the values, not just the keys: an un-consumed selection means
+        # that branch was never configured, which a success response would
+        # otherwise hide (the scalar era carried no information beyond the
+        # key name; a list does).
+        details = ", ".join(
+            f"{key}={remaining_config[key]!r}" for key in sorted(leftover_menu_keys)
+        )
         warnings.append(
-            "Ignored menu selection key(s) with no matching menu step: "
-            f"{', '.join(sorted(leftover_menu_keys))}"
+            f"Ignored menu selection key(s) with no matching menu step: {details}"
         )
     return warnings
 
@@ -794,6 +824,12 @@ def _consume_all_remaining_keys(
     consumed key is still recorded by leaf name, so a later step that *does*
     arrive with a schema declaring one of them can be filled from the record
     rather than submitted without it.
+
+    In a cyclic-menu flow the config legitimately carries values destined
+    for several branches, so a schemaless step mid-loop sweeping them all up
+    is far likelier to misfire ("extra keys not allowed" attributed to the
+    wrong step) — a warning is surfaced when this fires while menu
+    selections are still queued, so the sweep is at least visible.
     """
     form_data: dict[str, Any] = {}
     for key in list(remaining_config.keys()):
@@ -804,6 +840,18 @@ def _consume_all_remaining_keys(
         _mark_consumed(consumed_config_keys, "", key)
         if reuse_state is not None:
             reuse_state.record("", key, value, scoped_only=False)
+    queued = {
+        key: remaining_config[key]
+        for key in _MENU_SELECTION_KEY_ORDER
+        if key in remaining_config
+    }
+    if form_data and queued and reuse_state is not None:
+        reuse_state.notes.append(
+            "A step without a schema consumed every remaining config key "
+            f"({', '.join(sorted(form_data))}) while menu selection(s) "
+            f"{queued!r} were still queued — values intended for later "
+            "branches may have been submitted to this step instead"
+        )
     return form_data
 
 

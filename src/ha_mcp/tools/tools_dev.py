@@ -1816,8 +1816,11 @@ class DevTools:
                 # 'clear' (case-insensitive) aliases the empty string: some
                 # MCP clients mangle empty-string arguments in transit, which
                 # left this tool unable to clear its own pin over such a
-                # client (the entry's HA options UI always could).
-                if pip_spec is not None and pip_spec.strip().lower() == "clear":
+                # client (the entry's HA options UI always could). A
+                # whitespace-only value normalizes the same way, matching the
+                # server-side ``_normalize`` in the component's options flow
+                # so the caller sees the collapse at the call site.
+                if pip_spec is not None and pip_spec.strip().lower() in ("", "clear"):
                     pip_spec = ""
                 return await self._update_source(channel, pip_spec)
             if action == "restart":
