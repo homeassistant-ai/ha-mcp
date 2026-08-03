@@ -141,7 +141,7 @@ deliberately omits `github-actions[bot]` to keep that lever.
 |-------|---------|
 | `ready-to-implement` | Clear path, no decisions needed |
 | `needs-choices` | Multiple approaches, needs stakeholder input |
-| `needs-info` | Awaiting clarification from reporter |
+| `needs-info` | Awaiting clarification from reporter. `close-needs-info.yml` clocks from the label event: reminders on days 3/5/6, auto-close on day 7 without an author reply; an author reply removes the label |
 | `priority: high/medium/low` | Relative priority |
 | `triaged` | Automated triage complete (historical — applied by the retired `issue-triage.yml` bot) |
 | `triage-failed` | Automated triage failed (historical — applied by the retired `issue-triage.yml` bot) |

@@ -16,18 +16,24 @@ jobs:
   close_needs_info:
     runs-on: ubuntu-latest
     steps:
-      - name: Close stale needs-info issues
+      - name: Warn and close stale needs-info issues
         uses: actions/github-script@v9
         with:
           script: |
-            // HTML anchors the retired issue-triage.yml bot embedded in its comments.
-            // Still matched so issues it flagged before retirement keep aging out;
-            // issues labeled needs-info manually (no bot comment) are skipped below.
-            const BOT_COMMENT_MARKER = '<!-- triage-bot:info-needed -->';
-            const DUPLICATE_COMMENT_MARKER = '<!-- triage-bot:duplicate -->';
+            // The clock is the most recent `needs-info` *label event*. The retired
+            // triage bot used to anchor this workflow on its own marker comments,
+            // which meant a manually applied needs-info label never aged out. A
+            // label event is the one signal both paths share — the bot's labeling
+            // produced one too, so issues it flagged before retirement keep aging.
             const BOT_LOGIN = 'github-actions[bot]';
-            const DAYS_BEFORE_CLOSE = 10;
+            const DAYS_BEFORE_CLOSE = 7;
+            // Reminder comments at these day marks; the close (with its own final
+            // comment) lands at DAYS_BEFORE_CLOSE. Only the *latest* due reminder
+            // is posted per run, so an issue first seen late in the schedule gets
+            // one catch-up reminder, not a backlog of them.
+            const WARNING_DAYS = [3, 5, 6];
             const MS_PER_DAY = 86400000;
+            const warningMarker = (day) => `<!-- needs-info-warning:${day} -->`;
 
             const issues = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner,
@@ -43,6 +49,24 @@ jobs:
               const issueNumber = issue.number;
               core.info(`Checking issue #${issueNumber}: ${issue.title}`);
 
+              const events = await github.paginate(github.rest.issues.listEvents, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                per_page: 100,
+              });
+              const labelEvents = events.filter(e =>
+                e.event === 'labeled' && e.label && e.label.name === 'needs-info'
+              );
+              if (labelEvents.length === 0) {
+                // The label is on the issue, so an event should always exist.
+                core.warning(`  needs-info present but no labeled event found — skipping`);
+                continue;
+              }
+              const labeledDate = new Date(labelEvents[labelEvents.length - 1].created_at);
+              const daysSince = (Date.now() - labeledDate.getTime()) / MS_PER_DAY;
+              core.info(`  needs-info applied ${daysSince.toFixed(1)} days ago`);
+
               const comments = await github.paginate(github.rest.issues.listComments, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -50,36 +74,18 @@ jobs:
                 per_page: 100,
               });
 
-              // Find the most recent bot triage comment (info needed or duplicate flag)
-              const botComments = comments.filter(c =>
-                c.user.login === BOT_LOGIN &&
-                (c.body.includes(BOT_COMMENT_MARKER) || c.body.includes(DUPLICATE_COMMENT_MARKER))
-              );
-
-              if (botComments.length === 0) {
-                core.info(`  No bot triage comment found — skipping`);
-                continue;
-              }
-
-              const botComment = botComments[botComments.length - 1];
-              const botCommentDate = new Date(botComment.created_at);
-              const daysSinceBot = (Date.now() - botCommentDate.getTime()) / MS_PER_DAY;
-
-              core.info(`  Bot comment is ${daysSinceBot.toFixed(1)} days old`);
-
-              // Only the issue author replying resets the clock (the retired triage bot
-              // used the same rule). A maintainer/bystander comment must not remove
-              // needs-info, or the issue silently escapes the stale-close path with the
-              // requested info still missing.
-              const repliesAfterBot = comments.filter(c =>
+              // Only the issue author replying resets the clock (the retired triage
+              // bot used the same rule). A maintainer/bystander comment must not
+              // remove needs-info, or the issue silently escapes the stale-close
+              // path with the requested info still missing. Re-labeling after an
+              // author reply restarts the whole schedule via the label event.
+              const authorReplied = comments.some(c =>
                 c.user.type !== 'Bot' &&
                 c.user.login === issue.user.login &&
-                new Date(c.created_at) > botCommentDate
+                new Date(c.created_at) > labeledDate
               );
-
-              if (repliesAfterBot.length > 0) {
-                // Author replied — remove needs-info; triage will re-evaluate on next comment
-                core.info(`  Author comment found after bot comment — removing needs-info`);
+              if (authorReplied) {
+                core.info(`  Author replied after labeling — removing needs-info`);
                 try {
                   await github.rest.issues.removeLabel({
                     owner: context.repo.owner,
@@ -93,7 +99,9 @@ jobs:
                 continue;
               }
 
-              if (daysSinceBot >= DAYS_BEFORE_CLOSE) {
+              // --- Close path: comment first, then label removal, then close.
+              // Never close silently — if the comment fails, leave the issue open.
+              if (daysSince >= DAYS_BEFORE_CLOSE) {
                 core.info(`  Closing issue #${issueNumber} — ${DAYS_BEFORE_CLOSE} days without reply`);
 
                 let commented = false;
@@ -131,7 +139,38 @@ jobs:
                 });
 
                 core.info(`  Closed issue #${issueNumber}`);
-              } else {
-                core.info(`  ${(DAYS_BEFORE_CLOSE - daysSinceBot).toFixed(1)} days remaining — leaving open`);
+                continue;
               }
+
+              // --- Warning path: latest due reminder, once per labeling cycle.
+              // The labeledDate comparison scopes the dedup to this cycle, so a
+              // removed-and-reapplied label restarts the schedule from scratch.
+              const dueDays = WARNING_DAYS.filter(d => daysSince >= d);
+              if (dueDays.length === 0) {
+                core.info(`  No reminder due yet (${daysSince.toFixed(1)} days)`);
+                continue;
+              }
+              const day = dueDays[dueDays.length - 1];
+              const alreadyPosted = comments.some(c =>
+                c.user.login === BOT_LOGIN &&
+                new Date(c.created_at) > labeledDate &&
+                c.body.includes(warningMarker(day))
+              );
+              if (alreadyPosted) {
+                core.info(`  Day-${day} reminder already posted`);
+                continue;
+              }
+
+              const isFinal = day === WARNING_DAYS[WARNING_DAYS.length - 1];
+              const daysLeft = Math.max(1, Math.round(DAYS_BEFORE_CLOSE - daysSince));
+              const notice = isFinal
+                ? `⚠️ **Final reminder** — this issue will be closed automatically **tomorrow** unless the requested information is provided.`
+                : `⏳ **Reminder** — this issue is still awaiting the requested information and will be closed automatically in about ${daysLeft} day${daysLeft === 1 ? '' : 's'}.`;
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body: `Hi @${issue.user.login} — ${notice}\n\nReplying with the requested details keeps it open.\n\n*🤖 Automated by Issue Bot*\n${warningMarker(day)}`,
+              });
+              core.info(`  Posted day-${day} reminder`);
             }
