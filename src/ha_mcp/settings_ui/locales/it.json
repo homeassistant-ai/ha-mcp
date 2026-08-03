@@ -735,7 +735,7 @@
     },
     "ha_manage_hacs": {
       "title": "Gestisci HACS",
-      "description": "Gestisce HACS (Home Assistant Community Store): installa o aggiorna elementi e aggiunge repository personalizzati."
+      "description": "Gestisci HACS (Home Assistant Community Store) — installare/aggiornare, rimuovere o aggiungere repository personalizzati."
     },
     "ha_manage_pipeline": {
       "title": "Gestisci le pipeline di Assist",
