@@ -32,6 +32,79 @@ reviews:
       - "dependabot[bot]"
       - "ha-mcp-renovate[bot]"
       - "github-actions[bot]"
+issue_enrichment:
+  # Replaces the retired GitHub Models triage bot (issue-triage.yml). The docs
+  # claim enrichment is "enabled by default", but the schema this file points
+  # at says the default is false — and the schema wins: no issue opened since
+  # the app install got an enrichment comment until this was set explicitly.
+  # Enrichment posts one comment per new/edited issue: possible duplicates,
+  # related issues and PRs, suggested assignees, and a Create Plan checkbox.
+  auto_enrich:
+    enabled: true
+  labeling:
+    # false by default — without it CodeRabbit only *suggests* labels in the
+    # enrichment comment instead of applying them.
+    auto_apply_labels: true
+    # The instruction set mirrors the old triage bot's classifications —
+    # minus `invalid`, dropped deliberately: spam gets closed, not labeled —
+    # plus the bug-class/scope taxonomy from AGENTS.md § Issue Labels. Issue
+    # templates already self-apply their labels; these instructions mostly
+    # cover blank issues and misfiled templates. Labels must match existing
+    # repo labels exactly — CodeRabbit does not create them.
+    labeling_instructions:
+      - label: bug
+        instructions: >-
+          Broken or incorrect behavior: crashes, tool call failures, wrong
+          data returned, regressions. Includes agent-behavior bugs where the
+          AI picked the wrong tool or misused parameters because a tool
+          description misled it — those are bugs even when no error is thrown.
+      - label: enhancement
+        instructions: >-
+          Requests for new features or improvements that do not exist yet:
+          new tools, new parameters, new deployment options, better output.
+      - label: question
+        instructions: >-
+          How-to or usage questions with no clear defect and no feature
+          request.
+      - label: documentation
+        instructions: >-
+          Documentation gaps or corrections: README, setup guides, tool
+          docstrings, the project website.
+      - label: runtime-bug
+        instructions: >-
+          Bug during normal operation after a successful startup: a tool call
+          fails, returns wrong data, or behaves incorrectly while the server
+          is otherwise running fine.
+      - label: startup-bug
+        instructions: >-
+          Bug during startup, install, connect, or authentication: the server
+          never reaches a working state. Includes uvx/pip/docker/add-on
+          install failures and client connection failures.
+      - label: agent-behavior
+        instructions: >-
+          The AI agent misbehaves without a code error: selects the wrong
+          tool, misunderstands parameters, loops, or gives up unnecessarily.
+          The fix is descriptive text (docstring, description, example), not
+          code.
+      - label: upstream
+        instructions: >-
+          Root cause is an upstream dependency, not ha-mcp code: Home
+          Assistant core, FastMCP, the MCP SDK, or a client app such as
+          Claude Desktop.
+      - label: Network misconfiguration
+        instructions: >-
+          ha-mcp itself works but the user cannot reach it: reverse proxy,
+          DNS, TLS, port forwarding, or other remote-access setup problems on
+          the user's network.
+  planning:
+    # Plans stay manual — `@coderabbitai plan` or the Create Plan checkbox in
+    # the enrichment comment. auto_planning defaults to *enabled* with an
+    # empty label list, and the docs define matching behaviour only for
+    # non-empty lists; explicit false keeps "plan every issue" from becoming
+    # the accidental reading of that gap.
+    enabled: true
+    auto_planning:
+      enabled: false
 knowledge_base:
   code_guidelines:
     # AGENTS.md is auto-detected; a guideline file is scoped to its own
