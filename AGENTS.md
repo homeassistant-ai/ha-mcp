@@ -90,7 +90,7 @@ When implementing features or debugging, consult these resources:
 
 ## Issue & PR Management
 
-### Automated Code Review (Codex)
+### Automated Code Review
 
 **Codex** reviews PRs automatically (`pr-codex-review-request.yml` /
 `pr-codex-review-delivery.yml`; posts as `chatgpt-codex-connector[bot]`).
@@ -101,8 +101,35 @@ document (code quality, test coverage, security patterns, MCP conventions,
 safety annotation accuracy): the `@codex review` request comment points Codex
 at it explicitly, and the Claude review skills below apply it.
 
+**CodeRabbit** (GitHub app, posts as `coderabbitai[bot]`) reviews drafts too —
+`.coderabbit.yaml` sets `reviews.auto_review.drafts: true`, since every PR here
+opens as a draft, and `auto_pause_after_reviewed_commits: 0` so it keeps
+reviewing every push instead of going quiet after five. That spends the
+per-developer hourly review allowance faster; a rate-limited push says so in a
+comment and never blocks merge, and CodeRabbit's `rate limit` command reports
+whether reviews are available without consuming one. It auto-detects `AGENTS.md` as review criteria;
+`.gemini/styleguide.md` is added through
+`knowledge_base.code_guidelines.filePatterns` (see the comment there). Repo YAML
+outranks the UI settings (only org/workspace Global Overrides beat it) and does
+not merge with them — any key it omits falls back to CodeRabbit's schema
+defaults, not to UI values. A change to `.coderabbit.yaml` never applies to the
+PR making it: on open-source repos CodeRabbit honours only the base branch's
+config, so the PR reports `Configuration used: defaults` and the change takes
+effect on merge.
+
+**Bot-authored PRs are excluded from automatic review by both tools** —
+Dependabot, Renovate, and the `github-actions[bot]` webhook-proxy promote PRs
+(dev → stable copies whose content was already reviewed in their dev PRs).
+Enforced in `.coderabbit.yaml` `ignore_usernames` and the `pull_request_target`
+admission list in `pr-codex-review-request.yml`, pinned to each other by
+`test_coderabbit_config.py`. A maintainer can still summon a review on a
+promote PR: `@coderabbitai review`, or for Codex a comment that is exactly
+`/review` (or `@ghhamcp review`) — the `issue_comment` admission list
+deliberately omits `github-actions[bot]` to keep that lever.
+
 **Division of Labor:**
 - **Codex (automatic)**: Code quality, test coverage, generic security, MCP conventions
+- **CodeRabbit (automatic, drafts included)**: Line-level review against `AGENTS.md` and `.gemini/styleguide.md`, PR walkthrough and summary
 - **Claude `/contrib-pr-review` (on-demand)**: Repo-specific security (AGENTS.md, .github/, .claude/), detailed test analysis, PR size assessment, issue linkage
 - **Claude `/my-pr-checker` (lifecycle)**: Resolve threads, fix issues, monitor CI, create improvement PRs
 
@@ -161,7 +188,7 @@ gh issue list --state open --json number,title,labels --jq '.[] | select(.labels
 ### PR Review Comments
 
 **Always check for comments after pushing to a PR.** They come from bots
-(Codex, Copilot) or humans. Address human comments with highest
+(Codex, CodeRabbit, Copilot) or humans. Address human comments with highest
 priority; treat bot comments as suggestions to assess, not commands.
 
 **Reply, then resolve.** After addressing an inline comment, reply on its
