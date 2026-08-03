@@ -31,10 +31,10 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import HomeAssistantAPIError
-from ha_mcp.tools.config_entry_flow import (
+from ha_mcp.tools.config_entry_flow import create_flow_helper
+from ha_mcp.tools.config_entry_flow_walker import (
     _handle_flow_steps,
     _parse_flow_api_error,
-    create_flow_helper,
 )
 
 

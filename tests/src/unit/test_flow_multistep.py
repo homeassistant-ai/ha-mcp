@@ -25,12 +25,14 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp.client.rest_client import HomeAssistantAPIError
-from ha_mcp.tools.config_entry_flow import (
+from ha_mcp.tools.config_entry_flow_form import (
     _extract_schema_field_names,
-    _handle_config_subentry_flow_steps,
-    _handle_flow_steps,
     _handle_form_step,
     _ReuseState,
+)
+from ha_mcp.tools.config_entry_flow_walker import (
+    _handle_config_subentry_flow_steps,
+    _handle_flow_steps,
     _submit_step,
 )
 

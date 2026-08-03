@@ -33,9 +33,9 @@ from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_config_entry,
-    iter_schema_fields,
     update_config_entry_options,
 )
+from .config_entry_flow_form import iter_schema_fields
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,

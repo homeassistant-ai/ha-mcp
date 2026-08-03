@@ -36,11 +36,11 @@ from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     SUPPORTED_HELPERS,
     create_flow_helper,
-    fetch_helper_flow_info,
     get_user_step_field_names,
     set_config_subentry,
     update_flow_helper,
 )
+from .config_entry_flow_walker import fetch_helper_flow_info
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -632,7 +632,7 @@ def get_simple_helper_schema(helper_type: str) -> list[_HelperFieldSpec] | None:
     Callers attach the result to validation-error context as ``data_schema``
     so the LLM sees field shape inline with a 4xx response, matching the
     auto-attach pattern already in use for flow helpers (see
-    ``fetch_helper_flow_info`` in ``config_entry_flow``).
+    ``fetch_helper_flow_info`` in ``config_entry_flow_walker``).
     Returns ``None`` for any helper_type not in ``SIMPLE_HELPER_SCHEMAS``,
     so callers can write a single uniform ``if schema is not None: …`` branch.
     """
@@ -670,7 +670,7 @@ def _simple_helper_error_context(
 _MENU_ROOTED_FLOW_HELPER_TYPES: frozenset[str] = frozenset({"template", "group"})
 
 # Keys callers may pass inside ``config`` to select a menu branch — mirrors
-# ``_MENU_SELECTION_KEY_ORDER`` in ``config_entry_flow.py`` (kept in parallel
+# ``_MENU_SELECTION_KEY_ORDER`` in ``config_entry_flow_menu.py`` (kept in parallel
 # rather than imported to avoid widening that module's surface). The ORDER is
 # load-bearing on both sides: it fixes which key wins when a config carries
 # more than one selection key.
@@ -735,7 +735,7 @@ async def _flow_helper_error_context(
         )
     except Exception as e:
         # Mirror the breadcrumb in ``abort_config_flow``'s own swallow
-        # (config_entry_flow), so a fetch failure here doesn't
+        # (config_entry_flow_walker), so a fetch failure here doesn't
         # disappear silently — this PR raises the call rate by 5 sites
         # and the swallow needs an audit-trail entry.
         logger.debug(
