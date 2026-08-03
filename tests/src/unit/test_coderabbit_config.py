@@ -90,10 +90,12 @@ def test_draft_reviews_are_enabled() -> None:
 def test_bot_authors_stay_unreviewed() -> None:
     """Dependency and automation PRs were never reviewed; keep it that way.
 
-    Repo YAML replaces the UI settings rather than merging with them, so this
-    key has to be present: dropping it resolves ``ignore_usernames`` to the
-    schema default of ``[]`` and every Dependabot, Renovate, and
-    release-automation PR starts getting reviewed.
+    Nothing configured produces that today — the resolved config is entirely
+    defaults — so it rests on undocumented CodeRabbit bot-author handling.
+    Pinning the logins here makes the intent explicit and independent of that
+    behaviour, and ``ignore_usernames`` defaults to ``[]``, so dropping the key
+    would leave nothing standing between a handling change and a flood of
+    reviews on every Dependabot, Renovate, and release-automation PR.
     """
     configured = set(_config()["reviews"]["auto_review"]["ignore_usernames"])
     missing = BOT_AUTHORS - configured

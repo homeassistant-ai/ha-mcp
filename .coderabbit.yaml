@@ -6,12 +6,11 @@ reviews:
     # 5-commit pause and leaves the PR silently unreviewed. 0 disables the
     # pause so review keeps running until it stops finding anything.
     auto_pause_after_reviewed_commits: 0
-    # Dependency and automation PRs are not reviewed today, and this file must
-    # say so to keep it that way: repo YAML replaces the UI settings wholesale
-    # rather than merging with them, so an omitted ignore_usernames resolves to
-    # the schema default of [] and CodeRabbit would start reviewing every
-    # Dependabot, Renovate, and release-automation PR. Exact, case-sensitive
-    # logins — no wildcards.
+    # Dependency and automation PRs go unreviewed today, but nothing configured
+    # says so — `@coderabbitai configuration` reports every value as coming from
+    # defaults, so the current behaviour rests on undocumented CodeRabbit
+    # bot-author handling. Stated explicitly here so it survives a change to
+    # that handling. Exact, case-sensitive logins — no wildcards.
     ignore_usernames:
       - "dependabot[bot]"
       - "ha-mcp-renovate[bot]"
