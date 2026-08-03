@@ -16,15 +16,20 @@ reviews:
     # available without spending one. OSS projects sit on a 1-10/hour band that
     # varies with project popularity, so the real headroom here is unknown.
     auto_pause_after_reviewed_commits: 0
-    # Dependency and automation PRs go unreviewed today, but nothing configured
-    # says so — `@coderabbitai configuration` reports every value as coming from
+    # Dependency-update PRs go unreviewed today, but nothing configured says
+    # so — `@coderabbitai configuration` reports every value as coming from
     # defaults, so the current behaviour rests on undocumented CodeRabbit
     # bot-author handling. Stated explicitly here so it survives a change to
     # that handling. Exact, case-sensitive logins — no wildcards.
+    #
+    # Deliberately the same two logins as the Codex skip list in
+    # pr-codex-review-request.yml, and nothing more. github-actions[bot] is
+    # absent on purpose: that login authors the webhook-proxy promote PRs,
+    # which are reviewed today (Codex reviewed #1936/#2037, humans approved
+    # them, and #1977 folded in real fixes) and must stay reviewed.
     ignore_usernames:
       - "dependabot[bot]"
       - "ha-mcp-renovate[bot]"
-      - "github-actions[bot]"
 knowledge_base:
   code_guidelines:
     # AGENTS.md is auto-detected; a guideline file is scoped to its own

@@ -27,12 +27,16 @@ AGENTS_MD = REPO_ROOT / "AGENTS.md"
 CODEX_DELIVERY = REPO_ROOT / ".github" / "workflows" / "pr-codex-review-delivery.yml"
 STYLEGUIDE = ".gemini/styleguide.md"
 
-# Bot identities whose PRs have never been reviewed. Exact logins: CodeRabbit
-# matches ``ignore_usernames`` case-sensitively with no wildcard support.
+# The exact skip list, mirroring the Codex list in
+# pr-codex-review-request.yml. Dependency-update PRs are the one class that
+# genuinely goes unreviewed. github-actions[bot] must NOT appear here: it
+# authors the webhook-proxy promote PRs, which are reviewed today (Codex and
+# humans; #1977 folded in real fixes) — ignoring the login would silently
+# extend the dependency-PR policy to them. Exact logins: CodeRabbit matches
+# ``ignore_usernames`` case-sensitively with no wildcard support.
 BOT_AUTHORS = {
     "dependabot[bot]",
     "ha-mcp-renovate[bot]",
-    "github-actions[bot]",
 }
 
 # ``applyTo`` has to keep the styleguide repo-wide, and minimatch's ``dot:
@@ -119,22 +123,31 @@ def test_draft_reviews_are_enabled() -> None:
 
 
 def test_bot_authors_stay_unreviewed() -> None:
-    """Dependency and automation PRs were never reviewed; keep it that way.
+    """The skip list is exact in both directions.
 
-    Nothing configured produces that today — the resolved config is entirely
-    defaults — so it rests on undocumented CodeRabbit bot-author handling.
-    Pinning the logins here makes the intent explicit and independent of that
-    behaviour, and ``ignore_usernames`` defaults to ``[]``, so dropping the key
-    would leave nothing standing between a handling change and a flood of
-    reviews on every Dependabot, Renovate, and release-automation PR.
+    Dropping a login floods dependency PRs with reviews: nothing configured
+    produces today's skip — the resolved config is entirely defaults — so it
+    rests on undocumented CodeRabbit bot-author handling, and
+    ``ignore_usernames`` defaults to ``[]``.
+
+    Adding a login silently widens the policy: ``github-actions[bot]`` was
+    listed here once, which would have excluded the webhook-proxy promote PRs
+    that Codex and humans actually review. An addition must change
+    ``BOT_AUTHORS`` too, where the comment forces the promote-PR question.
     """
     configured = set(_config()["reviews"]["auto_review"]["ignore_usernames"])
-    missing = BOT_AUTHORS - configured
 
+    missing = BOT_AUTHORS - configured
     assert not missing, (
         f"ignore_usernames no longer covers {sorted(missing)} — those PRs would "
         "start getting reviewed. Matching is exact and case-sensitive, so the "
         "login must include the `[bot]` suffix."
+    )
+    extras = configured - BOT_AUTHORS
+    assert not extras, (
+        f"ignore_usernames gained {sorted(extras)} — every PR that login "
+        "authors silently loses CodeRabbit review. If that is intended, add "
+        "it to BOT_AUTHORS with the rationale recorded in the comment there."
     )
 
 
