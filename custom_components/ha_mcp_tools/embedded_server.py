@@ -1641,12 +1641,14 @@ def _teardown_worker_loop(loop: asyncio.AbstractEventLoop) -> None:
         ("asyncgen", loop.shutdown_asyncgens),
         # The executor join is bounded too: a stuck executor thread must not
         # keep the worker alive past the join deadline (abandoning it emits
-        # a RuntimeWarning instead of hanging).
+        # a RuntimeWarning instead of hanging). The runtime has accepted
+        # timeout= since Python 3.12; typeshed's AbstractEventLoop signature
+        # lags behind, hence the scoped ignore.
         (
             "executor",
             partial(
                 loop.shutdown_default_executor,
-                timeout=_TEARDOWN_TIMEOUT_SECONDS,
+                timeout=_TEARDOWN_TIMEOUT_SECONDS,  # type: ignore[call-arg]
             ),
         ),
     ):
