@@ -25,10 +25,12 @@ Home Assistant language code names every file:
 - `homeassistant-addon-dev/translations/<code>.yaml` (generated)
 
 Add the two authored catalogs — this one may start as a `meta`-only stub
-(`native_name`, `dir`) — then run `python scripts/generate_locales.py` and let
-`scripts/translate_locales.py` (or the `locale-sync.yml` workflow on the PR)
-machine-fill every string; review its output like any other diff. Also
-add the new code to the locale list in the repository-root `AGENTS.md`
+(`native_name`, `dir`) — then run `python scripts/generate_locales.py` and
+merge: the post-merge `locale-sync.yml` workflow machine-fills every string
+over its next daily runs. To fill them in your own PR instead, run
+`scripts/translate_locales.py` yourself and review its output like any
+other diff. Also add the new code to the locale list in the repository-root
+`AGENTS.md`
 § Translations — that list is pinned by
 `test_agents_md_lists_every_shipped_locale`. The engine reads the target
 language from `meta.native_name`, so any language an LLM can write — natural
@@ -69,21 +71,30 @@ import, so the failure names the file but arrives as a broken test module:
 
 ## What CI checks
 
+In PR CI (`tests/src/unit/test_locale_parity.py`, ungated):
+
 - Every surface carries the same set of language codes.
-- `tool_groups` and `tools` name exactly the renderable groups and tools — a
-  tool added to the codebase turns every locale red in the PR that adds it.
+- The generated files (both add-on YAMLs, `FEATURE_META`) are byte-exact
+  generator output (`test_derived_catalogs_match_the_canonical_store`); run
+  `python scripts/generate_locales.py` after touching any `addon.*`,
+  `addon_stable.*` or `features.*` key.
+- Component-catalog `{placeholder}` parity, for keys whose English still
+  matches the baseline — a hand edit that drops a placeholder fails the PR
+  that makes it; a translation awaiting a machine rewrite is excluded.
+
+In the post-merge `locale-sync.yml` workflow only (the same test file, gated
+behind `LOCALE_COMPLETENESS_CHECKS=1` — a PR that changes English merges
+without these, and the daily sync owes them afterwards):
+
+- `tool_groups` and `tools` name exactly the renderable groups and tools.
 - At most 5% of this catalog's `messages`, and 5% of its `tools` texts, may be
   byte-identical to English or missing outright; the component catalogs allow
   15%, because they carry product names as keys of their own. A single tool
   whose `title` *and* `description` are both still English fails by name
   however small the share.
-- The generated files (both add-on YAMLs, `FEATURE_META`) are byte-exact
-  generator output (`test_derived_catalogs_match_the_canonical_store`); run
-  `python scripts/generate_locales.py` after touching any `addon.*`,
-  `addon_stable.*` or `features.*` key.
 - The English each translation was written against is hashed in
   `tests/src/unit/locale_source_baseline.json`, so a later edit to an English
-  string turns the locales red rather than leaving them silently stale —
+  string reads as stale rather than silently keeping the old meaning —
   `scripts/translate_locales.py` retranslates exactly those keys and repins
   the baseline. Adding a language does not change any English source, so no
   baseline regeneration is needed for it.
