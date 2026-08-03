@@ -45,6 +45,13 @@ jobs:
 
             core.info(`Found ${issues.length} open issues with needs-info label`);
 
+            // Failed closes are collected rather than thrown so one bad write
+            // does not skip the rest of the batch — but they must still fail
+            // the run: a rejected close leaves the issue open with needs-info
+            // already removed, so the daily query never returns it again and
+            // nothing retries it. The failed step is the only signal left.
+            const failedCloses = [];
+
             for (const issue of issues) {
               const issueNumber = issue.number;
               core.info(`Checking issue #${issueNumber}: ${issue.title}`);
@@ -145,9 +152,8 @@ jobs:
                   });
                   core.info(`  Closed issue #${issueNumber}`);
                 } catch (err) {
-                  // The closing comment is already posted, so the state is
-                  // self-describing to a maintainer; keep the batch going.
                   core.warning(`  Failed to close #${issueNumber}: ${err.message}`);
+                  failedCloses.push(issueNumber);
                 }
                 continue;
               }
@@ -194,4 +200,8 @@ jobs:
               } catch (err) {
                 core.warning(`  Failed to post day-${day} reminder on #${issueNumber}: ${err.message}`);
               }
+            }
+
+            if (failedCloses.length > 0) {
+              core.setFailed(`Failed to close ${failedCloses.length} issue(s): #${failedCloses.join(', #')}. Each is open with needs-info already removed and a closing comment posted — the daily query will never return it again, so close it (or re-apply needs-info) manually.`);
             }
