@@ -166,14 +166,27 @@ def test_codex_auto_skip_matches_the_coderabbit_ignore_list() -> None:
     dispatches Codex (the on-demand lever the exclusion rationale relies on).
     """
     text = CODEX_REQUEST.read_text("utf-8")
-    bot_lists = [
-        set(json.loads(raw))
-        for raw in re.findall(r"fromJSON\('(\[[^']*\])'\)", text)
+    # Bound to the pull_request_target branch structurally, not by position.
+    # Anchored on the event_name comparisons — the bare event names also
+    # appear in the `on:` trigger block, which holds no skip list at all.
+    auto_anchor = "github.event_name == 'pull_request_target'"
+    comment_anchor = "github.event_name == 'issue_comment'"
+    assert auto_anchor in text and comment_anchor in text, (
+        f"{CODEX_REQUEST.name} no longer has the two admission branches this "
+        "test expects — rebind the extraction below to the new structure."
+    )
+    auto_branch = text.split(auto_anchor, 1)[1].split(comment_anchor, 1)[0]
+    raw_lists = [
+        raw
+        for raw in re.findall(r"fromJSON\('(\[[^']*\])'\)", auto_branch)
         if "[bot]" in raw
     ]
-    assert bot_lists, f"no bot skip list found in {CODEX_REQUEST.name}"
+    assert len(raw_lists) == 1, (
+        f"expected exactly one bot skip list in {CODEX_REQUEST.name}'s "
+        f"pull_request_target branch, found {len(raw_lists)}"
+    )
 
-    auto_admission = bot_lists[0]
+    auto_admission = set(json.loads(raw_lists[0]))
     assert auto_admission == BOT_AUTHORS, (
         f"{CODEX_REQUEST.name}'s auto-admission skip list {sorted(auto_admission)} "
         f"differs from .coderabbit.yaml's ignore_usernames {sorted(BOT_AUTHORS)} — "
