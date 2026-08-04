@@ -308,7 +308,7 @@ def _seed_state_from_url(url: str) -> None:
     _save_sidecar_state(port, match.group(2))
 
 
-def _shutdown_endpoint(url: str) -> str:
+def _shutdown_url(url: str) -> str:
     """Derive the retire POST target from a recorded settings URL.
 
     Shared between the retire flow and its producer/consumer test — the
@@ -318,13 +318,16 @@ def _shutdown_endpoint(url: str) -> str:
     return url.removesuffix("/settings") + "/api/settings/shutdown"
 
 
-def _post_shutdown(url: str) -> bool:
-    """POST the retire request; True only when the old sidecar acknowledged.
+def _post_shutdown(url: str) -> tuple[bool, bool | None]:
+    """POST the retire request; returns ``(acked, sentinel_created)``.
 
-    Every failure mode gets its own truthful log line — a refusal
-    (HTTPError: the endpoint answered "alive and NOT shutting down") and
-    a timeout (alive but slow) are NOT "no responsive sidecar", and both
-    return False so the caller neither clears the sentinel nor waits on
+    ``acked`` is True only when the old sidecar acknowledged (2xx).
+    ``sentinel_created`` reports whether THIS request created the disable
+    sentinel (None when the endpoint predates the field). Every failure
+    mode gets its own truthful log line — a refusal (HTTPError: the
+    endpoint answered "alive and NOT shutting down") and a timeout
+    (alive but slow) are NOT "no responsive sidecar", and both return
+    acked=False so the caller neither clears the sentinel nor waits on
     a pid that will not exit.
     """
     import urllib.error
@@ -332,11 +335,22 @@ def _post_shutdown(url: str) -> bool:
     try:
         import urllib.request
 
-        request = urllib.request.Request(
-            _shutdown_endpoint(url), data=b"", method="POST"
-        )
-        with _no_proxy_opener().open(request, timeout=_SHUTDOWN_HTTP_TIMEOUT):
-            return True  # urllib raises for non-2xx; reaching here is success
+        request = urllib.request.Request(_shutdown_url(url), data=b"", method="POST")
+        with _no_proxy_opener().open(request, timeout=_SHUTDOWN_HTTP_TIMEOUT) as resp:
+            # urllib raises for non-2xx; reaching here is success. The
+            # endpoint reports whether THIS request created the disable
+            # sentinel — the authoritative signal for clearing it (a
+            # user's Stop can land between the caller's snapshot and this
+            # POST). Legacy endpoints without the field yield None and
+            # the caller falls back to its snapshot.
+            sentinel_created: bool | None = None
+            with contextlib.suppress(OSError, ValueError, TypeError):
+                payload = json.loads(resp.read())
+                if isinstance(payload, dict) and isinstance(
+                    payload.get("sentinel_created"), bool
+                ):
+                    sentinel_created = payload["sentinel_created"]
+            return True, sentinel_created
     except urllib.error.HTTPError as exc:
         # Caught before URLError, which it subclasses. The endpoint's
         # non-2xx answers (sentinel write failed / stop() raised) leave
@@ -364,7 +378,7 @@ def _post_shutdown(url: str) -> bool:
             "replacing state files only.",
             exc,
         )
-    return False
+    return False, None
 
 
 def _log_shutdown_timeout(exc: BaseException) -> None:
@@ -415,15 +429,23 @@ def _shutdown_existing_sidecar() -> None:
     # Stop in this very window" (keep it — their disable must stick).
     sentinel_preexisting = _disabled_sentinel().exists()
 
-    if not _post_shutdown(url):
+    acked, sentinel_created = _post_shutdown(url)
+    if not acked:
         return
     logger.info("Retired previous settings UI sidecar at %s", url)
 
     # /shutdown drops the disable sentinel before signalling exit — its
     # "user clicked shutdown" contract. This is a replace, not a disable:
     # clear the sentinel or the freshly spawned child would honor it and
-    # exit immediately. Only a sentinel our own POST caused is cleared.
-    if not sentinel_preexisting:
+    # exit immediately. Only a sentinel our own POST caused is cleared —
+    # the endpoint's sentinel_created field is authoritative (it closes
+    # the window where a user's Stop lands between the snapshot above
+    # and our POST); legacy endpoints without the field fall back to
+    # the snapshot.
+    should_clear = (
+        sentinel_created if sentinel_created is not None else not sentinel_preexisting
+    )
+    if should_clear:
         with contextlib.suppress(FileNotFoundError, OSError):
             _disabled_sentinel().unlink()
 
@@ -578,7 +600,7 @@ def _bind_listener(preferred: int, source: str) -> socket.socket:
     raise OSError("no bind candidates")  # unreachable: [.., 0] always ends in raise
 
 
-def maybe_spawn() -> None:
+def maybe_spawn(prepare: Callable[[], None] | None = None) -> None:
     """Retire any previous sidecar and spawn a fresh one.
 
     Called once from stdio ``main()`` after argument validation. No-op
@@ -590,6 +612,11 @@ def maybe_spawn() -> None:
     serves the code and environment of the parent that spawned it, which
     may be a long-dead install many versions old. Replacing it on every
     startup keeps the settings UI in lockstep with this server process.
+
+    ``prepare`` runs winner-only, inside the spawn lock, just before the
+    child is launched — the metadata-cache dump goes here so a lock
+    LOSER (whose environment may differ) can never overwrite the cache
+    the winner's sidecar serves.
     """
     if _is_disabled():
         logger.info(
@@ -616,6 +643,15 @@ def maybe_spawn() -> None:
             return
 
         _shutdown_existing_sidecar()
+        if prepare is not None:
+            try:
+                prepare()
+            except Exception:
+                # The cache dump is advisory; a failure must not cost the
+                # user their settings UI.
+                logger.warning(
+                    "Sidecar prepare hook failed; spawning anyway.", exc_info=True
+                )
         _do_spawn()
 
 
@@ -1076,6 +1112,12 @@ def _build_app(
         # sidecar running — silently exiting without the sentinel would
         # leave the user thinking they'd disabled the sidecar while it
         # quietly respawns on the next stdio start.
+        # ``sentinel_created`` tells the retire flow whether THIS request
+        # created the sentinel: a replace clears only its own sentinel, so
+        # a user's Stop that landed a beat earlier stays honored.
+        # (Requests are serialized on uvicorn's single event loop, so the
+        # exists-then-write pair cannot interleave with another request.)
+        sentinel_created = not _disabled_sentinel().exists()
         try:
             _disabled_sentinel().write_text(
                 f"Disabled via /shutdown endpoint at pid {os.getpid()}\n"
@@ -1132,6 +1174,7 @@ def _build_app(
         return JSONResponse(
             {
                 "success": True,
+                "sentinel_created": sentinel_created,
                 "message": (
                     "Settings UI sidecar shutting down. "
                     f"Delete {_disabled_sentinel()} to re-enable on next ha-mcp start."
@@ -1242,6 +1285,15 @@ def run_main() -> int:
     # earlier in this module for why we don't install our own.
     with app.state.shutdown_lock:
         app.state.shutdown_state["stop"] = _stop
+
+    # Start listening BEFORE publishing the URL: a parent that reads the
+    # fresh ui.url may POST /shutdown immediately, and a bound-but-not-
+    # listening socket would refuse it — misread as "no sidecar" and
+    # answered with a duplicate spawn. Listening here lets the kernel
+    # queue that connection until uvicorn's accept loop takes over
+    # (asyncio's create_server re-listens on an already-listening socket
+    # without complaint).
+    listener.listen(128)
 
     _write_pid_url(url)
 

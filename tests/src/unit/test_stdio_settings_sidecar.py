@@ -220,13 +220,20 @@ class TestPidLiveness:
         assert sidecar._pid_alive(-1) is False
 
 
-def _fake_opener(status: int = 200, side_effect: Exception | None = None) -> MagicMock:
-    """Stand-in for ``_no_proxy_opener()``: canned status or raising open()."""
+def _fake_opener(
+    status: int = 200,
+    side_effect: Exception | None = None,
+    body: str | None = None,
+) -> MagicMock:
+    """Stand-in for ``_no_proxy_opener()``: canned status/body or raising open()."""
     opener = MagicMock()
     if side_effect is not None:
         opener.open.side_effect = side_effect
     else:
-        opener.open.return_value.__enter__.return_value.status = status
+        response = opener.open.return_value.__enter__.return_value
+        response.status = status
+        if body is not None:
+            response.read.return_value = body.encode()
     return opener
 
 
@@ -410,6 +417,38 @@ class TestShutdownExistingSidecar:
             and "spawning replacement anyway" in rec.message
             for rec in caplog.records
         ), f"expected timeout warning, got: {[r.message for r in caplog.records]}"
+
+    def test_user_stop_landing_just_before_the_post_is_preserved(
+        self, tmp_data_dir: Path
+    ) -> None:
+        """The endpoint's sentinel_created field closes the snapshot race.
+
+        Sequence: parent snapshots (sentinel absent) → user clicks Stop
+        (their request writes the sentinel) → parent's POST reaches the
+        endpoint, which reports sentinel_created=false because the file
+        already existed. The parent must honor that over its stale
+        snapshot, or the user's disable is silently undone.
+        """
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        sentinel = tmp_data_dir / "settings_ui_disabled"
+
+        def _user_stop_then_answer(_req: object, timeout: float = 0) -> MagicMock:
+            sentinel.write_text("Disabled via /shutdown endpoint at pid 999\n")
+            cm = MagicMock()
+            response = cm.__enter__.return_value
+            response.status = 200
+            response.read.return_value = b'{"success": true, "sentinel_created": false}'
+            return cm
+
+        opener = MagicMock()
+        opener.open.side_effect = _user_stop_then_answer
+        with patch.object(sidecar, "_no_proxy_opener", return_value=opener):
+            sidecar._shutdown_existing_sidecar()
+        assert sentinel.exists(), (
+            "sentinel_created=false must override the stale absent-snapshot"
+        )
 
     def test_preexisting_sentinel_survives_the_replace(
         self, tmp_data_dir: Path
@@ -740,6 +779,38 @@ class TestMaybeSpawnGates:
             "maybe_spawn must poll until the child publishes its URL"
         )
 
+    def test_prepare_callback_runs_winner_only_inside_the_lock(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """maybe_spawn(prepare=...) invokes the callback exactly once on
+        the winner path; losers and disabled installs never invoke it."""
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        events: list[str] = []
+        fake_proc = MagicMock()
+        fake_proc.pid = 12345
+        fake_proc.poll.return_value = None
+        url_file = tmp_data_dir / "ui.url"
+
+        def _publish(_duration: float) -> None:
+            url_file.write_text("http://127.0.0.1:54321/private_x/settings\n")
+
+        with (
+            patch("subprocess.Popen", return_value=fake_proc),
+            patch("time.sleep", side_effect=_publish),
+        ):
+            sidecar.maybe_spawn(prepare=lambda: events.append("winner"))
+        assert events == ["winner"]
+
+        events.clear()
+        with sidecar._spawn_lock() as held:
+            assert held is True
+            sidecar.maybe_spawn(prepare=lambda: events.append("loser"))
+        assert events == []
+
+        monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
+        sidecar.maybe_spawn(prepare=lambda: events.append("disabled"))
+        assert events == []
+
     def test_lock_loser_reports_existing_url_to_stderr(
         self,
         tmp_data_dir: Path,
@@ -799,10 +870,14 @@ class TestMainSpawnPathDumpsCache:
         async def _fake_metadata(_server: object) -> list[dict[str, str]]:
             return [{"name": "ha_get_state", "primary_tag": "Entity Operations"}]
 
+        def _winner_spawn(prepare: object = None) -> None:
+            assert callable(prepare), "maybe_spawn must receive the dump callback"
+            prepare()
+
         with (
             patch.object(main_module, "_get_server") as get_server,
             patch("ha_mcp.settings_ui._get_tool_metadata", new=_fake_metadata),
-            patch.object(sidecar, "maybe_spawn") as spawn,
+            patch.object(sidecar, "maybe_spawn", side_effect=_winner_spawn) as spawn,
         ):
             main_module._maybe_spawn_settings_sidecar()
         get_server.assert_called_once()
@@ -810,6 +885,27 @@ class TestMainSpawnPathDumpsCache:
         assert load_tool_metadata_cache() == [
             {"name": "ha_get_state", "primary_tag": "Entity Operations"}
         ]
+
+    def test_dump_never_runs_when_the_spawn_is_skipped(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A lock loser must not dump — its cache could belong to a
+        different environment than the sidecar the winner just spawned,
+        and the sidecar reloads the shared file per request."""
+        import ha_mcp.__main__ as main_module
+
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+
+        def _loser_spawn(prepare: object = None) -> None:
+            return  # lock loser: never invokes the dump callback
+
+        with (
+            patch.object(main_module, "_get_server") as get_server,
+            patch.object(sidecar, "maybe_spawn", side_effect=_loser_spawn),
+        ):
+            main_module._maybe_spawn_settings_sidecar()
+        get_server.assert_not_called()
+        assert load_tool_metadata_cache() == []
 
     def test_dump_skipped_when_disabled(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -1013,6 +1109,11 @@ class TestRunMainWiring:
         # The pre-bound serving socket must be handed to uvicorn — a
         # host/port re-bind would reintroduce the probe-then-rebind race.
         assert snapshot["sockets"] == [listener]
+        # The socket must be LISTENING before ui.url is published (run_main
+        # is linear: listen() precedes _write_pid_url), so a parent that
+        # reads the fresh URL gets its retire POST kernel-queued even
+        # before uvicorn's accept loop starts — never connection-refused.
+        listener.listen.assert_called_once()
 
         url = snapshot["url"]
         assert url.startswith("http://127.0.0.1:54321/private_"), (
@@ -1600,7 +1701,7 @@ class TestDiscoverabilityFlow:
         app = sidecar._build_app(host="127.0.0.1", port=port, secret_path=secret_path)
         client = TestClient(app)
 
-        target = sidecar._shutdown_endpoint(url)
+        target = sidecar._shutdown_url(url)
         prefix = f"http://127.0.0.1:{port}"
         assert target.startswith(prefix)
         resp = client.post(
@@ -1608,10 +1709,20 @@ class TestDiscoverabilityFlow:
             headers={"host": f"127.0.0.1:{port}"},
         )
         assert resp.status_code == 200
-        assert resp.json().get("success") is True
+        body = resp.json()
+        assert body.get("success") is True
         # The endpoint's contract the retire flow depends on: the disable
-        # sentinel is written before it answers.
+        # sentinel is written before it answers, and the response reports
+        # whether THIS request created it (drives the parent's decision
+        # to clear it — a user's earlier Stop must not be cleared).
         assert (tmp_data_dir / "settings_ui_disabled").exists()
+        assert body.get("sentinel_created") is True
+        second = client.post(
+            target.removeprefix(prefix),
+            headers={"host": f"127.0.0.1:{port}"},
+        )
+        assert second.status_code == 200
+        assert second.json().get("sentinel_created") is False
 
     def test_url_from_overview_serves_settings_page(self, tmp_data_dir: Path) -> None:
         """The URL ``ha_get_overview`` surfaces MUST hit a real /settings page.
