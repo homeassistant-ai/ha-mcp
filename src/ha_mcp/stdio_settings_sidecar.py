@@ -616,10 +616,11 @@ def maybe_spawn(prepare: Callable[[], None] | None = None) -> None:
     may be a long-dead install many versions old. Replacing it on every
     startup keeps the settings UI in lockstep with this server process.
 
-    ``prepare`` runs winner-only, inside the spawn lock, just before the
-    child is launched — the metadata-cache dump goes here so a lock
+    ``prepare`` runs winner-only, inside the spawn lock, BEFORE the old
+    sidecar is retired — the metadata-cache dump goes here so a lock
     LOSER (whose environment may differ) can never overwrite the cache
-    the winner's sidecar serves.
+    the winner's sidecar serves, and the heavy dump happens while the
+    old sidecar still holds the remembered port.
     """
     if _is_disabled():
         logger.info(

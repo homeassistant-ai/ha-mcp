@@ -1682,14 +1682,33 @@ class TestDumpCacheFailurePath:
     def test_dump_returns_false_on_oserror(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Force Path.write_text to raise; the helper must catch + return
+        # Force the atomic writer to raise; the helper must catch + return
         # False without escaping the exception (callers in __main__.py
         # rely on this to avoid blocking stdio startup on cache I/O).
         def _raise(*_args: object, **_kwargs: object) -> None:
             raise OSError("simulated disk full")
 
-        monkeypatch.setattr(Path, "write_text", _raise)
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._persistence._atomic_write_json", _raise
+        )
         assert dump_tool_metadata_cache([{"name": "x"}]) is False
+
+    def test_dump_is_atomic(self, tmp_data_dir: Path) -> None:
+        """The dump must go through tmp-then-rename, never truncate-write.
+
+        Since the dump moved ahead of the retire, it overlaps the OLD
+        still-serving sidecar on every startup — a truncate-write would
+        hand a concurrent /api/tools request an empty tool list from the
+        half-written file. os.replace guarantees readers see the old or
+        the new content, never a torn one.
+        """
+        payload = [{"name": "ha_get_state", "primary_tag": "Entity Operations"}]
+        with patch(
+            "ha_mcp.settings_ui._persistence._atomic_write_json"
+        ) as atomic_write:
+            assert dump_tool_metadata_cache(payload) is True
+        atomic_write.assert_called_once()
+        assert atomic_write.call_args[0][1] == payload
 
 
 class TestSpawnLock:
