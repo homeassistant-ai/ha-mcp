@@ -5,6 +5,7 @@ exiting cleanly within the expected timeout period.
 """
 
 import asyncio
+import logging
 import os
 import signal
 import sys
@@ -297,6 +298,92 @@ class TestGracefulShutdownIntegration:
 
             # Verify cleanup was called
             assert cleanup_called.is_set(), "Cleanup was not called"
+
+    @pytest.mark.asyncio
+    async def test_cleanup_that_swallows_cancellation_is_abandoned(
+        self, monkeypatch, caplog
+    ):
+        """A hung cleanup that swallows cancellation cannot block shutdown.
+
+        CLI mirror of the embedded regression (issue #2127): the real cleanup
+        stack swallows ``CancelledError`` at several layers, so the shutdown
+        path must cancel-and-abandon. Against the previous ``wait_for`` form
+        this test times out: ``wait_for`` awaits the cancelled cleanup, and
+        this cleanup — like the real stack — eats the cancellation.
+        """
+        import ha_mcp.__main__ as main_module
+
+        monkeypatch.setattr(main_module, "SHUTDOWN_TIMEOUT_SECONDS", 0.1)
+        release = asyncio.Event()
+        cancellation_seen = asyncio.Event()
+        cleanup_task = None
+
+        async def swallowing_cleanup():
+            nonlocal cleanup_task
+            cleanup_task = asyncio.current_task()
+            while True:
+                try:
+                    await release.wait()
+                    return
+                except asyncio.CancelledError:
+                    cancellation_seen.set()
+                    continue
+
+        mock_mcp = MagicMock()
+
+        async def mock_run_async(show_banner=True):
+            await asyncio.sleep(100)
+
+        mock_mcp.run_async = mock_run_async
+
+        with (
+            patch.object(main_module, "_get_mcp", return_value=mock_mcp),
+            patch.object(
+                main_module, "_cleanup_resources", side_effect=swallowing_cleanup
+            ),
+        ):
+            main_module._shutdown_event = None
+            main_module._shutdown_in_progress = False
+
+            server_task = asyncio.create_task(main_module._run_with_graceful_shutdown())
+            try:
+                await asyncio.sleep(0.1)
+
+                if main_module._shutdown_event:
+                    main_module._shutdown_event.set()
+
+                with caplog.at_level(logging.WARNING, logger=main_module.logger.name):
+                    # asyncio.wait, not wait_for: a timing-out wait_for would
+                    # cancel server_task and re-await it — against the
+                    # regressed code that cancellation is swallowed by the
+                    # same cleanup, hanging the test instead of failing it.
+                    _done, pending = await asyncio.wait({server_task}, timeout=3.0)
+                    if pending:
+                        pytest.fail(
+                            "Shutdown blocked on a cancellation-swallowing cleanup"
+                        )
+                    try:
+                        server_task.result()
+                    except asyncio.CancelledError:
+                        pass  # Expected
+
+                assert "Resource cleanup timed out" in caplog.text
+                # The abandon branch cancels before logging; the swallow must
+                # have seen that cancellation, or a timeout-only
+                # implementation could satisfy the assertions above.
+                await asyncio.wait_for(cancellation_seen.wait(), timeout=1.0)
+            finally:
+                # Unblock and drain the abandoned cleanup task so it cannot
+                # leak past this test, even when an assertion above fails.
+                release.set()
+                if cleanup_task is not None:
+                    await asyncio.wait_for(asyncio.shield(cleanup_task), timeout=1.0)
+                # The fail path leaves server_task pending: cancel and drain
+                # it best-effort, again without re-awaiting a swallowed
+                # cancellation through wait_for.
+                if not server_task.done():
+                    server_task.cancel()
+                    await asyncio.wait({server_task}, timeout=1.0)
 
 
 class TestStdinDetection:
