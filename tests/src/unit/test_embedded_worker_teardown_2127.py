@@ -208,26 +208,37 @@ async def test_shutdown_server_resources_bounded_abandons_a_swallowing_hang(
     monkeypatch.setattr(es, "_TEARDOWN_TIMEOUT_SECONDS", 0.05)
     monkeypatch.setattr(ws_client.websocket_manager, "disconnect", AsyncMock())
     release = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+    hang_task: asyncio.Task[Any] | None = None
 
     async def swallowing_hang() -> None:
+        nonlocal hang_task
+        hang_task = asyncio.current_task()
         while True:
             try:
                 await release.wait()
                 return
             except asyncio.CancelledError:
+                cancellation_seen.set()
                 continue
 
     monkeypatch.setattr(ws_listener, "stop_websocket_listener", swallowing_hang)
 
-    with caplog.at_level(logging.WARNING, logger=es._LOGGER.name):
-        await es._shutdown_server_resources_bounded(AsyncMock(name="server"))
+    try:
+        with caplog.at_level(logging.WARNING, logger=es._LOGGER.name):
+            await es._shutdown_server_resources_bounded(AsyncMock(name="server"))
 
-    assert "Embedded resource cleanup timed out" in caplog.text
-
-    # Unblock and drain the abandoned task so it cannot leak past this test.
-    release.set()
-    for _ in range(10):
-        await asyncio.sleep(0)
+        assert "Embedded resource cleanup timed out" in caplog.text
+        # The abandon branch cancels before logging; the swallow must have
+        # seen that cancellation, or a timeout-only implementation could
+        # satisfy the assertion above.
+        await asyncio.wait_for(cancellation_seen.wait(), timeout=1.0)
+    finally:
+        # Unblock and drain the abandoned task so it cannot leak past this
+        # test, even when an assertion above fails.
+        release.set()
+        if hang_task is not None:
+            await asyncio.wait_for(asyncio.shield(hang_task), timeout=1.0)
 
 
 async def test_shutdown_server_resources_isolates_step_failures(

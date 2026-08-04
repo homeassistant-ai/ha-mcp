@@ -315,13 +315,18 @@ class TestGracefulShutdownIntegration:
 
         monkeypatch.setattr(main_module, "SHUTDOWN_TIMEOUT_SECONDS", 0.1)
         release = asyncio.Event()
+        cancellation_seen = asyncio.Event()
+        cleanup_task = None
 
         async def swallowing_cleanup():
+            nonlocal cleanup_task
+            cleanup_task = asyncio.current_task()
             while True:
                 try:
                     await release.wait()
                     return
                 except asyncio.CancelledError:
+                    cancellation_seen.set()
                     continue
 
         mock_mcp = MagicMock()
@@ -340,28 +345,37 @@ class TestGracefulShutdownIntegration:
             main_module._shutdown_event = None
             main_module._shutdown_in_progress = False
 
-            server_task = asyncio.create_task(main_module._run_with_graceful_shutdown())
+            try:
+                server_task = asyncio.create_task(
+                    main_module._run_with_graceful_shutdown()
+                )
 
-            await asyncio.sleep(0.1)
+                await asyncio.sleep(0.1)
 
-            if main_module._shutdown_event:
-                main_module._shutdown_event.set()
+                if main_module._shutdown_event:
+                    main_module._shutdown_event.set()
 
-            with caplog.at_level(logging.WARNING, logger=main_module.logger.name):
-                try:
-                    await asyncio.wait_for(server_task, timeout=3.0)
-                except TimeoutError:
-                    pytest.fail("Shutdown blocked on a cancellation-swallowing cleanup")
-                except asyncio.CancelledError:
-                    pass  # Expected
+                with caplog.at_level(logging.WARNING, logger=main_module.logger.name):
+                    try:
+                        await asyncio.wait_for(server_task, timeout=3.0)
+                    except TimeoutError:
+                        pytest.fail(
+                            "Shutdown blocked on a cancellation-swallowing cleanup"
+                        )
+                    except asyncio.CancelledError:
+                        pass  # Expected
 
-        assert "Resource cleanup timed out" in caplog.text
-
-        # Unblock and drain the abandoned cleanup task so it cannot leak
-        # past this test.
-        release.set()
-        for _ in range(10):
-            await asyncio.sleep(0)
+                assert "Resource cleanup timed out" in caplog.text
+                # The abandon branch cancels before logging; the swallow must
+                # have seen that cancellation, or a timeout-only
+                # implementation could satisfy the assertions above.
+                await asyncio.wait_for(cancellation_seen.wait(), timeout=1.0)
+            finally:
+                # Unblock and drain the abandoned cleanup task so it cannot
+                # leak past this test, even when an assertion above fails.
+                release.set()
+                if cleanup_task is not None:
+                    await asyncio.wait_for(asyncio.shield(cleanup_task), timeout=1.0)
 
 
 class TestStdinDetection:
