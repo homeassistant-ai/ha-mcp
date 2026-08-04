@@ -28,6 +28,7 @@ _WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "locale-sync.yml"
 _GATED_TEST_FILES = (
     Path(__file__).with_name("test_locale_parity.py"),
     Path(__file__).with_name("test_settings_ui_i18n.py"),
+    Path(__file__).with_name("test_translate_locales.py"),
 )
 
 
@@ -58,10 +59,7 @@ def _verification_steps() -> list[dict[str, Any]]:
         step
         for step in steps
         if "pytest" in str(step.get("run", ""))
-        and (
-            "test_locale_parity.py" in str(step.get("run", ""))
-            or "test_settings_ui_i18n.py" in str(step.get("run", ""))
-        )
+        and any(path.name in str(step.get("run", "")) for path in _GATED_TEST_FILES)
     ]
 
 
