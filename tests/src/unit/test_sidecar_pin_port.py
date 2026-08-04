@@ -16,6 +16,7 @@ from ha_mcp.config import Settings
 
 
 def _a_free_port() -> int:
+    """Return an available localhost TCP port."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return int(s.getsockname()[1])

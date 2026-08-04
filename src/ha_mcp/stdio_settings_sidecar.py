@@ -104,25 +104,26 @@ def _log_file() -> Path:
 
 
 def _disabled_sentinel() -> Path:
+    """
+    Get the path to the disable sentinel file for the settings sidecar.
+    
+    Returns:
+        Path to the sentinel file that, when present, persistently disables the UI sidecar.
+    """
     return _sidecar_dir() / "settings_ui_disabled"
 
 
 def _state_file() -> Path:
+    """Return the path to the sidecar's persistent state file."""
     return _sidecar_dir() / "ui.state"
 
 
 def _load_sidecar_state() -> tuple[int, str] | None:
-    """Return ``(port, secret_path)`` persisted by a prior spawn, or None.
-
-    ``ui.url``/``ui.pid`` mean "a sidecar is serving right now" and die
-    with the process; ``ui.state`` means "this install's stable URL" and
-    outlives it. With replace-on-startup (issue #2131) the process no
-    longer survives restarts, so URL stability comes from rebinding the
-    remembered port and reusing the remembered secret path.
-
-    Both values are validated strictly — the secret is interpolated into
-    route paths, so a corrupted file must yield None (fresh values), not
-    a malformed route table.
+    """
+    Load and validate the persisted sidecar port and secret path.
+    
+    Returns:
+    	tuple[int, str] | None: The validated port and secret path, or `None` if the state file is missing, unreadable, malformed, or invalid.
     """
     try:
         text = _state_file().read_text()
@@ -183,11 +184,11 @@ def _save_sidecar_state(port: int, secret_path: str) -> None:
 
 
 def read_sidecar_url() -> str | None:
-    """Return the current sidecar URL, or None if no sidecar is running.
-
-    Reads ``~/.ha-mcp/ui.url`` if present. Consumed by
-    ``ha_get_overview`` to surface the URL to the LLM (and through it,
-    the user) on every overview call.
+    """
+    Read the sidecar's published URL when it is available.
+    
+    Returns:
+        str | None: The sidecar URL, or `None` if the URL is unavailable.
     """
     try:
         return _url_file().read_text().strip() or None
@@ -217,7 +218,15 @@ def _is_disabled() -> bool:
 
 
 def _pid_alive(pid: int) -> bool:
-    """Return True if a process with ``pid`` is currently alive."""
+    """
+    Determine whether a process is running for the given process ID.
+    
+    Parameters:
+    	pid (int): Process ID to check
+    
+    Returns:
+    	bool: `true` if the process exists or access restrictions indicate it may exist, `false` otherwise
+    """
     if pid <= 0:
         return False
     if sys.platform == "win32":
@@ -309,29 +318,29 @@ def _seed_state_from_url(url: str) -> None:
 
 
 def _shutdown_url(url: str) -> str:
-    """Derive the retire POST target from a recorded settings URL.
-
-    Shared between the retire flow and its producer/consumer test — the
-    arithmetic must stay in lockstep with the route table in
-    :func:`_build_app`. ``mode=retire`` tells a current-code endpoint to
-    skip the disable-sentinel write (a retire is not a disable), so
-    every sentinel on disk is user-owned; legacy endpoints ignore the
-    parameter and keep their write-then-clear contract.
+    """
+    Build the authenticated retire endpoint URL from a recorded settings URL.
+    
+    Parameters:
+    	url (str): The recorded settings page URL.
+    
+    Returns:
+    	str: The URL for the retire shutdown endpoint.
     """
     return url.removesuffix("/settings") + "/api/settings/shutdown?mode=retire"
 
 
 def _post_shutdown(url: str) -> tuple[bool, bool | None]:
-    """POST the retire request; returns ``(acked, sentinel_created)``.
-
-    ``acked`` is True only when the old sidecar acknowledged (2xx).
-    ``sentinel_created`` reports whether THIS request created the disable
-    sentinel (None when the endpoint predates the field). Every failure
-    mode gets its own truthful log line — a refusal (HTTPError: the
-    endpoint answered "alive and NOT shutting down") and a timeout
-    (alive but slow) are NOT "no responsive sidecar", and both return
-    acked=False so the caller neither clears the sentinel nor waits on
-    a pid that will not exit.
+    """
+    Request shutdown of the sidecar identified by a recorded URL.
+    
+    Parameters:
+        url (str): Recorded sidecar URL.
+    
+    Returns:
+        tuple[bool, bool | None]: Whether the sidecar acknowledged the request and,
+        when reported by the endpoint, whether the request created the disable
+        sentinel.
     """
     import urllib.error
 
@@ -385,6 +394,9 @@ def _post_shutdown(url: str) -> tuple[bool, bool | None]:
 
 
 def _log_shutdown_timeout(exc: BaseException) -> None:
+    """
+    Log that the previous sidecar did not respond to the shutdown request within the configured timeout.
+    """
     logger.warning(
         "Old sidecar did not answer /shutdown within %.1fs (%s); "
         "it may still be running. Spawning replacement anyway.",
@@ -394,32 +406,13 @@ def _log_shutdown_timeout(exc: BaseException) -> None:
 
 
 def _shutdown_existing_sidecar() -> None:
-    """Retire a previously spawned sidecar so a fresh one can replace it.
-
-    Reusing a running sidecar froze the settings UI at the code and
-    environment of whatever parent spawned it first — in issue #2131 a
-    57-day-old orphan from a long-gone install kept serving stale feature
-    flags through many client restarts and upgrades. Every stdio startup
-    therefore retires the old sidecar and spawns its own.
-
-    Termination goes through the sidecar's own ``POST /shutdown`` endpoint
-    on the recorded secret-path URL, never ``os.kill``:
-
-    * Only the real sidecar was ever told the secret path, so a listener
-      answering on it is ours for practical purposes (a recycled port
-      would need a catch-all handler to false-positive) — and even then
-      nothing is killed: the worst a stranger receives is a POST it
-      ignores.
-    * The endpoint has lived at the same path since the first sidecar
-      release (#1381), so orphans spawned by any past version are retired
-      too.
-
-    Best-effort throughout: on any failure the caller still spawns the
-    replacement — worst case an unresponsive old process lingers until
-    reboot, but the discovery files are unlinked and rewritten by the
-    replacement, so nothing hands out the old URL anymore (if the
-    replacement loses the port to that lingering process, it serves on
-    an ephemeral fallback instead).
+    """
+    Retires the previously spawned settings sidecar before replacement.
+    
+    The shutdown request is sent through the sidecar's authenticated shutdown
+    endpoint. If the request succeeds, any sentinel created by that request is
+    removed and the function waits briefly for the recorded process to exit.
+    Failures are handled on a best-effort basis so replacement can continue.
     """
     url = read_sidecar_url()
     if url is None:
@@ -480,26 +473,18 @@ def _shutdown_existing_sidecar() -> None:
 
 
 def _spawn_lock_path() -> Path:
+    """Return the path of the sidecar spawn lock file."""
     return _sidecar_dir() / "spawn.lock"
 
 
 @contextlib.contextmanager
 def _spawn_lock() -> Iterator[bool]:
-    """Yield True if this caller holds the spawn lock, False if another holds it.
-
-    Serializes concurrent ``maybe_spawn()`` calls so two parent stdio
-    processes starting in rapid succession can't both run the
-    retire-and-respawn window — the loser's child would race on
-    ``bind()`` and crash into ``sidecar.log``.
-
-    Non-blocking: a caller that can't acquire the lock returns False
-    immediately and the parent should skip spawning (the holding
-    parent is doing it). Released on context exit. Lock file lives at
-    ``~/.ha-mcp/spawn.lock`` (mode 0o600).
-
-    Falls back to no-op (yields True) if the OS-specific lock primitive
-    isn't available or fails — better to risk the rare race than to
-    refuse to spawn at all on an exotic platform.
+    """
+    Provide non-blocking coordination for concurrent sidecar spawns.
+    
+    Yields:
+        bool: `True` when the caller holds the lock or locking is unavailable;
+            `False` when another caller currently holds the lock.
     """
     lock_path = _spawn_lock_path()
     try:
@@ -553,26 +538,17 @@ def _spawn_lock() -> Iterator[bool]:
 
 
 def _bind_listener(preferred: int, source: str) -> socket.socket:
-    """Bind and return the sidecar's actual serving socket.
-
-    Binding the real socket up front (instead of probing a port and
-    letting uvicorn rebind it) makes port acquisition atomic: a busy
-    preferred port fails HERE, before any state is persisted or
-    discovery file written, and falls back to an ephemeral port.
-
-    Platform flags matter (#2134 review):
-
-    * Windows: ``SO_EXCLUSIVEADDRUSE``. Plain ``SO_REUSEADDR`` there
-      permits binding over a live listener that also set it — the probe
-      would report the busy port as free and the child would die inside
-      uvicorn's real bind after the discovery files were written.
-    * POSIX: ``SO_REUSEADDR``, keeping the ``TIME_WAIT`` grace a
-      pinned/remembered port needs across quick restarts (#1587).
-
-    ``source`` names the caller's intent ("Pinned" or "Remembered") so
-    the fallback warning doesn't blame a pin the user never set.
-    Raises OSError only when even the ephemeral bind fails — the caller
-    must exit without touching any state file.
+    """Bind and return a localhost socket for the sidecar.
+    
+    Parameters:
+        preferred (int): Preferred port, or 0 to select an ephemeral port.
+        source (str): Description of the preferred-port source for fallback logging.
+    
+    Returns:
+        socket.socket: A bound IPv4 TCP socket.
+    
+    Raises:
+        OSError: If the preferred port and ephemeral fallback cannot be bound.
     """
     candidates = [preferred, 0] if preferred else [0]
     for candidate in candidates:
@@ -604,22 +580,16 @@ def _bind_listener(preferred: int, source: str) -> socket.socket:
 
 
 def maybe_spawn(prepare: Callable[[], None] | None = None) -> None:
-    """Retire any previous sidecar and spawn a fresh one.
-
-    Called once from stdio ``main()`` after argument validation. No-op
-    when the sidecar is disabled (env var or sentinel), when a
-    concurrent parent already holds the spawn lock, or when subprocess
-    spawn raises (best effort; the MCP server continues regardless).
-
-    A previously spawned sidecar is never reused (issue #2131): it
-    serves the code and environment of the parent that spawned it, which
-    may be a long-dead install many versions old. Replacing it on every
-    startup keeps the settings UI in lockstep with this server process.
-
-    ``prepare`` runs winner-only, inside the spawn lock, just before the
-    child is launched — the metadata-cache dump goes here so a lock
-    LOSER (whose environment may differ) can never overwrite the cache
-    the winner's sidecar serves.
+    """
+    Retire any existing settings UI sidecar and start a fresh one.
+    
+    The operation is skipped when the sidecar is disabled or another process is
+    already spawning it. Failures during preparation or spawning are handled as
+    best effort so the parent process can continue.
+    
+    Parameters:
+        prepare (Callable[[], None] | None): Optional callback executed before
+            spawning the replacement sidecar.
     """
     if _is_disabled():
         logger.info(
@@ -659,10 +629,8 @@ def maybe_spawn(prepare: Callable[[], None] | None = None) -> None:
 
 
 def _do_spawn() -> None:
-    """Inner spawn; caller holds the spawn lock, predecessor retired.
-
-    Extracted from :func:`maybe_spawn` so the context manager doesn't
-    indent the full Popen block.
+    """
+    Spawn the settings UI sidecar process and wait briefly for it to publish its discovery URL.
     """
     # Clean stale pid/url files from a previous crash before spawning.
     for stale in (_pid_file(), _url_file()):
@@ -791,27 +759,12 @@ def _do_spawn() -> None:
 
 
 def _atomic_write_0600(path: Path, content: str) -> None:
-    """Create ``path`` with 0o600 perms atomically and write ``content``.
-
-    Two atomicity guarantees, both needed:
-
-    1. **Perms**: ``Path.write_text()`` opens with default perms (0o644
-       under a typical 022 umask) and only restricts them via a
-       follow-up ``os.chmod`` — a TOCTOU window where the URL (a
-       credential — it embeds the secret path) is briefly
-       world-readable on shared hosts. ``os.open`` with an explicit
-       ``mode`` arg sets perms on the creating syscall itself, closing
-       the window.
-
-    2. **Content**: write to a sibling ``<path>.tmp`` and ``os.replace``
-       into place. ``O_TRUNC`` directly on ``path`` would leave an
-       empty/truncated file if the writer dies mid-write (signal, OOM,
-       disk full) — and a half-written URL file next to a still-live
-       PID file produces the worst-possible state (consumers read
-       ``None`` and assume "no sidecar" even though one is running).
-       ``os.replace`` is atomic on POSIX and on Windows (since Vista),
-       so readers always see either the old content or the full new
-       content.
+    """
+    Atomically writes content to a file with owner-only permissions.
+    
+    Parameters:
+        path (Path): Destination file path.
+        content (str): Text to write to the file.
     """
     tmp = path.with_suffix(path.suffix + ".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -884,18 +837,11 @@ def _serving_files_lock() -> Iterator[None]:
 
 
 def _write_pid_url(url: str) -> None:
-    """Persist the sidecar URL and pid for parent / overview consumption.
-
-    Writes pid BEFORE url — the ordering is load-bearing twice over:
-    a partial failure can't leave a URL file pointing at a dead port
-    without the matching pid file, and ``_cleanup_owned_serving_files``
-    relies on it ("pid is mine" implies a successor hasn't started
-    writing, since a successor lands its pid first). If the URL write
-    fails after the pid file lands, both are removed rather than leaving
-    the pair inconsistent.
-
-    Runs under ``_serving_files_lock`` so a slow-exiting predecessor's
-    cleanup can't interleave with these writes.
+    """
+    Persist the current process ID and sidecar URL for parent-process discovery.
+    
+    The process ID is written before the URL. If writing the URL fails, the
+    process ID file is removed to keep the discovery files consistent.
     """
     with _serving_files_lock():
         url_path = _url_file()
@@ -926,22 +872,32 @@ def _build_shutdown_handler(
     shutdown_lock: threading.Lock,
     shutdown_state: dict[str, Callable[[], None] | None],
 ) -> Callable[[Request], Awaitable[Any]]:
-    """Build the POST /shutdown handler.
-
-    Two callers, two contracts. The page's Stop button (no mode param)
-    is a DISABLE: drop the sentinel BEFORE signalling exit so a fast
-    restart cycle doesn't race past the check in maybe_spawn(); if the
-    sentinel write fails, surface it and keep running. The replace
-    flow's ``mode=retire`` is NOT a disable: it writes no sentinel at
-    all, so every sentinel on disk is user-owned and the replace flow
-    never has one of its own to clear — a user Stop landing anywhere
-    around a retire always sticks. ``sentinel_created`` reports what
-    THIS request did (requests are serialized on uvicorn's single event
-    loop, so the exists-then-write pair cannot interleave).
+    """
+    Create a shutdown endpoint for stopping or retiring the settings sidecar.
+    
+    A normal request creates the disable sentinel before stopping the sidecar.
+    A request with ``mode=retire`` stops the sidecar without creating a sentinel.
+    If sentinel creation or shutdown fails, the endpoint returns an error response
+    and rolls back a sentinel created by the current request when necessary.
+    
+    Parameters:
+        shutdown_lock (threading.Lock): Lock protecting the shutdown callback.
+        shutdown_state (dict[str, Callable[[], None] | None]): Shared state
+            containing the shutdown callback.
+    
+    Returns:
+        Callable[[Request], Awaitable[Any]]: The asynchronous shutdown request
+            handler.
     """
     from starlette.responses import JSONResponse
 
     def _write_sentinel_or_error() -> Any | None:
+        """
+        Create the settings-UI disable sentinel.
+        
+        Returns:
+            None on success, or a JSON error response if the sentinel cannot be written.
+        """
         try:
             _disabled_sentinel().write_text(
                 f"Disabled via /shutdown endpoint at pid {os.getpid()}\n"
@@ -966,6 +922,17 @@ def _build_shutdown_handler(
         return None
 
     async def _shutdown_endpoint(request: Request) -> Any:
+        """
+        Handle authenticated requests to stop the settings UI sidecar.
+        
+        Requests with ``mode=retire`` stop the sidecar without creating a disable
+        sentinel. Other requests create the disable sentinel before stopping the
+        server and roll it back if stopping fails.
+        
+        Returns:
+        	Any: A JSON response indicating whether shutdown succeeded and whether a
+        	disable sentinel was created.
+        """
         is_retire = request.query_params.get("mode") == "retire"
         sentinel_created = False
         if not is_retire:
@@ -1028,11 +995,14 @@ def _build_app(
     port: int,
     secret_path: str,
 ) -> Any:
-    """Construct the Starlette app the sidecar serves.
-
-    Imported lazily — the parent process should not pay for Starlette
-    import at MCP startup time (it's already paid by the FastMCP
-    transports, but stdio mode shouldn't be).
+    """
+    Builds the Starlette application for the localhost settings sidecar.
+    
+    The application serves settings endpoints beneath the secret path and
+    enforces localhost host and origin checks for browser requests.
+    
+    Returns:
+        Any: The configured Starlette application.
     """
     from starlette.applications import Starlette
     from starlette.middleware import Middleware
@@ -1230,11 +1200,13 @@ def _build_app(
 
 
 def run_main() -> int:
-    """Sidecar entry point — invoked via ``python -m ha_mcp.stdio_settings_sidecar``.
-
-    Resolves the port and secret path (persisted values from a prior
-    spawn when available, fresh ones otherwise), writes pid+url files,
-    and runs uvicorn until killed. Returns the exit code.
+    """
+    Run the settings UI sidecar and return its exit status.
+    
+    The sidecar reuses persisted port and secret-path values when available, publishes its serving URL, and runs until shutdown. Disabled configurations exit successfully without starting the server.
+    
+    Returns:
+    	int: 0 on normal or disabled exit, or 1 when no listening socket can be bound.
     """
     # Honor the disable sentinel on direct invocation too, so a user
     # who disabled via /shutdown but later tried to start the sidecar
@@ -1346,16 +1318,8 @@ def run_main() -> int:
 
 
 def _cleanup_owned_serving_files() -> None:
-    """Unlink ui.pid/ui.url iff ui.pid still records THIS process.
-
-    The pid is the only valid ownership token: two live processes never
-    share one, while with sticky ``ui.state`` a successor's ui.url is
-    normally byte-identical to its predecessor's (same port, same
-    secret), so URL content cannot be trusted to distinguish owners.
-    ``_write_pid_url`` writes pid before url, so
-    "pid is mine" implies the successor hasn't started writing; holding
-    ``_serving_files_lock`` across check + unlink closes the remaining
-    interleave window.
+    """
+    Remove the serving files only when they still belong to the current process.
     """
     with _serving_files_lock():
         try:

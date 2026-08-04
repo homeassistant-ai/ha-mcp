@@ -356,6 +356,16 @@ class TestShutdownExistingSidecar:
 
         def _fake_open(_req: object, timeout: float = 0) -> MagicMock:
             # The live endpoint writes the sentinel before signalling exit.
+            """
+            Simulate a successful shutdown endpoint response while creating the disable sentinel.
+            
+            Parameters:
+            	_req (object): Ignored request object.
+            	timeout (float): Ignored request timeout.
+            
+            Returns:
+            	MagicMock: A context manager whose response status is 200.
+            """
             sentinel.write_text("Disabled via /shutdown endpoint at pid 999\n")
             cm = MagicMock()
             cm.__enter__.return_value.status = 200
@@ -795,6 +805,7 @@ class TestMaybeSpawnGates:
         url_file = tmp_data_dir / "ui.url"
 
         def _publish(_duration: float) -> None:
+            """Publish the test sidecar URL to the URL file."""
             url_file.write_text("http://127.0.0.1:54321/private_x/settings\n")
 
         with (
@@ -871,9 +882,15 @@ class TestMainSpawnPathDumpsCache:
         )
 
         async def _fake_metadata(_server: object) -> list[dict[str, str]]:
+            """Return the metadata for the simulated state retrieval tool.
+            
+            Returns:
+            	list[dict[str, str]]: A list containing the tool name and its primary tag.
+            """
             return [{"name": "ha_get_state", "primary_tag": "Entity Operations"}]
 
         def _winner_spawn(prepare: object = None) -> None:
+            """Execute the preparation callback for the winning sidecar spawn."""
             assert callable(prepare), "maybe_spawn must receive the dump callback"
             prepare()
 
@@ -1147,6 +1164,12 @@ class TestRunMainWiring:
                 self.should_exit = False
 
             def run(self, sockets: list[object] | None = None) -> None:
+                """
+                Record the sidecar's published URL and process ID together with the provided sockets.
+                
+                Parameters:
+                	sockets (list[object] | None): Sockets associated with the sidecar.
+                """
                 snapshot["url"] = (tmp_data_dir / "ui.url").read_text().strip()
                 snapshot["pid"] = (tmp_data_dir / "ui.pid").read_text().strip()
                 snapshot["sockets"] = sockets
@@ -1187,6 +1210,12 @@ class TestRunMainWiring:
                 # With sticky ui.state the successor reuses the SAME port
                 # and secret, so its ui.url content is byte-identical —
                 # URL equality can never distinguish owners (#2134 review).
+                """
+                Simulate a successor sidecar taking ownership while this process exits.
+                
+                The successor preserves the existing UI URL and publishes a replacement
+                process ID.
+                """
                 same_url = (tmp_data_dir / "ui.url").read_text()
                 (tmp_data_dir / "ui.pid").write_text("424242\n")
                 (tmp_data_dir / "ui.url").write_text(same_url)
@@ -1233,6 +1262,9 @@ class TestRunMainWiring:
 
         @__import__("contextlib").contextmanager
         def _tracking_lock() -> object:
+            """
+            Record entry into the lock for test assertions.
+            """
             entered.append("locked")
             yield
 
@@ -1326,6 +1358,16 @@ class TestRunMainWiring:
         )
 
         def _fail_bind(preferred: int, source: str) -> MagicMock:
+            """
+            Simulate failure when attempting to bind a port.
+            
+            Parameters:
+                preferred (int): Preferred port value.
+                source (str): Port selection source.
+            
+            Raises:
+                OSError: Always raised to indicate that no ports are available.
+            """
             raise OSError("no ports available")
 
         monkeypatch.setattr(sidecar, "_bind_listener", _fail_bind)
@@ -1382,6 +1424,16 @@ class TestRunMainWiring:
         requested: list[int] = []
 
         def _fake_bind(preferred: int, source: str) -> MagicMock:
+            """
+            Create a mock listener for the requested port and record the bind request.
+            
+            Parameters:
+                preferred (int): Port requested for binding.
+                source (str): Source associated with the bind request.
+            
+            Returns:
+                MagicMock: Mock listener configured for the requested port.
+            """
             requested.append(preferred)
             return _fake_listener(preferred)
 
@@ -1806,6 +1858,12 @@ class TestDiscoverabilityFlow:
             def run(self, sockets: list[object] | None = None) -> None:
                 # Snapshot the URL the writer chose + the app's routes
                 # at the same instant the listener "starts".
+                """
+                Start the sidecar runtime, optionally using pre-bound sockets.
+                
+                Parameters:
+                	sockets (list[object] | None): Sockets to use for serving, if provided.
+                """
                 captured["url"] = (tmp_data_dir / "ui.url").read_text().strip()
 
         fake_uvicorn = MagicMock()
