@@ -1751,11 +1751,13 @@ class DevTools:
                     "Explicit pip requirement for update_source — a version pin "
                     "(ha-mcp==7.9.0) or a GitHub tarball URL such as "
                     "https://github.com/homeassistant-ai/ha-mcp/archive/refs/"
-                    "pull/<PR>/head.tar.gz. 'clear' (case-insensitive, so it "
-                    "can never name a pip package) clears the override and "
-                    "falls back to the release channel; an empty string also "
-                    "clears but some MCP clients mangle it in transit — "
-                    "prefer 'clear'."
+                    "pull/<PR>/head.tar.gz. The bare name 'clear' "
+                    "(case-insensitive) is reserved: it clears the override "
+                    "and falls back to the release channel instead of being "
+                    "treated as a requirement (pin a specific version, e.g. "
+                    "'clear==2.0.0', if you genuinely need that PyPI "
+                    "package). An empty string also clears but some MCP "
+                    "clients mangle it in transit — prefer 'clear'."
                 ),
             ),
         ] = None,

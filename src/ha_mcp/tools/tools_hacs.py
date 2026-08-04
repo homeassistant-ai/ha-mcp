@@ -589,17 +589,28 @@ class HacsTools:
         # HACS's remove command "succeeds" on a store-only repository (its
         # uninstall no-ops when no files are downloaded), which would report
         # "Successfully removed" for something never installed. Check the
-        # installed state first; an info failure falls through so the remove
-        # itself surfaces the real error. The same probe supplies the real
-        # repository name for numeric IDs, which the resolve short-circuit
-        # echoes back verbatim — without it the response could not confirm
-        # WHICH repository the ID identified.
+        # installed state first. The WS client RAISES on a failed info frame
+        # (it never returns success=False), so the probe must swallow those
+        # to fall through — otherwise an info hiccup (GitHub rate limit,
+        # transient) would abort the call before the remove is ever sent,
+        # with an error misattributed to the probe. The same probe supplies
+        # the real repository name for numeric IDs, which the resolve
+        # short-circuit echoes back verbatim — without it the response could
+        # not confirm WHICH repository the ID identified.
         # NOTE: HACS's WS API is asymmetric — info takes ``repository_id``
         # while remove takes ``repository`` (caught by the e2e contract
         # tests; the unit mocks cannot see the real schema).
-        info = await ws_client.send_command(
-            "hacs/repository/info", repository_id=actual_id
-        )
+        try:
+            info = await ws_client.send_command(
+                "hacs/repository/info", repository_id=actual_id
+            )
+        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as probe_err:
+            logger.debug(
+                "Installed-state probe failed for %s; proceeding to remove: %s",
+                actual_id,
+                probe_err,
+            )
+            info = {}
         info_result = info.get("result") or {}
         if info.get("success"):
             repo_name = (

@@ -296,6 +296,29 @@ class TestManageHacsRemove:
         assert "boom" in str(excinfo.value)
         assert "remove" in str(excinfo.value).lower()
 
+    async def test_remove_proceeds_when_installed_probe_fails(self, tools):
+        # The WS client raises on a failed info frame; the probe must swallow
+        # that and fall through — a rate-limited or transient info lookup
+        # must not make a downloaded repository unremovable, nor misattribute
+        # its own error to the remove (Patch76 review, PR #2124).
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            side_effect=[
+                HomeAssistantCommandError("Command failed: rate limited", "unknown"),
+                {"success": True, "result": {}},
+            ]
+        )
+        with _patched_hacs(ws):
+            result = await tools.ha_manage_hacs(
+                action="remove", repository_id="401454435"
+            )
+
+        assert result["success"] is True
+        commands = [c.args[0] for c in ws.send_command.await_args_list]
+        assert commands == ["hacs/repository/info", "hacs/repository/remove"]
+
     async def test_remove_command_error_keeps_command_context(self, tools):
         # The WS client RAISES HomeAssistantCommandError on a failed result
         # frame (it never returns success=False), so the raised path is the
