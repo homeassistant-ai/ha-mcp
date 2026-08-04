@@ -12,6 +12,8 @@ import json
 import os
 from collections.abc import Generator
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -205,7 +207,7 @@ class TestReadSidecarUrl:
 
 
 class TestPidLiveness:
-    """``_pid_alive`` and ``_existing_sidecar_alive`` correctness."""
+    """``_pid_alive`` correctness."""
 
     def test_pid_alive_for_self(self) -> None:
         assert sidecar._pid_alive(os.getpid()) is True
@@ -217,19 +219,501 @@ class TestPidLiveness:
         assert sidecar._pid_alive(0) is False
         assert sidecar._pid_alive(-1) is False
 
-    def test_existing_sidecar_missing_pidfile(self, tmp_data_dir: Path) -> None:
-        assert sidecar._existing_sidecar_alive() is False
 
-    def test_existing_sidecar_garbage_pidfile(self, tmp_data_dir: Path) -> None:
+def _fake_opener(
+    status: int = 200,
+    side_effect: Exception | None = None,
+    body: str | None = None,
+) -> MagicMock:
+    """Stand-in for ``_no_proxy_opener()``: canned status/body or raising open()."""
+    opener = MagicMock()
+    if side_effect is not None:
+        opener.open.side_effect = side_effect
+    else:
+        response = opener.open.return_value.__enter__.return_value
+        response.status = status
+        if body is not None:
+            response.read.return_value = body.encode()
+    return opener
+
+
+def _fake_listener(port: int) -> MagicMock:
+    """Stand-in for the socket ``_bind_listener`` returns."""
+    sock = MagicMock()
+    sock.getsockname.return_value = ("127.0.0.1", port)
+    return sock
+
+
+class TestShutdownExistingSidecar:
+    """``_shutdown_existing_sidecar`` retires the previous sidecar (issue #2131).
+
+    Termination goes through the old sidecar's own ``/shutdown`` endpoint
+    on its recorded secret-path URL — never ``os.kill``. Only the real
+    sidecar answers on the secret path, so a reused PID can never get an
+    innocent process terminated, and the endpoint has existed at the same
+    path since the first sidecar release, so pre-fix orphans (the 57-day
+    one in #2131) are retired too.
+    """
+
+    def test_posts_shutdown_to_secret_endpoint(self, tmp_data_dir: Path) -> None:
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        opener = _fake_opener()
+        with patch.object(sidecar, "_no_proxy_opener", return_value=opener):
+            sidecar._shutdown_existing_sidecar()
+        opener.open.assert_called_once()
+        req = opener.open.call_args[0][0]
+        assert (
+            req.full_url
+            == "http://127.0.0.1:9999/private_xx/api/settings/shutdown?mode=retire"
+        )
+        assert req.get_method() == "POST"
+
+    def test_opener_disables_environment_proxies(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The shutdown POST targets loopback and embeds the secret path —
+        an HTTP_PROXY-honoring opener would leak the secret to the proxy
+        and never reach the listener (urllib does not bypass 127.0.0.1
+        unless no_proxy says so). The empty ProxyHandler suppresses the
+        default env-reading one; with an empty dict it registers no
+        protocol handlers at all, so the pin is "no proxy-carrying
+        handler exists even with proxies in the environment"."""
+        import urllib.request
+
+        monkeypatch.setenv("HTTP_PROXY", "http://proxy.example:3128")
+        monkeypatch.setenv("http_proxy", "http://proxy.example:3128")
+        assert not any(
+            isinstance(h, urllib.request.ProxyHandler) and h.proxies
+            for h in sidecar._no_proxy_opener().handlers
+        ), "opener must not carry an env-configured ProxyHandler"
+
+    def test_no_url_file_is_noop(self, tmp_data_dir: Path) -> None:
+        opener = _fake_opener()
+        with patch.object(sidecar, "_no_proxy_opener", return_value=opener):
+            sidecar._shutdown_existing_sidecar()
+        opener.open.assert_not_called()
+
+    def test_malformed_url_is_nonfatal(self, tmp_data_dir: Path) -> None:
+        """A corrupt ui.url must not raise out of the replace flow.
+
+        ``Request("garbage/...")`` raises ValueError before any I/O; if it
+        escaped, maybe_spawn() would abort before _do_spawn() and every
+        later startup would repeat the failure with the stale files intact.
+        """
+        (tmp_data_dir / "ui.url").write_text("garbage\n")
+        (tmp_data_dir / "ui.pid").write_text("4242\n")
+        with patch.object(sidecar, "_pid_alive") as alive:
+            sidecar._shutdown_existing_sidecar()
+        alive.assert_not_called()
+
+    def test_seeds_state_from_legacy_url(self, tmp_data_dir: Path) -> None:
+        """Upgrading from a pre-ui.state release keeps the existing URL.
+
+        Legacy installs carry port+secret only in ui.url, which the
+        replace flow deletes — without seeding, the first upgraded
+        startup would mint a fresh URL and break every bookmark. Seeding
+        must happen even when the old sidecar is already dead.
+        """
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:54321/private_legacy/settings\n"
+        )
+        import urllib.error
+
+        opener = _fake_opener(side_effect=urllib.error.URLError("refused"))
+        with patch.object(sidecar, "_no_proxy_opener", return_value=opener):
+            sidecar._shutdown_existing_sidecar()
+        state = json.loads((tmp_data_dir / "ui.state").read_text())
+        assert state == {"port": 54321, "secret_path": "/private_legacy"}
+
+    def test_seed_does_not_overwrite_existing_state(self, tmp_data_dir: Path) -> None:
+        (tmp_data_dir / "ui.state").write_text(
+            json.dumps({"port": 44444, "secret_path": "/private_state"})
+        )
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:54321/private_other/settings\n"
+        )
+        opener = _fake_opener()
+        with patch.object(sidecar, "_no_proxy_opener", return_value=opener):
+            sidecar._shutdown_existing_sidecar()
+        state = json.loads((tmp_data_dir / "ui.state").read_text())
+        assert state == {"port": 44444, "secret_path": "/private_state"}
+
+    def test_removes_sentinel_written_by_shutdown_endpoint(
+        self, tmp_data_dir: Path
+    ) -> None:
+        """/shutdown drops the disable sentinel; a replace must clear it.
+
+        Otherwise every replacement would permanently disable the
+        settings UI — the freshly spawned child honors the sentinel and
+        exits immediately.
+        """
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        sentinel = tmp_data_dir / "settings_ui_disabled"
+
+        def _fake_open(_req: object, timeout: float = 0) -> MagicMock:
+            # The live endpoint writes the sentinel before signalling exit.
+            sentinel.write_text("Disabled via /shutdown endpoint at pid 999\n")
+            cm = MagicMock()
+            cm.__enter__.return_value.status = 200
+            return cm
+
+        opener = MagicMock()
+        opener.open.side_effect = _fake_open
+        with patch.object(sidecar, "_no_proxy_opener", return_value=opener):
+            sidecar._shutdown_existing_sidecar()
+        assert not sentinel.exists(), (
+            "replace flow must remove the disable sentinel the endpoint wrote"
+        )
+
+    def test_pid_is_captured_before_the_post(self, tmp_data_dir: Path) -> None:
+        """The exit wait must survive the dying sidecar's own cleanup.
+
+        A current-code sidecar can ack the POST and unlink ui.pid (its
+        ownership-guarded cleanup) before the parent gets around to
+        reading it; reading the pid AFTER the POST would then skip the
+        exit wait entirely and the replacement would race the dying
+        process for the remembered port. Capture before the POST.
+        """
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        (tmp_data_dir / "ui.pid").write_text("4242\n")
+
+        def _ack_and_cleanup(_req: object, timeout: float = 0) -> MagicMock:
+            # The dying sidecar's finally-cleanup lands with the ack.
+            (tmp_data_dir / "ui.pid").unlink()
+            cm = MagicMock()
+            cm.__enter__.return_value.status = 200
+            return cm
+
+        opener = MagicMock()
+        opener.open.side_effect = _ack_and_cleanup
+        liveness = iter([True, False])
+        with (
+            patch.object(sidecar, "_no_proxy_opener", return_value=opener),
+            patch.object(
+                sidecar, "_pid_alive", side_effect=lambda _pid: next(liveness)
+            ) as alive,
+            patch("time.sleep"),
+        ):
+            sidecar._shutdown_existing_sidecar()
+        assert alive.call_count == 2, (
+            "exit wait must run on the pre-POST pid even after cleanup"
+        )
+        assert alive.call_args[0][0] == 4242
+
+    def test_waits_for_recorded_pid_to_exit(self, tmp_data_dir: Path) -> None:
+        """After a successful POST, poll the old pid until it exits.
+
+        Two reasons the wait matters: the dying process holds the port
+        the replacement wants to rebind (the sticky URL depends on it
+        freeing in time), and sidecars from releases before the
+        ownership-guarded cleanup unlink ui.pid/ui.url blindly on exit —
+        during migration a still-dying legacy process could delete the
+        replacement's freshly written files.
+        """
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        (tmp_data_dir / "ui.pid").write_text("4242\n")
+        liveness = iter([True, True, False])
+        with (
+            patch.object(sidecar, "_no_proxy_opener", return_value=_fake_opener()),
+            patch.object(
+                sidecar, "_pid_alive", side_effect=lambda _pid: next(liveness)
+            ) as alive,
+            patch("time.sleep"),
+        ):
+            sidecar._shutdown_existing_sidecar()
+        assert alive.call_count == 3
+        assert alive.call_args[0][0] == 4242
+
+    def test_exit_wait_times_out_with_warning(
+        self, tmp_data_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A pid that never exits must not stall startup past the bound."""
+        import logging
+
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        (tmp_data_dir / "ui.pid").write_text("4242\n")
+        # First monotonic() call sets the deadline; the next one exceeds it.
+        clock = iter([1000.0, 1000.0 + sidecar._OLD_SIDECAR_EXIT_WAIT + 1])
+        with (
+            caplog.at_level(logging.WARNING, logger="ha_mcp.stdio_settings_sidecar"),
+            patch.object(sidecar, "_no_proxy_opener", return_value=_fake_opener()),
+            patch.object(sidecar, "_pid_alive", return_value=True),
+            patch("time.monotonic", side_effect=lambda: next(clock)),
+            patch("time.sleep"),
+        ):
+            sidecar._shutdown_existing_sidecar()
+        assert any(
+            "still alive" in rec.message
+            and "spawning replacement anyway" in rec.message
+            for rec in caplog.records
+        ), f"expected timeout warning, got: {[r.message for r in caplog.records]}"
+
+    def test_user_stop_landing_just_before_the_post_is_preserved(
+        self, tmp_data_dir: Path
+    ) -> None:
+        """The endpoint's sentinel_created field closes the snapshot race.
+
+        Sequence: parent snapshots (sentinel absent) → user clicks Stop
+        (their request writes the sentinel) → parent's POST reaches the
+        endpoint, which reports sentinel_created=false because the file
+        already existed. The parent must honor that over its stale
+        snapshot, or the user's disable is silently undone.
+        """
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        sentinel = tmp_data_dir / "settings_ui_disabled"
+
+        def _user_stop_then_answer(_req: object, timeout: float = 0) -> MagicMock:
+            sentinel.write_text("Disabled via /shutdown endpoint at pid 999\n")
+            cm = MagicMock()
+            response = cm.__enter__.return_value
+            response.status = 200
+            response.read.return_value = b'{"success": true, "sentinel_created": false}'
+            return cm
+
+        opener = MagicMock()
+        opener.open.side_effect = _user_stop_then_answer
+        with patch.object(sidecar, "_no_proxy_opener", return_value=opener):
+            sidecar._shutdown_existing_sidecar()
+        assert sentinel.exists(), (
+            "sentinel_created=false must override the stale absent-snapshot"
+        )
+
+    def test_preexisting_sentinel_survives_the_replace(
+        self, tmp_data_dir: Path
+    ) -> None:
+        """Only a sentinel the retire POST itself caused may be removed.
+
+        A user can click the page's Stop button in the window between the
+        parent's _is_disabled() check and its POST; the endpoint then
+        writes the sentinel for THEM. Snapshotting existence before the
+        POST distinguishes "the sentinel I just caused" from "the
+        sentinel the user caused" — the latter must survive, or the UI
+        the user just turned off silently resurrects.
+        """
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        sentinel = tmp_data_dir / "settings_ui_disabled"
+        sentinel.write_text("user clicked stop moments before the POST\n")
+        with patch.object(sidecar, "_no_proxy_opener", return_value=_fake_opener()):
+            sidecar._shutdown_existing_sidecar()
+        assert sentinel.exists(), "a user-caused sentinel must not be unlinked"
+
+    def test_refused_shutdown_logs_truthfully_and_keeps_sentinel_alone(
+        self, tmp_data_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A 500 from /shutdown means "alive and NOT shutting down".
+
+        urllib raises HTTPError for non-2xx (it is a URLError subclass),
+        so a plain URLError arm mislabels an explicit refusal as "no
+        responsive sidecar" — the opposite of the truth — and skips
+        nothing it should skip. The refusal paths (sentinel write failed
+        / stop() raised) leave no sentinel to clean and a process that
+        will not exit, so: truthful warning, no sentinel unlink, no exit
+        wait.
+        """
+        import logging
+        import urllib.error
+
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        (tmp_data_dir / "ui.pid").write_text("4242\n")
+        sentinel = tmp_data_dir / "settings_ui_disabled"
+        sentinel.write_text("user clicked stop just now\n")
+        refusal = urllib.error.HTTPError(
+            "http://127.0.0.1:9999/private_xx/api/settings/shutdown",
+            500,
+            "Internal Server Error",
+            None,  # type: ignore[arg-type]
+            None,
+        )
+        with (
+            caplog.at_level(logging.WARNING, logger="ha_mcp.stdio_settings_sidecar"),
+            patch.object(
+                sidecar,
+                "_no_proxy_opener",
+                return_value=_fake_opener(side_effect=refusal),
+            ),
+            patch.object(sidecar, "_pid_alive") as alive,
+        ):
+            sidecar._shutdown_existing_sidecar()
+        alive.assert_not_called()
+        assert sentinel.exists(), "refusal path must not unlink the sentinel"
+        assert any(
+            "refused shutdown" in rec.message and "500" in str(rec.args)
+            for rec in caplog.records
+        ), f"expected refusal warning, got: {[r.message for r in caplog.records]}"
+
+    def test_timed_out_shutdown_warns_it_may_still_be_running(
+        self, tmp_data_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A slow-but-alive sidecar is not "no responsive sidecar".
+
+        socket timeouts are OSError subclasses; folding them into the
+        dead-listener arm tells the operator nothing was there when a
+        live process simply didn't answer in time.
+        """
+        import logging
+
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        with (
+            caplog.at_level(logging.WARNING, logger="ha_mcp.stdio_settings_sidecar"),
+            patch.object(
+                sidecar,
+                "_no_proxy_opener",
+                return_value=_fake_opener(side_effect=TimeoutError("timed out")),
+            ),
+            patch.object(sidecar, "_pid_alive") as alive,
+        ):
+            sidecar._shutdown_existing_sidecar()
+        alive.assert_not_called()
+        assert any(
+            "did not answer" in rec.message and "may still be running" in rec.message
+            for rec in caplog.records
+        ), f"expected timeout warning, got: {[r.message for r in caplog.records]}"
+
+    def test_post_failure_is_nonfatal_and_skips_wait(self, tmp_data_dir: Path) -> None:
+        """Dead listener → nothing to retire; don't raise, don't poll the pid.
+
+        The recorded pid is NOT verified to be the sidecar (PID reuse),
+        so with no listener on the secret path there is nothing safe to
+        wait on — proceed straight to spawning the replacement.
+        """
+        import urllib.error
+
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        (tmp_data_dir / "ui.pid").write_text(f"{os.getpid()}\n")
+        with (
+            patch.object(
+                sidecar,
+                "_no_proxy_opener",
+                return_value=_fake_opener(
+                    side_effect=urllib.error.URLError("connection refused")
+                ),
+            ),
+            patch.object(sidecar, "_pid_alive") as alive,
+        ):
+            sidecar._shutdown_existing_sidecar()
+        alive.assert_not_called()
+
+    def test_garbage_pid_file_skips_wait(self, tmp_data_dir: Path) -> None:
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
         (tmp_data_dir / "ui.pid").write_text("not a number\n")
-        assert sidecar._existing_sidecar_alive() is False
+        with (
+            patch.object(sidecar, "_no_proxy_opener", return_value=_fake_opener()),
+            patch.object(sidecar, "_pid_alive") as alive,
+        ):
+            sidecar._shutdown_existing_sidecar()
+        alive.assert_not_called()
 
-    def test_existing_sidecar_dead_pid(self, tmp_data_dir: Path) -> None:
-        # PID 999999 is almost certainly not running. If by some
-        # miracle it is on the test box, the assertion will fail loudly
-        # — better than silently passing on a stale check.
-        (tmp_data_dir / "ui.pid").write_text("999999\n")
-        assert sidecar._existing_sidecar_alive() is False
+
+class TestSidecarStateValidation:
+    """``_load_sidecar_state`` rejects everything it cannot safely serve.
+
+    The secret is interpolated into route paths and the port is bound
+    verbatim, so any invalid shape must yield None (fresh values) — and,
+    when a file was actually present, a warning: a silently regenerated
+    URL looks like the bug this state file exists to prevent.
+    """
+
+    def test_valid_state_round_trips(self, tmp_data_dir: Path) -> None:
+        (tmp_data_dir / "ui.state").write_text(
+            json.dumps({"port": 54321, "secret_path": "/private_ok"})
+        )
+        assert sidecar._load_sidecar_state() == (54321, "/private_ok")
+
+    def test_absent_file_is_silent(
+        self, tmp_data_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.stdio_settings_sidecar"):
+            assert sidecar._load_sidecar_state() is None
+        assert not caplog.records, "a normal first spawn must not warn"
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "not json {{{",
+            json.dumps(["port", 54321]),  # non-dict root
+            json.dumps({"port": "54321", "secret_path": "/private_x"}),  # str port
+            json.dumps({"port": True, "secret_path": "/private_x"}),  # bool port
+            json.dumps({"port": 0, "secret_path": "/private_x"}),  # out of range
+            json.dumps({"port": 1023, "secret_path": "/private_x"}),  # below floor
+            json.dumps({"port": 99999, "secret_path": "/private_x"}),  # above range
+            json.dumps({"port": 54321, "secret_path": ""}),  # empty secret
+            json.dumps({"port": 54321, "secret_path": "/"}),  # bare slash
+            json.dumps({"port": 54321, "secret_path": "/private_a/../b"}),  # traversal
+            json.dumps({"port": 54321}),  # missing secret
+        ],
+    )
+    def test_invalid_state_yields_none_and_warns(
+        self, tmp_data_dir: Path, caplog: pytest.LogCaptureFixture, payload: str
+    ) -> None:
+        import logging
+
+        (tmp_data_dir / "ui.state").write_text(payload)
+        with caplog.at_level(logging.WARNING, logger="ha_mcp.stdio_settings_sidecar"):
+            assert sidecar._load_sidecar_state() is None
+        assert any("ui.state" in rec.message for rec in caplog.records), (
+            f"present-but-invalid state must warn; got {[r.message for r in caplog.records]}"
+        )
+
+    def test_floor_port_1024_is_accepted(self, tmp_data_dir: Path) -> None:
+        (tmp_data_dir / "ui.state").write_text(
+            json.dumps({"port": 1024, "secret_path": "/private_ok"})
+        )
+        assert sidecar._load_sidecar_state() == (1024, "/private_ok")
+
+    def test_save_failure_is_nonfatal(self, tmp_data_dir: Path) -> None:
+        with patch.object(
+            sidecar, "_atomic_write_0600", side_effect=OSError("read-only fs")
+        ):
+            sidecar._save_sidecar_state(54321, "/private_x")  # must not raise
+
+
+class TestSeedStateFromUrl:
+    """Legacy-migration parser: only a well-formed loopback URL seeds state."""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://127.0.0.1:0/private_x/settings",  # port 0
+            "http://127.0.0.1:99999/private_x/settings",  # out of range
+            "http://127.0.0.1:1023/private_x/settings",  # below floor
+            "https://127.0.0.1:54321/private_x/settings",  # wrong scheme
+            "http://192.168.1.10:54321/private_x/settings",  # not loopback
+            "http://127.0.0.1:54321/private_x",  # missing /settings
+            "garbage",
+        ],
+    )
+    def test_invalid_urls_seed_nothing(self, tmp_data_dir: Path, url: str) -> None:
+        sidecar._seed_state_from_url(url)
+        assert not (tmp_data_dir / "ui.state").exists()
+
+    def test_valid_legacy_url_seeds_state(self, tmp_data_dir: Path) -> None:
+        sidecar._seed_state_from_url("http://127.0.0.1:54321/private_ok/settings")
+        state = json.loads((tmp_data_dir / "ui.state").read_text())
+        assert state == {"port": 54321, "secret_path": "/private_ok"}
 
 
 class TestMaybeSpawnGates:
@@ -238,56 +722,220 @@ class TestMaybeSpawnGates:
     def test_maybe_spawn_skips_when_disabled(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Disabled means fully inert: no retire POST, no spawn.
+
+        The disabled check must run BEFORE the retire flow — a reorder
+        would have a deliberately disabled install still POSTing
+        /shutdown (and clearing the sentinel that records the disable).
+        """
         monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
-        with patch("subprocess.Popen") as popen:
+        with (
+            patch.object(sidecar, "_shutdown_existing_sidecar") as shutdown,
+            patch("subprocess.Popen") as popen,
+        ):
             sidecar.maybe_spawn()
         popen.assert_not_called()
+        shutdown.assert_not_called()
 
-    def test_maybe_spawn_skips_when_sidecar_alive(
+    def test_maybe_spawn_replaces_live_sidecar(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # "Alive" now means BOTH the recorded PID is live AND the URL
-        # file is on disk — see ``_existing_sidecar_alive`` docstring
-        # for the stale-PID / crashed-mid-startup self-heal rationale.
+        """A live sidecar is retired and replaced, never reused (issue #2131).
+
+        Reuse froze the settings UI at the code + environment of whatever
+        parent spawned the sidecar first — a 57-day-old orphan in the
+        reported case. Every stdio startup now hands out a sidecar that
+        matches the running server.
+        """
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
         (tmp_data_dir / "ui.pid").write_text(f"{os.getpid()}\n")
         (tmp_data_dir / "ui.url").write_text(
             "http://127.0.0.1:9999/private_xx/settings\n"
         )
-        with patch("subprocess.Popen") as popen:
+        fake_proc = MagicMock()
+        fake_proc.pid = 12345
+        with (
+            patch.object(sidecar, "_shutdown_existing_sidecar") as shutdown,
+            patch("subprocess.Popen", return_value=fake_proc) as popen,
+        ):
             sidecar.maybe_spawn()
-        popen.assert_not_called()
+        shutdown.assert_called_once()
+        popen.assert_called_once()
 
     def test_maybe_spawn_respawns_when_pid_alive_but_url_missing(
-        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Stale PID without a URL file → respawn + warning log.
+        """Live PID without a URL file → nothing to retire, spawn fresh.
 
-        Failure modes this guards: (a) PID reuse after a crash that
-        didn't clean up ``ui.pid`` and the OS reassigned the PID to
-        an unrelated process; (b) sidecar that wrote pid then crashed
-        before writing url (port-bind race, see ``_pick_free_port``).
-        Without this self-heal, ``_pid_alive(pid)`` returns True and
-        every future ``maybe_spawn()`` silently skips spawning a real
-        sidecar — user permanently has no UI until they manually
-        ``rm ui.pid``.
+        Covers PID reuse after a crash that didn't clean up ``ui.pid``:
+        with no recorded URL there is no listener to shut down (and no
+        proof the PID is even a sidecar), so the replace flow must not
+        touch the process — just spawn.
         """
-        import logging
-
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
         (tmp_data_dir / "ui.pid").write_text(f"{os.getpid()}\n")
         # ui.url deliberately not written.
         fake_proc = MagicMock()
         fake_proc.pid = 99999
+        opener = _fake_opener()
         with (
-            caplog.at_level(logging.WARNING, logger="ha_mcp.stdio_settings_sidecar"),
+            patch.object(sidecar, "_no_proxy_opener", return_value=opener),
             patch("subprocess.Popen", return_value=fake_proc) as popen,
         ):
             sidecar.maybe_spawn()
         popen.assert_called_once()
+        opener.open.assert_not_called()
+
+    def test_do_spawn_holds_the_lock_until_the_child_publishes(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """maybe_spawn must not return before the child writes ui.url.
+
+        The spawn lock is released when maybe_spawn returns; a second
+        parent starting in the child's 1-3s import window would then see
+        no ui.url, retire nothing, and spawn a second child against the
+        same remembered port. Holding the lock until the URL is
+        published makes the concurrent parent take the loser path
+        instead.
+        """
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        fake_proc = MagicMock()
+        fake_proc.pid = 12345
+        fake_proc.poll.return_value = None  # child still running
+        url_file = tmp_data_dir / "ui.url"
+        sleeps: list[float] = []
+
+        def _sleep_then_publish(duration: float) -> None:
+            sleeps.append(duration)
+            if len(sleeps) == 2:
+                url_file.write_text("http://127.0.0.1:54321/private_x/settings\n")
+
+        with (
+            patch("subprocess.Popen", return_value=fake_proc),
+            patch("time.sleep", side_effect=_sleep_then_publish),
+        ):
+            sidecar.maybe_spawn()
+        assert len(sleeps) == 2, (
+            "maybe_spawn must poll until the child publishes its URL"
+        )
+
+    def test_publish_wait_warns_when_the_child_dies_early(
+        self,
+        tmp_data_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A child that exits before publishing must end the wait loudly.
+
+        Both early returns of the publish wait drop the spawn lock with
+        no ui.url on disk — residual by design (an import crash must not
+        wedge stdio startup), so the warnings are the only trace. This
+        pins the child-died arm deliberately (it was previously reached
+        only incidentally by tests whose bare MagicMock poll() happened
+        to be truthy).
+        """
+        import logging
+
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        fake_proc = MagicMock()
+        fake_proc.pid = 12345
+        fake_proc.poll.return_value = 1
+        fake_proc.returncode = 1
+        with (
+            caplog.at_level(logging.WARNING, logger="ha_mcp.stdio_settings_sidecar"),
+            patch("subprocess.Popen", return_value=fake_proc),
+            patch("time.sleep"),
+        ):
+            sidecar.maybe_spawn()
         assert any(
-            "treating as stale and respawning" in rec.message for rec in caplog.records
-        ), f"expected stale-sidecar warning, got: {[r.message for r in caplog.records]}"
+            "exited" in rec.message and "before publishing" in rec.message
+            for rec in caplog.records
+        ), f"expected child-died warning, got: {[r.message for r in caplog.records]}"
+
+    def test_publish_wait_warns_on_deadline_expiry(
+        self,
+        tmp_data_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A child alive but silent past the bound ends the wait loudly."""
+        import logging
+
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        fake_proc = MagicMock()
+        fake_proc.pid = 12345
+        fake_proc.poll.return_value = None
+        clock = iter([1000.0, 1000.0 + sidecar._CHILD_PUBLISH_WAIT + 1])
+        with (
+            caplog.at_level(logging.WARNING, logger="ha_mcp.stdio_settings_sidecar"),
+            patch("subprocess.Popen", return_value=fake_proc),
+            patch("time.monotonic", side_effect=lambda: next(clock)),
+            patch("time.sleep"),
+        ):
+            sidecar.maybe_spawn()
+        assert any(
+            "has not published its URL" in rec.message for rec in caplog.records
+        ), (
+            f"expected publish-timeout warning, got: {[r.message for r in caplog.records]}"
+        )
+
+    def test_prepare_callback_runs_winner_only_inside_the_lock(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """maybe_spawn(prepare=...) invokes the callback exactly once on
+        the winner path — BEFORE the retire, so the heavy metadata dump
+        runs while the old sidecar still holds the remembered port (the
+        unbound window shrinks to spawn-plus-startup). Losers and
+        disabled installs never invoke it."""
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        events: list[str] = []
+        fake_proc = MagicMock()
+        fake_proc.pid = 12345
+        fake_proc.poll.return_value = None
+        url_file = tmp_data_dir / "ui.url"
+
+        def _publish(_duration: float) -> None:
+            url_file.write_text("http://127.0.0.1:54321/private_x/settings\n")
+
+        with (
+            patch.object(
+                sidecar,
+                "_shutdown_existing_sidecar",
+                side_effect=lambda: events.append("retire"),
+            ),
+            patch("subprocess.Popen", return_value=fake_proc),
+            patch("time.sleep", side_effect=_publish),
+        ):
+            sidecar.maybe_spawn(prepare=lambda: events.append("prepare"))
+        assert events == ["prepare", "retire"]
+
+        events.clear()
+        with sidecar._spawn_lock() as held:
+            assert held is True
+            sidecar.maybe_spawn(prepare=lambda: events.append("loser"))
+        assert events == []
+
+        monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
+        sidecar.maybe_spawn(prepare=lambda: events.append("disabled"))
+        assert events == []
+
+    def test_lock_loser_reports_existing_url_to_stderr(
+        self,
+        tmp_data_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The loser should tell the user where the settings UI lives."""
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        with sidecar._spawn_lock() as held:
+            assert held is True
+            with patch("subprocess.Popen") as popen:
+                sidecar.maybe_spawn()
+            popen.assert_not_called()
+        assert "http://127.0.0.1:9999/private_xx/settings" in capsys.readouterr().err
 
     def test_maybe_spawn_invokes_popen_when_no_existing(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -303,6 +951,85 @@ class TestMaybeSpawnGates:
         # so it doesn't depend on console_scripts being on PATH.
         called_cmd = popen.call_args[0][0]
         assert called_cmd[-2:] == ["-m", "ha_mcp.stdio_settings_sidecar"]
+
+
+class TestMainSpawnPathDumpsCache:
+    """``__main__._maybe_spawn_settings_sidecar`` cache-dump gating."""
+
+    def test_dump_runs_even_when_sidecar_files_present(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A live sidecar no longer short-circuits the metadata dump.
+
+        The old fast path skipped the dump when a sidecar was alive
+        (nothing to spawn for). With replace-on-startup the alive sidecar
+        is about to be retired, and its successor must read a cache dumped
+        by THIS parent — an old-version cache would resurface issue #2131
+        as a stale Tools tab.
+        """
+        import ha_mcp.__main__ as main_module
+
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        (tmp_data_dir / "ui.pid").write_text(f"{os.getpid()}\n")
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+
+        async def _fake_metadata(_server: object) -> list[dict[str, str]]:
+            return [{"name": "ha_get_state", "primary_tag": "Entity Operations"}]
+
+        def _winner_spawn(prepare: object = None) -> None:
+            assert callable(prepare), "maybe_spawn must receive the dump callback"
+            prepare()
+
+        with (
+            patch.object(main_module, "_get_server") as get_server,
+            patch("ha_mcp.settings_ui._get_tool_metadata", new=_fake_metadata),
+            patch.object(sidecar, "maybe_spawn", side_effect=_winner_spawn) as spawn,
+        ):
+            main_module._maybe_spawn_settings_sidecar()
+        get_server.assert_called_once()
+        spawn.assert_called_once()
+        assert load_tool_metadata_cache() == [
+            {"name": "ha_get_state", "primary_tag": "Entity Operations"}
+        ]
+
+    def test_dump_never_runs_when_the_spawn_is_skipped(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A lock loser must not dump — its cache could belong to a
+        different environment than the sidecar the winner just spawned,
+        and the sidecar reloads the shared file per request."""
+        import ha_mcp.__main__ as main_module
+
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+
+        def _loser_spawn(prepare: object = None) -> None:
+            return  # lock loser: never invokes the dump callback
+
+        with (
+            patch.object(main_module, "_get_server") as get_server,
+            patch.object(sidecar, "maybe_spawn", side_effect=_loser_spawn),
+        ):
+            main_module._maybe_spawn_settings_sidecar()
+        get_server.assert_not_called()
+        assert load_tool_metadata_cache() == []
+
+    def test_dump_skipped_when_disabled(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Disabled sidecar → no server build, no dump; maybe_spawn still
+        invoked for its skip-logging."""
+        import ha_mcp.__main__ as main_module
+
+        monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
+        with (
+            patch.object(main_module, "_get_server") as get_server,
+            patch.object(sidecar, "maybe_spawn") as spawn,
+        ):
+            main_module._maybe_spawn_settings_sidecar()
+        get_server.assert_not_called()
+        spawn.assert_called_once()
 
 
 class TestSecurityMiddleware:
@@ -475,31 +1202,26 @@ class TestRunMainWiring:
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
-        monkeypatch.setattr(sidecar, "_pick_free_port", lambda pinned=0: 54321)
-
-        # Mock uvicorn.Server so ``server.run()`` is a no-op and the
-        # test doesn't bind a port or block. The test exercises the
-        # pre-run() wiring; the cleanup block in ``run_main`` would
-        # unlink ui.url/ui.pid on exit, so we snapshot before that
-        # runs by patching server.run to verify the files exist there.
-        snapshot: dict[str, str] = {}
-
-        class FakeServer:
-            def __init__(self, _config: object) -> None:
-                self.should_exit = False
-
-            def run(self) -> None:
-                # Capture state at the moment the listener "starts".
-                snapshot["url"] = (tmp_data_dir / "ui.url").read_text().strip()
-                snapshot["pid"] = (tmp_data_dir / "ui.pid").read_text().strip()
-
-        fake_uvicorn = MagicMock()
-        fake_uvicorn.Server = FakeServer
-        fake_uvicorn.Config = MagicMock()
-        monkeypatch.setitem(__import__("sys").modules, "uvicorn", fake_uvicorn)
+        monkeypatch.setattr(
+            "ha_mcp.config.get_global_settings",
+            lambda: SimpleNamespace(sidecar_pin_port=0),
+        )
+        listener = _fake_listener(54321)
+        monkeypatch.setattr(
+            sidecar, "_bind_listener", lambda preferred, source: listener
+        )
+        snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
 
         rc = sidecar.run_main()
         assert rc == 0
+        # The pre-bound serving socket must be handed to uvicorn — a
+        # host/port re-bind would reintroduce the probe-then-rebind race.
+        assert snapshot["sockets"] == [listener]
+        # The socket must be LISTENING before ui.url is published (run_main
+        # is linear: listen() precedes _write_pid_url), so a parent that
+        # reads the fresh URL gets its retire POST kernel-queued even
+        # before uvicorn's accept loop starts — never connection-refused.
+        listener.listen.assert_called_once()
 
         url = snapshot["url"]
         assert url.startswith("http://127.0.0.1:54321/private_"), (
@@ -512,6 +1234,292 @@ class TestRunMainWiring:
         # Cleanup path runs in run_main's finally; both files must be gone.
         assert not (tmp_data_dir / "ui.url").exists()
         assert not (tmp_data_dir / "ui.pid").exists()
+
+    @staticmethod
+    def _install_fake_uvicorn(
+        monkeypatch: pytest.MonkeyPatch, tmp_data_dir: Path
+    ) -> dict[str, str]:
+        """Stub uvicorn.Server; capture ui.url/ui.pid at run() time.
+
+        run_main's finally-block unlinks the files on exit, so asserting
+        after return would always see them gone — the snapshot taken
+        inside run() is the observable contract.
+        """
+        snapshot: dict[str, Any] = {}
+
+        class FakeServer:
+            def __init__(self, _config: object) -> None:
+                self.should_exit = False
+
+            def run(self, sockets: list[object] | None = None) -> None:
+                snapshot["url"] = (tmp_data_dir / "ui.url").read_text().strip()
+                snapshot["pid"] = (tmp_data_dir / "ui.pid").read_text().strip()
+                snapshot["sockets"] = sockets
+
+        fake_uvicorn = MagicMock()
+        fake_uvicorn.Server = FakeServer
+        fake_uvicorn.Config = MagicMock()
+        monkeypatch.setitem(__import__("sys").modules, "uvicorn", fake_uvicorn)
+        return snapshot
+
+    def test_run_main_cleanup_spares_a_successors_files(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The exit cleanup must only unlink files this process still owns.
+
+        The retire wait is bounded: a slow-dying sidecar can still be
+        exiting after its replacement wrote fresh ui.pid/ui.url. A blind
+        unlink in the old process's finally-block would delete the NEW
+        sidecar's discovery files and ha_get_overview would stop
+        surfacing the URL. Simulated by swapping in a successor's files
+        during run().
+        """
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.setattr(
+            "ha_mcp.config.get_global_settings",
+            lambda: SimpleNamespace(sidecar_pin_port=0),
+        )
+        monkeypatch.setattr(
+            sidecar, "_bind_listener", lambda preferred, source: _fake_listener(54321)
+        )
+
+        class FakeServer:
+            def __init__(self, _config: object) -> None:
+                self.should_exit = False
+
+            def run(self, sockets: list[object] | None = None) -> None:
+                # A replacement took over while this process was exiting.
+                # With sticky ui.state the successor reuses the SAME port
+                # and secret, so its ui.url content is byte-identical —
+                # URL equality can never distinguish owners (#2134 review).
+                same_url = (tmp_data_dir / "ui.url").read_text()
+                (tmp_data_dir / "ui.pid").write_text("424242\n")
+                (tmp_data_dir / "ui.url").write_text(same_url)
+                self.successor_url = same_url
+
+        fake_uvicorn = MagicMock()
+        fake_uvicorn.Server = FakeServer
+        fake_uvicorn.Config = MagicMock()
+        monkeypatch.setitem(__import__("sys").modules, "uvicorn", fake_uvicorn)
+
+        assert sidecar.run_main() == 0
+        assert (tmp_data_dir / "ui.pid").read_text().strip() == "424242"
+        assert (tmp_data_dir / "ui.url").exists(), (
+            "exiting sidecar deleted its successor's identical ui.url"
+        )
+
+    def test_cleanup_guard_is_pid_based(self, tmp_data_dir: Path) -> None:
+        """Ownership = ui.pid records this process; url content is moot.
+
+        Two live processes can never share a pid, while with sticky state
+        they always share the URL — the pid is the only valid token.
+        """
+        url = "http://127.0.0.1:54321/private_x/settings"
+        # Successor's pid recorded → delete nothing, even with matching URL.
+        (tmp_data_dir / "ui.pid").write_text("424242\n")
+        (tmp_data_dir / "ui.url").write_text(url + "\n")
+        sidecar._cleanup_owned_serving_files()
+        assert (tmp_data_dir / "ui.pid").exists()
+        assert (tmp_data_dir / "ui.url").exists()
+        # Own pid recorded → delete both, regardless of url content.
+        (tmp_data_dir / "ui.pid").write_text(f"{os.getpid()}\n")
+        sidecar._cleanup_owned_serving_files()
+        assert not (tmp_data_dir / "ui.pid").exists()
+        assert not (tmp_data_dir / "ui.url").exists()
+        # Missing pid file → nothing to own, nothing deleted.
+        (tmp_data_dir / "ui.url").write_text(url + "\n")
+        sidecar._cleanup_owned_serving_files()
+        assert (tmp_data_dir / "ui.url").exists()
+
+    def test_write_and_cleanup_share_the_files_lock(self, tmp_data_dir: Path) -> None:
+        """Both critical sections run under the same inter-process lock,
+        closing the write-between-check-and-unlink window."""
+        entered: list[str] = []
+
+        @__import__("contextlib").contextmanager
+        def _tracking_lock() -> object:
+            entered.append("locked")
+            yield
+
+        with patch.object(sidecar, "_serving_files_lock", _tracking_lock):
+            sidecar._write_pid_url("http://127.0.0.1:54321/private_x/settings")
+            sidecar._cleanup_owned_serving_files()
+        assert len(entered) == 2
+
+    def test_run_main_reuses_persisted_port_and_secret(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A prior spawn's port + secret are reused → the URL never changes.
+
+        With replace-on-startup (issue #2131) the sidecar process no
+        longer survives restarts, so URL stability must come from
+        persisted state instead: the replacement rebinds the remembered
+        port and serves the remembered secret path.
+        """
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        # Stub the settings singleton: it reads the real data dir, so a
+        # host-level pin (env or override file) would change ``requested``.
+        monkeypatch.setattr(
+            "ha_mcp.config.get_global_settings",
+            lambda: SimpleNamespace(sidecar_pin_port=0),
+        )
+        (tmp_data_dir / "ui.state").write_text(
+            json.dumps({"port": 54321, "secret_path": "/private_persisted"})
+        )
+        requested: list[int] = []
+
+        def _fake_bind(preferred: int, source: str) -> MagicMock:
+            requested.append(preferred)
+            return _fake_listener(preferred or 49999)
+
+        monkeypatch.setattr(sidecar, "_bind_listener", _fake_bind)
+        snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
+
+        assert sidecar.run_main() == 0
+        assert requested == [54321], "remembered port must be requested for rebind"
+        assert snapshot["url"] == "http://127.0.0.1:54321/private_persisted/settings"
+
+    def test_run_main_persists_the_bound_port_not_the_requested_one(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ephemeral fallback must be what lands in ui.state.
+
+        When the remembered port can't be bound, the sidecar serves on a
+        fallback port; persisting the REQUESTED port instead would make
+        ui.state disagree with the URL just served, and the settings URL
+        would flip on every subsequent restart.
+        """
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.setattr(
+            "ha_mcp.config.get_global_settings",
+            lambda: SimpleNamespace(sidecar_pin_port=0),
+        )
+        (tmp_data_dir / "ui.state").write_text(
+            json.dumps({"port": 54321, "secret_path": "/private_persisted"})
+        )
+        monkeypatch.setattr(
+            sidecar, "_bind_listener", lambda preferred, source: _fake_listener(49999)
+        )
+        snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
+
+        assert sidecar.run_main() == 0
+        assert snapshot["url"] == "http://127.0.0.1:49999/private_persisted/settings"
+        state = json.loads((tmp_data_dir / "ui.state").read_text())
+        assert state["port"] == 49999
+
+    def test_run_main_bind_failure_exits_before_touching_files(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Total bind failure must not disturb a live sidecar's files.
+
+        If even the ephemeral bind fails, this child can never serve —
+        writing state/discovery files first (or cleaning existing ones
+        on the way out) would corrupt or delete a LIVE predecessor's
+        records for nothing.
+        """
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.setattr(
+            "ha_mcp.config.get_global_settings",
+            lambda: SimpleNamespace(sidecar_pin_port=0),
+        )
+        (tmp_data_dir / "ui.pid").write_text("424242\n")
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:54321/private_live/settings\n"
+        )
+        (tmp_data_dir / "ui.state").write_text(
+            json.dumps({"port": 54321, "secret_path": "/private_live"})
+        )
+
+        def _fail_bind(preferred: int, source: str) -> MagicMock:
+            raise OSError("no ports available")
+
+        monkeypatch.setattr(sidecar, "_bind_listener", _fail_bind)
+        self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
+
+        assert sidecar.run_main() != 0
+        assert (tmp_data_dir / "ui.pid").read_text().strip() == "424242"
+        assert "private_live" in (tmp_data_dir / "ui.url").read_text()
+        state = json.loads((tmp_data_dir / "ui.state").read_text())
+        assert state["port"] == 54321
+
+    def test_run_main_persists_state_for_next_spawn(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """First run records port + secret; cleanup must NOT remove them.
+
+        ui.url/ui.pid mean "a sidecar is serving right now" and die with
+        the process; ui.state means "this install's stable URL" and must
+        outlive it — it's what the NEXT spawn reads.
+        """
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.setattr(
+            "ha_mcp.config.get_global_settings",
+            lambda: SimpleNamespace(sidecar_pin_port=0),
+        )
+        monkeypatch.setattr(
+            sidecar, "_bind_listener", lambda preferred, source: _fake_listener(54321)
+        )
+        snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
+
+        assert sidecar.run_main() == 0
+        state = json.loads((tmp_data_dir / "ui.state").read_text())
+        assert state["port"] == 54321
+        secret = state["secret_path"]
+        assert secret.startswith("/private_")
+        assert snapshot["url"] == f"http://127.0.0.1:54321{secret}/settings"
+        # Serving files cleaned up, state retained.
+        assert not (tmp_data_dir / "ui.url").exists()
+        assert not (tmp_data_dir / "ui.pid").exists()
+        assert (tmp_data_dir / "ui.state").exists()
+
+    def test_run_main_pin_setting_overrides_persisted_port(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicit pin (#1587) wins over the remembered port; secret sticks."""
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        (tmp_data_dir / "ui.state").write_text(
+            json.dumps({"port": 54321, "secret_path": "/private_persisted"})
+        )
+        monkeypatch.setattr(
+            "ha_mcp.config.get_global_settings",
+            lambda: SimpleNamespace(sidecar_pin_port=61234),
+        )
+        requested: list[int] = []
+
+        def _fake_bind(preferred: int, source: str) -> MagicMock:
+            requested.append(preferred)
+            return _fake_listener(preferred)
+
+        monkeypatch.setattr(sidecar, "_bind_listener", _fake_bind)
+        snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
+
+        assert sidecar.run_main() == 0
+        assert requested == [61234]
+        assert snapshot["url"] == "http://127.0.0.1:61234/private_persisted/settings"
+        # State follows the actually bound port so the next spawn (with
+        # the pin removed again) keeps the same origin.
+        state = json.loads((tmp_data_dir / "ui.state").read_text())
+        assert state["port"] == 61234
+
+    def test_run_main_regenerates_on_garbage_state(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.setattr(
+            "ha_mcp.config.get_global_settings",
+            lambda: SimpleNamespace(sidecar_pin_port=0),
+        )
+        (tmp_data_dir / "ui.state").write_text("not json {{{")
+        monkeypatch.setattr(
+            sidecar, "_bind_listener", lambda preferred, source: _fake_listener(54321)
+        )
+        snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
+
+        assert sidecar.run_main() == 0
+        assert snapshot["url"].startswith("http://127.0.0.1:54321/private_")
+        state = json.loads((tmp_data_dir / "ui.state").read_text())
+        assert state["port"] == 54321
+        assert state["secret_path"].startswith("/private_")
 
     def test_run_main_respects_disable_sentinel(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -563,9 +1571,6 @@ class TestMaybeSpawnStaleCleanup:
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
         stale_pid = tmp_data_dir / "ui.pid"
         stale_url = tmp_data_dir / "ui.url"
-        # Pre-create stale files with a CLEARLY DEAD pid so the
-        # "_existing_sidecar_alive" guard returns False and we proceed
-        # to the cleanup-then-spawn path.
         stale_pid.write_text("999999\n")
         stale_url.write_text("http://127.0.0.1:1/stale\n")
 
@@ -581,7 +1586,20 @@ class TestMaybeSpawnStaleCleanup:
             proc.pid = 12345
             return proc
 
-        with patch("subprocess.Popen", side_effect=_record_state):
+        # The stale URL has no live listener; stub the retire POST so the
+        # test stays hermetic (no real socket connect).
+        import urllib.error
+
+        with (
+            patch.object(
+                sidecar,
+                "_no_proxy_opener",
+                return_value=_fake_opener(
+                    side_effect=urllib.error.URLError("connection refused")
+                ),
+            ),
+            patch("subprocess.Popen", side_effect=_record_state),
+        ):
             sidecar.maybe_spawn()
 
         # Both stale files must have been unlinked before Popen ran;
@@ -593,6 +1611,107 @@ class TestMaybeSpawnStaleCleanup:
             "stale ui.url still present at Popen call — cleanup regressed"
         )
 
+    def test_ui_state_survives_the_stale_cleanup(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ui.state must NOT join the stale-file unlink loop.
+
+        It carries the stable URL to the next spawn — adding it to the
+        cleanup (a plausible "clean stale state too" edit) would destroy
+        URL stability, the PR's headline promise, with the suite green.
+        """
+        import urllib.error
+
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        (tmp_data_dir / "ui.pid").write_text("999999\n")
+        (tmp_data_dir / "ui.url").write_text("http://127.0.0.1:1/stale\n")
+        state_file = tmp_data_dir / "ui.state"
+        state_file.write_text(
+            json.dumps({"port": 54321, "secret_path": "/private_keep"})
+        )
+        snapshot: dict[str, bool] = {}
+
+        def _record_state(*_args: object, **_kwargs: object) -> MagicMock:
+            snapshot["state_exists"] = state_file.exists()
+            proc = MagicMock()
+            proc.pid = 12345
+            proc.poll.return_value = None
+            return proc
+
+        with (
+            patch.object(
+                sidecar,
+                "_no_proxy_opener",
+                return_value=_fake_opener(
+                    side_effect=urllib.error.URLError("connection refused")
+                ),
+            ),
+            patch("time.sleep"),
+            patch("time.monotonic", side_effect=[0.0, 100.0, 200.0]),
+            patch("subprocess.Popen", side_effect=_record_state),
+        ):
+            sidecar.maybe_spawn()
+
+        assert snapshot.get("state_exists") is True
+        assert state_file.exists()
+        assert json.loads(state_file.read_text())["secret_path"] == "/private_keep"
+
+
+class TestServingFilesLock:
+    """``_serving_files_lock`` degrades to unlocked, loudly, never fatally."""
+
+    def test_open_failure_degrades_to_unlocked(
+        self,
+        tmp_data_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A data dir where the lock file can't be opened (read-only fs,
+        flock-less network mount) must not take the sidecar down with it —
+        the write/cleanup body still runs, with a warning trail."""
+        import logging
+
+        real_open = os.open
+
+        def _fail_lock_open(path: object, *args: object, **kwargs: object) -> int:
+            if str(path).endswith("files.lock"):
+                raise OSError("read-only file system")
+            return real_open(path, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(os, "open", _fail_lock_open)
+        ran = False
+        with (
+            caplog.at_level(logging.WARNING, logger="ha_mcp.stdio_settings_sidecar"),
+            sidecar._serving_files_lock(),
+        ):
+            ran = True
+        assert ran
+        assert any("proceeding unlocked" in r.message for r in caplog.records)
+
+    def test_acquire_failure_degrades_to_unlocked(
+        self, tmp_data_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+        import sys
+
+        if sys.platform == "win32":
+            import msvcrt
+
+            lock_target, lock_name = msvcrt, "locking"
+        else:
+            import fcntl
+
+            lock_target, lock_name = fcntl, "flock"
+        ran = False
+        with (
+            caplog.at_level(logging.WARNING, logger="ha_mcp.stdio_settings_sidecar"),
+            patch.object(lock_target, lock_name, side_effect=OSError("ENOLCK")),
+            sidecar._serving_files_lock(),
+        ):
+            ran = True
+        assert ran
+        assert any("proceeding unlocked" in r.message for r in caplog.records)
+
 
 class TestDumpCacheFailurePath:
     """``dump_tool_metadata_cache`` documented contract: returns False on OSError."""
@@ -600,24 +1719,55 @@ class TestDumpCacheFailurePath:
     def test_dump_returns_false_on_oserror(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Force Path.write_text to raise; the helper must catch + return
+        # Force the atomic writer to raise; the helper must catch + return
         # False without escaping the exception (callers in __main__.py
         # rely on this to avoid blocking stdio startup on cache I/O).
         def _raise(*_args: object, **_kwargs: object) -> None:
             raise OSError("simulated disk full")
 
-        monkeypatch.setattr(Path, "write_text", _raise)
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._persistence._atomic_write_json", _raise
+        )
         assert dump_tool_metadata_cache([{"name": "x"}]) is False
+
+    def test_dump_is_atomic(self, tmp_data_dir: Path) -> None:
+        """A reader must see the OLD cache until the instant of rename.
+
+        Since the dump moved ahead of the retire, it overlaps the OLD
+        still-serving sidecar on every startup — a truncate-write would
+        hand a concurrent /api/tools request an empty tool list from the
+        half-written file. Asserted against the real property, not the
+        helper delegation: at the moment os.replace fires, the
+        destination still holds the previous content, and afterwards the
+        new content — never a torn state. A truncate-write
+        reimplementation (in the dump OR inside the helper) never calls
+        os.replace and fails here.
+        """
+        cache = tmp_data_dir / "tool_metadata.json"
+        cache.write_text('[{"name": "old"}]')
+        observed: dict[str, str] = {}
+        real_replace = os.replace
+
+        def _observing_replace(src: object, dst: object) -> None:
+            observed["at_replace"] = Path(str(dst)).read_text()
+            real_replace(src, dst)  # type: ignore[arg-type]
+
+        with patch("os.replace", side_effect=_observing_replace):
+            assert dump_tool_metadata_cache([{"name": "new"}]) is True
+        assert observed["at_replace"] == '[{"name": "old"}]', (
+            "destination was modified before the rename — write is not atomic"
+        )
+        assert json.loads(cache.read_text()) == [{"name": "new"}]
 
 
 class TestSpawnLock:
     """``_spawn_lock`` serializes concurrent ``maybe_spawn()`` callers.
 
     The race Patch76 flagged: two parent stdio processes starting in
-    rapid succession can both clear the ``_existing_sidecar_alive()``
-    check and ``Popen`` a child; the loser's child then races on
-    ``bind()`` and crashes into ``sidecar.log``. The lock makes the
-    alive-check-plus-Popen window mutually exclusive across parents.
+    rapid succession can both run the retire-and-respawn window and
+    ``Popen`` a child; the loser's child then races on ``bind()`` and
+    crashes into ``sidecar.log``. The lock makes that window mutually
+    exclusive across parents.
     """
 
     def test_second_holder_sees_lock_unacquired(self, tmp_data_dir: Path) -> None:
@@ -641,13 +1791,22 @@ class TestSpawnLock:
     def test_maybe_spawn_held_lock_short_circuits(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """If another parent already holds the spawn lock, maybe_spawn() MUST NOT Popen."""
+        """A lock loser must neither Popen NOR retire.
+
+        The winner may have just spawned a fresh sidecar; a loser that
+        still ran the retire POST would shut that brand-new sidecar
+        down, leaving no sidecar at all.
+        """
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
         with sidecar._spawn_lock() as held:
             assert held is True
-            with patch("subprocess.Popen") as popen:
+            with (
+                patch.object(sidecar, "_shutdown_existing_sidecar") as shutdown,
+                patch("subprocess.Popen") as popen,
+            ):
                 sidecar.maybe_spawn()
             popen.assert_not_called()
+            shutdown.assert_not_called()
 
 
 class TestDiscoverabilityFlow:
@@ -661,6 +1820,57 @@ class TestDiscoverabilityFlow:
     Claude would hand users a dead link without any test failing. This
     suite ties producer + consumer together.
     """
+
+    def test_retire_post_reaches_the_real_shutdown_route(
+        self, tmp_data_dir: Path
+    ) -> None:
+        """Producer/consumer tie for the retire path (#2134 review).
+
+        The retire POST must survive the real route table AND the real
+        SecurityMiddleware with exactly urllib's header shape: Host set
+        to the loopback authority and NO Origin header (the CSRF check
+        is opt-in for Origin-less clients — tightening it to require
+        Origin would break every replace). A drift in the route path,
+        the derivation arithmetic, or the middleware contract fails
+        here first.
+        """
+        port = 54321
+        secret_path = "/private_retire"
+        url = f"http://127.0.0.1:{port}{secret_path}/settings"
+        app = sidecar._build_app(host="127.0.0.1", port=port, secret_path=secret_path)
+        client = TestClient(app)
+
+        target = sidecar._shutdown_url(url)
+        prefix = f"http://127.0.0.1:{port}"
+        assert target.startswith(prefix)
+        resp = client.post(
+            target.removeprefix(prefix),
+            headers={"host": f"127.0.0.1:{port}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body.get("success") is True
+        # A retire is not a disable: the retire-mode POST must NOT write
+        # the sentinel at all — every sentinel on disk is therefore
+        # user-owned and the replace flow never has one of its own to
+        # clear (closing the retire-created-then-user-clicks race).
+        assert "mode=retire" in target
+        assert not (tmp_data_dir / "settings_ui_disabled").exists()
+        assert body.get("sentinel_created") is False
+        # No "delete the sentinel to re-enable" advice on a retire — it
+        # wrote no sentinel and a replacement follows immediately.
+        assert "Delete" not in body.get("message", "")
+
+        # The page's Stop button (no mode param) keeps the disable
+        # contract: sentinel written, creation reported truthfully.
+        stop_path = f"{secret_path}/api/settings/shutdown"
+        first = client.post(stop_path, headers={"host": f"127.0.0.1:{port}"})
+        assert first.status_code == 200
+        assert first.json().get("sentinel_created") is True
+        assert (tmp_data_dir / "settings_ui_disabled").exists()
+        second = client.post(stop_path, headers={"host": f"127.0.0.1:{port}"})
+        assert second.status_code == 200
+        assert second.json().get("sentinel_created") is False
 
     def test_url_from_overview_serves_settings_page(self, tmp_data_dir: Path) -> None:
         """The URL ``ha_get_overview`` surfaces MUST hit a real /settings page.
@@ -718,7 +1928,13 @@ class TestDiscoverabilityFlow:
         sidecar uses at runtime.
         """
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
-        monkeypatch.setattr(sidecar, "_pick_free_port", lambda pinned=0: 41234)
+        monkeypatch.setattr(
+            "ha_mcp.config.get_global_settings",
+            lambda: SimpleNamespace(sidecar_pin_port=0),
+        )
+        monkeypatch.setattr(
+            sidecar, "_bind_listener", lambda preferred, source: _fake_listener(41234)
+        )
 
         captured: dict[str, object] = {}
 
@@ -726,7 +1942,7 @@ class TestDiscoverabilityFlow:
             def __init__(self, _config: object) -> None:
                 self.should_exit = False
 
-            def run(self) -> None:
+            def run(self, sockets: list[object] | None = None) -> None:
                 # Snapshot the URL the writer chose + the app's routes
                 # at the same instant the listener "starts".
                 captured["url"] = (tmp_data_dir / "ui.url").read_text().strip()

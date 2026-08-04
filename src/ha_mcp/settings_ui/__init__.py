@@ -626,7 +626,9 @@ def register_settings_routes(
         ("/api/settings/features", ["GET"], "get_feature_flags"),
         ("/api/settings/features", ["POST"], "save_feature_flags"),
         # Theme / accessibility prefs (#1574 review) — server-side copy so
-        # they survive the stdio sidecar's per-spawn origin change
+        # they survive a stdio sidecar origin change (stable by default
+        # since #2131, but fresh on first spawn / lost ui.state / pin
+        # change / taken remembered port)
         ("/api/settings/theme", ["GET"], "get_theme_prefs"),
         ("/api/settings/theme", ["POST"], "save_theme_prefs"),
         # Advanced settings endpoints

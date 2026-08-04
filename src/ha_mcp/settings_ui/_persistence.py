@@ -67,7 +67,11 @@ def dump_tool_metadata_cache(metadata: list[dict[str, Any]]) -> bool:
     """
     path = _get_tool_metadata_cache_path()
     try:
-        path.write_text(json.dumps(metadata))
+        # Atomic (tmp-then-rename): since the dump moved ahead of the
+        # sidecar retire it overlaps the OLD still-serving sidecar on
+        # every startup, and a truncate-write would hand a concurrent
+        # /api/tools request an empty tool list from the torn file.
+        _atomic_write_json(path, metadata)
     except OSError:
         logger.warning("Failed to dump tool metadata cache to %s", path, exc_info=True)
         return False
@@ -203,10 +207,13 @@ def effective_tool_config(settings: Settings | None = None) -> dict[str, Any]:
     return {**cfg, "tools": tools}
 
 
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+def _atomic_write_json(
+    path: Path, payload: dict[str, Any] | list[dict[str, Any]]
+) -> None:
     """Write ``payload`` to ``path`` atomically.
 
-    Writes to ``<path>.tmp`` first and ``os.replace``s into place so a
+    Writes to a unique same-directory temp file (``mkstemp``, since
+    #1993) first and ``os.replace``s into place so a
     crash or out-of-space mid-write cannot leave a partial/empty file —
     callers that read the file back (``load_tool_config`` /
     ``_load_backup_settings_override``) would otherwise treat a

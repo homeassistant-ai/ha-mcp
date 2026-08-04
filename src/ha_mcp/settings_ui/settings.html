@@ -15,12 +15,14 @@
      system sans-serif. -->
 <script data-purpose="server-prefs" data-prefs="__HA_MCP_THEME_PREFS__">
   // #1574 review: theme/accessibility prefs also persist server-side
-  // (theme_prefs.json) because stdio respawns its settings sidecar on a
-  // random port — a fresh origin whose localStorage starts empty. The page
-  // handler substitutes the data-prefs attribute at request time; this
-  // seeds only MISSING localStorage keys (the browser's own latest choice
-  // wins) before the anti-FOUC resolver below reads them. The docs site is
-  // a static build and stays localStorage-only.
+  // (theme_prefs.json) because the stdio sidecar's port — stable by
+  // default since #2131, but fresh on first spawn, a lost ui.state, a
+  // pin change, or a taken remembered port — is the browser origin, and
+  // a new origin's localStorage starts empty. The page handler
+  // substitutes the data-prefs attribute at request time; this seeds
+  // only MISSING localStorage keys (the browser's own latest choice
+  // wins) before the anti-FOUC resolver below reads them. The docs site
+  // is a static build and stays localStorage-only.
   (function () {
     var el = document.currentScript;
     var raw = el ? el.getAttribute("data-prefs") : "";
@@ -366,10 +368,10 @@
 <div class="panel" id="panel-accessibility" role="tabpanel" aria-labelledby="tab-accessibility" tabindex="0">
   <p class="tool-desc" style="margin-bottom:16px" data-i18n="accessibility.intro">
     These settings apply immediately and are saved in this browser and on the
-    server, so they survive restarts in every mode (including stdio, where the
-    settings page moves to a fresh port each session). The docs site offers
-    the same controls in its navigation bar; it has no server and saves per
-    browser.
+    server, so they survive restarts in every mode (including stdio, where
+    the settings page can occasionally move to a new port). The docs site
+    offers the same controls in its navigation bar; it has no server and
+    saves per browser.
   </p>
   <p class="a11y-contrast-warning" id="a11y-storage-note" hidden data-i18n="accessibility.storage_blocked">
     Your browser is blocking site storage; choices apply for this session
