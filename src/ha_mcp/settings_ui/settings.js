@@ -4020,8 +4020,9 @@ loadFsCustomPaths();
 
   // #1574 review: localStorage is the synchronous store the anti-FOUC
   // script reads at paint time, but it is origin-scoped and the stdio
-  // sidecar binds a fresh random port (= fresh empty origin) per session.
-  // This hook therefore (a) mirrors every change to the server
+  // sidecar's port (= the origin) can still change: stable by default
+  // since #2131, yet fresh on first spawn, a lost ui.state, or a pin
+  // change. This hook therefore (a) mirrors every change to the server
   // (./api/settings/theme -> theme_prefs.json), which seeds the next
   // fresh origin via the server-prefs head script, and (b) surfaces a
   // blocked localStorage (private mode) once instead of silently losing

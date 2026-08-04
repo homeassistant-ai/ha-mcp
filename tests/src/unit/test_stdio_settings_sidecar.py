@@ -219,6 +219,16 @@ class TestPidLiveness:
         assert sidecar._pid_alive(-1) is False
 
 
+def _fake_opener(status: int = 200, side_effect: Exception | None = None) -> MagicMock:
+    """Stand-in for ``_no_proxy_opener()``: canned status or raising open()."""
+    opener = MagicMock()
+    if side_effect is not None:
+        opener.open.side_effect = side_effect
+    else:
+        opener.open.return_value.__enter__.return_value.status = status
+    return opener
+
+
 class TestShutdownExistingSidecar:
     """``_shutdown_existing_sidecar`` retires the previous sidecar (issue #2131).
 
@@ -234,18 +244,83 @@ class TestShutdownExistingSidecar:
         (tmp_data_dir / "ui.url").write_text(
             "http://127.0.0.1:9999/private_xx/settings\n"
         )
-        with patch("urllib.request.urlopen") as urlopen:
-            urlopen.return_value.__enter__.return_value.status = 200
+        opener = _fake_opener()
+        with patch.object(sidecar, "_no_proxy_opener", return_value=opener):
             sidecar._shutdown_existing_sidecar()
-        urlopen.assert_called_once()
-        req = urlopen.call_args[0][0]
+        opener.open.assert_called_once()
+        req = opener.open.call_args[0][0]
         assert req.full_url == "http://127.0.0.1:9999/private_xx/api/settings/shutdown"
         assert req.get_method() == "POST"
 
+    def test_opener_disables_environment_proxies(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The shutdown POST targets loopback and embeds the secret path —
+        an HTTP_PROXY-honoring opener would leak the secret to the proxy
+        and never reach the listener (urllib does not bypass 127.0.0.1
+        unless no_proxy says so). The empty ProxyHandler suppresses the
+        default env-reading one; with an empty dict it registers no
+        protocol handlers at all, so the pin is "no proxy-carrying
+        handler exists even with proxies in the environment"."""
+        import urllib.request
+
+        monkeypatch.setenv("HTTP_PROXY", "http://proxy.example:3128")
+        monkeypatch.setenv("http_proxy", "http://proxy.example:3128")
+        assert not any(
+            isinstance(h, urllib.request.ProxyHandler) and h.proxies
+            for h in sidecar._no_proxy_opener().handlers
+        ), "opener must not carry an env-configured ProxyHandler"
+
     def test_no_url_file_is_noop(self, tmp_data_dir: Path) -> None:
-        with patch("urllib.request.urlopen") as urlopen:
+        opener = _fake_opener()
+        with patch.object(sidecar, "_no_proxy_opener", return_value=opener):
             sidecar._shutdown_existing_sidecar()
-        urlopen.assert_not_called()
+        opener.open.assert_not_called()
+
+    def test_malformed_url_is_nonfatal(self, tmp_data_dir: Path) -> None:
+        """A corrupt ui.url must not raise out of the replace flow.
+
+        ``Request("garbage/...")`` raises ValueError before any I/O; if it
+        escaped, maybe_spawn() would abort before _do_spawn() and every
+        later startup would repeat the failure with the stale files intact.
+        """
+        (tmp_data_dir / "ui.url").write_text("garbage\n")
+        (tmp_data_dir / "ui.pid").write_text("4242\n")
+        with patch.object(sidecar, "_pid_alive") as alive:
+            sidecar._shutdown_existing_sidecar()
+        alive.assert_not_called()
+
+    def test_seeds_state_from_legacy_url(self, tmp_data_dir: Path) -> None:
+        """Upgrading from a pre-ui.state release keeps the existing URL.
+
+        Legacy installs carry port+secret only in ui.url, which the
+        replace flow deletes — without seeding, the first upgraded
+        startup would mint a fresh URL and break every bookmark. Seeding
+        must happen even when the old sidecar is already dead.
+        """
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:54321/private_legacy/settings\n"
+        )
+        import urllib.error
+
+        opener = _fake_opener(side_effect=urllib.error.URLError("refused"))
+        with patch.object(sidecar, "_no_proxy_opener", return_value=opener):
+            sidecar._shutdown_existing_sidecar()
+        state = json.loads((tmp_data_dir / "ui.state").read_text())
+        assert state == {"port": 54321, "secret_path": "/private_legacy"}
+
+    def test_seed_does_not_overwrite_existing_state(self, tmp_data_dir: Path) -> None:
+        (tmp_data_dir / "ui.state").write_text(
+            json.dumps({"port": 44444, "secret_path": "/private_state"})
+        )
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:54321/private_other/settings\n"
+        )
+        opener = _fake_opener()
+        with patch.object(sidecar, "_no_proxy_opener", return_value=opener):
+            sidecar._shutdown_existing_sidecar()
+        state = json.loads((tmp_data_dir / "ui.state").read_text())
+        assert state == {"port": 44444, "secret_path": "/private_state"}
 
     def test_removes_sentinel_written_by_shutdown_endpoint(
         self, tmp_data_dir: Path
@@ -261,14 +336,16 @@ class TestShutdownExistingSidecar:
         )
         sentinel = tmp_data_dir / "settings_ui_disabled"
 
-        def _fake_urlopen(_req: object, timeout: float = 0) -> MagicMock:
+        def _fake_open(_req: object, timeout: float = 0) -> MagicMock:
             # The live endpoint writes the sentinel before signalling exit.
             sentinel.write_text("Disabled via /shutdown endpoint at pid 999\n")
             cm = MagicMock()
             cm.__enter__.return_value.status = 200
             return cm
 
-        with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+        opener = MagicMock()
+        opener.open.side_effect = _fake_open
+        with patch.object(sidecar, "_no_proxy_opener", return_value=opener):
             sidecar._shutdown_existing_sidecar()
         assert not sentinel.exists(), (
             "replace flow must remove the disable sentinel the endpoint wrote"
@@ -288,13 +365,12 @@ class TestShutdownExistingSidecar:
         (tmp_data_dir / "ui.pid").write_text("4242\n")
         liveness = iter([True, True, False])
         with (
-            patch("urllib.request.urlopen") as urlopen,
+            patch.object(sidecar, "_no_proxy_opener", return_value=_fake_opener()),
             patch.object(
                 sidecar, "_pid_alive", side_effect=lambda _pid: next(liveness)
             ) as alive,
             patch("time.sleep"),
         ):
-            urlopen.return_value.__enter__.return_value.status = 200
             sidecar._shutdown_existing_sidecar()
         assert alive.call_count == 3
         assert alive.call_args[0][0] == 4242
@@ -313,12 +389,11 @@ class TestShutdownExistingSidecar:
         clock = iter([1000.0, 1000.0 + sidecar._OLD_SIDECAR_EXIT_WAIT + 1])
         with (
             caplog.at_level(logging.WARNING, logger="ha_mcp.stdio_settings_sidecar"),
-            patch("urllib.request.urlopen") as urlopen,
+            patch.object(sidecar, "_no_proxy_opener", return_value=_fake_opener()),
             patch.object(sidecar, "_pid_alive", return_value=True),
             patch("time.monotonic", side_effect=lambda: next(clock)),
             patch("time.sleep"),
         ):
-            urlopen.return_value.__enter__.return_value.status = 200
             sidecar._shutdown_existing_sidecar()
         assert any(
             "still alive" in rec.message
@@ -340,9 +415,12 @@ class TestShutdownExistingSidecar:
         )
         (tmp_data_dir / "ui.pid").write_text(f"{os.getpid()}\n")
         with (
-            patch(
-                "urllib.request.urlopen",
-                side_effect=urllib.error.URLError("connection refused"),
+            patch.object(
+                sidecar,
+                "_no_proxy_opener",
+                return_value=_fake_opener(
+                    side_effect=urllib.error.URLError("connection refused")
+                ),
             ),
             patch.object(sidecar, "_pid_alive") as alive,
         ):
@@ -355,10 +433,9 @@ class TestShutdownExistingSidecar:
         )
         (tmp_data_dir / "ui.pid").write_text("not a number\n")
         with (
-            patch("urllib.request.urlopen") as urlopen,
+            patch.object(sidecar, "_no_proxy_opener", return_value=_fake_opener()),
             patch.object(sidecar, "_pid_alive") as alive,
         ):
-            urlopen.return_value.__enter__.return_value.status = 200
             sidecar._shutdown_existing_sidecar()
         alive.assert_not_called()
 
@@ -414,13 +491,14 @@ class TestMaybeSpawnGates:
         # ui.url deliberately not written.
         fake_proc = MagicMock()
         fake_proc.pid = 99999
+        opener = _fake_opener()
         with (
-            patch("urllib.request.urlopen") as urlopen,
+            patch.object(sidecar, "_no_proxy_opener", return_value=opener),
             patch("subprocess.Popen", return_value=fake_proc) as popen,
         ):
             sidecar.maybe_spawn()
         popen.assert_called_once()
-        urlopen.assert_not_called()
+        opener.open.assert_not_called()
 
     def test_maybe_spawn_invokes_popen_when_no_existing(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -706,6 +784,47 @@ class TestRunMainWiring:
         monkeypatch.setitem(__import__("sys").modules, "uvicorn", fake_uvicorn)
         return snapshot
 
+    def test_run_main_cleanup_spares_a_successors_files(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The exit cleanup must only unlink files this process still owns.
+
+        The retire wait is bounded: a slow-dying sidecar can still be
+        exiting after its replacement wrote fresh ui.pid/ui.url. A blind
+        unlink in the old process's finally-block would delete the NEW
+        sidecar's discovery files and ha_get_overview would stop
+        surfacing the URL. Simulated by swapping in a successor's files
+        during run().
+        """
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.setattr(
+            "ha_mcp.config.get_global_settings",
+            lambda: SimpleNamespace(sidecar_pin_port=0),
+        )
+        monkeypatch.setattr(sidecar, "_pick_free_port", lambda pinned=0: 54321)
+
+        class FakeServer:
+            def __init__(self, _config: object) -> None:
+                self.should_exit = False
+
+            def run(self) -> None:
+                # A replacement took over while this process was exiting.
+                (tmp_data_dir / "ui.pid").write_text("424242\n")
+                (tmp_data_dir / "ui.url").write_text(
+                    "http://127.0.0.1:55555/private_successor/settings\n"
+                )
+
+        fake_uvicorn = MagicMock()
+        fake_uvicorn.Server = FakeServer
+        fake_uvicorn.Config = MagicMock()
+        monkeypatch.setitem(__import__("sys").modules, "uvicorn", fake_uvicorn)
+
+        assert sidecar.run_main() == 0
+        assert (tmp_data_dir / "ui.pid").read_text().strip() == "424242"
+        assert (
+            tmp_data_dir / "ui.url"
+        ).read_text().strip() == "http://127.0.0.1:55555/private_successor/settings"
+
     def test_run_main_reuses_persisted_port_and_secret(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -884,9 +1003,12 @@ class TestMaybeSpawnStaleCleanup:
         import urllib.error
 
         with (
-            patch(
-                "urllib.request.urlopen",
-                side_effect=urllib.error.URLError("connection refused"),
+            patch.object(
+                sidecar,
+                "_no_proxy_opener",
+                return_value=_fake_opener(
+                    side_effect=urllib.error.URLError("connection refused")
+                ),
             ),
             patch("subprocess.Popen", side_effect=_record_state),
         ):

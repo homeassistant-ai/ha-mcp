@@ -232,6 +232,47 @@ _OLD_SIDECAR_EXIT_WAIT = 5.0
 _OLD_SIDECAR_EXIT_POLL = 0.1
 
 
+def _no_proxy_opener() -> Any:
+    """Opener that never routes through HTTP(S)_PROXY.
+
+    The shutdown POST targets 127.0.0.1 and embeds the secret path;
+    urllib honors environment proxies even for loopback unless
+    ``no_proxy`` says otherwise, which would both leak the secret to the
+    proxy and never reach the listener.
+    """
+    import urllib.request
+
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+# Shape run_main() writes into ui.url. Doubles as the legacy-migration
+# parser: pre-ui.state releases used the same format.
+_SIDECAR_URL_RE = re.compile(
+    r"http://127\.0\.0\.1:(\d{1,5})(/private_[A-Za-z0-9_-]+)/settings"
+)
+
+
+def _seed_state_from_url(url: str) -> None:
+    """Migrate a pre-``ui.state`` install's stable URL into the state file.
+
+    Releases before the replace-on-startup fix kept the port and secret
+    only in ``ui.url``, which the replace flow deletes. Without this
+    seed, the first upgraded startup would mint a fresh URL and break
+    every existing bookmark — the exact thing the persisted state exists
+    to prevent. No-op when ``ui.state`` already exists (state is
+    authoritative) or the URL doesn't parse.
+    """
+    if _load_sidecar_state() is not None:
+        return
+    match = _SIDECAR_URL_RE.fullmatch(url.strip())
+    if match is None:
+        return
+    port = int(match.group(1))
+    if not 0 < port < 65536:
+        return
+    _save_sidecar_state(port, match.group(2))
+
+
 def _shutdown_existing_sidecar() -> None:
     """Retire a previously spawned sidecar so a fresh one can replace it.
 
@@ -259,18 +300,22 @@ def _shutdown_existing_sidecar() -> None:
     url = read_sidecar_url()
     if url is None:
         return
+    _seed_state_from_url(url)
 
     import urllib.error
-    import urllib.request
 
     shutdown_url = url.removesuffix("/settings") + "/api/settings/shutdown"
-    request = urllib.request.Request(shutdown_url, data=b"", method="POST")
     try:
-        with urllib.request.urlopen(
+        import urllib.request
+
+        request = urllib.request.Request(shutdown_url, data=b"", method="POST")
+        with _no_proxy_opener().open(
             request, timeout=_SHUTDOWN_HTTP_TIMEOUT
         ) as response:
             status = response.status
-    except (urllib.error.URLError, OSError) as exc:
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        # ValueError: a corrupt ui.url ("garbage") fails Request
+        # construction before any I/O — still just stale state to replace.
         logger.info(
             "No responsive sidecar at the recorded URL (%s); "
             "replacing state files only.",
@@ -983,12 +1028,33 @@ def run_main() -> int:
     try:
         server.run()
     finally:
-        # Best-effort cleanup of state files on graceful exit.
-        for path in (_url_file(), _pid_file()):
-            with contextlib.suppress(FileNotFoundError, OSError):
-                path.unlink()
+        # Best-effort cleanup of serving files on graceful exit — but only
+        # the ones this process still owns. The retire wait in
+        # _shutdown_existing_sidecar is bounded, so a slow exit can outlive
+        # its replacement's file writes; a blind unlink here would delete
+        # the NEW sidecar's discovery files. (ui.state is deliberately
+        # never cleaned: it carries the stable URL to the next spawn.)
+        _cleanup_owned_serving_files(url)
 
     return 0
+
+
+def _cleanup_owned_serving_files(url: str) -> None:
+    """Unlink ui.pid/ui.url iff they still record THIS process/URL."""
+    try:
+        owns_pid = _pid_file().read_text().strip() == str(os.getpid())
+    except OSError:
+        owns_pid = False
+    if owns_pid:
+        with contextlib.suppress(FileNotFoundError, OSError):
+            _pid_file().unlink()
+    try:
+        owns_url = _url_file().read_text().strip() == url
+    except OSError:
+        owns_url = False
+    if owns_url:
+        with contextlib.suppress(FileNotFoundError, OSError):
+            _url_file().unlink()
 
 
 if __name__ == "__main__":  # pragma: no cover — exercised end-to-end, not unit

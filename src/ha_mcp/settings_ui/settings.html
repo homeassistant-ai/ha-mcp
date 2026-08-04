@@ -15,12 +15,14 @@
      system sans-serif. -->
 <script data-purpose="server-prefs" data-prefs="__HA_MCP_THEME_PREFS__">
   // #1574 review: theme/accessibility prefs also persist server-side
-  // (theme_prefs.json) because stdio respawns its settings sidecar on a
-  // random port — a fresh origin whose localStorage starts empty. The page
-  // handler substitutes the data-prefs attribute at request time; this
-  // seeds only MISSING localStorage keys (the browser's own latest choice
-  // wins) before the anti-FOUC resolver below reads them. The docs site is
-  // a static build and stays localStorage-only.
+  // (theme_prefs.json) because the stdio sidecar's port — stable by
+  // default since #2131, but fresh on first spawn, a lost ui.state, or a
+  // pin change — is the browser origin, and a new origin's localStorage
+  // starts empty. The page handler substitutes the data-prefs attribute
+  // at request time; this seeds only MISSING localStorage keys (the
+  // browser's own latest choice wins) before the anti-FOUC resolver below
+  // reads them. The docs site is a static build and stays
+  // localStorage-only.
   (function () {
     var el = document.currentScript;
     var raw = el ? el.getAttribute("data-prefs") : "";
