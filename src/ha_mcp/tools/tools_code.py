@@ -53,8 +53,18 @@ logger = logging.getLogger(__name__)
 # boundary.
 #
 # WARNING: This is shared across all clients in the same server process.
-# In multi-user modes (OAuth, HTTP), one user's saved tools are visible to
-# all other users. Scope to per-session/user before multi-user support.
+# In multi-user modes (OAuth, HTTP), one user's saved tools are listable and
+# runnable by every other user, and ``save_as`` overwrites by name without an
+# ownership check.
+#
+# That exposure is accepted design, not a pending TODO — SECURITY.md § Scope
+# excludes "Saved custom tools (code mode, off by default) visible to other
+# clients of the same server process", on the grounds that they are shared
+# scaffolding rather than per-user data, that ``run_saved`` executes with the
+# caller's own HA token (granting no access the caller lacks), and that any
+# client which can reach ha-mcp is a trusted principal (SECURITY.md § "MCP
+# clients are trusted principals"). Scoping per session/user would be a
+# feature, not a security fix.
 _saved_tools: dict[str, dict[str, str]] = {}
 
 # Tools that sandbox code must not call. Includes ``ha_manage_custom_tool``

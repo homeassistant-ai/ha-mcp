@@ -1004,6 +1004,14 @@ def _get_http_runtime(default_port: int = 8086) -> tuple[str, int, str]:
     ``run_async``, any ``FASTMCP_HOST`` value in the environment is
     ignored — ``MCP_HOST`` is the only env var that affects bind host
     for ha-mcp's CLI entry points.
+
+    The ``0.0.0.0`` bind combined with the default ``/mcp`` path is the
+    documented posture, not an oversight. SECURITY.md § "Local network is
+    the trusted zone for standard mode" makes the LAN the trusted zone, and
+    its Scope section excludes both "LAN-peer access to standard-mode HTTP
+    endpoints" and anything "only exploitable due to a misconfigured
+    deployment (e.g. ... a network-reachable HTTP entrypoint using the
+    default ``MCP_SECRET_PATH``)".
     """
 
     host = os.getenv("MCP_HOST", "0.0.0.0")
@@ -1020,7 +1028,9 @@ def _get_http_runtime(default_port: int = 8086) -> tuple[str, int, str]:
 # Default ``MCP_SECRET_PATH`` value, shared by ``_get_http_runtime`` (the
 # read-from-env fallback) and ``_warn_if_default_path_exposed`` (the
 # hardening-nudge predicate). Single source of truth so the two sites
-# can't drift.
+# can't drift. Leaving this at ``/mcp`` on a non-loopback bind is an
+# accepted, documented posture — see the Scope exclusions quoted in
+# ``_get_http_runtime`` above.
 DEFAULT_MCP_PATH = "/mcp"
 
 # Hostname literals (not IP addresses) treated as loopback by
