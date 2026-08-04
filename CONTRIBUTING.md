@@ -50,8 +50,10 @@ uv run lefthook install --reset-hooks-path
 - **Docs**: Update README.md for user-facing changes
 - **PRs**: Use the template, ensure tests pass
 - **Translations**: A language ships on all four translated surfaces or not at
-  all. Read `src/ha_mcp/settings_ui/locales/README.md` first — a catalog copied
-  from `en.json` fails CI
+  all. Read `src/ha_mcp/settings_ui/locales/README.md` first. Changing an
+  English string owes no translations — the post-merge locale-sync workflow
+  machine-fills them daily, and its verification rejects a catalog left
+  byte-identical to English
 
 ## 💤 Abandoned PRs
 

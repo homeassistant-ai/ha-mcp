@@ -36,7 +36,7 @@ strings failed and the run continues, and two consecutive dead batches stop
 the run early. Partial runs are resumable — completed work is recorded in
 ``tests/src/unit/locale_sync_progress.json`` and skipped on the rerun; only a
 fully successful run repins the baseline and deletes that record, so the
-parity suite stays red until every string is translated.
+locale-sync runs stay red until every string is translated.
 
 Usage::
 
@@ -1002,8 +1002,9 @@ def _repin_baseline(module: Any) -> None:
     so nothing on screen went stale, but someone must confirm the stub still
     describes the tool. Automation must not wave that through — changed
     ``" (parsed)"`` keys keep their OLD hash here, leaving
-    ``test_translations_are_checked_against_current_english`` red until a
-    human confirms and runs ``scripts/update_locale_baseline.py`` (the manual
+    ``test_translations_are_checked_against_current_english`` — run by the
+    locale-sync workflow's completeness verification — red until a human
+    confirms and runs ``scripts/update_locale_baseline.py`` (the manual
     repin, which is that confirmation).
     """
     current = module.english_sources()

@@ -40,7 +40,7 @@ dependencies = [
     # 48.0.1 — the floor must admit every supported core's pin; live-found on
     # the embedded e2e lane against the HA 2026.6.4 image).
     # cryptography is a transitive dependency only — never imported in src/.
-    "cryptography>=48.0.0,<50",
+    "cryptography>=48.0.0,<51",
     "pydantic-monty==0.0.18",
     "tzdata>=2024.1",
     "packaging>=24.0",

@@ -184,7 +184,7 @@
     "errors.stop_failed": "停止失败",
     "errors.restart_failed": "重启失败",
     "errors.failed_detail": "失败：{detail}",
-    "errors.addon_not_back": "应用（插件）未恢复在线。请手动重新加载",
+    "errors.addon_not_back": "应用（附加组件）未能恢复在线。请手动重新加载页面。",
     "errors.unparseable_suffix": " （响应体无法解析）",
     "common.operation_failed": "{operation}失败：{detail}",
     "common.enabled": "已启用",
