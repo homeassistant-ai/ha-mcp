@@ -313,9 +313,12 @@ def _shutdown_url(url: str) -> str:
 
     Shared between the retire flow and its producer/consumer test — the
     arithmetic must stay in lockstep with the route table in
-    :func:`_build_app`.
+    :func:`_build_app`. ``mode=retire`` tells a current-code endpoint to
+    skip the disable-sentinel write (a retire is not a disable), so
+    every sentinel on disk is user-owned; legacy endpoints ignore the
+    parameter and keep their write-then-clear contract.
     """
-    return url.removesuffix("/settings") + "/api/settings/shutdown"
+    return url.removesuffix("/settings") + "/api/settings/shutdown?mode=retire"
 
 
 def _post_shutdown(url: str) -> tuple[bool, bool | None]:
@@ -919,6 +922,107 @@ def _write_pid_url(url: str) -> None:
 # same stop callable via ``app.state.shutdown_state`` and is unaffected.
 
 
+def _build_shutdown_handler(
+    shutdown_lock: threading.Lock,
+    shutdown_state: dict[str, Callable[[], None] | None],
+) -> Callable[[Request], Awaitable[Any]]:
+    """Build the POST /shutdown handler.
+
+    Two callers, two contracts. The page's Stop button (no mode param)
+    is a DISABLE: drop the sentinel BEFORE signalling exit so a fast
+    restart cycle doesn't race past the check in maybe_spawn(); if the
+    sentinel write fails, surface it and keep running. The replace
+    flow's ``mode=retire`` is NOT a disable: it writes no sentinel at
+    all, so every sentinel on disk is user-owned and the replace flow
+    never has one of its own to clear — a user Stop landing anywhere
+    around a retire always sticks. ``sentinel_created`` reports what
+    THIS request did (requests are serialized on uvicorn's single event
+    loop, so the exists-then-write pair cannot interleave).
+    """
+    from starlette.responses import JSONResponse
+
+    def _write_sentinel_or_error() -> Any | None:
+        try:
+            _disabled_sentinel().write_text(
+                f"Disabled via /shutdown endpoint at pid {os.getpid()}\n"
+            )
+        except OSError as e:
+            logger.exception("Failed to write disabled sentinel")
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "INTERNAL_ERROR",
+                        "message": (
+                            f"Failed to write disable sentinel "
+                            f"({type(e).__name__}: {e}); sidecar not shutting "
+                            "down. Set HA_MCP_DISABLE_SETTINGS_UI=1 and "
+                            "restart your MCP client to disable."
+                        ),
+                    },
+                },
+                status_code=500,
+            )
+        return None
+
+    async def _shutdown_endpoint(request: Request) -> Any:
+        is_retire = request.query_params.get("mode") == "retire"
+        sentinel_created = False
+        if not is_retire:
+            sentinel_created = not _disabled_sentinel().exists()
+            error = _write_sentinel_or_error()
+            if error is not None:
+                return error
+        with shutdown_lock:
+            stop = shutdown_state.get("stop")
+        if stop is not None:
+            try:
+                stop()
+            except Exception as stop_exc:
+                # Sentinel write already succeeded; if we now report
+                # "shutting down" but the process keeps running, the
+                # user has the worst possible state: UI loads on this
+                # session, but next restart skips spawning. Roll back
+                # the sentinel so subsequent ha-mcp launches still
+                # spawn the sidecar, and surface the failure. Only a
+                # sentinel THIS request created may be rolled back — in
+                # retire mode (or a repeat Stop) any sentinel on disk is
+                # someone else's disable.
+                logger.exception("uvicorn stop() raised — rolling back sentinel")
+                if sentinel_created:
+                    with contextlib.suppress(FileNotFoundError, OSError):
+                        _disabled_sentinel().unlink()
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": {
+                            "code": "INTERNAL_ERROR",
+                            "message": (
+                                f"Sentinel written but server stop failed "
+                                f"({type(stop_exc).__name__}: {stop_exc}); "
+                                "sentinel was rolled back so future "
+                                "launches will still spawn. Set "
+                                "HA_MCP_DISABLE_SETTINGS_UI=1 and "
+                                "restart your MCP client to disable."
+                            ),
+                        },
+                    },
+                    status_code=500,
+                )
+        return JSONResponse(
+            {
+                "success": True,
+                "sentinel_created": sentinel_created,
+                "message": (
+                    "Settings UI sidecar shutting down. "
+                    f"Delete {_disabled_sentinel()} to re-enable on next ha-mcp start."
+                ),
+            }
+        )
+
+    return _shutdown_endpoint
+
+
 def _build_app(
     host: str,
     port: int,
@@ -933,7 +1037,7 @@ def _build_app(
     from starlette.applications import Starlette
     from starlette.middleware import Middleware
     from starlette.middleware.base import BaseHTTPMiddleware
-    from starlette.responses import JSONResponse, PlainTextResponse
+    from starlette.responses import PlainTextResponse
     from starlette.routing import Route
 
     from .settings_ui import build_settings_handlers
@@ -1104,83 +1208,7 @@ def _build_app(
     # object — the ``shutdown_state`` dict is the indirection layer.
     shutdown_lock = threading.Lock()
     shutdown_state: dict[str, Callable[[], None] | None] = {"stop": None}
-
-    async def _shutdown_endpoint(_request: Request) -> JSONResponse:
-        # Drop sentinel BEFORE signalling exit so a fast restart cycle
-        # doesn't race past the check in maybe_spawn(). If the sentinel
-        # write fails, surface the failure to the caller AND keep the
-        # sidecar running — silently exiting without the sentinel would
-        # leave the user thinking they'd disabled the sidecar while it
-        # quietly respawns on the next stdio start.
-        # ``sentinel_created`` tells the retire flow whether THIS request
-        # created the sentinel: a replace clears only its own sentinel, so
-        # a user's Stop that landed a beat earlier stays honored.
-        # (Requests are serialized on uvicorn's single event loop, so the
-        # exists-then-write pair cannot interleave with another request.)
-        sentinel_created = not _disabled_sentinel().exists()
-        try:
-            _disabled_sentinel().write_text(
-                f"Disabled via /shutdown endpoint at pid {os.getpid()}\n"
-            )
-        except OSError as e:
-            logger.exception("Failed to write disabled sentinel")
-            return JSONResponse(
-                {
-                    "success": False,
-                    "error": {
-                        "code": "INTERNAL_ERROR",
-                        "message": (
-                            f"Failed to write disable sentinel "
-                            f"({type(e).__name__}: {e}); sidecar not shutting "
-                            "down. Set HA_MCP_DISABLE_SETTINGS_UI=1 and "
-                            "restart your MCP client to disable."
-                        ),
-                    },
-                },
-                status_code=500,
-            )
-        with shutdown_lock:
-            stop = shutdown_state.get("stop")
-        if stop is not None:
-            try:
-                stop()
-            except Exception as stop_exc:
-                # Sentinel write already succeeded; if we now report
-                # "shutting down" but the process keeps running, the
-                # user has the worst possible state: UI loads on this
-                # session, but next restart skips spawning. Roll back
-                # the sentinel so subsequent ha-mcp launches still
-                # spawn the sidecar, and surface the failure.
-                logger.exception("uvicorn stop() raised — rolling back sentinel")
-                with contextlib.suppress(FileNotFoundError, OSError):
-                    _disabled_sentinel().unlink()
-                return JSONResponse(
-                    {
-                        "success": False,
-                        "error": {
-                            "code": "INTERNAL_ERROR",
-                            "message": (
-                                f"Sentinel written but server stop failed "
-                                f"({type(stop_exc).__name__}: {stop_exc}); "
-                                "sentinel was rolled back so future "
-                                "launches will still spawn. Set "
-                                "HA_MCP_DISABLE_SETTINGS_UI=1 and "
-                                "restart your MCP client to disable."
-                            ),
-                        },
-                    },
-                    status_code=500,
-                )
-        return JSONResponse(
-            {
-                "success": True,
-                "sentinel_created": sentinel_created,
-                "message": (
-                    "Settings UI sidecar shutting down. "
-                    f"Delete {_disabled_sentinel()} to re-enable on next ha-mcp start."
-                ),
-            }
-        )
+    _shutdown_endpoint = _build_shutdown_handler(shutdown_lock, shutdown_state)
 
     routes.append(
         Route(

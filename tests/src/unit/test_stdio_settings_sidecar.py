@@ -264,7 +264,10 @@ class TestShutdownExistingSidecar:
             sidecar._shutdown_existing_sidecar()
         opener.open.assert_called_once()
         req = opener.open.call_args[0][0]
-        assert req.full_url == "http://127.0.0.1:9999/private_xx/api/settings/shutdown"
+        assert (
+            req.full_url
+            == "http://127.0.0.1:9999/private_xx/api/settings/shutdown?mode=retire"
+        )
         assert req.get_method() == "POST"
 
     def test_opener_disables_environment_proxies(
@@ -1711,16 +1714,22 @@ class TestDiscoverabilityFlow:
         assert resp.status_code == 200
         body = resp.json()
         assert body.get("success") is True
-        # The endpoint's contract the retire flow depends on: the disable
-        # sentinel is written before it answers, and the response reports
-        # whether THIS request created it (drives the parent's decision
-        # to clear it — a user's earlier Stop must not be cleared).
+        # A retire is not a disable: the retire-mode POST must NOT write
+        # the sentinel at all — every sentinel on disk is therefore
+        # user-owned and the replace flow never has one of its own to
+        # clear (closing the retire-created-then-user-clicks race).
+        assert "mode=retire" in target
+        assert not (tmp_data_dir / "settings_ui_disabled").exists()
+        assert body.get("sentinel_created") is False
+
+        # The page's Stop button (no mode param) keeps the disable
+        # contract: sentinel written, creation reported truthfully.
+        stop_path = f"{secret_path}/api/settings/shutdown"
+        first = client.post(stop_path, headers={"host": f"127.0.0.1:{port}"})
+        assert first.status_code == 200
+        assert first.json().get("sentinel_created") is True
         assert (tmp_data_dir / "settings_ui_disabled").exists()
-        assert body.get("sentinel_created") is True
-        second = client.post(
-            target.removeprefix(prefix),
-            headers={"host": f"127.0.0.1:{port}"},
-        )
+        second = client.post(stop_path, headers={"host": f"127.0.0.1:{port}"})
         assert second.status_code == 200
         assert second.json().get("sentinel_created") is False
 
