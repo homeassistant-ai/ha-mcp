@@ -118,9 +118,12 @@ _STOP_JOIN_TIMEOUT_SECONDS = 10.0
 
 # Budget for each teardown phase (the _serve resource cleanup and the
 # worker-loop pending-task sweep). Mirrors the CLI runner's
-# SHUTDOWN_TIMEOUT_SECONDS: both phases together must finish well inside
+# SHUTDOWN_TIMEOUT_SECONDS: both phases together must finish inside
 # _STOP_JOIN_TIMEOUT_SECONDS, or async_stop declares the worker orphaned
-# while the old thread is still executing shared ha_mcp modules.
+# while the old thread is still executing shared ha_mcp modules. The budget
+# bounds only the phases that accept one — asyncgen finalization and
+# uvicorn's post-drain lifespan shutdown remain unbounded — so it buys
+# headroom, not a hard ceiling on the join.
 _TEARDOWN_TIMEOUT_SECONDS = 2.0
 
 # Per-download HTTP timeout for a forced reinstall. The first install pulls the
@@ -1592,6 +1595,12 @@ def _cancel_pending_tasks(loop: asyncio.AbstractEventLoop) -> None:
     generator is already running``) and ``loop.close()`` destroys the
     survivors ("Task was destroyed but it is pending!"), one error pair per
     entry reload.
+
+    Abandoning is inherently partial: a task that ignores cancellation past
+    the budget and still drives an async generator leaves that generator
+    running, and ``shutdown_asyncgens()`` then reports the same ``aclose()``
+    error this sweep exists to remove. The ignored-cancellation warning
+    below is the tell when that residual fires.
     """
     pending = asyncio.all_tasks(loop)
     if not pending:

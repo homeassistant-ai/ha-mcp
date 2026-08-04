@@ -165,6 +165,11 @@ def test_teardown_bounds_a_task_that_ignores_cancellation(monkeypatch, caplog) -
     assert not tasks["stubborn"].done()
     assert "ignored cancellation during worker-loop teardown" in caplog.text
 
+    # The abandoned task stays pending by design; silence asyncio's "Task
+    # was destroyed but it is pending!" destroy log — the exact signature
+    # this fix removes from production — when the reference is collected.
+    tasks["stubborn"]._log_destroy_pending = False
+
 
 async def test_shutdown_server_resources_runs_every_step(monkeypatch) -> None:
     """Listener stop, pool disconnect, and server close are all awaited."""

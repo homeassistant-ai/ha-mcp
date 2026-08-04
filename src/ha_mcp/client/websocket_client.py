@@ -1312,7 +1312,14 @@ class WebSocketManager:
         if stale:
             try:
                 await stale.disconnect()
-            except (OSError, RuntimeError, asyncio.CancelledError):
+            except asyncio.CancelledError:
+                # The caller itself was cancelled mid-eviction: propagate.
+                # Eviction runs after the fresh client was pooled, so a
+                # swallow here would hand a connected client back to a
+                # cancelled caller (mirror of the stale-replacement clause
+                # in get_client).
+                raise
+            except (OSError, RuntimeError):
                 logger.warning(
                     "Error disconnecting evicted WebSocket client",
                     exc_info=True,

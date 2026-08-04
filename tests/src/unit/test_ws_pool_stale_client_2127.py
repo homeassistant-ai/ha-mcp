@@ -17,6 +17,7 @@ from collections.abc import Callable
 
 import pytest
 
+from ha_mcp.client import websocket_client
 from ha_mcp.client.websocket_client import (
     HomeAssistantWebSocketClient,
     WebSocketManager,
@@ -157,3 +158,29 @@ async def test_stale_client_disconnect_cancellation_propagates(manager):
 
     assert len(constructed) == 1
     assert manager._clients == {}
+
+
+async def test_eviction_disconnect_cancellation_propagates(manager, monkeypatch):
+    """The LRU-eviction clause mirrors the stale-replacement cancellation.
+
+    Eviction runs after the fresh client was pooled, so a swallowed
+    ``CancelledError`` there would hand a freshly connected client back to a
+    cancelled caller — the same defect the stale-replacement clause fixed.
+    The pool must still hold the fresh client (insertion precedes eviction),
+    and the evicted client must already be gone.
+    """
+    monkeypatch.setattr(websocket_client, "MAX_POOL_SIZE", 1)
+
+    evicted = StubWebSocketClient(disconnect_error=asyncio.CancelledError())
+    fresh = StubWebSocketClient()
+    handed = iter((evicted, fresh))
+    manager.configure(client_factory=lambda url, token: next(handed))
+
+    first = await manager.get_client(url="http://ha.local", token="t-one")
+    assert first is evicted
+
+    with pytest.raises(asyncio.CancelledError):
+        await manager.get_client(url="http://ha.local", token="t-two")
+
+    assert evicted.disconnect_calls == 1
+    assert list(manager._clients.values()) == [fresh]
