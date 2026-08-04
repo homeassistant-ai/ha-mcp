@@ -17,8 +17,11 @@ surface to maintain.
 
 Security posture:
     - Bind 127.0.0.1 only (never the wildcard).
-    - Random secret path generated per spawn (16 bytes urlsafe).
-    - Random free port chosen at spawn time.
+    - Random secret path (16 bytes urlsafe) generated on first spawn and
+      persisted in ``ui.state`` (0600) so the settings URL stays stable
+      across replace-on-startup; delete the file to rotate it.
+    - Random free port chosen on first spawn and remembered the same way
+      (an explicit pin, #1587, takes precedence).
     - ``Host`` header validation: rejects requests whose host doesn't
       match the bound socket — blocks DNS rebinding attacks where a
       malicious website resolves an attacker-controlled domain to
@@ -45,8 +48,10 @@ Lifecycle:
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -95,6 +100,56 @@ def _log_file() -> Path:
 
 def _disabled_sentinel() -> Path:
     return _sidecar_dir() / "settings_ui_disabled"
+
+
+def _state_file() -> Path:
+    return _sidecar_dir() / "ui.state"
+
+
+def _load_sidecar_state() -> tuple[int, str] | None:
+    """Return ``(port, secret_path)`` persisted by a prior spawn, or None.
+
+    ``ui.url``/``ui.pid`` mean "a sidecar is serving right now" and die
+    with the process; ``ui.state`` means "this install's stable URL" and
+    outlives it. With replace-on-startup (issue #2131) the process no
+    longer survives restarts, so URL stability comes from rebinding the
+    remembered port and reusing the remembered secret path.
+
+    Both values are validated strictly — the secret is interpolated into
+    route paths, so a corrupted file must yield None (fresh values), not
+    a malformed route table.
+    """
+    try:
+        raw = json.loads(_state_file().read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    port = raw.get("port")
+    secret = raw.get("secret_path")
+    if not isinstance(port, int) or isinstance(port, bool) or not 0 < port < 65536:
+        return None
+    if not isinstance(secret, str) or not re.fullmatch(
+        r"/private_[A-Za-z0-9_-]+", secret
+    ):
+        return None
+    return port, secret
+
+
+def _save_sidecar_state(port: int, secret_path: str) -> None:
+    """Persist the bound port + secret for the next spawn (best effort)."""
+    try:
+        _atomic_write_0600(
+            _state_file(),
+            json.dumps({"port": port, "secret_path": secret_path}) + "\n",
+        )
+    except OSError:
+        logger.warning(
+            "Failed to persist sidecar state at %s; the settings URL will "
+            "change on the next restart.",
+            _state_file(),
+            exc_info=True,
+        )
 
 
 def read_sidecar_url() -> str | None:
@@ -855,8 +910,9 @@ def _build_app(
 def run_main() -> int:
     """Sidecar entry point — invoked via ``python -m ha_mcp.stdio_settings_sidecar``.
 
-    Picks a port, generates a secret path, writes pid+url files, and
-    runs uvicorn until killed. Returns the exit code.
+    Resolves the port and secret path (persisted values from a prior
+    spawn when available, fresh ones otherwise), writes pid+url files,
+    and runs uvicorn until killed. Returns the exit code.
     """
     # Honor the disable sentinel on direct invocation too, so a user
     # who disabled via /shutdown but later tried to start the sidecar
@@ -881,14 +937,22 @@ def run_main() -> int:
 
     # Effective pin port honours both the env var (HA_MCP_SIDECAR_PORT) and
     # a value set via the settings UI Advanced tab (persisted to the override
-    # file and applied by get_global_settings). 0 = ephemeral. The lenient
-    # validator in config.Settings has already clamped any bad value to 0.
+    # file and applied by get_global_settings). The lenient validator in
+    # config.Settings has already clamped any bad value to 0. With no pin,
+    # the port + secret persisted by a prior spawn are reused so the
+    # settings URL survives replace-on-startup (issue #2131); only a truly
+    # first spawn (or a lost/invalid ui.state) picks fresh values.
     from .config import get_global_settings
 
-    port = _pick_free_port(get_global_settings().sidecar_pin_port)
-    secret_token = secrets.token_urlsafe(16)
-    secret_path = f"/private_{secret_token}"
+    persisted = _load_sidecar_state()
+    remembered_port, remembered_secret = persisted if persisted else (0, None)
+    port = _pick_free_port(get_global_settings().sidecar_pin_port or remembered_port)
+    if remembered_secret is None:
+        secret_path = f"/private_{secrets.token_urlsafe(16)}"
+    else:
+        secret_path = remembered_secret
     url = f"http://127.0.0.1:{port}{secret_path}/settings"
+    _save_sidecar_state(port, secret_path)
 
     app = _build_app(host="127.0.0.1", port=port, secret_path=secret_path)
 

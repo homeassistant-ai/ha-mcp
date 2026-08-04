@@ -672,6 +672,128 @@ class TestRunMainWiring:
         assert not (tmp_data_dir / "ui.url").exists()
         assert not (tmp_data_dir / "ui.pid").exists()
 
+    @staticmethod
+    def _install_fake_uvicorn(
+        monkeypatch: pytest.MonkeyPatch, tmp_data_dir: Path
+    ) -> dict[str, str]:
+        """Stub uvicorn.Server; capture ui.url/ui.pid at run() time.
+
+        run_main's finally-block unlinks the files on exit, so asserting
+        after return would always see them gone — the snapshot taken
+        inside run() is the observable contract.
+        """
+        snapshot: dict[str, str] = {}
+
+        class FakeServer:
+            def __init__(self, _config: object) -> None:
+                self.should_exit = False
+
+            def run(self) -> None:
+                snapshot["url"] = (tmp_data_dir / "ui.url").read_text().strip()
+                snapshot["pid"] = (tmp_data_dir / "ui.pid").read_text().strip()
+
+        fake_uvicorn = MagicMock()
+        fake_uvicorn.Server = FakeServer
+        fake_uvicorn.Config = MagicMock()
+        monkeypatch.setitem(__import__("sys").modules, "uvicorn", fake_uvicorn)
+        return snapshot
+
+    def test_run_main_reuses_persisted_port_and_secret(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A prior spawn's port + secret are reused → the URL never changes.
+
+        With replace-on-startup (issue #2131) the sidecar process no
+        longer survives restarts, so URL stability must come from
+        persisted state instead: the replacement rebinds the remembered
+        port and serves the remembered secret path.
+        """
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        (tmp_data_dir / "ui.state").write_text(
+            json.dumps({"port": 54321, "secret_path": "/private_persisted"})
+        )
+        requested: list[int] = []
+
+        def _fake_pick(pinned: int = 0) -> int:
+            requested.append(pinned)
+            return pinned or 49999
+
+        monkeypatch.setattr(sidecar, "_pick_free_port", _fake_pick)
+        snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
+
+        assert sidecar.run_main() == 0
+        assert requested == [54321], "remembered port must be requested for rebind"
+        assert snapshot["url"] == "http://127.0.0.1:54321/private_persisted/settings"
+
+    def test_run_main_persists_state_for_next_spawn(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """First run records port + secret; cleanup must NOT remove them.
+
+        ui.url/ui.pid mean "a sidecar is serving right now" and die with
+        the process; ui.state means "this install's stable URL" and must
+        outlive it — it's what the NEXT spawn reads.
+        """
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.setattr(sidecar, "_pick_free_port", lambda pinned=0: 54321)
+        snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
+
+        assert sidecar.run_main() == 0
+        state = json.loads((tmp_data_dir / "ui.state").read_text())
+        assert state["port"] == 54321
+        secret = state["secret_path"]
+        assert secret.startswith("/private_")
+        assert snapshot["url"] == f"http://127.0.0.1:54321{secret}/settings"
+        # Serving files cleaned up, state retained.
+        assert not (tmp_data_dir / "ui.url").exists()
+        assert not (tmp_data_dir / "ui.pid").exists()
+        assert (tmp_data_dir / "ui.state").exists()
+
+    def test_run_main_pin_setting_overrides_persisted_port(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicit pin (#1587) wins over the remembered port; secret sticks."""
+        from types import SimpleNamespace
+
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        (tmp_data_dir / "ui.state").write_text(
+            json.dumps({"port": 54321, "secret_path": "/private_persisted"})
+        )
+        monkeypatch.setattr(
+            "ha_mcp.config.get_global_settings",
+            lambda: SimpleNamespace(sidecar_pin_port=61234),
+        )
+        requested: list[int] = []
+
+        def _fake_pick(pinned: int = 0) -> int:
+            requested.append(pinned)
+            return pinned
+
+        monkeypatch.setattr(sidecar, "_pick_free_port", _fake_pick)
+        snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
+
+        assert sidecar.run_main() == 0
+        assert requested == [61234]
+        assert snapshot["url"] == "http://127.0.0.1:61234/private_persisted/settings"
+        # State follows the actually bound port so the next spawn (with
+        # the pin removed again) keeps the same origin.
+        state = json.loads((tmp_data_dir / "ui.state").read_text())
+        assert state["port"] == 61234
+
+    def test_run_main_regenerates_on_garbage_state(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        (tmp_data_dir / "ui.state").write_text("not json {{{")
+        monkeypatch.setattr(sidecar, "_pick_free_port", lambda pinned=0: 54321)
+        snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
+
+        assert sidecar.run_main() == 0
+        assert snapshot["url"].startswith("http://127.0.0.1:54321/private_")
+        state = json.loads((tmp_data_dir / "ui.state").read_text())
+        assert state["port"] == 54321
+        assert state["secret_path"].startswith("/private_")
+
     def test_run_main_respects_disable_sentinel(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
