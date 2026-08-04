@@ -1005,13 +1005,18 @@ def _get_http_runtime(default_port: int = 8086) -> tuple[str, int, str]:
     ignored — ``MCP_HOST`` is the only env var that affects bind host
     for ha-mcp's CLI entry points.
 
-    The ``0.0.0.0`` bind combined with the default ``/mcp`` path is the
-    documented posture, not an oversight. SECURITY.md § "Local network is
-    the trusted zone for standard mode" makes the LAN the trusted zone, and
-    its Scope section excludes both "LAN-peer access to standard-mode HTTP
-    endpoints" and anything "only exploitable due to a misconfigured
-    deployment (e.g. ... a network-reachable HTTP entrypoint using the
-    default ``MCP_SECRET_PATH``)".
+    The ``0.0.0.0`` default is deliberate and documented: SECURITY.md
+    § "Local network is the trusted zone for standard mode" states that the
+    HTTP entrypoints bind to all interfaces so LAN peers can reach them, and
+    its Scope section excludes "LAN-peer access to standard-mode HTTP
+    endpoints".
+
+    The default ``/mcp`` path is *not* blessed the same way once the bind
+    leaves loopback. That combination is what ``_warn_if_default_path_exposed``
+    warns about, and SECURITY.md's Scope classes it under "a misconfigured
+    deployment" — meaning such reports are declined, not that the
+    configuration is endorsed. Operators on a non-loopback bind are still
+    expected to set a high-entropy ``MCP_SECRET_PATH``.
     """
 
     host = os.getenv("MCP_HOST", "0.0.0.0")
@@ -1028,9 +1033,9 @@ def _get_http_runtime(default_port: int = 8086) -> tuple[str, int, str]:
 # Default ``MCP_SECRET_PATH`` value, shared by ``_get_http_runtime`` (the
 # read-from-env fallback) and ``_warn_if_default_path_exposed`` (the
 # hardening-nudge predicate). Single source of truth so the two sites
-# can't drift. Leaving this at ``/mcp`` on a non-loopback bind is an
-# accepted, documented posture — see the Scope exclusions quoted in
-# ``_get_http_runtime`` above.
+# can't drift. Safe on a loopback bind; on a non-loopback bind it is the
+# misconfiguration ``_warn_if_default_path_exposed`` flags, which SECURITY.md
+# declines to action without endorsing — see ``_get_http_runtime`` above.
 DEFAULT_MCP_PATH = "/mcp"
 
 # Hostname literals (not IP addresses) treated as loopback by
