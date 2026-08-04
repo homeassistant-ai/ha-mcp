@@ -2,9 +2,10 @@
 
 The browser keeps these in localStorage for synchronous pre-paint reads,
 but localStorage is origin-scoped and the stdio settings sidecar's port
-can change — historically on every spawn, now (#2131) only when the
-persisted ``ui.state`` is first created, lost, or overridden by a pin
-change — and each port change is a fresh origin that starts empty. The
+can change — historically on every spawn, now (#2131) only on the first
+spawn, a lost ``ui.state``, a pin change, or a remembered port another
+process took — and each port change is a fresh origin that starts
+empty. The
 server-side copy here survives that: POSTs land in ``theme_prefs.json``
 next to the other settings files, and the page handler seeds them back
 into the served HTML (``server-prefs`` head script) so a fresh origin

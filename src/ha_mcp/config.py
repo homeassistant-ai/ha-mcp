@@ -860,9 +860,9 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
     AdvancedField("environment", "ENVIRONMENT", str, "diagnostics", True),
     AdvancedField("log_level", "LOG_LEVEL", str, "diagnostics", True),
     AdvancedField("debug", "DEBUG", bool, "diagnostics", True),
-    # Settings UI sidecar (stdio-only). Pin the sidecar's port so the
-    # settings URL/origin is stable across restarts; 0 = ephemeral
-    # (default). #1587.
+    # Settings UI sidecar (stdio-only). 0 (default) = first spawn picks a
+    # free port and later spawns reuse it via ui.state (#2131); a value
+    # pins a preferred fixed port instead (best-effort, #1587).
     AdvancedField("sidecar_pin_port", "HA_MCP_SIDECAR_PORT", int, "sidecar", True),
     # NOTE: ``auto_backup_dir`` and ``auto_backup_calendar_lookahead_days``
     # are NOT in this tuple. They are in ``BACKUP_OVERRIDE_FIELDS`` (defined

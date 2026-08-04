@@ -19,15 +19,20 @@ Security posture:
     - Bind 127.0.0.1 only (never the wildcard).
     - Random secret path (16 bytes urlsafe) generated on first spawn and
       persisted in ``ui.state`` (0600) so the settings URL stays stable
-      across replace-on-startup; delete the file to rotate it.
+      across replace-on-startup. To rotate it, stop the sidecar (the
+      page's Stop button, then remove the disable sentinel) and delete
+      ``ui.state`` — while a sidecar is running, a deleted ``ui.state``
+      is re-seeded from the live ``ui.url`` on the next startup.
     - Random free port chosen on first spawn and remembered the same way
-      (an explicit pin, #1587, takes precedence).
+      (an explicit pin, #1587, takes precedence; a remembered port that
+      became unavailable falls back to a fresh ephemeral one).
     - ``Host`` header validation: rejects requests whose host doesn't
       match the bound socket — blocks DNS rebinding attacks where a
       malicious website resolves an attacker-controlled domain to
       ``127.0.0.1`` to reach this listener from the user's browser.
     - ``Origin`` validation on mutating methods.
-    - ``~/.ha-mcp/ui.{url,pid,log}`` written with 0600 / 0644 perms.
+    - ``~/.ha-mcp/`` state files (``ui.url``, ``ui.pid``, ``ui.state``,
+      ``files.lock``) written 0600; ``sidecar.log`` 0644.
 
 Disable mechanisms:
     - ``HA_MCP_DISABLE_SETTINGS_UI`` env var (truthy → skip spawn).
@@ -42,7 +47,7 @@ Lifecycle:
       settings UI always reflects the running server's code and
       environment (issue #2131).
     - Child runs until replaced by the next stdio startup or killed
-      (OS reboot, ``ha-mcp-settings stop``, or ``POST /shutdown``).
+      (OS reboot or ``POST /shutdown``).
 """
 
 from __future__ import annotations
@@ -120,18 +125,43 @@ def _load_sidecar_state() -> tuple[int, str] | None:
     a malformed route table.
     """
     try:
-        raw = json.loads(_state_file().read_text())
-    except (OSError, ValueError):
+        text = _state_file().read_text()
+    except FileNotFoundError:
+        return None  # normal first spawn — nothing to say
+    except OSError:
+        logger.warning(
+            "Cannot read %s; generating a fresh settings URL.",
+            _state_file(),
+            exc_info=True,
+        )
+        return None
+
+    def _invalid(reason: str) -> None:
+        # A present-but-invalid file means the URL is about to change —
+        # exactly the symptom this state exists to prevent — so say why.
+        logger.warning(
+            "Invalid ui.state (%s); generating a fresh settings URL.", reason
+        )
+
+    try:
+        raw = json.loads(text)
+    except ValueError:
+        _invalid("not JSON")
         return None
     if not isinstance(raw, dict):
+        _invalid("non-object root")
         return None
     port = raw.get("port")
     secret = raw.get("secret_path")
-    if not isinstance(port, int) or isinstance(port, bool) or not 0 < port < 65536:
+    # Floor matches the sidecar_pin_port validator: no privileged ports,
+    # and real ephemeral ports never sit below 1024 anyway.
+    if not isinstance(port, int) or isinstance(port, bool) or not 1024 <= port <= 65535:
+        _invalid(f"port {port!r} out of range")
         return None
     if not isinstance(secret, str) or not re.fullmatch(
         r"/private_[A-Za-z0-9_-]+", secret
     ):
+        _invalid("malformed secret_path")
         return None
     return port, secret
 
@@ -224,12 +254,17 @@ def _read_recorded_pid() -> int | None:
         return None
 
 
-# Timeouts for retiring the previous sidecar. The HTTP timeout bounds the
-# stdio-startup delay when the recorded URL points at a hung process; the
-# exit wait bounds how long we give a healthy sidecar to finish dying.
+# Timeouts for retiring the previous sidecar. The HTTP timeout is
+# urllib's per-socket-operation timeout (a listener that accepts and
+# dribbles can stretch the total), which in practice bounds the startup
+# delay when the recorded URL points at a hung process; the exit wait
+# bounds how long we give a healthy sidecar to finish dying.
 _SHUTDOWN_HTTP_TIMEOUT = 2.0
 _OLD_SIDECAR_EXIT_WAIT = 5.0
 _OLD_SIDECAR_EXIT_POLL = 0.1
+# How long the spawning parent keeps the spawn lock while the child gets
+# through interpreter start + imports to _write_pid_url.
+_CHILD_PUBLISH_WAIT = 5.0
 
 
 def _no_proxy_opener() -> Any:
@@ -259,7 +294,7 @@ def _seed_state_from_url(url: str) -> None:
     only in ``ui.url``, which the replace flow deletes. Without this
     seed, the first upgraded startup would mint a fresh URL and break
     every existing bookmark — the exact thing the persisted state exists
-    to prevent. No-op when ``ui.state`` already exists (state is
+    to prevent. No-op when ``ui.state`` already holds valid state (it is
     authoritative) or the URL doesn't parse.
     """
     if _load_sidecar_state() is not None:
@@ -268,9 +303,77 @@ def _seed_state_from_url(url: str) -> None:
     if match is None:
         return
     port = int(match.group(1))
-    if not 0 < port < 65536:
+    if not 1024 <= port <= 65535:  # same floor as _load_sidecar_state
         return
     _save_sidecar_state(port, match.group(2))
+
+
+def _shutdown_endpoint(url: str) -> str:
+    """Derive the retire POST target from a recorded settings URL.
+
+    Shared between the retire flow and its producer/consumer test — the
+    arithmetic must stay in lockstep with the route table in
+    :func:`_build_app`.
+    """
+    return url.removesuffix("/settings") + "/api/settings/shutdown"
+
+
+def _post_shutdown(url: str) -> bool:
+    """POST the retire request; True only when the old sidecar acknowledged.
+
+    Every failure mode gets its own truthful log line — a refusal
+    (HTTPError: the endpoint answered "alive and NOT shutting down") and
+    a timeout (alive but slow) are NOT "no responsive sidecar", and both
+    return False so the caller neither clears the sentinel nor waits on
+    a pid that will not exit.
+    """
+    import urllib.error
+
+    try:
+        import urllib.request
+
+        request = urllib.request.Request(
+            _shutdown_endpoint(url), data=b"", method="POST"
+        )
+        with _no_proxy_opener().open(request, timeout=_SHUTDOWN_HTTP_TIMEOUT):
+            return True  # urllib raises for non-2xx; reaching here is success
+    except urllib.error.HTTPError as exc:
+        # Caught before URLError, which it subclasses. The endpoint's
+        # non-2xx answers (sentinel write failed / stop() raised) leave
+        # the process running and no sentinel behind.
+        logger.warning(
+            "Old sidecar refused shutdown (HTTP %s); spawning replacement anyway.",
+            exc.code,
+        )
+    except TimeoutError as exc:
+        _log_shutdown_timeout(exc)
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError):
+            _log_shutdown_timeout(exc.reason)
+        else:
+            logger.info(
+                "No responsive sidecar at the recorded URL (%s); "
+                "replacing state files only.",
+                exc,
+            )
+    except (OSError, ValueError) as exc:
+        # ValueError: a corrupt ui.url ("garbage") fails Request
+        # construction before any I/O — still just stale state to replace.
+        logger.info(
+            "No responsive sidecar at the recorded URL (%s); "
+            "replacing state files only.",
+            exc,
+        )
+    return False
+
+
+def _log_shutdown_timeout(exc: BaseException) -> None:
+    logger.warning(
+        "Old sidecar did not answer /shutdown within %.1fs (%s); "
+        "it may still be running. Spawning replacement anyway.",
+        _SHUTDOWN_HTTP_TIMEOUT,
+        exc,
+    )
 
 
 def _shutdown_existing_sidecar() -> None:
@@ -285,57 +388,44 @@ def _shutdown_existing_sidecar() -> None:
     Termination goes through the sidecar's own ``POST /shutdown`` endpoint
     on the recorded secret-path URL, never ``os.kill``:
 
-    * Answering on the secret path proves the listener IS our sidecar, so
-      a PID recycled to an unrelated process can never get that process
-      killed.
+    * Only the real sidecar was ever told the secret path, so a listener
+      answering on it is ours for practical purposes (a recycled port
+      would need a catch-all handler to false-positive) — and even then
+      nothing is killed: the worst a stranger receives is a POST it
+      ignores.
     * The endpoint has lived at the same path since the first sidecar
       release (#1381), so orphans spawned by any past version are retired
       too.
 
     Best-effort throughout: on any failure the caller still spawns the
     replacement — worst case an unresponsive old process lingers until
-    reboot, but the pid/url files are overwritten so nothing hands out
-    its URL anymore.
+    reboot, but the discovery files are unlinked and rewritten by the
+    replacement, so nothing hands out the old URL anymore (if the
+    replacement loses the port to that lingering process, it serves on
+    an ephemeral fallback instead).
     """
     url = read_sidecar_url()
     if url is None:
         return
     _seed_state_from_url(url)
 
-    import urllib.error
+    # Snapshot BEFORE the POST: /shutdown writes the disable sentinel, so
+    # afterwards its presence is ambiguous between "my POST caused it"
+    # (clear it — this is a replace, not a disable) and "the user clicked
+    # Stop in this very window" (keep it — their disable must stick).
+    sentinel_preexisting = _disabled_sentinel().exists()
 
-    shutdown_url = url.removesuffix("/settings") + "/api/settings/shutdown"
-    try:
-        import urllib.request
-
-        request = urllib.request.Request(shutdown_url, data=b"", method="POST")
-        with _no_proxy_opener().open(
-            request, timeout=_SHUTDOWN_HTTP_TIMEOUT
-        ) as response:
-            status = response.status
-    except (urllib.error.URLError, OSError, ValueError) as exc:
-        # ValueError: a corrupt ui.url ("garbage") fails Request
-        # construction before any I/O — still just stale state to replace.
-        logger.info(
-            "No responsive sidecar at the recorded URL (%s); "
-            "replacing state files only.",
-            exc,
-        )
-        return
-    if not 200 <= status < 300:
-        logger.warning(
-            "Old sidecar answered shutdown with HTTP %s; spawning replacement anyway.",
-            status,
-        )
+    if not _post_shutdown(url):
         return
     logger.info("Retired previous settings UI sidecar at %s", url)
 
     # /shutdown drops the disable sentinel before signalling exit — its
     # "user clicked shutdown" contract. This is a replace, not a disable:
     # clear the sentinel or the freshly spawned child would honor it and
-    # exit immediately.
-    with contextlib.suppress(FileNotFoundError, OSError):
-        _disabled_sentinel().unlink()
+    # exit immediately. Only a sentinel our own POST caused is cleared.
+    if not sentinel_preexisting:
+        with contextlib.suppress(FileNotFoundError, OSError):
+            _disabled_sentinel().unlink()
 
     pid = _read_recorded_pid()
     if pid is None:
@@ -343,10 +433,14 @@ def _shutdown_existing_sidecar() -> None:
 
     import time
 
-    # Wait (bounded) for the old process to exit: its run_main() finally-
-    # block unlinks the pid/url files, and if the replacement has already
-    # written its own by then, that cleanup would delete the NEW sidecar's
-    # files and ha_get_overview would stop surfacing the URL.
+    # Wait (bounded) for the old process to exit, for two reasons: (a) it
+    # holds the port the replacement wants to rebind — the sticky URL only
+    # survives if the port frees inside this window; (b) sidecars from
+    # releases BEFORE the ownership-guarded cleanup unlink ui.pid/ui.url
+    # blindly on exit, so during migration a still-dying legacy process
+    # could delete the replacement's freshly written files. (Current-code
+    # sidecars can't: _cleanup_owned_serving_files checks ownership under
+    # _serving_files_lock.)
     deadline = time.monotonic() + _OLD_SIDECAR_EXIT_WAIT
     while _pid_alive(pid):
         if time.monotonic() >= deadline:
@@ -433,40 +527,55 @@ def _spawn_lock() -> Iterator[bool]:
         os.close(fd)
 
 
-def _pick_free_port(pinned: int = 0) -> int:
-    """Return the port the sidecar listener should bind.
+def _bind_listener(preferred: int, source: str) -> socket.socket:
+    """Bind and return the sidecar's actual serving socket.
 
-    ``pinned == 0`` (default): bind a transient socket to an ephemeral
-    port and return it. The socket is closed before the sidecar opens its
-    own listener. The OS may hand out the same port again; if another
-    process snatches it in the gap, the sidecar startup will fail and log
-    to ``sidecar.log`` — the parent moves on (settings UI is advisory, not
-    required for MCP operation).
+    Binding the real socket up front (instead of probing a port and
+    letting uvicorn rebind it) makes port acquisition atomic: a busy
+    preferred port fails HERE, before any state is persisted or
+    discovery file written, and falls back to an ephemeral port.
 
-    ``pinned != 0``: try to reserve the requested fixed port with
-    ``SO_REUSEADDR`` so the settings URL/origin survives restarts (#1587).
-    ``SO_REUSEADDR`` lets the bind succeed even if a crashed sidecar left
-    the port in ``TIME_WAIT``. If the port is genuinely unavailable (in
-    use by another process), log a warning and fall back to an ephemeral
-    port rather than failing the sidecar.
+    Platform flags matter (#2134 review):
+
+    * Windows: ``SO_EXCLUSIVEADDRUSE``. Plain ``SO_REUSEADDR`` there
+      permits binding over a live listener that also set it — the probe
+      would report the busy port as free and the child would die inside
+      uvicorn's real bind after the discovery files were written.
+    * POSIX: ``SO_REUSEADDR``, keeping the ``TIME_WAIT`` grace a
+      pinned/remembered port needs across quick restarts (#1587).
+
+    ``source`` names the caller's intent ("Pinned" or "Remembered") so
+    the fallback warning doesn't blame a pin the user never set.
+    Raises OSError only when even the ephemeral bind fails — the caller
+    must exit without touching any state file.
     """
-    if pinned:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                sock.bind(("127.0.0.1", pinned))
-                return int(sock.getsockname()[1])
-            except OSError as exc:
-                logger.warning(
-                    "Sidecar pin port %d unavailable (%s); "
-                    "falling back to an ephemeral port",
-                    pinned,
-                    exc,
+    candidates = [preferred, 0] if preferred else [0]
+    for candidate in candidates:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            if sys.platform == "win32":
+                sock.setsockopt(
+                    socket.SOL_SOCKET,
+                    socket.SO_EXCLUSIVEADDRUSE,  # type: ignore[attr-defined,unused-ignore]
+                    1,
                 )
-        return _pick_free_port(0)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+            else:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("127.0.0.1", candidate))
+        except OSError as exc:
+            sock.close()
+            if candidate == 0:
+                raise
+            logger.warning(
+                "%s sidecar port %d unavailable (%s); "
+                "falling back to an ephemeral port",
+                source,
+                candidate,
+                exc,
+            )
+            continue
+        return sock
+    raise OSError("no bind candidates")  # unreachable: [.., 0] always ends in raise
 
 
 def maybe_spawn() -> None:
@@ -494,12 +603,16 @@ def maybe_spawn() -> None:
     # then Claude Code back-to-back) could both run the retire + Popen
     # window — the loser's child would race on bind() and die into
     # sidecar.log. The lock ensures only one parent runs it at a time;
-    # the loser simply uses the winner's freshly spawned sidecar.
+    # the loser skips (and reports the winner's URL below if it is
+    # already published — the winner may still be mid-spawn).
     with _spawn_lock() as acquired:
         if not acquired:
             logger.info(
                 "Another parent process is currently spawning the sidecar; skipping."
             )
+            existing = read_sidecar_url()
+            if existing:
+                print(f"ha-mcp settings UI at: {existing}", file=sys.stderr)
             return
 
         _shutdown_existing_sidecar()
@@ -507,8 +620,7 @@ def maybe_spawn() -> None:
 
 
 def _do_spawn() -> None:
-    """Inner spawn — assumes the spawn lock is held and any previous
-    sidecar has been retired.
+    """Inner spawn; caller holds the spawn lock, predecessor retired.
 
     Extracted from :func:`maybe_spawn` so the context manager doesn't
     indent the full Popen block.
@@ -602,6 +714,36 @@ def _do_spawn() -> None:
         file=sys.stderr,
     )
 
+    # Keep the spawn lock (held by our caller) until the child has
+    # published its URL. The child needs a full interpreter start before
+    # _write_pid_url runs; a second parent starting inside that window
+    # would find no ui.url, retire nothing, and spawn a duplicate child
+    # against the same remembered port. Holding the lock makes that
+    # parent take the loser path instead. Bounded: an import crash in
+    # the child must not wedge stdio startup.
+    import time
+
+    deadline = time.monotonic() + _CHILD_PUBLISH_WAIT
+    while not _url_file().exists():
+        if proc.poll() is not None:
+            logger.warning(
+                "Settings UI sidecar pid=%d exited (rc=%s) before publishing "
+                "its URL; see %s.",
+                proc.pid,
+                proc.returncode,
+                log_path,
+            )
+            return
+        if time.monotonic() >= deadline:
+            logger.warning(
+                "Settings UI sidecar pid=%d has not published its URL after "
+                "%.0fs; continuing without waiting further.",
+                proc.pid,
+                _CHILD_PUBLISH_WAIT,
+            )
+            return
+        time.sleep(_OLD_SIDECAR_EXIT_POLL)
+
 
 # --------------------------------------------------------------------------
 # Sidecar child process — runs when this module is invoked via
@@ -661,7 +803,10 @@ def _serving_files_lock() -> Iterator[None]:
     try:
         fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
     except OSError:
-        logger.debug("Cannot open %s; proceeding unlocked", lock_path, exc_info=True)
+        # Warning, not debug: unlocked means the predecessor-vs-successor
+        # file race this lock exists to prevent is back — worth a trace
+        # in sidecar.log when it happens (e.g. flock-less network mounts).
+        logger.warning("Cannot open %s; proceeding unlocked", lock_path, exc_info=True)
         yield
         return
     locked = False
@@ -679,8 +824,10 @@ def _serving_files_lock() -> Iterator[None]:
                 fcntl.flock(fd, fcntl.LOCK_EX)
             locked = True
         except OSError:
-            logger.debug(
-                "Serving-files lock unavailable; proceeding unlocked", exc_info=True
+            logger.warning(
+                "Serving-files lock unavailable; proceeding unlocked "
+                "(predecessor/successor file writes are unserialized)",
+                exc_info=True,
             )
         yield
     finally:
@@ -700,11 +847,13 @@ def _serving_files_lock() -> Iterator[None]:
 def _write_pid_url(url: str) -> None:
     """Persist the sidecar URL and pid for parent / overview consumption.
 
-    Writes pid BEFORE url so a partial failure can't leave a URL file
-    pointing at a dead port without the matching pid file. If the URL
-    write fails after the pid file lands, both are removed — better to
-    have neither than a URL+missing-pid pair that future
-    ``maybe_spawn()`` calls would misread as "no sidecar".
+    Writes pid BEFORE url — the ordering is load-bearing twice over:
+    a partial failure can't leave a URL file pointing at a dead port
+    without the matching pid file, and ``_cleanup_owned_serving_files``
+    relies on it ("pid is mine" implies a successor hasn't started
+    writing, since a successor lands its pid first). If the URL write
+    fails after the pid file lands, both are removed rather than leaving
+    the pair inconsistent.
 
     Runs under ``_serving_files_lock`` so a slow-exiting predecessor's
     cleanup can't interleave with these writes.
@@ -842,9 +991,11 @@ def _build_app(
             methods=["POST"],
         ),
         # Theme / accessibility prefs (#1574 review). The sidecar is the
-        # very mode these exist for: its random per-spawn port makes every
-        # session a fresh localStorage origin, so the server-side copy is
-        # what carries the user's choices across restarts.
+        # very mode these exist for: its port (= the localStorage origin)
+        # is stable by default since #2131 but still changes on first
+        # spawn, a lost ui.state, a pin change, or a taken remembered
+        # port — and each change is a fresh empty origin the server-side
+        # copy re-seeds with the user's choices.
         Route(
             f"{secret_prefix}/api/settings/theme",
             handlers["get_theme_prefs"],
@@ -1046,12 +1197,26 @@ def run_main() -> int:
 
     persisted = _load_sidecar_state()
     remembered_port, remembered_secret = persisted if persisted else (0, None)
-    port = _pick_free_port(get_global_settings().sidecar_pin_port or remembered_port)
+    pin_port = get_global_settings().sidecar_pin_port
+    try:
+        listener = _bind_listener(
+            pin_port or remembered_port, "Pinned" if pin_port else "Remembered"
+        )
+    except OSError:
+        # Not even an ephemeral port could be bound. This child can never
+        # serve — exit WITHOUT touching ui.state or the discovery files,
+        # which may belong to a live predecessor.
+        logger.exception("Cannot bind any port for the settings UI; exiting.")
+        return 1
+    port = int(listener.getsockname()[1])
     if remembered_secret is None:
         secret_path = f"/private_{secrets.token_urlsafe(16)}"
     else:
         secret_path = remembered_secret
     url = f"http://127.0.0.1:{port}{secret_path}/settings"
+    # Persist only AFTER the successful bind: the state must describe a
+    # port this process actually serves, or the next spawn inherits a
+    # port that doesn't match the URL the user bookmarked.
     _save_sidecar_state(port, secret_path)
 
     app = _build_app(host="127.0.0.1", port=port, secret_path=secret_path)
@@ -1062,6 +1227,9 @@ def run_main() -> int:
         port=port,
         log_level=log_level.lower(),
         access_log=False,
+        # Bounded graceful drain keeps a retiring sidecar's exit inside
+        # the parent's _OLD_SIDECAR_EXIT_WAIT window.
+        timeout_graceful_shutdown=3,
     )
     server = uvicorn.Server(config)
 
@@ -1081,7 +1249,10 @@ def run_main() -> int:
     print(f"ha-mcp settings UI ready at: {url}", file=sys.stderr)
 
     try:
-        server.run()
+        # Hand uvicorn the pre-bound socket — re-binding host/port here
+        # would reintroduce the probe-then-rebind race _bind_listener
+        # exists to close.
+        server.run(sockets=[listener])
     finally:
         # Best-effort cleanup of serving files on graceful exit — but only
         # the ones this process still owns. The retire wait in
@@ -1099,8 +1270,9 @@ def _cleanup_owned_serving_files() -> None:
 
     The pid is the only valid ownership token: two live processes never
     share one, while with sticky ``ui.state`` a successor's ui.url is
-    byte-identical to its predecessor's, so URL content can never
-    distinguish owners. ``_write_pid_url`` writes pid before url, so
+    normally byte-identical to its predecessor's (same port, same
+    secret), so URL content cannot be trusted to distinguish owners.
+    ``_write_pid_url`` writes pid before url, so
     "pid is mine" implies the successor hasn't started writing; holding
     ``_serving_files_lock`` across check + unlink closes the remaining
     interleave window.

@@ -63,7 +63,7 @@
     "policies.pending.empty": "No pending approvals.",
     "policies.rules.title": "Gated tools",
     "policies.rules.empty": "No tools currently security-gated. Enable per-tool gating from the <a href=\"#\" data-panel-link=\"tools\">Tools</a> tab.",
-    "accessibility.intro": "These settings apply immediately and are saved in this browser and on the server, so they survive restarts in every mode (including stdio, where the settings page moves to a fresh port each session). The docs site offers the same controls in its navigation bar; it has no server and saves per browser.",
+    "accessibility.intro": "These settings apply immediately and are saved in this browser and on the server, so they survive restarts in every mode (including stdio, where the settings page can occasionally move to a new port). The docs site offers the same controls in its navigation bar; it has no server and saves per browser.",
     "accessibility.storage_blocked": "Your browser is blocking site storage; choices apply for this session only.",
     "accessibility.theme.title": "Theme",
     "accessibility.theme.help": "One-click color schemes. Auto, the default, follows your OS preference and flips live when it changes.",
