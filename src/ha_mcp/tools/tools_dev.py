@@ -1751,7 +1751,13 @@ class DevTools:
                     "Explicit pip requirement for update_source — a version pin "
                     "(ha-mcp==7.9.0) or a GitHub tarball URL such as "
                     "https://github.com/homeassistant-ai/ha-mcp/archive/refs/"
-                    "pull/<PR>/head.tar.gz. Empty string clears the override."
+                    "pull/<PR>/head.tar.gz. The bare name 'clear' "
+                    "(case-insensitive) is reserved: it clears the override "
+                    "and falls back to the release channel instead of being "
+                    "treated as a requirement (pin a specific version, e.g. "
+                    "'clear==2.0.0', if you genuinely need that PyPI "
+                    "package). An empty string also clears but some MCP "
+                    "clients mangle it in transit — prefer 'clear'."
                 ),
             ),
         ] = None,
@@ -1800,6 +1806,7 @@ class DevTools:
         ha_dev_manage_server("info")
         ha_dev_manage_server("update_source", channel="dev")
         ha_dev_manage_server("update_source", pip_spec="https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/1234/head.tar.gz")
+        ha_dev_manage_server("update_source", pip_spec="clear", channel="stable")
         ha_dev_manage_server("restart")
         ha_dev_manage_server("list_pending")
         ha_dev_manage_server("approve", token="abc123")
@@ -1808,6 +1815,15 @@ class DevTools:
             if action == "info":
                 return await self._server_info()
             if action == "update_source":
+                # 'clear' (case-insensitive) aliases the empty string: some
+                # MCP clients mangle empty-string arguments in transit, which
+                # left this tool unable to clear its own pin over such a
+                # client (the entry's HA options UI always could). A
+                # whitespace-only value normalizes the same way, matching the
+                # server-side ``_normalize`` in the component's options flow
+                # so the caller sees the collapse at the call site.
+                if pip_spec is not None and pip_spec.strip().lower() in ("", "clear"):
+                    pip_spec = ""
                 return await self._update_source(channel, pip_spec)
             if action == "restart":
                 return await self._restart_server()

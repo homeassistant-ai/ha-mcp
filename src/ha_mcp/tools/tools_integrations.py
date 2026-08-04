@@ -33,9 +33,9 @@ from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_config_entry,
-    iter_schema_fields,
     update_config_entry_options,
 )
+from .config_entry_flow_form import iter_schema_fields
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -1688,7 +1688,10 @@ class IntegrationTools:
                     "integration's config flow. With 'entry_id' alone: input "
                     "for the entry's options flow (updates its options). "
                     "Multi-step flows consume keys per step; menu steps take "
-                    "'next_step_id'. The step's data_schema is returned on "
+                    "'next_step_id' — a string, or a list of successive "
+                    "selections for flows that present more than one menu "
+                    "(e.g. a menu revisited after each branch, ending in a "
+                    "finish option). The step's data_schema is returned on "
                     "validation errors so field names can be corrected."
                 ),
                 default=None,

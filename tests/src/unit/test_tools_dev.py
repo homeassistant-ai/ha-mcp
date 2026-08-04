@@ -349,6 +349,76 @@ class TestManageServer:
         assert result["data"]["applied"] == {"channel": "dev"}
         assert result["data"]["previous"]["channel"] == "stable"
 
+    async def test_update_source_clear_aliases_empty_pip_spec(self):
+        # Clearing the override must not require sending "" — some MCP
+        # clients mangle empty-string arguments in transit, leaving this
+        # tool unable to clear its own pin over such a client.
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        await DevTools(client).ha_dev_manage_server(
+            action="update_source", channel="stable", pip_spec="clear"
+        )
+        client.submit_options_flow_step.assert_awaited_once_with(
+            "flow-1", {"channel": "stable", "pip_spec": ""}
+        )
+
+    async def test_update_source_clear_alias_is_case_insensitive_and_lone(self):
+        # 'Clear' alone (no channel) is a valid call shape: drop the pin,
+        # fall back to the entry's already-configured channel.
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        await DevTools(client).ha_dev_manage_server(
+            action="update_source", pip_spec="Clear"
+        )
+        client.submit_options_flow_step.assert_awaited_once_with(
+            "flow-1", {"pip_spec": ""}
+        )
+
+    async def test_update_source_clear_clears_an_actually_set_pin(self):
+        # The scenario the alias exists for: an EXISTING pin must be
+        # cleared, not resent by the preserved-overrides pass — and the
+        # URL/secret overrides must survive the same submit.
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}],
+            flows=[dict(_SERVER_FLOW_WITH_OVERRIDES)],
+        )
+        await DevTools(client).ha_dev_manage_server(
+            action="update_source", pip_spec="clear"
+        )
+        submitted = client.submit_options_flow_step.await_args.args[1]
+        assert submitted["pip_spec"] == ""
+        assert submitted["server_url"] == "http://ha.local:8123"
+        assert submitted["external_url"] == "https://ext.example.com"
+        assert submitted["webhook_id_override"] == "hook123"
+        assert submitted["secret_path_override"] == "/secret"
+
+    async def test_update_source_whitespace_only_pip_spec_clears(self):
+        # A mangling client's likeliest artifact — normalize at the call
+        # site, matching the component options flow's server-side collapse.
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}],
+            flows=[dict(_SERVER_FLOW_WITH_OVERRIDES)],
+        )
+        await DevTools(client).ha_dev_manage_server(
+            action="update_source", pip_spec="   "
+        )
+        assert client.submit_options_flow_step.await_args.args[1]["pip_spec"] == ""
+
+    async def test_update_source_non_clear_values_pass_untouched(self):
+        # A real spec merely containing the word must never be blanked.
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        await DevTools(client).ha_dev_manage_server(
+            action="update_source", pip_spec="clearly==1.0"
+        )
+        assert (
+            client.submit_options_flow_step.await_args.args[1]["pip_spec"]
+            == "clearly==1.0"
+        )
+
     async def test_update_source_preserves_url_and_secret_overrides(self):
         # update_source drives the component's options flow, whose optional text
         # fields pre-fill via suggested_value so the UI can clear them. A sparse

@@ -1,8 +1,8 @@
 """Unit tests for the consolidated HACS action tools.
 
 Exercise the per-action handler success paths (``_hacs_info`` /
-``_hacs_download`` / ``_hacs_add_repository``) and the dispatcher's
-error-routing with a mocked WebSocket client. Complements the
+``_hacs_download`` / ``_hacs_remove`` / ``_hacs_add_repository``) and the
+dispatcher's error-routing with a mocked WebSocket client. Complements the
 validation-guard tests in ``test_identifier_validation_family.py`` and the
 ctx/progress test in ``test_context_injection.py``.
 """
@@ -204,6 +204,226 @@ class TestManageHacsAddRepository:
         assert "VALIDATION_INVALID_PARAMETER" in str(excinfo.value)
         assert "format" in str(excinfo.value).lower()
         ws.send_command.assert_not_awaited()
+
+
+def _remove_ws(*, installed: bool = True, remove_response: dict | None = None):
+    """A WS client scripted for the remove path: info probe, then remove."""
+    ws = AsyncMock()
+    ws.send_command = AsyncMock(
+        side_effect=[
+            {"success": True, "result": {"installed": installed}},
+            remove_response or {"success": True, "result": {}},
+        ]
+    )
+    return ws
+
+
+class TestManageHacsRemove:
+    async def test_remove_by_numeric_id_sends_remove_command(self, tools):
+        ws = _remove_ws()
+        with _patched_hacs(ws):
+            result = await tools.ha_manage_hacs(
+                action="remove", repository_id="401454435"
+            )
+
+        assert result["success"] is True
+        assert result["repository_id"] == "401454435"
+        assert "Successfully removed" in result["message"]
+        # Loaded-module caveat must reach the caller — file removal alone
+        # does not unload an integration.
+        assert "restart" in result["note"]
+        # A numeric id needs no owner/repo resolution round-trip, so with the
+        # availability probe patched out by the fixture the WS traffic is
+        # exactly the installed-state probe followed by the remove.
+        commands = [c.args[0] for c in ws.send_command.await_args_list]
+        assert commands == ["hacs/repository/info", "hacs/repository/remove"]
+        # HACS's WS API is asymmetric: info takes repository_id, remove takes
+        # repository — pin both so neither regresses (e2e caught the mixup).
+        assert ws.send_command.await_args_list[0].kwargs["repository_id"] == "401454435"
+        assert ws.send_command.await_args.kwargs["repository"] == "401454435"
+
+    async def test_remove_by_owner_repo_resolves_first(self, tools):
+        ws = _remove_ws()
+        registered = {
+            "id": "555",
+            "full_name": "hif2k1/battery_sim",
+            "name": "Battery Sim",
+        }
+        with (
+            _patched_hacs(ws),
+            patch(
+                "ha_mcp.tools.tools_hacs.wait_for_repo_registration",
+                new_callable=AsyncMock,
+            ) as wait_mock,
+        ):
+            wait_mock.return_value = registered
+            result = await tools.ha_manage_hacs(
+                action="remove", repository_id="hif2k1/battery_sim"
+            )
+
+        assert result["success"] is True
+        assert result["repository"] == "Battery Sim"
+        assert ws.send_command.await_args.args[0] == "hacs/repository/remove"
+        assert ws.send_command.await_args.kwargs["repository"] == "555"
+
+    async def test_remove_rejects_empty_repository_id_before_ws(self, tools):
+        ws = _ws({})
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="remove", repository_id="   ")
+        assert "repository_id" in str(excinfo.value)
+        ws.send_command.assert_not_awaited()
+
+    async def test_remove_store_only_repository_raises_not_found(self, tools):
+        # HACS's own remove command reports success for a repository that was
+        # never downloaded (its uninstall no-ops without local files) — the
+        # tool must reject instead of claiming "Successfully removed".
+        ws = _remove_ws(installed=False)
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="remove", repository_id="401454435")
+
+        assert "RESOURCE_NOT_FOUND" in str(excinfo.value)
+        assert "not downloaded" in str(excinfo.value)
+        # The remove command must never be sent for a store-only repo.
+        commands = [c.args[0] for c in ws.send_command.await_args_list]
+        assert commands == ["hacs/repository/info"]
+
+    async def test_remove_surfaces_backend_failure(self, tools):
+        ws = _remove_ws(remove_response={"success": False, "error": "boom"})
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="remove", repository_id="401454435")
+        # HACS's own error text must survive the wrap — the context command
+        # name alone would satisfy a bare "remove" check.
+        assert "boom" in str(excinfo.value)
+        assert "remove" in str(excinfo.value).lower()
+
+    async def test_remove_proceeds_when_installed_probe_fails(self, tools):
+        # The WS client raises on a failed info frame; the probe must swallow
+        # that and fall through — a rate-limited or transient info lookup
+        # must not make a downloaded repository unremovable, nor misattribute
+        # its own error to the remove (Patch76 review, PR #2124).
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            side_effect=[
+                HomeAssistantCommandError("Command failed: rate limited", "unknown"),
+                {"success": True, "result": {}},
+            ]
+        )
+        with _patched_hacs(ws):
+            result = await tools.ha_manage_hacs(
+                action="remove", repository_id="401454435"
+            )
+
+        assert result["success"] is True
+        commands = [c.args[0] for c in ws.send_command.await_args_list]
+        assert commands == ["hacs/repository/info", "hacs/repository/remove"]
+
+    async def test_remove_command_error_keeps_command_context(self, tools):
+        # The WS client RAISES HomeAssistantCommandError on a failed result
+        # frame (it never returns success=False), so the raised path is the
+        # one real HACS failures take — the command context must survive it.
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            side_effect=[
+                {"success": True, "result": {"installed": True}},
+                HomeAssistantCommandError("Command failed: kaboom", "unknown_error"),
+            ]
+        )
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="remove", repository_id="401454435")
+        assert "kaboom" in str(excinfo.value)
+        assert "hacs/repository/remove" in str(excinfo.value)
+
+    async def test_remove_timeout_says_outcome_is_unknown(self, tools):
+        # HACS force-refreshes from GitHub before uninstalling; when that
+        # blows the WS wait the uninstall usually still completes, so a
+        # plain "failed" would invite a destructive retry. The error must
+        # say the outcome is unverified and point at the info probe.
+        from ha_mcp.client.rest_client import HomeAssistantCommandTimeout
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            side_effect=[
+                {"success": True, "result": {"installed": True}},
+                HomeAssistantCommandTimeout("Command timeout"),
+            ]
+        )
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="remove", repository_id="401454435")
+        assert "may still have completed" in str(excinfo.value)
+
+    async def test_remove_numeric_id_reports_real_name_from_info(self, tools):
+        # The resolve short-circuit echoes a numeric id back as the "name";
+        # the installed-state probe carries the real identity, and the
+        # response must use it so the caller can verify WHICH repository
+        # the id meant.
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            side_effect=[
+                {
+                    "success": True,
+                    "result": {"installed": True, "full_name": "hif2k1/battery_sim"},
+                },
+                {"success": True, "result": {}},
+            ]
+        )
+        with _patched_hacs(ws):
+            result = await tools.ha_manage_hacs(
+                action="remove", repository_id="401454435"
+            )
+        assert result["repository"] == "hif2k1/battery_sim"
+        assert "hif2k1/battery_sim" in result["message"]
+
+    async def test_foreign_params_are_rejected_not_ignored(self, tools):
+        # A parameter belonging to another action must fail loudly —
+        # ha_manage_hacs(action="remove", version=...) plausibly means
+        # "uninstall this version", which remove cannot honor; silently
+        # dropping it would remove the whole repository.
+        ws = _ws({})
+        cases = [
+            {"action": "remove", "repository_id": "1", "version": "v4.0.0"},
+            {"action": "remove", "repository_id": "1", "repository": "o/r"},
+            {"action": "download", "repository_id": "1", "category": "theme"},
+            {
+                "action": "add_repository",
+                "repository": "o/r",
+                "category": "theme",
+                "repository_id": "1",
+            },
+        ]
+        for kwargs in cases:
+            with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+                await tools.ha_manage_hacs(**kwargs)
+            assert "VALIDATION_INVALID_PARAMETER" in str(excinfo.value), kwargs
+            assert "do not apply" in str(excinfo.value), kwargs
+        ws.send_command.assert_not_awaited()
+
+    async def test_remove_returns_top_level_success_envelope(self, tools):
+        # AGENTS.md response contract: {"success": True, "data": ...} at the
+        # TOP level. add_timezone_metadata wraps its payload under "data", so
+        # the handler must hoist success above the wrapper — with the real
+        # wrapper shape (not the identity stand-in) the envelope holds.
+        async def _wrapping_timezone(_client, data):
+            return {"data": data, "metadata": {"home_assistant_timezone": "UTC"}}
+
+        ws = _remove_ws()
+        with (
+            _patched_hacs(ws),
+            patch(
+                "ha_mcp.tools.tools_hacs.add_timezone_metadata",
+                new=_wrapping_timezone,
+            ),
+        ):
+            result = await tools.ha_manage_hacs(
+                action="remove", repository_id="401454435"
+            )
+
+        assert result["success"] is True
+        assert result["data"]["repository_id"] == "401454435"
+        assert "metadata" in result
 
 
 class TestDispatcherErrorRouting:

@@ -735,7 +735,7 @@
     },
     "ha_manage_hacs": {
       "title": "Gérer HACS",
-      "description": "Installe, met à jour et ajoute des dépôts HACS personnalisés."
+      "description": "Gérer HACS (Home Assistant Community Store) — installer/mettre à jour, supprimer ou ajouter des dépôts personnalisés."
     },
     "ha_manage_pipeline": {
       "title": "Gérer le pipeline Assist",

@@ -7,6 +7,13 @@ Covers:
 - Error feedback on missing menu selection (data_schema_unavailable_reason
   marker + menu_options inline on validation errors)
 - Deletion of config-entry-based helpers
+
+Known limitation: CYCLIC menu flows (a menu re-presented after each branch,
+issue #2116 — battery_sim, MQTT device-subentry reconfigure) have no e2e
+coverage because no integration in the test container exposes one; every
+menu-rooted flow reachable here (group, template) is linear. The successive-
+selection-list behavior is pinned by the ``TestCyclicMenuFlows`` unit suite
+against the shared walker instead.
 """
 
 import logging
@@ -417,7 +424,7 @@ class TestConfigEntryFlow:
         ), f"Error should mention menu selection: {error_str}"
         # The error context must carry the legal sub-types inline so the
         # caller can pick a branch on the next try without a discovery
-        # round-trip — see _handle_menu_step in config_entry_flow.
+        # round-trip — see _handle_menu_step in config_entry_flow_menu.
         menu_options = data.get("menu_options")
         assert isinstance(menu_options, list) and menu_options, (
             f"Error should carry menu_options list: {data}"

@@ -5379,8 +5379,14 @@ async def _server_entry_update_prep(
         # auto-updating. Persisting it verbatim would read as an intentional
         # override and disable auto-updates. This keeps the no-op check honest: a
         # frame that normalizes to the stored value is unchanged, not a schedule.
+        # 'clear' (case-insensitive) is the empty string's mangling-proof
+        # alias (see ha_dev_manage_server): recognize it here too so raw WS
+        # callers and older servers cannot persist the literal word as a pip
+        # requirement that fails at install time.
         pip_spec = msg["pip_spec"]
-        if str(pip_spec).strip() in ("", DEFAULT_PIP_SPEC):
+        if str(pip_spec).strip() in ("", DEFAULT_PIP_SPEC) or (
+            str(pip_spec).strip().lower() == "clear"
+        ):
             pip_spec = ""
         delta[OPT_PIP_SPEC] = pip_spec
         applying["pip_spec"] = pip_spec

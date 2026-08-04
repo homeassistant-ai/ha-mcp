@@ -735,7 +735,7 @@
     },
     "ha_manage_hacs": {
       "title": "HACS verwalten",
-      "description": "Installiert, aktualisiert und fügt benutzerdefinierte HACS-Repositories hinzu."
+      "description": "Verwalte HACS (Home Assistant Community Store) — installiere/aktualisiere, entferne oder füge benutzerdefinierte Repositories hinzu."
     },
     "ha_manage_pipeline": {
       "title": "Assist-Pipeline verwalten",

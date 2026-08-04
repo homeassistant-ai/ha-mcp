@@ -735,7 +735,7 @@
     },
     "ha_manage_hacs": {
       "title": "管理 HACS",
-      "description": "管理 HACS（Home Assistant 社区商店）——安装/更新或添加自定义仓库。"
+      "description": "管理 HACS (Home Assistant 社区商店) — 安装/更新、移除或添加自定义存储库。"
     },
     "ha_manage_pipeline": {
       "title": "管理 Assist 管线",
