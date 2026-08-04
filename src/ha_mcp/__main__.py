@@ -609,6 +609,25 @@ async def _cleanup_resources() -> None:
     logger.info("Server resources cleaned up")
 
 
+def _log_cleanup_result(task: "asyncio.Future[None]") -> None:
+    """Consume the cleanup task's outcome so a failure is never silent.
+
+    ``asyncio.wait`` does not retrieve results, and the timeout path
+    deliberately abandons rather than awaits (see the ``finally`` block), so
+    without this nothing observes ``cleanup_task``. An exception left
+    unretrieved this close to loop teardown surfaces only as a GC-time "Task
+    exception was never retrieved" error, which is unstructured and not
+    guaranteed to be emitted before exit. Mirrors what ``_cancel_tasks`` does
+    for the tasks it reaps. Cancellation is the expected abandoned-timeout
+    outcome and stays silent.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning(f"Resource cleanup raised: {exc!r}")
+
+
 async def _cancel_tasks(*tasks: asyncio.Task) -> None:
     """Cancel tasks and wait for completion, bounding the wait.
 
@@ -697,6 +716,7 @@ async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
         # guard), so a hung close handshake could block shutdown past the
         # budget. A straggler is left to the runner's own task sweep.
         cleanup_task = asyncio.ensure_future(_cleanup_resources())
+        cleanup_task.add_done_callback(_log_cleanup_result)
         _done, cleanup_pending = await asyncio.wait(
             {cleanup_task}, timeout=SHUTDOWN_TIMEOUT_SECONDS
         )

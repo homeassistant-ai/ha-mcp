@@ -53,9 +53,11 @@ logger = logging.getLogger(__name__)
 # boundary.
 #
 # WARNING: This is shared across all clients in the same server process.
-# In multi-user modes (OAuth, HTTP), one user's saved tools are listable and
-# runnable by every other user, and ``save_as`` overwrites by name without an
-# ownership check.
+# One client's saved tools are listable and runnable by every other client,
+# and ``save_as`` overwrites by name without an ownership check. OAuth is the
+# only mode with distinct per-user credentials for that to cross; standard,
+# OIDC and add-on modes are single-tenant already (SECURITY.md § "Standard
+# mode is single-tenant"), so every caller there shares one HA token anyway.
 #
 # That exposure is accepted design, not a pending TODO — SECURITY.md § Scope
 # excludes "Saved custom tools (code mode, off by default) visible to other
