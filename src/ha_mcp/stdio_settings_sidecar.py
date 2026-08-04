@@ -646,6 +646,57 @@ def _atomic_write_0600(path: Path, content: str) -> None:
         raise
 
 
+@contextlib.contextmanager
+def _serving_files_lock() -> Iterator[None]:
+    """Serialize ui.pid/ui.url writes against exit cleanup across processes.
+
+    A successor writing its serving files can interleave with its
+    predecessor's exit cleanup; without a lock the predecessor can pass
+    its ownership check and then unlink files the successor wrote a
+    moment later. Both critical sections are tiny, so this blocks
+    (unlike ``_spawn_lock``); on any lock failure it degrades to
+    unlocked best-effort rather than blocking sidecar exit or startup.
+    """
+    lock_path = _sidecar_dir() / "files.lock"
+    try:
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        logger.debug("Cannot open %s; proceeding unlocked", lock_path, exc_info=True)
+        yield
+        return
+    locked = False
+    try:
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+
+                # LK_LOCK retries for ~10s before raising — an effective
+                # bounded blocking wait.
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            locked = True
+        except OSError:
+            logger.debug(
+                "Serving-files lock unavailable; proceeding unlocked", exc_info=True
+            )
+        yield
+    finally:
+        if locked:
+            with contextlib.suppress(OSError):
+                if sys.platform == "win32":
+                    import msvcrt
+
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def _write_pid_url(url: str) -> None:
     """Persist the sidecar URL and pid for parent / overview consumption.
 
@@ -654,22 +705,26 @@ def _write_pid_url(url: str) -> None:
     write fails after the pid file lands, both are removed — better to
     have neither than a URL+missing-pid pair that future
     ``maybe_spawn()`` calls would misread as "no sidecar".
+
+    Runs under ``_serving_files_lock`` so a slow-exiting predecessor's
+    cleanup can't interleave with these writes.
     """
-    url_path = _url_file()
-    pid_path = _pid_file()
-    try:
-        _atomic_write_0600(pid_path, f"{os.getpid()}\n")
-    except OSError:
-        logger.exception("Failed to write sidecar pid file at %s", pid_path)
-        return
-    try:
-        _atomic_write_0600(url_path, url + "\n")
-    except OSError:
-        logger.exception("Failed to write sidecar URL file at %s", url_path)
-        # Roll back the pid write so the next maybe_spawn() doesn't think
-        # there's a live sidecar with an unreadable URL.
-        with contextlib.suppress(FileNotFoundError, OSError):
-            pid_path.unlink()
+    with _serving_files_lock():
+        url_path = _url_file()
+        pid_path = _pid_file()
+        try:
+            _atomic_write_0600(pid_path, f"{os.getpid()}\n")
+        except OSError:
+            logger.exception("Failed to write sidecar pid file at %s", pid_path)
+            return
+        try:
+            _atomic_write_0600(url_path, url + "\n")
+        except OSError:
+            logger.exception("Failed to write sidecar URL file at %s", url_path)
+            # Roll back the pid write so the next maybe_spawn() doesn't think
+            # there's a live sidecar with an unreadable URL.
+            with contextlib.suppress(FileNotFoundError, OSError):
+                pid_path.unlink()
 
 
 # Note: a custom ``_install_shutdown_handlers`` lived here previously.
@@ -1034,27 +1089,32 @@ def run_main() -> int:
         # its replacement's file writes; a blind unlink here would delete
         # the NEW sidecar's discovery files. (ui.state is deliberately
         # never cleaned: it carries the stable URL to the next spawn.)
-        _cleanup_owned_serving_files(url)
+        _cleanup_owned_serving_files()
 
     return 0
 
 
-def _cleanup_owned_serving_files(url: str) -> None:
-    """Unlink ui.pid/ui.url iff they still record THIS process/URL."""
-    try:
-        owns_pid = _pid_file().read_text().strip() == str(os.getpid())
-    except OSError:
-        owns_pid = False
-    if owns_pid:
-        with contextlib.suppress(FileNotFoundError, OSError):
-            _pid_file().unlink()
-    try:
-        owns_url = _url_file().read_text().strip() == url
-    except OSError:
-        owns_url = False
-    if owns_url:
-        with contextlib.suppress(FileNotFoundError, OSError):
-            _url_file().unlink()
+def _cleanup_owned_serving_files() -> None:
+    """Unlink ui.pid/ui.url iff ui.pid still records THIS process.
+
+    The pid is the only valid ownership token: two live processes never
+    share one, while with sticky ``ui.state`` a successor's ui.url is
+    byte-identical to its predecessor's, so URL content can never
+    distinguish owners. ``_write_pid_url`` writes pid before url, so
+    "pid is mine" implies the successor hasn't started writing; holding
+    ``_serving_files_lock`` across check + unlink closes the remaining
+    interleave window.
+    """
+    with _serving_files_lock():
+        try:
+            owns = _pid_file().read_text().strip() == str(os.getpid())
+        except OSError:
+            return
+        if not owns:
+            return
+        for path in (_url_file(), _pid_file()):
+            with contextlib.suppress(FileNotFoundError, OSError):
+                path.unlink()
 
 
 if __name__ == "__main__":  # pragma: no cover — exercised end-to-end, not unit

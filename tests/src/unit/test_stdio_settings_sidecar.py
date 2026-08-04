@@ -809,10 +809,13 @@ class TestRunMainWiring:
 
             def run(self) -> None:
                 # A replacement took over while this process was exiting.
+                # With sticky ui.state the successor reuses the SAME port
+                # and secret, so its ui.url content is byte-identical —
+                # URL equality can never distinguish owners (#2134 review).
+                same_url = (tmp_data_dir / "ui.url").read_text()
                 (tmp_data_dir / "ui.pid").write_text("424242\n")
-                (tmp_data_dir / "ui.url").write_text(
-                    "http://127.0.0.1:55555/private_successor/settings\n"
-                )
+                (tmp_data_dir / "ui.url").write_text(same_url)
+                self.successor_url = same_url
 
         fake_uvicorn = MagicMock()
         fake_uvicorn.Server = FakeServer
@@ -821,9 +824,47 @@ class TestRunMainWiring:
 
         assert sidecar.run_main() == 0
         assert (tmp_data_dir / "ui.pid").read_text().strip() == "424242"
-        assert (
-            tmp_data_dir / "ui.url"
-        ).read_text().strip() == "http://127.0.0.1:55555/private_successor/settings"
+        assert (tmp_data_dir / "ui.url").exists(), (
+            "exiting sidecar deleted its successor's identical ui.url"
+        )
+
+    def test_cleanup_guard_is_pid_based(self, tmp_data_dir: Path) -> None:
+        """Ownership = ui.pid records this process; url content is moot.
+
+        Two live processes can never share a pid, while with sticky state
+        they always share the URL — the pid is the only valid token.
+        """
+        url = "http://127.0.0.1:54321/private_x/settings"
+        # Successor's pid recorded → delete nothing, even with matching URL.
+        (tmp_data_dir / "ui.pid").write_text("424242\n")
+        (tmp_data_dir / "ui.url").write_text(url + "\n")
+        sidecar._cleanup_owned_serving_files()
+        assert (tmp_data_dir / "ui.pid").exists()
+        assert (tmp_data_dir / "ui.url").exists()
+        # Own pid recorded → delete both, regardless of url content.
+        (tmp_data_dir / "ui.pid").write_text(f"{os.getpid()}\n")
+        sidecar._cleanup_owned_serving_files()
+        assert not (tmp_data_dir / "ui.pid").exists()
+        assert not (tmp_data_dir / "ui.url").exists()
+        # Missing pid file → nothing to own, nothing deleted.
+        (tmp_data_dir / "ui.url").write_text(url + "\n")
+        sidecar._cleanup_owned_serving_files()
+        assert (tmp_data_dir / "ui.url").exists()
+
+    def test_write_and_cleanup_share_the_files_lock(self, tmp_data_dir: Path) -> None:
+        """Both critical sections run under the same inter-process lock,
+        closing the write-between-check-and-unlink window."""
+        entered: list[str] = []
+
+        @__import__("contextlib").contextmanager
+        def _tracking_lock() -> object:
+            entered.append("locked")
+            yield
+
+        with patch.object(sidecar, "_serving_files_lock", _tracking_lock):
+            sidecar._write_pid_url("http://127.0.0.1:54321/private_x/settings")
+            sidecar._cleanup_owned_serving_files()
+        assert len(entered) == 2
 
     def test_run_main_reuses_persisted_port_and_secret(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
