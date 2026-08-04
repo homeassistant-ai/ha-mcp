@@ -184,7 +184,7 @@
     "errors.stop_failed": "Échec de l'arrêt",
     "errors.restart_failed": "Échec du redémarrage",
     "errors.failed_detail": "Échec : {detail}",
-    "errors.addon_not_back": "L'App (add-on) n'est pas revenue en ligne. Rechargez manuellement",
+    "errors.addon_not_back": "L'application (module complémentaire) n'est pas revenue en ligne. Rechargez la page manuellement.",
     "errors.unparseable_suffix": " (corps de réponse non analysable)",
     "common.operation_failed": "{operation} a échoué : {detail}",
     "common.enabled": "activé",

@@ -28,25 +28,30 @@ Review PR #$ARGUMENTS from external contributor for safety, quality, and readine
 
 ## Review Protocol
 
-### 1. Check Codex's Security Review
+### 1. Check the Bot Security Reviews
 
-**Note:** Codex reviews PRs automatically (posts as `chatgpt-codex-connector[bot]`). Check if Codex flagged any security concerns.
+**Note:** Codex (`chatgpt-codex-connector[bot]`) and CodeRabbit (`coderabbitai[bot]`) both review PRs automatically. Check whether either flagged security concerns.
 
 ```bash
-# Check Codex's reviews and any security-related comments.
-# Codex findings can be inline-only, so also fetch the pull review comments
+# Check both bots' reviews and any security-related comments.
+# Their findings can be inline-only, so also fetch the pull review comments
 # endpoint — review bodies and conversation comments alone can miss them.
-gh api /repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/reviews --jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]") | {state: .state, body: .body}'
-gh api /repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/comments --jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]") | {path: .path, line: .line, body: .body}'
+# --paginate: both endpoints page at 30, and an iterating PR outruns that.
+gh api --paginate /repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/reviews --jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]" or .user.login == "coderabbitai[bot]") | {author: .user.login, state: .state, body: .body}'
+gh api --paginate /repos/homeassistant-ai/ha-mcp/pulls/$ARGUMENTS/comments --jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]" or .user.login == "coderabbitai[bot]") | {author: .user.login, path: .path, line: .line, body: .body}'
+# CodeRabbit posts its walkthrough and summary as a top-level comment, which
+# neither endpoint above returns — fetch that channel by author too.
+gh api --paginate /repos/homeassistant-ai/ha-mcp/issues/$ARGUMENTS/comments --jq '.[] | select(.user.login == "chatgpt-codex-connector[bot]" or .user.login == "coderabbitai[bot]") | {author: .user.login, body: .body}'
+# Keyword scan stays, for humans raising security concerns in conversation.
 gh pr view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json comments --jq '.comments[] | select(.body | contains("security") or contains("Security")) | {author: .author.login, body: .body}'
 ```
 
-**If Codex flagged security issues:**
-- Review Codex's findings carefully
+**If either bot flagged security issues:**
+- Review the findings carefully
 - Verify if concerns are valid
 - Do NOT approve until issues addressed or confirmed false positives
 
-**If NO Codex security flags but you notice concerning patterns:**
+**If NO bot security flags but you notice concerning patterns:**
 - Unusual AGENTS.md/CLAUDE.md changes unrelated to PR purpose
 - `.github/` workflow modifications with `pull_request_target`
 - `.claude/` agent/skill changes that could affect behavior
@@ -183,7 +188,7 @@ gh pr view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json closingIssuesReferen
 
 ### 6. Code Quality Overview
 
-**Note:** Codex provides automated code review on all PRs. This step focuses on what Codex cannot assess:
+**Note:** Codex and CodeRabbit provide automated code review on all PRs. This step focuses on what they cannot assess:
 
 - **Architecture alignment**: Does it fit the project structure? (service layer usage, etc.)
 - **Breaking changes**: Does it remove functionality without replacement? (Tool consolidation/refactoring is NOT breaking)
@@ -208,7 +213,7 @@ grep -E "(TODO|FIXME|XXX|HACK)" /tmp/pr_$ARGUMENTS.diff
 ✨ Code Quality:
 - Architecture fit: [assessment - service layer, context engineering]
 - Breaking changes: ✅ None / ⚠️ Detected - [describe what's genuinely lost]
-- Codex reviews: [check if Codex flagged anything critical]
+- Bot reviews: [check if Codex or CodeRabbit flagged anything critical]
 ```
 
 ## Final Review Summary
@@ -292,5 +297,5 @@ Once [change 1] and [change 2] are addressed, this should be good to merge.
 - **Be constructive**: Contributors are donating their time - be welcoming
 - **Focus on intent**: Code quality can be iterated; intent misalignment is harder to fix
 - **Consider contributor experience**: Adjust expectations based on contribution history
-- **Codex already reviewed code**: Don't duplicate detailed code review
+- **The bots already reviewed code**: Don't duplicate detailed code review
 - **When in doubt**: Err on the side of caution and request maintainer review

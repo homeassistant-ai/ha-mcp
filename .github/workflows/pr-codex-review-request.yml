@@ -24,7 +24,7 @@ jobs:
       ${{
         (github.event_name == 'pull_request_target' &&
           !contains(
-            fromJSON('["dependabot[bot]", "ha-mcp-renovate[bot]"]'),
+            fromJSON('["dependabot[bot]", "ha-mcp-renovate[bot]", "github-actions[bot]"]'),
             github.event.pull_request.user.login
           )) ||
         (github.event_name == 'issue_comment' &&

@@ -5,7 +5,7 @@
 which is exactly how ``packaging/`` went uncovered. This pins the list to the
 tree, so the next one fails here instead of going quietly unlinted.
 
-Precedent for asserting on workflow contents: ``test_triage_prompt_budget.py``.
+Precedent for asserting on workflow contents: ``test_e2e_skip_gate_shape.py``.
 """
 
 from __future__ import annotations
