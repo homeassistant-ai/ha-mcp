@@ -273,6 +273,13 @@ the proxy returns 503 whenever the server is not running.
 - DNS rebinding against the HTTP entrypoints: fastmcp's Host/Origin guard is off
   by default; URL-path secrecy is the boundary and the local network is the
   trusted zone (see [Threat Model](#threat-model) above).
+- The web settings UI not being gated by the OAuth/OIDC token: fastmcp custom
+  routes bypass the auth middleware by design, so a dedicated secret path gates
+  it instead (see [OAuth Mode](#oauth-mode--beta-warning) below). Reports
+  placing the settings routes at `<MCP_SECRET_PATH>/settings` in OAuth or OIDC
+  mode describe pre-7.14.0 behavior, and the Supervisor-backed operations they
+  reach (add-on restart, add-on option writes) require `SUPERVISOR_TOKEN` and
+  return 400 outside add-on mode.
 - OAuth token containing an encoded LLAT: this is the Bearer token design
   (see [Threat Model](#threat-model) above).
 - OAuth token revocation not preventing further HA API access: revoke the LLAT
@@ -295,6 +302,15 @@ and carries a larger attack surface than the standard LLAT setup.
 - Requires explicit opt-in (`ha-mcp-oauth`); the default entrypoint is unaffected
 - CVEs were published and fixed in v7.x (XSS: GHSA-pf93-j98v-25pv;
   SSRF: GHSA-fmfg-9g7c-3vq7). Upgrade to the latest release before deploying.
+- The web settings UI is **not** gated by the OAuth token. It is served as
+  fastmcp custom routes, which bypass `RequireAuthMiddleware`, so `mcp.auth`
+  covers the MCP protocol endpoints only. Since 7.14.0 the UI is mounted under
+  its own dedicated secret path — auto-generated as `/private_<token>` unless
+  `MCP_SETTINGS_SECRET_PATH` is set, never advertised to MCP clients, and
+  printed only in the startup log (GHSA-mx64-982r-65vg). Treat that path as a
+  credential, or set `HA_MCP_DISABLE_SETTINGS_UI` to not serve the UI at all.
+  Standard mode and the add-on differ: there the UI sits under the MCP secret
+  path, which is already the auth boundary for the tool surface.
 
 If you choose to run OAuth mode, restrict the consent endpoint to trusted
 networks and place it behind a TLS-terminating reverse proxy.
@@ -308,7 +324,9 @@ and, like OAuth mode, exposes dynamic client registration (DCR) to any
 client that can reach the discovery endpoints. The same TLS/reverse-proxy
 recommendations apply, and
 `OIDC_ALLOWED_CLIENT_REDIRECT_URIS` should be set for internet-facing
-deployments (see [docs/oidc.md](docs/oidc.md)).
+deployments (see [docs/oidc.md](docs/oidc.md)). The settings-UI caveat above
+applies identically: `MCP_SETTINGS_SECRET_PATH`, not the OIDC token, is what
+gates it.
 
 ## Reporting a Vulnerability
 
