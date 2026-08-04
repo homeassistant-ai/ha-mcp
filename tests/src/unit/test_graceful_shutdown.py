@@ -340,6 +340,9 @@ class TestGracefulShutdownIntegration:
             try:
                 await asyncio.wait_for(server_task, timeout=3.0)
             except (TimeoutError, asyncio.CancelledError):
+                # Either outcome is acceptable here: the assertion below is
+                # about the cleanup exception being observed, not about how
+                # the server task itself ended.
                 pass
 
         assert "Resource cleanup raised" in caplog.text, (
