@@ -609,6 +609,25 @@ async def _cleanup_resources() -> None:
     logger.info("Server resources cleaned up")
 
 
+def _log_cleanup_result(task: "asyncio.Future[None]") -> None:
+    """Consume the cleanup task's outcome so a failure is never silent.
+
+    ``asyncio.wait`` does not retrieve results, and the timeout path
+    deliberately abandons rather than awaits (see the ``finally`` block), so
+    without this nothing observes ``cleanup_task``. An exception left
+    unretrieved this close to loop teardown surfaces only as a GC-time "Task
+    exception was never retrieved" error, which is unstructured and not
+    guaranteed to be emitted before exit. Mirrors what ``_cancel_tasks`` does
+    for the tasks it reaps. Cancellation is the expected abandoned-timeout
+    outcome and stays silent.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning(f"Resource cleanup raised: {exc!r}")
+
+
 async def _cancel_tasks(*tasks: asyncio.Task) -> None:
     """Cancel tasks and wait for completion, bounding the wait.
 
@@ -697,6 +716,7 @@ async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
         # guard), so a hung close handshake could block shutdown past the
         # budget. A straggler is left to the runner's own task sweep.
         cleanup_task = asyncio.ensure_future(_cleanup_resources())
+        cleanup_task.add_done_callback(_log_cleanup_result)
         _done, cleanup_pending = await asyncio.wait(
             {cleanup_task}, timeout=SHUTDOWN_TIMEOUT_SECONDS
         )
@@ -1004,6 +1024,19 @@ def _get_http_runtime(default_port: int = 8086) -> tuple[str, int, str]:
     ``run_async``, any ``FASTMCP_HOST`` value in the environment is
     ignored — ``MCP_HOST`` is the only env var that affects bind host
     for ha-mcp's CLI entry points.
+
+    The ``0.0.0.0`` default is deliberate and documented: SECURITY.md
+    § "Local network is the trusted zone for standard mode" states that the
+    HTTP entrypoints bind to all interfaces so LAN peers can reach them, and
+    its Scope section excludes "LAN-peer access to standard-mode HTTP
+    endpoints".
+
+    The default ``/mcp`` path is *not* blessed the same way once the bind
+    leaves loopback. That combination is what ``_warn_if_default_path_exposed``
+    warns about, and SECURITY.md's Scope classes it under "a misconfigured
+    deployment" — meaning such reports are declined, not that the
+    configuration is endorsed. Operators on a non-loopback bind are still
+    expected to set a high-entropy ``MCP_SECRET_PATH``.
     """
 
     host = os.getenv("MCP_HOST", "0.0.0.0")
@@ -1020,7 +1053,9 @@ def _get_http_runtime(default_port: int = 8086) -> tuple[str, int, str]:
 # Default ``MCP_SECRET_PATH`` value, shared by ``_get_http_runtime`` (the
 # read-from-env fallback) and ``_warn_if_default_path_exposed`` (the
 # hardening-nudge predicate). Single source of truth so the two sites
-# can't drift.
+# can't drift. Safe on a loopback bind; on a non-loopback bind it is the
+# misconfiguration ``_warn_if_default_path_exposed`` flags, which SECURITY.md
+# declines to action without endorsing — see ``_get_http_runtime`` above.
 DEFAULT_MCP_PATH = "/mcp"
 
 # Hostname literals (not IP addresses) treated as loopback by
