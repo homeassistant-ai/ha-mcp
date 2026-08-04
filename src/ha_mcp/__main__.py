@@ -894,11 +894,21 @@ def main() -> None:
 
 
 def _maybe_spawn_settings_sidecar() -> None:
-    """
-    Prepare the tool metadata cache and optionally start the stdio settings UI sidecar.
-    
-    Cache generation and sidecar startup are best effort; failures are logged without
-    blocking MCP startup.
+    """Dump tool metadata cache + spawn the stdio settings UI sidecar.
+
+    Split out of ``main()`` to keep the entrypoint readable. The cache
+    dump uses a one-off ``asyncio.run`` because ``_get_tool_metadata``
+    is async; this happens before the main stdio loop so there's no
+    nested-loop conflict with ``_run_entrypoint``'s own ``asyncio.run``.
+
+    Performance: the dump constructs the full FastMCP server via the
+    cached ``_get_server()`` singleton the stdio session builds anyway,
+    so this only front-loads that cost. The dump runs as maybe_spawn's
+    ``prepare`` hook — winner-only, inside the spawn lock — because the
+    replacement sidecar must read a cache dumped by the SAME parent that
+    spawned it: a spawn-lock loser with a different environment could
+    otherwise overwrite the winner's cache (issue #2131 review), and the
+    sidecar reloads that shared file per request.
     """
     from ha_mcp.settings_ui import (
         _get_tool_metadata,
@@ -930,11 +940,6 @@ def _maybe_spawn_settings_sidecar() -> None:
         # startup. The exception class in the warning distinguishes
         # server-init failures (Pydantic ValidationError) from cache I/O
         # (OSError) from event-loop issues (RuntimeError).
-        """
-        Best-effort generation of the tool metadata cache for the settings sidecar.
-        
-        Failures are logged and do not prevent stdio startup.
-        """
         try:
             metadata = asyncio.run(_get_tool_metadata(_get_server()))
             dumped = dump_tool_metadata_cache(metadata)
