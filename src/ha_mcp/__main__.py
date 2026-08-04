@@ -901,27 +901,26 @@ def _maybe_spawn_settings_sidecar() -> None:
     is async; this happens before the main stdio loop so there's no
     nested-loop conflict with ``_run_entrypoint``'s own ``asyncio.run``.
 
-    Performance: the dump constructs the full FastMCP server, which is
-    heavy. Skip it (and the server build) when there's nothing to spawn
-    for — sidecar disabled or already alive. Warm restarts that already
-    have a sidecar pay zero cold-start tax from this path.
+    Performance: the dump constructs the full FastMCP server via the
+    cached ``_get_server()`` singleton the stdio session builds anyway,
+    so this only front-loads that cost. It runs on EVERY startup — a
+    live sidecar no longer skips it, because ``maybe_spawn()`` retires
+    and replaces the sidecar (issue #2131) and the replacement must read
+    a cache dumped by THIS parent, not one left by whatever old install
+    spawned its predecessor.
     """
     from ha_mcp.settings_ui import (
         _get_tool_metadata,
         dump_tool_metadata_cache,
     )
     from ha_mcp.stdio_settings_sidecar import (
-        _existing_sidecar_alive,
         _is_disabled,
         maybe_spawn,
     )
 
-    # Cheap gates first; skip the heavy metadata dump when the sidecar
-    # would be a no-op anyway. Any condition that makes maybe_spawn()
-    # short-circuit also makes the dump pointless (the running sidecar
-    # already has a cache from a prior parent startup; a disabled
-    # sidecar never reads one).
-    if _is_disabled() or _existing_sidecar_alive():
+    # Disabled is the only dump-skipping gate; maybe_spawn() logs the
+    # skip reason (a disabled sidecar never reads the cache).
+    if _is_disabled():
         try:
             maybe_spawn()
         except Exception as e:

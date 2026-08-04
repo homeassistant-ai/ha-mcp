@@ -205,7 +205,7 @@ class TestReadSidecarUrl:
 
 
 class TestPidLiveness:
-    """``_pid_alive`` and ``_existing_sidecar_alive`` correctness."""
+    """``_pid_alive`` correctness."""
 
     def test_pid_alive_for_self(self) -> None:
         assert sidecar._pid_alive(os.getpid()) is True
@@ -217,19 +217,122 @@ class TestPidLiveness:
         assert sidecar._pid_alive(0) is False
         assert sidecar._pid_alive(-1) is False
 
-    def test_existing_sidecar_missing_pidfile(self, tmp_data_dir: Path) -> None:
-        assert sidecar._existing_sidecar_alive() is False
 
-    def test_existing_sidecar_garbage_pidfile(self, tmp_data_dir: Path) -> None:
+class TestShutdownExistingSidecar:
+    """``_shutdown_existing_sidecar`` retires the previous sidecar (issue #2131).
+
+    Termination goes through the old sidecar's own ``/shutdown`` endpoint
+    on its recorded secret-path URL — never ``os.kill``. Only the real
+    sidecar answers on the secret path, so a reused PID can never get an
+    innocent process terminated, and the endpoint has existed at the same
+    path since the first sidecar release, so pre-fix orphans (the 57-day
+    one in #2131) are retired too.
+    """
+
+    def test_posts_shutdown_to_secret_endpoint(self, tmp_data_dir: Path) -> None:
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        with patch("urllib.request.urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.status = 200
+            sidecar._shutdown_existing_sidecar()
+        urlopen.assert_called_once()
+        req = urlopen.call_args[0][0]
+        assert req.full_url == "http://127.0.0.1:9999/private_xx/api/settings/shutdown"
+        assert req.get_method() == "POST"
+
+    def test_no_url_file_is_noop(self, tmp_data_dir: Path) -> None:
+        with patch("urllib.request.urlopen") as urlopen:
+            sidecar._shutdown_existing_sidecar()
+        urlopen.assert_not_called()
+
+    def test_removes_sentinel_written_by_shutdown_endpoint(
+        self, tmp_data_dir: Path
+    ) -> None:
+        """/shutdown drops the disable sentinel; a replace must clear it.
+
+        Otherwise every replacement would permanently disable the
+        settings UI — the freshly spawned child honors the sentinel and
+        exits immediately.
+        """
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        sentinel = tmp_data_dir / "settings_ui_disabled"
+
+        def _fake_urlopen(_req: object, timeout: float = 0) -> MagicMock:
+            # The live endpoint writes the sentinel before signalling exit.
+            sentinel.write_text("Disabled via /shutdown endpoint at pid 999\n")
+            cm = MagicMock()
+            cm.__enter__.return_value.status = 200
+            return cm
+
+        with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+            sidecar._shutdown_existing_sidecar()
+        assert not sentinel.exists(), (
+            "replace flow must remove the disable sentinel the endpoint wrote"
+        )
+
+    def test_waits_for_recorded_pid_to_exit(self, tmp_data_dir: Path) -> None:
+        """After a successful POST, poll the old pid until it exits.
+
+        Guards the file-clobber race: the dying sidecar's run_main()
+        finally-block unlinks ui.pid/ui.url — if the replacement spawns
+        before the old process is gone, that cleanup would delete the NEW
+        sidecar's files and ha_get_overview would report no settings URL.
+        """
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        (tmp_data_dir / "ui.pid").write_text("4242\n")
+        liveness = iter([True, True, False])
+        with (
+            patch("urllib.request.urlopen") as urlopen,
+            patch.object(
+                sidecar, "_pid_alive", side_effect=lambda _pid: next(liveness)
+            ) as alive,
+            patch("time.sleep"),
+        ):
+            urlopen.return_value.__enter__.return_value.status = 200
+            sidecar._shutdown_existing_sidecar()
+        assert alive.call_count == 3
+        assert alive.call_args[0][0] == 4242
+
+    def test_post_failure_is_nonfatal_and_skips_wait(self, tmp_data_dir: Path) -> None:
+        """Dead listener → nothing to retire; don't raise, don't poll the pid.
+
+        The recorded pid is NOT verified to be the sidecar (PID reuse),
+        so with no listener on the secret path there is nothing safe to
+        wait on — proceed straight to spawning the replacement.
+        """
+        import urllib.error
+
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        (tmp_data_dir / "ui.pid").write_text(f"{os.getpid()}\n")
+        with (
+            patch(
+                "urllib.request.urlopen",
+                side_effect=urllib.error.URLError("connection refused"),
+            ),
+            patch.object(sidecar, "_pid_alive") as alive,
+        ):
+            sidecar._shutdown_existing_sidecar()
+        alive.assert_not_called()
+
+    def test_garbage_pid_file_skips_wait(self, tmp_data_dir: Path) -> None:
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
         (tmp_data_dir / "ui.pid").write_text("not a number\n")
-        assert sidecar._existing_sidecar_alive() is False
-
-    def test_existing_sidecar_dead_pid(self, tmp_data_dir: Path) -> None:
-        # PID 999999 is almost certainly not running. If by some
-        # miracle it is on the test box, the assertion will fail loudly
-        # — better than silently passing on a stale check.
-        (tmp_data_dir / "ui.pid").write_text("999999\n")
-        assert sidecar._existing_sidecar_alive() is False
+        with (
+            patch("urllib.request.urlopen") as urlopen,
+            patch.object(sidecar, "_pid_alive") as alive,
+        ):
+            urlopen.return_value.__enter__.return_value.status = 200
+            sidecar._shutdown_existing_sidecar()
+        alive.assert_not_called()
 
 
 class TestMaybeSpawnGates:
@@ -243,51 +346,53 @@ class TestMaybeSpawnGates:
             sidecar.maybe_spawn()
         popen.assert_not_called()
 
-    def test_maybe_spawn_skips_when_sidecar_alive(
+    def test_maybe_spawn_replaces_live_sidecar(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # "Alive" now means BOTH the recorded PID is live AND the URL
-        # file is on disk — see ``_existing_sidecar_alive`` docstring
-        # for the stale-PID / crashed-mid-startup self-heal rationale.
+        """A live sidecar is retired and replaced, never reused (issue #2131).
+
+        Reuse froze the settings UI at the code + environment of whatever
+        parent spawned the sidecar first — a 57-day-old orphan in the
+        reported case. Every stdio startup now hands out a sidecar that
+        matches the running server.
+        """
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
         (tmp_data_dir / "ui.pid").write_text(f"{os.getpid()}\n")
         (tmp_data_dir / "ui.url").write_text(
             "http://127.0.0.1:9999/private_xx/settings\n"
         )
-        with patch("subprocess.Popen") as popen:
+        fake_proc = MagicMock()
+        fake_proc.pid = 12345
+        with (
+            patch.object(sidecar, "_shutdown_existing_sidecar") as shutdown,
+            patch("subprocess.Popen", return_value=fake_proc) as popen,
+        ):
             sidecar.maybe_spawn()
-        popen.assert_not_called()
+        shutdown.assert_called_once()
+        popen.assert_called_once()
 
     def test_maybe_spawn_respawns_when_pid_alive_but_url_missing(
-        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Stale PID without a URL file → respawn + warning log.
+        """Live PID without a URL file → nothing to retire, spawn fresh.
 
-        Failure modes this guards: (a) PID reuse after a crash that
-        didn't clean up ``ui.pid`` and the OS reassigned the PID to
-        an unrelated process; (b) sidecar that wrote pid then crashed
-        before writing url (port-bind race, see ``_pick_free_port``).
-        Without this self-heal, ``_pid_alive(pid)`` returns True and
-        every future ``maybe_spawn()`` silently skips spawning a real
-        sidecar — user permanently has no UI until they manually
-        ``rm ui.pid``.
+        Covers PID reuse after a crash that didn't clean up ``ui.pid``:
+        with no recorded URL there is no listener to shut down (and no
+        proof the PID is even a sidecar), so the replace flow must not
+        touch the process — just spawn.
         """
-        import logging
-
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
         (tmp_data_dir / "ui.pid").write_text(f"{os.getpid()}\n")
         # ui.url deliberately not written.
         fake_proc = MagicMock()
         fake_proc.pid = 99999
         with (
-            caplog.at_level(logging.WARNING, logger="ha_mcp.stdio_settings_sidecar"),
+            patch("urllib.request.urlopen") as urlopen,
             patch("subprocess.Popen", return_value=fake_proc) as popen,
         ):
             sidecar.maybe_spawn()
         popen.assert_called_once()
-        assert any(
-            "treating as stale and respawning" in rec.message for rec in caplog.records
-        ), f"expected stale-sidecar warning, got: {[r.message for r in caplog.records]}"
+        urlopen.assert_not_called()
 
     def test_maybe_spawn_invokes_popen_when_no_existing(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -303,6 +408,60 @@ class TestMaybeSpawnGates:
         # so it doesn't depend on console_scripts being on PATH.
         called_cmd = popen.call_args[0][0]
         assert called_cmd[-2:] == ["-m", "ha_mcp.stdio_settings_sidecar"]
+
+
+class TestMainSpawnPathDumpsCache:
+    """``__main__._maybe_spawn_settings_sidecar`` cache-dump gating."""
+
+    def test_dump_runs_even_when_sidecar_files_present(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A live sidecar no longer short-circuits the metadata dump.
+
+        The old fast path skipped the dump when a sidecar was alive
+        (nothing to spawn for). With replace-on-startup the alive sidecar
+        is about to be retired, and its successor must read a cache dumped
+        by THIS parent — an old-version cache would resurface issue #2131
+        as a stale Tools tab.
+        """
+        import ha_mcp.__main__ as main_module
+
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        (tmp_data_dir / "ui.pid").write_text(f"{os.getpid()}\n")
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+
+        async def _fake_metadata(_server: object) -> list[dict[str, str]]:
+            return [{"name": "ha_get_state", "primary_tag": "Entity Operations"}]
+
+        with (
+            patch.object(main_module, "_get_server") as get_server,
+            patch("ha_mcp.settings_ui._get_tool_metadata", new=_fake_metadata),
+            patch.object(sidecar, "maybe_spawn") as spawn,
+        ):
+            main_module._maybe_spawn_settings_sidecar()
+        get_server.assert_called_once()
+        spawn.assert_called_once()
+        assert load_tool_metadata_cache() == [
+            {"name": "ha_get_state", "primary_tag": "Entity Operations"}
+        ]
+
+    def test_dump_skipped_when_disabled(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Disabled sidecar → no server build, no dump; maybe_spawn still
+        invoked for its skip-logging."""
+        import ha_mcp.__main__ as main_module
+
+        monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
+        with (
+            patch.object(main_module, "_get_server") as get_server,
+            patch.object(sidecar, "maybe_spawn") as spawn,
+        ):
+            main_module._maybe_spawn_settings_sidecar()
+        get_server.assert_not_called()
+        spawn.assert_called_once()
 
 
 class TestSecurityMiddleware:
@@ -563,9 +722,6 @@ class TestMaybeSpawnStaleCleanup:
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
         stale_pid = tmp_data_dir / "ui.pid"
         stale_url = tmp_data_dir / "ui.url"
-        # Pre-create stale files with a CLEARLY DEAD pid so the
-        # "_existing_sidecar_alive" guard returns False and we proceed
-        # to the cleanup-then-spawn path.
         stale_pid.write_text("999999\n")
         stale_url.write_text("http://127.0.0.1:1/stale\n")
 
@@ -581,7 +737,17 @@ class TestMaybeSpawnStaleCleanup:
             proc.pid = 12345
             return proc
 
-        with patch("subprocess.Popen", side_effect=_record_state):
+        # The stale URL has no live listener; stub the retire POST so the
+        # test stays hermetic (no real socket connect).
+        import urllib.error
+
+        with (
+            patch(
+                "urllib.request.urlopen",
+                side_effect=urllib.error.URLError("connection refused"),
+            ),
+            patch("subprocess.Popen", side_effect=_record_state),
+        ):
             sidecar.maybe_spawn()
 
         # Both stale files must have been unlinked before Popen ran;
@@ -614,10 +780,10 @@ class TestSpawnLock:
     """``_spawn_lock`` serializes concurrent ``maybe_spawn()`` callers.
 
     The race Patch76 flagged: two parent stdio processes starting in
-    rapid succession can both clear the ``_existing_sidecar_alive()``
-    check and ``Popen`` a child; the loser's child then races on
-    ``bind()`` and crashes into ``sidecar.log``. The lock makes the
-    alive-check-plus-Popen window mutually exclusive across parents.
+    rapid succession can both run the retire-and-respawn window and
+    ``Popen`` a child; the loser's child then races on ``bind()`` and
+    crashes into ``sidecar.log``. The lock makes that window mutually
+    exclusive across parents.
     """
 
     def test_second_holder_sees_lock_unacquired(self, tmp_data_dir: Path) -> None:

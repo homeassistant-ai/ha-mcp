@@ -8,9 +8,10 @@ unreachable when the user wants to open it.
 
 This module addresses that by spawning a tiny standalone Starlette
 HTTP server in a detached child process on stdio startup. The child
-survives parent SIGTERM / idle-death, lives until the OS reboots (or
-until the user disables it), and serves the same settings page the
-HTTP modes serve — the route handlers are shared via
+survives parent SIGTERM / idle-death, lives until the next stdio
+startup replaces it (or the OS reboots, or the user disables it), and
+serves the same settings page the HTTP modes serve — the route
+handlers are shared via
 :func:`ha_mcp.settings_ui.build_settings_handlers` so there's no second
 surface to maintain.
 
@@ -33,8 +34,12 @@ Disable mechanisms:
 Lifecycle:
     - Parent stdio process calls :func:`maybe_spawn` shortly after
       argument validation, before entering the stdio event loop.
-    - Child runs until killed (OS reboot, ``ha-mcp-settings stop``,
-      or the ``POST /shutdown`` endpoint).
+    - :func:`maybe_spawn` retires any previously spawned sidecar via its
+      own ``POST /shutdown`` endpoint and spawns a fresh child, so the
+      settings UI always reflects the running server's code and
+      environment (issue #2131).
+    - Child runs until replaced by the next stdio startup or killed
+      (OS reboot, ``ha-mcp-settings stop``, or ``POST /shutdown``).
 """
 
 from __future__ import annotations
@@ -156,53 +161,103 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _existing_sidecar_alive() -> bool:
-    """Check whether a previously spawned sidecar is still running.
+def _read_recorded_pid() -> int | None:
+    """Return the PID recorded in ``ui.pid``, or None if absent/garbage."""
+    try:
+        return int(_pid_file().read_text().strip())
+    except (OSError, ValueError):
+        return None
 
-    "Alive" here means BOTH the recorded PID is live AND the URL file
-    is present on disk. Checking the PID alone has two failure modes:
 
-    * **PID reuse**: after a crash that doesn't clean up ``ui.pid``,
-      the OS can reassign that PID to an unrelated process (any
-      ``python.exe``, a system daemon, even ``chrome.exe``).
-      ``_pid_alive`` returns True for any of those, so
-      ``maybe_spawn()`` permanently skips spawning the real sidecar
-      until the user manually deletes ``ui.pid``.
+# Timeouts for retiring the previous sidecar. The HTTP timeout bounds the
+# stdio-startup delay when the recorded URL points at a hung process; the
+# exit wait bounds how long we give a healthy sidecar to finish dying.
+_SHUTDOWN_HTTP_TIMEOUT = 2.0
+_OLD_SIDECAR_EXIT_WAIT = 5.0
+_OLD_SIDECAR_EXIT_POLL = 0.1
 
-    * **Crashed-mid-startup**: child exits before writing
-      ``ui.url`` but after writing ``ui.pid`` (e.g. uvicorn port-bind
-      race, see ``_pick_free_port`` docstring). Same lockout.
 
-    The URL file is the consumer contract — if it isn't present,
-    no one can reach the sidecar, so by definition no sidecar is
-    "serving". Self-heal by reporting False, which lets the caller
-    spawn a fresh one and overwrite both stale files.
+def _shutdown_existing_sidecar() -> None:
+    """Retire a previously spawned sidecar so a fresh one can replace it.
+
+    Reusing a running sidecar froze the settings UI at the code and
+    environment of whatever parent spawned it first — in issue #2131 a
+    57-day-old orphan from a long-gone install kept serving stale feature
+    flags through many client restarts and upgrades. Every stdio startup
+    therefore retires the old sidecar and spawns its own.
+
+    Termination goes through the sidecar's own ``POST /shutdown`` endpoint
+    on the recorded secret-path URL, never ``os.kill``:
+
+    * Answering on the secret path proves the listener IS our sidecar, so
+      a PID recycled to an unrelated process can never get that process
+      killed.
+    * The endpoint has lived at the same path since the first sidecar
+      release (#1381), so orphans spawned by any past version are retired
+      too.
+
+    Best-effort throughout: on any failure the caller still spawns the
+    replacement — worst case an unresponsive old process lingers until
+    reboot, but the pid/url files are overwritten so nothing hands out
+    its URL anymore.
     """
+    url = read_sidecar_url()
+    if url is None:
+        return
+
+    import urllib.error
+    import urllib.request
+
+    shutdown_url = url.removesuffix("/settings") + "/api/settings/shutdown"
+    request = urllib.request.Request(shutdown_url, data=b"", method="POST")
     try:
-        raw = _pid_file().read_text().strip()
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return False
-    try:
-        pid = int(raw)
-    except ValueError:
-        return False
-    if not _pid_alive(pid):
-        return False
-    if not _url_file().exists():
-        # PID is live but no URL on disk → the process is either a
-        # reused-PID unrelated stranger, or a crashed-mid-startup
-        # sidecar that never finished writing. Either way the
-        # consumer can't reach it; treat as dead.
-        logger.warning(
-            "Sidecar pid %s is alive but %s is missing — "
-            "treating as stale and respawning.",
-            pid,
-            _url_file(),
+        with urllib.request.urlopen(
+            request, timeout=_SHUTDOWN_HTTP_TIMEOUT
+        ) as response:
+            status = response.status
+    except (urllib.error.URLError, OSError) as exc:
+        logger.info(
+            "No responsive sidecar at the recorded URL (%s); "
+            "replacing state files only.",
+            exc,
         )
-        return False
-    return True
+        return
+    if not 200 <= status < 300:
+        logger.warning(
+            "Old sidecar answered shutdown with HTTP %s; spawning replacement anyway.",
+            status,
+        )
+        return
+    logger.info("Retired previous settings UI sidecar at %s", url)
+
+    # /shutdown drops the disable sentinel before signalling exit — its
+    # "user clicked shutdown" contract. This is a replace, not a disable:
+    # clear the sentinel or the freshly spawned child would honor it and
+    # exit immediately.
+    with contextlib.suppress(FileNotFoundError, OSError):
+        _disabled_sentinel().unlink()
+
+    pid = _read_recorded_pid()
+    if pid is None:
+        return
+
+    import time
+
+    # Wait (bounded) for the old process to exit: its run_main() finally-
+    # block unlinks the pid/url files, and if the replacement has already
+    # written its own by then, that cleanup would delete the NEW sidecar's
+    # files and ha_get_overview would stop surfacing the URL.
+    deadline = time.monotonic() + _OLD_SIDECAR_EXIT_WAIT
+    while _pid_alive(pid):
+        if time.monotonic() >= deadline:
+            logger.warning(
+                "Old sidecar pid %s still alive %.0fs after acknowledging "
+                "shutdown; spawning replacement anyway.",
+                pid,
+                _OLD_SIDECAR_EXIT_WAIT,
+            )
+            return
+        time.sleep(_OLD_SIDECAR_EXIT_POLL)
 
 
 def _spawn_lock_path() -> Path:
@@ -214,9 +269,9 @@ def _spawn_lock() -> Iterator[bool]:
     """Yield True if this caller holds the spawn lock, False if another holds it.
 
     Serializes concurrent ``maybe_spawn()`` calls so two parent stdio
-    processes starting in rapid succession can't both clear the
-    ``_existing_sidecar_alive()`` check and ``Popen`` a child — the
-    loser of which would race on ``bind()`` and crash into ``sidecar.log``.
+    processes starting in rapid succession can't both run the
+    retire-and-respawn window — the loser's child would race on
+    ``bind()`` and crash into ``sidecar.log``.
 
     Non-blocking: a caller that can't acquire the lock returns False
     immediately and the parent should skip spawning (the holding
@@ -315,13 +370,17 @@ def _pick_free_port(pinned: int = 0) -> int:
 
 
 def maybe_spawn() -> None:
-    """Spawn the sidecar if appropriate.
+    """Retire any previous sidecar and spawn a fresh one.
 
     Called once from stdio ``main()`` after argument validation. No-op
-    when the sidecar is disabled (env var or sentinel), when another
-    sidecar is already alive, when a concurrent parent already holds
-    the spawn lock, or when subprocess spawn raises (best effort; the
-    MCP server continues regardless).
+    when the sidecar is disabled (env var or sentinel), when a
+    concurrent parent already holds the spawn lock, or when subprocess
+    spawn raises (best effort; the MCP server continues regardless).
+
+    A previously spawned sidecar is never reused (issue #2131): it
+    serves the code and environment of the parent that spawned it, which
+    may be a long-dead install many versions old. Replacing it on every
+    startup keeps the settings UI in lockstep with this server process.
     """
     if _is_disabled():
         logger.info(
@@ -332,10 +391,10 @@ def maybe_spawn() -> None:
 
     # Serialize concurrent spawn attempts. Two parent stdio processes
     # starting in rapid succession (e.g. user launching Claude Desktop
-    # then Claude Code back-to-back) could both clear the alive-check
-    # and Popen — the loser's child would race on bind() and die into
-    # sidecar.log. The lock ensures only one parent runs the
-    # alive-check + Popen window at a time.
+    # then Claude Code back-to-back) could both run the retire + Popen
+    # window — the loser's child would race on bind() and die into
+    # sidecar.log. The lock ensures only one parent runs it at a time;
+    # the loser simply uses the winner's freshly spawned sidecar.
     with _spawn_lock() as acquired:
         if not acquired:
             logger.info(
@@ -343,21 +402,13 @@ def maybe_spawn() -> None:
             )
             return
 
-        # Re-check alive *inside* the lock — a concurrent parent that
-        # held the lock just before us may have already spawned a
-        # sidecar that has now written its pid file.
-        if _existing_sidecar_alive():
-            url = read_sidecar_url()
-            if url:
-                print(f"ha-mcp settings UI already running at: {url}", file=sys.stderr)
-            logger.info("Settings UI sidecar already running; skipping spawn.")
-            return
-
+        _shutdown_existing_sidecar()
         _do_spawn()
 
 
 def _do_spawn() -> None:
-    """Inner spawn — assumes the spawn lock is held and alive-check failed.
+    """Inner spawn — assumes the spawn lock is held and any previous
+    sidecar has been retired.
 
     Extracted from :func:`maybe_spawn` so the context manager doesn't
     indent the full Popen block.
