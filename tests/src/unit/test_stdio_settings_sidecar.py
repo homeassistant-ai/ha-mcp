@@ -12,6 +12,7 @@ import json
 import os
 from collections.abc import Generator
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -297,6 +298,33 @@ class TestShutdownExistingSidecar:
             sidecar._shutdown_existing_sidecar()
         assert alive.call_count == 3
         assert alive.call_args[0][0] == 4242
+
+    def test_exit_wait_times_out_with_warning(
+        self, tmp_data_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A pid that never exits must not stall startup past the bound."""
+        import logging
+
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        (tmp_data_dir / "ui.pid").write_text("4242\n")
+        # First monotonic() call sets the deadline; the next one exceeds it.
+        clock = iter([1000.0, 1000.0 + sidecar._OLD_SIDECAR_EXIT_WAIT + 1])
+        with (
+            caplog.at_level(logging.WARNING, logger="ha_mcp.stdio_settings_sidecar"),
+            patch("urllib.request.urlopen") as urlopen,
+            patch.object(sidecar, "_pid_alive", return_value=True),
+            patch("time.monotonic", side_effect=lambda: next(clock)),
+            patch("time.sleep"),
+        ):
+            urlopen.return_value.__enter__.return_value.status = 200
+            sidecar._shutdown_existing_sidecar()
+        assert any(
+            "still alive" in rec.message
+            and "spawning replacement anyway" in rec.message
+            for rec in caplog.records
+        ), f"expected timeout warning, got: {[r.message for r in caplog.records]}"
 
     def test_post_failure_is_nonfatal_and_skips_wait(self, tmp_data_dir: Path) -> None:
         """Dead listener → nothing to retire; don't raise, don't poll the pid.
@@ -635,27 +663,7 @@ class TestRunMainWiring:
     ) -> None:
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
         monkeypatch.setattr(sidecar, "_pick_free_port", lambda pinned=0: 54321)
-
-        # Mock uvicorn.Server so ``server.run()`` is a no-op and the
-        # test doesn't bind a port or block. The test exercises the
-        # pre-run() wiring; the cleanup block in ``run_main`` would
-        # unlink ui.url/ui.pid on exit, so we snapshot before that
-        # runs by patching server.run to verify the files exist there.
-        snapshot: dict[str, str] = {}
-
-        class FakeServer:
-            def __init__(self, _config: object) -> None:
-                self.should_exit = False
-
-            def run(self) -> None:
-                # Capture state at the moment the listener "starts".
-                snapshot["url"] = (tmp_data_dir / "ui.url").read_text().strip()
-                snapshot["pid"] = (tmp_data_dir / "ui.pid").read_text().strip()
-
-        fake_uvicorn = MagicMock()
-        fake_uvicorn.Server = FakeServer
-        fake_uvicorn.Config = MagicMock()
-        monkeypatch.setitem(__import__("sys").modules, "uvicorn", fake_uvicorn)
+        snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
 
         rc = sidecar.run_main()
         assert rc == 0
@@ -709,6 +717,12 @@ class TestRunMainWiring:
         port and serves the remembered secret path.
         """
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        # Stub the settings singleton: it reads the real data dir, so a
+        # host-level pin (env or override file) would change ``requested``.
+        monkeypatch.setattr(
+            "ha_mcp.config.get_global_settings",
+            lambda: SimpleNamespace(sidecar_pin_port=0),
+        )
         (tmp_data_dir / "ui.state").write_text(
             json.dumps({"port": 54321, "secret_path": "/private_persisted"})
         )
@@ -735,6 +749,10 @@ class TestRunMainWiring:
         outlive it — it's what the NEXT spawn reads.
         """
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.setattr(
+            "ha_mcp.config.get_global_settings",
+            lambda: SimpleNamespace(sidecar_pin_port=0),
+        )
         monkeypatch.setattr(sidecar, "_pick_free_port", lambda pinned=0: 54321)
         snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
 
@@ -753,8 +771,6 @@ class TestRunMainWiring:
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Explicit pin (#1587) wins over the remembered port; secret sticks."""
-        from types import SimpleNamespace
-
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
         (tmp_data_dir / "ui.state").write_text(
             json.dumps({"port": 54321, "secret_path": "/private_persisted"})
@@ -784,6 +800,10 @@ class TestRunMainWiring:
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        monkeypatch.setattr(
+            "ha_mcp.config.get_global_settings",
+            lambda: SimpleNamespace(sidecar_pin_port=0),
+        )
         (tmp_data_dir / "ui.state").write_text("not json {{{")
         monkeypatch.setattr(sidecar, "_pick_free_port", lambda pinned=0: 54321)
         snapshot = self._install_fake_uvicorn(monkeypatch, tmp_data_dir)
