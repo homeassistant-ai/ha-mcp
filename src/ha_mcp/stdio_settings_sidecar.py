@@ -432,6 +432,12 @@ def _shutdown_existing_sidecar() -> None:
     # Stop in this very window" (keep it — their disable must stick).
     sentinel_preexisting = _disabled_sentinel().exists()
 
+    # Capture the pid BEFORE the POST: a current-code sidecar can ack and
+    # run its ownership-guarded cleanup (unlinking ui.pid) before we get
+    # back here — a post-POST read would then find nothing and skip the
+    # exit wait, racing the dying process for the remembered port.
+    pid = _read_recorded_pid()
+
     acked, sentinel_created = _post_shutdown(url)
     if not acked:
         return
@@ -452,7 +458,6 @@ def _shutdown_existing_sidecar() -> None:
         with contextlib.suppress(FileNotFoundError, OSError):
             _disabled_sentinel().unlink()
 
-    pid = _read_recorded_pid()
     if pid is None:
         return
 

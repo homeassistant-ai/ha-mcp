@@ -369,6 +369,43 @@ class TestShutdownExistingSidecar:
             "replace flow must remove the disable sentinel the endpoint wrote"
         )
 
+    def test_pid_is_captured_before_the_post(self, tmp_data_dir: Path) -> None:
+        """The exit wait must survive the dying sidecar's own cleanup.
+
+        A current-code sidecar can ack the POST and unlink ui.pid (its
+        ownership-guarded cleanup) before the parent gets around to
+        reading it; reading the pid AFTER the POST would then skip the
+        exit wait entirely and the replacement would race the dying
+        process for the remembered port. Capture before the POST.
+        """
+        (tmp_data_dir / "ui.url").write_text(
+            "http://127.0.0.1:9999/private_xx/settings\n"
+        )
+        (tmp_data_dir / "ui.pid").write_text("4242\n")
+
+        def _ack_and_cleanup(_req: object, timeout: float = 0) -> MagicMock:
+            # The dying sidecar's finally-cleanup lands with the ack.
+            (tmp_data_dir / "ui.pid").unlink()
+            cm = MagicMock()
+            cm.__enter__.return_value.status = 200
+            return cm
+
+        opener = MagicMock()
+        opener.open.side_effect = _ack_and_cleanup
+        liveness = iter([True, False])
+        with (
+            patch.object(sidecar, "_no_proxy_opener", return_value=opener),
+            patch.object(
+                sidecar, "_pid_alive", side_effect=lambda _pid: next(liveness)
+            ) as alive,
+            patch("time.sleep"),
+        ):
+            sidecar._shutdown_existing_sidecar()
+        assert alive.call_count == 2, (
+            "exit wait must run on the pre-POST pid even after cleanup"
+        )
+        assert alive.call_args[0][0] == 4242
+
     def test_waits_for_recorded_pid_to_exit(self, tmp_data_dir: Path) -> None:
         """After a successful POST, poll the old pid until it exits.
 
@@ -1694,21 +1731,33 @@ class TestDumpCacheFailurePath:
         assert dump_tool_metadata_cache([{"name": "x"}]) is False
 
     def test_dump_is_atomic(self, tmp_data_dir: Path) -> None:
-        """The dump must go through tmp-then-rename, never truncate-write.
+        """A reader must see the OLD cache until the instant of rename.
 
         Since the dump moved ahead of the retire, it overlaps the OLD
         still-serving sidecar on every startup — a truncate-write would
         hand a concurrent /api/tools request an empty tool list from the
-        half-written file. os.replace guarantees readers see the old or
-        the new content, never a torn one.
+        half-written file. Asserted against the real property, not the
+        helper delegation: at the moment os.replace fires, the
+        destination still holds the previous content, and afterwards the
+        new content — never a torn state. A truncate-write
+        reimplementation (in the dump OR inside the helper) never calls
+        os.replace and fails here.
         """
-        payload = [{"name": "ha_get_state", "primary_tag": "Entity Operations"}]
-        with patch(
-            "ha_mcp.settings_ui._persistence._atomic_write_json"
-        ) as atomic_write:
-            assert dump_tool_metadata_cache(payload) is True
-        atomic_write.assert_called_once()
-        assert atomic_write.call_args[0][1] == payload
+        cache = tmp_data_dir / "tool_metadata.json"
+        cache.write_text('[{"name": "old"}]')
+        observed: dict[str, str] = {}
+        real_replace = os.replace
+
+        def _observing_replace(src: object, dst: object) -> None:
+            observed["at_replace"] = Path(str(dst)).read_text()
+            real_replace(src, dst)  # type: ignore[arg-type]
+
+        with patch("os.replace", side_effect=_observing_replace):
+            assert dump_tool_metadata_cache([{"name": "new"}]) is True
+        assert observed["at_replace"] == '[{"name": "old"}]', (
+            "destination was modified before the rename — write is not atomic"
+        )
+        assert json.loads(cache.read_text()) == [{"name": "new"}]
 
 
 class TestSpawnLock:

@@ -212,7 +212,8 @@ def _atomic_write_json(
 ) -> None:
     """Write ``payload`` to ``path`` atomically.
 
-    Writes to ``<path>.tmp`` first and ``os.replace``s into place so a
+    Writes to a unique same-directory temp file (``mkstemp``, since
+    #1993) first and ``os.replace``s into place so a
     crash or out-of-space mid-write cannot leave a partial/empty file —
     callers that read the file back (``load_tool_config`` /
     ``_load_backup_settings_override``) would otherwise treat a
