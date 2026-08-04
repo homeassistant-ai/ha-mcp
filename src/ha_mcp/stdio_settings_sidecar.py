@@ -645,7 +645,10 @@ def maybe_spawn(prepare: Callable[[], None] | None = None) -> None:
                 print(f"ha-mcp settings UI at: {existing}", file=sys.stderr)
             return
 
-        _shutdown_existing_sidecar()
+        # prepare (the heavy metadata dump — a full server build) runs
+        # BEFORE the retire: the old sidecar keeps serving, and keeps the
+        # remembered port bound, while the slow work happens. The port's
+        # unbound window shrinks to spawn-plus-child-startup.
         if prepare is not None:
             try:
                 prepare()
@@ -655,6 +658,7 @@ def maybe_spawn(prepare: Callable[[], None] | None = None) -> None:
                 logger.warning(
                     "Sidecar prepare hook failed; spawning anyway.", exc_info=True
                 )
+        _shutdown_existing_sidecar()
         _do_spawn()
 
 
@@ -1009,14 +1013,21 @@ def _build_shutdown_handler(
                     },
                     status_code=500,
                 )
+        # The re-enable instruction only makes sense for a disable — a
+        # retire wrote no sentinel and is followed by a replacement.
+        message = (
+            "Settings UI sidecar shutting down for replacement."
+            if is_retire
+            else (
+                "Settings UI sidecar shutting down. "
+                f"Delete {_disabled_sentinel()} to re-enable on next ha-mcp start."
+            )
+        )
         return JSONResponse(
             {
                 "success": True,
                 "sentinel_created": sentinel_created,
-                "message": (
-                    "Settings UI sidecar shutting down. "
-                    f"Delete {_disabled_sentinel()} to re-enable on next ha-mcp start."
-                ),
+                "message": message,
             }
         )
 

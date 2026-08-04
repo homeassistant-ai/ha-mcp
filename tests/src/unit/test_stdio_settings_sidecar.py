@@ -782,11 +782,74 @@ class TestMaybeSpawnGates:
             "maybe_spawn must poll until the child publishes its URL"
         )
 
+    def test_publish_wait_warns_when_the_child_dies_early(
+        self,
+        tmp_data_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A child that exits before publishing must end the wait loudly.
+
+        Both early returns of the publish wait drop the spawn lock with
+        no ui.url on disk — residual by design (an import crash must not
+        wedge stdio startup), so the warnings are the only trace. This
+        pins the child-died arm deliberately (it was previously reached
+        only incidentally by tests whose bare MagicMock poll() happened
+        to be truthy).
+        """
+        import logging
+
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        fake_proc = MagicMock()
+        fake_proc.pid = 12345
+        fake_proc.poll.return_value = 1
+        fake_proc.returncode = 1
+        with (
+            caplog.at_level(logging.WARNING, logger="ha_mcp.stdio_settings_sidecar"),
+            patch("subprocess.Popen", return_value=fake_proc),
+            patch("time.sleep"),
+        ):
+            sidecar.maybe_spawn()
+        assert any(
+            "exited" in rec.message and "before publishing" in rec.message
+            for rec in caplog.records
+        ), f"expected child-died warning, got: {[r.message for r in caplog.records]}"
+
+    def test_publish_wait_warns_on_deadline_expiry(
+        self,
+        tmp_data_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A child alive but silent past the bound ends the wait loudly."""
+        import logging
+
+        monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
+        fake_proc = MagicMock()
+        fake_proc.pid = 12345
+        fake_proc.poll.return_value = None
+        clock = iter([1000.0, 1000.0 + sidecar._CHILD_PUBLISH_WAIT + 1])
+        with (
+            caplog.at_level(logging.WARNING, logger="ha_mcp.stdio_settings_sidecar"),
+            patch("subprocess.Popen", return_value=fake_proc),
+            patch("time.monotonic", side_effect=lambda: next(clock)),
+            patch("time.sleep"),
+        ):
+            sidecar.maybe_spawn()
+        assert any(
+            "has not published its URL" in rec.message for rec in caplog.records
+        ), (
+            f"expected publish-timeout warning, got: {[r.message for r in caplog.records]}"
+        )
+
     def test_prepare_callback_runs_winner_only_inside_the_lock(
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """maybe_spawn(prepare=...) invokes the callback exactly once on
-        the winner path; losers and disabled installs never invoke it."""
+        the winner path — BEFORE the retire, so the heavy metadata dump
+        runs while the old sidecar still holds the remembered port (the
+        unbound window shrinks to spawn-plus-startup). Losers and
+        disabled installs never invoke it."""
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
         events: list[str] = []
         fake_proc = MagicMock()
@@ -798,11 +861,16 @@ class TestMaybeSpawnGates:
             url_file.write_text("http://127.0.0.1:54321/private_x/settings\n")
 
         with (
+            patch.object(
+                sidecar,
+                "_shutdown_existing_sidecar",
+                side_effect=lambda: events.append("retire"),
+            ),
             patch("subprocess.Popen", return_value=fake_proc),
             patch("time.sleep", side_effect=_publish),
         ):
-            sidecar.maybe_spawn(prepare=lambda: events.append("winner"))
-        assert events == ["winner"]
+            sidecar.maybe_spawn(prepare=lambda: events.append("prepare"))
+        assert events == ["prepare", "retire"]
 
         events.clear()
         with sidecar._spawn_lock() as held:
@@ -1721,6 +1789,9 @@ class TestDiscoverabilityFlow:
         assert "mode=retire" in target
         assert not (tmp_data_dir / "settings_ui_disabled").exists()
         assert body.get("sentinel_created") is False
+        # No "delete the sentinel to re-enable" advice on a retire — it
+        # wrote no sentinel and a replacement follows immediately.
+        assert "Delete" not in body.get("message", "")
 
         # The page's Stop button (no mode param) keeps the disable
         # contract: sentinel written, creation reported truthfully.
