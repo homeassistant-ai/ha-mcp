@@ -184,7 +184,7 @@
     "errors.stop_failed": "Не удалось остановить",
     "errors.restart_failed": "Не удалось перезапустить",
     "errors.failed_detail": "Ошибка: {detail}",
-    "errors.addon_not_back": "Дополнение не вернулось в сеть. Обновите страницу вручную",
+    "errors.addon_not_back": "Приложение (дополнение) не вернулось в онлайн. Обновите страницу вручную.",
     "errors.unparseable_suffix": " (тело ответа не удалось разобрать)",
     "common.operation_failed": "Операция «{operation}» завершилась ошибкой: {detail}",
     "common.enabled": "включено",
