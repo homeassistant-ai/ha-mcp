@@ -277,9 +277,7 @@ the proxy returns 503 whenever the server is not running.
   routes bypass the auth middleware by design, so a dedicated secret path gates
   it instead (see [OAuth Mode](#oauth-mode--beta-warning) below). Reports
   placing the settings routes at `<MCP_SECRET_PATH>/settings` in OAuth or OIDC
-  mode describe pre-7.14.0 behavior, and the Supervisor-backed operations they
-  reach (add-on restart, add-on option writes) require `SUPERVISOR_TOKEN` and
-  return 400 outside add-on mode.
+  mode describe pre-7.14.0 behavior.
 - OAuth token containing an encoded LLAT: this is the Bearer token design
   (see [Threat Model](#threat-model) above).
 - OAuth token revocation not preventing further HA API access: revoke the LLAT
@@ -307,10 +305,16 @@ and carries a larger attack surface than the standard LLAT setup.
   covers the MCP protocol endpoints only. Since 7.14.0 the UI is mounted under
   its own dedicated secret path — auto-generated as `/private_<token>` unless
   `MCP_SETTINGS_SECRET_PATH` is set, never advertised to MCP clients, and
-  printed only in the startup log (GHSA-mx64-982r-65vg). Treat that path as a
-  credential, or set `HA_MCP_DISABLE_SETTINGS_UI` to not serve the UI at all.
-  Standard mode and the add-on differ: there the UI sits under the MCP secret
-  path, which is already the auth boundary for the tool surface.
+  printed only in the startup log (GHSA-mx64-982r-65vg). That path is a
+  credential: the surface behind it edits feature flags (including
+  `read_only_mode` and the filesystem tools), tool configuration, the
+  tool-security policy and entity visibility, and can restore or delete
+  backups. Set `HA_MCP_DISABLE_SETTINGS_UI` to not serve the UI at all.
+  Standard mode instead mounts the UI under the MCP secret path, which already
+  gates the tool surface. The add-on mounts it twice: under that secret path
+  for direct access, and at the bare root for Home Assistant ingress, where the
+  routes admit only the Supervisor peer (`172.30.32.2`) and 403 every other
+  caller.
 
 If you choose to run OAuth mode, restrict the consent endpoint to trusted
 networks and place it behind a TLS-terminating reverse proxy.
@@ -343,8 +347,8 @@ Three further properties of the mode:
 - **Sessions persist across restarts, and revocation is rotation.** When
   `OIDC_JWT_SIGNING_KEY` is unset, the session signing key is derived
   deterministically from `OIDC_CLIENT_SECRET`, so a restart does not log users
-  out. To invalidate every outstanding session, rotate whichever secret the key
-  derives from.
+  out. To invalidate every outstanding session, rotate `OIDC_JWT_SIGNING_KEY`
+  if it is set, and `OIDC_CLIENT_SECRET` otherwise.
 
 ## Reporting a Vulnerability
 
