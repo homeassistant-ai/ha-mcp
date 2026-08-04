@@ -345,23 +345,25 @@ class TestGracefulShutdownIntegration:
             main_module._shutdown_event = None
             main_module._shutdown_in_progress = False
 
+            server_task = asyncio.create_task(main_module._run_with_graceful_shutdown())
             try:
-                server_task = asyncio.create_task(
-                    main_module._run_with_graceful_shutdown()
-                )
-
                 await asyncio.sleep(0.1)
 
                 if main_module._shutdown_event:
                     main_module._shutdown_event.set()
 
                 with caplog.at_level(logging.WARNING, logger=main_module.logger.name):
-                    try:
-                        await asyncio.wait_for(server_task, timeout=3.0)
-                    except TimeoutError:
+                    # asyncio.wait, not wait_for: a timing-out wait_for would
+                    # cancel server_task and re-await it — against the
+                    # regressed code that cancellation is swallowed by the
+                    # same cleanup, hanging the test instead of failing it.
+                    _done, pending = await asyncio.wait({server_task}, timeout=3.0)
+                    if pending:
                         pytest.fail(
                             "Shutdown blocked on a cancellation-swallowing cleanup"
                         )
+                    try:
+                        server_task.result()
                     except asyncio.CancelledError:
                         pass  # Expected
 
@@ -376,6 +378,12 @@ class TestGracefulShutdownIntegration:
                 release.set()
                 if cleanup_task is not None:
                     await asyncio.wait_for(asyncio.shield(cleanup_task), timeout=1.0)
+                # The fail path leaves server_task pending: cancel and drain
+                # it best-effort, again without re-awaiting a swallowed
+                # cancellation through wait_for.
+                if not server_task.done():
+                    server_task.cancel()
+                    await asyncio.wait({server_task}, timeout=1.0)
 
 
 class TestStdinDetection:
