@@ -648,7 +648,7 @@ async function _runRestartReloadCycle(previousInstanceId) {
     // never actually fired (silent supervisor failure → instance_id
     // never flipped) OR supervisor is genuinely slower than the cap.
     // Surface a clear next-step instead of silently doing nothing.
-    btn.textContent = t('errors.addon_not_back', {}, 'App (add-on) did not come back online. Reload manually');
+    btn.textContent = t('errors.addon_not_back', {}, 'App (add-on) did not come back online. Reload the page manually.');
     btn.disabled = false;
     restartInProgress = false;
   }

@@ -12,6 +12,7 @@ real API is left to the live workflow run.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -479,9 +480,21 @@ class TestPlanning:
             "engine calls"
         )
 
+    # Same gate as ``test_locale_parity.completeness`` (see the marker
+    # comment there): this asserts the LIVE tree owes no translations, which
+    # any PR that changes an English string legitimately violates until the
+    # post-merge sync runs. ``test_locale_sync_gate_shape`` pins the wiring.
+    @pytest.mark.skipif(
+        not os.environ.get("LOCALE_COMPLETENESS_CHECKS"),
+        reason=(
+            "translated-catalog completeness is verified by the post-merge "
+            "locale-sync workflow — set LOCALE_COMPLETENESS_CHECKS=1 to run"
+        ),
+    )
     def test_clean_tree_plans_no_work(self) -> None:
-        """The no-op invariant the CI loop terminates on: after a translation
-        commit repins the baseline, the retriggered run must find nothing."""
+        """The sync's own no-op invariant: after a run repins the baseline,
+        a rerun must find nothing — verified in the workflow, where it runs
+        against the freshly translated tree."""
         module = translate_locales._load_test_module()
         plan = translate_locales.build_plan(module)
         assert plan.items == []

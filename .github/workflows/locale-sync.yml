@@ -218,8 +218,14 @@ jobs:
         uv run pytest tests/src/unit/test_settings_ui_i18n.py -q --maxfail=0 \
           -k "test_shipped_catalog_translates_the_tools_tab" \
           --junitxml="$RUNNER_TEMP/verify-i18n.xml"
+        # The sync's own no-op invariant: a rerun against the tree this run
+        # just translated and repinned must plan zero work.
+        uv run pytest tests/src/unit/test_translate_locales.py -q --maxfail=0 \
+          -k "test_clean_tree_plans_no_work" \
+          --junitxml="$RUNNER_TEMP/verify-noop.xml"
         assert_nothing_skipped "$RUNNER_TEMP/verify-parity.xml"
         assert_nothing_skipped "$RUNNER_TEMP/verify-i18n.xml"
+        assert_nothing_skipped "$RUNNER_TEMP/verify-noop.xml"
 
     - name: Check for held English-source staleness
       id: staleness
