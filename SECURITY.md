@@ -328,6 +328,24 @@ deployments (see [docs/oidc.md](docs/oidc.md)). The settings-UI caveat above
 applies identically: `MCP_SETTINGS_SECRET_PATH`, not the OIDC token, is what
 gates it.
 
+Three further properties of the mode:
+
+- **OIDC is an access gate, not per-user authorization.** Every authenticated
+  user shares the one server-side `HOMEASSISTANT_TOKEN`, so all requests act as
+  the same Home Assistant identity. As in standard mode, there is no per-user
+  isolation — reports assuming user A cannot reach user B's data do not apply.
+  Per-user Home Assistant credentials exist only in OAuth mode.
+- **The token audience is not checked by default.** With `OIDC_AUDIENCE` unset
+  and `OIDC_VERIFY_ID_TOKEN` off, FastMCP's JWT verifier checks issuer,
+  signature, and expiry but not `aud`. That is fine on an IdP dedicated to
+  ha-mcp, and weaker on a shared one, where a token another client obtained
+  from the same issuer would also pass. Set `OIDC_AUDIENCE` on a shared IdP.
+- **Sessions persist across restarts, and revocation is rotation.** When
+  `OIDC_JWT_SIGNING_KEY` is unset, the session signing key is derived
+  deterministically from `OIDC_CLIENT_SECRET`, so a restart does not log users
+  out. To invalidate every outstanding session, rotate whichever secret the key
+  derives from.
+
 ## Reporting a Vulnerability
 
 Use the private reporting page at:
