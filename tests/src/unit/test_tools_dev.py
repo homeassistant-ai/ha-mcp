@@ -1596,24 +1596,42 @@ class TestSecurityPolicyAccessGuard:
         assert engine["editable"] is False
         assert "locked_reason" not in engine
 
-    async def test_gate_removal_refused_without_access(self):
+    async def test_gate_removal_refused_without_access(self, monkeypatch):
         # gated=False REMOVES an operator-installed approval gate — the
         # exact escalation #2141 blocks. Pins the `gated is not None`
-        # check against a "simplification" to bare truthiness.
+        # check against a "simplification" to bare truthiness. Seeded
+        # with a real gate first, so a refusal raised AFTER a write
+        # would be caught by the survives-assertion.
+        monkeypatch.setenv(POLICY_ACCESS_FLAG, "true")
+        dev = DevTools(MagicMock())
+        await dev.ha_dev_manage_settings(
+            action="set_tool", tool="ha_call_service", gated=True
+        )
+        monkeypatch.delenv(POLICY_ACCESS_FLAG)
         with pytest.raises(ToolError, match="AUTH_INSUFFICIENT_PERMISSIONS"):
-            await DevTools(MagicMock()).ha_dev_manage_settings(
+            await dev.ha_dev_manage_settings(
                 action="set_tool", tool="ha_call_service", gated=False
             )
-        assert self._rules() == []
+        assert [r.tool_name for r in self._rules()] == ["ha_call_service"]
 
     async def test_policy_engine_reset_refused(self):
         # reset returns the flag to its default (False) — same blast
         # radius as set value=False; the guard must sit ahead of the
-        # set/reset split.
+        # set/reset split. Seeded with an override so a reset that wrote
+        # before raising would be caught.
+        _override_file_path().write_text(
+            json.dumps({"enable_tool_security_policies": True})
+        )
         with pytest.raises(ToolError, match="AUTH_INSUFFICIENT_PERMISSIONS"):
             await DevTools(MagicMock()).ha_dev_manage_settings(
                 action="reset", setting="enable_tool_security_policies"
             )
+        assert (
+            json.loads(_override_file_path().read_text())[
+                "enable_tool_security_policies"
+            ]
+            is True
+        )
 
     @pytest.mark.parametrize("env_val", ["1", "yes", "on", "T", "Y", "TRUE"])
     async def test_env_truthy_strings_grant_access(self, monkeypatch, env_val):

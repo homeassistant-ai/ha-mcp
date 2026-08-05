@@ -220,7 +220,8 @@ class TestDevManageSettings:
         from a sidecar process) takes effect on the next call — no
         restart, no settings-singleton reload."""
         flags_file = dev_mode_enabled / "feature_flags.json"
-        existing = json.loads(flags_file.read_text()) if flags_file.exists() else {}
+        original_contents = flags_file.read_text() if flags_file.exists() else None
+        existing = json.loads(original_contents) if original_contents else {}
         try:
             flags_file.write_text(
                 json.dumps({**existing, "dev_tools_security_policy_access": True})
@@ -232,8 +233,8 @@ class TestDevManageSettings:
             )
             assert result.get("success") is True, extract_error_message(result)
         finally:
-            if existing:
-                flags_file.write_text(json.dumps(existing))
+            if original_contents is not None:
+                flags_file.write_text(original_contents)
             else:
                 flags_file.unlink(missing_ok=True)
 
