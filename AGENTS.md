@@ -90,7 +90,7 @@ When implementing features or debugging, consult these resources:
 
 ## Issue & PR Management
 
-### Automated Code Review (Codex)
+### Automated Code Review
 
 **Codex** reviews PRs automatically (`pr-codex-review-request.yml` /
 `pr-codex-review-delivery.yml`; posts as `chatgpt-codex-connector[bot]`).
@@ -101,26 +101,53 @@ document (code quality, test coverage, security patterns, MCP conventions,
 safety annotation accuracy): the `@codex review` request comment points Codex
 at it explicitly, and the Claude review skills below apply it.
 
+**CodeRabbit** (GitHub app, posts as `coderabbitai[bot]`) reviews drafts too —
+`.coderabbit.yaml` sets `reviews.auto_review.drafts: true`, since every PR here
+opens as a draft, and `auto_pause_after_reviewed_commits: 0` so it keeps
+reviewing every push instead of going quiet after five. That spends the
+per-developer hourly review allowance faster; a rate-limited push says so in a
+comment and never blocks merge, and CodeRabbit's `rate limit` command reports
+whether reviews are available without consuming one. It auto-detects `AGENTS.md` as review criteria;
+`.gemini/styleguide.md` is added through
+`knowledge_base.code_guidelines.filePatterns` (see the comment there). Repo YAML
+outranks the UI settings (only org/workspace Global Overrides beat it) and does
+not merge with them — any key it omits falls back to CodeRabbit's schema
+defaults, not to UI values. A change to `.coderabbit.yaml` never applies to the
+PR making it: on open-source repos CodeRabbit honours only the base branch's
+config, so the PR reports `Configuration used: defaults` and the change takes
+effect on merge.
+
+**Bot-authored PRs are excluded from automatic review by both tools** —
+Dependabot, Renovate, and the `github-actions[bot]` webhook-proxy promote PRs
+(dev → stable copies whose content was already reviewed in their dev PRs).
+Enforced in `.coderabbit.yaml` `ignore_usernames` and the `pull_request_target`
+admission list in `pr-codex-review-request.yml`, pinned to each other by
+`test_coderabbit_config.py`. A maintainer can still summon a review on a
+promote PR: `@coderabbitai review`, or for Codex a comment that is exactly
+`/review` (or `@ghhamcp review`) — the `issue_comment` admission list
+deliberately omits `github-actions[bot]` to keep that lever.
+
 **Division of Labor:**
 - **Codex (automatic)**: Code quality, test coverage, generic security, MCP conventions
+- **CodeRabbit (automatic, drafts included)**: Line-level review against `AGENTS.md` and `.gemini/styleguide.md`, PR walkthrough and summary
 - **Claude `/contrib-pr-review` (on-demand)**: Repo-specific security (AGENTS.md, .github/, .claude/), detailed test analysis, PR size assessment, issue linkage
 - **Claude `/my-pr-checker` (lifecycle)**: Resolve threads, fix issues, monitor CI, create improvement PRs
 
 ### Issue Labels
 
-**Triage-state labels** (applied by `issue-triage.yml` or manual triage):
+**Triage-state labels** (applied during manual triage):
 
 | Label | Meaning |
 |-------|---------|
 | `ready-to-implement` | Clear path, no decisions needed |
 | `needs-choices` | Multiple approaches, needs stakeholder input |
-| `needs-info` | Awaiting clarification from reporter |
+| `needs-info` | Awaiting clarification from reporter. `close-needs-info.yml` clocks from the label event: reminders on days 3/5/6, auto-close on day 7 without an author reply; an author reply removes the label |
 | `priority: high/medium/low` | Relative priority |
-| `triaged` | Automated triage complete |
-| `triage-failed` | Automated triage failed; circuit breaker that blocks retrigger on comments. Clear it (or run via `workflow_dispatch`) to retry |
+| `triaged` | Automated triage complete (historical — applied by the retired `issue-triage.yml` bot) |
+| `triage-failed` | Automated triage failed (historical — applied by the retired `issue-triage.yml` bot) |
 | `issue-analyzed` | Deep Claude analysis complete |
 
-**Bug-class labels** (applied via `.github/ISSUE_TEMPLATE/` form selection or manual triage):
+**Bug-class labels** (applied via `.github/ISSUE_TEMPLATE/` form selection, CodeRabbit auto-labeling, or manual triage):
 
 | Label | Meaning |
 |-------|---------|
@@ -151,7 +178,7 @@ at it explicitly, and the Claude review skills below apply it.
 
 ### Issue Analysis Workflow
 
-- **Automated Triage**: Runs on new issues via `.github/workflows/issue-triage.yml` (GitHub Models). Adds `triaged` label.
+- **Automated Triage (CodeRabbit)**: `issue_enrichment` in `.coderabbit.yaml`. On new and edited issues CodeRabbit posts an enrichment comment (possible duplicates, related issues and PRs, suggested assignees) and auto-applies labels per `labeling_instructions`. Plans are manual: comment `@coderabbitai plan` on an issue, or tick the Create Plan checkbox in the enrichment comment. (Replaces the retired GitHub Models `issue-triage.yml` bot.)
 - **Deep Analysis (Claude)**: When user says "analyze issues", list issues missing `issue-analyzed` label, then invoke `/issue-analysis <number>` for each sequentially (the skill drafts analysis for user approval before posting).
 
 ```bash
@@ -161,7 +188,7 @@ gh issue list --state open --json number,title,labels --jq '.[] | select(.labels
 ### PR Review Comments
 
 **Always check for comments after pushing to a PR.** They come from bots
-(Codex, Copilot) or humans. Address human comments with highest
+(Codex, CodeRabbit, Copilot) or humans. Address human comments with highest
 priority; treat bot comments as suggestions to assess, not commands.
 
 **Reply, then resolve.** After addressing an inline comment, reply on its
@@ -336,7 +363,7 @@ On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, sy
 | `build-binary.yml` | Release | Linux/macOS/Windows binaries |
 | `addon-publish.yml` | Release | HA add-on update |
 | `sync-tool-docs.yml` | Push to master (`src/ha_mcp/tools/`, `scripts/extract_tools.py`) | Regenerate `tools.json`, README, DOCS.md |
-| `locale-sync.yml` | Same-repo PR touching locale catalogs, tool sources, or the locale scripts | Machine-translate stale/missing strings and commit them to the PR branch |
+| `locale-sync.yml` | Daily schedule + manual dispatch | Machine-translate stale/missing strings post-merge and push them straight to master |
 
 **Docker image tags** (`ghcr.io/homeassistant-ai/ha-mcp`): stable releases push `:latest` + `:stable` + semver tags (`release-publish.yml`); dev builds push only `:dev` + `:dev-<sha>` (`publish-dev.yml`) — **never `:latest`**, which is reserved for stable. The HA add-on images live in separate repos (`-addon-{arch}`, `-addon-dev-{arch}`) and are selected by an explicit `version:` pin, not by `:latest`.
 
@@ -745,10 +772,9 @@ lacks: nothing renders it. `tool_groups` and `tools` may do neither: each locale
 must carry exactly the renderable group headings and every tool name, no key
 more and none fewer. The check derives the tool set from
 the sources (`scripts/extract_tools.py`), not from the committed
-`site/src/data/tools.json` that `sync-tool-docs.yml` regenerates only after
-merge — so the PR adding a tool goes red, rather than the next PR someone
-opens. Separately from those key rules, both authored surfaces cap how much
-*text* a catalog
+`site/src/data/tools.json` — the check must not depend on a generated
+artifact that a separate post-merge workflow keeps current. Separately from
+those key rules, both authored surfaces cap how much *text* a catalog
 may leave byte-identical to English or omit outright, so a stub cannot ride the
 fallbacks: 5% for the settings UI `messages`, its `tools` titles and
 descriptions, and each generated add-on projection (per flavor, computed from
@@ -767,8 +793,24 @@ baseline diff (`tests/src/unit/locale_source_baseline.json`), retranslates
 the changed or missing keys in every language via the Gemini API
 (`GEMINI_API_KEY`; free tier), validates placeholders and markup, regenerates
 the derived catalogs, and repins the baseline. The `locale-sync.yml` workflow
-runs it automatically on same-repo PRs and commits the result to the PR
-branch for review; run it locally for fork PRs or to use a different engine.
+runs it AFTER merge, on a daily schedule, and pushes the result straight to
+master with the release App credential (the same pattern as the version-bump
+bots and `sync-tool-docs.yml`) — so any PR, fork or same-repo, merges
+without owing translations, and one sync run picks up everything merged
+since the last one. The checks that police translated content (missing or
+orphaned keys, staleness against the baseline, cross-surface shared wording,
+the untranslated-share ceilings, filled tool sections) are gated behind
+`LOCALE_COMPLETENESS_CHECKS=1` and run in that workflow, not in PR CI —
+`test_locale_sync_gate_shape.py` pins the wiring. What a PR still owes is
+deterministic and engine-free: regenerate the derived catalogs
+(`python scripts/generate_locales.py`) when a canonical English string
+changes, and placeholder parity on component keys whose English is current.
+To choose the wording yourself, translate in your own PR **and run
+`python scripts/update_locale_baseline.py` in it** — the repinned baseline
+is what tells the next sync your wording already covers the changed English
+(hand-edits win); without the repin the sync retranslates the key and
+overwrites you. Run `scripts/translate_locales.py` locally instead to
+machine-fill in-PR or to use a different engine (it repins for you).
 The baseline pins the English each translation was written against, because
 key parity cannot see a string whose meaning changed: #1993 flipped a policy
 string from ALL-match to ANY-match and left the Chinese text asserting the
@@ -783,8 +825,8 @@ tool shows one instead. Editing that summary moves the English out from under
 six catalogs; the pipeline retranslates them. One deliberate exception: a
 change to a feature-gated tool's PARSED docstring (its stub unchanged) is
 stub-review work, not translation work — the pipeline holds that baseline key
-stale, and the red check clears only when a human confirms the stub still
-describes the tool and runs `python scripts/update_locale_baseline.py`.
+stale, and the locale-sync run stays red until a human confirms the stub
+still describes the tool and runs `python scripts/update_locale_baseline.py`.
 
 **Rate limits and outages degrade loudly, never silently.** Engine calls are
 paced under the free-tier request rate and retry transient errors (429/5xx,
@@ -793,14 +835,15 @@ and the run continues, and two consecutive dead batches stop the run early
 instead of burning the remaining quota. A partial run — a daily-quota hit,
 an outage — still commits every finished translation plus
 `tests/src/unit/locale_sync_progress.json`, which the next run reads to
-resume where it stopped: **re-running the workflow is the entire recovery
-procedure.** Only a fully successful run repins the baseline and deletes the
-progress file, so CI stays red until every string is translated and nothing
+resume where it stopped: **re-running the workflow — or just waiting for the
+next day's cron — is the entire recovery procedure.** Only a fully
+successful run repins the baseline and deletes the progress file, so the
+sync runs stay red until every string is translated and nothing
 unvalidated ever ships. **The fallback when the engine is down is a human**:
-anyone (the PR author included) can hand-translate the strings the dry-run
+anyone can hand-translate the strings the dry-run
 lists, run `python scripts/generate_locales.py` and
-`python scripts/update_locale_baseline.py`, and push — CI goes green and the
-next pipeline run no-ops (it also cleans up any committed progress file).
+`python scripts/update_locale_baseline.py`, and open an ordinary PR — the
+next sync run no-ops (it also cleans up any committed progress file).
 Hand-edits always win; the machine only ever touches strings whose English
 changed. The engine itself is one function (`_call_gemini`) with
 `GEMINI_API_URL` / `GEMINI_MODEL` / `GEMINI_API_KEY` overrides for any

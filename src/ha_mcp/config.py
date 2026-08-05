@@ -102,11 +102,12 @@ class Settings(BaseSettings):
     # WebSocket configuration (essential for async operations)
     enable_websocket: bool = Field(True, alias="ENABLE_WEBSOCKET")
 
-    # Settings UI sidecar (stdio mode only, #1587). 0 = pick a free
-    # ephemeral port at every spawn (default); 1024-65535 pins the sidecar
-    # to a fixed port so the settings URL/origin stays stable across
-    # restarts (bookmarks, browser localStorage). Read by run_main() in
-    # stdio_settings_sidecar.py.
+    # Settings UI sidecar (stdio mode only, #1587). 0 (default) = pick a
+    # free ephemeral port on the first spawn and reuse it afterwards
+    # (persisted in ui.state, #2131) so the settings URL/origin stays
+    # stable across restarts; 1024-65535 pins a preferred fixed port
+    # instead (best-effort: falls back to an ephemeral one if taken).
+    # Read by run_main() in stdio_settings_sidecar.py.
     sidecar_pin_port: int = Field(0, alias="HA_MCP_SIDECAR_PORT")
 
     # Development/Debug configuration
@@ -859,9 +860,9 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
     AdvancedField("environment", "ENVIRONMENT", str, "diagnostics", True),
     AdvancedField("log_level", "LOG_LEVEL", str, "diagnostics", True),
     AdvancedField("debug", "DEBUG", bool, "diagnostics", True),
-    # Settings UI sidecar (stdio-only). Pin the sidecar's port so the
-    # settings URL/origin is stable across restarts; 0 = ephemeral
-    # (default). #1587.
+    # Settings UI sidecar (stdio-only). 0 (default) = first spawn picks a
+    # free port and later spawns reuse it via ui.state (#2131); a value
+    # pins a preferred fixed port instead (best-effort, #1587).
     AdvancedField("sidecar_pin_port", "HA_MCP_SIDECAR_PORT", int, "sidecar", True),
     # NOTE: ``auto_backup_dir`` and ``auto_backup_calendar_lookahead_days``
     # are NOT in this tuple. They are in ``BACKUP_OVERRIDE_FIELDS`` (defined

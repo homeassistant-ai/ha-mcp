@@ -171,6 +171,33 @@ async def test_real_component_write_maps_and_defers_merged_apply() -> None:
 
 
 @pytest.mark.asyncio
+async def test_real_component_normalizes_literal_clear_pip_spec() -> None:
+    """A raw server_entry_update frame carrying the literal 'clear' must
+    collapse to "" inside the COMPONENT — raw WS callers and older servers
+    never pass through the ha_dev_manage_server alias, and persisting the
+    word verbatim would fail at install time as a pip requirement."""
+    entry = FakeConfigEntry(
+        domain="ha_mcp_tools",
+        data={"entry_type": "server", "webhook_id": "secret"},
+        options={"channel": "stable", "pip_spec": "ha-mcp==9.9.9"},
+        entry_id="srv1",
+    )
+    component_hass = _ComponentHass([entry])
+    ws = _real_update_ws(component_hass)
+
+    response = await ws.send_command(
+        "ha_mcp_tools/server_entry_update", pip_spec="Clear"
+    )
+
+    assert response["success"] is True
+    assert response["result"]["applying"] == {"pip_spec": ""}
+    assert len(component_hass.scheduled) == 1
+    await component_hass.scheduled[0]
+    _entry, applied = component_hass.config_entries.update_calls[0]
+    assert applied["pip_spec"] == ""
+
+
+@pytest.mark.asyncio
 async def test_real_component_no_entry_falls_back_to_component_not_installed() -> None:
     """When the component reports no server entry AND the legacy probe also finds
     none, the consumer surfaces COMPONENT_NOT_INSTALLED. Component-first: the

@@ -609,6 +609,25 @@ async def _cleanup_resources() -> None:
     logger.info("Server resources cleaned up")
 
 
+def _log_cleanup_result(task: "asyncio.Future[None]") -> None:
+    """Consume the cleanup task's outcome so a failure is never silent.
+
+    ``asyncio.wait`` does not retrieve results, and the timeout path
+    deliberately abandons rather than awaits (see the ``finally`` block), so
+    without this nothing observes ``cleanup_task``. An exception left
+    unretrieved this close to loop teardown surfaces only as a GC-time "Task
+    exception was never retrieved" error, which is unstructured and not
+    guaranteed to be emitted before exit. Mirrors what ``_cancel_tasks`` does
+    for the tasks it reaps. Cancellation is the expected abandoned-timeout
+    outcome and stays silent.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning(f"Resource cleanup raised: {exc!r}")
+
+
 async def _cancel_tasks(*tasks: asyncio.Task) -> None:
     """Cancel tasks and wait for completion, bounding the wait.
 
@@ -690,11 +709,19 @@ async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
             logger.error("Server task cancelled without a shutdown signal")
             raise
     finally:
-        try:
-            await asyncio.wait_for(
-                _cleanup_resources(), timeout=SHUTDOWN_TIMEOUT_SECONDS
-            )
-        except TimeoutError:
+        # Cancel-and-abandon, not wait_for: wait_for awaits the cancelled
+        # coroutine before raising, and the cleanup stack swallows
+        # CancelledError at several layers (per-client in
+        # WebSocketManager.disconnect, in client.disconnect's own task-cancel
+        # guard), so a hung close handshake could block shutdown past the
+        # budget. A straggler is left to the runner's own task sweep.
+        cleanup_task = asyncio.ensure_future(_cleanup_resources())
+        cleanup_task.add_done_callback(_log_cleanup_result)
+        _done, cleanup_pending = await asyncio.wait(
+            {cleanup_task}, timeout=SHUTDOWN_TIMEOUT_SECONDS
+        )
+        if cleanup_pending:
+            cleanup_task.cancel()
             logger.warning("Resource cleanup timed out")
 
         try:
@@ -901,27 +928,27 @@ def _maybe_spawn_settings_sidecar() -> None:
     is async; this happens before the main stdio loop so there's no
     nested-loop conflict with ``_run_entrypoint``'s own ``asyncio.run``.
 
-    Performance: the dump constructs the full FastMCP server, which is
-    heavy. Skip it (and the server build) when there's nothing to spawn
-    for — sidecar disabled or already alive. Warm restarts that already
-    have a sidecar pay zero cold-start tax from this path.
+    Performance: the dump constructs the full FastMCP server via the
+    cached ``_get_server()`` singleton the stdio session builds anyway,
+    so this only front-loads that cost. The dump runs as maybe_spawn's
+    ``prepare`` hook — winner-only, inside the spawn lock — because the
+    replacement sidecar must read a cache dumped by the SAME parent that
+    spawned it: a spawn-lock loser with a different environment could
+    otherwise overwrite the winner's cache (issue #2131 review), and the
+    sidecar reloads that shared file per request.
     """
     from ha_mcp.settings_ui import (
         _get_tool_metadata,
         dump_tool_metadata_cache,
     )
     from ha_mcp.stdio_settings_sidecar import (
-        _existing_sidecar_alive,
         _is_disabled,
         maybe_spawn,
     )
 
-    # Cheap gates first; skip the heavy metadata dump when the sidecar
-    # would be a no-op anyway. Any condition that makes maybe_spawn()
-    # short-circuit also makes the dump pointless (the running sidecar
-    # already has a cache from a prior parent startup; a disabled
-    # sidecar never reads one).
-    if _is_disabled() or _existing_sidecar_alive():
+    # Disabled is the only dump-skipping gate; maybe_spawn() logs the
+    # skip reason (a disabled sidecar never reads the cache).
+    if _is_disabled():
         try:
             maybe_spawn()
         except Exception as e:
@@ -932,32 +959,35 @@ def _maybe_spawn_settings_sidecar() -> None:
             )
         return
 
-    try:
-        metadata = asyncio.run(_get_tool_metadata(_get_server()))
-        dumped = dump_tool_metadata_cache(metadata)
-        # Log a deliberate one-liner so users debugging an empty
-        # settings page can see whether the parent's dump succeeded
-        # by grepping the stdio process output (which Claude Desktop
-        # surfaces in its MCP server log panel).
-        logger.info(
-            "Tool metadata cache: %d tools dumped, write %s",
-            len(metadata),
-            "succeeded" if dumped else "FAILED",
-        )
-    except Exception as e:
-        # Cache dump is best-effort — the sidecar falls back to an empty
-        # tools list rather than blocking stdio startup. Include the
-        # exception class in the warning so ops can distinguish
+    def _dump_metadata_cache() -> None:
+        # One-off asyncio.run is safe here: this runs before the main
+        # stdio loop, so there's no nested-loop conflict with
+        # _run_entrypoint's own asyncio.run. Best-effort — the sidecar
+        # falls back to an empty tools list rather than blocking stdio
+        # startup. The exception class in the warning distinguishes
         # server-init failures (Pydantic ValidationError) from cache I/O
         # (OSError) from event-loop issues (RuntimeError).
-        logger.warning(
-            "Failed to dump tool metadata cache (%s)",
-            type(e).__name__,
-            exc_info=True,
-        )
+        try:
+            metadata = asyncio.run(_get_tool_metadata(_get_server()))
+            dumped = dump_tool_metadata_cache(metadata)
+            # Deliberate one-liner so users debugging an empty settings
+            # page can see whether the parent's dump succeeded by
+            # grepping the stdio process output (which Claude Desktop
+            # surfaces in its MCP server log panel).
+            logger.info(
+                "Tool metadata cache: %d tools dumped, write %s",
+                len(metadata),
+                "succeeded" if dumped else "FAILED",
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to dump tool metadata cache (%s)",
+                type(e).__name__,
+                exc_info=True,
+            )
 
     try:
-        maybe_spawn()
+        maybe_spawn(prepare=_dump_metadata_cache)
     except Exception as e:
         # Spawn failures already log inside maybe_spawn(); the bare
         # except here is a defense-in-depth guard for any unexpected
@@ -994,6 +1024,19 @@ def _get_http_runtime(default_port: int = 8086) -> tuple[str, int, str]:
     ``run_async``, any ``FASTMCP_HOST`` value in the environment is
     ignored — ``MCP_HOST`` is the only env var that affects bind host
     for ha-mcp's CLI entry points.
+
+    The ``0.0.0.0`` default is deliberate and documented: SECURITY.md
+    § "Local network is the trusted zone for standard mode" states that the
+    HTTP entrypoints bind to all interfaces so LAN peers can reach them, and
+    its Scope section excludes "LAN-peer access to standard-mode HTTP
+    endpoints".
+
+    The default ``/mcp`` path is *not* blessed the same way once the bind
+    leaves loopback. That combination is what ``_warn_if_default_path_exposed``
+    warns about, and SECURITY.md's Scope classes it under "a misconfigured
+    deployment" — meaning such reports are declined, not that the
+    configuration is endorsed. Operators on a non-loopback bind are still
+    expected to set a high-entropy ``MCP_SECRET_PATH``.
     """
 
     host = os.getenv("MCP_HOST", "0.0.0.0")
@@ -1010,7 +1053,9 @@ def _get_http_runtime(default_port: int = 8086) -> tuple[str, int, str]:
 # Default ``MCP_SECRET_PATH`` value, shared by ``_get_http_runtime`` (the
 # read-from-env fallback) and ``_warn_if_default_path_exposed`` (the
 # hardening-nudge predicate). Single source of truth so the two sites
-# can't drift.
+# can't drift. Safe on a loopback bind; on a non-loopback bind it is the
+# misconfiguration ``_warn_if_default_path_exposed`` flags, which SECURITY.md
+# declines to action without endorsing — see ``_get_http_runtime`` above.
 DEFAULT_MCP_PATH = "/mcp"
 
 # Hostname literals (not IP addresses) treated as loopback by

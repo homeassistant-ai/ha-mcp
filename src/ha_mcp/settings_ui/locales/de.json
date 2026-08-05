@@ -184,7 +184,7 @@
     "errors.stop_failed": "Stoppen fehlgeschlagen",
     "errors.restart_failed": "Neustart fehlgeschlagen",
     "errors.failed_detail": "Fehlgeschlagen: {detail}",
-    "errors.addon_not_back": "Add-on ist nicht wieder online gekommen. Lade manuell neu",
+    "errors.addon_not_back": "App (Add-on) ist nicht wieder online gegangen. Lade die Seite manuell neu.",
     "errors.unparseable_suffix": " (Antwort-Body nicht parsebar)",
     "common.operation_failed": "{operation} fehlgeschlagen: {detail}",
     "common.enabled": "aktiviert",
@@ -735,7 +735,7 @@
     },
     "ha_manage_hacs": {
       "title": "HACS verwalten",
-      "description": "Installiert, aktualisiert und fügt benutzerdefinierte HACS-Repositories hinzu."
+      "description": "Verwalte HACS (Home Assistant Community Store) — installiere/aktualisiere, entferne oder füge benutzerdefinierte Repositories hinzu."
     },
     "ha_manage_pipeline": {
       "title": "Assist-Pipeline verwalten",

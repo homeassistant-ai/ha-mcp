@@ -36,11 +36,11 @@ from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     SUPPORTED_HELPERS,
     create_flow_helper,
-    fetch_helper_flow_info,
     get_user_step_field_names,
     set_config_subentry,
     update_flow_helper,
 )
+from .config_entry_flow_walker import fetch_helper_flow_info
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -632,7 +632,7 @@ def get_simple_helper_schema(helper_type: str) -> list[_HelperFieldSpec] | None:
     Callers attach the result to validation-error context as ``data_schema``
     so the LLM sees field shape inline with a 4xx response, matching the
     auto-attach pattern already in use for flow helpers (see
-    ``fetch_helper_flow_info`` in ``config_entry_flow``).
+    ``fetch_helper_flow_info`` in ``config_entry_flow_walker``).
     Returns ``None`` for any helper_type not in ``SIMPLE_HELPER_SCHEMAS``,
     so callers can write a single uniform ``if schema is not None: …`` branch.
     """
@@ -670,8 +670,10 @@ def _simple_helper_error_context(
 _MENU_ROOTED_FLOW_HELPER_TYPES: frozenset[str] = frozenset({"template", "group"})
 
 # Keys callers may pass inside ``config`` to select a menu branch — mirrors
-# ``_MENU_SELECTION_KEYS`` in ``config_entry_flow.py`` (kept in parallel
-# rather than imported to avoid widening that module's surface).
+# ``_MENU_SELECTION_KEY_ORDER`` in ``config_entry_flow_menu.py`` (kept in parallel
+# rather than imported to avoid widening that module's surface). The ORDER is
+# load-bearing on both sides: it fixes which key wins when a config carries
+# more than one selection key.
 _MENU_CHOICE_CONFIG_KEYS: tuple[str, ...] = (
     "group_type",
     "next_step_id",
@@ -684,19 +686,24 @@ def _extract_menu_choice_from_config(
 ) -> str | None:
     """Best-effort menu-choice extraction for pre-flow error context.
 
-    Returns the value of the first ``_MENU_CHOICE_CONFIG_KEYS`` key found in
-    ``config_dict`` if it's a non-empty string, else ``None``. Mirrors
-    ``_handle_menu_step`` in ``config_entry_flow`` — without this,
-    ``_flow_helper_error_context`` falls back to ``menu_choice=None`` and
-    silently omits ``data_schema`` for menu-rooted types
-    (``template``/``group`` — the most common ones).
+    Walks ``_MENU_CHOICE_CONFIG_KEYS`` in order and returns the first usable
+    selection, stringified: a scalar value, or the first element of a list of
+    successive selections (flows that revisit menus, issue #2116). Empty and
+    missing values fall through to the next key; ``None`` when nothing
+    usable is supplied. Follows ``_handle_menu_step``'s key precedence —
+    without this, ``_flow_helper_error_context`` falls back to
+    ``menu_choice=None`` and silently omits ``data_schema`` for menu-rooted
+    types (``template``/``group`` — the most common ones).
     """
     if not config_dict:
         return None
     for key in _MENU_CHOICE_CONFIG_KEYS:
         value = config_dict.get(key)
-        if isinstance(value, str) and value:
-            return value
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if value is None or value == "":
+            continue
+        return str(value)
     return None
 
 
@@ -728,7 +735,7 @@ async def _flow_helper_error_context(
         )
     except Exception as e:
         # Mirror the breadcrumb in ``abort_config_flow``'s own swallow
-        # (config_entry_flow), so a fetch failure here doesn't
+        # (config_entry_flow_walker), so a fetch failure here doesn't
         # disappear silently — this PR raises the call rate by 5 sites
         # and the swallow needs an audit-trail entry.
         logger.debug(
@@ -4603,6 +4610,10 @@ class HelperConfigTools:
           menu-rooted helpers like `template`/`group` when no sub-type is
           chosen yet) so a follow-up call can self-correct without a
           separate schema-discovery round-trip.
+        - Flows that present more than one menu (e.g. an MQTT device
+          subentry reconfigure looping through its summary menu) take
+          `next_step_id` as a LIST of successive selections, consumed one
+          per menu encounter.
 
         EXAMPLES (menu-based types + tod, where first-call payload is non-obvious):
         - template sensor:

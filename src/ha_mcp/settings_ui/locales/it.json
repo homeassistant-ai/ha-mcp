@@ -184,7 +184,7 @@
     "errors.stop_failed": "Arresto non riuscito",
     "errors.restart_failed": "Riavvio non riuscito",
     "errors.failed_detail": "Non riuscito: {detail}",
-    "errors.addon_not_back": "L'app (componente aggiuntivo) non è tornata online. Ricarica manualmente",
+    "errors.addon_not_back": "L'App (add-on) non è tornata online. Ricarica la pagina manualmente.",
     "errors.unparseable_suffix": " (corpo della risposta non interpretabile)",
     "common.operation_failed": "{operation} non è riuscito: {detail}",
     "common.enabled": "attivato",
@@ -735,7 +735,7 @@
     },
     "ha_manage_hacs": {
       "title": "Gestisci HACS",
-      "description": "Gestisce HACS (Home Assistant Community Store): installa o aggiorna elementi e aggiunge repository personalizzati."
+      "description": "Gestisci HACS (Home Assistant Community Store) — installare/aggiornare, rimuovere o aggiungere repository personalizzati."
     },
     "ha_manage_pipeline": {
       "title": "Gestisci le pipeline di Assist",

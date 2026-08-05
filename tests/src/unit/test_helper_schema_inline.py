@@ -34,10 +34,8 @@ from unittest.mock import AsyncMock
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.config_entry_flow import (
-    FLOW_HELPER_TYPES,
-    fetch_helper_flow_info,
-)
+from ha_mcp.tools.config_entry_flow import FLOW_HELPER_TYPES
+from ha_mcp.tools.config_entry_flow_walker import fetch_helper_flow_info
 from ha_mcp.tools.tools_config_helpers import (
     SIMPLE_HELPER_SCHEMAS,
     SIMPLE_HELPER_TYPES,
@@ -769,8 +767,9 @@ class TestExtractMenuChoiceFromConfig:
             ({"group_type": "light"}, "light"),
             ({"next_step_id": "sensor"}, "sensor"),
             ({"menu_option": "binary_sensor"}, "binary_sensor"),
-            # Multiple keys: first found wins (mirrors _handle_menu_step's
-            # for-break loop).
+            # Multiple keys: first in _MENU_CHOICE_CONFIG_KEYS order wins —
+            # the same canonical order _handle_menu_step consumes by
+            # (_MENU_SELECTION_KEY_ORDER in config_entry_flow_menu.py).
             (
                 {"group_type": "light", "next_step_id": "sensor"},
                 "light",
@@ -779,9 +778,16 @@ class TestExtractMenuChoiceFromConfig:
             ({"name": "My Helper"}, None),
             ({}, None),
             (None, None),
-            # Non-string menu values are ignored — caller error, not a hint.
-            ({"group_type": 123}, None),
+            # Non-string scalars are stringified — _handle_menu_step consumes
+            # them via str(), so the error context must name the same branch
+            # the walker would take.
+            ({"group_type": 123}, "123"),
             ({"next_step_id": ""}, None),
+            # A list of successive selections names its first element
+            # (issue #2116); empty lists fall through like missing keys.
+            ({"next_step_id": ["main_params", "all_done"]}, "main_params"),
+            ({"group_type": [123]}, "123"),
+            ({"next_step_id": [], "menu_option": "sensor"}, "sensor"),
         ],
     )
     def test_extracts_first_present_menu_key(

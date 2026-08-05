@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections import Counter
 from pathlib import Path
@@ -304,6 +305,33 @@ def test_shipped_catalog_loads_and_is_registered(locale: str) -> None:
         f"{_catalog_file(locale)} meta.dir is {catalog['meta'].get('dir')!r}; "
         "the rendered <html dir> attribute only accepts 'ltr' or 'rtl'"
     )
+
+
+# Same gate as ``test_locale_parity.completeness`` (see the marker comment
+# there): filled tool sections are the post-merge locale-sync workflow's to
+# owe, not the PR's — a new language legitimately merges as a ``meta``-only
+# stub the daily sync then fills. ``test_locale_sync_gate_shape`` pins the
+# env-var wiring on both files.
+_completeness = pytest.mark.skipif(
+    not os.environ.get("LOCALE_COMPLETENESS_CHECKS"),
+    reason=(
+        "translated-catalog completeness is verified by the post-merge "
+        "locale-sync workflow — set LOCALE_COMPLETENESS_CHECKS=1 to run"
+    ),
+)
+
+
+@_completeness
+@pytest.mark.parametrize("locale", _shipped_locales())
+def test_shipped_catalog_translates_the_tools_tab(locale: str) -> None:
+    """Both tool sections must be filled once the sync has run.
+
+    Split from the structural check above so a ``meta``-only stub catalog
+    can merge and be filled post-merge; an empty section here after a clean
+    sync run means the fill never happened.
+    """
+    catalog = CATALOGS[locale]
+
     assert catalog["tool_groups"], (
         f"{_catalog_file(locale)} has an empty tool_groups — the tools tab "
         "would fall back to English group headings for this language"

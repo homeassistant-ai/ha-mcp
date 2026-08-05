@@ -648,7 +648,7 @@ async function _runRestartReloadCycle(previousInstanceId) {
     // never actually fired (silent supervisor failure → instance_id
     // never flipped) OR supervisor is genuinely slower than the cap.
     // Surface a clear next-step instead of silently doing nothing.
-    btn.textContent = t('errors.addon_not_back', {}, 'App (add-on) did not come back online. Reload manually');
+    btn.textContent = t('errors.addon_not_back', {}, 'App (add-on) did not come back online. Reload the page manually.');
     btn.disabled = false;
     restartInProgress = false;
   }
@@ -3534,7 +3534,7 @@ const ADVANCED_FIELD_META = {
   code_mode_max_invocations: { label: "Code-mode max invocations",    help: "API/tool-call cap per sandbox run. Restart required." },
   code_mode_saved_tools_path:{ label: "Saved-tools path",              help: "JSON file where ha_manage_custom_tool persists saved tools across restarts. Restart required." },
   extra_yaml_write_keys:     { label: "Extra YAML write keys",        help: "Comma-separated top-level keys ha_config_set_yaml may write in addition to the built-in ones, for YAML-first integrations on this install (e.g. alert2). Keys that redefine Home Assistant's own trust boundary can never be added and are ignored. Requires custom component 1.2.4 or newer." },
-  sidecar_pin_port:    { label: "Settings UI sidecar port",    help: "0 = a new free port each restart (default); set 1024–65535 to pin a fixed port so the settings URL stays stable across restarts. Falls back to a free port if the pinned one is busy. Restart required." },
+  sidecar_pin_port:    { label: "Settings UI sidecar port",    help: "0 picks a free port on first start and keeps it for later restarts; 1024–65535 pins a preferred port (falls back to a free one if taken). Restart required." },
   enable_dev_mode:     { label: "Developer mode",               help: "⚠ DANGER: registers hidden developer tools (ha_dev_manage_server, ha_dev_manage_settings) that let AI agents change server settings and replace the running server version (e.g. install a PR build). For development and testing only. Restart required." },
 };
 
@@ -4020,8 +4020,10 @@ loadFsCustomPaths();
 
   // #1574 review: localStorage is the synchronous store the anti-FOUC
   // script reads at paint time, but it is origin-scoped and the stdio
-  // sidecar binds a fresh random port (= fresh empty origin) per session.
-  // This hook therefore (a) mirrors every change to the server
+  // sidecar's port (= the origin) can still change: stable by default
+  // since #2131, yet fresh on first spawn, a lost ui.state, a pin
+  // change, or a taken remembered port. This hook therefore (a) mirrors
+  // every change to the server
   // (./api/settings/theme -> theme_prefs.json), which seeds the next
   // fresh origin via the server-prefs head script, and (b) surfaces a
   // blocked localStorage (private mode) once instead of silently losing

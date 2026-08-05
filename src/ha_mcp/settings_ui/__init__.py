@@ -566,6 +566,15 @@ def register_settings_routes(
     and serve the "Open Web UI" button. Stdio transports use a separate
     side-process sidecar instead — see :mod:`ha_mcp.stdio_settings_sidecar`.
 
+    The ``RequireAuthMiddleware`` bypass is the documented posture, not an
+    oversight: SECURITY.md § "OAuth Mode — Beta Warning" states that the
+    settings UI "is **not** gated by the OAuth token", and its Scope section
+    excludes "The web settings UI not being gated by the OAuth/OIDC token".
+    OAuth and OIDC modes compensate by passing a *dedicated* secret path here
+    rather than the client-known MCP path (GHSA-mx64-982r-65vg); standard mode
+    and the add-on pass the MCP secret path, which already gates the whole
+    tool surface.
+
     Args:
         mcp: The FastMCP instance to register routes on.
         server: The HomeAssistantSmartMCPServer wrapping ``mcp``.
@@ -626,7 +635,9 @@ def register_settings_routes(
         ("/api/settings/features", ["GET"], "get_feature_flags"),
         ("/api/settings/features", ["POST"], "save_feature_flags"),
         # Theme / accessibility prefs (#1574 review) — server-side copy so
-        # they survive the stdio sidecar's per-spawn origin change
+        # they survive a stdio sidecar origin change (stable by default
+        # since #2131, but fresh on first spawn / lost ui.state / pin
+        # change / taken remembered port)
         ("/api/settings/theme", ["GET"], "get_theme_prefs"),
         ("/api/settings/theme", ["POST"], "save_theme_prefs"),
         # Advanced settings endpoints

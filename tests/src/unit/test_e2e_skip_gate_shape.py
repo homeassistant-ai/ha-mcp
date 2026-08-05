@@ -15,9 +15,8 @@ copy-pasting an existing lane:
    `run != 'true'` both read the same as a deliberate docs-only `false`.
 
 So every gate must consult `needs.changes.result` and must require an explicit
-`false` before honoring a skip. These tests read the workflow YAML the way
-``test_triage_prompt_budget.py`` does; they pass on arrival and only fire when a
-new or edited lane drops a clause.
+`false` before honoring a skip. These tests read the workflow YAML directly;
+they pass on arrival and only fire when a new or edited lane drops a clause.
 """
 
 from __future__ import annotations

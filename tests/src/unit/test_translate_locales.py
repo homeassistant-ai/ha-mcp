@@ -12,6 +12,7 @@ real API is left to the live workflow run.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,6 +34,25 @@ from translate_locales import (  # noqa: E402
     _unflatten,
     _validate,
 )
+
+_SETTINGS_LOCALES = _REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
+# Catalogs that carry translated text. A new language may ship as a meta-only
+# stub for the pipeline to fill (AGENTS.md § Translations), and a stub has no
+# wording to sample yet — requiring samples of it would forbid the documented
+# way to add a language.
+_TRANSLATED_LOCALES = sorted(
+    path.stem
+    for path in _SETTINGS_LOCALES.glob("*.json")
+    if path.stem != "en" and json.loads(path.read_text("utf-8")).get("messages")
+)
+
+
+_SAMPLE_ENGLISH = {
+    "long": "Restart the server, then refresh the tool list in your AI client.",
+    "neutral": "Server Settings",
+    "short": "Your browser blocks storage.",
+    "middle": "Reload the page, then re-apply your changes.",
+}
 
 
 def _item(section: str = "messages", english: str = "Hello {name}") -> WorkItem:
@@ -98,6 +118,185 @@ class TestChunk:
 
     def test_empty_batch_yields_no_chunks(self) -> None:
         assert _chunk({}) == []
+
+
+class TestStyleSamples:
+    """The samples are the catalog's address register, and only the samples.
+
+    Nothing downstream can recover it: ``_validate`` checks placeholders and
+    markup, the parity suite checks keys and how much text is still English.
+    A sample pair whose English does not address the reader therefore leaves
+    the engine on its own default for the language — measured against the
+    shipped catalogs, that turns German formal in a catalog whose own strings
+    address the reader informally throughout.
+    """
+
+    def test_prefers_reader_addressing_sources_shortest_first(self) -> None:
+        translated = dict.fromkeys(_SAMPLE_ENGLISH, "…")
+        assert translate_locales._style_sample_keys(_SAMPLE_ENGLISH, translated) == [
+            "short",
+            "middle",
+            "long",
+        ]
+
+    def test_skips_keys_the_catalog_has_not_translated(self) -> None:
+        """``messages`` may omit keys — English is the per-key fallback — so an
+        untranslated key carries no register and must not be sampled."""
+        translated = {"long": "…", "neutral": "…"}
+        assert translate_locales._style_sample_keys(_SAMPLE_ENGLISH, translated) == [
+            "long"
+        ]
+
+    def test_no_addressing_source_yields_no_samples(self) -> None:
+        """Degenerate but defined: an English catalog that never addresses the
+        reader gives the prompt no style block rather than a neutral one."""
+        assert (
+            translate_locales._style_sample_keys({"a": "Server Settings"}, {"a": "…"})
+            == []
+        )
+
+    def test_keys_in_the_request_are_not_sampled(self) -> None:
+        """A key is in a request because its English moved, so its committed
+        translation renders the previous English. Shown as the sample for the
+        very string being translated, the model answers with that stale text —
+        measured against the live engine, byte-identical to the old wording."""
+        translated = dict.fromkeys(_SAMPLE_ENGLISH, "…")
+        assert translate_locales._style_sample_keys(
+            _SAMPLE_ENGLISH, translated, {"short"}
+        ) == ["middle", "long"]
+
+    def test_reflexive_second_person_counts_as_addressing(self) -> None:
+        """`yourself` / `yourselves` address the reader as much as `your`; no
+        English string uses them today, so this pins the intent rather than a
+        current behaviour."""
+        english = {"a": "Give yourself access.", "b": "Help yourselves."}
+        assert translate_locales._style_sample_keys(
+            english, dict.fromkeys(english, "…")
+        ) == ["b", "a"]
+
+    def test_a_meta_only_stub_samples_nothing(self) -> None:
+        """A new language starts as a stub the pipeline fills, so an empty
+        catalog must yield no samples rather than raise."""
+        assert translate_locales._style_sample_keys({"a": "Your setting"}, {}) == []
+
+    def test_the_translated_catalogs_are_discovered(self) -> None:
+        """The parametrised check below runs over a glob, and an empty glob
+        would collapse it to a silent skip rather than a failure."""
+        assert _TRANSLATED_LOCALES, "no translated catalogs found to check samples for"
+
+    @pytest.mark.parametrize("locale", _TRANSLATED_LOCALES)
+    def test_every_shipped_catalog_gets_reader_addressing_samples(
+        self, locale: str
+    ) -> None:
+        """The guarantee has to hold for what actually ships, not just for a
+        fixture: every shipped catalog must yield samples, and every one of
+        them must address the reader."""
+        english = json.loads((_SETTINGS_LOCALES / "en.json").read_text("utf-8"))[
+            "messages"
+        ]
+        translated = json.loads(
+            (_SETTINGS_LOCALES / f"{locale}.json").read_text("utf-8")
+        ).get("messages", {})
+        keys = translate_locales._style_sample_keys(english, translated)
+
+        assert keys, (
+            f"{locale}.json yields no style sample, so the engine gets no "
+            "signal about how this catalog addresses its reader"
+        )
+        assert all(
+            translate_locales._SECOND_PERSON_RE.search(english[key]) for key in keys
+        ), f"{locale}.json samples {keys} do not address the reader"
+
+
+class TestPromptRegisterRule:
+    """The rule points at the samples, so it carries nothing without them."""
+
+    @staticmethod
+    def _locales(
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        de: dict,
+        component_de: dict | None = None,
+    ) -> None:
+        locales = tmp_path / "locales"
+        locales.mkdir()
+        (locales / "en.json").write_text(
+            json.dumps(
+                {
+                    "meta": {"native_name": "English"},
+                    "messages": {"greeting": "Restart your client."},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (locales / "de.json").write_text(
+            json.dumps({"meta": {"native_name": "Deutsch"}, "messages": de}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(translate_locales, "LOCALES_DIR", locales)
+
+        component = tmp_path / "component"
+        component.mkdir()
+        (component / "en.json").write_text(
+            json.dumps({"step": {"title": "Check your token."}}), encoding="utf-8"
+        )
+        (component / "de.json").write_text(
+            json.dumps({"step": component_de or {}}), encoding="utf-8"
+        )
+        monkeypatch.setattr(translate_locales, "COMPONENT_DIR", component)
+
+    def test_rule_ships_with_the_samples(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._locales(tmp_path, monkeypatch, {"greeting": "Starte deinen Client neu."})
+        prompt = translate_locales._prompt(
+            "de", {"messages:other": "Save"}, "messages", set()
+        )
+        assert "Starte deinen Client neu." in prompt
+        assert "Address the reader the way the sample translations" in prompt
+
+    def test_stub_catalog_gets_neither(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._locales(tmp_path, monkeypatch, {})
+        prompt = translate_locales._prompt(
+            "de", {"messages:greeting": "Save"}, "messages", set()
+        )
+        assert "Match the tone and terminology" not in prompt
+        assert "Address the reader the way" not in prompt
+
+    def test_a_key_queued_for_a_later_chunk_is_not_sampled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Results are applied only after every chunk finishes, so a key another
+        chunk still owes carries the translation of the PREVIOUS English while
+        this chunk is prompted. Excluding only the current chunk's keys would
+        show that stale pair as the sample — the whole queue has to go."""
+        self._locales(tmp_path, monkeypatch, {"greeting": "Starte deinen Client neu."})
+        prompt = translate_locales._prompt(
+            "de", {"messages:other": "Save"}, "messages", {"greeting"}
+        )
+        assert "Starte deinen Client neu." not in prompt
+        assert "Match the tone and terminology" not in prompt
+
+    def test_component_work_samples_the_component_catalog(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The two authored surfaces need not share a register — French ships a
+        `vous`-only component catalog next to a settings catalog that mixes `tu`
+        and `vous` — so a component request must not be told to imitate the
+        settings catalog's register."""
+        self._locales(
+            tmp_path,
+            monkeypatch,
+            {"greeting": "Starte deinen Client neu."},
+            component_de={"title": "Prüfen Sie Ihr Token."},
+        )
+        prompt = translate_locales._prompt(
+            "de", {"component:other": "Save"}, "component", set()
+        )
+        assert "Prüfen Sie Ihr Token." in prompt
+        assert "Starte deinen Client neu." not in prompt
 
 
 class TestFlattenRoundTrip:
@@ -166,9 +365,136 @@ class TestPlanning:
         assert [(i.key, i.english) for i in plan.items] == [("Lights", "Lights")]
         assert plan.deletions == []
 
+    def test_run_wide_queue_reaches_every_chunk_and_the_retry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``_translate_locale`` is what computes the exclusion set and hands it
+        to each request; the per-``_prompt`` tests cannot see that. Two chunks
+        plus a forced retry, and no prompt may quote a key the run still owes."""
+        locales = tmp_path / "locales"
+        locales.mkdir()
+        # Each over half the character budget, so the two land in separate
+        # chunks — with both in one chunk the run-wide set and the chunk-local
+        # one are the same thing and the check below proves nothing.
+        big = "x" * (translate_locales._MAX_CHARS_PER_REQUEST // 2 + 100)
+        english = {
+            "first": f"Restart your client. {big}",
+            "second": f"Reload your page. {big}",
+            "sample": "Check your token.",
+        }
+        (locales / "en.json").write_text(
+            json.dumps({"meta": {"native_name": "English"}, "messages": english}),
+            encoding="utf-8",
+        )
+        (locales / "de.json").write_text(
+            json.dumps(
+                {
+                    "meta": {"native_name": "Deutsch"},
+                    "messages": {k: f"DE-{k} deinen" for k in english},
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(translate_locales, "LOCALES_DIR", locales)
+        monkeypatch.setattr(translate_locales.time, "sleep", lambda _s: None)
+
+        prompts: list[str] = []
+
+        chunk_prompts: list[str] = []
+
+        def fake_engine(prompt: str) -> dict[str, str]:
+            prompts.append(prompt)
+            if "previous attempt was rejected" not in prompt:
+                chunk_prompts.append(prompt)
+            # Empty answers fail validation, so every string also exercises the
+            # retry prompt in _accept_or_retry.
+            return dict.fromkeys(("messages:first", "messages:second"), "")
+
+        monkeypatch.setattr(translate_locales, "_call_gemini", fake_engine)
+
+        items = [
+            WorkItem("de", "messages", key, english[key]) for key in ("first", "second")
+        ]
+        translate_locales._translate_locale("de", items)
+
+        assert len(chunk_prompts) >= 2, (
+            f"expected the work to span two chunks, got {len(chunk_prompts)} "
+            "requests — the run-wide set is indistinguishable from the "
+            "chunk-local one inside a single chunk"
+        )
+        assert len(prompts) > len(chunk_prompts), "expected retry prompts too"
+        for prompt in prompts:
+            assert "DE-first" not in prompt
+            assert "DE-second" not in prompt
+        assert any("DE-sample" in prompt for prompt in prompts), (
+            "the untouched key should still be sampled — otherwise this test "
+            "would pass with sampling switched off entirely"
+        )
+
+    def test_engine_failures_count_across_a_locale_not_per_surface(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One failure ending the settings surface and one opening the component
+        surface are two consecutive failures against the same engine. A counter
+        living inside the per-surface call resets between them, so the run keeps
+        calling an engine that has already answered twice in a row."""
+        locales = tmp_path / "locales"
+        component = tmp_path / "component"
+        locales.mkdir()
+        component.mkdir()
+        (locales / "en.json").write_text(
+            json.dumps(
+                {"meta": {"native_name": "English"}, "messages": {"a": "Your page."}}
+            ),
+            encoding="utf-8",
+        )
+        (locales / "de.json").write_text(
+            json.dumps({"meta": {"native_name": "Deutsch"}, "messages": {"a": "…"}}),
+            encoding="utf-8",
+        )
+        (component / "en.json").write_text(json.dumps({"x": "Your token."}), "utf-8")
+        (component / "de.json").write_text(json.dumps({"x": "…"}), "utf-8")
+        monkeypatch.setattr(translate_locales, "LOCALES_DIR", locales)
+        monkeypatch.setattr(translate_locales, "COMPONENT_DIR", component)
+        monkeypatch.setattr(translate_locales.time, "sleep", lambda _s: None)
+
+        calls: list[str] = []
+
+        def dead_engine(prompt: str) -> dict[str, str]:
+            calls.append(prompt)
+            raise SystemExit("engine down")
+
+        monkeypatch.setattr(translate_locales, "_call_gemini", dead_engine)
+
+        _results, _failures, _failed, dead = translate_locales._translate_locale(
+            "de",
+            [
+                WorkItem("de", "messages", "a", "Your page."),
+                WorkItem("de", "component", "x", "Your token."),
+            ],
+        )
+
+        assert dead, "two failed chunks in a row must declare the engine dead"
+        assert len(calls) == 2, (
+            f"expected the run to stop after the second failure, saw {len(calls)} "
+            "engine calls"
+        )
+
+    # Same gate as ``test_locale_parity.completeness`` (see the marker
+    # comment there): this asserts the LIVE tree owes no translations, which
+    # any PR that changes an English string legitimately violates until the
+    # post-merge sync runs. ``test_locale_sync_gate_shape`` pins the wiring.
+    @pytest.mark.skipif(
+        not os.environ.get("LOCALE_COMPLETENESS_CHECKS"),
+        reason=(
+            "translated-catalog completeness is verified by the post-merge "
+            "locale-sync workflow — set LOCALE_COMPLETENESS_CHECKS=1 to run"
+        ),
+    )
     def test_clean_tree_plans_no_work(self) -> None:
-        """The no-op invariant the CI loop terminates on: after a translation
-        commit repins the baseline, the retriggered run must find nothing."""
+        """The sync's own no-op invariant: after a run repins the baseline,
+        a rerun must find nothing — verified in the workflow, where it runs
+        against the freshly translated tree."""
         module = translate_locales._load_test_module()
         plan = translate_locales.build_plan(module)
         assert plan.items == []

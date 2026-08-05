@@ -28,19 +28,19 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp==3.4.4",
+    "fastmcp==3.4.5",
     "httpx[socks]==0.28.1",
     "pydantic==2.13.4",
     "python-dotenv==1.2.2",
     "truststore==0.10.4",
-    "websockets==16.1.1",
+    "websockets==17.0",
     # Range (not a hard pin) so the resolver can satisfy Home Assistant's own
     # cryptography constraint when ha-mcp is installed into the HA venv for
     # in-process embedding (HA 2026.6 pins cryptography==48.0.0, 2026.7 pins
     # 48.0.1 — the floor must admit every supported core's pin; live-found on
     # the embedded e2e lane against the HA 2026.6.4 image).
     # cryptography is a transitive dependency only — never imported in src/.
-    "cryptography>=48.0.0,<50",
+    "cryptography>=48.0.0,<51",
     "pydantic-monty==0.0.18",
     "tzdata>=2024.1",
     "packaging>=24.0",

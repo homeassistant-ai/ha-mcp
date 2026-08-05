@@ -184,7 +184,7 @@
     "errors.stop_failed": "Fallo al detener",
     "errors.restart_failed": "Fallo al reiniciar",
     "errors.failed_detail": "Fallo: {detail}",
-    "errors.addon_not_back": "La app (complemento) no ha vuelto a estar en línea. Recarga manualmente",
+    "errors.addon_not_back": "La aplicación (complemento) no volvió a conectarse. Recarga la página manualmente.",
     "errors.unparseable_suffix": " (no se ha podido interpretar el cuerpo de la respuesta)",
     "common.operation_failed": "{operation} ha fallado: {detail}",
     "common.enabled": "activado",
@@ -735,7 +735,7 @@
     },
     "ha_manage_hacs": {
       "title": "Gestionar HACS",
-      "description": "Gestiona HACS: instala o actualiza elementos y añade repositorios personalizados."
+      "description": "Gestionar HACS (Home Assistant Community Store) — instalar/actualizar, eliminar o añadir repositorios personalizados."
     },
     "ha_manage_pipeline": {
       "title": "Gestionar canalización de Assist",

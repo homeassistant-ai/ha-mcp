@@ -923,9 +923,9 @@ class TestRestartAddonFlow:
             "probe must not reload when instance_id never flips — "
             "that would land the user back on the same broken instance"
         )
-        assert "did not come back online" in result.dom.lower(), (
-            f"expected manual-reload fallback message, dom={result.dom[:600]}"
-        )
+        assert (
+            "did not come back online. reload the page manually." in result.dom.lower()
+        ), f"expected manual-reload fallback message, dom={result.dom[:600]}"
 
 
 # ---------------------------------------------------------------------------
