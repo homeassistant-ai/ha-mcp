@@ -555,6 +555,53 @@ async def test_logs_error_log_with_level_filter(mcp_client):
 
 
 @pytest.mark.asyncio
+async def test_logs_error_log_structured_parses_real_log(mcp_client):
+    """structured=True must actually parse a REAL log, not just return a shape.
+
+    The unit fixtures imitate the plain ``home-assistant.log`` file, which only
+    container/pip installs read. This test runs the parser over whatever the
+    live instance actually serves, so a format the regex cannot match fails
+    loudly here instead of returning ``success: true, top_issues: []`` — a
+    false all-clear — on an instance whose log is full of errors.
+    """
+    logger.info("Testing error_log structured summary against a live log")
+
+    result = await mcp_client.call_tool(
+        "ha_get_logs",
+        {"source": "error_log", "structured": True},
+    )
+
+    raw_data = assert_mcp_success(result, "Structured error log")
+    data = get_logbook_data(raw_data)
+
+    assert data["success"] is True
+    assert data.get("source") == "error_log"
+    assert data.get("structured") is True
+    assert "top_issues" in data, "Structured mode must return top_issues"
+    assert "by_component" in data, "Structured mode must return by_component"
+    assert "log" not in data, "Structured mode replaces the raw text"
+
+    summary = data["summary"]
+    if summary["total_raw_lines"] == 0:
+        pytest.skip("Live instance served an empty error log — nothing to parse")
+
+    # The load-bearing assertion: lines arrived AND the parser understood them.
+    assert summary["parsed_entries"] > 0, (
+        "Parsed nothing from a non-empty live log "
+        f"({summary['unparseable_lines']} of {summary['total_raw_lines']} "
+        f"unparseable) — the log format drifted: {data.get('warnings')}"
+    )
+    # Bounded output is the whole premise of this mode.
+    assert len(data["top_issues"]) <= summary["showing_top_n"]
+
+    logger.info(
+        f"Parsed {summary['parsed_entries']} of {summary['total_raw_lines']} "
+        f"lines into {summary['unique_issues']} unique issues across "
+        f"{summary['components_affected']} components"
+    )
+
+
+@pytest.mark.asyncio
 async def test_logs_logbook_with_search(mcp_client):
     """Test logbook source with search keyword filtering."""
     logger.info("Testing logbook with search filter")

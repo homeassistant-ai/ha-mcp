@@ -7,12 +7,15 @@ Covers:
   warning when structured used with wrong source
 """
 
+import asyncio
+import inspect
 import textwrap
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import TypeAdapter
 
 from ha_mcp.tools.tools_utility import (
     _DEFAULT_TOP_N,
@@ -94,6 +97,24 @@ def _make_client(log_text: str = _SAMPLE_LOG) -> MagicMock:
     client = MagicMock()
     client.get_error_log = AsyncMock(return_value=log_text)
     return client
+
+
+def _get_tool_param_annotation(tool_name: str, param_name: str) -> Any:
+    """Annotation of ``param_name`` on the REGISTERED tool, via real FastMCP.
+
+    Mirrors ``test_json_string_param_coercion.py``: FastMCP builds its argument
+    TypeAdapter from the registered fn's signature, so the annotation read here
+    is exactly what validates inbound MCP traffic.
+    """
+    from fastmcp import FastMCP
+
+    async def _inner() -> Any:
+        mcp = FastMCP("test")
+        register_utility_tools(mcp, _make_client())
+        tool = await mcp.get_tool(tool_name)
+        return inspect.signature(tool.fn).parameters[param_name].annotation
+
+    return asyncio.run(_inner())
 
 
 def _register_and_collect(client: Any) -> dict[str, Any]:
@@ -335,12 +356,29 @@ class TestHaGetLogsStructured:
         result = await tools["ha_get_logs"](source="error_log")
         assert "log" in result
 
+    @pytest.mark.parametrize(
+        ("raw_value", "expected"), [("true", True), ("false", False)]
+    )
+    def test_structured_string_is_coerced_by_the_schema(self, raw_value, expected):
+        """AI tools often pass booleans as strings; the schema must coerce them.
+
+        Asserted at the annotation level rather than by calling the collected
+        function: ``_register_and_collect`` stores the undecorated fn, so no
+        pydantic validation runs there and *any* non-empty string is truthy —
+        ``structured="false"`` would have passed a `structured is True`
+        assertion while meaning the opposite. FastMCP builds its argument
+        TypeAdapter from this same signature, so this is what the transport
+        enforces.
+        """
+        annotation = _get_tool_param_annotation("ha_get_logs", "structured")
+        assert TypeAdapter(annotation).validate_python(raw_value) is expected
+
     @pytest.mark.asyncio
-    async def test_structured_string_true_is_accepted(self):
-        """AI tools often pass booleans as strings."""
+    async def test_structured_bool_reaches_the_parser(self):
+        """The coerced True actually selects the structured branch."""
         client = _make_client(_SAMPLE_LOG)
         tools = _register_and_collect(client)
-        result = await tools["ha_get_logs"](source="error_log", structured="true")
+        result = await tools["ha_get_logs"](source="error_log", structured=True)
         assert result["structured"] is True
 
     @pytest.mark.asyncio
@@ -429,12 +467,15 @@ class TestSupervisorInstallRegressions:
         result = _parse_error_log_structured(_UNPARSEABLE_LOG)
         assert result["summary"]["parsed_entries"] == 0
         assert result["summary"]["unparseable_lines"] > 0
-        assert "warning" in result
-        assert "NOT evidence" in result["warning"]
+        # Top-level `warnings: list[str]` — the repo's single warning channel.
+        # A singular `warning` string put one payload on two channels.
+        assert isinstance(result["warnings"], list)
+        assert "NOT evidence" in result["warnings"][0]
+        assert "warning" not in result
 
     def test_empty_log_does_not_warn(self):
         # No input is genuinely nothing to report — distinct from format drift.
-        assert "warning" not in _parse_error_log_structured("")
+        assert "warnings" not in _parse_error_log_structured("")
 
 
 class TestCountSemantics:
@@ -464,13 +505,13 @@ class TestCountSemantics:
         result = _parse_error_log_structured("\n".join(lines), level="ERROR")
         assert result["summary"]["unparseable_lines"] == 0
         assert result["summary"]["parsed_entries"] == 1
-        assert "warning" not in result
+        assert "warnings" not in result
 
     def test_all_filtered_out_warns_about_filters_not_parsing(self):
         result = _parse_error_log_structured(_SAMPLE_LOG, search="nothing-matches-this")
         assert result["summary"]["parsed_entries"] == 0
         assert result["summary"]["unparseable_lines"] == 0
-        assert "reflects the filters" in result["warning"]
+        assert "reflects the filters" in result["warnings"][0]
 
 
 class TestBoundedOutput:
@@ -499,6 +540,38 @@ class TestBoundedOutput:
         bucket = result["by_component"]["one.sub.mod"]
         assert bucket["issue_count"] == 10
         assert bucket["total_occurrences"] == 10
+
+
+class TestWarningsAreMergedNotClobbered:
+    """Three layers can warn on one structured call; none may overwrite another.
+
+    ``_parse_error_log_structured`` (format drift), ``_build_structured_error_log``
+    (ignored limit/order) and ``get_logs`` (wrong-source params) each append to
+    the same top-level list. An overwrite here silently drops the "this summary
+    is NOT an all-clear" notice, which is the one warning that must never be lost.
+    """
+
+    @pytest.mark.asyncio
+    async def test_drift_warning_survives_ignored_param_warning(self):
+        client = _make_client(_UNPARSEABLE_LOG)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](
+            source="error_log", structured=True, limit=5, order="oldest"
+        )
+        joined = " ".join(result["warnings"])
+        assert "NOT evidence" in joined
+        assert "do not apply when structured=True" in joined
+
+    @pytest.mark.asyncio
+    async def test_wrong_source_param_warning_does_not_clobber_drift(self):
+        client = _make_client(_UNPARSEABLE_LOG)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](
+            source="error_log", structured=True, entity_id="light.kitchen"
+        )
+        joined = " ".join(result["warnings"])
+        assert "only apply to source='logbook'" in joined
+        assert "NOT evidence" in joined
 
 
 class TestDedupKey:

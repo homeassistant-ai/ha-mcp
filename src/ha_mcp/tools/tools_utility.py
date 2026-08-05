@@ -270,19 +270,21 @@ def _parse_error_log_structured(
     # Fail loudly on format drift. Silence here is what turned an unreadable log
     # into a confident "no errors found"; if nothing parsed but there WAS input,
     # say so rather than returning an empty summary that reads as all-clear.
+    # Degraded-operation notices go in the top-level `warnings` list — the one
+    # channel this repo's tools use — never a singular `warning` string.
     if total_raw_lines > 0 and not parsed:
         if unparseable_lines > 0:
-            result["warning"] = (
+            result["warnings"] = [
                 f"No log lines could be parsed ({unparseable_lines} of "
                 f"{total_raw_lines} did not match the expected Home Assistant log "
                 "format). This summary is NOT evidence that the log is clean - "
                 "re-run with structured=False to read the raw text."
-            )
+            ]
         else:
-            result["warning"] = (
+            result["warnings"] = [
                 "No entries matched the requested filters. The log parsed "
                 "successfully, so this reflects the filters, not a parse failure."
-            )
+            ]
     return result
 
 
@@ -513,7 +515,10 @@ class UtilityTools:
             top_n=top_n,
         )
         if warnings:
-            result["warnings"] = warnings
+            # Prepend, don't overwrite: the structured error_log path emits its
+            # own warnings (format drift, ignored limit/order) and clobbering
+            # them would drop the "this is NOT an all-clear" notice.
+            result["warnings"] = warnings + result.get("warnings", [])
         return result
 
     @staticmethod
@@ -872,11 +877,13 @@ class UtilityTools:
             if given
         ]
         if ignored:
-            result["warnings"] = [
+            # Append: the parser may already have warned about format drift, and
+            # overwriting that would drop the "this is NOT an all-clear" notice.
+            result.setdefault("warnings", []).append(
                 f"Parameter(s) {', '.join(ignored)} do not apply when "
                 "structured=True; the summary ranks the whole log by "
                 "occurrence count. Use top_n to bound the output."
-            ]
+            )
         return result
 
     async def _get_error_log(
@@ -1549,12 +1556,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service); ignored for source='logger' and for error_log with structured=True. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window.
         **Logbook params:** hours_back, entity_id, end_time, offset, compact (default True — strips attribute dicts to save context)
         **System/error_log params:** level (ERROR, WARNING, INFO, DEBUG, CRITICAL)
-        **error_log params:** structured (default False — when True, returns a
-            deduplicated, component-grouped summary ranked by occurrence count
-            instead of raw text), top_n (max distinct issues, default 20, max 500).
-            In structured mode `search` matches the message and logger name only,
-            whereas on the raw path it matches the whole line; `limit`/`order`
-            do not apply.
+        **error_log params:** structured, top_n. In structured mode `search`
+            matches the message and logger name only, whereas on the raw path it
+            matches the whole line; `limit`/`order` do not apply.
 
         **Prefer source='system' for triage.** It returns HA's own deduplicated
         system_log entries with counts, first_occurred and full tracebacks, which

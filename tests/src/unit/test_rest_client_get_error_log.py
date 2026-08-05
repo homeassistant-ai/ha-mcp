@@ -25,6 +25,7 @@ import httpx
 import pytest
 
 from ha_mcp.client.rest_client import (
+    _ERROR_LOG_LINES,
     HomeAssistantAPIError,
     HomeAssistantClient,
     HomeAssistantConnectionError,
@@ -147,7 +148,13 @@ async def test_is_supervised_handles_unexpected_response_shape(client):
 
 @pytest.mark.asyncio
 async def test_get_error_log_addon_branch(client):
-    """Addon (`is_running_in_addon()` True) → `_supervisor_logs_get('core')`."""
+    """Addon (`is_running_in_addon()` True) → `_supervisor_logs_get('core')`.
+
+    The explicit ``lines=`` is load-bearing: without it Supervisor applies its
+    100-line default, so the add-on saw a ~100-line log where the in-process
+    server saw ~18k on the same instance. Pinned to the same window the
+    supervised-external branch requests below.
+    """
     client._supervisor_logs_get = AsyncMock(return_value="addon-log-content")
     client._request = AsyncMock()
     client._raw_request = AsyncMock()
@@ -156,7 +163,8 @@ async def test_get_error_log_addon_branch(client):
         result = await client.get_error_log()
 
     assert result == "addon-log-content"
-    client._supervisor_logs_get.assert_awaited_once_with("core")
+    client._supervisor_logs_get.assert_awaited_once_with("core", lines=_ERROR_LOG_LINES)
+    assert _ERROR_LOG_LINES > 100, "must exceed Supervisor's default window"
     # Must NOT have touched the external-branch paths.
     client._request.assert_not_called()
     client._raw_request.assert_not_called()
