@@ -122,11 +122,16 @@ class TestNoSharedWebsocketsImports:
     def test_pyproject_declares_no_websockets_dependency(self):
         import tomllib
 
+        from packaging.requirements import Requirement
+        from packaging.utils import canonicalize_name
+
         pyproject = tomllib.loads(
             (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         )
         for dep in pyproject["project"]["dependencies"]:
-            assert not re.match(r"^websockets\b", dep.strip()), (
+            # Canonical-name comparison: PEP 503 names are case-insensitive
+            # and may carry extras ("WebSockets[x]>=…" is the same package).
+            assert canonicalize_name(Requirement(dep).name) != "websockets", (
                 f"pyproject declares {dep!r} — the dependency line makes "
                 "ha-mcp a writer to the contested shared copy again; the "
                 "vendored copy replaces it"

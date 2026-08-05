@@ -74,7 +74,14 @@ def main() -> int:
             # implementation when the extension is absent.
             if relative.endswith((".c", ".so", ".pyd")):
                 continue
-            destination = _TARGET / relative
+            destination = (_TARGET / relative).resolve()
+            # Containment check (CWE-22): member names come from the
+            # downloaded archive, so a crafted ``../`` inside the matched
+            # prefix must never write outside the vendor dir.
+            if not destination.is_relative_to(_TARGET.resolve()):
+                raise SystemExit(
+                    f"refusing archive member escaping the vendor dir: {member.name}"
+                )
             destination.parent.mkdir(parents=True, exist_ok=True)
             extract = tar.extractfile(member)
             assert extract is not None
