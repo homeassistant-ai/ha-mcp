@@ -5,9 +5,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-import websockets.exceptions
 from fastmcp.exceptions import ToolError
 
+# The vendored copy — the same classes tools_addons raises/catches; the
+# shared site-packages websockets is a DIFFERENT set of classes that
+# except/isinstance would silently not match.
+import ha_mcp._vendor.websockets.exceptions  # noqa: F401  (binds .exceptions)
+from ha_mcp._vendor import websockets
 from ha_mcp.tools.tools_addons import (
     _apply_response_transform,
     _call_addon_api,
@@ -1309,8 +1313,8 @@ class TestCallAddonWsErrors:
         self, mock_ingress_session, status, must_mention
     ):
         """401/403 from the WS handshake should suggest token/scope, not path."""
-        from websockets.datastructures import Headers
-        from websockets.http11 import Response
+        from ha_mcp._vendor.websockets.datastructures import Headers
+        from ha_mcp._vendor.websockets.http11 import Response
 
         client = _make_mock_client()
 
@@ -1345,8 +1349,8 @@ class TestCallAddonWsErrors:
     @pytest.mark.asyncio
     async def test_ws_handshake_404_keeps_path_hint(self, mock_ingress_session):
         """404 from the WS handshake should still surface the path-shape hint."""
-        from websockets.datastructures import Headers
-        from websockets.http11 import Response
+        from ha_mcp._vendor.websockets.datastructures import Headers
+        from ha_mcp._vendor.websockets.http11 import Response
 
         client = _make_mock_client()
 

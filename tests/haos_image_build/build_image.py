@@ -61,6 +61,11 @@ ONBOARDING_NAME = "HA-MCP CI"
 # discover), and CI jobs run single-threaded so collision risk is low.
 # Configurable via env var for the rare parallel-build scenario.
 HA_HOST_PORT = int(os.environ.get("HAOS_BUILD_HA_PORT", "18123"))
+# Forward of guest port 80: HA 2026.8 changed the Supervisor-managed
+# DEFAULT HTTP port from 8123 to 80 (http.config.default_server_port),
+# so a FRESH boot - before bake_test_state seeds the configuration.yaml
+# that pins server_port: 8123 - answers on 80. The bake probes both.
+HA_ALT_HOST_PORT = int(os.environ.get("HAOS_BUILD_HA_ALT_PORT", "18124"))
 SSH_HOST_PORT = int(os.environ.get("HAOS_BUILD_SSH_PORT", "12222"))
 
 # OVMF firmware path varies by distribution. Default matches the
@@ -340,6 +345,39 @@ def _wait_http_ok(url: str, timeout: float = 300.0) -> None:
     )
 
 
+def _discover_ha_base_url(timeout: float = 600.0) -> str:
+    """Return the base URL of whichever forwarded port HA answers on.
+
+    HA 2026.8 changed the Supervisor-managed default HTTP port from 8123 to
+    80 ("Supervisor fronts Core on the standard HTTP port"), so a FRESH
+    boot — before the seeded configuration.yaml pinning server_port: 8123
+    exists — serves guest port 80, while older cores serve 8123. Probe both
+    forwards and lock onto the responder; every later phase of the bake
+    talks to that base URL.
+    """
+    deadline = time.monotonic() + timeout
+    candidates = (
+        f"http://127.0.0.1:{HA_HOST_PORT}",
+        f"http://127.0.0.1:{HA_ALT_HOST_PORT}",
+    )
+    last_errors: dict[str, str] = {}
+    while time.monotonic() < deadline:
+        for base in candidates:
+            try:
+                with urllib.request.urlopen(
+                    f"{base}/manifest.json", timeout=5.0
+                ) as resp:
+                    if resp.status == 200:
+                        LOG.info("HA is answering on %s", base)
+                        return base
+            except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
+                last_errors[base] = repr(e)
+        time.sleep(3.0)
+    raise TimeoutError(
+        f"HA did not answer on any forwarded port within {timeout}s: {last_errors}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Image fetch + QEMU lifecycle
 # ---------------------------------------------------------------------------
@@ -382,6 +420,7 @@ def start_qemu(qcow2: Path, work_dir: Path) -> subprocess.Popen[bytes]:
         f"if=virtio,file={qcow2},format=qcow2",
         "-netdev",
         f"user,id=net0,hostfwd=tcp:127.0.0.1:{HA_HOST_PORT}-:8123,"
+        f"hostfwd=tcp:127.0.0.1:{HA_ALT_HOST_PORT}-:80,"
         f"hostfwd=tcp:127.0.0.1:{SSH_HOST_PORT}-:22",
         "-device",
         "virtio-net-pci,netdev=net0",
@@ -1987,10 +2026,9 @@ def build(work_dir: Path, output: Path) -> None:
     # heavy Chromium Puppet add-on.
     stage_screenshot_engine_source(qcow2)
     qemu = start_qemu(qcow2, work_dir)
-    base_url = f"http://127.0.0.1:{HA_HOST_PORT}"
     try:
         _wait_port(HA_HOST_PORT, timeout=180)
-        _wait_http_ok(f"{base_url}/manifest.json", timeout=600)
+        base_url = _discover_ha_base_url(timeout=600)
         token = onboard(base_url)
         _check_core_auth(base_url, token)
         with HAWebSocket(base_url, token) as ws:

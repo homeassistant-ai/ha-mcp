@@ -20,6 +20,13 @@ scene: !include scenes.yaml
 
 # HTTP configuration for proxy support
 http:
+  # Explicit pin: HA 2026.8 changed the Supervisor-managed DEFAULT port
+  # from 8123 to 80 (http.config.default_server_port — "Supervisor fronts
+  # Core on the standard HTTP port"), which broke every HAOS lane's
+  # port-8123 contract on fresh boots. Pinning it here keeps the whole
+  # suite (container AND baked-HAOS, whose bake_test_state seeds this
+  # file) on 8123 regardless of core version.
+  server_port: 8123
   use_x_forwarded_for: true
   trusted_proxies:
     - 127.0.0.0/8

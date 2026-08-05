@@ -168,7 +168,14 @@ def main(argv: list[str] | None = None) -> int:
 
     constraints_text: str | None
     if args.constraints_file is not None:
-        constraints_text = args.constraints_file.read_text(encoding="utf-8")
+        try:
+            constraints_text = args.constraints_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as err:
+            print(
+                f"ERROR: could not read {args.constraints_file}: {err}",
+                file=sys.stderr,
+            )
+            return 2
         origin = str(args.constraints_file)
     else:
         constraints_text = _fetch_constraints(args.ha_version)

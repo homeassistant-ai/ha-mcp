@@ -16,7 +16,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from websockets.exceptions import ConnectionClosedError
+from ha_mcp._vendor.websockets.exceptions import ConnectionClosedError
 
 from ha_mcp.client.rest_client import (
     HomeAssistantClient,

@@ -104,8 +104,9 @@ def _fetch_requirements_all(ha_version: str) -> set[str]:
             return _parse_requirement_names(response.text)
         except requests.exceptions.RequestException as err:
             last_error = err
-            time.sleep(5 * (attempt + 1))
-    pytest.fail(
+            if attempt < 2:  # no pointless backoff after the final attempt
+                time.sleep(5 * (attempt + 1))
+    raise AssertionError(
         f"could not fetch {url} to build the governed-package set "
         f"(last error: {last_error}); the no-stomp guard cannot run "
         "without it"
