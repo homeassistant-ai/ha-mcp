@@ -212,6 +212,31 @@ class TestDevManageSettings:
             "dev_tools_security_policy_access" in extract_error_message(result).lower()
         )
 
+    async def test_set_policy_allowed_after_override_file_grant(
+        self, mcp_client_with_dev_mode, dev_mode_enabled
+    ):
+        """Allow path through the real registered tool: granting access by
+        writing the override file (what the web UI's POST does, possibly
+        from a sidecar process) takes effect on the next call — no
+        restart, no settings-singleton reload."""
+        flags_file = dev_mode_enabled / "feature_flags.json"
+        existing = json.loads(flags_file.read_text()) if flags_file.exists() else {}
+        try:
+            flags_file.write_text(
+                json.dumps({**existing, "dev_tools_security_policy_access": True})
+            )
+            result = await safe_call_tool(
+                mcp_client_with_dev_mode,
+                "ha_dev_manage_settings",
+                {"action": "set_policy", "policy": {"rules": [], "version": 0}},
+            )
+            assert result.get("success") is True, extract_error_message(result)
+        finally:
+            if existing:
+                flags_file.write_text(json.dumps(existing))
+            else:
+                flags_file.unlink(missing_ok=True)
+
 
 class TestDevManageServer:
     async def test_info_reports_deployment(self, mcp_client_with_dev_mode):

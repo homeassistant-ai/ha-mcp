@@ -49,7 +49,7 @@ shared libraries already loaded by the HA process are not reloaded.
 | `reset` | Removes one setting's override-file entry, returning it to its default. Refused for env-pinned and add-on-managed settings, like `set`. |
 | `list_tools` | Returns the Tools tab payload: every tool with its state (enabled / disabled / pinned), effective LLM-API exposure, per-tool security gate, and the env-pinned / mandatory / best-practice locks that make a row read-only. |
 | `set_tool` | Changes one tool's `state`, `llm_api` exposure, and/or its security `gate` (`gated=`). All requested changes are validated before anything is written. `tool='*'` is refused — author wildcard rules through `set_policy`. `gated=` requires [security policy access](#security-policy-access). |
-| `get_policy` | Returns the full tool-security policy (`wait_seconds`, `approval_ttl_minutes`, `rules`, `version`) plus whether the policy engine is enabled and live. |
+| `get_policy` | Returns the full tool-security policy (`wait_seconds`, `approval_ttl_minutes`, `rules`, `version`, `schema_version`) plus whether the policy engine is enabled and live. |
 | `set_policy` | Writes the full policy, schema-validated and guarded by the `version` from your last `get_policy` (optimistic concurrency). Requires [security policy access](#security-policy-access). |
 | `get_backup_config` | Returns the auto-backup config fields (the Backups tab's settings), with each value's origin. |
 | `set_backup_config` | Changes auto-backup settings, routed through the Supervisor in add-on mode and the override file elsewhere. |
@@ -79,17 +79,24 @@ While it is off, these are refused with `AUTH_INSUFFICIENT_PERMISSIONS`:
   before the state change is written)
 - `ha_dev_manage_server` `approve` and `deny`
 - `ha_dev_manage_settings` `set` / `reset` of `enable_tool_security_policies`
-  — turning the engine off would bypass every gate at once
+  — turning the engine off would bypass every gate at once on the next
+  restart (and the dev tools can restart the server)
 
 Reads stay available either way: `get_policy`, `list_tools`, `list_pending`,
 and the `list` settings matrix are never gated. The matrix marks the guarded
 rows honestly: `enable_tool_security_policies` reports `editable: false` with
 `locked_reason: policy_access_required` while access is off, and
-`dev_tools_security_policy_access` always reports `editable: false` with
-`locked_reason: web_ui_or_env_only`.
+`dev_tools_security_policy_access` reports `editable: false` with
+`locked_reason: web_ui_or_env_only`. An env-pinned row keeps its plain env
+story instead — the pin is the lock an operator must lift first.
 
-The toggle applies **live** — no restart needed — and the dev tools can never
-change it themselves: `set` and `reset` of
-`dev_tools_security_policy_access` are refused even while access is on, so an
-agent can neither grant itself policy access nor revoke it. Flip it in the web
-settings UI or via the env var.
+The toggle applies **live** — no restart needed — and the dev tools' settings
+surfaces never write it: `set` and `reset` of
+`dev_tools_security_policy_access` are refused even while access is on. Flip
+it in the web settings UI or via the env var.
+
+This is a leash on the dev tools' settings surfaces, **not a sandbox**. Dev
+mode's `update_source` / `restart` can still replace the running server
+build, and in add-on deployments `ha_manage_addon` can reach the add-on's own
+options and ingress. Where that boundary matters, gate those tools with
+policy rules — or keep dev mode off; it remains a trusted-operator feature.

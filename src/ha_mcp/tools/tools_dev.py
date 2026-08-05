@@ -132,26 +132,36 @@ def _security_policy_access_enabled() -> bool:
     process, so its POST resets only the sidecar's own cached settings —
     this process would keep serving the stale value until restart. Reading
     the env var, then the override file, fresh per call keeps the toggle
-    live in every deployment mode, with the same precedence
-    ``get_global_settings`` applies (env wins over file over default).
-    The string set mirrors pydantic's truthy strings so an env value like
-    ``1`` or ``yes`` cannot enable the field on the Settings object while
-    this guard still reads it as off.
+    live in every deployment mode, in the same env-over-file ORDER the
+    settings loader applies. Coercion is per source: an env string is
+    parsed with pydantic's truthy set (matching what ``Settings`` would
+    have read from the same var), and a file value goes through the
+    loader's own ``_coerce_advanced_override_value`` — so the guard can
+    never disagree with what Settings and the web UI checkbox read from
+    the same file (a hand-edited ``"true"`` string, which the loader
+    rejects and renders as OFF, must fail closed here too). The read is a
+    tiny synchronous stat/parse; guard call sites take it inline, and the
+    ``_settings_rows`` caller already runs on a worker thread.
     """
     import os
 
-    from ..config import _read_feature_flag_override_file
+    from ..config import (
+        _coerce_advanced_override_value,
+        _read_feature_flag_override_file,
+    )
 
-    raw: Any = os.environ.get("HAMCP_DEV_SECURITY_POLICY_ACCESS")
+    env_raw = os.environ.get("HAMCP_DEV_SECURITY_POLICY_ACCESS")
+    if env_raw is not None:
+        return env_raw.strip().lower() in ("1", "true", "t", "yes", "y", "on")
+    # The override file is keyed by FIELD name (see
+    # _apply_one_advanced_override), not env-var name.
+    raw = _read_feature_flag_override_file().get("dev_tools_security_policy_access")
     if raw is None:
-        # The override file is keyed by FIELD name (see
-        # _apply_one_advanced_override), not env-var name.
-        raw = _read_feature_flag_override_file().get("dev_tools_security_policy_access")
-    if isinstance(raw, bool):
-        return raw
-    if isinstance(raw, str):
-        return raw.strip().lower() in ("1", "true", "t", "yes", "y", "on")
-    return False
+        return False
+    ok, coerced = _coerce_advanced_override_value(
+        "dev_tools_security_policy_access", bool, raw
+    )
+    return bool(coerced) if ok else False
 
 
 def _apply_policy_guard_row_locks(fname: str, row: dict[str, Any]) -> None:
@@ -161,16 +171,21 @@ def _apply_policy_guard_row_locks(fname: str, row: dict[str, Any]) -> None:
     see ``editable: true`` on rows whose set/reset the guards refuse:
     ``enable_tool_security_policies`` while access is off, and
     ``dev_tools_security_policy_access`` always (web UI / env var only).
-    The toggle's displayed value is also re-read fresh so a sidecar-process
-    edit shows here without a restart, matching what the guard enforces.
+    A row that is ALREADY non-editable (env-pinned) keeps its plain env
+    story: the pin refuses the write before these guards would, and
+    stamping a policy reason there would misdirect the fix toward the
+    wrong lock. The toggle's displayed value is also re-read fresh so a
+    sidecar-process edit shows here without a restart, matching what the
+    guard enforces.
     """
     if fname == "enable_tool_security_policies":
-        if not _security_policy_access_enabled():
+        if row["editable"] and not _security_policy_access_enabled():
             row["editable"] = False
             row["locked_reason"] = "policy_access_required"
     elif fname == "dev_tools_security_policy_access":
-        row["editable"] = False
-        row["locked_reason"] = "web_ui_or_env_only"
+        if row["editable"]:
+            row["editable"] = False
+            row["locked_reason"] = "web_ui_or_env_only"
         row["value"] = _security_policy_access_enabled()
 
 
@@ -808,7 +823,8 @@ class DevTools:
                 default=None,
                 description=(
                     "set_policy: the full policy object "
-                    "{wait_seconds, approval_ttl_minutes, rules, version}"
+                    "{wait_seconds, approval_ttl_minutes, rules, version, "
+                    "schema_version}"
                 ),
             ),
         ] = None,
@@ -856,7 +872,9 @@ class DevTools:
         (set_policy, set_tool with gated=, and set/reset of
         enable_tool_security_policies) additionally require the
         'dev_tools_security_policy_access' setting, which is off by
-        default; reads are always available.
+        default; reads are always available. That setting itself is never
+        writable by these tools — change it in the web settings UI or via
+        HAMCP_DEV_SECURITY_POLICY_ACCESS.
 
         EXAMPLES:
         ha_dev_manage_settings("list_tools")
@@ -2454,9 +2472,12 @@ def register_dev_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         logger.debug(f"Dev tools disabled (set {FEATURE_FLAG}=true to enable)")
         return
 
+    access = "on" if _security_policy_access_enabled() else "off"
     logger.warning(
-        "Developer mode is ON: ha_dev_manage_server / ha_dev_manage_settings "
-        "are registered. These tools can change server settings, tool "
-        "visibility, security policies, and replace the running server version."
+        f"Developer mode is ON: ha_dev_manage_server / ha_dev_manage_settings "
+        f"are registered. These tools can change server settings, tool "
+        f"visibility, and replace the running server version. Rewriting tool "
+        f"security policies and deciding approvals additionally require "
+        f"dev_tools_security_policy_access (currently {access})."
     )
     register_tool_methods(mcp, DevTools(client, server=kwargs.get("server")))

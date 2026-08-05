@@ -314,9 +314,13 @@ class Settings(BaseSettings):
     # settings UI runs in a detached sidecar process whose POST cannot
     # reset this process' settings singleton. Editable
     # from the web settings UI (Developer section) or the env var ONLY —
-    # the dev tools can never change this field itself, in either
-    # direction, and it is absent from the add-on config schemas like
-    # enable_dev_mode.
+    # the dev tools' own settings surfaces refuse to write this field, in
+    # either direction, and it is absent from the add-on config schemas
+    # like enable_dev_mode. A leash on those surfaces, NOT a sandbox: dev
+    # mode's update_source/restart can still replace the running server
+    # build, and in add-on mode ha_manage_addon can reach the add-on's
+    # own options and ingress — gate those tools with policy rules (or
+    # keep dev mode off) where that boundary matters.
     dev_tools_security_policy_access: bool = Field(
         False, alias="HAMCP_DEV_SECURITY_POLICY_ACCESS"
     )

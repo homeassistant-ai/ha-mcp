@@ -1563,8 +1563,14 @@ class TestSecurityPolicyAccessGuard:
         assert toggle["locked_reason"] == "web_ui_or_env_only"
         assert toggle["value"] is False
 
-    @pytest.mark.usefixtures("_policy_access_on")
     async def test_list_unlocks_engine_row_with_access(self):
+        # Access granted via the override file (the web-UI path): the
+        # toggle row keeps origin=file, so the dev-tools lock is what
+        # renders — an env grant would env-pin the row and the plain env
+        # story would win instead (see the env-pinned test above).
+        _override_file_path().write_text(
+            json.dumps({"dev_tools_security_policy_access": True})
+        )
         result = await DevTools(MagicMock()).ha_dev_manage_settings(action="list")
         rows = {r["setting"]: r for r in result["data"]["settings"]}
         engine = rows["enable_tool_security_policies"]
@@ -1576,3 +1582,82 @@ class TestSecurityPolicyAccessGuard:
         assert toggle["editable"] is False
         assert toggle["locked_reason"] == "web_ui_or_env_only"
         assert toggle["value"] is True
+
+    async def test_env_pinned_engine_row_keeps_env_story(self, monkeypatch):
+        # An env-pinned row is refused by the pin before the guard would
+        # fire; stamping policy_access_required there would misdirect the
+        # operator toward the wrong lock.
+        monkeypatch.setenv("ENABLE_TOOL_SECURITY_POLICIES", "true")
+        reset_global_settings()
+        result = await DevTools(MagicMock()).ha_dev_manage_settings(action="list")
+        rows = {r["setting"]: r for r in result["data"]["settings"]}
+        engine = rows["enable_tool_security_policies"]
+        assert engine["origin"] == "env"
+        assert engine["editable"] is False
+        assert "locked_reason" not in engine
+
+    async def test_gate_removal_refused_without_access(self):
+        # gated=False REMOVES an operator-installed approval gate — the
+        # exact escalation #2141 blocks. Pins the `gated is not None`
+        # check against a "simplification" to bare truthiness.
+        with pytest.raises(ToolError, match="AUTH_INSUFFICIENT_PERMISSIONS"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set_tool", tool="ha_call_service", gated=False
+            )
+        assert self._rules() == []
+
+    async def test_policy_engine_reset_refused(self):
+        # reset returns the flag to its default (False) — same blast
+        # radius as set value=False; the guard must sit ahead of the
+        # set/reset split.
+        with pytest.raises(ToolError, match="AUTH_INSUFFICIENT_PERMISSIONS"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="reset", setting="enable_tool_security_policies"
+            )
+
+    @pytest.mark.parametrize("env_val", ["1", "yes", "on", "T", "Y", "TRUE"])
+    async def test_env_truthy_strings_grant_access(self, monkeypatch, env_val):
+        monkeypatch.setenv(POLICY_ACCESS_FLAG, env_val)
+        assert tools_dev._security_policy_access_enabled() is True
+
+    @pytest.mark.parametrize("env_val", ["false", "0", "off", "no", "", "banana"])
+    async def test_env_other_strings_deny_access(self, monkeypatch, env_val):
+        monkeypatch.setenv(POLICY_ACCESS_FLAG, env_val)
+        assert tools_dev._security_policy_access_enabled() is False
+
+    async def test_env_false_beats_file_true(self, monkeypatch):
+        # Same env-over-file precedence as _apply_one_advanced_override.
+        _override_file_path().write_text(
+            json.dumps({"dev_tools_security_policy_access": True})
+        )
+        monkeypatch.setenv(POLICY_ACCESS_FLAG, "false")
+        assert tools_dev._security_policy_access_enabled() is False
+
+    async def test_file_string_value_fails_closed(self):
+        # A hand-edited JSON string is rejected by the settings loader
+        # (_coerce_advanced_override_value takes bool|int only), so the
+        # web UI renders the toggle OFF. The guard must agree — reading
+        # "true" as truthy here would grant access no surface displays.
+        _override_file_path().write_text(
+            json.dumps({"dev_tools_security_policy_access": "true"})
+        )
+        assert tools_dev._security_policy_access_enabled() is False
+        with pytest.raises(ToolError, match="AUTH_INSUFFICIENT_PERMISSIONS"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set_policy", policy={"rules": []}
+            )
+
+    async def test_file_int_value_matches_the_loader(self):
+        # The loader accepts bool|int for a bool field, so 1 renders the
+        # web UI toggle ON — the guard must agree, not refuse with a
+        # message claiming the setting is false.
+        _override_file_path().write_text(
+            json.dumps({"dev_tools_security_policy_access": 1})
+        )
+        assert tools_dev._security_policy_access_enabled() is True
+
+    async def test_file_non_scalar_value_fails_closed(self):
+        _override_file_path().write_text(
+            json.dumps({"dev_tools_security_policy_access": ["true"]})
+        )
+        assert tools_dev._security_policy_access_enabled() is False
