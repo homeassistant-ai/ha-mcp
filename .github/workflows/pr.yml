@@ -215,10 +215,14 @@ jobs:
       # tests/src/unit/test_ha_constraint_alignment.py.
       #
       # Exit codes are load-bearing: 1 is a real drift violation and fails
-      # the job; 2 means HA's constraints file could not be fetched, which
-      # is an outage on someone else's server and must not red-light every
-      # open PR — it warns and passes, the same fail-open the
-      # component-version gate above uses when the mirror API is unreadable.
+      # the job; 78 means HA's constraints file was UNREACHABLE, which is an
+      # outage on someone else's server and must not red-light every open PR
+      # — it warns and passes, the same fail-open the component-version gate
+      # above uses when the mirror API is unreadable. Every other code
+      # (including argparse's 2 for a usage error, uv's own 2, and a 4xx
+      # meaning the constraints file moved) fails the job: those are our
+      # problems, and failing open on them would leave this gate green
+      # forever while it checked nothing.
       run: |
         set +e
         uv run --no-project --with packaging python \
@@ -226,8 +230,8 @@ jobs:
           --ha-version "${HA_IMAGE_GHCR##*:}"
         status=$?
         set -e
-        if [ "$status" -eq 2 ]; then
-          echo "::warning::could not fetch HA's package_constraints.txt - skipping the alignment check (the e2e no-stomp guard still covers the real install)"
+        if [ "$status" -eq 78 ]; then
+          echo "::warning::could not reach HA's package_constraints.txt - skipping the alignment check (the e2e no-stomp guard still covers the real install)"
           exit 0
         fi
         exit "$status"

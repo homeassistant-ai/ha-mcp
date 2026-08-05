@@ -435,6 +435,38 @@ class TestEnsurePackage:
         assert proc.await_args.args[2] == ["ha-mcp==7.12.1"]
         install_pkg.assert_not_called()
 
+    async def test_unchanged_url_override_never_takes_fast_path(
+        self, tmp_path, monkeypatch
+    ):
+        """A URL override must force-install even when nothing changed.
+
+        The fast path hands the spec to HA's requirements manager, and
+        homeassistant.util.package.is_installed() returns False for every
+        requirement carrying a URL ("we cannot verify versions") — so
+        async_process_requirements always reaches install_package(), whose
+        upgrade default appends a bare --upgrade that re-resolves the whole
+        graph and replaces packages HA only floors. That is the #2135/#2146
+        tear, and for a URL override it would recur on EVERY restart, since
+        the stored spec matches from the second bring-up onward.
+        """
+        spec = "ha-mcp @ file:///config/ha_mcp-8.1.0-py3-none-any.whl"
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_PIP_SPEC: spec},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: spec},
+        )
+        proc = AsyncMock()
+        install_pkg = MagicMock(return_value=True)
+        monkeypatch.setattr(es, "async_process_requirements", proc)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "8.1.0")
+
+        await mgr._async_ensure_package()
+
+        proc.assert_not_awaited()
+        install_pkg.assert_called_once()
+        assert install_pkg.call_args.args[0] == spec
+
     async def test_auto_update_off_takes_fast_path_when_pinned_unchanged(
         self, tmp_path, monkeypatch
     ):
@@ -958,7 +990,11 @@ class TestEnsurePackage:
         assert exc.value.kind == "package"
         assert "installed ha-mcp 6.2.0" in str(exc.value)
         assert f"requires {es.MIN_EMBEDDED_SERVER_VERSION} or newer" in str(exc.value)
-        assert "resolver details" in str(exc.value)
+        # Point at the logger that actually carries the installer output: the
+        # force path shells out to uv and logs only under the component's own
+        # logger, so naming homeassistant.util.package alone sends the user to
+        # an empty log.
+        assert "custom_components.ha_mcp_tools.embedded_server" in str(exc.value)
         assert "update Home Assistant" not in str(exc.value)
         assert DATA_LAST_PIP_SPEC not in _entry.data
 

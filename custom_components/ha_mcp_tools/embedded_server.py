@@ -665,13 +665,16 @@ class EmbeddedServerManager:
         background task, so it never blocks HA startup, and uv no-ops quickly
         when the newest build is already installed.
 
-        Fast path: reserved for a STABLE spec — an explicit pip-spec override (a
-        version pin or tarball URL) or a channel with auto-update turned OFF
+        Fast path: reserved for a stable INDEX spec — an explicit pip-spec
+        override that is a version pin, or a channel with auto-update turned OFF
         (which pins to the installed version, see :meth:`_resolve_pip_spec`).
         When that spec matches the one last installed and the package imports,
         delegate the "already satisfied?" decision to Home Assistant's
         requirements manager; a pinned spec does not move, so there is nothing to
-        upgrade to. A CHANGED spec (a new override, a cleared override, a
+        upgrade to. A URL override (a tarball or ``file://`` wheel) is
+        deliberately EXCLUDED: HA's is-installed check cannot verify a URL
+        requirement, so delegating one always reaches its bare ``--upgrade``
+        install — see the comment on ``spec_is_stable`` below. A CHANGED spec (a new override, a cleared override, a
         toggled auto-update, a channel switch) falls through to the
         force-install path below — and additionally uninstalls the replaced
         distribution first (:meth:`_async_remove_replaced_source`), because
@@ -746,7 +749,20 @@ class EmbeddedServerManager:
         # A "stable" spec (an explicit override, or a channel pinned because
         # auto-update is off) is eligible for the fast path; an unpinned
         # auto-updating channel never is.
-        spec_is_stable = bool(self._pip_spec_override) or not self._auto_update
+        # A URL spec is never eligible, however stable it looks. The fast
+        # path delegates to HA's requirements manager, and
+        # homeassistant.util.package.is_installed() returns False for ANY
+        # requirement carrying a URL ("we cannot verify versions, so let the
+        # package manager handle it"), so async_process_requirements always
+        # reaches install_package(), whose upgrade default appends a bare
+        # --upgrade. That re-resolves the whole graph and replaces packages
+        # HA only floors — the #2135/#2146 tear, on every restart. Routing
+        # URL specs to the force path costs a scoped --reinstall-package of
+        # OUR distribution only, which is the install HA would have done
+        # anyway, minus the stomp.
+        spec_is_stable = (
+            bool(self._pip_spec_override) or not self._auto_update
+        ) and not _spec_is_url_requirement(self._pip_spec)
         fast_path_ok = (
             spec_is_stable
             and stored_spec == self._pip_spec
@@ -782,9 +798,10 @@ class EmbeddedServerManager:
             raise EmbeddedServerError(
                 f"The installer left installed ha-mcp {version}, but this "
                 f"in-process component requires {MIN_EMBEDDED_SERVER_VERSION} "
-                "or newer. Review resolver details logged under "
-                "homeassistant.util.package, correct the package conflict, and "
-                "reload this integration.",
+                "or newer. Review the installer output logged under "
+                "custom_components.ha_mcp_tools.embedded_server (or, for an "
+                "index spec taking the fast path, homeassistant.util.package), "
+                "correct the package conflict, and reload this integration.",
                 kind="package",
             )
         _LOGGER.info("HA-MCP in-process server package ready (version %s)", version)
@@ -2052,6 +2069,19 @@ def _scoped_install_flags(spec: str, channel_dist: str | None) -> list[str]:
     if requirement.url is not None:
         return ["--reinstall-package", requirement.name]
     return ["--upgrade-package", requirement.name]
+
+
+def _spec_is_url_requirement(spec: str) -> bool:
+    """True when ``spec`` installs from a URL rather than an index.
+
+    Same shape test :func:`_scoped_install_flags` routes on, and for the
+    same reason — an unparseable spec is treated as URL-ish so it takes the
+    conservative path.
+    """
+    try:
+        return Requirement(spec).url is not None
+    except InvalidRequirement:
+        return True
 
 
 def _uv_install_args(

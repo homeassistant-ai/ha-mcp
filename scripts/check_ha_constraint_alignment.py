@@ -59,11 +59,17 @@ _CONSTRAINTS_URL = (
     "{version}/homeassistant/package_constraints.txt"
 )
 # Worst-case fetch cost is bounded well inside the CI job's own timeout, so
-# a slow-but-not-dead network still reaches the distinct exit 2 instead of
-# being killed by the runner (which would read as an infra flake).
+# a slow-but-not-dead network still reaches the distinct unreachable exit
+# instead of being killed by the runner (which would read as an infra flake).
 _FETCH_ATTEMPTS = 3
 _FETCH_TIMEOUT_SECONDS = 10
 _FETCH_BACKOFF_SECONDS = 3
+# Exit code reserved for "HA's constraints file was unreachable" — the ONLY
+# condition CI is allowed to fail open on. Deliberately not 2: argparse exits
+# 2 on any usage error and uv exits 2 on its own failures, so a fail-open
+# keyed on 2 would silently swallow a mistyped flag or a broken runner and
+# leave the gate green while checking nothing.
+EXIT_CONSTRAINTS_UNREACHABLE = 78
 
 
 def parse_requirement_lines(text: str) -> dict[str, SpecifierSet]:
@@ -155,9 +161,14 @@ def check_alignment(
 def _fetch_constraints(ha_version: str) -> str | None:
     """Fetch HA's constraints file, retrying transient failures.
 
-    Returns None after three failed attempts; the caller exits 2 — a
-    distinct code from a real violation (1), so a network blip in the
-    required CI job is never mistaken for a dependency-drift failure.
+    Returns None after three failed attempts; the caller then exits
+    :data:`EXIT_CONSTRAINTS_UNREACHABLE`, the one code CI fails open on —
+    distinct from a real violation (1) and from every other exit 2 in this
+    script, so a network blip is never mistaken for drift and a permanent
+    error is never mistaken for a blip.
+
+    A 4xx is permanent, not transient: it means the constraints file moved
+    or the version ref does not exist. Those exit 1 immediately.
     """
     url = _CONSTRAINTS_URL.format(version=ha_version)
     last_error: Exception | None = None
@@ -168,6 +179,22 @@ def _fetch_constraints(ha_version: str) -> str | None:
             ) as response:
                 payload: bytes = response.read()
             return payload.decode("utf-8")
+        except urllib.error.HTTPError as err:
+            # A 4xx is PERMANENT — a moved/renamed constraints file or a ref
+            # that does not exist. Retrying cannot fix it, and returning the
+            # network sentinel would let CI's fail-open branch swallow it
+            # forever. Fall through to the caller's hard failure instead.
+            if 400 <= err.code < 500:
+                print(
+                    f"ERROR: {url} returned HTTP {err.code} — the constraints "
+                    "file moved or the version ref does not exist; this check "
+                    "cannot fail open on it",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1) from err
+            last_error = err
+            if attempt < _FETCH_ATTEMPTS - 1:
+                time.sleep(_FETCH_BACKOFF_SECONDS * (attempt + 1))
         except (urllib.error.URLError, OSError) as err:
             last_error = err
             if attempt < _FETCH_ATTEMPTS - 1:
@@ -209,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
         constraints_text = _fetch_constraints(args.ha_version)
         origin = f"HA core {args.ha_version}"
     if constraints_text is None:
-        return 2
+        return EXIT_CONSTRAINTS_UNREACHABLE
 
     ha_constraints = parse_requirement_lines(constraints_text)
     if not ha_constraints:

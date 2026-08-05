@@ -375,10 +375,25 @@ class TestIntegrationFiltering:
             for e in data["entries"]
             if e.get("supports_options") and e.get("state") == "loaded"
         ]
-        if not entries_with_support:
+        # Verifiability keys on the SEEDED HACS entry, not on "any loaded
+        # entry that supports options": other integrations advertise an
+        # OptionsFlow while having nothing stored, so a container where HACS
+        # failed to set up still offers such entries and their legitimately
+        # empty options read as the #1245 regression. (Seen in CI: every
+        # HACS test skipped with "Unknown command" — HACS never loaded —
+        # while this test failed on some other integration's empty options.)
+        hacs_ready = any(
+            e.get("domain") == "hacs"
+            and e.get("state") == "loaded"
+            and e.get("supports_options")
+            for e in data["entries"]
+        )
+        if not hacs_ready:
             pytest.skip(
-                "no LOADED supports_options=True entry in this container "
-                "(seeded HACS entry failed to set up) — probe unverifiable"
+                "the seeded HACS entry is not loaded in this container "
+                "(GitHub rate-limiting during its setup) — the only entry "
+                "with known-non-empty options is missing, so the OptionsFlow "
+                "probe is unverifiable here"
             )
         non_empty = [e for e in entries_with_support if e["options"]]
         assert non_empty, (

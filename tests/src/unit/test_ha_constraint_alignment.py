@@ -13,6 +13,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
 from packaging.requirements import Requirement
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -187,11 +188,48 @@ class TestFetchFailurePath:
         monkeypatch.setattr(checker.urllib.request, "urlopen", boom)
         monkeypatch.setattr(checker.time, "sleep", sleeps.append)
 
-    def test_unreachable_constraints_exit_two(self, monkeypatch):
+    def test_unreachable_constraints_exit_is_the_fail_open_sentinel(self, monkeypatch):
+        """Only THIS code may fail open, and it must not be 2.
+
+        pr.yml warns-and-passes on the sentinel alone. Were it 2, argparse's
+        usage-error exit and uv's own exit 2 would land in the same branch,
+        leaving the gate permanently green while checking nothing.
+        """
         sleeps: list[float] = []
         attempts: list[int] = []
         self._patch_fetch(monkeypatch, sleeps=sleeps, attempts=attempts)
-        assert checker.main(["--ha-version", "2026.8.0"]) == 2
+        assert (
+            checker.main(["--ha-version", "2026.8.0"])
+            == checker.EXIT_CONSTRAINTS_UNREACHABLE
+        )
+        assert checker.EXIT_CONSTRAINTS_UNREACHABLE != 2
+
+    def test_permanent_http_error_fails_hard_instead_of_failing_open(
+        self, monkeypatch
+    ):
+        """A moved constraints file must red-light the PR, not warn.
+
+        A 404 is not an outage — it means HA renamed or moved
+        package_constraints.txt, or the version ref does not exist. Retrying
+        cannot fix it, and returning the network sentinel would let CI
+        swallow it silently on every future PR.
+        """
+        attempts: list[int] = []
+
+        def gone(*_args, **_kwargs):
+            attempts.append(1)
+            raise checker.urllib.error.HTTPError(
+                "https://example.invalid/c.txt", 404, "Not Found", {}, None
+            )
+
+        monkeypatch.setattr(checker.urllib.request, "urlopen", gone)
+        monkeypatch.setattr(checker.time, "sleep", lambda _s: None)
+
+        with pytest.raises(SystemExit) as exc:
+            checker.main(["--ha-version", "2026.8.0"])
+
+        assert exc.value.code == 1
+        assert len(attempts) == 1, "a permanent 4xx must not be retried"
 
     def test_exactly_three_attempts_with_no_trailing_sleep(self, monkeypatch):
         sleeps: list[float] = []
