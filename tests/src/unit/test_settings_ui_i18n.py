@@ -309,9 +309,10 @@ def test_shipped_catalog_loads_and_is_registered(locale: str) -> None:
 
 # Same gate as ``test_locale_parity.completeness`` (see the marker comment
 # there): filled tool sections are the post-merge locale-sync workflow's to
-# owe, not the PR's — a new language legitimately merges as a ``meta``-only
-# stub the daily sync then fills. ``test_locale_sync_gate_shape`` pins the
-# env-var wiring on both files.
+# owe, not the PR's — a new language legitimately merges as a near-empty
+# catalog the daily sync then fills, carrying only what the ungated checks in
+# this file ask of it. ``test_locale_sync_gate_shape`` pins the env-var wiring
+# on both files.
 _completeness = pytest.mark.skipif(
     not os.environ.get("LOCALE_COMPLETENESS_CHECKS"),
     reason=(
@@ -326,9 +327,9 @@ _completeness = pytest.mark.skipif(
 def test_shipped_catalog_translates_the_tools_tab(locale: str) -> None:
     """Both tool sections must be filled once the sync has run.
 
-    Split from the structural check above so a ``meta``-only stub catalog
-    can merge and be filled post-merge; an empty section here after a clean
-    sync run means the fill never happened.
+    Split from the structural check above so a near-empty catalog can merge
+    and be filled post-merge; an empty section here after a clean sync run
+    means the fill never happened.
     """
     catalog = CATALOGS[locale]
 

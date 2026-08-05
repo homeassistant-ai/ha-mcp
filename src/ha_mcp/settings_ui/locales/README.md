@@ -24,10 +24,12 @@ Home Assistant language code names every file:
 - `homeassistant-addon/translations/<code>.yaml` (generated)
 - `homeassistant-addon-dev/translations/<code>.yaml` (generated)
 
-Add the two authored catalogs — this one may start as a `meta`-only stub
-(`native_name`, `dir`) — then run `python scripts/generate_locales.py` and
-merge: the post-merge `locale-sync.yml` workflow machine-fills every string
-over its next daily runs. To fill them in your own PR instead, run
+Add the two authored catalogs, then run `python scripts/generate_locales.py`
+and merge: the post-merge `locale-sync.yml` workflow machine-fills every string
+over its next daily runs. The component catalog may start as an empty object;
+this one needs `meta` (`native_name`, `dir`) plus the handful of `messages`
+keys the ungated checks below demand — a `meta`-only catalog is red in PR CI.
+To fill them in your own PR instead, run
 `scripts/translate_locales.py` yourself and review its output like any
 other diff. Also add the new code to the locale list in the repository-root
 `AGENTS.md`
@@ -71,9 +73,26 @@ import, so the failure names the file but arrives as a broken test module:
 
 ## What CI checks
 
-In PR CI (`tests/src/unit/test_locale_parity.py`, ungated):
+In PR CI (ungated — `tests/src/unit/test_locale_parity.py` unless another file
+is named):
 
 - Every surface carries the same set of language codes.
+- Every decided `Decision` outcome (all but `pending`) and every
+  `PredicateOp` operator has a word in every catalog, non-blank — and in every
+  catalog but `en.json` not still spelled the way the backend does
+  (`test_every_decided_outcome_has_a_catalog_word`,
+  `test_every_predicate_operator_has_a_catalog_word` in
+  `tests/src/unit/test_settings_ui_i18n.py`). These words render inside
+  otherwise translated sentences, and the page payload merges English
+  underneath, so a missing key shows English's own word rather than reading as
+  a gap — and the bare enum literal where English lacks the key too. That is
+  why they are owed at once rather than left to the sync.
+- At least one translated key whose English addresses the reader in the
+  second person, so `scripts/translate_locales.py` can show the engine
+  how this catalog addresses its reader
+  (`test_every_shipped_catalog_gets_reader_addressing_samples` in
+  `tests/src/unit/test_translate_locales.py`). Without one the pipeline
+  translates the rest of the catalog with no register to imitate.
 - The generated files (both add-on YAMLs, `FEATURE_META`) are byte-exact
   generator output (`test_derived_catalogs_match_the_canonical_store`); run
   `python scripts/generate_locales.py` after touching any `addon.*`,
@@ -82,9 +101,9 @@ In PR CI (`tests/src/unit/test_locale_parity.py`, ungated):
   matches the baseline — a hand edit that drops a placeholder fails the PR
   that makes it; a translation awaiting a machine rewrite is excluded.
 
-In the post-merge `locale-sync.yml` workflow only (the same test file, gated
-behind `LOCALE_COMPLETENESS_CHECKS=1` — a PR that changes English merges
-without these, and the daily sync owes them afterwards):
+In the post-merge `locale-sync.yml` workflow only (the same files, gated behind
+`LOCALE_COMPLETENESS_CHECKS=1` — a PR that changes English merges without
+these, and the daily sync owes them afterwards):
 
 - `tool_groups` and `tools` name exactly the renderable groups and tools.
 - At most 5% of this catalog's `messages`, and 5% of its `tools` texts, may be

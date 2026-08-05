@@ -36,10 +36,12 @@ from translate_locales import (  # noqa: E402
 )
 
 _SETTINGS_LOCALES = _REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
-# Catalogs that carry translated text. A new language may ship as a meta-only
-# stub for the pipeline to fill (AGENTS.md § Translations), and a stub has no
-# wording to sample yet — requiring samples of it would forbid the documented
-# way to add a language.
+# Catalogs that carry translated text. A catalog with no `messages` yet has no
+# wording to sample, so sampling it would fail on emptiness rather than on the
+# property this checks. Such a catalog cannot ship anyway — the `Decision` and
+# `PredicateOp` word checks in test_settings_ui_i18n.py apply to every catalog
+# (AGENTS.md § Translations) — so the exclusion narrows this check rather than
+# opening a way past it.
 _TRANSLATED_LOCALES = sorted(
     path.stem
     for path in _SETTINGS_LOCALES.glob("*.json")
@@ -790,9 +792,12 @@ class TestMetaOnlyStub:
     def test_documented_stub_language_flow_does_not_crash(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AGENTS.md says a new language may start as a meta-only stub catalog
-        and the pipeline fills every string — so a catalog with no messages/
-        tools/tool_groups sections must plan cleanly and be writable."""
+        """A new language starts as a near-empty catalog the pipeline fills, and
+        the sections it does not carry yet are absent rather than empty — so a
+        catalog with no messages/tools/tool_groups sections must plan cleanly
+        and be writable. What a shipped catalog owes beyond that is checked
+        against the real files (see the address-register check above), not
+        here."""
         locales = tmp_path / "locales"
         locales.mkdir()
         (locales / "en.json").write_text(
