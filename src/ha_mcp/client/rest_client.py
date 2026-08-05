@@ -1192,6 +1192,28 @@ class HomeAssistantClient:
         logger.debug(f"Starting config flow for handler: {handler}")
         return await self._request("POST", "/config/config_entries/flow", json=payload)
 
+    async def start_reconfigure_flow(
+        self, handler: str, entry_id: str
+    ) -> dict[str, Any]:
+        """Start Home Assistant's official reconfigure flow for an entry.
+
+        Home Assistant selects ``SOURCE_RECONFIGURE`` when ``entry_id`` is
+        included in the config-flow start payload. The integration's
+        ``async_step_reconfigure`` then owns validation and updates the
+        existing entry in place; this method deliberately does not edit
+        storage or delete/recreate entries.
+        """
+        logger.debug(
+            "Starting reconfigure flow for handler %s and entry %s",
+            handler,
+            entry_id,
+        )
+        return await self._request(
+            "POST",
+            "/config/config_entries/flow",
+            json={"handler": handler, "entry_id": entry_id},
+        )
+
     async def submit_config_flow_step(
         self, flow_id: str, user_input: dict[str, Any]
     ) -> dict[str, Any]:
@@ -1362,6 +1384,17 @@ class HomeAssistantClient:
                 "subentry_id": subentry_id,
             }
         )
+
+    async def list_config_entries(self) -> list[dict[str, Any]]:
+        """List all config entries from Home Assistant."""
+        logger.debug("Listing Home Assistant config entries")
+        entries: Any = await self._request("GET", "/config/config_entries/entry")
+        if not isinstance(entries, list):
+            raise HomeAssistantAPIError(
+                "Unexpected response format from config entries API",
+                status_code=500,
+            )
+        return [dict(entry) for entry in entries if isinstance(entry, dict)]
 
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
         """

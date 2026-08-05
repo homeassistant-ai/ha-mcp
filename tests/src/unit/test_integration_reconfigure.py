@@ -1,0 +1,250 @@
+"""Tests for generic config-entry reconfiguration."""
+
+import json
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from fastmcp.exceptions import ToolError
+
+from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.tools.config_entry_flow import reconfigure_config_entry
+from ha_mcp.tools.tools_integrations import IntegrationTools
+
+
+@pytest.fixture
+def reconfig_entry() -> dict[str, object]:
+    """Return a minimal Home Assistant config-entry representation."""
+    return {
+        "entry_id": "entry-123",
+        "domain": "shelly",
+        "title": "Living room relay",
+        "unique_id": "AA:BB:CC:DD:EE:FF",
+        "supports_reconfigure": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_preserves_entry_and_submits_host_and_port(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """The official reconfigure flow updates the existing entry in place."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, reconfig_entry])
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-123",
+            "type": "form",
+            "step_id": "reconfigure",
+            "data_schema": [
+                {"name": "host", "required": True},
+                {"name": "port", "required": False, "default": 80},
+            ],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "entry-123", host="10.0.50.170", port=80
+    )
+
+    assert result["success"] is True
+    assert result["operation"] == "reconfigured"
+    assert result["entry_id"] == "entry-123"
+    assert result["domain"] == "shelly"
+    assert result["verification"] == {
+        "entry_id_preserved": True,
+        "domain_preserved": True,
+        "unique_id_preserved": True,
+        "duplicate_entry_created": False,
+    }
+    client.start_reconfigure_flow.assert_awaited_once_with("shelly", "entry-123")
+    client.submit_config_flow_step.assert_awaited_once_with(
+        "flow-123", {"host": "10.0.50.170", "port": 80}
+    )
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_drives_multiple_form_steps(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """The generic walker can finish a reconfigure flow with multiple forms."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, reconfig_entry])
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-multi",
+            "type": "form",
+            "step_id": "host",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        side_effect=[
+            {
+                "flow_id": "flow-multi",
+                "type": "form",
+                "step_id": "port",
+                "data_schema": [{"name": "port", "required": True}],
+            },
+            {"type": "abort", "reason": "reconfigure_successful"},
+        ]
+    )
+
+    result = await reconfigure_config_entry(
+        client, "entry-123", host="10.0.50.173", port=8080
+    )
+
+    assert result["success"] is True
+    assert client.submit_config_flow_step.await_args_list[0].args == (
+        "flow-multi",
+        {"host": "10.0.50.173"},
+    )
+    assert client.submit_config_flow_step.await_args_list[1].args == (
+        "flow-multi",
+        {"port": 8080},
+    )
+
+
+@pytest.mark.asyncio
+async def test_client_starts_official_reconfigure_flow_with_entry_id() -> None:
+    """The REST client uses entry_id, which makes HA select source=reconfigure."""
+    client = HomeAssistantClient(
+        base_url="http://homeassistant.local",
+        token="test-token",
+        verify_ssl=True,
+    )
+    client._request = AsyncMock(return_value={"flow_id": "flow-1", "type": "form"})
+
+    result = await client.start_reconfigure_flow("esphome", "entry-123")
+
+    assert result["flow_id"] == "flow-1"
+    client._request.assert_awaited_once_with(
+        "POST",
+        "/config/config_entries/flow",
+        json={"handler": "esphome", "entry_id": "entry-123"},
+    )
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_fails_closed_when_original_entry_cannot_be_verified(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """A completed flow is not reported as success if HA returns another entry."""
+    changed_entry = dict(reconfig_entry)
+    changed_entry["entry_id"] = "different-entry"
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, changed_entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-verify",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+    client.abort_config_flow = AsyncMock()
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(client, "entry-123", host="10.0.50.174")
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert payload["entry_id"] == "entry-123"
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_detects_duplicate_identity(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """Post-flight verification rejects a second entry sharing the identity."""
+    duplicate_entry = dict(reconfig_entry)
+    duplicate_entry["entry_id"] = "entry-duplicate"
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, reconfig_entry])
+    client.list_config_entries = AsyncMock(
+        return_value=[reconfig_entry, duplicate_entry]
+    )
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-duplicate",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(client, "entry-123", host="10.0.50.175")
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert "duplicate" in payload["error"]["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_rejects_entries_without_official_support(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """Entries without async_step_reconfigure are rejected before any flow starts."""
+    reconfig_entry["supports_reconfigure"] = False
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.start_reconfigure_flow = AsyncMock()
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(client, "entry-123", host="10.0.50.170")
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "reconfigure" in payload["error"]["message"].lower()
+    client.start_reconfigure_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_requires_explicit_confirmation(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """The MCP tool performs preflight but never writes without confirm=True."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.start_reconfigure_flow = AsyncMock()
+    tools = IntegrationTools(client)
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_reconfigure_integration(
+            entry_id="entry-123", host="10.0.50.180", port=80
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "confirm" in payload["error"]["message"].lower()
+    assert payload["entry_id"] == "entry-123"
+    client.start_reconfigure_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_rejects_invalid_port(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """Ports outside TCP's valid range are rejected locally."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client, "entry-123", host="10.0.50.180", port=65536
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "port" in payload["error"]["message"].lower()
+    client.get_config_entry.assert_not_awaited()

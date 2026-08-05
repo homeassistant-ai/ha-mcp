@@ -35,7 +35,7 @@ from .config_entry_flow_walker import (
     _handle_config_subentry_flow_steps,
     _handle_flow_steps,
 )
-from .helpers import raise_tool_error
+from .helpers import raise_tool_error, validate_identifier_not_empty
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +279,215 @@ async def update_config_entry_options(
         "domain": actual_domain,
         "message": f"{actual_domain} {noun} updated successfully",
         "updated": True,
+    }
+    if result.get("warnings"):
+        response["warnings"] = result["warnings"]
+    return response
+
+
+async def _verify_reconfigured_entry(
+    client: Any,
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    entry_id: str,
+    domain: str,
+) -> dict[str, Any]:
+    """Verify identity preservation and absence of duplicate config entries."""
+    if after.get("entry_id") != entry_id or after.get("domain") != domain:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Reconfigure flow completed but the original config entry could not be verified",
+                suggestions=[
+                    "Inspect ha_get_integration() before retrying; do not create a duplicate entry.",
+                ],
+                context={
+                    "entry_id": entry_id,
+                    "expected_domain": domain,
+                    "verified_entry": after,
+                },
+            )
+        )
+
+    before_unique_id = before.get("unique_id")
+    if before_unique_id is not None and after.get("unique_id") != before_unique_id:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Reconfigure flow changed the original entry unique_id",
+                suggestions=[
+                    "Inspect the integration and entity registry before retrying; "
+                    "the original entry identity was not preserved.",
+                ],
+                context={
+                    "entry_id": entry_id,
+                    "expected_unique_id": before_unique_id,
+                    "verified_unique_id": after.get("unique_id"),
+                },
+            )
+        )
+
+    entries = await client.list_config_entries()
+    same_identity_entries = [
+        entry
+        for entry in entries
+        if entry.get("domain") == domain
+        and (
+            entry.get("entry_id") == entry_id
+            or (
+                before_unique_id is not None
+                and entry.get("unique_id") == before_unique_id
+            )
+        )
+    ]
+    if len(same_identity_entries) != 1:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Reconfigure flow verification found duplicate or missing config entries",
+                suggestions=[
+                    "Do not create another entry; inspect ha_get_integration() and the "
+                    "Home Assistant config-entry registry first.",
+                ],
+                context={
+                    "entry_id": entry_id,
+                    "domain": domain,
+                    "matching_entry_ids": [
+                        item.get("entry_id") for item in same_identity_entries
+                    ],
+                },
+            )
+        )
+
+    return {
+        "entry_id_preserved": True,
+        "domain_preserved": True,
+        "unique_id_preserved": before_unique_id is not None,
+        "duplicate_entry_created": False,
+    }
+
+
+async def reconfigure_config_entry(
+    client: Any,
+    entry_id: str,
+    *,
+    host: str,
+    port: int | None = None,
+) -> dict[str, Any]:
+    """Reconfigure an existing integration through HA's official flow.
+
+    The operation is intentionally generic: integrations opt in by exposing
+    ``async_step_reconfigure`` and decide how the submitted host/port values
+    are validated. The existing config entry is never deleted or recreated.
+    """
+    entry_id = validate_identifier_not_empty(
+        entry_id,
+        "entry_id",
+        suggestions=["Use ha_get_integration() to find valid config entry IDs"],
+    )
+    host = validate_identifier_not_empty(
+        host,
+        "host",
+        suggestions=["Provide the device IP address or hostname"],
+    )
+    if port is not None and (
+        isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535
+    ):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "port must be an integer between 1 and 65535",
+                context={"entry_id": entry_id, "port": port},
+            )
+        )
+
+    before = await client.get_config_entry(entry_id)
+    domain = before.get("domain")
+    if not isinstance(domain, str) or not domain:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.INTERNAL_UNEXPECTED,
+                "Home Assistant returned a config entry without a valid domain",
+                context={"entry_id": entry_id, "entry": before},
+            )
+        )
+    if not before.get("supports_reconfigure", False):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Integration '{domain}' does not support the official reconfigure flow",
+                suggestions=[
+                    "Use ha_get_integration(entry_id=...) to inspect the entry; "
+                    "only integrations implementing async_step_reconfigure can be changed this way.",
+                ],
+                context={
+                    "entry_id": entry_id,
+                    "domain": domain,
+                    "supports_reconfigure": False,
+                },
+            )
+        )
+
+    config: dict[str, Any] = {"host": host}
+    if port is not None:
+        config["port"] = port
+
+    flow_result = await client.start_reconfigure_flow(domain, entry_id)
+    flow_id = flow_result.get("flow_id")
+    if not flow_id:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Failed to start the integration reconfigure flow",
+                suggestions=[
+                    "Confirm that the entry still exists and supports reconfigure",
+                ],
+                context={
+                    "entry_id": entry_id,
+                    "domain": domain,
+                    "details": flow_result,
+                },
+            )
+        )
+
+    try:
+        result = await _handle_flow_steps(
+            client,
+            flow_id,
+            flow_result,
+            config,
+            helper_type=domain,
+            is_reconfigure=True,
+        )
+    except Exception:
+        try:
+            await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
+        except Exception as abort_err:
+            logger.warning(
+                "Failed to abort reconfigure flow %s after error: %s",
+                flow_id,
+                abort_err,
+            )
+        raise
+
+    after = await client.get_config_entry(entry_id)
+    verification = await _verify_reconfigured_entry(
+        client,
+        before,
+        after,
+        entry_id=entry_id,
+        domain=domain,
+    )
+
+    response: dict[str, Any] = {
+        "success": True,
+        "operation": "reconfigured",
+        "entry_id": entry_id,
+        "domain": domain,
+        "title": after.get("title"),
+        "message": f"{domain} integration reconfigured successfully",
+        "verification": verification,
     }
     if result.get("warnings"):
         response["warnings"] = result["warnings"]

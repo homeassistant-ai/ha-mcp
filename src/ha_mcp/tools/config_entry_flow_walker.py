@@ -403,6 +403,53 @@ def _raise_flow_abort(flow_id: str, current_step: dict[str, Any]) -> NoReturn:
     )
 
 
+def _reconfigure_abort_result(
+    current_step: dict[str, Any],
+    *,
+    is_reconfigure: bool,
+    ignored_config_keys: set[str],
+    remaining_config: dict[str, Any],
+    reuse_state: _ReuseState,
+) -> dict[str, Any] | None:
+    """Translate a successful reconfigure abort into a walker result."""
+    if (
+        not is_reconfigure
+        or current_step.get("reason") not in _RECONFIGURE_SUCCESS_REASONS
+    ):
+        return None
+    response: dict[str, Any] = {
+        "success": True,
+        "operation": "reconfigured",
+        "flow_result": current_step,
+    }
+    warnings = _success_warnings(ignored_config_keys, remaining_config, reuse_state)
+    if warnings:
+        response["warnings"] = warnings
+    return response
+
+
+def _handle_abort_step(
+    flow_id: str,
+    current_step: dict[str, Any],
+    *,
+    is_reconfigure: bool,
+    ignored_config_keys: set[str],
+    remaining_config: dict[str, Any],
+    reuse_state: _ReuseState,
+) -> dict[str, Any]:
+    """Handle normal aborts and successful reconfigure aborts."""
+    reconfigure_result = _reconfigure_abort_result(
+        current_step,
+        is_reconfigure=is_reconfigure,
+        ignored_config_keys=ignored_config_keys,
+        remaining_config=remaining_config,
+        reuse_state=reuse_state,
+    )
+    if reconfigure_result is not None:
+        return reconfigure_result
+    _raise_flow_abort(flow_id, current_step)
+
+
 async def _handle_flow_steps(
     client: Any,
     flow_id: str,
@@ -410,6 +457,8 @@ async def _handle_flow_steps(
     config: dict[str, Any],
     submit_fn: Any = None,
     helper_type: str | None = None,
+    *,
+    is_reconfigure: bool = False,
 ) -> dict[str, Any]:
     """Walk a multi-step config flow handling menu and form steps.
 
@@ -484,7 +533,14 @@ async def _handle_flow_steps(
             )
 
         if result_type == _FlowType.ABORT:
-            _raise_flow_abort(flow_id, current_step)
+            return _handle_abort_step(
+                flow_id,
+                current_step,
+                is_reconfigure=is_reconfigure,
+                ignored_config_keys=ignored_config_keys,
+                remaining_config=remaining_config,
+                reuse_state=reuse_state,
+            )
 
         if result_type == _FlowType.MENU:
             menu_choice = _handle_menu_step(

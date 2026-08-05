@@ -33,6 +33,7 @@ from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_config_entry,
+    reconfigure_config_entry,
     update_config_entry_options,
 )
 from .config_entry_flow_form import iter_schema_fields
@@ -1634,6 +1635,141 @@ class IntegrationTools:
         # Sort by score descending
         matches.sort(key=lambda x: x[0], reverse=True)
         return [match[1] for match in matches]
+
+    @tool(
+        name="ha_reconfigure_integration",
+        tags={"Integrations"},
+        annotations={
+            "openWorldHint": False,
+            "destructiveHint": True,
+            "title": "Reconfigure Integration",
+        },
+    )
+    @with_auto_backup(
+        domain="integration",
+        id_param="entry_id",
+        skip_fn=lambda kwargs: not kwargs.get("confirm", False),
+    )
+    @log_tool_usage
+    async def ha_reconfigure_integration(
+        self,
+        entry_id: Annotated[
+            str,
+            Field(
+                description="Existing Home Assistant config entry ID to reconfigure."
+            ),
+        ],
+        host: Annotated[
+            str,
+            Field(
+                description=(
+                    "New device IP address or hostname. The integration's official "
+                    "reconfigure flow validates whether this value is supported."
+                )
+            ),
+        ],
+        port: Annotated[
+            int | None,
+            Field(
+                default=None,
+                ge=1,
+                le=65535,
+                description=(
+                    "Optional new TCP port. Omit to let the integration preserve "
+                    "or default its current port."
+                ),
+            ),
+        ] = None,
+        confirm: Annotated[
+            bool,
+            Field(
+                default=False,
+                description=(
+                    "Must be True to apply the change. With False, the tool only "
+                    "performs a preflight and returns the entry details."
+                ),
+            ),
+        ] = False,
+    ) -> dict[str, Any]:
+        """Change an existing integration's network endpoint safely.
+
+        This is not Shelly-specific. It works only for entries whose
+        integration implements Home Assistant's official
+        ``async_step_reconfigure`` flow. Home Assistant keeps ownership of
+        integration-specific validation and updates the existing entry in
+        place, preserving its entry/device/entity relationships.
+        """
+        try:
+            entry_id = validate_identifier_not_empty(
+                entry_id,
+                "entry_id",
+                suggestions=["Use ha_get_integration() to find valid config entry IDs"],
+            )
+            host = validate_identifier_not_empty(
+                host,
+                "host",
+                suggestions=["Provide the device IP address or hostname"],
+            )
+            entry = await self._client.get_config_entry(entry_id)
+            domain = entry.get("domain")
+            supports_reconfigure = bool(entry.get("supports_reconfigure", False))
+            if not supports_reconfigure:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Integration '{domain}' does not support the official reconfigure flow",
+                        suggestions=[
+                            "Only integrations implementing async_step_reconfigure "
+                            "can be changed with this tool.",
+                        ],
+                        context={
+                            "entry_id": entry_id,
+                            "domain": domain,
+                            "supports_reconfigure": False,
+                        },
+                    )
+                )
+
+            if not confirm:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Preflight completed; confirm=True is required to apply the reconfiguration",
+                        suggestions=[
+                            "Review the entry and target host/port in this response, "
+                            "then repeat the call with confirm=True.",
+                        ],
+                        context={
+                            "entry_id": entry_id,
+                            "domain": domain,
+                            "title": entry.get("title"),
+                            "current_unique_id": entry.get("unique_id"),
+                            "target_host": host,
+                            "target_port": port,
+                            "supports_reconfigure": True,
+                        },
+                    )
+                )
+
+            return await reconfigure_config_entry(
+                self._client,
+                entry_id,
+                host=host,
+                port=port,
+            )
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error("Failed to reconfigure integration: %s", e)
+            exception_to_structured_error(
+                e,
+                context={"entry_id": entry_id, "host": host, "port": port},
+                suggestions=[
+                    "Verify the entry ID and confirm that the integration device "
+                    "is reachable at the requested host and port.",
+                ],
+            )
+            return None  # unreachable: exception_to_structured_error raises
 
     @tool(
         name="ha_set_integration",
