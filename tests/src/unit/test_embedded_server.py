@@ -904,6 +904,10 @@ class TestEnsurePackage:
         monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.13.0")
+        # Stub the per-dist lookup the replaced-source check reads, or this
+        # test's outcome depends on whatever ha-mcp metadata happens to exist
+        # in the environment running it.
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.13.0")
         monkeypatch.setattr(
             es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
         )
@@ -931,6 +935,10 @@ class TestEnsurePackage:
         monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.13.0")
+        # Stub the per-dist lookup the replaced-source check reads, or this
+        # test's outcome depends on whatever ha-mcp metadata happens to exist
+        # in the environment running it.
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.13.0")
         monkeypatch.setattr(
             es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
         )
@@ -3963,6 +3971,42 @@ class TestForceInstallPackage:
 
         assert len(calls) == 2
         assert "UV_EXTRA_INDEX_URL" not in calls[1]
+
+    def test_malformed_extra_index_url_does_not_break_the_failure_path(
+        self, monkeypatch
+    ):
+        """A typo'd index URL must not replace uv's stderr with a traceback.
+
+        ``urlparse("https://[bad").hostname`` raises ValueError (Invalid IPv6
+        URL), and this code runs only AFTER an install has already failed —
+        so an operator's malformed UV_EXTRA_INDEX_URL entry would turn a
+        reportable install failure into an exception from the error handler.
+        """
+        calls: list[dict[str, str]] = []
+
+        def fake_run(args, **kwargs):
+            env = kwargs["env"]
+            calls.append(env)
+            if _WHEELS_HOST in env.get("UV_EXTRA_INDEX_URL", ""):
+                return SimpleNamespace(
+                    returncode=1,
+                    stderr=f"error: failed to fetch https://{_WHEELS_HOST}/x",
+                )
+            return SimpleNamespace(returncode=0, stderr="")
+
+        monkeypatch.setattr(es.subprocess, "run", fake_run)
+        monkeypatch.setenv(
+            "UV_EXTRA_INDEX_URL",
+            f"https://[bad/simple https://{_WHEELS_HOST}/simple",
+        )
+
+        assert self._install("ha-mcp")
+
+        assert len(calls) == 2, "the failing extra index was not retried"
+        retry_extra = calls[1].get("UV_EXTRA_INDEX_URL", "")
+        assert _WHEELS_HOST not in retry_extra
+        # The unparseable entry is kept: we could not prove it was at fault.
+        assert "https://[bad/simple" in retry_extra
 
     def test_unrelated_failure_is_not_retried(self, monkeypatch):
         """Only an extra-index failure earns a second attempt."""

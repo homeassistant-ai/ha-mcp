@@ -2032,9 +2032,7 @@ def _force_install_package(
     # included as-is, exactly as install_package logs it.
     extra_urls = env.get("UV_EXTRA_INDEX_URL", "").split()
     failing = {
-        url: host
-        for url in extra_urls
-        if (host := urlparse(url).hostname) and host in stderr
+        url: host for url in extra_urls if (host := _url_host(url)) and host in stderr
     }
     if failing:
         _LOGGER.warning(
@@ -2089,6 +2087,21 @@ def _scoped_install_flags(spec: str, channel_dist: str | None) -> list[str]:
     if requirement.url is not None:
         return ["--reinstall-package", requirement.name]
     return ["--upgrade-package", requirement.name]
+
+
+def _url_host(url: str) -> str | None:
+    """Host of ``url``, or None when it cannot be parsed.
+
+    ``urlparse().hostname`` RAISES on a malformed URL (``ValueError:
+    Invalid IPv6 URL`` for an unclosed bracket), and the one caller runs on
+    the INSTALL-FAILURE path — where an operator's typo'd
+    ``UV_EXTRA_INDEX_URL`` entry would replace uv's real stderr with a
+    traceback from the error handler.
+    """
+    try:
+        return urlparse(url).hostname
+    except ValueError:
+        return None
 
 
 def _pin_moves_off_installed(spec: str, installed_version: str) -> bool:
