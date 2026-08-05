@@ -48,6 +48,8 @@ from .reconfigure_security import (
 
 logger = logging.getLogger(__name__)
 
+_KNOWN_AUXILIARY_ENTRY_DOMAINS = frozenset({"switch_as_x"})
+
 
 def _normalise_identity_value(value: Any) -> str:
     """Normalise registry identifiers for stable comparisons."""
@@ -149,15 +151,17 @@ async def _same_domain_related_entry_ids(
     entry_id: str,
     domain: str,
 ) -> list[str]:
-    """Return related entries that are duplicates in the same integration.
+    """Classify related entries and return those that must block reconfigure.
 
     Home Assistant may intentionally attach an auxiliary platform entry such as
     ``switch_as_x`` to the same physical device. That is not a second physical
     integration entry and must not block reconfiguration of the primary entry.
-    Unknown related entries remain blocking so the duplicate safeguard fails
-    closed when the config-entry registry cannot explain the relationship.
+    Only explicitly known auxiliary domains are allowed. Unknown or malformed
+    relationships remain blocking so the duplicate safeguard fails closed.
     """
     related_entry_ids = set(identity.get("related_entry_ids", [])) - {entry_id}
+    identity["auxiliary_related_entry_ids"] = []
+    identity["blocking_related_entry_ids"] = []
     if not related_entry_ids:
         return []
 
@@ -167,12 +171,30 @@ async def _same_domain_related_entry_ids(
         for item in entries
         if isinstance(item, dict) and item.get("entry_id")
     }
-    return sorted(
-        related_id
-        for related_id in related_entry_ids
-        if related_id not in entries_by_id
-        or entries_by_id[related_id].get("domain") == domain
-    )
+    blocking: list[str] = []
+    auxiliary: list[str] = []
+    for related_id in sorted(related_entry_ids):
+        related_entry = entries_by_id.get(related_id)
+        related_domain = (
+            related_entry.get("domain") if isinstance(related_entry, dict) else None
+        )
+        if not isinstance(related_domain, str) or not related_domain:
+            related_domain = (
+                related_entry.get("handler")
+                if isinstance(related_entry, dict)
+                else None
+            )
+        if (
+            related_domain == domain
+            or related_domain not in _KNOWN_AUXILIARY_ENTRY_DOMAINS
+        ):
+            blocking.append(related_id)
+        else:
+            auxiliary.append(related_id)
+
+    identity["auxiliary_related_entry_ids"] = auxiliary
+    identity["blocking_related_entry_ids"] = blocking
+    return blocking
 
 
 async def _optional_registry_rows(

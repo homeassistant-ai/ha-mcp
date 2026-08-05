@@ -1886,6 +1886,58 @@ class TestSetIntegrationModes:
             tools.ha_set_integration(entry_id="abc"), "Nothing to do"
         )
 
+    async def test_reconfigure_only_parameters_are_rejected_in_options_mode(
+        self, tools
+    ):
+        """Identity guards and confirmation must not be silently ignored."""
+        with (
+            patch(
+                "ha_mcp.tools.tools_integrations.update_config_entry_options",
+                new=AsyncMock(return_value={"success": True}),
+            ) as options_mock,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.ha_set_integration(
+                entry_id="abc",
+                config={"scan_interval": 30},
+                expected_device_id="device-1",
+            )
+
+        err = json.loads(str(exc_info.value))
+        assert err["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "reconfigure" in err["error"]["message"].lower()
+        options_mock.assert_not_awaited()
+
+    async def test_confirm_true_is_rejected_outside_reconfigure_mode(self, tools):
+        """confirm=True must not turn an options update into an unguarded write."""
+        with (
+            patch(
+                "ha_mcp.tools.tools_integrations.update_config_entry_options",
+                new=AsyncMock(return_value={"success": True}),
+            ) as options_mock,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.ha_set_integration(
+                entry_id="abc",
+                config={"scan_interval": 30},
+                expected_unique_id="unique-1",
+                confirm=True,
+            )
+
+        err = json.loads(str(exc_info.value))
+        assert err["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "reconfigure" in err["error"]["message"].lower()
+        assert err["ignored_parameters"] == ["confirm", "expected_unique_id"]
+        options_mock.assert_not_awaited()
+
+    async def test_set_integration_has_explicit_safety_annotations(self, tools):
+        """The unified tool advertises its state-changing safety semantics."""
+        annotations = tools.ha_set_integration.__fastmcp__.annotations
+        assert annotations.openWorldHint is False
+        assert annotations.destructiveHint is True
+        assert annotations.readOnlyHint is False
+        assert annotations.idempotentHint is False
+
     async def test_reconfigure_mode_delegates_to_shared_handler(
         self, tools, mock_client
     ):

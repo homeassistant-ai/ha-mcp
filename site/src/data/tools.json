@@ -2311,7 +2311,7 @@
   {
     "name": "ha_set_integration",
     "title": "Set Integration",
-    "description": "Manage an integration (config entry): enable/disable, add, or update options.\n\nModes (pick one):\n- Enable/disable: entry_id + enabled.\n- Add integration: domain (+ config) — drives the domain's config\n  flow, including menus and multi-step forms.\n- Update options: entry_id + config — drives the entry's options\n  flow (what the \"Configure\" button does in the HA UI).\n\nWHEN NOT TO USE:\n- Helpers (template, group, utility_meter, ...): use\n  ha_config_set_helper.\n- Config subentries: use\n  ha_config_set_helper(helper_type='config_subentry').\n- Removing an entry: use ha_remove_helpers_integrations.\n\nUse ha_get_integration() to find entry IDs, and\nha_get_integration(entry_id=..., include_schema=True) to inspect the\noptions fields before an update.\n\nCaveats: adding an integration runs its config flow exactly as the HA\nUI would (may pair devices, scan the network, create entities). Flows\nrequiring a browser step (OAuth) or an asynchronous provider step\nerror out at that step with a structured error instead of completing.\n\nEXAMPLES:\n- Disable: ha_set_integration(entry_id=\"abc123\", enabled=False)\n- Add: ha_set_integration(domain=\"workday\", config={\"name\": \"Workday\"})\n- Update options: ha_set_integration(entry_id=\"abc123\", config={\"scan_interval\": 30})",
+    "description": "Manage an integration (config entry): enable/disable, add, update options, or reconfigure.\n\nModes (pick one):\n- Enable/disable: entry_id + enabled.\n- Add integration: domain (+ config) — drives the domain's config\n  flow, including menus and multi-step forms.\n- Update options: entry_id + config — drives the entry's options\n  flow (what the \"Configure\" button does in the HA UI).\n- Reconfigure: entry_id + reconfigure=True + config — drives the\n  existing entry's official reconfigure flow; pass confirm=False for\n  read-only preflight and confirm=True to apply.\n\nWHEN NOT TO USE:\n- Helpers (template, group, utility_meter, ...): use\n  ha_config_set_helper.\n- Config subentries: use\n  ha_config_set_helper(helper_type='config_subentry').\n- Removing an entry: use ha_remove_helpers_integrations.\n\nUse ha_get_integration() to find entry IDs, and\nha_get_integration(entry_id=..., include_schema=True) to inspect the\noptions fields before an update.\n\nCaveats: adding an integration runs its config flow exactly as the HA\nUI would (may pair devices, scan the network, create entities). Flows\nrequiring a browser step (OAuth) or an asynchronous provider step\nerror out at that step with a structured error instead of completing.\n\nEXAMPLES:\n- Disable: ha_set_integration(entry_id=\"abc123\", enabled=False)\n- Add: ha_set_integration(domain=\"workday\", config={\"name\": \"Workday\"})\n- Update options: ha_set_integration(entry_id=\"abc123\", config={\"scan_interval\": 30})\n- Reconfigure preflight: ha_set_integration(\n  entry_id=\"abc123\", reconfigure=True, config={\"host\": \"10.0.0.5\"}\n)",
     "inputSchema": {
       "properties": {
         "entry_id": {
@@ -2329,12 +2329,38 @@
         "config": {
           "type": "Annotated[dict[str, Any] | None, JSON_STRING_COERCION, Field(description=\"Flow form data. With 'domain': input for the new integration's config flow. With 'entry_id' alone: input for the entry's options flow (updates its options). Multi-step flows consume keys per step; menu steps take 'next_step_id' — a string, or a list of successive selections for flows that present more than one menu (e.g. a menu revisited after each branch, ending in a finish option). The step's data_schema is returned on validation errors so field names can be corrected.\", default=None)]",
           "default": null
+        },
+        "reconfigure": {
+          "type": "Annotated[bool, Field(default=False, description=\"Use the existing config entry's official reconfigure flow instead of its options flow. Requires confirm=True to apply; confirm=False performs read-only preflight.\")]",
+          "default": false
+        },
+        "expected_device_id": {
+          "type": "Annotated[str | None, Field(default=None, description='Expected Home Assistant device registry ID.')]",
+          "default": null
+        },
+        "expected_unique_id": {
+          "type": "Annotated[str | None, Field(default=None, description='Expected config-entry unique ID.')]",
+          "default": null
+        },
+        "expected_mac": {
+          "type": "Annotated[str | None, Field(default=None, description='Expected physical device MAC or IEEE value.')]",
+          "default": null
+        },
+        "expected_entity_ids": {
+          "type": "Annotated[list[str] | None, JSON_STRING_COERCION, Field(default=None, description='Exact entity IDs expected to remain associated.')]",
+          "default": null
+        },
+        "confirm": {
+          "type": "Annotated[bool, Field(default=False, description='Required when reconfigure=True to apply the change.')]",
+          "default": false
         }
       }
     },
     "annotations": {
       "openWorldHint": false,
-      "destructiveHint": true
+      "destructiveHint": true,
+      "readOnlyHint": false,
+      "idempotentHint": false
     },
     "tags": [
       "Integrations"

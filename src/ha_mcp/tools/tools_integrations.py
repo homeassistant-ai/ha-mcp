@@ -74,6 +74,45 @@ logger = logging.getLogger(__name__)
 WS_CONFIG_ENTRIES = "ha_mcp_tools/config_entries"
 
 
+def _reject_reconfigure_only_parameters(
+    *,
+    confirm: bool,
+    expected_device_id: str | None,
+    expected_unique_id: str | None,
+    expected_mac: str | None,
+    expected_entity_ids: list[str] | None,
+) -> None:
+    """Reject confirmation and identity guards outside reconfigure mode."""
+    reconfigure_only_parameters = {
+        name
+        for name, value in (
+            ("expected_device_id", expected_device_id),
+            ("expected_unique_id", expected_unique_id),
+            ("expected_mac", expected_mac),
+            ("expected_entity_ids", expected_entity_ids),
+        )
+        if value is not None
+    }
+    if not confirm and not reconfigure_only_parameters:
+        return
+
+    ignored_parameters = sorted(
+        ({"confirm"} if confirm else set()) | reconfigure_only_parameters
+    )
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            "The following parameters require reconfigure=True: "
+            + ", ".join(ignored_parameters),
+            suggestions=[
+                "Pass reconfigure=True to use confirmation and "
+                "identity safeguards for the official reconfigure flow."
+            ],
+            context={"ignored_parameters": ignored_parameters},
+        )
+    )
+
+
 FlowLookupReason = Literal[
     "ok",
     "wrong_helper_type",
@@ -1646,50 +1685,13 @@ class IntegrationTools:
     async def _run_reconfigure(
         self,
         entry_id: str,
-        config: Annotated[
-            dict[str, Any] | None,
-            JSON_STRING_COERCION,
-            Field(
-                default=None,
-                description="Generic values accepted by the integration's reconfigure flow.",
-            ),
-        ] = None,
-        expected_device_id: Annotated[
-            str | None,
-            Field(
-                default=None, description="Expected Home Assistant device registry ID."
-            ),
-        ] = None,
-        expected_unique_id: Annotated[
-            str | None,
-            Field(default=None, description="Expected config-entry unique ID."),
-        ] = None,
-        expected_mac: Annotated[
-            str | None,
-            Field(
-                default=None,
-                description="Expected device MAC from inventory or an independent check.",
-            ),
-        ] = None,
-        expected_entity_ids: Annotated[
-            list[str] | None,
-            JSON_STRING_COERCION,
-            Field(
-                default=None,
-                description="Exact entity IDs expected to remain associated.",
-            ),
-        ] = None,
-        confirm: Annotated[
-            bool,
-            Field(
-                default=False,
-                description=(
-                    "Must be True to apply the change. With False, the tool only "
-                    "performs a preflight and returns the entry, identity, and "
-                    "rollback details."
-                ),
-            ),
-        ] = False,
+        *,
+        config: dict[str, Any] | None = None,
+        expected_device_id: str | None = None,
+        expected_unique_id: str | None = None,
+        expected_mac: str | None = None,
+        expected_entity_ids: list[str] | None = None,
+        confirm: bool = False,
     ) -> dict[str, Any]:
         """Change an existing integration's configuration safely.
 
@@ -1784,6 +1786,8 @@ class IntegrationTools:
         annotations={
             "openWorldHint": False,
             "destructiveHint": True,
+            "readOnlyHint": False,
+            "idempotentHint": False,
             "title": "Set Integration",
         },
     )
@@ -1940,6 +1944,14 @@ class IntegrationTools:
                     expected_entity_ids=expected_entity_ids,
                     confirm=confirm,
                 )
+
+            _reject_reconfigure_only_parameters(
+                confirm=confirm,
+                expected_device_id=expected_device_id,
+                expected_unique_id=expected_unique_id,
+                expected_mac=expected_mac,
+                expected_entity_ids=expected_entity_ids,
+            )
 
             if domain is not None and entry_id is not None:
                 raise_tool_error(

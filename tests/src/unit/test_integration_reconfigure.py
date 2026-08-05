@@ -541,6 +541,107 @@ async def test_reconfigure_allows_auxiliary_entry_sharing_same_device() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reconfigure_allows_known_auxiliary_handler_without_domain() -> None:
+    """A known helper remains allowed when HA exposes its handler, not domain."""
+    shelly_entry = {
+        "entry_id": "shelly-entry",
+        "domain": "shelly",
+        "state": "setup_retry",
+        "supports_reconfigure": True,
+    }
+    auxiliary_entry = {
+        "entry_id": "switch-as-x-entry",
+        "handler": "switch_as_x",
+        "state": "loaded",
+    }
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=shelly_entry)
+    client.list_entity_registry = AsyncMock(
+        return_value=[
+            {
+                "entity_id": "switch.source",
+                "config_entry_id": "shelly-entry",
+                "device_id": "shared-device",
+            },
+            {
+                "entity_id": "light.derived",
+                "config_entry_id": "switch-as-x-entry",
+                "device_id": "shared-device",
+            },
+        ]
+    )
+    client.list_device_registry = AsyncMock(return_value=[])
+    client.list_config_entries = AsyncMock(return_value=[shelly_entry, auxiliary_entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-handler-only-auxiliary",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client,
+        "shelly-entry",
+        config={"host": "10.0.50.52"},
+        expected_device_id="shared-device",
+    )
+
+    assert result["success"] is True
+    client.start_reconfigure_flow.assert_awaited_once_with("shelly", "shelly-entry")
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_rejects_unknown_related_domain() -> None:
+    """An unexplained cross-domain relationship remains fail-closed."""
+    shelly_entry = {
+        "entry_id": "shelly-entry",
+        "domain": "shelly",
+        "state": "setup_retry",
+        "supports_reconfigure": True,
+    }
+    unknown_entry = {
+        "entry_id": "unknown-entry",
+        "domain": "some_other_integration",
+        "state": "loaded",
+    }
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=shelly_entry)
+    client.list_entity_registry = AsyncMock(
+        return_value=[
+            {
+                "entity_id": "switch.source",
+                "config_entry_id": "shelly-entry",
+                "device_id": "shared-device",
+            },
+            {
+                "entity_id": "sensor.unexplained",
+                "config_entry_id": "unknown-entry",
+                "device_id": "shared-device",
+            },
+        ]
+    )
+    client.list_device_registry = AsyncMock(return_value=[])
+    client.list_config_entries = AsyncMock(return_value=[shelly_entry, unknown_entry])
+    client.start_reconfigure_flow = AsyncMock()
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client,
+            "shelly-entry",
+            config={"host": "10.0.50.53"},
+            expected_device_id="shared-device",
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert "duplicate" in payload["error"]["message"].lower()
+    client.start_reconfigure_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_reconfigure_rejects_expected_unique_id_mismatch_before_flow(
     reconfig_entry: dict[str, object],
 ) -> None:
@@ -818,9 +919,10 @@ async def test_confirmed_reconfigure_uses_normal_auto_backup_policy(
     from ha_mcp.backup_manager import BackupManager
 
     original_maybe_snapshot = BackupManager.maybe_snapshot
+    observed_mandatory: list[Any] = []
 
     async def checked_maybe_snapshot(self: Any, *args: Any, **kwargs: Any) -> Any:
-        assert kwargs["mandatory"] is False
+        observed_mandatory.append(kwargs.get("mandatory", "<missing>"))
         return await original_maybe_snapshot(self, *args, **kwargs)
 
     monkeypatch.setattr(BackupManager, "maybe_snapshot", checked_maybe_snapshot)
@@ -858,6 +960,7 @@ async def test_confirmed_reconfigure_uses_normal_auto_backup_policy(
 
     snapshots = list(backup_dir.glob("integration.*.yaml"))
     assert len(snapshots) == (0 if backup_capture_fails else 1)
+    assert observed_mandatory == [False]
     if not backup_capture_fails:
         assert "entry-123" in snapshots[0].read_text()
     assert result["status"] == "applied_but_unverified"
