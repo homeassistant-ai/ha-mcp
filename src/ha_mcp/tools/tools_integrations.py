@@ -32,7 +32,7 @@ from .component_api import (
 from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
-    _collect_reconfigure_identity,
+    _validate_reconfigure_identity_and_duplicates,
     create_config_entry,
     prepare_reconfigure_request,
     reconfigure_config_entry,
@@ -1579,6 +1579,7 @@ class IntegrationTools:
             "source": entry.get("source"),
             "supports_options": entry.get("supports_options", False),
             "supports_unload": entry.get("supports_unload", False),
+            "supports_reconfigure": entry.get("supports_reconfigure", False),
             "disabled_by": entry.get("disabled_by"),
         }
 
@@ -1642,61 +1643,15 @@ class IntegrationTools:
         matches.sort(key=lambda x: x[0], reverse=True)
         return [match[1] for match in matches]
 
-    @tool(
-        name="ha_reconfigure_integration",
-        tags={"Integrations"},
-        annotations={
-            "openWorldHint": False,
-            "destructiveHint": True,
-            "title": "Reconfigure Integration",
-        },
-    )
-    @with_auto_backup(
-        domain="integration",
-        id_param="entry_id",
-        mandatory=True,
-        skip_fn=lambda kwargs: not kwargs.get("confirm", False),
-    )
-    @log_tool_usage
-    async def ha_reconfigure_integration(
+    async def _run_reconfigure(
         self,
-        entry_id: Annotated[
-            str,
-            Field(
-                description="Existing Home Assistant config entry ID to reconfigure."
-            ),
-        ],
-        host: Annotated[
-            str | None,
-            Field(
-                default=None,
-                description=(
-                    "Optional network address shorthand. Use config for integrations "
-                    "that require different fields."
-                ),
-            ),
-        ] = None,
-        port: Annotated[
-            int | None,
-            Field(
-                default=None,
-                ge=1,
-                le=65535,
-                description=(
-                    "Optional new TCP port. Omit to let the integration preserve "
-                    "or default its current port."
-                ),
-            ),
-        ] = None,
+        entry_id: str,
         config: Annotated[
             dict[str, Any] | None,
             JSON_STRING_COERCION,
             Field(
                 default=None,
-                description=(
-                    "Optional generic flow values, including menu selections such as "
-                    "next_step_id. Host and port are accepted as shorthand."
-                ),
+                description="Generic values accepted by the integration's reconfigure flow.",
             ),
         ] = None,
         expected_device_id: Annotated[
@@ -1742,23 +1697,32 @@ class IntegrationTools:
         integration implements Home Assistant's official
         ``async_step_reconfigure`` flow. Home Assistant keeps ownership of
         integration-specific validation and updates the existing entry in
-        place, preserving its entry/device/entity relationships. The mandatory
-        backup is safety evidence, not a connection-settings rollback: the
-        returned rollback metadata describes repeating the official flow with
-        the previous non-sensitive configuration, and flags when redacted
-        secrets require manual intervention.
+        place, preserving its entry/device/entity relationships. Auto-backup
+        follows the normal integration backup policy; it is not a separate
+        mandatory gate. The returned rollback metadata describes repeating
+        the official flow with the previous non-sensitive configuration, and
+        flags when redacted secrets require manual intervention.
         """
         try:
             entry_id, entry, target_config = await prepare_reconfigure_request(
                 self._client,
                 entry_id,
-                host=host,
-                port=port,
                 config=config,
             )
             domain = entry["domain"]
-            identity = await _collect_reconfigure_identity(
-                self._client, entry, entry_id
+            expected_identity = {
+                "device_id": expected_device_id,
+                "unique_id": expected_unique_id,
+                "mac": expected_mac,
+                "entity_ids": list(expected_entity_ids or []),
+            }
+            identity = await _validate_reconfigure_identity_and_duplicates(
+                self._client,
+                entry,
+                entry_id=entry_id,
+                domain=domain,
+                expected_identity=expected_identity,
+                prepared_identity=None,
             )
             if not confirm:
                 raise_tool_error(
@@ -1779,12 +1743,7 @@ class IntegrationTools:
                             "rollback": build_reconfigure_rollback_metadata(
                                 entry_id, domain, entry
                             ),
-                            "expected_identity": {
-                                "device_id": expected_device_id,
-                                "unique_id": expected_unique_id,
-                                "mac": expected_mac,
-                                "entity_ids": expected_entity_ids or [],
-                            },
+                            "expected_identity": expected_identity,
                             "supports_reconfigure": True,
                         },
                     )
@@ -1793,8 +1752,6 @@ class IntegrationTools:
             return await reconfigure_config_entry(
                 self._client,
                 entry_id,
-                host=host,
-                port=port,
                 config=config,
                 expected_device_id=expected_device_id,
                 expected_unique_id=expected_unique_id,
@@ -1812,13 +1769,11 @@ class IntegrationTools:
                 e,
                 context={
                     "entry_id": entry_id,
-                    "host": host,
-                    "port": port,
                     "config_keys": sorted(config or {}),
                 },
                 suggestions=[
-                    "Verify the entry ID and confirm that the integration device "
-                    "is reachable at the requested host and port.",
+                    "Verify the entry ID and that the integration supports its official "
+                    "reconfigure flow.",
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
@@ -1832,7 +1787,15 @@ class IntegrationTools:
             "title": "Set Integration",
         },
     )
-    @with_auto_backup(domain="integration", id_param="entry_id")
+    @with_auto_backup(
+        domain="integration",
+        id_param="entry_id",
+        # A reconfigure preflight is read-only: do not resolve settings, create
+        # a snapshot, or let backup policy affect the confirmation response.
+        skip_fn=lambda kwargs: (
+            bool(kwargs.get("reconfigure")) and not bool(kwargs.get("confirm"))
+        ),
+    )
     @log_tool_usage
     async def ha_set_integration(
         self,
@@ -1885,8 +1848,50 @@ class IntegrationTools:
                 default=None,
             ),
         ] = None,
+        reconfigure: Annotated[
+            bool,
+            Field(
+                default=False,
+                description=(
+                    "Use the existing config entry's official reconfigure flow "
+                    "instead of its options flow. Requires confirm=True to apply; "
+                    "confirm=False performs read-only preflight."
+                ),
+            ),
+        ] = False,
+        expected_device_id: Annotated[
+            str | None,
+            Field(
+                default=None, description="Expected Home Assistant device registry ID."
+            ),
+        ] = None,
+        expected_unique_id: Annotated[
+            str | None,
+            Field(default=None, description="Expected config-entry unique ID."),
+        ] = None,
+        expected_mac: Annotated[
+            str | None,
+            Field(
+                default=None, description="Expected physical device MAC or IEEE value."
+            ),
+        ] = None,
+        expected_entity_ids: Annotated[
+            list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                default=None,
+                description="Exact entity IDs expected to remain associated.",
+            ),
+        ] = None,
+        confirm: Annotated[
+            bool,
+            Field(
+                default=False,
+                description="Required when reconfigure=True to apply the change.",
+            ),
+        ] = False,
     ) -> dict[str, Any]:
-        """Manage an integration (config entry): enable/disable, add, or update options.
+        """Manage an integration (config entry): enable/disable, add, update options, or reconfigure.
 
         Modes (pick one):
         - Enable/disable: entry_id + enabled.
@@ -1894,6 +1899,9 @@ class IntegrationTools:
           flow, including menus and multi-step forms.
         - Update options: entry_id + config — drives the entry's options
           flow (what the "Configure" button does in the HA UI).
+        - Reconfigure: entry_id + reconfigure=True + config — drives the
+          existing entry's official reconfigure flow; pass confirm=False for
+          read-only preflight and confirm=True to apply.
 
         WHEN NOT TO USE:
         - Helpers (template, group, utility_meter, ...): use
@@ -1915,8 +1923,24 @@ class IntegrationTools:
         - Disable: ha_set_integration(entry_id="abc123", enabled=False)
         - Add: ha_set_integration(domain="workday", config={"name": "Workday"})
         - Update options: ha_set_integration(entry_id="abc123", config={"scan_interval": 30})
+        - Reconfigure preflight: ha_set_integration(
+          entry_id="abc123", reconfigure=True, config={"host": "10.0.0.5"}
+        )
         """
         try:
+            if reconfigure:
+                return await self._handle_reconfigure_mode(
+                    entry_id=entry_id,
+                    domain=domain,
+                    enabled=enabled,
+                    config=config,
+                    expected_device_id=expected_device_id,
+                    expected_unique_id=expected_unique_id,
+                    expected_mac=expected_mac,
+                    expected_entity_ids=expected_entity_ids,
+                    confirm=confirm,
+                )
+
             if domain is not None and entry_id is not None:
                 raise_tool_error(
                     create_error_response(
@@ -2007,6 +2031,53 @@ class IntegrationTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
+
+    async def _handle_reconfigure_mode(
+        self,
+        *,
+        entry_id: str | None,
+        domain: str | None,
+        enabled: bool | None,
+        config: dict[str, Any] | None,
+        expected_device_id: str | None,
+        expected_unique_id: str | None,
+        expected_mac: str | None,
+        expected_entity_ids: list[str] | None,
+        confirm: bool,
+    ) -> dict[str, Any]:
+        """Validate and dispatch the reconfigure mode of ``ha_set_integration``."""
+        if domain is not None or enabled is not None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Reconfigure mode requires entry_id and config; do not "
+                    "combine it with domain or enabled",
+                    context={
+                        "entry_id": entry_id,
+                        "domain": domain,
+                        "enabled": enabled,
+                    },
+                )
+            )
+        if entry_id is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Reconfigure mode requires an existing entry_id",
+                    suggestions=[
+                        "Use ha_get_integration() to find a valid config entry ID"
+                    ],
+                )
+            )
+        return await self._run_reconfigure(
+            entry_id,
+            config=config,
+            expected_device_id=expected_device_id,
+            expected_unique_id=expected_unique_id,
+            expected_mac=expected_mac,
+            expected_entity_ids=expected_entity_ids,
+            confirm=confirm,
+        )
 
     @staticmethod
     def _set_integration_error_context(

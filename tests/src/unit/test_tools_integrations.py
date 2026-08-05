@@ -1886,7 +1886,122 @@ class TestSetIntegrationModes:
             tools.ha_set_integration(entry_id="abc"), "Nothing to do"
         )
 
-    # === Mode delegation ===
+    async def test_reconfigure_mode_delegates_to_shared_handler(
+        self, tools, mock_client
+    ):
+        sentinel = {"success": True, "operation": "reconfigured"}
+        with patch.object(
+            tools,
+            "_run_reconfigure",
+            new=AsyncMock(return_value=sentinel),
+        ) as run_mock:
+            result = await tools.ha_set_integration(
+                entry_id="abc",
+                reconfigure=True,
+                config={"host": "10.0.50.170"},
+                expected_device_id="device-1",
+                confirm=True,
+            )
+        run_mock.assert_awaited_once_with(
+            "abc",
+            config={"host": "10.0.50.170"},
+            expected_device_id="device-1",
+            expected_unique_id=None,
+            expected_mac=None,
+            expected_entity_ids=None,
+            confirm=True,
+        )
+        assert result is sentinel
+
+    async def test_reconfigure_mode_reuses_shared_preflight_validation(
+        self, tools, mock_client
+    ):
+        entry = {
+            "entry_id": "abc",
+            "domain": "shelly",
+            "title": "Kitchen",
+            "supports_reconfigure": True,
+        }
+        identity = {"device_ids": [], "entity_ids": [], "macs": []}
+        with (
+            patch(
+                "ha_mcp.tools.tools_integrations.prepare_reconfigure_request",
+                new=AsyncMock(return_value=("abc", entry, {"host": "10.0.50.170"})),
+            ),
+            patch(
+                "ha_mcp.tools.tools_integrations._validate_reconfigure_identity_and_duplicates",
+                new=AsyncMock(return_value=identity),
+            ) as validate_mock,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools._run_reconfigure(
+                "abc",
+                config={"host": "10.0.50.170"},
+                expected_device_id="device-1",
+                confirm=False,
+            )
+
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert payload["status"] == "validation_only"
+        validate_mock.assert_awaited_once_with(
+            mock_client,
+            entry,
+            entry_id="abc",
+            domain="shelly",
+            expected_identity={
+                "device_id": "device-1",
+                "unique_id": None,
+                "mac": None,
+                "entity_ids": [],
+            },
+            prepared_identity=None,
+        )
+
+    async def test_reconfigure_mode_passes_prepared_identity_to_apply(
+        self, tools, mock_client
+    ):
+        entry = {
+            "entry_id": "abc",
+            "domain": "shelly",
+            "title": "Kitchen",
+            "supports_reconfigure": True,
+        }
+        identity = {"device_ids": ["device-1"], "entity_ids": [], "macs": []}
+        with (
+            patch(
+                "ha_mcp.tools.tools_integrations.prepare_reconfigure_request",
+                new=AsyncMock(return_value=("abc", entry, {"host": "10.0.50.170"})),
+            ),
+            patch(
+                "ha_mcp.tools.tools_integrations._validate_reconfigure_identity_and_duplicates",
+                new=AsyncMock(return_value=identity),
+            ),
+            patch(
+                "ha_mcp.tools.tools_integrations.reconfigure_config_entry",
+                new=AsyncMock(return_value={"success": True}),
+            ) as apply_mock,
+        ):
+            result = await tools._run_reconfigure(
+                "abc",
+                config={"host": "10.0.50.170"},
+                expected_device_id="device-1",
+                confirm=True,
+            )
+
+        assert result == {"success": True}
+        apply_mock.assert_awaited_once_with(
+            mock_client,
+            "abc",
+            config={"host": "10.0.50.170"},
+            expected_device_id="device-1",
+            expected_unique_id=None,
+            expected_mac=None,
+            expected_entity_ids=None,
+            _prepared_entry=entry,
+            _prepared_flow_config={"host": "10.0.50.170"},
+            _prepared_identity=identity,
+        )
 
     async def test_add_mode_delegates_to_create_config_entry(self, tools, mock_client):
         sentinel = {"success": True, "entry_id": "new123", "domain": "workday"}

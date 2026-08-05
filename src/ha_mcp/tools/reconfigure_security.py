@@ -83,6 +83,28 @@ def redact_reconfigure_value(value: Any, key: str | None = None) -> Any:
     return value
 
 
+def redact_reconfigure_schema(schema: Any) -> Any:
+    """Redact defaults and suggested values for sensitive flow fields."""
+    if not isinstance(schema, list):
+        return redact_reconfigure_value(schema)
+    redacted: list[Any] = []
+    for field in schema:
+        if not isinstance(field, dict):
+            redacted.append(redact_reconfigure_value(field))
+            continue
+        field_copy = redact_reconfigure_value(field)
+        field_name = field.get("name")
+        if isinstance(field_name, str) and _is_sensitive_key(field_name):
+            if isinstance(field_copy, dict):
+                if "default" in field_copy:
+                    field_copy["default"] = _REDACTED
+                description = field_copy.get("description")
+                if isinstance(description, dict) and "suggested_value" in description:
+                    description["suggested_value"] = _REDACTED
+        redacted.append(field_copy)
+    return redacted
+
+
 def build_reconfigure_rollback_metadata(
     entry_id: str,
     domain: str,
@@ -118,8 +140,9 @@ def build_reconfigure_rollback_metadata(
         "backup_scope": "edits",
         "backup_restore_supported": False,
         "backup_restore_note": (
-            "The generic integration snapshot is redacted and does not restore "
-            "connection settings; HA REST config-entry data may be unavailable. "
-            "Use the official reconfigure flow instead."
+            "The generic integration snapshot is audit evidence only; its shared "
+            "restore handler does not restore connection settings, and HA REST "
+            "config-entry data may be unavailable. Use the official reconfigure "
+            "flow instead."
         ),
     }

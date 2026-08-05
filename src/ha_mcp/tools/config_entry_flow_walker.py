@@ -28,7 +28,7 @@ from .config_entry_flow_menu import (
     _handle_menu_step,
 )
 from .helpers import raise_tool_error
-from .reconfigure_security import redact_reconfigure_value
+from .reconfigure_security import redact_reconfigure_schema, redact_reconfigure_value
 
 logger = logging.getLogger(__name__)
 
@@ -268,14 +268,11 @@ async def _raise_flow_api_error(
         if isinstance(step_schema, list):
             current_schema = step_schema
 
-    # Reconfigure errors already carry the active reconfigure schema. Starting
-    # a second normal setup flow here would introspect the wrong contract.
-    info = (
-        {}
-        if is_reconfigure
-        else await fetch_helper_flow_info(client, helper_type, menu_choice)
-    )
-    schema = current_schema if is_reconfigure else info.get("schema") or current_schema
+    if is_reconfigure:
+        schema = current_schema
+    else:
+        info = await fetch_helper_flow_info(client, helper_type, menu_choice)
+        schema = info.get("schema") or current_schema
 
     if field_errors:
         # Structured field errors — tell the caller which fields failed.
@@ -291,7 +288,9 @@ async def _raise_flow_api_error(
         # `field_errors` tells "what failed", `data_schema` tells "what's
         # accepted"; together they're enough for self-correction.
         if schema is not None:
-            context["data_schema"] = schema
+            context["data_schema"] = (
+                redact_reconfigure_schema(schema) if is_reconfigure else schema
+            )
     else:
         # Unstructured — attach the data_schema so the LLM has something to use.
         message = (
@@ -299,7 +298,9 @@ async def _raise_flow_api_error(
             f"({status_code}): {parsed['message']}"
         )
         if schema is not None:
-            context["data_schema"] = schema
+            context["data_schema"] = (
+                redact_reconfigure_schema(schema) if is_reconfigure else schema
+            )
             suggestions.append(
                 "Inspect 'data_schema' in this error to see the fields HA expects, "
                 "then retry with a corrected config."
@@ -429,6 +430,36 @@ def _raise_flow_abort(
     )
 
 
+def _unconsumed_reconfigure_keys(
+    config: dict[str, Any],
+    ignored_config_keys: set[str],
+    remaining_config: dict[str, Any],
+) -> list[str]:
+    """List caller keys that a reconfigure flow never consumed."""
+    return sorted(
+        ignored_config_keys | {key for key in remaining_config if key in config}
+    )
+
+
+def _reconfigure_success_response(
+    current_step: dict[str, Any],
+    *,
+    ignored_config_keys: set[str],
+    remaining_config: dict[str, Any],
+    reuse_state: _ReuseState,
+) -> dict[str, Any]:
+    """Build the common successful reconfigure response."""
+    response: dict[str, Any] = {
+        "success": True,
+        "operation": "reconfigured",
+        "flow_result": current_step,
+    }
+    warnings = _success_warnings(ignored_config_keys, remaining_config, reuse_state)
+    if warnings:
+        response["warnings"] = warnings
+    return response
+
+
 def _reconfigure_abort_result(
     current_step: dict[str, Any],
     *,
@@ -445,8 +476,8 @@ def _reconfigure_abort_result(
         or current_step.get("reason") not in _RECONFIGURE_SUCCESS_REASONS
     ):
         return None
-    unresolved = sorted(
-        ignored_config_keys | {key for key in remaining_config if key in config}
+    unresolved = _unconsumed_reconfigure_keys(
+        config, ignored_config_keys, remaining_config
     )
     if unresolved:
         raise_tool_error(
@@ -466,15 +497,12 @@ def _reconfigure_abort_result(
                 },
             )
         )
-    response: dict[str, Any] = {
-        "success": True,
-        "operation": "reconfigured",
-        "flow_result": current_step,
-    }
-    warnings = _success_warnings(ignored_config_keys, remaining_config, reuse_state)
-    if warnings:
-        response["warnings"] = warnings
-    return response
+    return _reconfigure_success_response(
+        current_step,
+        ignored_config_keys=ignored_config_keys,
+        remaining_config=remaining_config,
+        reuse_state=reuse_state,
+    )
 
 
 def _handle_abort_step(
@@ -500,6 +528,7 @@ def _handle_abort_step(
     if reconfigure_result is not None:
         return reconfigure_result
     _raise_flow_abort(flow_id, current_step, is_reconfigure=is_reconfigure)
+    raise AssertionError("unreachable after _raise_flow_abort")
 
 
 def _flow_form_payload(
@@ -609,6 +638,10 @@ async def _handle_flow_steps(
         helper_type: Optional helper type (e.g. ``"statistics"``). When
             provided, surfaces the helper's data_schema in error context
             for unstructured HA 4xx responses so the caller can react.
+        is_reconfigure: Whether this is the official reconfigure flow. In this
+            mode, ``create_entry`` is rejected as ``applied_but_unverified``;
+            a ``reconfigure_successful`` abort returns ``operation``
+            ``"reconfigured"``.
 
     Returns:
         ``{"success": True, "entry": result}`` on success, plus ``warnings``
@@ -766,7 +799,6 @@ def _handle_subentry_create_entry(
     is_reconfigure: bool,
     ignored_config_keys: set[str],
     remaining_config: dict[str, Any],
-    config: dict[str, Any],
     reuse_state: _ReuseState,
 ) -> dict[str, Any]:
     """Handle a subentry create result and reject it in reconfigure mode."""
@@ -776,6 +808,10 @@ def _handle_subentry_create_entry(
                 ErrorCode.SERVICE_CALL_FAILED,
                 "Config subentry reconfigure created a new entry instead "
                 "of updating the existing entry",
+                suggestions=[
+                    "Inspect Home Assistant for a duplicate subentry before "
+                    "retrying; do not create another entry automatically."
+                ],
                 context={
                     "flow_id": flow_id,
                     "status": "applied_but_unverified",
@@ -806,33 +842,17 @@ def _handle_subentry_abort(
 ) -> dict[str, Any]:
     """Handle a subentry abort, enforcing consumed values after reconfigure."""
     reason = current_step.get("reason")
-    if is_reconfigure and reason in _RECONFIGURE_SUCCESS_REASONS:
-        unresolved = sorted(
-            ignored_config_keys | {key for key in remaining_config if key in config}
-        )
-        if unresolved:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Config subentry reconfigure completed without "
-                    "consuming all supplied configuration values",
-                    context={
-                        "flow_id": flow_id,
-                        "status": "applied_but_incomplete",
-                        "unconsumed_config_keys": unresolved,
-                        "details": current_step,
-                    },
-                )
-            )
-        response: dict[str, Any] = {
-            "success": True,
-            "operation": "reconfigured",
-            "flow_result": current_step,
-        }
-        warnings = _success_warnings(ignored_config_keys, remaining_config, reuse_state)
-        if warnings:
-            response["warnings"] = warnings
-        return response
+    reconfigure_result = _reconfigure_abort_result(
+        current_step,
+        is_reconfigure=is_reconfigure,
+        flow_id=flow_id,
+        config=config,
+        ignored_config_keys=ignored_config_keys,
+        remaining_config=remaining_config,
+        reuse_state=reuse_state,
+    )
+    if reconfigure_result is not None:
+        return reconfigure_result
     raise_tool_error(
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
@@ -840,6 +860,7 @@ def _handle_subentry_abort(
             context={"flow_id": flow_id, "details": current_step},
         )
     )
+    raise AssertionError("unreachable after subentry flow abort")
 
 
 async def _handle_config_subentry_flow_steps(
@@ -876,7 +897,6 @@ async def _handle_config_subentry_flow_steps(
                 is_reconfigure=is_reconfigure,
                 ignored_config_keys=ignored_config_keys,
                 remaining_config=remaining_config,
-                config=config,
                 reuse_state=reuse_state,
             )
 

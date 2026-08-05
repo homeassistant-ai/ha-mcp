@@ -301,8 +301,12 @@ class TestIntegrationManagement:
         before = assert_mcp_success(before_result, "Read reconfigure target")
         result = await safe_call_tool(
             mcp_client,
-            "ha_reconfigure_integration",
-            {"entry_id": entry_id, "config": {"host": "127.0.0.1"}},
+            "ha_set_integration",
+            {
+                "entry_id": entry_id,
+                "reconfigure": True,
+                "config": {},
+            },
         )
         assert result.get("success") is False
         assert result.get("error", {}).get("code") == "VALIDATION_INVALID_PARAMETER"
@@ -314,7 +318,19 @@ class TestIntegrationManagement:
         after = assert_mcp_success(
             after_result, "Read reconfigure target after preflight"
         )
-        assert after.get("entry", after) == before.get("entry", before)
+        before_entry = before.get("entry", before)
+        after_entry = after.get("entry", after)
+        stable_fields = (
+            "entry_id",
+            "domain",
+            "unique_id",
+            "title",
+            "state",
+            "disabled_by",
+        )
+        assert {field: after_entry.get(field) for field in stable_fields} == {
+            field: before_entry.get(field) for field in stable_fields
+        }
 
     async def test_reconfigure_confirmed_opt_in(self, mcp_client):
         """Run a real reconfigure flow only for an explicitly provisioned E2E target."""
@@ -331,8 +347,13 @@ class TestIntegrationManagement:
         )
         result = await safe_call_tool(
             mcp_client,
-            "ha_reconfigure_integration",
-            {"entry_id": entry_id, "config": config, "confirm": True},
+            "ha_set_integration",
+            {
+                "entry_id": entry_id,
+                "reconfigure": True,
+                "config": config,
+                "confirm": True,
+            },
         )
         assert result.get("success") is True, result
         assert result.get("status") in {

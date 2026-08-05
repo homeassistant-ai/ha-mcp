@@ -1402,12 +1402,15 @@ class HomeAssistantClient:
             {"type": "config/entity_registry/list"}
         )
         result: Any = response.get("result") if isinstance(response, dict) else None
-        if not isinstance(result, list):
+        if not isinstance(result, list) or not all(
+            isinstance(item, dict) for item in result
+        ):
+            detail = response.get("error") if isinstance(response, dict) else response
             raise HomeAssistantAPIError(
-                "Unexpected response format from entity registry API",
+                f"Unexpected response from entity registry API: {detail!r}",
                 status_code=500,
             )
-        return [dict(item) for item in result if isinstance(item, dict)]
+        return [dict(item) for item in result]
 
     async def list_device_registry(self) -> list[dict[str, Any]]:
         """List Home Assistant's device registry through the official WebSocket API."""
@@ -1415,12 +1418,15 @@ class HomeAssistantClient:
             {"type": "config/device_registry/list"}
         )
         result: Any = response.get("result") if isinstance(response, dict) else None
-        if not isinstance(result, list):
+        if not isinstance(result, list) or not all(
+            isinstance(item, dict) for item in result
+        ):
+            detail = response.get("error") if isinstance(response, dict) else response
             raise HomeAssistantAPIError(
-                "Unexpected response format from device registry API",
+                f"Unexpected response from device registry API: {detail!r}",
                 status_code=500,
             )
-        return [dict(item) for item in result if isinstance(item, dict)]
+        return [dict(item) for item in result]
 
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
         """
@@ -1439,19 +1445,9 @@ class HomeAssistantClient:
             HomeAssistantAPIError: If entry not found or API error
         """
         logger.debug(f"Getting config entry: {entry_id}")
-        # List all entries and filter by entry_id.
-        # Typed as Any because _request returns dict[str, Any] generically,
-        # but this endpoint actually returns a list.
-        entries: Any = await self._request("GET", "/config/config_entries/entry")
-
-        if not isinstance(entries, list):
-            raise HomeAssistantAPIError(
-                "Unexpected response format from config entries API",
-                status_code=500,
-            )
-
+        entries = await self.list_config_entries()
         found: dict[str, Any] | None = next(
-            (dict(e) for e in entries if e.get("entry_id") == entry_id), None
+            (entry for entry in entries if entry.get("entry_id") == entry_id), None
         )
         if found is None:
             raise HomeAssistantAPIError(

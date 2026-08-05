@@ -32,7 +32,7 @@ from typing import Any, Literal, NoReturn
 
 from fastmcp.exceptions import ToolError
 
-from ..client.rest_client import HomeAssistantConnectionError
+from ..client.rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .config_entry_flow_form import _extract_schema_field_names
 from .config_entry_flow_walker import (
@@ -202,7 +202,12 @@ async def _optional_registry_rows(
                 f"{method_name} transport unavailable for {entry_id}"
             )
         ) from err
-    return result if isinstance(result, list) else None
+    if not isinstance(result, list):
+        raise HomeAssistantAPIError(
+            f"Unexpected response from {method_name} for {entry_id}",
+            status_code=500,
+        )
+    return result
 
 
 def _verification_state(before_available: bool, after_available: bool) -> str:
@@ -533,34 +538,16 @@ async def update_config_entry_options(
     return response
 
 
-async def _verify_reconfigured_entry(  # noqa: C901
-    client: Any,
-    before: dict[str, Any],
-    after: dict[str, Any],
+def _verify_reconfigure_identity_fields(
     *,
     entry_id: str,
-    domain: str,
+    before: dict[str, Any],
     before_identity: dict[str, Any],
+    after: dict[str, Any],
     after_identity: dict[str, Any],
     expected_identity: dict[str, Any],
-) -> dict[str, Any]:
-    """Verify identity preservation and absence of duplicate config entries."""
-    if after.get("entry_id") != entry_id or after.get("domain") != domain:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Reconfigure flow completed but the original config entry could not be verified",
-                suggestions=[
-                    "Inspect ha_get_integration() before retrying; do not create a duplicate entry.",
-                ],
-                context={
-                    "entry_id": entry_id,
-                    "expected_domain": domain,
-                    "verified_entry": redact_reconfigure_value(after),
-                },
-            )
-        )
-
+) -> None:
+    """Verify the identity anchors that must survive a reconfigure flow."""
     before_unique_id = before.get("unique_id")
     after_unique_id = after.get("unique_id")
     if (
@@ -577,7 +564,7 @@ async def _verify_reconfigured_entry(  # noqa: C901
         )
 
     expected_unique_id = expected_identity.get("unique_id")
-    if expected_unique_id is not None and after.get("unique_id") != expected_unique_id:
+    if expected_unique_id is not None and after_unique_id != expected_unique_id:
         _raise_identity_mismatch(
             entry_id,
             "Reconfigure result does not match expected unique_id",
@@ -653,6 +640,54 @@ async def _verify_reconfigured_entry(  # noqa: C901
                 after=after_identity,
                 expected=expected_identity,
             )
+
+
+async def _verify_reconfigured_entry(
+    client: Any,
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    entry_id: str,
+    domain: str,
+    before_identity: dict[str, Any],
+    after_identity: dict[str, Any],
+    expected_identity: dict[str, Any],
+) -> dict[str, Any]:
+    """Verify identity preservation and absence of duplicate config entries."""
+    if after.get("entry_id") != entry_id or after.get("domain") != domain:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Reconfigure flow completed but the original config entry could not be verified",
+                suggestions=[
+                    "Inspect ha_get_integration() before retrying; do not create a duplicate entry.",
+                ],
+                context={
+                    "entry_id": entry_id,
+                    "expected_domain": domain,
+                    "verified_entry": redact_reconfigure_value(after),
+                },
+            )
+        )
+
+    _verify_reconfigure_identity_fields(
+        entry_id=entry_id,
+        before=before,
+        before_identity=before_identity,
+        after=after,
+        after_identity=after_identity,
+        expected_identity=expected_identity,
+    )
+
+    before_unique_id = before.get("unique_id")
+    after_unique_id = after.get("unique_id")
+    before_device_ids = set(before_identity.get("device_ids", []))
+    after_device_ids = set(after_identity.get("device_ids", []))
+    expected_device_id = expected_identity.get("device_id")
+    before_entity_ids = set(before_identity.get("entity_ids", []))
+    after_entity_ids = set(after_identity.get("entity_ids", []))
+    expected_entity_ids = set(expected_identity.get("entity_ids", []))
+    expected_mac = expected_identity.get("mac")
 
     after_related_entry_ids = await _same_domain_related_entry_ids(
         client,
@@ -757,11 +792,9 @@ async def _verify_reconfigured_entry(  # noqa: C901
 def _build_reconfigure_flow_config(
     entry_id: str,
     *,
-    host: str | None,
-    port: int | None,
     config: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Validate and combine the explicit host/port and generic flow values."""
+    """Validate and copy the integration-defined reconfigure flow values."""
     if config is not None and not isinstance(config, dict):
         raise_tool_error(
             create_error_response(
@@ -770,45 +803,13 @@ def _build_reconfigure_flow_config(
                 context={"entry_id": entry_id},
             )
         )
-    flow_config: dict[str, Any] = dict(config or {})
-    if host is not None:
-        flow_config["host"] = validate_identifier_not_empty(
-            host,
-            "host",
-            suggestions=["Provide the device IP address or hostname"],
-        )
-    if port is not None:
-        flow_config["port"] = port
-    if not flow_config:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Provide host/port or a non-empty config object",
-                context={"entry_id": entry_id},
-            )
-        )
-    flow_port = flow_config.get("port")
-    if flow_port is not None and (
-        isinstance(flow_port, bool)
-        or not isinstance(flow_port, int)
-        or not 1 <= flow_port <= 65535
-    ):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "port must be an integer between 1 and 65535",
-                context={"entry_id": entry_id, "port": flow_port},
-            )
-        )
-    return flow_config
+    return dict(config or {})
 
 
 async def prepare_reconfigure_request(
     client: Any,
     entry_id: str,
     *,
-    host: str | None = None,
-    port: int | None = None,
     config: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any], dict[str, Any]]:
     """Prepare one reconfigure request for preflight and confirmed execution."""
@@ -817,9 +818,7 @@ async def prepare_reconfigure_request(
         "entry_id",
         suggestions=["Use ha_get_integration() to find valid config entry IDs"],
     )
-    flow_config = _build_reconfigure_flow_config(
-        validated_entry_id, host=host, port=port, config=config
-    )
+    flow_config = _build_reconfigure_flow_config(validated_entry_id, config=config)
     entry = await client.get_config_entry(validated_entry_id)
     domain = entry.get("domain")
     if not isinstance(domain, str) or not domain:
@@ -1088,8 +1087,6 @@ async def reconfigure_config_entry(
     client: Any,
     entry_id: str,
     *,
-    host: str | None = None,
-    port: int | None = None,
     config: dict[str, Any] | None = None,
     expected_device_id: str | None = None,
     expected_unique_id: str | None = None,
@@ -1102,12 +1099,12 @@ async def reconfigure_config_entry(
     """Reconfigure an existing integration through HA's official flow.
 
     The operation is intentionally generic: integrations opt in by exposing
-    ``async_step_reconfigure`` and decide how the submitted host/port values
-    are validated. The existing config entry is never deleted or recreated.
+    ``async_step_reconfigure`` and decide how the submitted values are
+    validated. The existing config entry is never deleted or recreated.
     """
     if _prepared_entry is None or _prepared_flow_config is None:
         entry_id, before, flow_config = await prepare_reconfigure_request(
-            client, entry_id, host=host, port=port, config=config
+            client, entry_id, config=config
         )
     else:
         entry_id = validate_identifier_not_empty(entry_id, "entry_id")

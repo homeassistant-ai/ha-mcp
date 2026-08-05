@@ -684,7 +684,8 @@ class TestSubentryFlowIgnoredKeys:
             "Ignored config keys not declared by the Home Assistant flow schema: junk"
         ]
 
-    async def test_subentry_reconfigure_abort_reports_ignored_keys(self) -> None:
+    async def test_subentry_reconfigure_abort_rejects_ignored_keys(self) -> None:
+        """A reconfigure abort fails when the flow consumed no supplied key."""
         abort_step = {"type": "abort", "reason": "reconfigure_successful"}
         client = AsyncMock()
         client.submit_config_subentry_flow_step = AsyncMock(side_effect=[abort_step])
@@ -1231,7 +1232,6 @@ class TestRedeclaredFieldReuse:
         The ceiling is what ends the walk; the fire-once bound is what keeps the
         run in between from writing the same value ten times.
         """
-        import json
 
         from fastmcp.exceptions import ToolError
 
@@ -1802,7 +1802,6 @@ class TestAllKeysIgnoredIsAnError:
     """
 
     async def test_all_supplied_keys_ignored_raises(self) -> None:
-        import json
 
         from fastmcp.exceptions import ToolError
 
@@ -1857,7 +1856,6 @@ class TestAllKeysIgnoredIsAnError:
         assert "warnings" not in result
 
     async def test_seeded_section_defaults_do_not_count_as_consumed_keys(self) -> None:
-        import json
 
         from fastmcp.exceptions import ToolError
 
@@ -1893,7 +1891,6 @@ class TestAllKeysIgnoredIsAnError:
 
     async def test_step_owned_submission_does_not_count_as_consumed_keys(self) -> None:
         """A step's own suggestion fills a form but applies nothing the caller asked for."""
-        import json
 
         from fastmcp.exceptions import ToolError
 
@@ -2118,7 +2115,6 @@ class TestCyclicMenuFlows:
 
     async def test_re_encountered_menu_error_explains_list_syntax(self) -> None:
         """The revisit error must not claim no selection was supplied."""
-        import json
 
         from fastmcp.exceptions import ToolError
 
@@ -2149,7 +2145,6 @@ class TestCyclicMenuFlows:
 
     async def test_exhausted_error_example_uses_the_callers_key(self) -> None:
         """A group_type caller sees a group_type example, not next_step_id."""
-        import json
 
         from fastmcp.exceptions import ToolError
 
@@ -2192,7 +2187,6 @@ class TestCyclicMenuFlows:
         assert "warnings" not in result
 
     async def test_first_menu_without_selection_keeps_original_error(self) -> None:
-        import json
 
         from fastmcp.exceptions import ToolError
 
@@ -2209,7 +2203,6 @@ class TestCyclicMenuFlows:
         assert body["error"]["message"].startswith("Menu step requires a selection")
 
     async def test_empty_selection_list_is_treated_as_missing(self) -> None:
-        import json
 
         from fastmcp.exceptions import ToolError
 
@@ -2350,7 +2343,6 @@ class TestCyclicMenuFlows:
 
     async def test_falsy_list_element_raises_distinct_validation_error(self) -> None:
         """A falsy element is a malformed call, not an exhausted list."""
-        import json
 
         from fastmcp.exceptions import ToolError
 
@@ -2371,7 +2363,6 @@ class TestCyclicMenuFlows:
         assert "Menu step requires a selection" not in body["error"]["message"]
 
     async def test_falsy_element_midlist_is_not_reported_as_exhaustion(self) -> None:
-        import json
 
         from fastmcp.exceptions import ToolError
 
@@ -2447,7 +2438,6 @@ class TestCyclicMenuFlows:
 
     async def test_subentry_walker_exhausted_selections_error(self) -> None:
         """The revisited-menu error exists on the subentry walker too."""
-        import json
 
         from fastmcp.exceptions import ToolError
 
@@ -2483,7 +2473,6 @@ class TestCyclicMenuFlows:
 
     async def test_over_budget_timeout_names_consumed_selections(self) -> None:
         """A walk that exhausts its budget says what it consumed on the way."""
-        import json
 
         from fastmcp.exceptions import ToolError
 
