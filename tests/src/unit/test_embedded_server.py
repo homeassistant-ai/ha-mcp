@@ -1343,6 +1343,37 @@ class TestPendingInstallMarker:
         assert DATA_PENDING_INSTALL_VERSION not in entry.data
 
 
+class TestPinMovesOffInstalled:
+    """The predicate that lets the source-change uninstall be skipped.
+
+    A True here means "the forced install is guaranteed to be real", so a
+    wrong True reopens #1914: no uninstall, and an install the installer
+    then no-ops as already satisfied.
+    """
+
+    def test_local_version_label_still_satisfies_the_pin(self):
+        # PEP 440: ==1.0 matches an installed 1.0+local, even though
+        # Version("1.0") != Version("1.0+local"). Comparing parsed versions
+        # would call this "moved" and skip the uninstall.
+        assert not es._pin_moves_off_installed("ha-mcp==1.0", "1.0+local")
+
+    def test_different_version_moves(self):
+        assert es._pin_moves_off_installed("ha-mcp==8.1.0", "8.0.0")
+
+    def test_same_version_does_not_move(self):
+        assert not es._pin_moves_off_installed("ha-mcp==8.1.0", "8.1.0")
+
+    def test_non_pin_specs_never_move(self):
+        assert not es._pin_moves_off_installed("ha-mcp", "8.1.0")
+        assert not es._pin_moves_off_installed("ha-mcp>=8.0.0", "8.1.0")
+
+    def test_unprovable_inputs_keep_the_uninstall(self):
+        # Unparseable either side -> "unknown", which must not be reported
+        # as a guaranteed move.
+        assert not es._pin_moves_off_installed("ha-mcp==8.1.0", "not-a-version")
+        assert not es._pin_moves_off_installed("!!! not a requirement", "8.1.0")
+
+
 class TestDistHelpers:
     def test_dist_installed_true(self, monkeypatch):
         monkeypatch.setattr(importlib.metadata, "version", lambda name: "1.0")

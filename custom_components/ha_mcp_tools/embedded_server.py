@@ -2079,19 +2079,30 @@ def _scoped_install_flags(spec: str, channel_dist: str | None) -> list[str]:
 
 
 def _pin_moves_off_installed(spec: str, installed_version: str) -> bool:
-    """True when ``spec`` is an exact pin on a DIFFERENT version than installed.
+    """True when an exact-pin ``spec`` CANNOT be satisfied by what's installed.
 
-    False when the spec is not an exact pin, or when either version string
-    cannot be parsed — "unprovable" must not be mistaken for "guaranteed to
-    move", since the caller skips its uninstall on a True.
+    Asks the pin's own specifier rather than comparing parsed versions: PEP
+    440 ``==1.0`` matches an installed ``1.0+local``, while
+    ``Version("1.0") != Version("1.0+local")`` is True. A version comparison
+    would therefore call that pin "moved", skip the caller's uninstall, and
+    let the installer no-op it as already satisfied — the #1914 shape.
+
+    False when the spec is not an exact pin, and False whenever the answer
+    is unprovable (unparseable requirement or version): "unknown" must not
+    be mistaken for "guaranteed to move", since the caller skips its
+    uninstall on a True.
     """
-    pinned = _exact_pinned_version(spec)
-    if pinned is None:
+    if _exact_pinned_version(spec) is None:
         return False
     try:
-        return Version(pinned) != Version(installed_version)
-    except InvalidVersion:
+        requirement = Requirement(spec)
+        # Validate the installed version explicitly: SpecifierSet.contains()
+        # answers False for an unparseable version rather than raising, and
+        # False here would invert to "moved" — the unsafe direction.
+        Version(installed_version)
+    except (InvalidRequirement, InvalidVersion):
         return False
+    return not requirement.specifier.contains(installed_version, prereleases=True)
 
 
 def _spec_is_url_requirement(spec: str) -> bool:
