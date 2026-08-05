@@ -34,6 +34,7 @@ websockets pin would have.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from pathlib import Path
@@ -41,6 +42,10 @@ from pathlib import Path
 import pytest
 import requests
 from test_constants import HA_TEST_IMAGE
+
+# The component's own constant, so a rename cannot silently turn the
+# force-install marker below into a permanently-absent key.
+from custom_components.ha_mcp_tools.const import DATA_LAST_PIP_SPEC
 
 from ...conftest import (
     EMBEDDED_FREEZE_AFTER,
@@ -282,14 +287,34 @@ def test_embedded_runtime_install_replaces_nothing_ha_governs(
     # fast path or defers mutations: ha-mcp is in the live `pip list`
     # either way (the entrypoint preinstalled it), so the before/after diff
     # would be empty and the test would be green having exercised nothing.
-    log_text = (config_path / "home-assistant.log").read_text(
-        encoding="utf-8", errors="replace"
+    #
+    # The marker is the STORED spec rather than the bring-up log line: HA
+    # rotates home-assistant.log on every start, and the session container
+    # is restarted by other tests long before this one runs, so the log is
+    # not durable evidence. `last_pip_spec` is, and it is written by
+    # exactly one branch — `_store_installed_spec()` runs only when the
+    # stored spec DIFFERS from the target, which the fast path (entered
+    # only when they are equal) can never satisfy. The conftest seeds the
+    # entry with no `last_pip_spec` at all, so its presence here means the
+    # component ran its own force-install inside the live HA.
+    entries = json.loads(
+        (config_path / ".storage" / "core.config_entries").read_text(encoding="utf-8")
     )
-    assert "Installing the in-process server package" in log_text, (
-        "the component's force-install never ran (no install log line), so "
-        "this guard exercised no runtime install — if bring-up now takes "
-        "the fast path by design, this test needs a new way to reach the "
-        "install path rather than being allowed to pass vacuously"
+    server_entries = [
+        entry
+        for entry in entries["data"]["entries"]
+        if entry.get("data", {}).get("entry_type") == "server"
+    ]
+    assert len(server_entries) == 1, (
+        f"expected exactly one in-process server config entry, got "
+        f"{len(server_entries)} — the conftest seeding changed"
+    )
+    assert server_entries[0]["data"].get(DATA_LAST_PIP_SPEC), (
+        "the component's force-install never ran (no last_pip_spec recorded "
+        "on the server config entry), so this guard exercised no runtime "
+        "install — if bring-up now takes the fast path by design, this test "
+        "needs a new way to reach the install path rather than being allowed "
+        "to pass vacuously"
     )
 
     _assert_no_governed_changes(

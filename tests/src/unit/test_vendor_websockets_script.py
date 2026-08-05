@@ -24,6 +24,8 @@ import vendor_websockets as vendor  # noqa: E402
 
 _VERSION = "9.9.9"
 _PREFIX = f"websockets-{_VERSION}"
+# A member that escapes the vendored tree once its prefix is stripped.
+_TRAVERSAL = "../../../evil.py"
 
 
 def _tarball(members: dict[str, str]) -> bytes:
@@ -123,17 +125,23 @@ class TestFailurePaths:
     def test_archive_member_escaping_the_vendor_dir_is_refused(self, sandbox):
         """CWE-22: a crafted member must never write outside the tree."""
         target, install = sandbox
-        install(_sdist({f"{_PREFIX}/src/websockets/../../../evil.py": "pwned = 1\n"}))
+        install(_sdist({f"{_PREFIX}/src/websockets/{_TRAVERSAL}": "pwned = 1\n"}))
 
         with pytest.raises(SystemExit):
             vendor.main()
 
-        assert not (target.parent.parent / "evil.py").exists()
+        # Assert on where the member would ACTUALLY land: the script strips
+        # the prefix and joins the remainder onto the staging dir, so this
+        # one resolves three levels above it — outside tmp_path entirely.
+        # Checking a path inside tmp_path would pass with the containment
+        # check deleted, which is the one thing this test must catch.
+        escaped = (target.with_name(target.name + ".incoming") / _TRAVERSAL).resolve()
+        assert not escaped.exists(), f"traversal member escaped to {escaped}"
 
     def test_a_failed_sync_leaves_no_staging_tree_and_no_live_tree(self, sandbox):
         """A refused member must not strand a half-written package."""
         target, install = sandbox
-        install(_sdist({f"{_PREFIX}/src/websockets/../../../evil.py": "pwned = 1\n"}))
+        install(_sdist({f"{_PREFIX}/src/websockets/{_TRAVERSAL}": "pwned = 1\n"}))
 
         with pytest.raises(SystemExit):
             vendor.main()
@@ -154,6 +162,36 @@ class TestFailurePaths:
 
         assert vendor.manifest_lines(target) == before
 
+    def test_a_failed_promotion_restores_the_previous_tree(self, sandbox, monkeypatch):
+        """A rename failure must not leave the checkout with no vendored tree.
+
+        The package imports only the vendored copy, so losing it here is not
+        "the sync failed" — it is an unimportable checkout whose recovery is a
+        git command the failure never mentions.
+        """
+        target, install = sandbox
+        install(_sdist())
+        assert vendor.main() == 0
+        before = vendor.manifest_lines(target)
+
+        real_rename = Path.rename
+
+        def failing_promotion(self, destination):
+            # Fail ONLY the staging -> live promotion, so the rollback's own
+            # rename still works (it is what this test is checking).
+            if self.name.endswith(".incoming"):
+                raise OSError("promotion failed")
+            return real_rename(self, destination)
+
+        monkeypatch.setattr(Path, "rename", failing_promotion)
+        install(_sdist())
+        with pytest.raises(OSError):
+            vendor.main()
+
+        assert target.is_dir(), "the previous vendored tree was not restored"
+        assert vendor.manifest_lines(target) == before
+        assert not target.with_name(target.name + ".incoming").exists()
+
     def test_unexpected_sdist_layout_is_refused(self, sandbox):
         """No websockets/__init__.py means the layout moved — bail loudly."""
         target, install = sandbox
@@ -162,8 +200,9 @@ class TestFailurePaths:
         with pytest.raises(SystemExit):
             vendor.main()
 
-    def test_missing_pin_is_refused(self, sandbox, monkeypatch):
-        target, _install = sandbox
+    def test_missing_pin_is_refused(self, sandbox):
+        # The fixture is requested for its monkeypatching of _PIN_FILE, not
+        # for its value.
         vendor._PIN_FILE.write_text("# no pin here\n", encoding="utf-8")
 
         with pytest.raises(SystemExit):

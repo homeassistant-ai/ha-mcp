@@ -74,8 +74,12 @@ def manifest_lines(tree: Path) -> list[str]:
 
 
 def _write_manifest(tree: Path) -> None:
+    # newline="\n" is load-bearing: text mode translates to CRLF on a
+    # Windows checkout while git stores LF, so a manifest written here
+    # would not match the same tree on a Linux CI runner (and the file
+    # hashes itself into the next sync's manifest).
     (tree / MANIFEST_NAME).write_text(
-        "\n".join(manifest_lines(tree)) + "\n", encoding="utf-8"
+        "\n".join(manifest_lines(tree)) + "\n", encoding="utf-8", newline="\n"
     )
 
 
@@ -84,6 +88,74 @@ def read_pin() -> str:
         if match := re.fullmatch(r"websockets==([A-Za-z0-9.!+-]+)", raw_line.strip()):
             return match.group(1)
     raise SystemExit(f"no 'websockets==<version>' pin found in {_PIN_FILE}")
+
+
+def _stage_sdist(payload: bytes, version: str, staging: Path) -> int:
+    """Extract the sdist's pure-Python sources into ``staging``.
+
+    Returns the number of package files written (the LICENSE is copied too
+    but is not part of the count).
+    """
+    prefix = f"websockets-{version}/src/websockets/"
+    license_name = f"websockets-{version}/LICENSE"
+    extracted = 0
+    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tar:
+        for member in tar.getmembers():
+            if member.name == license_name:
+                staging.mkdir(parents=True, exist_ok=True)
+                extract = tar.extractfile(member)
+                assert extract is not None
+                (staging / "LICENSE").write_bytes(extract.read())
+                continue
+            if not member.name.startswith(prefix) or not member.isfile():
+                continue
+            relative = member.name[len(prefix) :]
+            # Pure-Python only: the optional C accelerator (speedups.c) is
+            # deliberately left out — websockets falls back to its Python
+            # implementation when the extension is absent.
+            # The .pyi stub goes with it: shipping a stub for a module this
+            # package does not contain would advertise it to type checkers
+            # following py.typed.
+            if relative.endswith((".c", ".so", ".pyd", "speedups.pyi")):
+                continue
+            destination = (staging / relative).resolve()
+            # Containment check (CWE-22): member names come from the
+            # downloaded archive, so a crafted ``../`` inside the matched
+            # prefix must never write outside the vendor dir.
+            if not destination.is_relative_to(staging.resolve()):
+                raise SystemExit(
+                    f"refusing archive member escaping the vendor dir: {member.name}"
+                )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            extract = tar.extractfile(member)
+            assert extract is not None
+            destination.write_bytes(extract.read())
+            extracted += 1
+    return extracted
+
+
+def _promote(staging: Path) -> None:
+    """Swap the staged tree into place, keeping the live one until it lands.
+
+    The live tree is moved ASIDE rather than deleted first: deleting it up
+    front means a failed promotion (a permission error, an open handle on
+    Windows) leaves the repository with no vendored websockets at all — and
+    the package imports only the vendored copy, so that is an unimportable
+    checkout whose recovery is a git command the failure never mentions.
+    """
+    backup = _TARGET.with_name(_TARGET.name + ".previous")
+    shutil.rmtree(backup, ignore_errors=True)
+    had_previous = _TARGET.exists()
+    if had_previous:
+        _TARGET.rename(backup)
+    try:
+        staging.rename(_TARGET)
+    except BaseException:
+        if had_previous:
+            backup.rename(_TARGET)
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    shutil.rmtree(backup, ignore_errors=True)
 
 
 def main() -> int:
@@ -101,50 +173,15 @@ def main() -> int:
     if staging.exists():
         shutil.rmtree(staging)
 
-    prefix = f"websockets-{version}/src/websockets/"
-    license_name = f"websockets-{version}/LICENSE"
-    extracted = 0
     try:
-        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tar:
-            for member in tar.getmembers():
-                if member.name == license_name:
-                    staging.mkdir(parents=True, exist_ok=True)
-                    extract = tar.extractfile(member)
-                    assert extract is not None
-                    (staging / "LICENSE").write_bytes(extract.read())
-                    continue
-                if not member.name.startswith(prefix) or not member.isfile():
-                    continue
-                relative = member.name[len(prefix) :]
-                # Pure-Python only: the optional C accelerator (speedups.c) is
-                # deliberately left out — websockets falls back to its Python
-                # implementation when the extension is absent.
-                # The .pyi stub goes with it: shipping a stub for a module
-                # this package does not contain would advertise it to type
-                # checkers following py.typed.
-                if relative.endswith((".c", ".so", ".pyd", "speedups.pyi")):
-                    continue
-                destination = (staging / relative).resolve()
-                # Containment check (CWE-22): member names come from the
-                # downloaded archive, so a crafted ``../`` inside the matched
-                # prefix must never write outside the vendor dir.
-                if not destination.is_relative_to(staging.resolve()):
-                    raise SystemExit(
-                        f"refusing archive member escaping the vendor dir: "
-                        f"{member.name}"
-                    )
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                extract = tar.extractfile(member)
-                assert extract is not None
-                destination.write_bytes(extract.read())
-                extracted += 1
-
+        extracted = _stage_sdist(payload, version, staging)
         if not (staging / "__init__.py").is_file():
             raise SystemExit("sdist layout unexpected: no websockets/__init__.py")
         (staging / "VENDORED").write_text(
             f"websockets=={version}\n"
             "Vendored by scripts/vendor_websockets.py — do not edit by hand.\n",
             encoding="utf-8",
+            newline="\n",
         )
         _write_manifest(staging)
     except BaseException:
@@ -153,10 +190,7 @@ def main() -> int:
         shutil.rmtree(staging, ignore_errors=True)
         raise
 
-    # Swap only once the staged tree is complete and validated.
-    if _TARGET.exists():
-        shutil.rmtree(_TARGET)
-    staging.rename(_TARGET)
+    _promote(staging)
     print(f"vendored websockets=={version}: {extracted} files -> {_TARGET}")
     return 0
 

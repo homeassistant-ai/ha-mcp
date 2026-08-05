@@ -19,6 +19,7 @@ import threading
 import time
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+from urllib.parse import urlparse
 
 import pytest
 
@@ -3758,7 +3759,14 @@ class TestForceInstallPackage:
         def fake_run(args, **kwargs):
             env = kwargs["env"]
             calls.append(env)
-            if "wheels.home-assistant.io" in env.get("UV_EXTRA_INDEX_URL", ""):
+            # Match the HOST, the way the installer's own retry does — a
+            # substring test over the whole index list would also "match" a
+            # URL that merely mentions the host in a path or query.
+            hosts = {
+                urlparse(url).hostname
+                for url in env.get("UV_EXTRA_INDEX_URL", "").split()
+            }
+            if "wheels.home-assistant.io" in hosts:
                 return SimpleNamespace(
                     returncode=1,
                     stderr="error: failed to fetch https://wheels.home-assistant.io/x",

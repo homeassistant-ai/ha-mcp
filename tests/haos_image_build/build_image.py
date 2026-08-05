@@ -318,6 +318,17 @@ def _http(
     return json.loads(raw) if raw else {}
 
 
+def _attempt_budget(deadline: float, want: float) -> float:
+    """Cap one poll attempt so the loop cannot overrun its own deadline.
+
+    Without this a helper documented as "180s" can run 180 + connect-timeout
+    + sleep, because both are spent AFTER the deadline check. Floored at
+    0.1s: a zero timeout puts the socket into non-blocking mode, turning a
+    legitimate final attempt into an instant spurious failure.
+    """
+    return max(0.1, min(want, deadline - time.monotonic()))
+
+
 def _wait_any_port(
     ports: tuple[int, ...], host: str = "127.0.0.1", timeout: float = 180.0
 ) -> int:
@@ -332,13 +343,13 @@ def _wait_any_port(
     while time.monotonic() < deadline:
         for port in ports:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(2.0)
+                s.settimeout(_attempt_budget(deadline, 2.0))
                 try:
                     s.connect((host, port))
                     return port
                 except OSError:
                     continue
-        time.sleep(2.0)
+        time.sleep(max(0.0, min(2.0, deadline - time.monotonic())))
     raise TimeoutError(f"none of {host}:{list(ports)} opened within {timeout}s")
 
 
@@ -347,12 +358,14 @@ def _wait_http_ok(url: str, timeout: float = 300.0) -> None:
     last_err: Exception | None = None
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=5.0) as resp:
+            with urllib.request.urlopen(
+                url, timeout=_attempt_budget(deadline, 5.0)
+            ) as resp:
                 if resp.status == 200:
                     return
         except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
             last_err = e
-        time.sleep(3.0)
+        time.sleep(max(0.0, min(3.0, deadline - time.monotonic())))
     raise TimeoutError(
         f"{url} did not become ready within {timeout}s (last: {last_err})"
     )
@@ -378,14 +391,14 @@ def _discover_ha_base_url(timeout: float = 600.0) -> str:
         for base in candidates:
             try:
                 with urllib.request.urlopen(
-                    f"{base}/manifest.json", timeout=5.0
+                    f"{base}/manifest.json", timeout=_attempt_budget(deadline, 5.0)
                 ) as resp:
                     if resp.status == 200:
                         LOG.info("HA is answering on %s", base)
                         return base
             except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
                 last_errors[base] = repr(e)
-        time.sleep(3.0)
+        time.sleep(max(0.0, min(3.0, deadline - time.monotonic())))
     raise TimeoutError(
         f"HA did not answer on any forwarded port within {timeout}s: {last_errors}"
     )
