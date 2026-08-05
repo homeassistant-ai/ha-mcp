@@ -63,8 +63,10 @@ ONBOARDING_NAME = "HA-MCP CI"
 HA_HOST_PORT = int(os.environ.get("HAOS_BUILD_HA_PORT", "18123"))
 # Forward of guest port 80: HA 2026.8 changed the Supervisor-managed
 # DEFAULT HTTP port from 8123 to 80 (http.config.default_server_port),
-# so a FRESH boot - before bake_test_state seeds the configuration.yaml
-# that pins server_port: 8123 - answers on 80. The bake probes both.
+# so a FRESH boot - before bake_test_state seeds the .storage/http
+# store that pins server_port 8123 - answers on 80. The bake probes
+# both. (configuration.yaml deliberately carries no http: block; a YAML
+# block becomes a self-reverting trial on 2026.8.)
 HA_ALT_HOST_PORT = int(os.environ.get("HAOS_BUILD_HA_ALT_PORT", "18124"))
 SSH_HOST_PORT = int(os.environ.get("HAOS_BUILD_SSH_PORT", "12222"))
 
@@ -361,7 +363,7 @@ def _discover_ha_base_url(timeout: float = 600.0) -> str:
 
     HA 2026.8 changed the Supervisor-managed default HTTP port from 8123 to
     80 ("Supervisor fronts Core on the standard HTTP port"), so a FRESH
-    boot — before the seeded configuration.yaml pinning server_port: 8123
+    boot — before the seeded .storage/http store pinning server_port 8123
     exists — serves guest port 80, while older cores serve 8123. Probe both
     forwards and lock onto the responder; every later phase of the bake
     talks to that base URL.

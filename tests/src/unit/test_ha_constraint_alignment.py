@@ -167,3 +167,60 @@ class TestMainExitCodes:
         constraints = tmp_path / "cons.txt"
         constraints.write_text("# nothing but comments\n", encoding="utf-8")
         assert checker.main(["--constraints-file", str(constraints)]) == 2
+
+
+class TestFetchFailurePath:
+    """The fetch budget the CI job's timeout is sized against.
+
+    pr.yml raised the lockfile job to 5 minutes and treats exit 2 as a
+    fail-open warning on the reasoning that a fetch failure resolves FAST
+    and distinctly. Restoring a long timeout or a trailing sleep would push
+    the worst case past the job budget, turning that clean exit into an
+    opaque runner kill — the exact outcome the comments say must not happen.
+    """
+
+    def _patch_fetch(self, monkeypatch, *, sleeps, attempts):
+        def boom(*_args, **_kwargs):
+            attempts.append(1)
+            raise checker.urllib.error.URLError("network down")
+
+        monkeypatch.setattr(checker.urllib.request, "urlopen", boom)
+        monkeypatch.setattr(checker.time, "sleep", sleeps.append)
+
+    def test_unreachable_constraints_exit_two(self, monkeypatch):
+        sleeps: list[float] = []
+        attempts: list[int] = []
+        self._patch_fetch(monkeypatch, sleeps=sleeps, attempts=attempts)
+        assert checker.main(["--ha-version", "2026.8.0"]) == 2
+
+    def test_exactly_three_attempts_with_no_trailing_sleep(self, monkeypatch):
+        sleeps: list[float] = []
+        attempts: list[int] = []
+        self._patch_fetch(monkeypatch, sleeps=sleeps, attempts=attempts)
+        checker.main(["--ha-version", "2026.8.0"])
+        assert len(attempts) == checker._FETCH_ATTEMPTS == 3
+        assert len(sleeps) == checker._FETCH_ATTEMPTS - 1, (
+            "a sleep after the final attempt is pure waste and pushes the "
+            "worst case toward the job timeout"
+        )
+
+    def test_worst_case_fits_well_inside_the_job_timeout(self):
+        budget = checker._FETCH_ATTEMPTS * checker._FETCH_TIMEOUT_SECONDS + sum(
+            checker._FETCH_BACKOFF_SECONDS * (n + 1)
+            for n in range(checker._FETCH_ATTEMPTS - 1)
+        )
+        assert budget <= 60, (
+            f"worst-case fetch is {budget}s; the lockfile job also checks the "
+            "lockfile and resolves packages, so keep this well under its "
+            "timeout-minutes or exit 2 becomes an opaque kill"
+        )
+
+    def test_unreadable_local_file_exits_two(self, tmp_path):
+        missing = tmp_path / "nope.txt"
+        assert checker.main(["--constraints-file", str(missing)]) == 2
+
+
+class TestMarkerSkipIsAnnounced:
+    def test_skipped_marker_clause_is_reported_on_stderr(self, capsys):
+        checker.parse_requirement_lines("fakelib==1.0;python_version<'3.0'\n")
+        assert "fakelib" in capsys.readouterr().err

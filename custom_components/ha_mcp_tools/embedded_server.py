@@ -1018,7 +1018,7 @@ class EmbeddedServerManager:
             partial(
                 _force_install_package,
                 self._pip_spec,
-                upgrade_dist=self._replaced_dist_name(),
+                channel_dist=dist_for_channel(self._channel),
                 constraints=kwargs.get("constraints"),
                 target=kwargs.get("target"),
                 timeout=timeout,
@@ -1954,39 +1954,28 @@ def _uninstall_distribution(dist_name: str, *, target: str | None = None) -> boo
 def _force_install_package(
     spec: str,
     *,
-    upgrade_dist: str | None,
+    channel_dist: str | None,
     constraints: str | None,
     target: str | None,
     timeout: int | None,
 ) -> bool:
-    """Install ``spec``, upgrading ONLY the named distribution (blocking).
+    """Install ``spec``, touching ONLY our own distribution (blocking).
 
     Mirrors ``homeassistant.util.package.install_package``'s uv invocation
     (index strategy, constraints, target, the uv --user workaround, and the
-    HTTP_TIMEOUT env) but swaps its eager ``--upgrade`` — which re-resolves
-    EVERY dependency to the newest allowed version, replacing packages the
-    Home Assistant image already ships (#2135/#2146) — for a scoped flag
-    that can only ever touch ha-mcp's own distribution:
-
-    * a named spec upgrades just that distribution
-      (``--upgrade-package <dist>``), which is what makes a channel
-      auto-update;
-    * a direct-URL spec (``upgrade_dist=None``) reinstalls just that
-      distribution (``--reinstall-package <name>``) so a URL install is
-      always REAL even when uv would consider the same URL already
-      satisfied — several callers (``_replaced_dist_name``,
-      ``_async_remove_replaced_source``) skip their uninstall on exactly
-      that guarantee, which the removed ``upgrade=True`` used to provide.
-
-    A bare URL that carries no distribution name is the one spec neither
-    flag can scope; it installs unflagged, as it did before.
+    HTTP_TIMEOUT env) but never its eager ``--upgrade``, which re-resolves
+    EVERY dependency to the newest allowed version and replaces packages the
+    Home Assistant image already ships (#2135/#2146). The replacement flag
+    is chosen per spec shape by :func:`_scoped_install_flags`;
+    ``channel_dist`` is the distribution the active channel installs, used
+    to scope a bare URL that names none of its own.
     """
     env = os.environ.copy()
     if timeout:
         env["HTTP_TIMEOUT"] = str(timeout)
     args = _uv_install_args(
         spec,
-        upgrade_dist=upgrade_dist,
+        channel_dist=channel_dist,
         constraints=constraints,
         target=target,
         env=env,
@@ -2030,10 +2019,45 @@ def _force_install_package(
     return False
 
 
+def _scoped_install_flags(spec: str, channel_dist: str | None) -> list[str]:
+    """Return the uv flag that scopes this install to OUR distribution.
+
+    Never a bare ``--upgrade``: that re-resolves the whole graph and
+    replaces packages Home Assistant ships (#2135/#2146). Which scoped flag
+    is right depends on the SPEC SHAPE, not on which distribution it names:
+
+    * A URL requirement must be REINSTALLED. Measured on uv 0.11.33 (the
+      version CI pins), re-running an unchanged ``name @ file://…`` spec
+      reports "Checked 1 package" under both no flag and
+      ``--upgrade-package`` — it installs nothing — while
+      ``--reinstall-package`` replaces it. Auditing-and-skipping would keep
+      the OLD code running while the bring-up logs success (the #1914
+      shape), and it is exactly the "a URL install is always real"
+      guarantee that ``_replaced_dist_name`` and
+      ``_async_remove_replaced_source`` skip their uninstall on.
+    * An index requirement only needs an UPGRADE, scoped to the
+      distribution the spec itself names. Force-reinstalling one instead
+      would reopen the non-atomic uninstall-then-extract window this PR
+      exists to close, on every bring-up, for a spec that never needed it.
+
+    A bare URL names no distribution of its own, so it is scoped to the one
+    the channel installs it as; naming a distribution that is not installed
+    is a harmless no-op for uv (verified: exit 0, package still installed
+    from the URL).
+    """
+    try:
+        requirement = Requirement(spec)
+    except InvalidRequirement:
+        return ["--reinstall-package", channel_dist] if channel_dist else []
+    if requirement.url is not None:
+        return ["--reinstall-package", requirement.name]
+    return ["--upgrade-package", requirement.name]
+
+
 def _uv_install_args(
     spec: str,
     *,
-    upgrade_dist: str | None,
+    channel_dist: str | None,
     constraints: str | None,
     target: str | None,
     env: dict[str, str],
@@ -2052,10 +2076,7 @@ def _uv_install_args(
         "--index-strategy",
         "unsafe-first-match",
     ]
-    if upgrade_dist is not None:
-        args += ["--upgrade-package", upgrade_dist]
-    elif (url_dist := _requirement_name(spec)) is not None:
-        args += ["--reinstall-package", url_dist]
+    args += _scoped_install_flags(spec, channel_dist)
     if constraints is not None:
         args += ["--constraint", constraints]
     if target:
@@ -2070,18 +2091,6 @@ def _uv_install_args(
         # uv has no --user (astral-sh/uv#2077); install_package's workaround.
         args += ["--python", sys.executable, "--target", os.path.abspath(user_site)]
     return args
-
-
-def _requirement_name(spec: str) -> str | None:
-    """Return the distribution name a spec installs, or None if unnamed.
-
-    ``name @ url`` and plain requirements yield their name; a bare URL
-    string (which does not parse as a requirement) yields None.
-    """
-    try:
-        return Requirement(spec).name
-    except InvalidRequirement:
-        return None
 
 
 def _run_uv_install(args: list[str], env: dict[str, str]) -> str | None:

@@ -213,10 +213,24 @@ jobs:
       # (HA_IMAGE_GHCR, renovate-managed), so drift on either side fails the
       # PR that introduces it. Rules unit-tested offline in
       # tests/src/unit/test_ha_constraint_alignment.py.
-      run: >-
-        uv run --no-project --with packaging python
-        scripts/check_ha_constraint_alignment.py
-        --ha-version "${HA_IMAGE_GHCR##*:}"
+      #
+      # Exit codes are load-bearing: 1 is a real drift violation and fails
+      # the job; 2 means HA's constraints file could not be fetched, which
+      # is an outage on someone else's server and must not red-light every
+      # open PR — it warns and passes, the same fail-open the
+      # component-version gate above uses when the mirror API is unreadable.
+      run: |
+        set +e
+        uv run --no-project --with packaging python \
+          scripts/check_ha_constraint_alignment.py \
+          --ha-version "${HA_IMAGE_GHCR##*:}"
+        status=$?
+        set -e
+        if [ "$status" -eq 2 ]; then
+          echo "::warning::could not fetch HA's package_constraints.txt - skipping the alignment check (the e2e no-stomp guard still covers the real install)"
+          exit 0
+        fi
+        exit "$status"
 
   docs-size:
     name: Docs Size Check

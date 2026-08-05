@@ -23,6 +23,7 @@ from __future__ import annotations
 import ast
 import inspect
 import re
+import sys
 from pathlib import Path
 
 from ha_mcp._vendor import websockets
@@ -107,6 +108,30 @@ class TestVendoredTreeMatchesPin:
 
     def test_license_ships_with_the_vendored_tree(self):
         assert (_VENDOR / "websockets" / "LICENSE").is_file()
+
+    def test_tree_contents_match_the_recorded_manifest(self):
+        """Every vendored file still hashes to what the sync recorded.
+
+        Version equality alone cannot see a truncated sync or a hand-edit —
+        both leave version.py (and therefore ``__version__``) intact — so
+        the guard would pass on a tree missing, say, asyncio/server.py and
+        the breakage would surface at runtime instead.
+        """
+        sys.path.insert(0, str(_REPO_ROOT / "scripts"))
+        import vendor_websockets
+
+        tree = _VENDOR / "websockets"
+        recorded = (
+            (tree / vendor_websockets.MANIFEST_NAME)
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+        actual = vendor_websockets.manifest_lines(tree)
+        assert actual == recorded, (
+            "vendored tree does not match its recorded manifest — a file was "
+            "added, removed, or edited by hand. Re-run "
+            "scripts/vendor_websockets.py and commit the result."
+        )
 
 
 class TestVendoredApiSurface:
@@ -210,3 +235,40 @@ class TestNoSharedWebsocketsImports:
                 "ha-mcp a writer to the contested shared copy again; the "
                 "vendored copy replaces it"
             )
+
+
+class TestEmbeddedListenerBehaviour:
+    """uvicorn must genuinely resolve no WebSocket protocol class.
+
+    The source-regex guard above proves our literal is ``"none"``; this
+    proves what that literal DOES. A uvicorn bump that renames or drops the
+    option would leave the grep green while Config.load() falls back to an
+    implementation that imports the shared websockets — putting the
+    contested copy back on the embedded server's startup path.
+    """
+
+    def test_ws_none_resolves_to_no_protocol_and_imports_nothing(self):
+        import uvicorn
+
+        async def app(scope, receive, send):  # pragma: no cover - never run
+            raise AssertionError("the probe never serves a request")
+
+        config = uvicorn.Config(app, ws="none", log_config=None)
+        config.load()
+        assert config.ws_protocol_class is None, (
+            "uvicorn resolved a WebSocket protocol class despite ws='none' — "
+            "the option changed meaning, and the embedded listener would "
+            "import the shared websockets again (#2135/#2146)"
+        )
+
+    def test_the_sansio_option_would_import_the_shared_package(self):
+        """Pin the premise: the rejected setting really does import it.
+
+        If a future uvicorn stopped importing websockets for this option,
+        the ws='none' requirement could be revisited — this test failing is
+        the signal to do that deliberately rather than by accident.
+        """
+        import uvicorn.config
+
+        assert "websockets" in uvicorn.config.WS_PROTOCOLS["websockets-sansio"]
+        assert uvicorn.config.WS_PROTOCOLS["none"] is None

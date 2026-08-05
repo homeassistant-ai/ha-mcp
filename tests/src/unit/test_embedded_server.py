@@ -477,7 +477,7 @@ class TestEnsurePackage:
         proc.assert_not_awaited()
         install_pkg.assert_called_once()
         assert install_pkg.call_args.args[0] == DEFAULT_PIP_SPEC
-        assert "upgrade_dist" in install_pkg.call_args.kwargs
+        assert install_pkg.call_args.kwargs["channel_dist"] == "ha-mcp"
 
     async def test_force_install_when_spec_changed(self, tmp_path, monkeypatch):
         # Configured spec differs from the last-installed one ⇒ force a real
@@ -508,7 +508,7 @@ class TestEnsurePackage:
         uninstall.assert_not_called()
         install_pkg.assert_called_once()
         assert install_pkg.call_args.args[0] == "ha-mcp==7.12.1"
-        assert "upgrade_dist" in install_pkg.call_args.kwargs
+        assert install_pkg.call_args.kwargs["channel_dist"] == "ha-mcp"
         # The just-installed spec is persisted so the next start takes the fast path.
         assert entry.data[DATA_LAST_PIP_SPEC] == "ha-mcp==7.12.1"
 
@@ -575,7 +575,7 @@ class TestEnsurePackage:
         uninstall.assert_called_once_with(DIST_NAME_STABLE)
         install_pkg.assert_called_once()
         assert install_pkg.call_args.args[0] == DIST_NAME_STABLE
-        assert "upgrade_dist" in install_pkg.call_args.kwargs
+        assert install_pkg.call_args.kwargs["channel_dist"] == "ha-mcp"
         assert calls == ["u", "i"]  # uninstall strictly before the install
         assert entry.data[DATA_LAST_PIP_SPEC] == DIST_NAME_STABLE
 
@@ -3570,14 +3570,20 @@ class TestServeRunningVersionCapture:
 
 
 class TestForceInstallPackage:
-    """The force install may upgrade ONLY ha-mcp's own distribution.
+    """The force install may only ever touch ha-mcp's own distribution.
 
     uv's bare ``--upgrade`` eagerly re-resolves the whole dependency graph
-    to the newest allowed versions, replacing packages the Home Assistant
-    image already ships even when the installed version satisfies our spec
-    — the #2135/#2146 torn-install window. ``--upgrade-package`` keeps the
-    auto-update behaviour for ha-mcp itself and leaves everything else at
-    the installed version whenever it satisfies the resolution.
+    and replaces packages the Home Assistant image already ships even when
+    the installed versions satisfy our specs — the #2135/#2146 torn-install
+    window. Which scoped flag replaces it depends on the SPEC SHAPE, and
+    both directions are load-bearing (measured against uv 0.11.33, the
+    version CI pins):
+
+    * URL spec + ``--upgrade-package`` -> "Checked 1 package", installs
+      NOTHING, so the old code keeps running while bring-up logs success.
+      Only ``--reinstall-package`` actually replaces it.
+    * Index spec + ``--reinstall-package`` -> forced uninstall-then-extract
+      on every bring-up, reopening the very window this PR closes.
     """
 
     def _run_capture(self, monkeypatch):
@@ -3591,52 +3597,153 @@ class TestForceInstallPackage:
         monkeypatch.setattr(es.subprocess, "run", fake_run)
         return captured
 
-    def test_scopes_upgrade_to_the_named_dist_only(self, monkeypatch):
+    def _install(self, spec, channel_dist="ha-mcp", **overrides):
+        params = {
+            "channel_dist": channel_dist,
+            "constraints": None,
+            "target": None,
+            "timeout": None,
+        }
+        params.update(overrides)
+        return es._force_install_package(spec, **params)
+
+    def test_never_passes_the_eager_upgrade_flag(self, monkeypatch):
         captured = self._run_capture(monkeypatch)
-        assert es._force_install_package(
-            "ha-mcp",
-            upgrade_dist="ha-mcp",
-            constraints="/cons.txt",
-            target=None,
-            timeout=120,
-        )
-        args = captured["args"]
-        assert "--upgrade" not in args, (
+        assert self._install("ha-mcp")
+        assert "--upgrade" not in captured["args"], (
             "bare uv --upgrade eagerly replaces the whole graph — the exact "
             "#2135/#2146 mechanism this function exists to prevent"
         )
-        idx = args.index("--upgrade-package")
-        assert args[idx + 1] == "ha-mcp"
-        assert "--constraint" in args
-        assert args[args.index("--constraint") + 1] == "/cons.txt"
-        assert args[:6] == [sys.executable, "-m", "uv", "pip", "install", "--quiet"]
-        assert captured["kwargs"]["env"]["HTTP_TIMEOUT"] == "120"
 
-    def test_url_spec_installs_with_no_upgrade_flag_at_all(self, monkeypatch):
+    def test_index_spec_upgrades_only_its_own_distribution(self, monkeypatch):
         captured = self._run_capture(monkeypatch)
-        assert es._force_install_package(
-            "ha-mcp @ file:///config/ha_mcp-1.0-py3-none-any.whl",
-            upgrade_dist=None,
-            constraints=None,
-            target=None,
-            timeout=None,
+        assert self._install("ha-mcp", channel_dist="ha-mcp")
+        args = captured["args"]
+        assert args[:6] == [sys.executable, "-m", "uv", "pip", "install", "--quiet"]
+        assert args[args.index("--upgrade-package") + 1] == "ha-mcp"
+        assert "--reinstall-package" not in args, (
+            "force-reinstalling an index requirement reopens the non-atomic "
+            "replacement window for a spec that never needed it"
+        )
+
+    def test_forked_index_spec_is_scoped_to_the_fork_not_reinstalled(self, monkeypatch):
+        """A pinned fork must be upgrade-scoped to ITSELF, never reinstalled.
+
+        Regression guard: routing on "which distribution did we recognise"
+        instead of "is this a URL" sent this spec down the reinstall path,
+        forcing an uninstall-then-extract on every single bring-up.
+        """
+        captured = self._run_capture(monkeypatch)
+        assert self._install("my-fork==1.0", channel_dist="ha-mcp")
+        args = captured["args"]
+        assert "--reinstall-package" not in args
+        assert args[args.index("--upgrade-package") + 1] == "my-fork"
+
+    def test_url_spec_is_reinstalled_not_merely_upgraded(self, monkeypatch):
+        """A URL spec MUST carry --reinstall-package.
+
+        Regression guard for the inverted routing: with
+        ``--upgrade-package`` (or no flag) uv audits an unchanged URL and
+        installs nothing, so a rebuilt wheel at the same path leaves the
+        old server running while the bring-up reports success — and
+        ``_replaced_dist_name`` / ``_async_remove_replaced_source`` skip
+        their uninstall precisely because a URL install is supposed to be
+        real.
+        """
+        captured = self._run_capture(monkeypatch)
+        assert self._install("ha-mcp @ file:///config/ha_mcp-1.0-py3-none-any.whl")
+        args = captured["args"]
+        assert args[args.index("--reinstall-package") + 1] == "ha-mcp"
+        assert "--upgrade-package" not in args
+        assert "--upgrade" not in args
+
+    def test_bare_url_is_scoped_to_the_channel_distribution(self, monkeypatch):
+        """A bare URL names no distribution, so the channel's is used."""
+        captured = self._run_capture(monkeypatch)
+        assert self._install(
+            "https://example.invalid/ha_mcp.tar.gz", channel_dist="ha-mcp-dev"
         )
         args = captured["args"]
-        assert "--upgrade" not in args
+        assert args[args.index("--reinstall-package") + 1] == "ha-mcp-dev"
+
+    def test_bare_url_without_a_channel_dist_installs_unflagged(self, monkeypatch):
+        captured = self._run_capture(monkeypatch)
+        assert self._install("https://example.invalid/ha_mcp.tar.gz", channel_dist=None)
+        args = captured["args"]
+        assert "--reinstall-package" not in args
         assert "--upgrade-package" not in args
+
+    def test_constraints_and_http_timeout_are_threaded(self, monkeypatch):
+        captured = self._run_capture(monkeypatch)
+        assert self._install("ha-mcp", constraints="/cons.txt", timeout=120)
+        args = captured["args"]
+        assert args[args.index("--constraint") + 1] == "/cons.txt"
+        assert captured["kwargs"]["env"]["HTTP_TIMEOUT"] == "120"
+
+    def test_subprocess_call_is_time_bounded(self, monkeypatch):
+        """A wedged uv must not hold the tracked-install slot forever.
+
+        The extra-index fallback can run uv twice inside that slot, so an
+        unbounded call would block the next bring-up indefinitely.
+        """
+        captured = self._run_capture(monkeypatch)
+        assert self._install("ha-mcp")
+        assert captured["kwargs"]["timeout"] == es._UV_INSTALL_TIMEOUT_SECONDS
+
+    def test_timeout_expiry_reports_failure(self, monkeypatch):
+        monkeypatch.setattr(
+            es.subprocess,
+            "run",
+            MagicMock(side_effect=es.subprocess.TimeoutExpired(cmd="uv", timeout=1)),
+        )
+        assert not self._install("ha-mcp")
 
     def test_target_install_uses_target_path(self, monkeypatch, tmp_path):
         captured = self._run_capture(monkeypatch)
-        assert es._force_install_package(
-            "ha-mcp",
-            upgrade_dist="ha-mcp",
-            constraints=None,
-            target=str(tmp_path),
-            timeout=None,
-        )
+        assert self._install("ha-mcp", target=str(tmp_path))
         args = captured["args"]
-        assert "--target" in args
         assert args[args.index("--target") + 1] == os.path.abspath(str(tmp_path))
+
+    def test_non_virtualenv_install_uses_the_user_site_workaround(
+        self, monkeypatch, tmp_path
+    ):
+        """The branch that runs on a non-venv HA install (uv has no --user).
+
+        The shared stub pins is_virtual_env to True for determinism, so
+        without flipping it here this path — the one real HA Core installs
+        take — would never execute in any test.
+        """
+        captured = self._run_capture(monkeypatch)
+        monkeypatch.setattr(es, "is_virtual_env", lambda: False)
+        monkeypatch.setattr(es.site, "getusersitepackages", lambda: str(tmp_path))
+        monkeypatch.delenv("UV_SYSTEM_PYTHON", raising=False)
+        monkeypatch.delenv("UV_PYTHON", raising=False)
+
+        assert self._install("ha-mcp")
+
+        args = captured["args"]
+        assert args[args.index("--python") + 1] == sys.executable
+        assert args[args.index("--target") + 1] == os.path.abspath(str(tmp_path))
+
+    def test_explicit_uv_python_selection_skips_the_workaround(
+        self, monkeypatch, tmp_path
+    ):
+        captured = self._run_capture(monkeypatch)
+        monkeypatch.setattr(es, "is_virtual_env", lambda: False)
+        monkeypatch.setattr(es.site, "getusersitepackages", lambda: str(tmp_path))
+        monkeypatch.setenv("UV_SYSTEM_PYTHON", "1")
+
+        assert self._install("ha-mcp")
+
+        assert "--target" not in captured["args"]
+
+    def test_nonzero_exit_reports_failure(self, monkeypatch):
+        monkeypatch.setattr(
+            es.subprocess,
+            "run",
+            MagicMock(return_value=SimpleNamespace(returncode=2, stderr="boom")),
+        )
+        assert not self._install("ha-mcp")
 
     def test_failing_extra_index_host_is_dropped_and_retried(self, monkeypatch):
         """A wheels-index outage must not fail an install PyPI can satisfy.
@@ -3664,16 +3771,9 @@ class TestForceInstallPackage:
             "https://wheels.home-assistant.io/simple https://healthy.example/simple",
         )
 
-        assert es._force_install_package(
-            "ha-mcp",
-            upgrade_dist="ha-mcp",
-            constraints=None,
-            target=None,
-            timeout=None,
-        )
+        assert self._install("ha-mcp")
 
         assert len(calls) == 2, "the failing extra index was not retried"
-        # The retry keeps the healthy index and drops only the failing host.
         retry_extra = calls[1].get("UV_EXTRA_INDEX_URL", "")
         assert "wheels.home-assistant.io" not in retry_extra
         assert "healthy.example" in retry_extra
@@ -3693,13 +3793,7 @@ class TestForceInstallPackage:
         monkeypatch.setattr(es.subprocess, "run", fake_run)
         monkeypatch.setenv("UV_EXTRA_INDEX_URL", "https://wheels.example/simple")
 
-        assert es._force_install_package(
-            "ha-mcp",
-            upgrade_dist="ha-mcp",
-            constraints=None,
-            target=None,
-            timeout=None,
-        )
+        assert self._install("ha-mcp")
 
         assert len(calls) == 2
         assert "UV_EXTRA_INDEX_URL" not in calls[1]
@@ -3715,33 +3809,15 @@ class TestForceInstallPackage:
         monkeypatch.setattr(es.subprocess, "run", fake_run)
         monkeypatch.setenv("UV_EXTRA_INDEX_URL", "https://wheels.example/simple")
 
-        assert not es._force_install_package(
-            "ha-mcp",
-            upgrade_dist="ha-mcp",
-            constraints=None,
-            target=None,
-            timeout=None,
-        )
+        assert not self._install("ha-mcp")
 
         assert len(calls) == 1
 
-    def test_nonzero_exit_reports_failure(self, monkeypatch):
-        monkeypatch.setattr(
-            es.subprocess,
-            "run",
-            MagicMock(return_value=SimpleNamespace(returncode=2, stderr="boom")),
-        )
-        assert not es._force_install_package(
-            "ha-mcp",
-            upgrade_dist="ha-mcp",
-            constraints=None,
-            target=None,
-            timeout=None,
-        )
-
     @pytest.mark.asyncio
-    async def test_manager_threads_pip_kwargs_and_dist(self, tmp_path, monkeypatch):
-        """_async_force_install passes HA's constraints/target + the channel dist."""
+    async def test_manager_threads_pip_kwargs_and_channel_dist(
+        self, tmp_path, monkeypatch
+    ):
+        """_async_force_install passes HA's constraints/target + the channel."""
         manager, _hass, _entry = _manager(tmp_path)
         monkeypatch.setattr(
             es,
@@ -3757,5 +3833,5 @@ class TestForceInstallPackage:
         kwargs = force.call_args.kwargs
         assert kwargs["constraints"] == "/hacons.txt"
         assert kwargs["target"] is None
-        assert kwargs["upgrade_dist"] == "ha-mcp"
+        assert kwargs["channel_dist"] == es.dist_for_channel(manager._channel)
         assert kwargs["timeout"] >= es._PIP_INSTALL_TIMEOUT_SECONDS

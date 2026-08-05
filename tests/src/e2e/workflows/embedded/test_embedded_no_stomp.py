@@ -187,13 +187,30 @@ def _assert_no_governed_changes(
         "the conflicting dependency spec (pyproject.toml) to admit HA's "
         "shipped version instead of pinning past it."
     )
-    if "websockets" in before:
-        assert after.get("websockets") == before["websockets"], (
-            f"[{context}] the install replaced HA's shipped websockets "
-            f"({before['websockets']} -> {after.get('websockets')}) — the "
-            "exact #2146 failure shape (ha-mcp no longer even declares it; "
-            "the vendored copy is the only one we import)"
-        )
+    # ADDED packages matter too: `replaced` is built from before.items() and
+    # is blind to a governed package the install PULLS IN fresh.
+    added_governed = {
+        name: after[name] for name in set(after) - set(before) if name in governed
+    }
+    assert not added_governed, (
+        f"[{context}] the install ADDED packages HA governs: {added_governed}. "
+        "HA's own requirement processing owns those; installing one behind "
+        "its back means our resolution, not HA's, decided the version."
+    )
+    # websockets is the package the whole fix is about, so its presence in
+    # the baseline is asserted rather than assumed — an image that stops
+    # shipping it would otherwise turn the check below into a silent no-op.
+    assert "websockets" in before, (
+        f"[{context}] the HA image no longer ships websockets, so the "
+        "check below proved nothing. Confirm how the shared copy reaches "
+        "this environment before relaxing this assertion (#2135/#2146)."
+    )
+    assert after.get("websockets") == before["websockets"], (
+        f"[{context}] the install replaced HA's shipped websockets "
+        f"({before['websockets']} -> {after.get('websockets')}) — the "
+        "exact #2146 failure shape (ha-mcp no longer even declares it; "
+        "the vendored copy is the only one we import)"
+    )
 
 
 def test_embedded_preinstall_replaces_nothing_ha_governs(

@@ -23,6 +23,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import io
 import re
 import shutil
@@ -36,6 +37,46 @@ _VENDOR_DIR = _REPO_ROOT / "src" / "ha_mcp" / "_vendor"
 _PIN_FILE = _VENDOR_DIR / "requirements.txt"
 _TARGET = _VENDOR_DIR / "websockets"
 _SDIST_URL = "https://pypi.org/packages/source/w/websockets/websockets-{version}.tar.gz"
+
+
+MANIFEST_NAME = "MANIFEST.sha256"
+
+
+def iter_vendored_files(tree: Path) -> list[Path]:
+    """Every vendored SOURCE file except the manifest, in stable order.
+
+    ``__pycache__`` is skipped: importing the vendored package writes
+    bytecode into the tree, so counting it would make the manifest depend on
+    whether anything had imported websockets yet.
+    """
+    return sorted(
+        (
+            p
+            for p in tree.rglob("*")
+            if p.is_file() and p.name != MANIFEST_NAME and "__pycache__" not in p.parts
+        ),
+        key=lambda p: p.relative_to(tree).as_posix(),
+    )
+
+
+def manifest_lines(tree: Path) -> list[str]:
+    """Return ``<sha256>  <relative path>`` for every vendored file.
+
+    Recorded at sync time and re-verified by the drift guard, so a
+    truncated sync or a hand-edit is caught — checking the version alone
+    cannot see either, since both leave version.py intact.
+    """
+    return [
+        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  "
+        f"{path.relative_to(tree).as_posix()}"
+        for path in iter_vendored_files(tree)
+    ]
+
+
+def _write_manifest(tree: Path) -> None:
+    (tree / MANIFEST_NAME).write_text(
+        "\n".join(manifest_lines(tree)) + "\n", encoding="utf-8"
+    )
 
 
 def read_pin() -> str:
@@ -78,7 +119,10 @@ def main() -> int:
                 # Pure-Python only: the optional C accelerator (speedups.c) is
                 # deliberately left out — websockets falls back to its Python
                 # implementation when the extension is absent.
-                if relative.endswith((".c", ".so", ".pyd")):
+                # The .pyi stub goes with it: shipping a stub for a module
+                # this package does not contain would advertise it to type
+                # checkers following py.typed.
+                if relative.endswith((".c", ".so", ".pyd", "speedups.pyi")):
                     continue
                 destination = (staging / relative).resolve()
                 # Containment check (CWE-22): member names come from the
@@ -102,6 +146,7 @@ def main() -> int:
             "Vendored by scripts/vendor_websockets.py — do not edit by hand.\n",
             encoding="utf-8",
         )
+        _write_manifest(staging)
     except BaseException:
         # Never leave a half-written staging tree behind; the live vendored
         # package has not been touched at this point.
