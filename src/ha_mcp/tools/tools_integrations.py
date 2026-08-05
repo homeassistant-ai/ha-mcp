@@ -34,6 +34,7 @@ from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     _collect_reconfigure_identity,
     create_config_entry,
+    prepare_reconfigure_request,
     reconfigure_config_entry,
     update_config_entry_options,
 )
@@ -1748,56 +1749,14 @@ class IntegrationTools:
         secrets require manual intervention.
         """
         try:
-            entry_id = validate_identifier_not_empty(
+            entry_id, entry, target_config = await prepare_reconfigure_request(
+                self._client,
                 entry_id,
-                "entry_id",
-                suggestions=["Use ha_get_integration() to find valid config entry IDs"],
+                host=host,
+                port=port,
+                config=config,
             )
-            if config is not None and not isinstance(config, dict):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "config must be an object containing the flow values",
-                        context={"entry_id": entry_id},
-                    )
-                )
-            target_config: dict[str, Any] = dict(config or {})
-            if host is not None:
-                target_config["host"] = validate_identifier_not_empty(
-                    host,
-                    "host",
-                    suggestions=["Provide the device IP address or hostname"],
-                )
-            if port is not None:
-                target_config["port"] = port
-            if not target_config:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "Provide host/port or a non-empty config object",
-                        context={"entry_id": entry_id},
-                    )
-                )
-            entry = await self._client.get_config_entry(entry_id)
-            domain = entry.get("domain")
-            supports_reconfigure = bool(entry.get("supports_reconfigure", False))
-            if not supports_reconfigure:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Integration '{domain}' does not support the official reconfigure flow",
-                        suggestions=[
-                            "Only integrations implementing async_step_reconfigure "
-                            "can be changed with this tool.",
-                        ],
-                        context={
-                            "entry_id": entry_id,
-                            "domain": domain,
-                            "supports_reconfigure": False,
-                        },
-                    )
-                )
-
+            domain = entry["domain"]
             identity = await _collect_reconfigure_identity(
                 self._client, entry, entry_id
             )
@@ -1841,6 +1800,9 @@ class IntegrationTools:
                 expected_unique_id=expected_unique_id,
                 expected_mac=expected_mac,
                 expected_entity_ids=expected_entity_ids,
+                _prepared_entry=entry,
+                _prepared_flow_config=target_config,
+                _prepared_identity=identity,
             )
         except ToolError:
             raise

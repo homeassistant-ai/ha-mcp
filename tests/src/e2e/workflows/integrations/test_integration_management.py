@@ -4,6 +4,7 @@ E2E tests for integration management tools.
 
 import json
 import logging
+import os
 
 import pytest
 
@@ -277,3 +278,64 @@ class TestIntegrationManagement:
         assert "already_deleted" not in json.dumps(data), (
             f"Stale already_deleted marker leaked into error: {data!r}"
         )
+
+    async def test_reconfigure_preflight_is_read_only(self, mcp_client):
+        """Exercise the live MCP payload without starting a mutating flow."""
+        list_result = await mcp_client.call_tool("ha_get_integration", {})
+        data = assert_mcp_success(list_result, "List reconfigurable integrations")
+        entry = next(
+            (
+                item
+                for item in data.get("entries", [])
+                if item.get("supports_reconfigure")
+            ),
+            None,
+        )
+        if entry is None:
+            pytest.skip("No integration with an official reconfigure flow is available")
+
+        entry_id = entry["entry_id"]
+        before_result = await mcp_client.call_tool(
+            "ha_get_integration", {"entry_id": entry_id}
+        )
+        before = assert_mcp_success(before_result, "Read reconfigure target")
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_reconfigure_integration",
+            {"entry_id": entry_id, "config": {"host": "127.0.0.1"}},
+        )
+        assert result.get("success") is False
+        assert result.get("error", {}).get("code") == "VALIDATION_INVALID_PARAMETER"
+        assert result.get("status") == "validation_only"
+
+        after_result = await mcp_client.call_tool(
+            "ha_get_integration", {"entry_id": entry_id}
+        )
+        after = assert_mcp_success(
+            after_result, "Read reconfigure target after preflight"
+        )
+        assert after.get("entry", after) == before.get("entry", before)
+
+    async def test_reconfigure_confirmed_opt_in(self, mcp_client):
+        """Run a real reconfigure flow only for an explicitly provisioned E2E target."""
+        entry_id = os.environ.get("HA_RECONFIGURE_E2E_ENTRY_ID")
+        raw_config = os.environ.get("HA_RECONFIGURE_E2E_CONFIG")
+        if not entry_id or not raw_config:
+            pytest.skip(
+                "Set HA_RECONFIGURE_E2E_ENTRY_ID and HA_RECONFIGURE_E2E_CONFIG "
+                "for an explicit confirmed reconfigure E2E target"
+            )
+        config = json.loads(raw_config)
+        assert isinstance(config, dict), (
+            "HA_RECONFIGURE_E2E_CONFIG must be a JSON object"
+        )
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_reconfigure_integration",
+            {"entry_id": entry_id, "config": config, "confirm": True},
+        )
+        assert result.get("success") is True, result
+        assert result.get("status") in {
+            "applied_and_verified",
+            "applied_but_unverified",
+        }

@@ -1,13 +1,15 @@
 """Tests for generic config-entry reconfiguration."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.client.rest_client import HomeAssistantClient
+from ha_mcp.client.rest_client import HomeAssistantClient, HomeAssistantConnectionError
 from ha_mcp.tools.config_entry_flow import reconfigure_config_entry
+from ha_mcp.tools.config_entry_flow_walker import _handle_config_subentry_flow_steps
 from ha_mcp.tools.reconfigure_security import (
     build_reconfigure_rollback_metadata,
     redact_reconfigure_value,
@@ -41,6 +43,17 @@ def test_reconfigure_redaction_covers_nested_camel_case_secrets() -> None:
         "apiKey": "[REDACTED]",
         "nested": {"clientSecret": "[REDACTED]", "host": "10.0.50.170"},
         "items": [{"refresh-token": "[REDACTED]"}],
+    }
+
+
+def test_reconfigure_redaction_covers_psk_secrets() -> None:
+    """Encryption PSKs must never appear in generic flow output."""
+    assert redact_reconfigure_value(
+        {"psk": "hidden", "noise_psk": "hidden", "network": {"PSK": "hidden"}}
+    ) == {
+        "psk": "[REDACTED]",
+        "noise_psk": "[REDACTED]",
+        "network": {"PSK": "[REDACTED]"},
     }
 
 
@@ -210,7 +223,8 @@ async def test_reconfigure_fails_when_success_abort_ignores_requested_values(
     payload = json.loads(str(exc_info.value))
     assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "consum" in payload["error"]["message"].lower()
-    client.abort_config_flow.assert_awaited_once_with("flow-ignored")
+    assert payload["status"] == "applied_but_incomplete"
+    client.abort_config_flow.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -570,7 +584,6 @@ async def test_reconfigure_does_not_treat_temporarily_missing_identity_as_change
         client,
         "entry-123",
         host="10.0.50.186",
-        expected_unique_id="AA:BB:CC:DD:EE:FF",
     )
 
     assert result["status"] == "applied_but_unverified"
@@ -702,6 +715,27 @@ async def test_reconfigure_requires_explicit_confirmation(
 
 
 @pytest.mark.asyncio
+async def test_reconfigure_confirm_true_requires_mandatory_backup(monkeypatch) -> None:
+    """A confirmed reconfigure is blocked when mandatory auto-backup is off."""
+    monkeypatch.setattr(
+        "ha_mcp.tools.auto_backup.get_global_settings",
+        lambda: SimpleNamespace(enable_auto_backup=False),
+    )
+    client = MagicMock()
+    tools = IntegrationTools(client)
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_reconfigure_integration(
+            entry_id="entry-123", host="10.0.50.180", confirm=True
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["error"]["code"] == "CONFIG_VALIDATION_FAILED"
+    assert "nothing was changed" in payload["error"]["message"].lower()
+    client.get_config_entry.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_reconfigure_rejects_invalid_port(
     reconfig_entry: dict[str, object],
 ) -> None:
@@ -718,3 +752,188 @@ async def test_reconfigure_rejects_invalid_port(
     assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "port" in payload["error"]["message"].lower()
     client.get_config_entry.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_stops_when_registry_transport_is_unavailable() -> None:
+    """A dead registry transport must not disable duplicate protection."""
+    before = {
+        "entry_id": "offline-entry",
+        "domain": "shelly",
+        "supports_reconfigure": True,
+        "unique_id": "device-1",
+    }
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=before)
+    client.list_entity_registry = AsyncMock(
+        side_effect=HomeAssistantConnectionError("registry unavailable")
+    )
+    client.list_device_registry = AsyncMock(return_value=[])
+    client.start_reconfigure_flow = AsyncMock()
+
+    with pytest.raises(HomeAssistantConnectionError):
+        await reconfigure_config_entry(client, "offline-entry", host="10.0.50.185")
+
+    client.start_reconfigure_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_rejects_expected_unique_id_cleared_after_flow(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """An explicitly expected unique_id cannot disappear after commit."""
+    after = {key: value for key, value in reconfig_entry.items() if key != "unique_id"}
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, after])
+    client.list_config_entries = AsyncMock(return_value=[after])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-cleared-unique-id",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client,
+            "entry-123",
+            host="10.0.50.186",
+            expected_unique_id="AA:BB:CC:DD:EE:FF",
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == "applied_but_unverified"
+    assert "expected unique_id" in payload["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_reads_mac_from_device_connections(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """Expected MAC validation includes device registry connections."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.list_entity_registry = AsyncMock(
+        return_value=[
+            {
+                "entity_id": "switch.living_room",
+                "config_entry_id": "entry-123",
+                "device_id": "device-living-room",
+            }
+        ]
+    )
+    client.list_device_registry = AsyncMock(
+        return_value=[
+            {
+                "id": "device-living-room",
+                "connections": [["mac", "AA:BB:CC:DD:EE:FF"]],
+                "identifiers": [],
+            }
+        ]
+    )
+    client.start_reconfigure_flow = AsyncMock()
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client,
+            "entry-123",
+            host="10.0.50.187",
+            expected_mac="11:22:33:44:55:66",
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert "expected MAC" in payload["error"]["message"]
+    client.start_reconfigure_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_seeds_device_identity_without_entities() -> None:
+    """A device linked directly to an entry remains an identity anchor without entities."""
+    before = {
+        "entry_id": "device-only-entry",
+        "domain": "shelly",
+        "supports_reconfigure": True,
+        "state": "setup_retry",
+    }
+    after = {**before, "state": "loaded"}
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(side_effect=[before, after])
+    client.list_entity_registry = AsyncMock(return_value=[])
+    client.list_device_registry = AsyncMock(
+        return_value=[
+            {
+                "id": "device-only",
+                "config_entries": ["device-only-entry"],
+                "identifiers": [["shelly", "AA:BB:CC:DD:EE:FF"]],
+            }
+        ]
+    )
+    client.list_config_entries = AsyncMock(return_value=[after])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-device-only",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client,
+        "device-only-entry",
+        host="10.0.50.188",
+        expected_device_id="device-only",
+        expected_mac="AA:BB:CC:DD:EE:FF",
+    )
+
+    assert result["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_create_entry_is_applied_but_unverified(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """A reconfigure flow must reject create_entry instead of reporting success."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-created-entry",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "create_entry", "result": {"entry_id": "new-entry"}}
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(client, "entry-123", host="10.0.50.189")
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == "applied_but_unverified"
+    assert payload["rollback"]["strategy"] == "official_reconfigure_flow"
+
+
+@pytest.mark.asyncio
+async def test_subentry_reconfigure_rejects_unconsumed_values() -> None:
+    """Subentry reconfigure aborts enforce the same consumed-key contract."""
+    client = MagicMock()
+    with pytest.raises(ToolError) as exc_info:
+        await _handle_config_subentry_flow_steps(
+            client,
+            "flow-subentry",
+            {"type": "abort", "reason": "reconfigure_successful"},
+            {"unexpected": True},
+            is_reconfigure=True,
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"

@@ -25,12 +25,14 @@ imported in one direction only (menu <- form <- walker <- here):
 """
 
 import asyncio
+import inspect
 import json
 import logging
-from typing import Any, Literal, NoReturn, cast
+from typing import Any, Literal, NoReturn
 
 from fastmcp.exceptions import ToolError
 
+from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .config_entry_flow_form import _extract_schema_field_names
 from .config_entry_flow_walker import (
@@ -101,10 +103,23 @@ async def _collect_reconfigure_identity(
 
     if device_rows is not None:
         device_ids = set(identity["device_ids"])
+        matching_device_rows = [
+            row
+            for row in device_rows
+            if row.get("id") in device_ids or entry_id in row.get("config_entries", [])
+        ]
+        identity["device_ids"] = sorted(
+            {
+                row["id"]
+                for row in matching_device_rows
+                if isinstance(row.get("id"), str)
+            }
+            | device_ids
+        )
         identifiers: list[str] = []
-        for row in device_rows:
-            if row.get("id") in device_ids:
-                for identifier in row.get("identifiers", []):
+        for row in matching_device_rows:
+            for field in ("identifiers", "connections"):
+                for identifier in row.get(field, []):
                     if isinstance(identifier, (list, tuple)) and len(identifier) >= 2:
                         identifiers.append(str(identifier[1]))
                     elif isinstance(identifier, str):
@@ -117,13 +132,10 @@ async def _collect_reconfigure_identity(
             }
         )
         related_entry_ids = set(identity["related_entry_ids"])
-        for row in device_rows:
-            if row.get("id") in device_ids:
-                related_entry_ids.update(
-                    item
-                    for item in row.get("config_entries", [])
-                    if isinstance(item, str)
-                )
+        for row in matching_device_rows:
+            related_entry_ids.update(
+                item for item in row.get("config_entries", []) if isinstance(item, str)
+            )
         identity["related_entry_ids"] = sorted(related_entry_ids)
         identity["device_registry_available"] = True
         identity["registry_available"] = True
@@ -173,10 +185,23 @@ async def _optional_registry_rows(
     if not callable(method):
         return None
     try:
-        result: Any = await cast(Any, method)()
-    except Exception as err:
-        logger.debug("%s unavailable for %s: %s", method_name, entry_id, err)
-        return None
+        result: Any = method()
+        if not inspect.isawaitable(result):
+            return None
+        result = await result
+    except (
+        ConnectionError,
+        OSError,
+        TimeoutError,
+        HomeAssistantConnectionError,
+    ) as err:
+        raise (
+            err
+            if isinstance(err, HomeAssistantConnectionError)
+            else HomeAssistantConnectionError(
+                f"{method_name} transport unavailable for {entry_id}"
+            )
+        ) from err
     return result if isinstance(result, list) else None
 
 
@@ -251,7 +276,11 @@ def _raise_post_commit_verification_error(
         )
 
     payload = redact_reconfigure_value(payload)
-    payload["status"] = "applied_but_unverified"
+    payload["status"] = (
+        payload.get("status")
+        if payload.get("status") in {"applied_but_incomplete", "applied_but_unverified"}
+        else "applied_but_unverified"
+    )
     payload["entry_id"] = entry_id
     payload["domain"] = domain
     payload["rollback"] = rollback_metadata
@@ -548,11 +577,7 @@ async def _verify_reconfigured_entry(  # noqa: C901
         )
 
     expected_unique_id = expected_identity.get("unique_id")
-    if (
-        expected_unique_id is not None
-        and after.get("unique_id") is not None
-        and after.get("unique_id") != expected_unique_id
-    ):
+    if expected_unique_id is not None and after.get("unique_id") != expected_unique_id:
         _raise_identity_mismatch(
             entry_id,
             "Reconfigure result does not match expected unique_id",
@@ -729,29 +754,14 @@ async def _verify_reconfigured_entry(  # noqa: C901
     }
 
 
-async def reconfigure_config_entry(  # noqa: C901
-    client: Any,
+def _build_reconfigure_flow_config(
     entry_id: str,
     *,
-    host: str | None = None,
-    port: int | None = None,
-    config: dict[str, Any] | None = None,
-    expected_device_id: str | None = None,
-    expected_unique_id: str | None = None,
-    expected_mac: str | None = None,
-    expected_entity_ids: list[str] | None = None,
+    host: str | None,
+    port: int | None,
+    config: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Reconfigure an existing integration through HA's official flow.
-
-    The operation is intentionally generic: integrations opt in by exposing
-    ``async_step_reconfigure`` and decide how the submitted host/port values
-    are validated. The existing config entry is never deleted or recreated.
-    """
-    entry_id = validate_identifier_not_empty(
-        entry_id,
-        "entry_id",
-        suggestions=["Use ha_get_integration() to find valid config entry IDs"],
-    )
+    """Validate and combine the explicit host/port and generic flow values."""
     if config is not None and not isinstance(config, dict):
         raise_tool_error(
             create_error_response(
@@ -790,18 +800,37 @@ async def reconfigure_config_entry(  # noqa: C901
                 context={"entry_id": entry_id, "port": flow_port},
             )
         )
+    return flow_config
 
-    before = await client.get_config_entry(entry_id)
-    domain = before.get("domain")
+
+async def prepare_reconfigure_request(
+    client: Any,
+    entry_id: str,
+    *,
+    host: str | None = None,
+    port: int | None = None,
+    config: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Prepare one reconfigure request for preflight and confirmed execution."""
+    validated_entry_id = validate_identifier_not_empty(
+        entry_id,
+        "entry_id",
+        suggestions=["Use ha_get_integration() to find valid config entry IDs"],
+    )
+    flow_config = _build_reconfigure_flow_config(
+        validated_entry_id, host=host, port=port, config=config
+    )
+    entry = await client.get_config_entry(validated_entry_id)
+    domain = entry.get("domain")
     if not isinstance(domain, str) or not domain:
         raise_tool_error(
             create_error_response(
                 ErrorCode.INTERNAL_UNEXPECTED,
                 "Home Assistant returned a config entry without a valid domain",
-                context={"entry_id": entry_id, "entry": before},
+                context={"entry_id": validated_entry_id, "entry": entry},
             )
         )
-    if not before.get("supports_reconfigure", False):
+    if not entry.get("supports_reconfigure", False):
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -811,22 +840,30 @@ async def reconfigure_config_entry(  # noqa: C901
                     "only integrations implementing async_step_reconfigure can be changed this way.",
                 ],
                 context={
-                    "entry_id": entry_id,
+                    "entry_id": validated_entry_id,
                     "domain": domain,
                     "supports_reconfigure": False,
                 },
             )
         )
+    return validated_entry_id, entry, flow_config
 
-    rollback_metadata = build_reconfigure_rollback_metadata(entry_id, domain, before)
 
-    expected_identity: dict[str, Any] = {
-        "device_id": expected_device_id,
-        "unique_id": expected_unique_id,
-        "mac": expected_mac,
-        "entity_ids": list(expected_entity_ids or []),
-    }
-    before_identity = await _collect_reconfigure_identity(client, before, entry_id)
+async def _validate_reconfigure_identity_and_duplicates(
+    client: Any,
+    entry: dict[str, Any],
+    *,
+    entry_id: str,
+    domain: str,
+    expected_identity: dict[str, Any],
+    prepared_identity: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Validate pre-flow identity anchors and same-domain duplicates."""
+    before_identity = (
+        prepared_identity
+        if prepared_identity is not None
+        else await _collect_reconfigure_identity(client, entry, entry_id)
+    )
     if not _identity_anchor(before_identity, expected_identity):
         raise_tool_error(
             create_error_response(
@@ -845,22 +882,49 @@ async def reconfigure_config_entry(  # noqa: C901
                 },
             )
         )
-    if (
-        expected_device_id
-        and before_identity["device_ids"]
-        and expected_device_id not in set(before_identity["device_ids"])
-    ):
-        _raise_identity_mismatch(
-            entry_id,
+    checks = (
+        (
+            expected_identity.get("device_id"),
+            before_identity["device_ids"],
+            "device_id",
             "The entry does not match expected device_id before reconfigure",
-            before=before_identity,
-            after=before_identity,
-            expected=expected_identity,
+        ),
+        (
+            expected_identity.get("unique_id"),
+            [entry["unique_id"]] if entry.get("unique_id") is not None else [],
+            "unique_id",
+            "The entry does not match expected unique_id before reconfigure",
+        ),
+        (
+            expected_identity.get("mac"),
+            before_identity["macs"],
+            "mac",
+            "The entry does not match expected MAC before reconfigure",
+        ),
+    )
+    for expected, available, key, message in checks:
+        if expected is None or not available:
+            continue
+        normalised = (
+            {_normalise_identity_value(value) for value in available}
+            if key == "mac"
+            else set(available)
         )
+        if (
+            _normalise_identity_value(expected) if key == "mac" else expected
+        ) not in normalised:
+            _raise_identity_mismatch(
+                entry_id,
+                message,
+                before=before_identity,
+                after=before_identity,
+                expected=expected_identity,
+            )
+    expected_entities = expected_identity["entity_ids"]
     if (
-        expected_entity_ids
+        expected_entities
         and before_identity["entity_ids"]
-        and set(expected_entity_ids) != set(before_identity["entity_ids"])
+        and set(expected_entities) != set(before_identity["entity_ids"])
     ):
         _raise_identity_mismatch(
             entry_id,
@@ -869,38 +933,13 @@ async def reconfigure_config_entry(  # noqa: C901
             after=before_identity,
             expected=expected_identity,
         )
-    if (
-        expected_unique_id is not None
-        and before.get("unique_id") is not None
-        and before.get("unique_id") != expected_unique_id
-    ):
-        _raise_identity_mismatch(
-            entry_id,
-            "The entry does not match expected unique_id before reconfigure",
-            before=before_identity,
-            after=before_identity,
-            expected=expected_identity,
-        )
-    if (
-        expected_mac is not None
-        and before_identity["macs"]
-        and _normalise_identity_value(expected_mac) not in set(before_identity["macs"])
-    ):
-        _raise_identity_mismatch(
-            entry_id,
-            "The entry does not match expected MAC before reconfigure",
-            before=before_identity,
-            after=before_identity,
-            expected=expected_identity,
-        )
-
-    before_related_entry_ids = await _same_domain_related_entry_ids(
+    related_entry_ids = await _same_domain_related_entry_ids(
         client,
         before_identity,
         entry_id=entry_id,
         domain=domain,
     )
-    if before_related_entry_ids:
+    if related_entry_ids:
         _raise_identity_mismatch(
             entry_id,
             "The entry has a registered device shared with duplicate config entries "
@@ -909,7 +948,18 @@ async def reconfigure_config_entry(  # noqa: C901
             after=before_identity,
             expected=expected_identity,
         )
+    return before_identity
 
+
+async def _run_reconfigure_flow(
+    client: Any,
+    *,
+    domain: str,
+    entry_id: str,
+    flow_config: dict[str, Any],
+    rollback_metadata: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Start and walk the official reconfigure flow."""
     flow_result = await client.start_reconfigure_flow(domain, entry_id)
     flow_id = flow_result.get("flow_id")
     if not flow_id:
@@ -927,7 +977,6 @@ async def reconfigure_config_entry(  # noqa: C901
                 },
             )
         )
-
     try:
         result = await _handle_flow_steps(
             client,
@@ -937,17 +986,50 @@ async def reconfigure_config_entry(  # noqa: C901
             helper_type=domain,
             is_reconfigure=True,
         )
+    except ToolError as flow_error:
+        try:
+            payload = json.loads(str(flow_error))
+        except (TypeError, ValueError):
+            payload = {}
+        if payload.get("status") in {
+            "applied_but_incomplete",
+            "applied_but_unverified",
+        }:
+            _raise_post_commit_verification_error(
+                flow_error,
+                entry_id=entry_id,
+                domain=domain,
+                rollback_metadata=rollback_metadata,
+            )
+        try:
+            await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
+        except Exception as abort_err:
+            logger.warning(
+                "Failed to abort reconfigure flow %s: %s", flow_id, abort_err
+            )
+        raise
     except Exception:
         try:
             await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
         except Exception as abort_err:
             logger.warning(
-                "Failed to abort reconfigure flow %s after error: %s",
-                flow_id,
-                abort_err,
+                "Failed to abort reconfigure flow %s: %s", flow_id, abort_err
             )
         raise
+    return flow_id, result
 
+
+async def _verify_reconfigure_result(
+    client: Any,
+    *,
+    before: dict[str, Any],
+    entry_id: str,
+    domain: str,
+    before_identity: dict[str, Any],
+    expected_identity: dict[str, Any],
+    rollback_metadata: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read back and verify the committed config entry with bounded retries."""
     after: dict[str, Any] | None = None
     verification: dict[str, Any] | None = None
     last_verification_error: Exception | None = None
@@ -999,6 +1081,97 @@ async def reconfigure_config_entry(  # noqa: C901
                 },
             )
         )
+    return after, verification
+
+
+async def reconfigure_config_entry(
+    client: Any,
+    entry_id: str,
+    *,
+    host: str | None = None,
+    port: int | None = None,
+    config: dict[str, Any] | None = None,
+    expected_device_id: str | None = None,
+    expected_unique_id: str | None = None,
+    expected_mac: str | None = None,
+    expected_entity_ids: list[str] | None = None,
+    _prepared_entry: dict[str, Any] | None = None,
+    _prepared_flow_config: dict[str, Any] | None = None,
+    _prepared_identity: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Reconfigure an existing integration through HA's official flow.
+
+    The operation is intentionally generic: integrations opt in by exposing
+    ``async_step_reconfigure`` and decide how the submitted host/port values
+    are validated. The existing config entry is never deleted or recreated.
+    """
+    if _prepared_entry is None or _prepared_flow_config is None:
+        entry_id, before, flow_config = await prepare_reconfigure_request(
+            client, entry_id, host=host, port=port, config=config
+        )
+    else:
+        entry_id = validate_identifier_not_empty(entry_id, "entry_id")
+        before = _prepared_entry
+        flow_config = dict(_prepared_flow_config)
+    domain = before.get("domain")
+    if not isinstance(domain, str) or not domain:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.INTERNAL_UNEXPECTED,
+                "Home Assistant returned a config entry without a valid domain",
+                context={"entry_id": entry_id, "entry": before},
+            )
+        )
+    if not before.get("supports_reconfigure", False):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Integration '{domain}' does not support the official reconfigure flow",
+                suggestions=[
+                    "Use ha_get_integration(entry_id=...) to inspect the entry; "
+                    "only integrations implementing async_step_reconfigure can be changed this way.",
+                ],
+                context={
+                    "entry_id": entry_id,
+                    "domain": domain,
+                    "supports_reconfigure": False,
+                },
+            )
+        )
+
+    rollback_metadata = build_reconfigure_rollback_metadata(entry_id, domain, before)
+
+    expected_identity: dict[str, Any] = {
+        "device_id": expected_device_id,
+        "unique_id": expected_unique_id,
+        "mac": expected_mac,
+        "entity_ids": list(expected_entity_ids or []),
+    }
+    before_identity = await _validate_reconfigure_identity_and_duplicates(
+        client,
+        before,
+        entry_id=entry_id,
+        domain=domain,
+        expected_identity=expected_identity,
+        prepared_identity=_prepared_identity,
+    )
+
+    _, result = await _run_reconfigure_flow(
+        client,
+        domain=domain,
+        entry_id=entry_id,
+        flow_config=flow_config,
+        rollback_metadata=rollback_metadata,
+    )
+    after, verification = await _verify_reconfigure_result(
+        client,
+        before=before,
+        entry_id=entry_id,
+        domain=domain,
+        before_identity=before_identity,
+        expected_identity=expected_identity,
+        rollback_metadata=rollback_metadata,
+    )
 
     response: dict[str, Any] = {
         "success": True,

@@ -21,6 +21,9 @@ _SECRET_MARKERS = frozenset(
         "connection_string",
         "client_secret",
         "refresh_token",
+        "psk",
+        "p_s_k",
+        "noise_psk",
     }
 )
 
@@ -43,6 +46,9 @@ def _is_sensitive_key(key: str) -> bool:
             "api_key",
             "private_key",
             "connection_string",
+            "psk",
+            "p_s_k",
+            "noise_psk",
         )
     )
 

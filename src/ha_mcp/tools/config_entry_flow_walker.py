@@ -259,9 +259,6 @@ async def _raise_flow_api_error(
         parsed["raw"],
     )
 
-    if is_reconfigure:
-        context = redact_reconfigure_value(context)
-
     suggestions: list[str] = []
     message: str
 
@@ -271,9 +268,14 @@ async def _raise_flow_api_error(
         if isinstance(step_schema, list):
             current_schema = step_schema
 
-    # Single introspection round-trip — used by both branches below.
-    info = await fetch_helper_flow_info(client, helper_type, menu_choice)
-    schema = info.get("schema") or current_schema
+    # Reconfigure errors already carry the active reconfigure schema. Starting
+    # a second normal setup flow here would introspect the wrong contract.
+    info = (
+        {}
+        if is_reconfigure
+        else await fetch_helper_flow_info(client, helper_type, menu_choice)
+    )
+    schema = current_schema if is_reconfigure else info.get("schema") or current_schema
 
     if field_errors:
         # Structured field errors — tell the caller which fields failed.
@@ -458,7 +460,7 @@ def _reconfigure_abort_result(
                 ],
                 context={
                     "flow_id": flow_id,
-                    "status": "apply_failed",
+                    "status": "applied_but_incomplete",
                     "unconsumed_config_keys": unresolved,
                     "details": current_step,
                 },
@@ -498,6 +500,71 @@ def _handle_abort_step(
     if reconfigure_result is not None:
         return reconfigure_result
     _raise_flow_abort(flow_id, current_step, is_reconfigure=is_reconfigure)
+
+
+def _flow_form_payload(
+    current_step: dict[str, Any],
+    *,
+    flow_id: str,
+    remaining_config: dict[str, Any],
+    ignored_config_keys: set[str],
+    reuse_state: _ReuseState,
+) -> tuple[dict[str, Any], bool]:
+    """Build one generic flow form payload and report consumed caller keys."""
+    consumed_form_keys: set[str] = set()
+    form_data = _auto_confirm_form_payload(current_step)
+    if form_data is None:
+        form_data = _handle_form_step(
+            flow_id,
+            current_step,
+            remaining_config,
+            ignored_config_keys,
+            consumed_form_keys,
+            reuse_state,
+        )
+    return form_data, bool(consumed_form_keys)
+
+
+def _handle_flow_create_entry(
+    flow_id: str,
+    current_step: dict[str, Any],
+    *,
+    is_reconfigure: bool,
+    supplied_keys: list[str],
+    saw_form_step: bool,
+    any_form_key_consumed: bool,
+    ignored_config_keys: set[str],
+    remaining_config: dict[str, Any],
+    reuse_state: _ReuseState,
+) -> dict[str, Any]:
+    """Finish a normal flow, but never treat create_entry as reconfigure success."""
+    if is_reconfigure:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Reconfigure flow created a new config entry instead of "
+                "updating the existing entry",
+                suggestions=[
+                    "Inspect Home Assistant for a duplicate entry before "
+                    "retrying; do not create another entry automatically."
+                ],
+                context={
+                    "flow_id": flow_id,
+                    "status": "applied_but_unverified",
+                    "details": current_step,
+                },
+            )
+        )
+    return _finish_flow_entry(
+        flow_id,
+        current_step,
+        supplied_keys=supplied_keys,
+        saw_form_step=saw_form_step,
+        any_form_key_consumed=any_form_key_consumed,
+        ignored_config_keys=ignored_config_keys,
+        remaining_config=remaining_config,
+        reuse_state=reuse_state,
+    )
 
 
 async def _handle_flow_steps(
@@ -571,9 +638,10 @@ async def _handle_flow_steps(
         result_type = current_step.get("type")
 
         if result_type == _FlowType.CREATE_ENTRY:
-            return _finish_flow_entry(
+            return _handle_flow_create_entry(
                 flow_id,
                 current_step,
+                is_reconfigure=is_reconfigure,
                 supplied_keys=supplied_keys,
                 saw_form_step=saw_form_step,
                 any_form_key_consumed=any_form_key_consumed,
@@ -625,18 +693,14 @@ async def _handle_flow_steps(
             # what it consumed for any later step that redeclares the same
             # field.
             saw_form_step = True
-            consumed_form_keys: set[str] = set()
-            form_data = _auto_confirm_form_payload(current_step)
-            if form_data is None:
-                form_data = _handle_form_step(
-                    flow_id,
-                    current_step,
-                    remaining_config,
-                    ignored_config_keys,
-                    consumed_form_keys,
-                    reuse_state,
-                )
-            if consumed_form_keys:
+            form_data, consumed_any = _flow_form_payload(
+                current_step,
+                flow_id=flow_id,
+                remaining_config=remaining_config,
+                ignored_config_keys=ignored_config_keys,
+                reuse_state=reuse_state,
+            )
+            if consumed_any:
                 any_form_key_consumed = True
             logger.debug(
                 f"Flow step {step_num}: form submit "
@@ -689,8 +753,91 @@ async def _handle_flow_steps(
                 "flow_id": flow_id,
                 "max_steps": max_steps,
                 "consumed_menu_selections": consumed_menu_selections,
-                **({"status": "apply_failed"} if is_reconfigure else {}),
+                **({"status": "applied_but_unverified"} if is_reconfigure else {}),
             },
+        )
+    )
+
+
+def _handle_subentry_create_entry(
+    flow_id: str,
+    current_step: dict[str, Any],
+    *,
+    is_reconfigure: bool,
+    ignored_config_keys: set[str],
+    remaining_config: dict[str, Any],
+    config: dict[str, Any],
+    reuse_state: _ReuseState,
+) -> dict[str, Any]:
+    """Handle a subentry create result and reject it in reconfigure mode."""
+    if is_reconfigure:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Config subentry reconfigure created a new entry instead "
+                "of updating the existing entry",
+                context={
+                    "flow_id": flow_id,
+                    "status": "applied_but_unverified",
+                    "details": current_step,
+                },
+            )
+        )
+    response: dict[str, Any] = {
+        "success": True,
+        "operation": "created",
+        "flow_result": current_step,
+    }
+    warnings = _success_warnings(ignored_config_keys, remaining_config, reuse_state)
+    if warnings:
+        response["warnings"] = warnings
+    return response
+
+
+def _handle_subentry_abort(
+    flow_id: str,
+    current_step: dict[str, Any],
+    *,
+    is_reconfigure: bool,
+    config: dict[str, Any],
+    ignored_config_keys: set[str],
+    remaining_config: dict[str, Any],
+    reuse_state: _ReuseState,
+) -> dict[str, Any]:
+    """Handle a subentry abort, enforcing consumed values after reconfigure."""
+    reason = current_step.get("reason")
+    if is_reconfigure and reason in _RECONFIGURE_SUCCESS_REASONS:
+        unresolved = sorted(
+            ignored_config_keys | {key for key in remaining_config if key in config}
+        )
+        if unresolved:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Config subentry reconfigure completed without "
+                    "consuming all supplied configuration values",
+                    context={
+                        "flow_id": flow_id,
+                        "status": "applied_but_incomplete",
+                        "unconsumed_config_keys": unresolved,
+                        "details": current_step,
+                    },
+                )
+            )
+        response: dict[str, Any] = {
+            "success": True,
+            "operation": "reconfigured",
+            "flow_result": current_step,
+        }
+        warnings = _success_warnings(ignored_config_keys, remaining_config, reuse_state)
+        if warnings:
+            response["warnings"] = warnings
+        return response
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"Config subentry flow aborted: {reason}",
+            context={"flow_id": flow_id, "details": current_step},
         )
     )
 
@@ -723,38 +870,25 @@ async def _handle_config_subentry_flow_steps(
         result_type = current_step.get("type")
 
         if result_type == _FlowType.CREATE_ENTRY:
-            response: dict[str, Any] = {
-                "success": True,
-                "operation": "created",
-                "flow_result": current_step,
-            }
-            warnings = _success_warnings(
-                ignored_config_keys, remaining_config, reuse_state
+            return _handle_subentry_create_entry(
+                flow_id,
+                current_step,
+                is_reconfigure=is_reconfigure,
+                ignored_config_keys=ignored_config_keys,
+                remaining_config=remaining_config,
+                config=config,
+                reuse_state=reuse_state,
             )
-            if warnings:
-                response["warnings"] = warnings
-            return response
 
         if result_type == _FlowType.ABORT:
-            reason = current_step.get("reason")
-            if is_reconfigure and reason in _RECONFIGURE_SUCCESS_REASONS:
-                response = {
-                    "success": True,
-                    "operation": "reconfigured",
-                    "flow_result": current_step,
-                }
-                warnings = _success_warnings(
-                    ignored_config_keys, remaining_config, reuse_state
-                )
-                if warnings:
-                    response["warnings"] = warnings
-                return response
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Config subentry flow aborted: {reason}",
-                    context={"flow_id": flow_id, "details": current_step},
-                )
+            return _handle_subentry_abort(
+                flow_id,
+                current_step,
+                is_reconfigure=is_reconfigure,
+                config=config,
+                ignored_config_keys=ignored_config_keys,
+                remaining_config=remaining_config,
+                reuse_state=reuse_state,
             )
 
         if result_type == _FlowType.MENU:
@@ -839,7 +973,7 @@ async def _handle_config_subentry_flow_steps(
                 "flow_id": flow_id,
                 "max_steps": max_steps,
                 "consumed_menu_selections": consumed_menu_selections,
-                **({"status": "apply_failed"} if is_reconfigure else {}),
+                **({"status": "applied_but_unverified"} if is_reconfigure else {}),
             },
         )
     )

@@ -19,10 +19,12 @@ section the caller never named.
 """
 
 import copy
+import json
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools.config_entry_flow_form import (
@@ -693,18 +695,18 @@ class TestSubentryFlowIgnoredKeys:
             "data_schema": [{"name": "name"}],
         }
 
-        result = await _handle_config_subentry_flow_steps(
-            client,
-            "flow-5",
-            initial_step,
-            {"name": "x", "junk": "ignored"},
-            is_reconfigure=True,
-        )
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_config_subentry_flow_steps(
+                client,
+                "flow-5",
+                initial_step,
+                {"name": "x", "junk": "ignored"},
+                is_reconfigure=True,
+            )
 
-        assert result["operation"] == "reconfigured"
-        assert result["warnings"] == [
-            "Ignored config keys not declared by the Home Assistant flow schema: junk"
-        ]
+        payload = json.loads(str(exc_info.value))
+        assert payload["status"] == "applied_but_incomplete"
+        assert payload["unconsumed_config_keys"] == ["junk"]
 
     async def test_subentry_reports_unknown_explicit_section_keys_with_path(
         self,
