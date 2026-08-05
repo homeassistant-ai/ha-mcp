@@ -130,6 +130,39 @@ async def _collect_reconfigure_identity(
     return identity
 
 
+async def _same_domain_related_entry_ids(
+    client: Any,
+    identity: dict[str, Any],
+    *,
+    entry_id: str,
+    domain: str,
+) -> list[str]:
+    """Return related entries that are duplicates in the same integration.
+
+    Home Assistant may intentionally attach an auxiliary platform entry such as
+    ``switch_as_x`` to the same physical device. That is not a second physical
+    integration entry and must not block reconfiguration of the primary entry.
+    Unknown related entries remain blocking so the duplicate safeguard fails
+    closed when the config-entry registry cannot explain the relationship.
+    """
+    related_entry_ids = set(identity.get("related_entry_ids", [])) - {entry_id}
+    if not related_entry_ids:
+        return []
+
+    entries = await client.list_config_entries()
+    entries_by_id = {
+        item.get("entry_id"): item
+        for item in entries
+        if isinstance(item, dict) and item.get("entry_id")
+    }
+    return sorted(
+        related_id
+        for related_id in related_entry_ids
+        if related_id not in entries_by_id
+        or entries_by_id[related_id].get("domain") == domain
+    )
+
+
 async def _optional_registry_rows(
     client: Any,
     method_name: str,
@@ -596,13 +629,17 @@ async def _verify_reconfigured_entry(  # noqa: C901
                 expected=expected_identity,
             )
 
-    after_related_entry_ids = set(after_identity.get("related_entry_ids", [])) - {
-        entry_id
-    }
+    after_related_entry_ids = await _same_domain_related_entry_ids(
+        client,
+        after_identity,
+        entry_id=entry_id,
+        domain=domain,
+    )
     if after_related_entry_ids:
         _raise_identity_mismatch(
             entry_id,
-            "Reconfigure flow left duplicate config entries sharing the registered device",
+            "Reconfigure flow left duplicate config entries sharing the registered "
+            "device from the same integration",
             before=before_identity,
             after=after_identity,
             expected=expected_identity,
@@ -857,13 +894,17 @@ async def reconfigure_config_entry(  # noqa: C901
             expected=expected_identity,
         )
 
-    before_related_entry_ids = set(before_identity.get("related_entry_ids", [])) - {
-        entry_id
-    }
+    before_related_entry_ids = await _same_domain_related_entry_ids(
+        client,
+        before_identity,
+        entry_id=entry_id,
+        domain=domain,
+    )
     if before_related_entry_ids:
         _raise_identity_mismatch(
             entry_id,
-            "The entry has a registered device shared with duplicate config entries",
+            "The entry has a registered device shared with duplicate config entries "
+            "from the same integration",
             before=before_identity,
             after=before_identity,
             expected=expected_identity,

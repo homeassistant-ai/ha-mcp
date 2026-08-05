@@ -397,6 +397,9 @@ async def test_reconfigure_rejects_registry_duplicate_without_unique_id() -> Non
         ]
     )
     client.list_device_registry = AsyncMock(return_value=[])
+    client.list_config_entries = AsyncMock(
+        return_value=[before, {"entry_id": "duplicate-entry", "domain": "shelly"}]
+    )
     client.start_reconfigure_flow = AsyncMock()
 
     with pytest.raises(ToolError) as exc_info:
@@ -409,6 +412,77 @@ async def test_reconfigure_rejects_registry_duplicate_without_unique_id() -> Non
     payload = json.loads(str(exc_info.value))
     assert "duplicate" in payload["error"]["message"].lower()
     client.start_reconfigure_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_allows_auxiliary_entry_sharing_same_device() -> None:
+    """A switch_as_x light is not a duplicate physical Shelly entry."""
+    shelly_entry = {
+        "entry_id": "shelly-entry",
+        "domain": "shelly",
+        "title": "Luces pasillo",
+        "state": "setup_retry",
+        "supports_reconfigure": True,
+    }
+    switch_as_x_entry = {
+        "entry_id": "switch-as-x-entry",
+        "domain": "switch_as_x",
+        "title": "luces_pasillo_switch_0",
+        "state": "loaded",
+        "supports_reconfigure": False,
+    }
+    entity_rows = [
+        {
+            "entity_id": "switch.luces_pasillo_switch_0",
+            "config_entry_id": "shelly-entry",
+            "device_id": "shared-device",
+            "platform": "shelly",
+        },
+        {
+            "entity_id": "light.luces_pasillo",
+            "config_entry_id": "switch-as-x-entry",
+            "device_id": "shared-device",
+            "platform": "switch_as_x",
+        },
+    ]
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(
+        side_effect=[shelly_entry, {**shelly_entry, "state": "loaded"}]
+    )
+    client.list_entity_registry = AsyncMock(return_value=entity_rows)
+    client.list_device_registry = AsyncMock(
+        return_value=[
+            {
+                "id": "shared-device",
+                "identifiers": [["shelly", "EC:DA:3B:C2:32:1C"]],
+                "config_entries": ["shelly-entry", "switch-as-x-entry"],
+            }
+        ]
+    )
+    client.list_config_entries = AsyncMock(
+        return_value=[shelly_entry, switch_as_x_entry]
+    )
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-auxiliary-entry",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client,
+        "shelly-entry",
+        host="10.0.50.51",
+        expected_device_id="shared-device",
+        expected_mac="EC:DA:3B:C2:32:1C",
+    )
+
+    assert result["success"] is True
+    client.start_reconfigure_flow.assert_awaited_once_with("shelly", "shelly-entry")
 
 
 @pytest.mark.asyncio
