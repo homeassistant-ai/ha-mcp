@@ -54,6 +54,7 @@ import yaml  # type: ignore[import-untyped]
 from fastmcp.exceptions import ToolError
 
 from .client.rest_client import HomeAssistantConnectionError, HomeAssistantError
+from .tools.reconfigure_security import redact_reconfigure_value
 
 logger = logging.getLogger(__name__)
 
@@ -1909,7 +1910,7 @@ async def _fetch_integration(client: Any, entity_id: str) -> Any:
     )
     for item in items:
         if item.get("entry_id") == entity_id:
-            return item
+            return redact_reconfigure_value(item)
     return None
 
 

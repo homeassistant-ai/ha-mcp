@@ -31,6 +31,7 @@ from ha_mcp.backup_manager import (
     _build_text_diff_response,
     _compute_json_patch,
     _fetch_calendar_event,
+    _fetch_integration,
     _fetch_todo_item,
     _pointer_segment,
     _require_dict,
@@ -2490,3 +2491,46 @@ class TestListEditsAndLegacy:
         monkeypatch.setattr(mgr, "list_legacy", _legacy_ok)
         out = await _edits_list(mgr, _StubSettings(), None, None, 50)
         assert "warnings" not in out
+
+
+@pytest.mark.asyncio
+async def test_integration_backup_redacts_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Config-entry snapshots must never retain integration credentials."""
+
+    class WSClient:
+        async def send_command(self, _command: str, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "success": True,
+                "result": [
+                    {
+                        "entry_id": "entry-123",
+                        "domain": "shelly",
+                        "data": {
+                            "host": "10.0.50.170",
+                            "password": "do-not-store",
+                            "nested": {"access_token": "also-do-not-store"},
+                        },
+                    }
+                ],
+            }
+
+        async def disconnect(self) -> None:
+            return None
+
+    async def _connected(*_args: Any, **_kwargs: Any) -> tuple[WSClient, None]:
+        return WSClient(), None
+
+    monkeypatch.setattr("ha_mcp.tools.helpers.get_connected_ws_client", _connected)
+
+    class Client:
+        base_url = "http://homeassistant.local"
+        token = "[REDACTED]"
+        verify_ssl = True
+
+    result = await _fetch_integration(Client(), "entry-123")
+
+    assert result["data"]["host"] == "10.0.50.170"
+    assert result["data"]["password"] == "[REDACTED]"
+    assert result["data"]["nested"]["access_token"] == "[REDACTED]"

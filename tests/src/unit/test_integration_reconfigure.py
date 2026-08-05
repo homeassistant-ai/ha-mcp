@@ -8,6 +8,7 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.config_entry_flow import reconfigure_config_entry
+from ha_mcp.tools.reconfigure_security import redact_reconfigure_value
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 
@@ -20,6 +21,23 @@ def reconfig_entry() -> dict[str, object]:
         "title": "Living room relay",
         "unique_id": "AA:BB:CC:DD:EE:FF",
         "supports_reconfigure": True,
+    }
+
+
+def test_reconfigure_redaction_covers_nested_camel_case_secrets() -> None:
+    """Flow errors must not leak common credential key spellings."""
+    value = redact_reconfigure_value(
+        {
+            "apiKey": "hidden",
+            "nested": {"clientSecret": "hidden", "host": "10.0.50.170"},
+            "items": [{"refresh-token": "hidden"}],
+        }
+    )
+
+    assert value == {
+        "apiKey": "[REDACTED]",
+        "nested": {"clientSecret": "[REDACTED]", "host": "10.0.50.170"},
+        "items": [{"refresh-token": "[REDACTED]"}],
     }
 
 
@@ -271,6 +289,140 @@ async def test_reconfigure_reports_applied_but_unverified_after_commit(
 
     payload = json.loads(str(exc_info.value))
     assert payload["status"] == "applied_but_unverified"
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_rejects_registry_duplicate_without_unique_id() -> None:
+    """A second entry sharing the registered device is unsafe even without unique_id."""
+    before = {
+        "entry_id": "offline-entry",
+        "domain": "shelly",
+        "state": "setup_retry",
+        "supports_reconfigure": True,
+    }
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=before)
+    client.list_entity_registry = AsyncMock(
+        return_value=[
+            {
+                "entity_id": "switch.a1",
+                "config_entry_id": "offline-entry",
+                "device_id": "device-a1",
+            },
+            {
+                "entity_id": "switch.a1_duplicate",
+                "config_entry_id": "duplicate-entry",
+                "device_id": "device-a1",
+            },
+        ]
+    )
+    client.list_device_registry = AsyncMock(return_value=[])
+    client.start_reconfigure_flow = AsyncMock()
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client,
+            "offline-entry",
+            host="10.0.50.185",
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert "duplicate" in payload["error"]["message"].lower()
+    client.start_reconfigure_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_rejects_expected_unique_id_mismatch_before_flow(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """A known entry identity mismatch must fail before any mutating flow starts."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.start_reconfigure_flow = AsyncMock()
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client,
+            "entry-123",
+            host="10.0.50.183",
+            expected_unique_id="different-device",
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert "expected unique_id" in payload["error"]["message"]
+    client.start_reconfigure_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_rejects_expected_mac_mismatch_before_flow(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """A known registry MAC mismatch must fail before any mutating flow starts."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.list_entity_registry = AsyncMock(
+        return_value=[
+            {
+                "entity_id": "switch.living_room",
+                "config_entry_id": "entry-123",
+                "device_id": "device-living-room",
+            }
+        ]
+    )
+    client.list_device_registry = AsyncMock(
+        return_value=[
+            {
+                "id": "device-living-room",
+                "identifiers": [["shelly", "AA:BB:CC:DD:EE:FF"]],
+            }
+        ]
+    )
+    client.start_reconfigure_flow = AsyncMock()
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client,
+            "entry-123",
+            host="10.0.50.184",
+            expected_mac="11:22:33:44:55:66",
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert "expected MAC" in payload["error"]["message"]
+    client.start_reconfigure_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_does_not_treat_temporarily_missing_identity_as_change(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """A post-flow missing identifier is unverified, not a different device."""
+    after = {key: value for key, value in reconfig_entry.items() if key != "unique_id"}
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, after])
+    client.list_config_entries = AsyncMock(return_value=[after])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-temporary-identity",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client,
+        "entry-123",
+        host="10.0.50.186",
+        expected_unique_id="AA:BB:CC:DD:EE:FF",
+    )
+
+    assert result["status"] == "applied_but_unverified"
+    assert result["verification"]["unique_id_verification"] == (
+        "unavailable_after_change"
+    )
 
 
 @pytest.mark.asyncio

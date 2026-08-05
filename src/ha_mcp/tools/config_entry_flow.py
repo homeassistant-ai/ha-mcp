@@ -38,6 +38,7 @@ from .config_entry_flow_walker import (
     _handle_flow_steps,
 )
 from .helpers import raise_tool_error, validate_identifier_not_empty
+from .reconfigure_security import redact_reconfigure_value
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ async def _collect_reconfigure_identity(
         "device_ids": [],
         "entity_ids": [],
         "macs": [],
+        "related_entry_ids": [],
         "entity_registry_available": False,
         "device_registry_available": False,
         "registry_available": False,
@@ -81,6 +83,15 @@ async def _collect_reconfigure_identity(
         identity["device_ids"] = sorted(
             {row["device_id"] for row in matching_entities if row.get("device_id")}
         )
+        current_device_ids = set(identity["device_ids"])
+        identity["related_entry_ids"] = sorted(
+            {
+                row["config_entry_id"]
+                for row in entity_rows
+                if row.get("device_id") in current_device_ids
+                and row.get("config_entry_id")
+            }
+        )
         identity["entity_registry_available"] = True
         identity["registry_available"] = True
 
@@ -101,6 +112,15 @@ async def _collect_reconfigure_identity(
                 if _normalise_identity_value(value)
             }
         )
+        related_entry_ids = set(identity["related_entry_ids"])
+        for row in device_rows:
+            if row.get("id") in device_ids:
+                related_entry_ids.update(
+                    item
+                    for item in row.get("config_entries", [])
+                    if isinstance(item, str)
+                )
+        identity["related_entry_ids"] = sorted(related_entry_ids)
         identity["device_registry_available"] = True
         identity["registry_available"] = True
     return identity
@@ -441,14 +461,18 @@ async def _verify_reconfigured_entry(  # noqa: C901
                 context={
                     "entry_id": entry_id,
                     "expected_domain": domain,
-                    "verified_entry": after,
+                    "verified_entry": redact_reconfigure_value(after),
                 },
             )
         )
 
     before_unique_id = before.get("unique_id")
     after_unique_id = after.get("unique_id")
-    if before_unique_id is not None and after_unique_id != before_unique_id:
+    if (
+        before_unique_id is not None
+        and after_unique_id is not None
+        and after_unique_id != before_unique_id
+    ):
         _raise_identity_mismatch(
             entry_id,
             "Reconfigure flow changed the original entry unique_id",
@@ -458,7 +482,11 @@ async def _verify_reconfigured_entry(  # noqa: C901
         )
 
     expected_unique_id = expected_identity.get("unique_id")
-    if expected_unique_id is not None and after.get("unique_id") != expected_unique_id:
+    if (
+        expected_unique_id is not None
+        and after.get("unique_id") is not None
+        and after.get("unique_id") != expected_unique_id
+    ):
         _raise_identity_mismatch(
             entry_id,
             "Reconfigure result does not match expected unique_id",
@@ -534,6 +562,18 @@ async def _verify_reconfigured_entry(  # noqa: C901
                 after=after_identity,
                 expected=expected_identity,
             )
+
+    after_related_entry_ids = set(after_identity.get("related_entry_ids", [])) - {
+        entry_id
+    }
+    if after_related_entry_ids:
+        _raise_identity_mismatch(
+            entry_id,
+            "Reconfigure flow left duplicate config entries sharing the registered device",
+            before=before_identity,
+            after=after_identity,
+            expected=expected_identity,
+        )
 
     identity_unique_ids = {
         value for value in (before_unique_id, after_unique_id) if value is not None
@@ -753,6 +793,42 @@ async def reconfigure_config_entry(  # noqa: C901
         _raise_identity_mismatch(
             entry_id,
             "The entry does not match expected entity_ids before reconfigure",
+            before=before_identity,
+            after=before_identity,
+            expected=expected_identity,
+        )
+    if (
+        expected_unique_id is not None
+        and before.get("unique_id") is not None
+        and before.get("unique_id") != expected_unique_id
+    ):
+        _raise_identity_mismatch(
+            entry_id,
+            "The entry does not match expected unique_id before reconfigure",
+            before=before_identity,
+            after=before_identity,
+            expected=expected_identity,
+        )
+    if (
+        expected_mac is not None
+        and before_identity["macs"]
+        and _normalise_identity_value(expected_mac) not in set(before_identity["macs"])
+    ):
+        _raise_identity_mismatch(
+            entry_id,
+            "The entry does not match expected MAC before reconfigure",
+            before=before_identity,
+            after=before_identity,
+            expected=expected_identity,
+        )
+
+    before_related_entry_ids = set(before_identity.get("related_entry_ids", [])) - {
+        entry_id
+    }
+    if before_related_entry_ids:
+        _raise_identity_mismatch(
+            entry_id,
+            "The entry has a registered device shared with duplicate config entries",
             before=before_identity,
             after=before_identity,
             expected=expected_identity,

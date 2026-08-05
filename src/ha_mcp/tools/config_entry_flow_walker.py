@@ -28,6 +28,7 @@ from .config_entry_flow_menu import (
     _handle_menu_step,
 )
 from .helpers import raise_tool_error
+from .reconfigure_security import redact_reconfigure_value
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +234,7 @@ async def _raise_flow_api_error(
     menu_choice: str | None,
     current_step: dict[str, Any] | None,
     submitted: dict[str, Any] | None,
+    is_reconfigure: bool = False,
 ) -> NoReturn:
     """Translate an HA 4xx during a flow submit into a structured ToolError.
 
@@ -256,6 +258,9 @@ async def _raise_flow_api_error(
         submitted,
         parsed["raw"],
     )
+
+    if is_reconfigure:
+        context = redact_reconfigure_value(context)
 
     suggestions: list[str] = []
     message: str
@@ -298,6 +303,10 @@ async def _raise_flow_api_error(
                 "then retry with a corrected config."
             )
 
+    if is_reconfigure:
+        context["status"] = "apply_failed"
+        context = redact_reconfigure_value(context)
+
     raise_tool_error(
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
@@ -317,6 +326,7 @@ async def _submit_step(
     helper_type: str | None,
     last_menu_choice: str | None,
     current_step: dict[str, Any],
+    is_reconfigure: bool = False,
 ) -> dict[str, Any]:
     try:
         return await asyncio.wait_for(submit_fn(flow_id, payload), timeout=20.0)
@@ -330,6 +340,7 @@ async def _submit_step(
                 menu_choice=last_menu_choice,
                 current_step=current_step,
                 submitted=payload,
+                is_reconfigure=is_reconfigure,
             )
         raise
 
@@ -382,7 +393,18 @@ def _finish_flow_entry(
     return response
 
 
-def _raise_flow_abort(flow_id: str, current_step: dict[str, Any]) -> NoReturn:
+def _flow_failure_context(
+    flow_id: str, current_step: dict[str, Any], *, is_reconfigure: bool
+) -> dict[str, Any]:
+    context: dict[str, Any] = {"flow_id": flow_id, "details": current_step}
+    if is_reconfigure:
+        context["status"] = "apply_failed"
+    return context
+
+
+def _raise_flow_abort(
+    flow_id: str, current_step: dict[str, Any], *, is_reconfigure: bool = False
+) -> NoReturn:
     """Raise the structured error for an ABORT flow step."""
     reason = current_step.get("reason")
     abort_suggestions: list[str] = []
@@ -398,7 +420,9 @@ def _raise_flow_abort(flow_id: str, current_step: dict[str, Any]) -> NoReturn:
             ErrorCode.SERVICE_CALL_FAILED,
             f"Flow aborted: {reason}",
             suggestions=abort_suggestions or None,
-            context={"flow_id": flow_id, "details": current_step},
+            context=_flow_failure_context(
+                flow_id, current_step, is_reconfigure=is_reconfigure
+            ),
         )
     )
 
@@ -434,6 +458,7 @@ def _reconfigure_abort_result(
                 ],
                 context={
                     "flow_id": flow_id,
+                    "status": "apply_failed",
                     "unconsumed_config_keys": unresolved,
                     "details": current_step,
                 },
@@ -472,7 +497,7 @@ def _handle_abort_step(
     )
     if reconfigure_result is not None:
         return reconfigure_result
-    _raise_flow_abort(flow_id, current_step)
+    _raise_flow_abort(flow_id, current_step, is_reconfigure=is_reconfigure)
 
 
 async def _handle_flow_steps(
@@ -589,6 +614,7 @@ async def _handle_flow_steps(
                 helper_type=helper_type,
                 last_menu_choice=last_menu_choice,
                 current_step=current_step,
+                is_reconfigure=is_reconfigure,
             )
 
         elif result_type == _FlowType.FORM:
@@ -624,6 +650,7 @@ async def _handle_flow_steps(
                 helper_type=helper_type,
                 last_menu_choice=last_menu_choice,
                 current_step=current_step,
+                is_reconfigure=is_reconfigure,
             )
 
         elif result_type in _UNDRIVABLE_STEP_TYPES:
@@ -637,7 +664,9 @@ async def _handle_flow_steps(
                         "Complete this flow in the Home Assistant UI "
                         "(Settings > Devices & Services)."
                     ],
-                    context={"flow_id": flow_id, "details": current_step},
+                    context=_flow_failure_context(
+                        flow_id, current_step, is_reconfigure=is_reconfigure
+                    ),
                 )
             )
 
@@ -646,7 +675,9 @@ async def _handle_flow_steps(
                 create_error_response(
                     ErrorCode.INTERNAL_UNEXPECTED,
                     f"Unexpected flow result type: {result_type}",
-                    context={"flow_id": flow_id, "details": current_step},
+                    context=_flow_failure_context(
+                        flow_id, current_step, is_reconfigure=is_reconfigure
+                    ),
                 )
             )
 
@@ -658,6 +689,7 @@ async def _handle_flow_steps(
                 "flow_id": flow_id,
                 "max_steps": max_steps,
                 "consumed_menu_selections": consumed_menu_selections,
+                **({"status": "apply_failed"} if is_reconfigure else {}),
             },
         )
     )
@@ -748,6 +780,7 @@ async def _handle_config_subentry_flow_steps(
                 helper_type=None,
                 last_menu_choice=last_menu_choice,
                 current_step=current_step,
+                is_reconfigure=is_reconfigure,
             )
             continue
 
@@ -773,6 +806,7 @@ async def _handle_config_subentry_flow_steps(
                 helper_type=None,
                 last_menu_choice=last_menu_choice,
                 current_step=current_step,
+                is_reconfigure=is_reconfigure,
             )
             continue
 
@@ -805,6 +839,7 @@ async def _handle_config_subentry_flow_steps(
                 "flow_id": flow_id,
                 "max_steps": max_steps,
                 "consumed_menu_selections": consumed_menu_selections,
+                **({"status": "apply_failed"} if is_reconfigure else {}),
             },
         )
     )

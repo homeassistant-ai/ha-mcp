@@ -45,6 +45,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .reconfigure_security import redact_reconfigure_value
 from .tools_config_helpers import (
     SIMPLE_HELPER_TYPES,
     _get_entities_for_config_entry,
@@ -421,30 +422,6 @@ async def _get_entry_id_for_flow_helper(
     if not config_entry_id:
         return None, "no_config_entry"
     return config_entry_id, "ok"
-
-
-def _redact_reconfigure_value(value: Any, key: str | None = None) -> Any:
-    if key and any(
-        marker in key.lower().replace("-", "_")
-        for marker in (
-            "password",
-            "secret",
-            "token",
-            "credential",
-            "api_key",
-            "private_key",
-            "connection_string",
-        )
-    ):
-        return "[REDACTED]"
-    if isinstance(value, dict):
-        return {
-            str(item_key): _redact_reconfigure_value(item, str(item_key))
-            for item_key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_redact_reconfigure_value(item) for item in value]
-    return value
 
 
 class IntegrationTools:
@@ -1709,6 +1686,7 @@ class IntegrationTools:
         ] = None,
         config: Annotated[
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(
@@ -1736,6 +1714,7 @@ class IntegrationTools:
         ] = None,
         expected_entity_ids: Annotated[
             list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description="Exact entity IDs expected to remain associated.",
@@ -1825,9 +1804,10 @@ class IntegrationTools:
                         ],
                         context={
                             "entry_id": entry_id,
+                            "status": "validation_only",
                             "domain": domain,
                             "title": entry.get("title"),
-                            "target_config": _redact_reconfigure_value(target_config),
+                            "target_config": redact_reconfigure_value(target_config),
                             "identity": identity,
                             "expected_identity": {
                                 "device_id": expected_device_id,
