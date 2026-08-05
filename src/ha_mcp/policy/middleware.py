@@ -41,7 +41,9 @@ PROXY_META_TOOLS = frozenset(
 # itself require approval — creating a second pending entry instead of
 # deciding the first, so nothing can ever be approved through the tool.
 # Only the queue-management actions are exempt; update_source / restart
-# remain gateable like any other high-stakes action.
+# remain gateable like any other high-stakes action. The exemption is not
+# a free self-approval: approve/deny separately require the
+# dev_tools_security_policy_access setting (off by default, issue #2141).
 _APPROVAL_MANAGEMENT_TOOL = "ha_dev_manage_server"
 _APPROVAL_MANAGEMENT_ACTIONS = frozenset({"list_pending", "approve", "deny"})
 

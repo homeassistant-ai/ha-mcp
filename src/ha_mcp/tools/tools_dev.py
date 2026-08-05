@@ -124,6 +124,80 @@ def is_dev_mode_enabled() -> bool:
     return bool(getattr(get_global_settings(), "enable_dev_mode", False))
 
 
+def _security_policy_access_enabled() -> bool:
+    """Check whether dev tools may change tool-security policy state.
+
+    Same read path and stale-singleton guard as
+    :func:`is_dev_mode_enabled` (issues #1783/#1785): a cached settings
+    object predating this field must read as "no access", never
+    AttributeError. Read per call, so flipping the toggle in the web UI
+    applies live without a server restart.
+    """
+    from ..config import get_global_settings
+
+    return bool(
+        getattr(get_global_settings(), "dev_tools_security_policy_access", False)
+    )
+
+
+def _require_security_policy_access(operation: str) -> None:
+    """Refuse ``operation`` unless security-policy access is enabled (#2141).
+
+    Guards every dev-tools surface that can weaken the tool-security
+    policies gating the agent itself, so dev mode can stay on for
+    everything else while policy override stays off.
+    """
+    if _security_policy_access_enabled():
+        return
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+            f"Dev tools may not {operation}: security-policy access is "
+            "disabled (dev_tools_security_policy_access=false).",
+            context={
+                "operation": operation,
+                "setting": "dev_tools_security_policy_access",
+            },
+            suggestions=[
+                "Enable 'Dev tools security policy access' in the web "
+                "settings UI (Server Settings tab, Developer section), or set "
+                "HAMCP_DEV_SECURITY_POLICY_ACCESS=true — it takes effect "
+                "without a restart.",
+            ],
+        )
+    )
+
+
+def _guard_security_policy_setting(setting: str) -> None:
+    """Gate set/reset of the two settings that define the dev tools' leash.
+
+    ``dev_tools_security_policy_access`` is refused unconditionally — even
+    with access ON — so the agent can neither grant itself policy access
+    nor revoke it; that toggle belongs to the web settings UI and the env
+    var alone. ``enable_tool_security_policies`` is the whole gating
+    engine's master switch, so writing it needs access.
+    """
+    if setting == "dev_tools_security_policy_access":
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+                "'dev_tools_security_policy_access' cannot be changed by dev "
+                "tools: it is the toggle governing their own access to tool "
+                "security policies.",
+                context={"setting": setting},
+                suggestions=[
+                    "Change it in the web settings UI (Server Settings tab, "
+                    "Developer section) or via the "
+                    "HAMCP_DEV_SECURITY_POLICY_ACCESS env var.",
+                ],
+            )
+        )
+    if setting == "enable_tool_security_policies":
+        _require_security_policy_access(
+            "enable or disable the tool-security-policy engine"
+        )
+
+
 def _spawn_background(coro: Any) -> None:
     """Run ``coro`` as a strongly-referenced fire-and-forget task."""
     task = asyncio.get_running_loop().create_task(coro)
@@ -742,7 +816,11 @@ class DevTools:
         LLM-API exposure, security gates, and policy edits apply live.
         Env-pinned settings/tools are read-only until the env var is unset.
         These actions can flip security-sensitive state — treat with the
-        same care as editing the web UI.
+        same care as editing the web UI. The policy-override surfaces
+        (set_policy, set_tool with gated=, and set/reset of
+        enable_tool_security_policies) additionally require the
+        'dev_tools_security_policy_access' setting, which is off by
+        default; reads are always available.
 
         EXAMPLES:
         ha_dev_manage_settings("list_tools")
@@ -808,6 +886,8 @@ class DevTools:
                     f"'setting' is required for action={action!r}",
                 )
             )
+        # set/reset only; 'list' returned above, and reads are never gated.
+        _guard_security_policy_setting(setting)
 
         from ..config import (
             _ADVANCED_SETTINGS_BOUNDS,
@@ -1027,6 +1107,11 @@ class DevTools:
                     "set_tool needs at least one of state / llm_api / gated",
                 )
             )
+        # The gate flag writes a security-policy rule (#2141); state /
+        # llm_api changes stay available without policy access. Checked
+        # before any write so a combined state+gated call is refused whole.
+        if gated is not None:
+            _require_security_policy_access("change a tool's security gate")
         # Reject unknown tool names BEFORE persisting anything: a typo'd
         # security gate ("ha_call_servce") would otherwise save a rule for a
         # nonexistent tool and report success while the intended tool stays
@@ -1387,6 +1472,8 @@ class DevTools:
         self, policy: dict[str, Any] | None, expected_version: int | None
     ) -> dict[str, Any]:
         """Write the full tool-security policy (validated, version-guarded)."""
+        _require_security_policy_access("rewrite the tool security policy")
+
         from pydantic import ValidationError
 
         from ..policy.model import Policy
@@ -1796,11 +1883,12 @@ class DevTools:
         arrives just before the server goes down) and supports those
         two deployments only (standalone processes must be restarted
         externally). list_pending/approve/deny are exempt from policy
-        gating (gating queue management would deadlock approvals) —
-        and since gated-call errors include the approval token, an
-        agent can self-approve its own gated calls while dev mode is
-        on. Dev mode is a trusted-operator feature; leave it off
-        otherwise.
+        gating (gating queue management would deadlock approvals), so
+        approve/deny instead require the separate
+        'dev_tools_security_policy_access' setting — off by default,
+        because gated-call errors carry the approval token and an agent
+        could otherwise self-approve its own gated calls. Dev mode is a
+        trusted-operator feature; leave it off otherwise.
 
         EXAMPLES:
         ha_dev_manage_server("info")
@@ -2277,6 +2365,10 @@ class DevTools:
         self, token: str | None, *, approve: bool
     ) -> dict[str, Any]:
         """Approve or deny one blocked tool call by token."""
+        # Deciding an approval is the agent clicking "accept" on its own
+        # gated call — the surface #2141 exists to close. list_pending
+        # stays open: reading the queue decides nothing.
+        _require_security_policy_access("decide a pending approval")
         if not token:
             raise_tool_error(
                 create_error_response(

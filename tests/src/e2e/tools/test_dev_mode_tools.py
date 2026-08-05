@@ -6,6 +6,8 @@ This test suite validates:
   appear only when HAMCP_ENABLE_DEV_MODE is on
 - ha_dev_manage_settings list / set / reset against a real server
 - ha_dev_manage_server info and its validation / deployment-mode errors
+- the security-policy access guard (issue #2141): set_policy is refused
+  through the real registered tool while dev mode alone is on
 
 Feature Flag: Set HAMCP_ENABLE_DEV_MODE=true to enable.
 
@@ -187,6 +189,22 @@ class TestDevManageSettings:
         )
         assert result.get("success") is not True
         assert "locked by env" in extract_error_message(result).lower()
+
+    async def test_set_policy_refused_without_security_policy_access(
+        self, mcp_client_with_dev_mode
+    ):
+        """Dev mode alone must not let an agent rewrite the policies gating
+        it (issue #2141): the module fixture enables dev mode only, so
+        dev_tools_security_policy_access keeps its default (off)."""
+        result = await safe_call_tool(
+            mcp_client_with_dev_mode,
+            "ha_dev_manage_settings",
+            {"action": "set_policy", "policy": {"rules": []}},
+        )
+        assert result.get("success") is not True
+        assert (
+            "dev_tools_security_policy_access" in extract_error_message(result).lower()
+        )
 
 
 class TestDevManageServer:
