@@ -8,7 +8,7 @@ import logging
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ..utilities.assertions import assert_mcp_success, safe_call_tool
+from ..utilities.assertions import MCPAssertions, assert_mcp_success, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -566,12 +566,11 @@ async def test_logs_error_log_structured_parses_real_log(mcp_client):
     """
     logger.info("Testing error_log structured summary against a live log")
 
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {"source": "error_log", "structured": True},
-    )
-
-    raw_data = assert_mcp_success(result, "Structured error log")
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success(
+            "ha_get_logs",
+            {"source": "error_log", "structured": True},
+        )
     data = get_logbook_data(raw_data)
 
     assert data["success"] is True
