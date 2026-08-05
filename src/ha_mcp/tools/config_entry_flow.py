@@ -38,7 +38,10 @@ from .config_entry_flow_walker import (
     _handle_flow_steps,
 )
 from .helpers import raise_tool_error, validate_identifier_not_empty
-from .reconfigure_security import redact_reconfigure_value
+from .reconfigure_security import (
+    build_reconfigure_rollback_metadata,
+    redact_reconfigure_value,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -748,6 +751,8 @@ async def reconfigure_config_entry(  # noqa: C901
             )
         )
 
+    rollback_metadata = build_reconfigure_rollback_metadata(entry_id, domain, before)
+
     expected_identity: dict[str, Any] = {
         "device_id": expected_device_id,
         "unique_id": expected_unique_id,
@@ -914,6 +919,7 @@ async def reconfigure_config_entry(  # noqa: C901
                     "domain": domain,
                     "status": "applied_but_unverified",
                     "error": str(last_verification_error),
+                    "rollback": rollback_metadata,
                 },
             )
         )
@@ -931,6 +937,14 @@ async def reconfigure_config_entry(  # noqa: C901
         "title": after.get("title"),
         "message": f"{domain} integration reconfigured successfully",
         "verification": verification,
+        "rollback_strategy": rollback_metadata["strategy"],
+        "rollback_automatic": rollback_metadata["automatic"],
+        "rollback_operator_action_required": rollback_metadata[
+            "operator_action_required"
+        ],
+        "rollback_manual_required": rollback_metadata["manual_required"],
+        "rollback_reference": rollback_metadata,
+        "target_config": redact_reconfigure_value(flow_config),
     }
     if result.get("warnings"):
         response["warnings"] = result["warnings"]

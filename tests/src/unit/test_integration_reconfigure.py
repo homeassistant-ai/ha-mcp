@@ -8,7 +8,10 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.tools.config_entry_flow import reconfigure_config_entry
-from ha_mcp.tools.reconfigure_security import redact_reconfigure_value
+from ha_mcp.tools.reconfigure_security import (
+    build_reconfigure_rollback_metadata,
+    redact_reconfigure_value,
+)
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 
@@ -39,6 +42,45 @@ def test_reconfigure_redaction_covers_nested_camel_case_secrets() -> None:
         "nested": {"clientSecret": "[REDACTED]", "host": "10.0.50.170"},
         "items": [{"refresh-token": "[REDACTED]"}],
     }
+
+
+def test_reconfigure_rollback_metadata_is_honest_about_redacted_secrets() -> None:
+    """Rollback uses the official flow and never promises replay of secrets."""
+    metadata = build_reconfigure_rollback_metadata(
+        "entry-123",
+        "shelly",
+        {
+            "data": {
+                "host": "10.0.50.170",
+                "port": 80,
+                "password": "do-not-return",
+            }
+        },
+    )
+
+    assert metadata["strategy"] == "official_reconfigure_flow"
+    assert metadata["automatic"] is False
+    assert metadata["operator_action_required"] is True
+    assert metadata["manual_required"] is True
+    assert metadata["manual_reason"] == "previous_config_contains_redacted_secrets"
+    assert metadata["previous_config"] == {
+        "host": "10.0.50.170",
+        "port": 80,
+        "password": "[REDACTED]",
+    }
+
+
+def test_reconfigure_rollback_metadata_without_secrets_is_replayable() -> None:
+    """A non-sensitive previous config can be replayed by an operator."""
+    metadata = build_reconfigure_rollback_metadata(
+        "entry-123",
+        "esphome",
+        {"data": {"host": "10.0.50.170", "port": 6053}},
+    )
+
+    assert metadata["manual_required"] is False
+    assert metadata["manual_reason"] is None
+    assert metadata["previous_config"] == {"host": "10.0.50.170", "port": 6053}
 
 
 @pytest.mark.asyncio
@@ -72,6 +114,14 @@ async def test_reconfigure_preserves_entry_and_submits_host_and_port(
     assert result["operation"] == "reconfigured"
     assert result["entry_id"] == "entry-123"
     assert result["domain"] == "shelly"
+    assert result["rollback_strategy"] == "official_reconfigure_flow"
+    assert result["rollback_automatic"] is False
+    assert result["rollback_operator_action_required"] is True
+    assert result["rollback_manual_required"] is True
+    assert result["rollback_reference"]["manual_reason"] == (
+        "previous_config_unavailable"
+    )
+    assert result["target_config"] == {"host": "10.0.50.170", "port": 80}
     assert result["verification"] == {
         "entry_id_preserved": True,
         "domain_preserved": True,

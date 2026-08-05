@@ -45,7 +45,10 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .reconfigure_security import redact_reconfigure_value
+from .reconfigure_security import (
+    build_reconfigure_rollback_metadata,
+    redact_reconfigure_value,
+)
 from .tools_config_helpers import (
     SIMPLE_HELPER_TYPES,
     _get_entities_for_config_entry,
@@ -1726,18 +1729,23 @@ class IntegrationTools:
                 default=False,
                 description=(
                     "Must be True to apply the change. With False, the tool only "
-                    "performs a preflight and returns the entry details."
+                    "performs a preflight and returns the entry, identity, and "
+                    "rollback details."
                 ),
             ),
         ] = False,
     ) -> dict[str, Any]:
-        """Change an existing integration's network endpoint safely.
+        """Change an existing integration's configuration safely.
 
         This is not Shelly-specific. It works only for entries whose
         integration implements Home Assistant's official
         ``async_step_reconfigure`` flow. Home Assistant keeps ownership of
         integration-specific validation and updates the existing entry in
-        place, preserving its entry/device/entity relationships.
+        place, preserving its entry/device/entity relationships. The mandatory
+        backup is safety evidence, not a connection-settings rollback: the
+        returned rollback metadata describes repeating the official flow with
+        the previous non-sensitive configuration, and flags when redacted
+        secrets require manual intervention.
         """
         try:
             entry_id = validate_identifier_not_empty(
@@ -1809,6 +1817,9 @@ class IntegrationTools:
                             "title": entry.get("title"),
                             "target_config": redact_reconfigure_value(target_config),
                             "identity": identity,
+                            "rollback": build_reconfigure_rollback_metadata(
+                                entry_id, domain, entry
+                            ),
                             "expected_identity": {
                                 "device_id": expected_device_id,
                                 "unique_id": expected_unique_id,
