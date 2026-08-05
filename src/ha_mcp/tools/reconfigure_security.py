@@ -113,6 +113,7 @@ def build_reconfigure_rollback_metadata(
         "backup_restore_supported": False,
         "backup_restore_note": (
             "The generic integration snapshot is redacted and does not restore "
-            "connection settings; use the official reconfigure flow instead."
+            "connection settings; HA REST config-entry data may be unavailable. "
+            "Use the official reconfigure flow instead."
         ),
     }

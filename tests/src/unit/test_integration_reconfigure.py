@@ -342,6 +342,36 @@ async def test_reconfigure_reports_applied_but_unverified_after_commit(
 
 
 @pytest.mark.asyncio
+async def test_reconfigure_verification_failure_includes_rollback_reference(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """Post-commit identity failures retain the operator rollback path."""
+    after = {**reconfig_entry, "unique_id": "DIFFERENT-AFTER-APPLY"}
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, after])
+    client.list_config_entries = AsyncMock(return_value=[after])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-identity-mismatch",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(client, "entry-123", host="10.0.50.183")
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == "applied_but_unverified"
+    assert payload["rollback"]["strategy"] == "official_reconfigure_flow"
+    assert payload["rollback"]["operator_action_required"] is True
+    assert payload["rollback"]["backup_restore_supported"] is False
+
+
+@pytest.mark.asyncio
 async def test_reconfigure_rejects_registry_duplicate_without_unique_id() -> None:
     """A second entry sharing the registered device is unsafe even without unique_id."""
     before = {

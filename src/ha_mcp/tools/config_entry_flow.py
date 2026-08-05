@@ -25,6 +25,7 @@ imported in one direction only (menu <- form <- walker <- here):
 """
 
 import asyncio
+import json
 import logging
 from typing import Any, Literal, NoReturn, cast
 
@@ -193,6 +194,35 @@ def _raise_identity_mismatch(
             },
         )
     )
+
+
+def _raise_post_commit_verification_error(
+    error: ToolError,
+    *,
+    entry_id: str,
+    domain: str,
+    rollback_metadata: dict[str, Any],
+) -> NoReturn:
+    """Preserve rollback guidance when a committed change fails verification."""
+    try:
+        payload = json.loads(str(error))
+    except (TypeError, ValueError):
+        payload = create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            "Reconfiguration was applied but could not be verified",
+        )
+    if not isinstance(payload, dict):
+        payload = create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            "Reconfiguration was applied but could not be verified",
+        )
+
+    payload = redact_reconfigure_value(payload)
+    payload["status"] = "applied_but_unverified"
+    payload["entry_id"] = entry_id
+    payload["domain"] = domain
+    payload["rollback"] = rollback_metadata
+    raise_tool_error(payload)
 
 
 # 15 helpers that use Config Entry Flow API (Issue #324).
@@ -898,8 +928,13 @@ async def reconfigure_config_entry(  # noqa: C901
                 expected_identity=expected_identity,
             )
             break
-        except ToolError:
-            raise
+        except ToolError as verification_error:
+            _raise_post_commit_verification_error(
+                verification_error,
+                entry_id=entry_id,
+                domain=domain,
+                rollback_metadata=rollback_metadata,
+            )
         except Exception as err:
             last_verification_error = err
             if attempt < 2:
