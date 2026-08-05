@@ -2099,3 +2099,69 @@ class TestVersionRenderingHonesty:
             "not detected (not installed, or probe failed)"
             in (result["formatted_report"])
         )
+
+
+class TestWebsocketsDependencyState:
+    """The torn-install probe (#2135/#2146) in diagnostic_info.
+
+    A version-mixed ``websockets`` install reports a version from its
+    metadata while the import chain behind ``websockets.connect`` raises
+    ImportError. ``websockets_dependency`` must carry both facts so a
+    "WebSocket dead, REST fine" report is a one-glance diagnosis.
+    """
+
+    def test_healthy_install_reports_version_and_import_ok(self):
+        from ha_mcp.tools.tools_bug_report import _websockets_dependency_state
+
+        state = _websockets_dependency_state()
+        assert state["import_ok"] is True
+        assert isinstance(state["version"], str) and state["version"]
+        assert "import_error" not in state
+
+    def test_torn_install_reports_import_error(self):
+        from ha_mcp.tools.tools_bug_report import _websockets_dependency_state
+
+        real_import_module = __import__("importlib").import_module
+
+        def fake_import_module(name):
+            if name == "websockets.asyncio.client":
+                raise ImportError(
+                    "cannot import name 'StatusLineTooLong' from "
+                    "'websockets.exceptions'"
+                )
+            return real_import_module(name)
+
+        with patch(
+            "ha_mcp.tools.tools_bug_report.importlib.import_module",
+            side_effect=fake_import_module,
+        ):
+            state = _websockets_dependency_state()
+
+        assert state["import_ok"] is False
+        assert state["version"]  # metadata version still readable
+        assert "StatusLineTooLong" in state["import_error"]
+
+    def test_missing_package_reports_import_error(self):
+        from ha_mcp.tools.tools_bug_report import _websockets_dependency_state
+
+        with patch(
+            "ha_mcp.tools.tools_bug_report.importlib.import_module",
+            side_effect=ModuleNotFoundError("No module named 'websockets'"),
+        ):
+            state = _websockets_dependency_state()
+
+        assert state["import_ok"] is False
+        assert state["version"] is None
+        assert "websockets" in state["import_error"]
+
+    @pytest.mark.asyncio
+    async def test_probe_lands_in_diagnostic_info(self):
+        from ha_mcp.tools.tools_bug_report import BugReportTools
+
+        client = MagicMock()
+        client.get_config = AsyncMock(side_effect=Exception("down"))
+        client.call_service = AsyncMock(side_effect=Exception("down"))
+        result = await BugReportTools(client).ha_report_issue(tool_call_count=1)
+        state = result["diagnostic_info"]["websockets_dependency"]
+        assert state["import_ok"] is True
+        assert state["version"]

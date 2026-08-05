@@ -203,6 +203,37 @@ def _detect_platform() -> dict[str, str]:
     }
 
 
+def _websockets_dependency_state() -> dict[str, Any]:
+    """Probe the installed ``websockets`` dependency for torn-install damage.
+
+    A half-upgraded install (#2135/#2146) leaves the package version-mixed on
+    disk: its metadata still reports one version while the import chain
+    behind ``websockets.connect`` raises ImportError on every WS connect.
+    Surfacing both facts here turns a "WebSocket dead, REST fine" report
+    into a one-glance diagnosis. Any probe failure is captured as data —
+    the bug-report path itself must never break on a broken dependency.
+    """
+    state: dict[str, Any] = {}
+    try:
+        websockets_module = importlib.import_module("websockets")
+        state["version"] = getattr(websockets_module, "__version__", "Unknown")
+    except Exception as e:
+        state["version"] = None
+        state["import_ok"] = False
+        state["import_error"] = f"{type(e).__name__}: {e}"
+        return state
+    try:
+        # The version-sensitive chain a torn install breaks (client.py /
+        # http11.py importing exception names their sibling exceptions.py
+        # predates).
+        importlib.import_module("websockets.asyncio.client")
+        state["import_ok"] = True
+    except Exception as e:
+        state["import_ok"] = False
+        state["import_error"] = f"{type(e).__name__}: {e}"
+    return state
+
+
 # Tool-surface-shaping toggles surfaced in bug reports. The set is small on
 # purpose: only flags that materially change which tools the agent sees, since
 # the same bug report behaves very differently depending on these. New
@@ -886,6 +917,7 @@ class BugReportTools:
             "instance": _instance_identity(),
             "installation_method": install_method,
             "platform": platform_info,
+            "websockets_dependency": _websockets_dependency_state(),
             "mcp_transport": mcp_transport,
             "mcp_client_info": client_info,
             "config_toggles": config_toggles,

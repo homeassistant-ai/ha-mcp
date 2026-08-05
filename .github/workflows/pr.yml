@@ -199,6 +199,20 @@ jobs:
     - name: Verify uv.lock is in sync with pyproject.toml
       run: uv lock --check
 
+    - name: Check dependency alignment with HA core constraints
+      # Mechanical link to HA's own package_constraints.txt (#2135/#2146):
+      # where HA pins a shared dependency exactly, ha-mcp must admit the pin;
+      # where HA is loose, ha-mcp must not pin exactly (an exact pin forces
+      # pip to replace the image-shipped copy in place — the torn-install
+      # window). Checked against the same HA version the e2e lanes run
+      # (HA_IMAGE_GHCR, renovate-managed), so drift on either side fails the
+      # PR that introduces it. Rules unit-tested offline in
+      # tests/src/unit/test_ha_constraint_alignment.py.
+      run: >-
+        uv run --no-project --with packaging python
+        scripts/check_ha_constraint_alignment.py
+        --ha-version "${HA_IMAGE_GHCR##*:}"
+
   docs-size:
     name: Docs Size Check
     runs-on: ubuntu-latest
@@ -398,6 +412,23 @@ jobs:
 
     - name: Run unit tests
       run: uv run pytest tests/src/unit/ -n auto --tb=short -v
+
+    - name: Unit tests at the websockets range floor
+      # websockets is a range (>=15.0.1,<18), floored at HA core's own
+      # package_constraints floor, so the embedded install can reuse the copy
+      # HA already ships instead of force-replacing it in place (#2135/#2146).
+      # The lockfile exercises the top of the range in the step above; this
+      # step overlays the floor version and re-runs the websockets-facing
+      # tests so both ends of the advertised range stay proven.
+      run: >-
+        uv run --with websockets==15.0.1 pytest
+        tests/src/unit/test_websockets_floor_compat.py
+        tests/src/unit/test_ws_connect_error_detail.py
+        tests/src/unit/test_ws_close_pending_requests_1721.py
+        tests/src/unit/test_rest_client_ws_transport_failure.py
+        tests/src/unit/test_ssl_verification.py
+        tests/src/unit/test_tools_addons.py
+        -n auto --tb=short -v
 
     - name: Run add-on structure tests
       # tests/addon/ validates add-on packaging / config.yaml structure (e.g.

@@ -379,7 +379,23 @@ class HomeAssistantWebSocketClient:
 
         except Exception as e:
             self._last_connect_error = f"{type(e).__name__}: {e}"
-            if _is_ssl_error(e) and self.verify_ssl:
+            if isinstance(e, ImportError):
+                # A version-mixed ``websockets`` install (files from two
+                # releases torn together by an interrupted in-place upgrade —
+                # #2135/#2146) fails the import chain behind
+                # ``websockets.connect`` on every attempt. Retrying can never
+                # succeed, so name the repair instead of the generic
+                # connection advice.
+                self._last_connect_error += (
+                    " — the installed 'websockets' package is broken "
+                    "(version-mixed files, usually from an interrupted "
+                    "in-place upgrade); reinstall it in the server's Python "
+                    "environment: pip install --force-reinstall websockets"
+                )
+                logger.error(
+                    "WebSocket connection failed: %s", self._last_connect_error
+                )
+            elif _is_ssl_error(e) and self.verify_ssl:
                 logger.error(
                     "WebSocket TLS verification failed for %s: %s. "
                     "If this is a self-signed certificate or hostname "

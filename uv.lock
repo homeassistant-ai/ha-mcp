@@ -782,7 +782,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = "==1.2.2" },
     { name = "truststore", specifier = "==0.10.4" },
     { name = "tzdata", specifier = ">=2024.1" },
-    { name = "websockets", specifier = "==17.0" },
+    { name = "websockets", specifier = ">=15.0.1,<18" },
 ]
 
 [package.metadata.requires-dev]

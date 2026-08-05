@@ -185,6 +185,14 @@ _EMBEDDED_READY_POLL_S = 5
 # wait from the 300s per-test timeout.
 _HAOS_EMBEDDED_BRINGUP_TIMEOUT = 600
 
+# ``pip list --format=freeze`` snapshots written by the embedded backend's
+# container entrypoint, bracketing the ha-mcp wheel preinstall. Land in the
+# bind-mounted /config so workflows/embedded/test_embedded_no_stomp.py can
+# read them host-side and assert the install replaced nothing the HA image
+# already shipped (#2135/#2146).
+EMBEDDED_FREEZE_BEFORE = ".embedded_preinstall_freeze_before.txt"
+EMBEDDED_FREEZE_AFTER = ".embedded_preinstall_freeze_after.txt"
+
 
 def _is_embedded_backend_selected() -> bool:
     """Return True when ``E2E_BACKEND=embedded`` selects the in-process server.
@@ -2280,6 +2288,13 @@ def _build_ha_testcontainer(
         # mutate the image's pinned dependency set (a real HA install applies
         # the same constraints) — this is exactly what surfaced the
         # cryptography-floor incompatibility with HA 2026.6 (live-found).
+        # ``pip list --format=freeze`` snapshots bracket the install so
+        # workflows/embedded/test_embedded_no_stomp.py can assert the install
+        # replaced NOTHING the image already shipped (#2135/#2146: an exact
+        # ha-mcp pin above an image-shipped version forces a non-atomic
+        # in-place replacement — interrupt it and the package is torn). The
+        # snapshots land in the bind-mounted /config so the test reads them
+        # host-side.
         quoted_wheel = shlex.quote(f"/config/{embedded_wheel_name}")
         constraints_probe = (
             "HACONS=\"$(python3 -c 'import homeassistant, os; "
@@ -2287,10 +2302,12 @@ def _build_ha_testcontainer(
             '"package_constraints.txt"))\')"'
         )
         preinit_cmds.append(
+            f"pip list --format=freeze > /config/{EMBEDDED_FREEZE_BEFORE} && "
             f"{constraints_probe} && "
             f'if [ -f "$HACONS" ]; then '
             f'pip install --no-cache-dir --constraint "$HACONS" {quoted_wheel}; '
-            f"else pip install --no-cache-dir {quoted_wheel}; fi"
+            f"else pip install --no-cache-dir {quoted_wheel}; fi && "
+            f"pip list --format=freeze > /config/{EMBEDDED_FREEZE_AFTER}"
         )
         logger.info(
             "📦 Embedded backend: preinstalling ha-mcp wheel %s (+deps) before "
