@@ -1,0 +1,20 @@
+{
+  "meta": {
+    "native_name": "Nederlands",
+    "dir": "ltr"
+  },
+  "messages": {
+    "policies.pending.decision.approved": "goedgekeurd",
+    "policies.pending.decision.denied": "geweigerd",
+    "policies.operators.exists": "bestaat",
+    "policies.operators.eq": "is gelijk aan",
+    "policies.operators.neq": "is NIET gelijk aan",
+    "policies.operators.in": "is een van",
+    "policies.operators.not_in": "is NIET een van",
+    "policies.operators.contains": "bevat",
+    "policies.operators.regex": "komt overeen met regex",
+    "policies.operators.gt": "is groter dan",
+    "policies.operators.lt": "is kleiner dan",
+    "accessibility.storage_blocked": "Je browser blokkeert opslag voor deze site; keuzes gelden alleen voor deze sessie."
+  }
+}
