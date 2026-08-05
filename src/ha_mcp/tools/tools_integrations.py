@@ -32,6 +32,7 @@ from .component_api import (
 from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
+    _collect_reconfigure_identity,
     create_config_entry,
     reconfigure_config_entry,
     update_config_entry_options,
@@ -420,6 +421,30 @@ async def _get_entry_id_for_flow_helper(
     if not config_entry_id:
         return None, "no_config_entry"
     return config_entry_id, "ok"
+
+
+def _redact_reconfigure_value(value: Any, key: str | None = None) -> Any:
+    if key and any(
+        marker in key.lower().replace("-", "_")
+        for marker in (
+            "password",
+            "secret",
+            "token",
+            "credential",
+            "api_key",
+            "private_key",
+            "connection_string",
+        )
+    ):
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {
+            str(item_key): _redact_reconfigure_value(item, str(item_key))
+            for item_key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_reconfigure_value(item) for item in value]
+    return value
 
 
 class IntegrationTools:
@@ -1648,6 +1673,7 @@ class IntegrationTools:
     @with_auto_backup(
         domain="integration",
         id_param="entry_id",
+        mandatory=True,
         skip_fn=lambda kwargs: not kwargs.get("confirm", False),
     )
     @log_tool_usage
@@ -1660,14 +1686,15 @@ class IntegrationTools:
             ),
         ],
         host: Annotated[
-            str,
+            str | None,
             Field(
+                default=None,
                 description=(
-                    "New device IP address or hostname. The integration's official "
-                    "reconfigure flow validates whether this value is supported."
-                )
+                    "Optional network address shorthand. Use config for integrations "
+                    "that require different fields."
+                ),
             ),
-        ],
+        ] = None,
         port: Annotated[
             int | None,
             Field(
@@ -1678,6 +1705,40 @@ class IntegrationTools:
                     "Optional new TCP port. Omit to let the integration preserve "
                     "or default its current port."
                 ),
+            ),
+        ] = None,
+        config: Annotated[
+            dict[str, Any] | None,
+            Field(
+                default=None,
+                description=(
+                    "Optional generic flow values, including menu selections such as "
+                    "next_step_id. Host and port are accepted as shorthand."
+                ),
+            ),
+        ] = None,
+        expected_device_id: Annotated[
+            str | None,
+            Field(
+                default=None, description="Expected Home Assistant device registry ID."
+            ),
+        ] = None,
+        expected_unique_id: Annotated[
+            str | None,
+            Field(default=None, description="Expected config-entry unique ID."),
+        ] = None,
+        expected_mac: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="Expected device MAC from inventory or an independent check.",
+            ),
+        ] = None,
+        expected_entity_ids: Annotated[
+            list[str] | None,
+            Field(
+                default=None,
+                description="Exact entity IDs expected to remain associated.",
             ),
         ] = None,
         confirm: Annotated[
@@ -1705,11 +1766,31 @@ class IntegrationTools:
                 "entry_id",
                 suggestions=["Use ha_get_integration() to find valid config entry IDs"],
             )
-            host = validate_identifier_not_empty(
-                host,
-                "host",
-                suggestions=["Provide the device IP address or hostname"],
-            )
+            if config is not None and not isinstance(config, dict):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "config must be an object containing the flow values",
+                        context={"entry_id": entry_id},
+                    )
+                )
+            target_config: dict[str, Any] = dict(config or {})
+            if host is not None:
+                target_config["host"] = validate_identifier_not_empty(
+                    host,
+                    "host",
+                    suggestions=["Provide the device IP address or hostname"],
+                )
+            if port is not None:
+                target_config["port"] = port
+            if not target_config:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Provide host/port or a non-empty config object",
+                        context={"entry_id": entry_id},
+                    )
+                )
             entry = await self._client.get_config_entry(entry_id)
             domain = entry.get("domain")
             supports_reconfigure = bool(entry.get("supports_reconfigure", False))
@@ -1730,22 +1811,30 @@ class IntegrationTools:
                     )
                 )
 
+            identity = await _collect_reconfigure_identity(
+                self._client, entry, entry_id
+            )
             if not confirm:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         "Preflight completed; confirm=True is required to apply the reconfiguration",
                         suggestions=[
-                            "Review the entry and target host/port in this response, "
+                            "Review the entry, target config, and identity in this response, "
                             "then repeat the call with confirm=True.",
                         ],
                         context={
                             "entry_id": entry_id,
                             "domain": domain,
                             "title": entry.get("title"),
-                            "current_unique_id": entry.get("unique_id"),
-                            "target_host": host,
-                            "target_port": port,
+                            "target_config": _redact_reconfigure_value(target_config),
+                            "identity": identity,
+                            "expected_identity": {
+                                "device_id": expected_device_id,
+                                "unique_id": expected_unique_id,
+                                "mac": expected_mac,
+                                "entity_ids": expected_entity_ids or [],
+                            },
                             "supports_reconfigure": True,
                         },
                     )
@@ -1756,6 +1845,11 @@ class IntegrationTools:
                 entry_id,
                 host=host,
                 port=port,
+                config=config,
+                expected_device_id=expected_device_id,
+                expected_unique_id=expected_unique_id,
+                expected_mac=expected_mac,
+                expected_entity_ids=expected_entity_ids,
             )
         except ToolError:
             raise
@@ -1763,7 +1857,12 @@ class IntegrationTools:
             logger.error("Failed to reconfigure integration: %s", e)
             exception_to_structured_error(
                 e,
-                context={"entry_id": entry_id, "host": host, "port": port},
+                context={
+                    "entry_id": entry_id,
+                    "host": host,
+                    "port": port,
+                    "config_keys": sorted(config or {}),
+                },
                 suggestions=[
                     "Verify the entry ID and confirm that the integration device "
                     "is reachable at the requested host and port.",

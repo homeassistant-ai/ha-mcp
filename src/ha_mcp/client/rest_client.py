@@ -1396,6 +1396,32 @@ class HomeAssistantClient:
             )
         return [dict(entry) for entry in entries if isinstance(entry, dict)]
 
+    async def list_entity_registry(self) -> list[dict[str, Any]]:
+        """List Home Assistant's entity registry through the official WebSocket API."""
+        response = await self.send_websocket_message(
+            {"type": "config/entity_registry/list"}
+        )
+        result: Any = response.get("result") if isinstance(response, dict) else None
+        if not isinstance(result, list):
+            raise HomeAssistantAPIError(
+                "Unexpected response format from entity registry API",
+                status_code=500,
+            )
+        return [dict(item) for item in result if isinstance(item, dict)]
+
+    async def list_device_registry(self) -> list[dict[str, Any]]:
+        """List Home Assistant's device registry through the official WebSocket API."""
+        response = await self.send_websocket_message(
+            {"type": "config/device_registry/list"}
+        )
+        result: Any = response.get("result") if isinstance(response, dict) else None
+        if not isinstance(result, list):
+            raise HomeAssistantAPIError(
+                "Unexpected response format from device registry API",
+                status_code=500,
+            )
+        return [dict(item) for item in result if isinstance(item, dict)]
+
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
         """
         Get config entry details.

@@ -26,7 +26,9 @@ imported in one direction only (menu <- form <- walker <- here):
 
 import asyncio
 import logging
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn, cast
+
+from fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
 from .config_entry_flow_form import _extract_schema_field_names
@@ -38,6 +40,137 @@ from .config_entry_flow_walker import (
 from .helpers import raise_tool_error, validate_identifier_not_empty
 
 logger = logging.getLogger(__name__)
+
+
+def _normalise_identity_value(value: Any) -> str:
+    """Normalise registry identifiers for stable comparisons."""
+    return "".join(character for character in str(value).upper() if character.isalnum())
+
+
+async def _collect_reconfigure_identity(
+    client: Any,
+    entry: dict[str, Any],
+    entry_id: str,
+) -> dict[str, Any]:
+    """Collect registry identity without requiring the physical device online."""
+    identity: dict[str, Any] = {
+        "unique_id": entry.get("unique_id"),
+        "device_ids": [],
+        "entity_ids": [],
+        "macs": [],
+        "entity_registry_available": False,
+        "device_registry_available": False,
+        "registry_available": False,
+    }
+    entity_rows = await _optional_registry_rows(
+        client, "list_entity_registry", entry_id
+    )
+    device_rows = await _optional_registry_rows(
+        client, "list_device_registry", entry_id
+    )
+
+    if entity_rows is not None:
+        matching_entities = [
+            row for row in entity_rows if row.get("config_entry_id") == entry_id
+        ]
+        identity["entity_ids"] = sorted(
+            row["entity_id"]
+            for row in matching_entities
+            if isinstance(row.get("entity_id"), str)
+        )
+        identity["device_ids"] = sorted(
+            {row["device_id"] for row in matching_entities if row.get("device_id")}
+        )
+        identity["entity_registry_available"] = True
+        identity["registry_available"] = True
+
+    if device_rows is not None:
+        device_ids = set(identity["device_ids"])
+        identifiers: list[str] = []
+        for row in device_rows:
+            if row.get("id") in device_ids:
+                for identifier in row.get("identifiers", []):
+                    if isinstance(identifier, (list, tuple)) and len(identifier) >= 2:
+                        identifiers.append(str(identifier[1]))
+                    elif isinstance(identifier, str):
+                        identifiers.append(identifier)
+        identity["macs"] = sorted(
+            {
+                _normalise_identity_value(value)
+                for value in identifiers
+                if _normalise_identity_value(value)
+            }
+        )
+        identity["device_registry_available"] = True
+        identity["registry_available"] = True
+    return identity
+
+
+async def _optional_registry_rows(
+    client: Any,
+    method_name: str,
+    entry_id: str,
+) -> list[dict[str, Any]] | None:
+    """Read one registry when available, without making offline devices a blocker."""
+    method: Any = getattr(client, method_name, None)
+    if not callable(method):
+        return None
+    try:
+        result: Any = await cast(Any, method)()
+    except Exception as err:
+        logger.debug("%s unavailable for %s: %s", method_name, entry_id, err)
+        return None
+    return result if isinstance(result, list) else None
+
+
+def _verification_state(before_available: bool, after_available: bool) -> str:
+    if before_available and after_available:
+        return "preserved"
+    if after_available:
+        return "available_after_change"
+    if before_available:
+        return "unavailable_after_change"
+    return "unavailable_before_change"
+
+
+def _identity_anchor(identity: dict[str, Any], expected: dict[str, Any]) -> bool:
+    """Whether the entry has any identity anchor, even while its device is offline."""
+    return bool(
+        identity.get("unique_id")
+        or identity.get("device_ids")
+        or identity.get("entity_ids")
+        or expected.get("device_id")
+        or expected.get("unique_id")
+        or expected.get("mac")
+        or expected.get("entity_ids")
+    )
+
+
+def _raise_identity_mismatch(
+    entry_id: str,
+    message: str,
+    *,
+    before: dict[str, Any],
+    after: dict[str, Any],
+    expected: dict[str, Any],
+) -> NoReturn:
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            message,
+            suggestions=[
+                "Do not retry automatically; inspect the config, device, and "
+                "entity registries before attempting another reconfiguration.",
+            ],
+            context={
+                "entry_id": entry_id,
+                "expected_identity": expected,
+                "before_identity": before,
+                "after_identity": after,
+            },
+        )
+    )
+
 
 # 15 helpers that use Config Entry Flow API (Issue #324).
 SUPPORTED_HELPERS = Literal[
@@ -285,13 +418,16 @@ async def update_config_entry_options(
     return response
 
 
-async def _verify_reconfigured_entry(
+async def _verify_reconfigured_entry(  # noqa: C901
     client: Any,
     before: dict[str, Any],
     after: dict[str, Any],
     *,
     entry_id: str,
     domain: str,
+    before_identity: dict[str, Any],
+    after_identity: dict[str, Any],
+    expected_identity: dict[str, Any],
 ) -> dict[str, Any]:
     """Verify identity preservation and absence of duplicate config entries."""
     if after.get("entry_id") != entry_id or after.get("domain") != domain:
@@ -311,23 +447,97 @@ async def _verify_reconfigured_entry(
         )
 
     before_unique_id = before.get("unique_id")
-    if before_unique_id is not None and after.get("unique_id") != before_unique_id:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Reconfigure flow changed the original entry unique_id",
-                suggestions=[
-                    "Inspect the integration and entity registry before retrying; "
-                    "the original entry identity was not preserved.",
-                ],
-                context={
-                    "entry_id": entry_id,
-                    "expected_unique_id": before_unique_id,
-                    "verified_unique_id": after.get("unique_id"),
-                },
-            )
+    after_unique_id = after.get("unique_id")
+    if before_unique_id is not None and after_unique_id != before_unique_id:
+        _raise_identity_mismatch(
+            entry_id,
+            "Reconfigure flow changed the original entry unique_id",
+            before=before_identity,
+            after=after_identity,
+            expected=expected_identity,
         )
 
+    expected_unique_id = expected_identity.get("unique_id")
+    if expected_unique_id is not None and after.get("unique_id") != expected_unique_id:
+        _raise_identity_mismatch(
+            entry_id,
+            "Reconfigure result does not match expected unique_id",
+            before=before_identity,
+            after=after_identity,
+            expected=expected_identity,
+        )
+
+    before_device_ids = set(before_identity.get("device_ids", []))
+    after_device_ids = set(after_identity.get("device_ids", []))
+    expected_device_id = expected_identity.get("device_id")
+    if (
+        before_device_ids
+        and after_identity.get("device_registry_available")
+        and after_device_ids != before_device_ids
+    ):
+        _raise_identity_mismatch(
+            entry_id,
+            "Reconfigure flow changed the associated device_id",
+            before=before_identity,
+            after=after_identity,
+            expected=expected_identity,
+        )
+    if (
+        expected_device_id is not None
+        and after_identity.get("device_registry_available")
+        and expected_device_id not in after_device_ids
+    ):
+        _raise_identity_mismatch(
+            entry_id,
+            "Reconfigure result does not match expected device_id",
+            before=before_identity,
+            after=after_identity,
+            expected=expected_identity,
+        )
+
+    before_entity_ids = set(before_identity.get("entity_ids", []))
+    after_entity_ids = set(after_identity.get("entity_ids", []))
+    expected_entity_ids = set(expected_identity.get("entity_ids", []))
+    if (
+        before_entity_ids
+        and after_identity.get("entity_registry_available")
+        and after_entity_ids != before_entity_ids
+    ):
+        _raise_identity_mismatch(
+            entry_id,
+            "Reconfigure flow changed the associated entity set",
+            before=before_identity,
+            after=after_identity,
+            expected=expected_identity,
+        )
+    if (
+        expected_entity_ids
+        and after_identity.get("entity_registry_available")
+        and after_entity_ids != expected_entity_ids
+    ):
+        _raise_identity_mismatch(
+            entry_id,
+            "Reconfigure result does not match expected entity_ids",
+            before=before_identity,
+            after=after_identity,
+            expected=expected_identity,
+        )
+
+    expected_mac = expected_identity.get("mac")
+    if expected_mac is not None:
+        known_macs = set(after_identity.get("macs", []))
+        if known_macs and _normalise_identity_value(expected_mac) not in known_macs:
+            _raise_identity_mismatch(
+                entry_id,
+                "Reconfigure result does not match expected MAC",
+                before=before_identity,
+                after=after_identity,
+                expected=expected_identity,
+            )
+
+    identity_unique_ids = {
+        value for value in (before_unique_id, after_unique_id) if value is not None
+    }
     entries = await client.list_config_entries()
     same_identity_entries = [
         entry
@@ -335,10 +545,7 @@ async def _verify_reconfigured_entry(
         if entry.get("domain") == domain
         and (
             entry.get("entry_id") == entry_id
-            or (
-                before_unique_id is not None
-                and entry.get("unique_id") == before_unique_id
-            )
+            or entry.get("unique_id") in identity_unique_ids
         )
     ]
     if len(same_identity_entries) != 1:
@@ -360,20 +567,69 @@ async def _verify_reconfigured_entry(
             )
         )
 
+    device_identity_verified = bool(
+        after_identity.get("device_registry_available")
+        and after_device_ids
+        and (not before_device_ids or after_device_ids == before_device_ids)
+        and (not expected_device_id or expected_device_id in after_device_ids)
+    )
+    entity_identity_verified = bool(
+        after_identity.get("entity_registry_available")
+        and after_entity_ids
+        and (not before_entity_ids or after_entity_ids == before_entity_ids)
+        and (not expected_entity_ids or after_entity_ids == expected_entity_ids)
+    )
+    mac_identity_verified = not expected_mac or bool(
+        after_identity.get("device_registry_available")
+        and _normalise_identity_value(expected_mac)
+        in set(after_identity.get("macs", []))
+    )
+
     return {
         "entry_id_preserved": True,
         "domain_preserved": True,
         "unique_id_preserved": before_unique_id is not None,
-        "duplicate_entry_created": False,
+        "unique_id_verification": (
+            _verification_state(
+                before_unique_id is not None,
+                after_unique_id is not None,
+            )
+        ),
+        "device_id_verification": _verification_state(
+            bool(before_device_ids),
+            bool(after_identity.get("device_registry_available")),
+        ),
+        "entity_verification": _verification_state(
+            bool(before_entity_ids),
+            bool(after_identity.get("entity_registry_available")),
+        ),
+        "identity_verification": (
+            "complete"
+            if (
+                device_identity_verified
+                and entity_identity_verified
+                and mac_identity_verified
+            )
+            else "partial"
+        ),
+        "duplicate_entry_created": False if identity_unique_ids else None,
+        "duplicate_verification": (
+            "complete" if identity_unique_ids else "limited_without_unique_id"
+        ),
     }
 
 
-async def reconfigure_config_entry(
+async def reconfigure_config_entry(  # noqa: C901
     client: Any,
     entry_id: str,
     *,
-    host: str,
+    host: str | None = None,
     port: int | None = None,
+    config: dict[str, Any] | None = None,
+    expected_device_id: str | None = None,
+    expected_unique_id: str | None = None,
+    expected_mac: str | None = None,
+    expected_entity_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Reconfigure an existing integration through HA's official flow.
 
@@ -386,19 +642,42 @@ async def reconfigure_config_entry(
         "entry_id",
         suggestions=["Use ha_get_integration() to find valid config entry IDs"],
     )
-    host = validate_identifier_not_empty(
-        host,
-        "host",
-        suggestions=["Provide the device IP address or hostname"],
-    )
-    if port is not None and (
-        isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535
+    if config is not None and not isinstance(config, dict):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "config must be an object containing the integration's flow values",
+                context={"entry_id": entry_id},
+            )
+        )
+    flow_config: dict[str, Any] = dict(config or {})
+    if host is not None:
+        flow_config["host"] = validate_identifier_not_empty(
+            host,
+            "host",
+            suggestions=["Provide the device IP address or hostname"],
+        )
+    if port is not None:
+        flow_config["port"] = port
+    if not flow_config:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Provide host/port or a non-empty config object",
+                context={"entry_id": entry_id},
+            )
+        )
+    flow_port = flow_config.get("port")
+    if flow_port is not None and (
+        isinstance(flow_port, bool)
+        or not isinstance(flow_port, int)
+        or not 1 <= flow_port <= 65535
     ):
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 "port must be an integer between 1 and 65535",
-                context={"entry_id": entry_id, "port": port},
+                context={"entry_id": entry_id, "port": flow_port},
             )
         )
 
@@ -429,9 +708,55 @@ async def reconfigure_config_entry(
             )
         )
 
-    config: dict[str, Any] = {"host": host}
-    if port is not None:
-        config["port"] = port
+    expected_identity: dict[str, Any] = {
+        "device_id": expected_device_id,
+        "unique_id": expected_unique_id,
+        "mac": expected_mac,
+        "entity_ids": list(expected_entity_ids or []),
+    }
+    before_identity = await _collect_reconfigure_identity(client, before, entry_id)
+    if not _identity_anchor(before_identity, expected_identity):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "The config entry has no available identity anchor for a safe "
+                "confirmed reconfiguration",
+                suggestions=[
+                    "Provide expected_device_id, expected_unique_id, expected_mac, "
+                    "or expected_entity_ids from an inventory or independent device "
+                    "check. The physical device may remain offline.",
+                ],
+                context={
+                    "entry_id": entry_id,
+                    "domain": domain,
+                    "identity": before_identity,
+                },
+            )
+        )
+    if (
+        expected_device_id
+        and before_identity["device_ids"]
+        and expected_device_id not in set(before_identity["device_ids"])
+    ):
+        _raise_identity_mismatch(
+            entry_id,
+            "The entry does not match expected device_id before reconfigure",
+            before=before_identity,
+            after=before_identity,
+            expected=expected_identity,
+        )
+    if (
+        expected_entity_ids
+        and before_identity["entity_ids"]
+        and set(expected_entity_ids) != set(before_identity["entity_ids"])
+    ):
+        _raise_identity_mismatch(
+            entry_id,
+            "The entry does not match expected entity_ids before reconfigure",
+            before=before_identity,
+            after=before_identity,
+            expected=expected_identity,
+        )
 
     flow_result = await client.start_reconfigure_flow(domain, entry_id)
     flow_id = flow_result.get("flow_id")
@@ -456,7 +781,7 @@ async def reconfigure_config_entry(
             client,
             flow_id,
             flow_result,
-            config,
+            flow_config,
             helper_type=domain,
             is_reconfigure=True,
         )
@@ -471,17 +796,59 @@ async def reconfigure_config_entry(
             )
         raise
 
-    after = await client.get_config_entry(entry_id)
-    verification = await _verify_reconfigured_entry(
-        client,
-        before,
-        after,
-        entry_id=entry_id,
-        domain=domain,
-    )
+    after: dict[str, Any] | None = None
+    verification: dict[str, Any] | None = None
+    last_verification_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            current_after = await client.get_config_entry(entry_id)
+            after = current_after
+            after_identity = await _collect_reconfigure_identity(
+                client, current_after, entry_id
+            )
+            verification = await _verify_reconfigured_entry(
+                client,
+                before,
+                current_after,
+                entry_id=entry_id,
+                domain=domain,
+                before_identity=before_identity,
+                after_identity=after_identity,
+                expected_identity=expected_identity,
+            )
+            break
+        except ToolError:
+            raise
+        except Exception as err:
+            last_verification_error = err
+            if attempt < 2:
+                await asyncio.sleep(0.25 * (attempt + 1))
+    if after is None or verification is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Reconfiguration was submitted but the applied state could not "
+                "be verified",
+                suggestions=[
+                    "Do not retry automatically. Inspect Home Assistant and the "
+                    "device, then verify the entry before attempting rollback.",
+                ],
+                context={
+                    "entry_id": entry_id,
+                    "domain": domain,
+                    "status": "applied_but_unverified",
+                    "error": str(last_verification_error),
+                },
+            )
+        )
 
     response: dict[str, Any] = {
         "success": True,
+        "status": (
+            "applied_and_verified"
+            if verification.get("identity_verification") == "complete"
+            else "applied_but_unverified"
+        ),
         "operation": "reconfigured",
         "entry_id": entry_id,
         "domain": domain,

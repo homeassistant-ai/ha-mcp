@@ -407,6 +407,8 @@ def _reconfigure_abort_result(
     current_step: dict[str, Any],
     *,
     is_reconfigure: bool,
+    flow_id: str,
+    config: dict[str, Any],
     ignored_config_keys: set[str],
     remaining_config: dict[str, Any],
     reuse_state: _ReuseState,
@@ -417,6 +419,26 @@ def _reconfigure_abort_result(
         or current_step.get("reason") not in _RECONFIGURE_SUCCESS_REASONS
     ):
         return None
+    unresolved = sorted(
+        ignored_config_keys | {key for key in remaining_config if key in config}
+    )
+    if unresolved:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Reconfigure flow completed without consuming all supplied "
+                "configuration values",
+                suggestions=[
+                    "Match the supplied config keys and menu selections to the "
+                    "flow data_schema/menu_options, then retry.",
+                ],
+                context={
+                    "flow_id": flow_id,
+                    "unconsumed_config_keys": unresolved,
+                    "details": current_step,
+                },
+            )
+        )
     response: dict[str, Any] = {
         "success": True,
         "operation": "reconfigured",
@@ -433,6 +455,7 @@ def _handle_abort_step(
     current_step: dict[str, Any],
     *,
     is_reconfigure: bool,
+    config: dict[str, Any],
     ignored_config_keys: set[str],
     remaining_config: dict[str, Any],
     reuse_state: _ReuseState,
@@ -441,6 +464,8 @@ def _handle_abort_step(
     reconfigure_result = _reconfigure_abort_result(
         current_step,
         is_reconfigure=is_reconfigure,
+        flow_id=flow_id,
+        config=config,
         ignored_config_keys=ignored_config_keys,
         remaining_config=remaining_config,
         reuse_state=reuse_state,
@@ -537,6 +562,7 @@ async def _handle_flow_steps(
                 flow_id,
                 current_step,
                 is_reconfigure=is_reconfigure,
+                config=config,
                 ignored_config_keys=ignored_config_keys,
                 remaining_config=remaining_config,
                 reuse_state=reuse_state,

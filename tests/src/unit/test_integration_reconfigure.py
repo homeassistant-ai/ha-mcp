@@ -58,7 +58,12 @@ async def test_reconfigure_preserves_entry_and_submits_host_and_port(
         "entry_id_preserved": True,
         "domain_preserved": True,
         "unique_id_preserved": True,
+        "unique_id_verification": "preserved",
+        "device_id_verification": "unavailable_before_change",
+        "entity_verification": "unavailable_before_change",
+        "identity_verification": "partial",
         "duplicate_entry_created": False,
+        "duplicate_verification": "complete",
     }
     client.start_reconfigure_flow.assert_awaited_once_with("shelly", "entry-123")
     client.submit_config_flow_step.assert_awaited_once_with(
@@ -107,6 +112,165 @@ async def test_reconfigure_drives_multiple_form_steps(
         "flow-multi",
         {"port": 8080},
     )
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_fails_when_success_abort_ignores_requested_values(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """A successful HA abort must not hide values that the flow never consumed."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-ignored",
+            "type": "form",
+            "step_id": "address",
+            "data_schema": [{"name": "address", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+    client.abort_config_flow = AsyncMock()
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client, "entry-123", config={"host": "10.0.50.180"}
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert "consum" in payload["error"]["message"].lower()
+    client.abort_config_flow.assert_awaited_once_with("flow-ignored")
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_accepts_generic_config_and_menu_selection(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """Generic integrations can receive arbitrary fields and menu choices."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, reconfig_entry])
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-generic",
+            "type": "menu",
+            "step_id": "choose_transport",
+            "menu_options": ["network", "cloud"],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        side_effect=[
+            {
+                "flow_id": "flow-generic",
+                "type": "form",
+                "step_id": "network",
+                "data_schema": [{"name": "address", "required": True}],
+            },
+            {"type": "abort", "reason": "reconfigure_successful"},
+        ]
+    )
+
+    result = await reconfigure_config_entry(
+        client,
+        "entry-123",
+        config={"next_step_id": "network", "address": "10.0.50.181"},
+    )
+
+    assert result["success"] is True
+    assert client.submit_config_flow_step.await_args_list[0].args == (
+        "flow-generic",
+        {"next_step_id": "network"},
+    )
+    assert client.submit_config_flow_step.await_args_list[1].args == (
+        "flow-generic",
+        {"address": "10.0.50.181"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_allows_offline_entry_with_registry_identity() -> None:
+    """A setup_retry entry can be changed without contacting the physical device."""
+    before = {
+        "entry_id": "offline-entry",
+        "domain": "shelly",
+        "state": "setup_retry",
+        "supports_reconfigure": True,
+    }
+    after = {**before, "state": "loaded", "unique_id": "84FCE6387220"}
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(side_effect=[before, after])
+    client.list_entity_registry = AsyncMock(
+        return_value=[
+            {
+                "entity_id": "switch.a1_luces_techo",
+                "config_entry_id": "offline-entry",
+                "device_id": "device-a1",
+            }
+        ]
+    )
+    client.list_device_registry = AsyncMock(
+        return_value=[
+            {
+                "id": "device-a1",
+                "identifiers": [["shelly", "84:FC:E6:38:72:20"]],
+            }
+        ]
+    )
+    client.list_config_entries = AsyncMock(return_value=[after])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "offline-flow",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client,
+        "offline-entry",
+        host="10.0.50.170",
+        expected_device_id="device-a1",
+        expected_mac="84-FC-E6-38-72-20",
+        expected_entity_ids=["switch.a1_luces_techo"],
+    )
+
+    assert result["success"] is True
+    assert result["verification"]["identity_verification"] == "complete"
+    assert result["verification"]["device_id_verification"] == "preserved"
+    assert result["verification"]["entity_verification"] == "preserved"
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_reports_applied_but_unverified_after_commit(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """A post-commit HA read failure is not presented as a clean apply failure."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(
+        side_effect=[reconfig_entry, RuntimeError("HA read timeout")]
+    )
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-unknown",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(client, "entry-123", host="10.0.50.182")
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == "applied_but_unverified"
 
 
 @pytest.mark.asyncio
