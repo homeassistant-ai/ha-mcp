@@ -1509,25 +1509,70 @@ class TestSecurityPolicyAccessGuard:
         assert queue.get(token).decision == "approved"
 
     async def test_access_applies_live_without_a_restart(self, monkeypatch):
-        # The guard reads through get_global_settings() per call, so the web
-        # UI toggle takes effect on the next call — no server restart.
+        # The guard reads the env var / override file fresh per call — no
+        # settings-singleton rebuild, no server restart.
         dev = DevTools(MagicMock())
         with pytest.raises(ToolError, match="AUTH_INSUFFICIENT_PERMISSIONS"):
             await dev.ha_dev_manage_settings(action="set_policy", policy={"rules": []})
         monkeypatch.setenv(POLICY_ACCESS_FLAG, "true")
-        reset_global_settings()
         result = await dev.ha_dev_manage_settings(
             action="set_policy", policy={"rules": []}
         )
         assert result["success"] is True
 
     async def test_access_granted_via_the_override_file(self):
-        """The web-UI toggle path: value in feature_flags.json, no env var."""
+        """The web-UI toggle path: value in feature_flags.json, no env var.
+
+        Deliberately NO ``reset_global_settings()`` after the file write,
+        and the singleton is built (stale) beforehand: in stdio mode the
+        settings UI sidecar is a separate process, so its POST resets only
+        its own cached settings. The guard must see the file value anyway.
+        """
+        assert get_global_settings().dev_tools_security_policy_access is False
         _override_file_path().write_text(
             json.dumps({"dev_tools_security_policy_access": True})
         )
-        reset_global_settings()
         result = await DevTools(MagicMock()).ha_dev_manage_settings(
             action="set_policy", policy={"rules": []}
         )
         assert result["success"] is True
+
+    async def test_access_revoked_via_the_override_file_applies_live(self):
+        """Flipping the toggle OFF in a sidecar process must also bite."""
+        _override_file_path().write_text(
+            json.dumps({"dev_tools_security_policy_access": True})
+        )
+        reset_global_settings()
+        assert get_global_settings().dev_tools_security_policy_access is True
+        _override_file_path().write_text(
+            json.dumps({"dev_tools_security_policy_access": False})
+        )
+        with pytest.raises(ToolError, match="AUTH_INSUFFICIENT_PERMISSIONS"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set_policy", policy={"rules": []}
+            )
+
+    async def test_list_locks_guarded_rows_without_access(self):
+        result = await DevTools(MagicMock()).ha_dev_manage_settings(action="list")
+        rows = {r["setting"]: r for r in result["data"]["settings"]}
+        engine = rows["enable_tool_security_policies"]
+        assert engine["editable"] is False
+        assert engine["locked_reason"] == "policy_access_required"
+        toggle = rows["dev_tools_security_policy_access"]
+        assert toggle["editable"] is False
+        assert toggle["locked_reason"] == "web_ui_or_env_only"
+        assert toggle["value"] is False
+
+    @pytest.mark.usefixtures("_policy_access_on")
+    async def test_list_unlocks_engine_row_with_access(self):
+        result = await DevTools(MagicMock()).ha_dev_manage_settings(action="list")
+        rows = {r["setting"]: r for r in result["data"]["settings"]}
+        engine = rows["enable_tool_security_policies"]
+        assert engine["editable"] is True
+        assert "locked_reason" not in engine
+        # The access toggle itself stays locked to dev tools forever, and
+        # its displayed value is the fresh read, not the cached singleton.
+        toggle = rows["dev_tools_security_policy_access"]
+        assert toggle["editable"] is False
+        assert toggle["locked_reason"] == "web_ui_or_env_only"
+        assert toggle["value"] is True

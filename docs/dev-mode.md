@@ -82,7 +82,11 @@ While it is off, these are refused with `AUTH_INSUFFICIENT_PERMISSIONS`:
   — turning the engine off would bypass every gate at once
 
 Reads stay available either way: `get_policy`, `list_tools`, `list_pending`,
-and the `list` settings matrix are never gated.
+and the `list` settings matrix are never gated. The matrix marks the guarded
+rows honestly: `enable_tool_security_policies` reports `editable: false` with
+`locked_reason: policy_access_required` while access is off, and
+`dev_tools_security_policy_access` always reports `editable: false` with
+`locked_reason: web_ui_or_env_only`.
 
 The toggle applies **live** — no restart needed — and the dev tools can never
 change it themselves: `set` and `reset` of

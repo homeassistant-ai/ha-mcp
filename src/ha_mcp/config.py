@@ -308,8 +308,11 @@ class Settings(BaseSettings):
     # approve/deny of queued approvals, and set/reset of
     # enable_tool_security_policies — are refused while it is off, so a
     # connected agent cannot rewrite the rules that gate it nor click
-    # "accept" on its own gated calls. Read through get_global_settings()
-    # at call time, so a change applies live without a restart. Editable
+    # "accept" on its own gated calls. The guard reads env var + override
+    # file fresh per call (NOT this cached Settings object), so a change
+    # applies live without a restart even in stdio mode, where the web
+    # settings UI runs in a detached sidecar process whose POST cannot
+    # reset this process' settings singleton. Editable
     # from the web settings UI (Developer section) or the env var ONLY —
     # the dev tools can never change this field itself, in either
     # direction, and it is absent from the add-on config schemas like

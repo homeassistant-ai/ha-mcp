@@ -127,17 +127,51 @@ def is_dev_mode_enabled() -> bool:
 def _security_policy_access_enabled() -> bool:
     """Check whether dev tools may change tool-security policy state.
 
-    Same read path and stale-singleton guard as
-    :func:`is_dev_mode_enabled` (issues #1783/#1785): a cached settings
-    object predating this field must read as "no access", never
-    AttributeError. Read per call, so flipping the toggle in the web UI
-    applies live without a server restart.
+    Deliberately NOT read through the ``get_global_settings()`` singleton:
+    in stdio deployments the web settings UI runs in a detached sidecar
+    process, so its POST resets only the sidecar's own cached settings —
+    this process would keep serving the stale value until restart. Reading
+    the env var, then the override file, fresh per call keeps the toggle
+    live in every deployment mode, with the same precedence
+    ``get_global_settings`` applies (env wins over file over default).
+    The string set mirrors pydantic's truthy strings so an env value like
+    ``1`` or ``yes`` cannot enable the field on the Settings object while
+    this guard still reads it as off.
     """
-    from ..config import get_global_settings
+    import os
 
-    return bool(
-        getattr(get_global_settings(), "dev_tools_security_policy_access", False)
-    )
+    from ..config import _read_feature_flag_override_file
+
+    raw: Any = os.environ.get("HAMCP_DEV_SECURITY_POLICY_ACCESS")
+    if raw is None:
+        # The override file is keyed by FIELD name (see
+        # _apply_one_advanced_override), not env-var name.
+        raw = _read_feature_flag_override_file().get("dev_tools_security_policy_access")
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return raw.strip().lower() in ("1", "true", "t", "yes", "y", "on")
+    return False
+
+
+def _apply_policy_guard_row_locks(fname: str, row: dict[str, Any]) -> None:
+    """Reflect the policy-access write guards in the ``list`` matrix rows.
+
+    Without this, agents reading the matrix to choose writable settings
+    see ``editable: true`` on rows whose set/reset the guards refuse:
+    ``enable_tool_security_policies`` while access is off, and
+    ``dev_tools_security_policy_access`` always (web UI / env var only).
+    The toggle's displayed value is also re-read fresh so a sidecar-process
+    edit shows here without a restart, matching what the guard enforces.
+    """
+    if fname == "enable_tool_security_policies":
+        if not _security_policy_access_enabled():
+            row["editable"] = False
+            row["locked_reason"] = "policy_access_required"
+    elif fname == "dev_tools_security_policy_access":
+        row["editable"] = False
+        row["locked_reason"] = "web_ui_or_env_only"
+        row["value"] = _security_policy_access_enabled()
 
 
 def _require_security_policy_access(operation: str) -> None:
@@ -484,6 +518,7 @@ class DevTools:
             bounds = _FEATURE_FLAG_INT_BOUNDS.get(fname)
             if bounds is not None:
                 row["min"], row["max"] = bounds
+            _apply_policy_guard_row_locks(fname, row)
             rows.append(row)
         for (
             fname,
@@ -517,6 +552,7 @@ class DevTools:
             choices = _ADVANCED_SETTINGS_CHOICES.get(fname)
             if choices is not None:
                 row["choices"] = list(choices)
+            _apply_policy_guard_row_locks(fname, row)
             rows.append(row)
         return rows
 

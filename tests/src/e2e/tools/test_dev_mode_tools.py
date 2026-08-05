@@ -54,6 +54,10 @@ def dev_mode_enabled(ha_container_with_fresh_config, tmp_path_factory):
     """
     old_flag = os.environ.get(FEATURE_FLAG)
     old_dir = os.environ.get("HA_MCP_CONFIG_DIR")
+    # Cleared so the policy-access guard tests below hold even when the
+    # suite runs in a shell that exported the toggle (e.g. while testing
+    # the feature itself).
+    old_access = os.environ.pop("HAMCP_DEV_SECURITY_POLICY_ACCESS", None)
     data_dir = tmp_path_factory.mktemp("dev-mode-data")
     os.environ[FEATURE_FLAG] = "true"
     os.environ["HA_MCP_CONFIG_DIR"] = str(data_dir)
@@ -68,6 +72,8 @@ def dev_mode_enabled(ha_container_with_fresh_config, tmp_path_factory):
         os.environ["HA_MCP_CONFIG_DIR"] = old_dir
     else:
         os.environ.pop("HA_MCP_CONFIG_DIR", None)
+    if old_access is not None:
+        os.environ["HAMCP_DEV_SECURITY_POLICY_ACCESS"] = old_access
     _reset_settings_state()
 
 
