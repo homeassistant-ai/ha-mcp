@@ -545,3 +545,79 @@ class TestEmbeddedServerEndToEnd:
                 # component's tool-search mode).
                 assert stamps["ha_search"]["pinned"] is True
                 assert stamps["ha_get_state"]["pinned"] is False
+
+    def test_torn_websockets_install_heals_on_reload(self, embedded_ha):
+        """A torn ``websockets`` install is healed by the real bring-up (#2146).
+
+        Tears the REAL package inside the container (deletes
+        ``websockets/http11.py`` — a killed mid-extraction leaves exactly
+        this shape: valid metadata, broken import chain), reloads the server
+        entry over HA's REST API so ``async_start`` runs again, and asserts
+        the heal reinstalled the metadata-recorded version, the import chain
+        is whole again in a fresh interpreter, and the MCP webhook came back.
+
+        Runs LAST in this class by definition order — it restarts the
+        server-under-test, invalidating the module fixture's session id for
+        any test that would run after it.
+
+        NOTE (skip-ceiling coupling): as a new test in this container_only +
+        not_on_embedded module it bumped the haos / haos_inaddon /
+        haos_embedded / embedded ceilings in
+        tests/src/e2e/basic/test_backend_dispatch_smoke.py by 1 each.
+        """
+        base_url, _session_id, config_path, container = embedded_ha
+        docker = container.get_wrapped_container()
+
+        tear = docker.exec_run(
+            [
+                "python3",
+                "-c",
+                (
+                    "import os, websockets; "
+                    "os.remove(os.path.join(os.path.dirname("
+                    "websockets.__file__), 'http11.py')); "
+                    "print('TORN')"
+                ),
+            ]
+        )
+        assert tear.exit_code == 0, (tear.output or b"").decode("utf-8", "replace")
+
+        broken = docker.exec_run(["python3", "-c", "import websockets.asyncio.client"])
+        assert broken.exit_code != 0, (
+            "expected the torn install to break the import chain, but it still imports"
+        )
+
+        # Reload the server entry: the bring-up (and its heal) runs again.
+        reload_resp = requests.post(
+            f"{base_url}/api/config/config_entries/entry/{_ENTRY_ID}/reload",
+            headers={"Authorization": f"Bearer {TEST_TOKEN}"},
+            timeout=60,
+        )
+        assert reload_resp.status_code == 200, reload_resp.text[:500]
+
+        # The heal downloads one wheel; give the bring-up a bounded window.
+        deadline = time.monotonic() + 180
+        ready = False
+        while time.monotonic() < deadline:
+            try:
+                ready, _new_session = _initialize(base_url)
+            except requests.exceptions.RequestException:
+                ready = False
+            if ready:
+                break
+            time.sleep(_READY_POLL_S)
+        assert ready, (
+            "MCP webhook did not come back after the torn-websockets reload; "
+            f"container logs:\n{container.get_logs()}"
+        )
+
+        # Disk is whole again in a fresh interpreter.
+        healed = docker.exec_run(["python3", "-c", "import websockets.asyncio.client"])
+        assert healed.exit_code == 0, (healed.output or b"").decode("utf-8", "replace")
+
+        # And the component said so, naming the version it restored.
+        log_text = (config_path / "home-assistant.log").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert "Detected a torn websockets install" in log_text
+        assert "Healed the torn websockets install" in log_text

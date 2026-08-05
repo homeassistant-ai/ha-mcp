@@ -3562,3 +3562,226 @@ class TestServeRunningVersionCapture:
 
         assert mgr._running_version == "7.13.0.dev1"
         assert isinstance(mgr._thread_exc, _StopServe)
+
+
+# =============================================================================
+# torn-websockets heal (#2135/#2146)
+# =============================================================================
+
+
+# The genuine probe, captured at import time: the autouse fixture below
+# replaces the module attribute for hermeticity, and the helper tests need
+# the real implementation back.
+_REAL_WEBSOCKETS_PROBE = es._probe_websockets_import
+
+
+@pytest.fixture(autouse=True)
+def _healthy_websockets_probe(monkeypatch):
+    """Keep every test hermetic: no real interpreter-probe subprocesses.
+
+    ``async_start`` now runs the torn-websockets heal, whose probe launches a
+    fresh interpreter. Stub it healthy by default; the heal tests below
+    override it per-case.
+    """
+    monkeypatch.setattr(es, "_probe_websockets_import", lambda: None)
+
+
+class TestTornWebsocketsHeal:
+    """The bring-up heals an unambiguously torn websockets install."""
+
+    @pytest.mark.asyncio
+    async def test_healthy_probe_is_a_no_op(self, tmp_path, monkeypatch):
+        manager, _hass, _entry = _manager(tmp_path)
+        reinstall = MagicMock(name="reinstall")
+        monkeypatch.setattr(es, "_reinstall_websockets", reinstall)
+
+        await manager._async_heal_torn_websockets()
+
+        reinstall.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_torn_install_reinstalls_metadata_version_and_purges(
+        self, tmp_path, monkeypatch
+    ):
+        manager, _hass, _entry = _manager(tmp_path)
+        probes = iter(
+            [
+                "ImportError: cannot import name 'StatusLineTooLong' from "
+                "'websockets.exceptions'",
+                None,  # re-probe after the reinstall: healed
+            ]
+        )
+        monkeypatch.setattr(es, "_probe_websockets_import", lambda: next(probes))
+        monkeypatch.setattr(
+            es, "_installed_dist_version", MagicMock(return_value="17.0")
+        )
+        reinstall = MagicMock(name="reinstall", return_value=True)
+        monkeypatch.setattr(es, "_reinstall_websockets", reinstall)
+        purge = MagicMock(name="purge")
+        monkeypatch.setattr(es, "_purge_websockets_modules", purge)
+
+        await manager._async_heal_torn_websockets()
+
+        reinstall.assert_called_once()
+        # Never chooses a version: reinstalls exactly what metadata records.
+        assert reinstall.call_args.args == ("17.0",)
+        purge.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_missing_metadata_defers_to_package_installer(
+        self, tmp_path, monkeypatch
+    ):
+        manager, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(
+            es,
+            "_probe_websockets_import",
+            lambda: "ModuleNotFoundError: No module named websockets",
+        )
+        monkeypatch.setattr(es, "_installed_dist_version", MagicMock(return_value=None))
+        reinstall = MagicMock(name="reinstall")
+        monkeypatch.setattr(es, "_reinstall_websockets", reinstall)
+
+        await manager._async_heal_torn_websockets()
+
+        reinstall.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unparseable_metadata_version_aborts_heal(
+        self, tmp_path, monkeypatch
+    ):
+        manager, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(
+            es, "_probe_websockets_import", lambda: "ImportError: broken"
+        )
+        monkeypatch.setattr(
+            es, "_installed_dist_version", MagicMock(return_value="not;a;version")
+        )
+        reinstall = MagicMock(name="reinstall")
+        monkeypatch.setattr(es, "_reinstall_websockets", reinstall)
+
+        await manager._async_heal_torn_websockets()
+
+        reinstall.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_failed_reinstall_neither_purges_nor_raises(
+        self, tmp_path, monkeypatch
+    ):
+        manager, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(
+            es, "_probe_websockets_import", lambda: "ImportError: broken"
+        )
+        monkeypatch.setattr(
+            es, "_installed_dist_version", MagicMock(return_value="17.0")
+        )
+        monkeypatch.setattr(es, "_reinstall_websockets", MagicMock(return_value=False))
+        purge = MagicMock(name="purge")
+        monkeypatch.setattr(es, "_purge_websockets_modules", purge)
+
+        # Best-effort: bring-up must survive a failed heal (REST still works).
+        await manager._async_heal_torn_websockets()
+
+        purge.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_still_broken_after_reinstall_does_not_purge(
+        self, tmp_path, monkeypatch
+    ):
+        manager, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(
+            es, "_probe_websockets_import", lambda: "ImportError: still broken"
+        )
+        monkeypatch.setattr(
+            es, "_installed_dist_version", MagicMock(return_value="17.0")
+        )
+        monkeypatch.setattr(es, "_reinstall_websockets", MagicMock(return_value=True))
+        purge = MagicMock(name="purge")
+        monkeypatch.setattr(es, "_purge_websockets_modules", purge)
+
+        await manager._async_heal_torn_websockets()
+
+        purge.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_async_start_runs_the_heal(self, tmp_path, monkeypatch):
+        """The heal is wired into the real bring-up path."""
+        manager, _hass, _entry = _manager(tmp_path)
+        heal = AsyncMock(name="heal")
+        monkeypatch.setattr(manager, "_async_heal_torn_websockets", heal)
+        monkeypatch.setattr(
+            manager, "_async_ensure_package", AsyncMock(return_value="9.9.9")
+        )
+        # Stop the bring-up right after the heal: token provisioning raises.
+        monkeypatch.setattr(
+            manager,
+            "_async_provision_token",
+            AsyncMock(side_effect=RuntimeError("stop here")),
+        )
+        with pytest.raises(RuntimeError, match="stop here"):
+            await manager.async_start()
+
+        heal.assert_awaited_once()
+
+
+class TestTornWebsocketsHealHelpers:
+    """The blocking helpers behind the heal."""
+
+    def test_probe_reports_last_stderr_line(self, monkeypatch):
+        result = SimpleNamespace(
+            returncode=1,
+            stderr=(
+                "Traceback (most recent call last):\n"
+                "  ...\n"
+                "ImportError: cannot import name 'StatusLineTooLong'"
+            ),
+        )
+        monkeypatch.setattr(es.subprocess, "run", MagicMock(return_value=result))
+        assert "StatusLineTooLong" in _REAL_WEBSOCKETS_PROBE()
+
+    def test_probe_failure_to_run_reports_healthy(self, monkeypatch):
+        monkeypatch.setattr(
+            es.subprocess, "run", MagicMock(side_effect=OSError("no exec"))
+        )
+        assert _REAL_WEBSOCKETS_PROBE() is None
+
+    def test_reinstall_invocation_shape(self, monkeypatch):
+        captured = {}
+
+        def fake_run(args, **kwargs):
+            captured["args"] = args
+            return SimpleNamespace(returncode=0, stderr="")
+
+        monkeypatch.setattr(es.subprocess, "run", fake_run)
+        assert es._reinstall_websockets("17.0", constraints="/cons.txt", target=None)
+        args = captured["args"]
+        # HA-style uv pip invocation, constrained, exact same-version pin,
+        # no dependency mutations.
+        assert args[:5] == [sys.executable, "-m", "uv", "pip", "install"]
+        assert "--constraint" in args
+        assert "/cons.txt" in args
+        assert "--reinstall" in args
+        assert "--no-deps" in args
+        assert args[-1] == "websockets==17.0"
+
+    def test_reinstall_nonzero_exit_reports_failure(self, monkeypatch):
+        monkeypatch.setattr(
+            es.subprocess,
+            "run",
+            MagicMock(return_value=SimpleNamespace(returncode=2, stderr="boom")),
+        )
+        assert not es._reinstall_websockets("17.0", constraints=None, target=None)
+
+    def test_purge_drops_only_websockets_modules(self):
+        fake_ws = ModuleType("websockets")
+        fake_exc = ModuleType("websockets.exceptions")
+        sys.modules["websockets"] = fake_ws
+        sys.modules["websockets.exceptions"] = fake_exc
+        sys.modules["websockets_not_it"] = ModuleType("websockets_not_it")
+        try:
+            es._purge_websockets_modules()
+            assert "websockets" not in sys.modules
+            assert "websockets.exceptions" not in sys.modules
+            assert "websockets_not_it" in sys.modules
+        finally:
+            for name in ("websockets", "websockets.exceptions", "websockets_not_it"):
+                sys.modules.pop(name, None)

@@ -133,6 +133,11 @@ _PIP_INSTALL_TIMEOUT_SECONDS = 300
 # Uninstall just removes files/metadata, so it is quick; cap it so a wedged
 # subprocess can never tie up an executor thread indefinitely.
 _PIP_UNINSTALL_TIMEOUT_SECONDS = 120
+# Torn-websockets heal (#2135/#2146): a fresh-interpreter import probe plus a
+# same-version reinstall. The probe is a bare ``python -c import``; the
+# reinstall may download one wheel.
+_WEBSOCKETS_PROBE_TIMEOUT_SECONDS = 60
+_WEBSOCKETS_REINSTALL_TIMEOUT_SECONDS = 300
 
 # How long a bring-up waits for an install job orphaned by a CANCELLED
 # previous bring-up before giving up: asyncio cancellation detaches the
@@ -327,6 +332,7 @@ class EmbeddedServerManager:
         ready_version = await self._async_ensure_package(
             defer_mutations=_prune_and_check_importing_workers()
         )
+        await self._async_heal_torn_websockets()
         access_token = await self._async_provision_token()
         await self._hass.async_add_executor_job(self._prepare_config_dir)
 
@@ -632,6 +638,84 @@ class EmbeddedServerManager:
                 "the ha-mcp package underneath it. Reload the integration "
                 "to retry.",
                 kind="package",
+            )
+
+    async def _async_heal_torn_websockets(self) -> None:
+        """Detect and repair a torn ``websockets`` install (#2135/#2146).
+
+        Older ha-mcp releases pinned ``websockets`` exactly, which forced pip
+        to replace Home Assistant's image-shipped copy in place; interrupting
+        that non-atomic replacement left the package version-mixed on disk —
+        metadata reporting one release while the import chain behind
+        ``websockets.connect`` raises ImportError on every WS connect. The
+        pin is a range now, so ha-mcp no longer opens that window, but an
+        already-torn install never heals by itself (its metadata still
+        satisfies any range) and custom-component users have no shell to run
+        the manual repair. So the bring-up heals it — only when the mismatch
+        is unambiguous (metadata present, fresh-interpreter import broken),
+        and never by choosing a version: the exact recorded version is
+        reinstalled (``--no-deps``, under HA's own constraints file), making
+        disk agree with metadata again. Best-effort: a failed heal logs and
+        lets the bring-up continue (REST tools work without the WebSocket,
+        and the server names the problem at connect time).
+        """
+        failure = await self._hass.async_add_executor_job(_probe_websockets_import)
+        if failure is None:
+            return
+        version = await self._hass.async_add_executor_job(
+            _installed_dist_version, "websockets"
+        )
+        if version is None:
+            # No metadata: not the torn-install shape. A plainly missing
+            # dependency is the package installer's job, not the heal's.
+            _LOGGER.warning(
+                "websockets import chain is broken (%s) but no websockets "
+                "metadata is installed; leaving repair to the package install",
+                failure,
+            )
+            return
+        try:
+            Version(version)
+        except InvalidVersion:
+            _LOGGER.error(
+                "websockets metadata reports unparseable version %r; "
+                "not attempting a heal",
+                version,
+            )
+            return
+        _LOGGER.warning(
+            "Detected a torn websockets install: metadata records %s but the "
+            "import chain fails (%s). Reinstalling websockets==%s to make "
+            "disk agree with metadata (see ha-mcp issues #2135/#2146).",
+            version,
+            failure,
+            version,
+        )
+        kwargs = pip_kwargs(self._hass.config.config_dir)
+        healed = await self._async_run_tracked_install_job(
+            partial(
+                _reinstall_websockets,
+                version,
+                constraints=kwargs.get("constraints"),
+                target=kwargs.get("target"),
+            )
+        )
+        if not healed:
+            return
+        recheck = await self._hass.async_add_executor_job(_probe_websockets_import)
+        if recheck is None:
+            _purge_websockets_modules()
+            _LOGGER.warning(
+                "Healed the torn websockets install (reinstalled %s); the "
+                "WebSocket client will import a consistent package now",
+                version,
+            )
+        else:
+            _LOGGER.error(
+                "websockets is still broken after reinstalling %s (%s); "
+                "restart Home Assistant to finish the repair",
+                version,
+                recheck,
             )
 
     async def _async_ensure_package(
@@ -1917,6 +2001,103 @@ def _uninstall_distribution(dist_name: str, *, target: str | None = None) -> boo
         )
         return False
     return True
+
+
+def _probe_websockets_import() -> str | None:
+    """Probe the ``websockets`` import chain in a fresh interpreter (blocking).
+
+    Returns ``None`` when healthy, else the failure text. A subprocess keeps
+    the probe independent of this process's ``sys.modules`` (which may cache
+    modules from a pre-tear release) and therefore proves the ON-DISK state —
+    the thing a reinstall can actually fix. ``websockets.asyncio.client`` is
+    the exact chain behind ``websockets.connect`` that a torn install breaks
+    (#2135/#2146). A probe that cannot run at all reports healthy: the heal
+    must never take down a bring-up on probe machinery.
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", "import websockets.asyncio.client"],
+            capture_output=True,
+            text=True,
+            timeout=_WEBSOCKETS_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as err:
+        _LOGGER.warning("Could not probe the websockets import chain: %s", err)
+        return None
+    if result.returncode == 0:
+        return None
+    stderr_lines = (result.stderr or "").strip().splitlines()
+    return stderr_lines[-1] if stderr_lines else f"exit code {result.returncode}"
+
+
+def _reinstall_websockets(
+    version: str, *, constraints: str | None, target: str | None
+) -> bool:
+    """Force-reinstall the exact ``websockets`` version its metadata records.
+
+    Blocking, best-effort. This is deliberately NOT an upgrade: the version
+    is the one already recorded in the environment's metadata (i.e. the one
+    the dependency graph already resolved to), so the reinstall is pure file
+    repair — disk is made to agree with metadata again. ``--no-deps`` keeps
+    every other package untouched, and Home Assistant's own constraints file
+    is applied so a version HA forbids fails loudly instead of installing.
+    Mirrors :func:`_uninstall_distribution`'s ``<python> -m uv pip``
+    invocation style.
+    """
+    args = [sys.executable, "-m", "uv", "pip", "install"]
+    if target is not None:
+        args += ["--target", os.path.abspath(target)]
+    else:
+        args += ["--python", sys.executable]
+    if constraints is not None:
+        args += ["--constraint", constraints]
+    args += ["--reinstall", "--no-deps", f"websockets=={version}"]
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=_WEBSOCKETS_REINSTALL_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as err:
+        _LOGGER.error("Could not reinstall websockets==%s: %s", version, err)
+        return False
+    if result.returncode != 0:
+        _LOGGER.error(
+            "Reinstall of websockets==%s exited %d: %s",
+            version,
+            result.returncode,
+            (result.stderr or "").strip(),
+        )
+        return False
+    return True
+
+
+def _purge_websockets_modules() -> None:
+    """Drop cached ``websockets`` modules after an on-disk heal.
+
+    Third-party dependencies are normally never purged (they are shared with
+    the rest of Home Assistant — see :func:`_purge_ha_mcp_modules`). The
+    confirmed-torn case is the exception that makes this safe: with the deep
+    import chain raising ImportError, no consumer in this process can have
+    finished importing it — at most the pre-tear release's leaf modules
+    (``websockets``, ``websockets.exceptions``, ...) are cached, and any
+    holder of those keeps its already-bound references. Without the purge,
+    the healed files on disk would still be mixed IN MEMORY with the stale
+    cached leaves and the retry would fail identically.
+    """
+    purged = [
+        name
+        for name in list(sys.modules)
+        if name == "websockets" or name.startswith("websockets.")
+    ]
+    for name in purged:
+        sys.modules.pop(name, None)
+    if purged:
+        _safe_invalidate_caches()
+        _LOGGER.debug("Purged %d cached websockets module(s) after heal", len(purged))
 
 
 def _exact_pinned_version(spec: str) -> str | None:
