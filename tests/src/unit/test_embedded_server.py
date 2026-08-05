@@ -3608,6 +3608,8 @@ class TestTornWebsocketsHeal:
             [
                 "ImportError: cannot import name 'StatusLineTooLong' from "
                 "'websockets.exceptions'",
+                "ImportError: cannot import name 'StatusLineTooLong' from "
+                "'websockets.exceptions'",  # recheck under the pip lock
                 None,  # re-probe after the reinstall: healed
             ]
         )
@@ -3701,6 +3703,51 @@ class TestTornWebsocketsHeal:
         await manager._async_heal_torn_websockets()
 
         purge.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_recheck_clean_under_lock_skips_reinstall(
+        self, tmp_path, monkeypatch
+    ):
+        """A concurrent heal finishing while we waited on the lock wins."""
+        manager, _hass, _entry = _manager(tmp_path)
+        probes = iter(["ImportError: broken", None])  # clean on the recheck
+        monkeypatch.setattr(es, "_probe_websockets_import", lambda: next(probes))
+        reinstall = MagicMock(name="reinstall")
+        monkeypatch.setattr(es, "_reinstall_websockets", reinstall)
+
+        await manager._async_heal_torn_websockets()
+
+        reinstall.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reinstall_runs_under_ha_pip_lock(self, tmp_path, monkeypatch):
+        """The heal serializes with HA's own requirement installs.
+
+        ``async_process_requirements`` holds the requirements manager's
+        ``pip_lock`` for every install; the heal must hold the same lock so
+        it can never rewrite the shared package under a live pip job.
+        """
+        manager, hass, _entry = _manager(tmp_path)
+        pip_lock = asyncio.Lock()
+        hass.data = {es.DATA_REQUIREMENTS_MANAGER: SimpleNamespace(pip_lock=pip_lock)}
+        probes = iter(["ImportError: broken", "ImportError: broken", None])
+        monkeypatch.setattr(es, "_probe_websockets_import", lambda: next(probes))
+        monkeypatch.setattr(
+            es, "_installed_dist_version", MagicMock(return_value="17.0")
+        )
+        held_during_reinstall = {}
+
+        def fake_reinstall(_version, *, constraints=None, target=None):
+            held_during_reinstall["locked"] = pip_lock.locked()
+            return True
+
+        monkeypatch.setattr(es, "_reinstall_websockets", fake_reinstall)
+        monkeypatch.setattr(es, "_purge_websockets_modules", MagicMock())
+
+        await manager._async_heal_torn_websockets()
+
+        assert held_during_reinstall["locked"] is True
+        assert not pip_lock.locked()  # released afterwards
 
     @pytest.mark.asyncio
     async def test_async_start_runs_the_heal(self, tmp_path, monkeypatch):

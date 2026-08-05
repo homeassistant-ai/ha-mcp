@@ -45,6 +45,7 @@ from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.requirements import (
+    DATA_REQUIREMENTS_MANAGER,
     RequirementsNotFound,
     async_process_requirements,
     pip_kwargs,
@@ -658,51 +659,77 @@ class EmbeddedServerManager:
         disk agree with metadata again. Best-effort: a failed heal logs and
         lets the bring-up continue (REST tools work without the WebSocket,
         and the server names the problem at connect time).
+
+        The reinstall runs under the requirements manager's ``pip_lock`` —
+        the same process-wide lock ``async_process_requirements`` holds — so
+        it can never mutate the shared package while another integration's
+        requirement install is running (which would be the very corruption
+        class this heal repairs). Mirrors HA's own probe → lock → recheck
+        pattern; the healthy fast path takes no lock at all.
         """
         failure = await self._hass.async_add_executor_job(_probe_websockets_import)
         if failure is None:
             return
-        version = await self._hass.async_add_executor_job(
-            _installed_dist_version, "websockets"
+        pip_lock = getattr(
+            self._hass.data.get(DATA_REQUIREMENTS_MANAGER), "pip_lock", None
         )
-        if version is None:
-            # No metadata: not the torn-install shape. A plainly missing
-            # dependency is the package installer's job, not the heal's.
+        if not isinstance(pip_lock, asyncio.Lock):
+            # The singleton exists once any integration's requirements were
+            # processed — this bring-up's own package step already did — so
+            # a missing manager is unexpected; heal anyway, unserialized,
+            # rather than leave the WebSocket dead.
+            _LOGGER.debug(
+                "Requirements manager pip lock unavailable; healing without it"
+            )
+            pip_lock = asyncio.Lock()
+        async with pip_lock:
+            failure = await self._hass.async_add_executor_job(_probe_websockets_import)
+            if failure is None:
+                # A concurrent bring-up healed it while we waited on the lock.
+                return
+            version = await self._hass.async_add_executor_job(
+                _installed_dist_version, "websockets"
+            )
+            if version is None:
+                # No metadata: not the torn-install shape. A plainly missing
+                # dependency is the package installer's job, not the heal's.
+                _LOGGER.warning(
+                    "websockets import chain is broken (%s) but no websockets "
+                    "metadata is installed; leaving repair to the package "
+                    "install",
+                    failure,
+                )
+                return
+            try:
+                Version(version)
+            except InvalidVersion:
+                _LOGGER.error(
+                    "websockets metadata reports unparseable version %r; "
+                    "not attempting a heal",
+                    version,
+                )
+                return
             _LOGGER.warning(
-                "websockets import chain is broken (%s) but no websockets "
-                "metadata is installed; leaving repair to the package install",
+                "Detected a torn websockets install: metadata records %s but "
+                "the import chain fails (%s). Reinstalling websockets==%s to "
+                "make disk agree with metadata (see ha-mcp issues "
+                "#2135/#2146).",
+                version,
                 failure,
-            )
-            return
-        try:
-            Version(version)
-        except InvalidVersion:
-            _LOGGER.error(
-                "websockets metadata reports unparseable version %r; "
-                "not attempting a heal",
                 version,
             )
-            return
-        _LOGGER.warning(
-            "Detected a torn websockets install: metadata records %s but the "
-            "import chain fails (%s). Reinstalling websockets==%s to make "
-            "disk agree with metadata (see ha-mcp issues #2135/#2146).",
-            version,
-            failure,
-            version,
-        )
-        kwargs = pip_kwargs(self._hass.config.config_dir)
-        healed = await self._async_run_tracked_install_job(
-            partial(
-                _reinstall_websockets,
-                version,
-                constraints=kwargs.get("constraints"),
-                target=kwargs.get("target"),
+            kwargs = pip_kwargs(self._hass.config.config_dir)
+            healed = await self._async_run_tracked_install_job(
+                partial(
+                    _reinstall_websockets,
+                    version,
+                    constraints=kwargs.get("constraints"),
+                    target=kwargs.get("target"),
+                )
             )
-        )
-        if not healed:
-            return
-        recheck = await self._hass.async_add_executor_job(_probe_websockets_import)
+            if not healed:
+                return
+            recheck = await self._hass.async_add_executor_job(_probe_websockets_import)
         if recheck is None:
             _purge_websockets_modules()
             _LOGGER.warning(

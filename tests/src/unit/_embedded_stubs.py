@@ -564,6 +564,7 @@ def install() -> None:
     )
     setmod(
         "homeassistant.requirements",
+        DATA_REQUIREMENTS_MANAGER="requirements_manager",
         RequirementsNotFound=RequirementsNotFound,
         async_process_requirements=AsyncMock(name="async_process_requirements"),
         pip_kwargs=MagicMock(name="pip_kwargs", return_value={}),
