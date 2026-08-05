@@ -955,6 +955,19 @@ class EmbeddedServerManager:
             return
         if stored_spec == self._pip_spec:
             return
+        if _spec_is_url_requirement(self._pip_spec):
+            # A URL spec is reinstalled outright (--reinstall-package, see
+            # _scoped_install_flags), so the install cannot be skipped as
+            # "already satisfied" and there is nothing for this uninstall to
+            # unblock. Removing first would only delete the working build
+            # BEFORE the new URL is fetched, so a failed fetch (bad path,
+            # network, moved tarball) leaves no server installed at all —
+            # and it reopens the uninstall-then-extract window on our own
+            # package. _replaced_dist_name() already declines for a BARE
+            # url; a NAMED one ("ha-mcp @ file:///…", the shape the config
+            # flow and the e2e lane use) parses fine and would fall through
+            # to the removal below without this.
+            return
         replaced_dist = self._replaced_dist_name()
         if replaced_dist is None:
             return
@@ -963,18 +976,12 @@ class EmbeddedServerManager:
             # code on disk came from the index too, so "already satisfied by
             # version" is the truth, not the #1914 lie.
             return
-        pinned = _exact_pinned_version(self._pip_spec)
-        if pinned is not None:
-            try:
-                version_moves = Version(pinned) != Version(installed_version)
-            except InvalidVersion:
-                version_moves = False  # unprovable — keep the uninstall
-            if version_moves:
-                # The new pin cannot be satisfied by the installed version, so
-                # the forced install is guaranteed to be real without any
-                # uninstall — and keeping the working build in place preserves
-                # it as the fallback if that install fails (e.g. offline).
-                return
+        if _pin_moves_off_installed(self._pip_spec, installed_version):
+            # The new pin cannot be satisfied by the installed version, so the
+            # forced install is guaranteed to be real without any uninstall —
+            # and keeping the working build in place preserves it as the
+            # fallback if that install fails (e.g. offline).
+            return
         if not await self._hass.async_add_executor_job(_dist_installed, replaced_dist):
             return
         _LOGGER.info(
@@ -2069,6 +2076,22 @@ def _scoped_install_flags(spec: str, channel_dist: str | None) -> list[str]:
     if requirement.url is not None:
         return ["--reinstall-package", requirement.name]
     return ["--upgrade-package", requirement.name]
+
+
+def _pin_moves_off_installed(spec: str, installed_version: str) -> bool:
+    """True when ``spec`` is an exact pin on a DIFFERENT version than installed.
+
+    False when the spec is not an exact pin, or when either version string
+    cannot be parsed — "unprovable" must not be mistaken for "guaranteed to
+    move", since the caller skips its uninstall on a True.
+    """
+    pinned = _exact_pinned_version(spec)
+    if pinned is None:
+        return False
+    try:
+        return Version(pinned) != Version(installed_version)
+    except InvalidVersion:
+        return False
 
 
 def _spec_is_url_requirement(spec: str) -> bool:

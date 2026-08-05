@@ -230,6 +230,31 @@ class TestFetchFailurePath:
         assert exc.value.code == 1
         assert len(attempts) == 1, "a permanent 4xx must not be retried"
 
+    @pytest.mark.parametrize("code", [408, 429])
+    def test_throttling_is_transient_not_permanent(self, monkeypatch, code):
+        """429/408 must retry and then fail OPEN, not red-light the PR.
+
+        raw.githubusercontent throttles shared CI runners; treating that as
+        a permanent 4xx would fail every open PR for someone else's rate
+        limit — the exact outcome the sentinel exists to prevent.
+        """
+        attempts: list[int] = []
+
+        def throttled(*_args, **_kwargs):
+            attempts.append(1)
+            raise checker.urllib.error.HTTPError(
+                "https://example.invalid/c.txt", code, "Too Many Requests", {}, None
+            )
+
+        monkeypatch.setattr(checker.urllib.request, "urlopen", throttled)
+        monkeypatch.setattr(checker.time, "sleep", lambda _s: None)
+
+        assert (
+            checker.main(["--ha-version", "2026.8.0"])
+            == checker.EXIT_CONSTRAINTS_UNREACHABLE
+        )
+        assert len(attempts) == checker._FETCH_ATTEMPTS
+
     def test_exactly_three_attempts_with_no_trailing_sleep(self, monkeypatch):
         sleeps: list[float] = []
         attempts: list[int] = []

@@ -616,6 +616,41 @@ class TestEnsurePackage:
         assert calls == ["u", "i"]  # uninstall strictly before the install
         assert entry.data[DATA_LAST_PIP_SPEC] == DIST_NAME_STABLE
 
+    async def test_url_to_url_change_keeps_the_working_build_installed(
+        self, tmp_path, monkeypatch
+    ):
+        """Switching between two named URLs must NOT uninstall first.
+
+        A URL spec is reinstalled outright (``--reinstall-package``), so the
+        install cannot be skipped as "already satisfied" and the #1914
+        uninstall has nothing to unblock. Removing first would delete the
+        working build BEFORE the new URL is fetched — a bad path or a
+        network blip then leaves no server installed at all, and it reopens
+        the uninstall-then-extract window on our own package. A BARE url is
+        already declined by _replaced_dist_name(); a NAMED one parses as a
+        requirement and used to fall through to the removal.
+        """
+        old_url = "ha-mcp @ file:///config/ha_mcp-8.0.0-py3-none-any.whl"
+        new_url = "ha-mcp @ file:///config/ha_mcp-8.1.0-py3-none-any.whl"
+        install_pkg = MagicMock(return_value=True)
+        uninstall = MagicMock(return_value=True)
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_PIP_SPEC: new_url},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: old_url},
+        )
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "8.0.0")
+        monkeypatch.setattr(es, "_dist_installed", lambda name: True)
+        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
+
+        await mgr._async_ensure_package()
+
+        uninstall.assert_not_called()
+        install_pkg.assert_called_once()
+        assert install_pkg.call_args.args[0] == new_url
+
     async def test_pin_matching_installed_version_still_reinstalls(
         self, tmp_path, monkeypatch
     ):

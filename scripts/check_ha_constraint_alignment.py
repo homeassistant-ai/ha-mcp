@@ -70,6 +70,9 @@ _FETCH_BACKOFF_SECONDS = 3
 # keyed on 2 would silently swallow a mistyped flag or a broken runner and
 # leave the gate green while checking nothing.
 EXIT_CONSTRAINTS_UNREACHABLE = 78
+# 4xx codes that are an outage, not a mistake: 408 Request Timeout and 429
+# Too Many Requests (raw.githubusercontent throttles shared CI runners).
+_TRANSIENT_HTTP_CODES = frozenset({408, 429})
 
 
 def parse_requirement_lines(text: str) -> dict[str, SpecifierSet]:
@@ -180,11 +183,16 @@ def _fetch_constraints(ha_version: str) -> str | None:
                 payload: bytes = response.read()
             return payload.decode("utf-8")
         except urllib.error.HTTPError as err:
-            # A 4xx is PERMANENT — a moved/renamed constraints file or a ref
-            # that does not exist. Retrying cannot fix it, and returning the
-            # network sentinel would let CI's fail-open branch swallow it
-            # forever. Fall through to the caller's hard failure instead.
-            if 400 <= err.code < 500:
+            # Most 4xx are PERMANENT — a moved/renamed constraints file or a
+            # ref that does not exist. Retrying cannot fix those, and
+            # returning the network sentinel would let CI's fail-open branch
+            # swallow them forever. Fall through to the caller's hard failure.
+            #
+            # 408/429 are the exceptions: raw.githubusercontent rate-limits
+            # shared CI runners, and treating that as permanent would fail
+            # PRs for someone else's throttle — exactly what the sentinel
+            # exists to avoid. They stay on the retry-then-sentinel path.
+            if 400 <= err.code < 500 and err.code not in _TRANSIENT_HTTP_CODES:
                 print(
                     f"ERROR: {url} returned HTTP {err.code} — the constraints "
                     "file moved or the version ref does not exist; this check "
