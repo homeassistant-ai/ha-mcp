@@ -669,7 +669,12 @@ class EmbeddedServerManager:
         it can never mutate the shared package while another integration's
         requirement install is running (which would be the very corruption
         class this heal repairs). Mirrors HA's own probe → lock → recheck
-        pattern; the healthy fast path takes no lock at all.
+        pattern; the healthy fast path takes no lock at all. The locked
+        section runs as its own task behind ``asyncio.shield``: cancelling
+        the bring-up (entry unload/reload, HA shutdown) mid-reinstall must
+        NOT release the pip lock while the shielded pip job is still
+        running — that would hand the lock to another integration's install
+        and reopen the tear window (Codex review on PR #2150).
         """
         failure = await self._hass.async_add_executor_job(_probe_websockets_import)
         if failure is None:
@@ -688,6 +693,19 @@ class EmbeddedServerManager:
                 "the module-level fallback lock"
             )
             pip_lock = _WEBSOCKETS_HEAL_FALLBACK_LOCK
+        heal_task = asyncio.create_task(self._async_heal_locked(pip_lock))
+        try:
+            await asyncio.shield(heal_task)
+        except asyncio.CancelledError:
+            if not heal_task.done():
+                # The bring-up is going away but the heal keeps running
+                # detached, holding the pip lock until its pip job actually
+                # finishes; observe its outcome so a failure is never lost.
+                heal_task.add_done_callback(_log_detached_heal_result)
+            raise
+
+    async def _async_heal_locked(self, pip_lock: asyncio.Lock) -> None:
+        """The pip-lock-holding critical section of the websockets heal."""
         async with pip_lock:
             failure = await self._hass.async_add_executor_job(_probe_websockets_import)
             if failure is None:
@@ -2034,6 +2052,21 @@ def _uninstall_distribution(dist_name: str, *, target: str | None = None) -> boo
         )
         return False
     return True
+
+
+def _log_detached_heal_result(task: asyncio.Task) -> None:
+    """Observe a heal task left running after its awaiter was cancelled.
+
+    The task result would otherwise be silently dropped — Python only warns
+    about never-retrieved exceptions at GC time, long after the context is
+    gone.
+    """
+    if task.cancelled():
+        _LOGGER.warning("Detached websockets heal was cancelled before finishing")
+        return
+    err = task.exception()
+    if err is not None:
+        _LOGGER.error("Detached websockets heal failed: %s", err)
 
 
 def _probe_websockets_import() -> str | None:

@@ -3748,6 +3748,58 @@ class TestTornWebsocketsHeal:
         assert not pip_lock.locked()  # released afterwards
 
     @pytest.mark.asyncio
+    async def test_cancelled_bringup_keeps_pip_lock_until_job_ends(
+        self, tmp_path, monkeypatch
+    ):
+        """Cancelling the bring-up mid-reinstall must NOT release the lock.
+
+        _async_run_tracked_install_job shields its executor job, so the pip
+        process keeps running after a cancel; if the ``async with pip_lock``
+        unwound with it, another integration's install could acquire HA's
+        pip lock and run concurrently with our still-running reinstall —
+        the tear window again. The heal runs its locked section as a
+        detached task instead (Codex review on PR #2150).
+        """
+        manager, hass, _entry = _manager(tmp_path)
+        pip_lock = asyncio.Lock()
+        hass.data = {es.DATA_REQUIREMENTS_MANAGER: SimpleNamespace(pip_lock=pip_lock)}
+        probes = iter(["ImportError: broken", "ImportError: broken", None])
+        monkeypatch.setattr(es, "_probe_websockets_import", lambda: next(probes))
+        monkeypatch.setattr(
+            es, "_installed_dist_version", MagicMock(return_value="17.0")
+        )
+        monkeypatch.setattr(es, "_reinstall_websockets", MagicMock(return_value=True))
+        monkeypatch.setattr(es, "_purge_websockets_modules", MagicMock())
+        release = asyncio.Event()
+
+        async def slow_job(func):
+            await release.wait()
+            return func()
+
+        monkeypatch.setattr(manager, "_async_run_tracked_install_job", slow_job)
+
+        outer = asyncio.create_task(manager._async_heal_torn_websockets())
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if pip_lock.locked():
+                break
+        assert pip_lock.locked(), "heal never reached the locked section"
+
+        outer.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await outer
+        # The awaiter is gone but the detached heal still holds HA's pip
+        # lock while its (shielded) job runs.
+        assert pip_lock.locked()
+
+        release.set()
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if not pip_lock.locked():
+                break
+        assert not pip_lock.locked(), "detached heal never released the lock"
+
+    @pytest.mark.asyncio
     async def test_async_start_runs_the_heal(self, tmp_path, monkeypatch):
         """The heal is wired into the real bring-up path."""
         manager, _hass, _entry = _manager(tmp_path)
