@@ -3823,20 +3823,38 @@ class TestForceInstallPackage:
         assert "--upgrade-package" not in args
         assert "--upgrade" not in args
 
-    def test_bare_url_is_scoped_to_the_channel_distribution(self, monkeypatch):
-        """A bare URL names no distribution, so the channel's is used."""
+    def test_bare_url_is_scoped_to_every_known_distribution(self, monkeypatch):
+        """A bare URL names no distribution, so both candidates are named.
+
+        The channel's dist alone is the wrong guess: a repository tarball
+        installs as ``ha-mcp`` whatever channel is selected, so on the dev
+        channel ``--reinstall-package ha-mcp-dev`` names a package the URL
+        does not provide — uv reports success while the real ``ha-mcp``
+        keeps running, and a mutable URL holds its version string so
+        nothing downstream notices (Codex review on #2150).
+        """
         captured = self._run_capture(monkeypatch)
         assert self._install(
             "https://example.invalid/ha_mcp.tar.gz", channel_dist="ha-mcp-dev"
         )
         args = captured["args"]
-        assert args[args.index("--reinstall-package") + 1] == "ha-mcp-dev"
+        scoped = [
+            args[i + 1]
+            for i, value in enumerate(args)
+            if value == "--reinstall-package"
+        ]
+        assert scoped == ["ha-mcp-dev", "ha-mcp"]
 
-    def test_bare_url_without_a_channel_dist_installs_unflagged(self, monkeypatch):
+    def test_bare_url_without_a_channel_dist_still_scopes_both(self, monkeypatch):
         captured = self._run_capture(monkeypatch)
         assert self._install("https://example.invalid/ha_mcp.tar.gz", channel_dist=None)
         args = captured["args"]
-        assert "--reinstall-package" not in args
+        scoped = [
+            args[i + 1]
+            for i, value in enumerate(args)
+            if value == "--reinstall-package"
+        ]
+        assert scoped == ["ha-mcp", "ha-mcp-dev"]
         assert "--upgrade-package" not in args
 
     def test_constraints_and_http_timeout_are_threaded(self, monkeypatch):

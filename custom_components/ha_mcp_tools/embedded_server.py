@@ -2075,15 +2075,26 @@ def _scoped_install_flags(spec: str, channel_dist: str | None) -> list[str]:
       would reopen the non-atomic uninstall-then-extract window this PR
       exists to close, on every bring-up, for a spec that never needed it.
 
-    A bare URL names no distribution of its own, so it is scoped to the one
-    the channel installs it as; naming a distribution that is not installed
-    is a harmless no-op for uv (verified: exit 0, package still installed
-    from the URL).
+    A bare URL names no distribution of its own, and the channel's dist is
+    the wrong guess: a repository tarball installs as ``ha-mcp`` whatever
+    channel is selected (see :meth:`_replaced_dist_name`), so on the dev
+    channel scoping to ``ha-mcp-dev`` would name a package the URL does not
+    provide — uv would report success while leaving the real ``ha-mcp``
+    un-refreshed, and a mutable URL (a branch tarball, a rebuilt artifact)
+    keeps its version string, so nothing else would catch it. Both known
+    dists are therefore named: reinstalling one that is not installed is a
+    harmless no-op for uv (verified: exit 0, package still installed from
+    the URL).
     """
     try:
         requirement = Requirement(spec)
     except InvalidRequirement:
-        return ["--reinstall-package", channel_dist] if channel_dist else []
+        candidates = [channel_dist] if channel_dist else []
+        candidates += [DIST_NAME_STABLE, DIST_NAME_DEV]
+        flags: list[str] = []
+        for dist in dict.fromkeys(candidates):  # ordered, deduplicated
+            flags += ["--reinstall-package", dist]
+        return flags
     if requirement.url is not None:
         return ["--reinstall-package", requirement.name]
     return ["--upgrade-package", requirement.name]
