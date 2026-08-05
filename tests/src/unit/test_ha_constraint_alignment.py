@@ -173,11 +173,12 @@ class TestMainExitCodes:
 class TestFetchFailurePath:
     """The fetch budget the CI job's timeout is sized against.
 
-    pr.yml raised the lockfile job to 5 minutes and treats exit 2 as a
-    fail-open warning on the reasoning that a fetch failure resolves FAST
-    and distinctly. Restoring a long timeout or a trailing sleep would push
-    the worst case past the job budget, turning that clean exit into an
-    opaque runner kill — the exact outcome the comments say must not happen.
+    pr.yml raised the lockfile job to 5 minutes and treats
+    EXIT_CONSTRAINTS_UNREACHABLE as a fail-open warning on the reasoning
+    that a fetch failure resolves FAST and distinctly. Restoring a long
+    timeout or a trailing sleep would push the worst case past the job
+    budget, turning that clean exit into an opaque runner kill — the exact
+    outcome the comments say must not happen.
     """
 
     def _patch_fetch(self, monkeypatch, *, sleeps, attempts):
@@ -204,9 +205,7 @@ class TestFetchFailurePath:
         )
         assert checker.EXIT_CONSTRAINTS_UNREACHABLE != 2
 
-    def test_permanent_http_error_fails_hard_instead_of_failing_open(
-        self, monkeypatch
-    ):
+    def test_permanent_http_error_fails_hard_instead_of_failing_open(self, monkeypatch):
         """A moved constraints file must red-light the PR, not warn.
 
         A 404 is not an outage — it means HA renamed or moved
