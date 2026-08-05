@@ -22,7 +22,11 @@ import os
 
 import pytest
 
-from ..utilities.assertions import extract_error_message, safe_call_tool
+from ..utilities.assertions import (
+    MCPAssertions,
+    extract_error_message,
+    safe_call_tool,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -226,12 +230,11 @@ class TestDevManageSettings:
             flags_file.write_text(
                 json.dumps({**existing, "dev_tools_security_policy_access": True})
             )
-            result = await safe_call_tool(
-                mcp_client_with_dev_mode,
-                "ha_dev_manage_settings",
-                {"action": "set_policy", "policy": {"rules": [], "version": 0}},
-            )
-            assert result.get("success") is True, extract_error_message(result)
+            async with MCPAssertions(mcp_client_with_dev_mode) as mcp:
+                await mcp.call_tool_success(
+                    "ha_dev_manage_settings",
+                    {"action": "set_policy", "policy": {"rules": [], "version": 0}},
+                )
         finally:
             if original_contents is not None:
                 flags_file.write_text(original_contents)
