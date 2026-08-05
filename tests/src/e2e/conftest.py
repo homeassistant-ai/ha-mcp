@@ -186,12 +186,14 @@ _EMBEDDED_READY_POLL_S = 5
 _HAOS_EMBEDDED_BRINGUP_TIMEOUT = 600
 
 # ``pip list --format=freeze`` snapshots written by the embedded backend's
-# container entrypoint, bracketing the ha-mcp wheel preinstall. Land in the
-# bind-mounted /config so workflows/embedded/test_embedded_no_stomp.py can
-# read them host-side and assert the install replaced nothing the HA image
-# already shipped (#2135/#2146).
+# container entrypoint, bracketing the ha-mcp wheel preinstall, plus a copy
+# of the image's own package_constraints.txt. Land in the bind-mounted
+# /config so workflows/embedded/test_embedded_no_stomp.py can read them
+# host-side and assert the install never replaced anything HA governs
+# (#2135/#2146).
 EMBEDDED_FREEZE_BEFORE = ".embedded_preinstall_freeze_before.txt"
 EMBEDDED_FREEZE_AFTER = ".embedded_preinstall_freeze_after.txt"
+EMBEDDED_HA_CONSTRAINTS_COPY = ".embedded_ha_package_constraints.txt"
 
 
 def _is_embedded_backend_selected() -> bool:
@@ -2305,6 +2307,7 @@ def _build_ha_testcontainer(
             f"pip list --format=freeze > /config/{EMBEDDED_FREEZE_BEFORE} && "
             f"{constraints_probe} && "
             f'if [ -f "$HACONS" ]; then '
+            f'cp "$HACONS" /config/{EMBEDDED_HA_CONSTRAINTS_COPY} && '
             f'pip install --no-cache-dir --constraint "$HACONS" {quoted_wheel}; '
             f"else pip install --no-cache-dir {quoted_wheel}; fi && "
             f"pip list --format=freeze > /config/{EMBEDDED_FREEZE_AFTER}"

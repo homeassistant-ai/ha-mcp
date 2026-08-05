@@ -10,6 +10,7 @@ This module handles WebSocket connections to Home Assistant for:
 import asyncio
 import concurrent.futures
 import hashlib
+import importlib.metadata
 import json
 import logging
 import ssl
@@ -249,6 +250,29 @@ class WebSocketConnectionState:
             queue.shutdown(immediate=True)
 
 
+def _torn_websockets_hint() -> str:
+    """Repair guidance for an ImportError out of the websockets package.
+
+    A version-mixed install (#2135/#2146) can only be fixed by rewriting the
+    files, and the safe repair mirrors the component's self-heal: the
+    metadata-recorded version, ``--no-deps`` — never a plain unconstrained
+    reinstall that could upgrade the package under Home Assistant.
+    """
+    try:
+        recorded = importlib.metadata.version("websockets")
+        reinstall_spec = f"websockets=={recorded}"
+    except Exception:
+        reinstall_spec = "websockets"
+    return (
+        " — the installed 'websockets' package is broken (version-mixed "
+        "files, usually from an interrupted in-place upgrade). Home "
+        "Assistant custom-component installs self-repair on the next "
+        "restart (ha_mcp_tools component 1.3.2+); on standalone installs "
+        "reinstall the recorded version without touching other packages: "
+        f"pip install --force-reinstall --no-deps {reinstall_spec}"
+    )
+
+
 class HomeAssistantWebSocketClient:
     """WebSocket client for Home Assistant real-time communication."""
 
@@ -386,12 +410,7 @@ class HomeAssistantWebSocketClient:
                 # ``websockets.connect`` on every attempt. Retrying can never
                 # succeed, so name the repair instead of the generic
                 # connection advice.
-                self._last_connect_error += (
-                    " — the installed 'websockets' package is broken "
-                    "(version-mixed files, usually from an interrupted "
-                    "in-place upgrade); reinstall it in the server's Python "
-                    "environment: pip install --force-reinstall websockets"
-                )
+                self._last_connect_error += _torn_websockets_hint()
                 logger.error(
                     "WebSocket connection failed: %s", self._last_connect_error
                 )

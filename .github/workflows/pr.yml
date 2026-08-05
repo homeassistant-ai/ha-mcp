@@ -420,14 +420,15 @@ jobs:
       # The lockfile exercises the top of the range in the step above; this
       # step overlays the floor version and re-runs the websockets-facing
       # tests so both ends of the advertised range stay proven.
+      working-directory: tests
       run: >-
         uv run --with websockets==15.0.1 pytest
-        tests/src/unit/test_websockets_floor_compat.py
-        tests/src/unit/test_ws_connect_error_detail.py
-        tests/src/unit/test_ws_close_pending_requests_1721.py
-        tests/src/unit/test_rest_client_ws_transport_failure.py
-        tests/src/unit/test_ssl_verification.py
-        tests/src/unit/test_tools_addons.py
+        src/unit/test_websockets_floor_compat.py
+        src/unit/test_ws_connect_error_detail.py
+        src/unit/test_ws_close_pending_requests_1721.py
+        src/unit/test_rest_client_ws_transport_failure.py
+        src/unit/test_ssl_verification.py
+        src/unit/test_tools_addons.py
         -n auto --tb=short -v
 
     - name: Run add-on structure tests

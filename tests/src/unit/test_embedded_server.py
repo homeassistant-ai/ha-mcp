@@ -3604,15 +3604,13 @@ class TestTornWebsocketsHeal:
         self, tmp_path, monkeypatch
     ):
         manager, _hass, _entry = _manager(tmp_path)
-        probes = iter(
-            [
-                "ImportError: cannot import name 'StatusLineTooLong' from "
-                "'websockets.exceptions'",
-                "ImportError: cannot import name 'StatusLineTooLong' from "
-                "'websockets.exceptions'",  # recheck under the pip lock
-                None,  # re-probe after the reinstall: healed
-            ]
+        torn_error = (
+            "ImportError: cannot import name 'StatusLineTooLong' from "
+            "'websockets.exceptions'"
         )
+        # Torn on the gate probe AND the recheck under the pip lock; healed
+        # on the post-reinstall re-probe.
+        probes = iter([torn_error, torn_error, None])
         monkeypatch.setattr(es, "_probe_websockets_import", lambda: next(probes))
         monkeypatch.setattr(
             es, "_installed_dist_version", MagicMock(return_value="17.0")
@@ -3819,10 +3817,13 @@ class TestTornWebsocketsHealHelpers:
         assert not es._reinstall_websockets("17.0", constraints=None, target=None)
 
     def test_purge_drops_only_websockets_modules(self):
-        fake_ws = ModuleType("websockets")
-        fake_exc = ModuleType("websockets.exceptions")
-        sys.modules["websockets"] = fake_ws
-        sys.modules["websockets.exceptions"] = fake_exc
+        names = ("websockets", "websockets.exceptions", "websockets_not_it")
+        # Snapshot whatever this process already has cached (other test
+        # files import the real websockets) so the fakes never leak into,
+        # or evict, the rest of the suite.
+        originals = {name: sys.modules.get(name) for name in names}
+        sys.modules["websockets"] = ModuleType("websockets")
+        sys.modules["websockets.exceptions"] = ModuleType("websockets.exceptions")
         sys.modules["websockets_not_it"] = ModuleType("websockets_not_it")
         try:
             es._purge_websockets_modules()
@@ -3830,5 +3831,8 @@ class TestTornWebsocketsHealHelpers:
             assert "websockets.exceptions" not in sys.modules
             assert "websockets_not_it" in sys.modules
         finally:
-            for name in ("websockets", "websockets.exceptions", "websockets_not_it"):
-                sys.modules.pop(name, None)
+            for name, original in originals.items():
+                if original is not None:
+                    sys.modules[name] = original
+                else:
+                    sys.modules.pop(name, None)

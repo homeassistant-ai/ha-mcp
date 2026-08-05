@@ -139,6 +139,10 @@ _PIP_UNINSTALL_TIMEOUT_SECONDS = 120
 # reinstall may download one wheel.
 _WEBSOCKETS_PROBE_TIMEOUT_SECONDS = 60
 _WEBSOCKETS_REINSTALL_TIMEOUT_SECONDS = 300
+# Fallback serialization for the heal when the requirements manager is
+# unavailable: module-level so two concurrent bring-ups in this process
+# still serialize against each other (a per-call lock would protect nothing).
+_WEBSOCKETS_HEAL_FALLBACK_LOCK = asyncio.Lock()
 
 # How long a bring-up waits for an install job orphaned by a CANCELLED
 # previous bring-up before giving up: asyncio cancellation detaches the
@@ -676,12 +680,14 @@ class EmbeddedServerManager:
         if not isinstance(pip_lock, asyncio.Lock):
             # The singleton exists once any integration's requirements were
             # processed — this bring-up's own package step already did — so
-            # a missing manager is unexpected; heal anyway, unserialized,
-            # rather than leave the WebSocket dead.
+            # a missing manager is unexpected; heal anyway under the
+            # module-level fallback lock (still serialized against other
+            # bring-ups in this process) rather than leave the WebSocket dead.
             _LOGGER.debug(
-                "Requirements manager pip lock unavailable; healing without it"
+                "Requirements manager pip lock unavailable; healing under "
+                "the module-level fallback lock"
             )
-            pip_lock = asyncio.Lock()
+            pip_lock = _WEBSOCKETS_HEAL_FALLBACK_LOCK
         async with pip_lock:
             failure = await self._hass.async_add_executor_job(_probe_websockets_import)
             if failure is None:
@@ -2041,6 +2047,14 @@ def _probe_websockets_import() -> str | None:
     (#2135/#2146). A probe that cannot run at all reports healthy: the heal
     must never take down a bring-up on probe machinery.
     """
+    # Mirror THIS process's import path into the child: on HA Core installs
+    # pip installs requirements into config/deps, which HA's bootstrap adds
+    # to sys.path at runtime — a bare child interpreter would not see it and
+    # would misreport a healthy deps-dir install as torn (and a healed one
+    # as still broken). The probe must answer for the same import reality
+    # the server thread lives in.
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
     try:
         result = subprocess.run(
             [sys.executable, "-c", "import websockets.asyncio.client"],
@@ -2048,6 +2062,7 @@ def _probe_websockets_import() -> str | None:
             text=True,
             timeout=_WEBSOCKETS_PROBE_TIMEOUT_SECONDS,
             check=False,
+            env=env,
         )
     except (OSError, subprocess.SubprocessError) as err:
         _LOGGER.warning("Could not probe the websockets import chain: %s", err)

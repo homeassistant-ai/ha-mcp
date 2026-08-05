@@ -191,9 +191,14 @@ class TestTornInstallImportError:
         # The original error stays verbatim...
         assert "ImportError" in reason
         assert "StatusLineTooLong" in reason
-        # ...and the actionable diagnosis is appended.
+        # ...and the actionable diagnosis is appended: embedded installs are
+        # pointed at the component self-heal, standalone installs at the SAFE
+        # repair (metadata-recorded version, --no-deps — never a plain
+        # unconstrained reinstall that could upgrade the package).
         assert "'websockets' package" in reason
-        assert "reinstall" in reason.lower()
+        assert "self-repair on the next restart" in reason
+        assert "--no-deps" in reason
+        assert "pip install --force-reinstall --no-deps websockets" in reason
 
     @pytest.mark.asyncio
     async def test_non_import_errors_get_no_reinstall_hint(self):
