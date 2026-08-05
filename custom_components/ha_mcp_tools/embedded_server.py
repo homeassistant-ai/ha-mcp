@@ -976,13 +976,26 @@ class EmbeddedServerManager:
             # code on disk came from the index too, so "already satisfied by
             # version" is the truth, not the #1914 lie.
             return
-        if _pin_moves_off_installed(self._pip_spec, installed_version):
+        if not await self._hass.async_add_executor_job(_dist_installed, replaced_dist):
+            return
+        # Compare the pin against the version of the distribution actually
+        # being replaced, not the caller's ``installed_version``: that one is
+        # read from whichever dist provides ``ha_mcp`` and is read BEFORE
+        # _async_remove_conflicting_dist() runs, so on a cross-channel switch
+        # it can describe the other channel's dist — or one already
+        # uninstalled. Comparing against it could report "the pin moved" for a
+        # target that is in fact already at the pinned version, skip this
+        # uninstall, and let the install no-op as satisfied (#1914).
+        replaced_version = await self._hass.async_add_executor_job(
+            _installed_dist_version, replaced_dist
+        )
+        if replaced_version is not None and _pin_moves_off_installed(
+            self._pip_spec, replaced_version
+        ):
             # The new pin cannot be satisfied by the installed version, so the
             # forced install is guaranteed to be real without any uninstall —
             # and keeping the working build in place preserves it as the
             # fallback if that install fails (e.g. offline).
-            return
-        if not await self._hass.async_add_executor_job(_dist_installed, replaced_dist):
             return
         _LOGGER.info(
             "The requested server source changed (%r -> %r); removing the "
@@ -2101,6 +2114,11 @@ def _pin_moves_off_installed(spec: str, installed_version: str) -> bool:
         # False here would invert to "moved" — the unsafe direction.
         Version(installed_version)
     except (InvalidRequirement, InvalidVersion):
+        return False
+    if requirement.marker is not None and not requirement.marker.evaluate():
+        # The requirement does not apply to this interpreter, so the
+        # installer will skip it entirely — the pin cannot make the install
+        # real, whatever version it names.
         return False
     return not requirement.specifier.contains(installed_version, prereleases=True)
 

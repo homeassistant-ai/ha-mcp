@@ -602,6 +602,9 @@ class TestEnsurePackage:
         monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.13.0")
+        # The replaced-source check reads the version of the dist it is about
+        # to replace, so that is the lookup a version-equality case must stub.
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.13.0")
         monkeypatch.setattr(
             es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
         )
@@ -651,6 +654,41 @@ class TestEnsurePackage:
         install_pkg.assert_called_once()
         assert install_pkg.call_args.args[0] == new_url
 
+    async def test_pin_compares_against_the_replaced_dist_not_the_generic_version(
+        self, tmp_path, monkeypatch
+    ):
+        """The pin must be compared with the dist actually being replaced.
+
+        ``installed_version`` comes from whichever dist provides ``ha_mcp``
+        and is read BEFORE _async_remove_conflicting_dist() runs, so on a
+        cross-channel switch it can name the other channel's version. Here
+        the generic lookup reports 8.0.0 while the target ``ha-mcp`` is
+        already at 8.1.0: comparing against the generic value says "the pin
+        moved", skips this uninstall, and the install then no-ops as
+        already satisfied — leaving the tarball's code running (#1914).
+        """
+        tarball = (
+            "https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/"
+            "1234/head.tar.gz"
+        )
+        install_pkg = MagicMock(return_value=True)
+        uninstall = MagicMock(return_value=True)
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_PIP_SPEC: "ha-mcp==8.1.0"},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: tarball},
+        )
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda *a: "8.0.0")
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "8.1.0")
+        monkeypatch.setattr(es, "_dist_installed", lambda name: True)
+        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
+
+        await mgr._async_ensure_package()
+
+        uninstall.assert_called_once_with(DIST_NAME_STABLE)
+
     async def test_pin_matching_installed_version_still_reinstalls(
         self, tmp_path, monkeypatch
     ):
@@ -672,6 +710,9 @@ class TestEnsurePackage:
         monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.13.0")
+        # The replaced-source check reads the version of the dist it is about
+        # to replace, so that is the lookup a version-equality case must stub.
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.13.0")
         monkeypatch.setattr(
             es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
         )
@@ -770,6 +811,9 @@ class TestEnsurePackage:
         monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.13.0")
+        # The replaced-source check reads the version of the dist it is about
+        # to replace, so that is the lookup a version-equality case must stub.
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.13.0")
         monkeypatch.setattr(
             es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
         )
@@ -1366,6 +1410,13 @@ class TestPinMovesOffInstalled:
     def test_non_pin_specs_never_move(self):
         assert not es._pin_moves_off_installed("ha-mcp", "8.1.0")
         assert not es._pin_moves_off_installed("ha-mcp>=8.0.0", "8.1.0")
+
+    def test_inapplicable_marker_never_counts_as_moving(self):
+        # The installer skips a requirement whose marker is false, so the pin
+        # cannot make the install real no matter which version it names.
+        assert not es._pin_moves_off_installed(
+            "ha-mcp==2.0; python_version < '3.0'", "8.1.0"
+        )
 
     def test_unprovable_inputs_keep_the_uninstall(self):
         # Unparseable either side -> "unknown", which must not be reported
