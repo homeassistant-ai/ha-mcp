@@ -316,17 +316,28 @@ def _http(
     return json.loads(raw) if raw else {}
 
 
-def _wait_port(port: int, host: str = "127.0.0.1", timeout: float = 180.0) -> None:
+def _wait_any_port(
+    ports: tuple[int, ...], host: str = "127.0.0.1", timeout: float = 180.0
+) -> int:
+    """Return the first of ``ports`` to accept a connection.
+
+    HA 2026.8 serves guest port 80 under Supervisor and older cores serve
+    8123, and both are forwarded — so gating the boot on ONE of them would
+    burn the whole budget and fail before the base-URL discovery below ever
+    got to look at the other.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(2.0)
-            try:
-                s.connect((host, port))
-                return
-            except OSError:
-                time.sleep(2.0)
-    raise TimeoutError(f"{host}:{port} did not open within {timeout}s")
+        for port in ports:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(2.0)
+                try:
+                    s.connect((host, port))
+                    return port
+                except OSError:
+                    continue
+        time.sleep(2.0)
+    raise TimeoutError(f"none of {host}:{list(ports)} opened within {timeout}s")
 
 
 def _wait_http_ok(url: str, timeout: float = 300.0) -> None:
@@ -2027,7 +2038,7 @@ def build(work_dir: Path, output: Path) -> None:
     stage_screenshot_engine_source(qcow2)
     qemu = start_qemu(qcow2, work_dir)
     try:
-        _wait_port(HA_HOST_PORT, timeout=180)
+        _wait_any_port((HA_HOST_PORT, HA_ALT_HOST_PORT), timeout=180)
         base_url = _discover_ha_base_url(timeout=600)
         token = onboard(base_url)
         _check_core_auth(base_url, token)

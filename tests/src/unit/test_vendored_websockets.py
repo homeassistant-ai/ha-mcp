@@ -12,13 +12,15 @@ Three guards keep the design honest:
 1. The vendored tree matches the renovate-managed pin — a version bump
    that forgets to run ``scripts/vendor_websockets.py`` cannot merge.
 2. The API surface our client code uses exists in the vendored copy.
-3. Nothing under ``src/ha_mcp`` (outside ``_vendor``) imports the shared
-   ``websockets`` — the regression that would silently re-enter the
-   shared-copy war.
+3. Nothing under ``src/ha_mcp`` or ``custom_components/ha_mcp_tools``
+   (outside ``_vendor``) imports the shared ``websockets``, and the
+   embedded listener loads no uvicorn WebSocket protocol — the regressions
+   that would silently re-enter the shared-copy war.
 """
 
 from __future__ import annotations
 
+import ast
 import inspect
 import re
 from pathlib import Path
@@ -35,6 +37,54 @@ from ha_mcp._vendor.websockets.exceptions import (
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SRC = _REPO_ROOT / "src" / "ha_mcp"
 _VENDOR = _SRC / "_vendor"
+
+
+def _scanned_source_files() -> list[Path]:
+    """Every first-party module that could import the shared websockets.
+
+    Both trees matter: ``src/ha_mcp`` is the server, and
+    ``custom_components/ha_mcp_tools`` runs INSIDE the Home Assistant
+    process — the very environment where the shared copy is contested — so
+    scanning only the former would let the component quietly re-enter the
+    shared-copy war.
+    """
+    roots = (_SRC, _REPO_ROOT / "custom_components" / "ha_mcp_tools")
+    return [
+        path
+        for root in roots
+        for path in root.rglob("*.py")
+        if _VENDOR not in path.parents
+    ]
+
+
+def _connect_kwargs_used_in_source() -> set[str]:
+    """Collect the keyword names passed to ``websockets.connect(...)`` calls.
+
+    Derived by AST rather than hand-listed so the API-surface guard cannot
+    silently stop covering a kwarg someone adds later.
+    """
+    used: set[str] = set()
+    for path in _scanned_source_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not isinstance(func, ast.Attribute) or func.attr != "connect":
+                continue
+            # ``websockets.connect(...)`` in any binding spelling.
+            target = func.value
+            name = (
+                target.id
+                if isinstance(target, ast.Name)
+                else target.attr
+                if isinstance(target, ast.Attribute)
+                else ""
+            )
+            if name != "websockets":
+                continue
+            used.update(kw.arg for kw in node.keywords if kw.arg)
+    return used
 
 
 def _pinned_version() -> str:
@@ -68,19 +118,21 @@ class TestVendoredApiSurface:
         assert isinstance(ClientConnection, type)
 
     def test_connect_accepts_every_kwarg_we_pass(self):
-        # The union of kwargs used at websocket_client.py::connect and
-        # tools_addons.py. Asserted as EXPLICIT parameters (not swallowed by
-        # a **kwargs catch-all, which forwards typos/renames to
-        # create_connection and detonates at runtime); ``ssl`` is genuinely
-        # a forwarded create_connection kwarg, so it is exempt.
-        used_kwargs = {
-            "ping_interval",
-            "ping_timeout",
-            "additional_headers",
-            "max_size",
-            "open_timeout",
-            "close_timeout",
-        }
+        """Every kwarg our code passes to connect() is an explicit parameter.
+
+        The kwarg set is DERIVED from the real call sites rather than
+        hand-listed: a hand-copied literal silently stops covering a kwarg
+        the moment someone adds one, which would let exactly the renovate
+        bump this guard exists to catch (a vendored release that renamed or
+        dropped a parameter) sail through and fail at runtime instead.
+
+        Asserted as EXPLICIT parameters — a ``**kwargs`` catch-all would
+        swallow a renamed kwarg and forward it to create_connection, which
+        raises TypeError only when a connection is actually attempted.
+        ``ssl`` is genuinely one of those forwarded kwargs, so it is exempt.
+        """
+        used_kwargs = _connect_kwargs_used_in_source() - {"ssl"}
+        assert used_kwargs, "no websockets.connect(...) call sites found"
         params = set(inspect.signature(websockets.connect).parameters)
         missing = used_kwargs - params
         assert not missing, (
@@ -106,17 +158,39 @@ class TestNoSharedWebsocketsImports:
     )
 
     def test_no_module_imports_the_shared_copy(self):
-        offenders = []
-        for path in _SRC.rglob("*.py"):
-            if _VENDOR in path.parents:
-                continue
-            if self._IMPORT_RE.search(path.read_text(encoding="utf-8")):
-                offenders.append(str(path.relative_to(_REPO_ROOT)))
+        offenders = [
+            str(path.relative_to(_REPO_ROOT))
+            for path in _scanned_source_files()
+            if self._IMPORT_RE.search(path.read_text(encoding="utf-8"))
+        ]
         assert not offenders, (
             "these modules import the SHARED websockets instead of "
             f"ha_mcp._vendor.websockets: {offenders} — the shared copy is "
             "unowned inside Home Assistant and can be replaced or torn by "
             "any integration's install (#2135/#2146)"
+        )
+
+    def test_embedded_listener_loads_no_websocket_protocol(self):
+        """uvicorn must not be told to load a WebSocket protocol.
+
+        uvicorn resolves its ``ws`` class EAGERLY in ``Config.load()``, and
+        every value except "none" imports the SHARED ``websockets`` package
+        (``websockets-sansio`` -> uvicorn's websockets_sansio_impl). That
+        would put the unowned, tearable shared copy back on the embedded
+        server's startup path — a torn install would crash the listener
+        before our vendored client is ever reached — which the vendoring
+        exists to make impossible. The MCP app serves Streamable HTTP and
+        registers no WebSocket route, so "none" costs nothing.
+        """
+        source = (
+            _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "embedded_server.py"
+        ).read_text(encoding="utf-8")
+        ws_settings = re.findall(r"""\bws\s*=\s*["']([^"']+)["']""", source)
+        assert ws_settings, "no uvicorn ws= setting found — did the call move?"
+        assert set(ws_settings) == {"none"}, (
+            f"embedded_server configures uvicorn with ws={ws_settings} — every "
+            "value but 'none' eagerly imports the shared websockets package "
+            "(#2135/#2146)"
         )
 
     def test_pyproject_declares_no_websockets_dependency(self):

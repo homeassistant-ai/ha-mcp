@@ -3638,6 +3638,93 @@ class TestForceInstallPackage:
         assert "--target" in args
         assert args[args.index("--target") + 1] == os.path.abspath(str(tmp_path))
 
+    def test_failing_extra_index_host_is_dropped_and_retried(self, monkeypatch):
+        """A wheels-index outage must not fail an install PyPI can satisfy.
+
+        uv treats a failing extra index as FATAL where pip merely skips it,
+        so homeassistant.util.package.install_package retries with the
+        offending host removed. This installer replaced install_package, so
+        it has to preserve that fallback.
+        """
+        calls: list[dict[str, str]] = []
+
+        def fake_run(args, **kwargs):
+            env = kwargs["env"]
+            calls.append(env)
+            if "wheels.home-assistant.io" in env.get("UV_EXTRA_INDEX_URL", ""):
+                return SimpleNamespace(
+                    returncode=1,
+                    stderr="error: failed to fetch https://wheels.home-assistant.io/x",
+                )
+            return SimpleNamespace(returncode=0, stderr="")
+
+        monkeypatch.setattr(es.subprocess, "run", fake_run)
+        monkeypatch.setenv(
+            "UV_EXTRA_INDEX_URL",
+            "https://wheels.home-assistant.io/simple https://healthy.example/simple",
+        )
+
+        assert es._force_install_package(
+            "ha-mcp",
+            upgrade_dist="ha-mcp",
+            constraints=None,
+            target=None,
+            timeout=None,
+        )
+
+        assert len(calls) == 2, "the failing extra index was not retried"
+        # The retry keeps the healthy index and drops only the failing host.
+        retry_extra = calls[1].get("UV_EXTRA_INDEX_URL", "")
+        assert "wheels.home-assistant.io" not in retry_extra
+        assert "healthy.example" in retry_extra
+
+    def test_sole_failing_extra_index_is_removed_entirely(self, monkeypatch):
+        calls: list[dict[str, str]] = []
+
+        def fake_run(args, **kwargs):
+            env = kwargs["env"]
+            calls.append(env)
+            if "UV_EXTRA_INDEX_URL" in env:
+                return SimpleNamespace(
+                    returncode=1, stderr="failed to fetch https://wheels.example/x"
+                )
+            return SimpleNamespace(returncode=0, stderr="")
+
+        monkeypatch.setattr(es.subprocess, "run", fake_run)
+        monkeypatch.setenv("UV_EXTRA_INDEX_URL", "https://wheels.example/simple")
+
+        assert es._force_install_package(
+            "ha-mcp",
+            upgrade_dist="ha-mcp",
+            constraints=None,
+            target=None,
+            timeout=None,
+        )
+
+        assert len(calls) == 2
+        assert "UV_EXTRA_INDEX_URL" not in calls[1]
+
+    def test_unrelated_failure_is_not_retried(self, monkeypatch):
+        """Only an extra-index failure earns a second attempt."""
+        calls: list[dict[str, str]] = []
+
+        def fake_run(args, **kwargs):
+            calls.append(kwargs["env"])
+            return SimpleNamespace(returncode=1, stderr="No matching distribution")
+
+        monkeypatch.setattr(es.subprocess, "run", fake_run)
+        monkeypatch.setenv("UV_EXTRA_INDEX_URL", "https://wheels.example/simple")
+
+        assert not es._force_install_package(
+            "ha-mcp",
+            upgrade_dist="ha-mcp",
+            constraints=None,
+            target=None,
+            timeout=None,
+        )
+
+        assert len(calls) == 1
+
     def test_nonzero_exit_reports_failure(self, monkeypatch):
         monkeypatch.setattr(
             es.subprocess,

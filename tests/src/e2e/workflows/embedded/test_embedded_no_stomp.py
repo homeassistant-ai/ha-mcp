@@ -257,8 +257,22 @@ def test_embedded_runtime_install_replaces_nothing_ha_governs(
     assert result.exit_code == 0, f"in-container pip list failed: {output[:500]}"
     runtime = _parse_freeze(output)
     assert "ha-mcp" in runtime or "ha-mcp-dev" in runtime, (
-        "ha-mcp missing from the live container environment — the runtime "
-        "install did not run, so this guard proved nothing"
+        "ha-mcp missing from the live container environment — the bring-up "
+        "never installed the server at all"
+    )
+    # POSITIVE marker that the runtime force-install actually executed.
+    # Without it this guard passes vacuously whenever bring-up takes the
+    # fast path or defers mutations: ha-mcp is in the live `pip list`
+    # either way (the entrypoint preinstalled it), so the before/after diff
+    # would be empty and the test would be green having exercised nothing.
+    log_text = (config_path / "home-assistant.log").read_text(
+        encoding="utf-8", errors="replace"
+    )
+    assert "Installing the in-process server package" in log_text, (
+        "the component's force-install never ran (no install log line), so "
+        "this guard exercised no runtime install — if bring-up now takes "
+        "the fast path by design, this test needs a new way to reach the "
+        "install path rather than being allowed to pass vacuously"
     )
 
     _assert_no_governed_changes(

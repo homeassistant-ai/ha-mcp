@@ -40,6 +40,7 @@ from contextlib import suppress
 from datetime import timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal
+from urllib.parse import urlparse
 
 from homeassistant.auth.const import GROUP_ID_ADMIN
 from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
@@ -134,6 +135,11 @@ _PIP_INSTALL_TIMEOUT_SECONDS = 300
 # Uninstall just removes files/metadata, so it is quick; cap it so a wedged
 # subprocess can never tie up an executor thread indefinitely.
 _PIP_UNINSTALL_TIMEOUT_SECONDS = 120
+# Upper bound for ONE uv install attempt. Generous (a cold ARM wheel build
+# is slow but finite) and bounded, so a wedged uv cannot hold the
+# process-wide tracked-install slot — and with it the next bring-up —
+# forever. The extra-index fallback can spend this twice.
+_UV_INSTALL_TIMEOUT_SECONDS = 1800
 
 # How long a bring-up waits for an install job orphaned by a CANCELLED
 # previous bring-up before giving up: asyncio cancellation detaches the
@@ -652,8 +658,10 @@ class EmbeddedServerManager:
         With auto-update on (the default) both channels install their
         distribution UNPINNED, so every entry reload / HA restart must pick up
         the newest build. Such a spec ALWAYS takes the force-install path
-        (``upgrade=True``, bypassing the requirements manager's is-installed
-        shortcut) — that is what makes the channel auto-update. This runs in a
+        (``--upgrade-package <dist>``, bypassing the requirements manager's
+        is-installed shortcut) — that is what makes the channel auto-update,
+        and scoping the upgrade to our own distribution is what keeps it
+        from replacing packages Home Assistant ships (#2135/#2146). This runs in a
         background task, so it never blocks HA startup, and uv no-ops quickly
         when the newest build is already installed.
 
@@ -667,8 +675,8 @@ class EmbeddedServerManager:
         toggled auto-update, a channel switch) falls through to the
         force-install path below — and additionally uninstalls the replaced
         distribution first (:meth:`_async_remove_replaced_source`), because
-        ``upgrade=True`` alone decides by version and a changed SOURCE can keep
-        the version string (issue #1914).
+        the upgrade flag alone decides by version and a changed SOURCE can
+        keep the version string (issue #1914).
 
         On a channel switch the other channel's distribution is uninstalled first
         (:meth:`_async_remove_conflicting_dist`): ``ha-mcp`` and ``ha-mcp-dev``
@@ -866,7 +874,8 @@ class EmbeddedServerManager:
 
         Returns None for an override that names an unknown distribution or
         does not parse as a requirement at all (a direct URL): the installer
-        re-fetches and rebuilds URL requirements under ``upgrade=True``
+        reinstalls a named URL requirement outright
+        (``--reinstall-package``, see :func:`_force_install_package`)
         regardless of the installed version, so a URL install is already
         real and nothing needs removing.
         """
@@ -886,7 +895,7 @@ class EmbeddedServerManager:
     ) -> None:
         """Uninstall the replaced distribution when the requested source changed.
 
-        The forced install that follows relies on ``upgrade=True``, and the
+        The forced install that follows relies on its upgrade flag, and the
         installer decides "already satisfied" by VERSION alone — but a source
         change can keep the version string. A PR branch's committed
         ``project.version`` equals the release it branched from (only release
@@ -904,7 +913,7 @@ class EmbeddedServerManager:
         Skipped when nothing is installed, when the last-installed spec is
         unknown (nothing to compare: first install, or entry data predating
         the spec tracking), when the spec is unchanged (the routine
-        reload/restart path, where ``upgrade=True`` alone is correct and an
+        reload/restart path, where the upgrade flag alone is correct and an
         uninstall would churn — and briefly break — a healthy install on
         every restart), when the new spec is a direct URL (always installs
         for real), when the named distribution is not installed (e.g. a
@@ -1020,8 +1029,9 @@ class EmbeddedServerManager:
                 f"Could not install the server ({self._pip_spec!r}). The "
                 f"in-process server requires ha-mcp "
                 f"{MIN_EMBEDDED_SERVER_VERSION} or newer and Home Assistant "
-                f"{MIN_EMBEDDED_HOME_ASSISTANT_VERSION} or newer. Resolver "
-                "details are logged under homeassistant.util.package.",
+                f"{MIN_EMBEDDED_HOME_ASSISTANT_VERSION} or newer. The "
+                "installer's output is logged under "
+                "custom_components.ha_mcp_tools.embedded_server.",
                 kind="package",
             )
 
@@ -1393,7 +1403,16 @@ class EmbeddedServerManager:
             port=self._port,
             timeout_graceful_shutdown=2,
             lifespan="on",
-            ws="websockets-sansio",
+            # HTTP-ONLY listener, so no WebSocket protocol is loaded. uvicorn
+            # resolves its ``ws`` class EAGERLY in Config.load(), and
+            # "websockets-sansio" imports the SHARED websockets package —
+            # the unowned, tearable copy ha-mcp vendors its own copy to stay
+            # clear of (#2135/#2146). With that setting a torn shared install
+            # crashed this server at listener startup no matter what the
+            # client imports. "none" resolves to None and imports nothing;
+            # the MCP app serves Streamable HTTP and registers no WebSocket
+            # route. Pinned by tests/src/unit/test_vendored_websockets.py.
+            ws="none",
             # Leave Home Assistant's logging untouched — do not let uvicorn
             # reconfigure the root logger from this thread.
             log_config=None,
@@ -1946,12 +1965,80 @@ def _force_install_package(
     (index strategy, constraints, target, the uv --user workaround, and the
     HTTP_TIMEOUT env) but swaps its eager ``--upgrade`` — which re-resolves
     EVERY dependency to the newest allowed version, replacing packages the
-    Home Assistant image already ships (#2135/#2146) — for
-    ``--upgrade-package`` scoped to ha-mcp's own distribution. A ``None``
-    ``upgrade_dist`` (a direct-URL spec, whose requirement uv re-fetches and
-    rebuilds regardless) installs with no upgrade flag at all.
+    Home Assistant image already ships (#2135/#2146) — for a scoped flag
+    that can only ever touch ha-mcp's own distribution:
+
+    * a named spec upgrades just that distribution
+      (``--upgrade-package <dist>``), which is what makes a channel
+      auto-update;
+    * a direct-URL spec (``upgrade_dist=None``) reinstalls just that
+      distribution (``--reinstall-package <name>``) so a URL install is
+      always REAL even when uv would consider the same URL already
+      satisfied — several callers (``_replaced_dist_name``,
+      ``_async_remove_replaced_source``) skip their uninstall on exactly
+      that guarantee, which the removed ``upgrade=True`` used to provide.
+
+    A bare URL that carries no distribution name is the one spec neither
+    flag can scope; it installs unflagged, as it did before.
     """
     env = os.environ.copy()
+    if timeout:
+        env["HTTP_TIMEOUT"] = str(timeout)
+    args = _uv_install_args(
+        spec,
+        upgrade_dist=upgrade_dist,
+        constraints=constraints,
+        target=target,
+        env=env,
+    )
+    _LOGGER.info("Installing the in-process server package: %s", spec)
+    stderr = _run_uv_install(args, env)
+    if stderr is None:
+        return True
+
+    # install_package's extra-index fallback, mirrored: uv treats a failing
+    # extra index as FATAL where pip merely skips it, so a wheels-index
+    # outage would otherwise fail a bring-up that PyPI could satisfy on its
+    # own. When the error names an extra-index host, retry with that host
+    # dropped. Matched on host because wheel files may live outside the
+    # index path. The warning names the failing HOSTS rather than the
+    # configured URLs (which can carry credentials); uv's own stderr is
+    # included as-is, exactly as install_package logs it.
+    extra_urls = env.get("UV_EXTRA_INDEX_URL", "").split()
+    failing = {
+        url: host
+        for url in extra_urls
+        if (host := urlparse(url).hostname) and host in stderr
+    }
+    if failing:
+        _LOGGER.warning(
+            "Could not install %r using extra index host %s: %s; retrying without it",
+            spec,
+            ", ".join(failing.values()),
+            stderr,
+        )
+        retry_env = env.copy()
+        if remaining := [url for url in extra_urls if url not in failing]:
+            retry_env["UV_EXTRA_INDEX_URL"] = " ".join(remaining)
+        else:
+            del retry_env["UV_EXTRA_INDEX_URL"]
+        stderr = _run_uv_install(args, retry_env)
+        if stderr is None:
+            return True
+
+    _LOGGER.error("Could not install %r: %s", spec, stderr)
+    return False
+
+
+def _uv_install_args(
+    spec: str,
+    *,
+    upgrade_dist: str | None,
+    constraints: str | None,
+    target: str | None,
+    env: dict[str, str],
+) -> list[str]:
+    """Build the ``uv pip install`` argv (mirrors install_package's shape)."""
     args = [
         sys.executable,
         "-m",
@@ -1967,8 +2054,8 @@ def _force_install_package(
     ]
     if upgrade_dist is not None:
         args += ["--upgrade-package", upgrade_dist]
-    if timeout:
-        env["HTTP_TIMEOUT"] = str(timeout)
+    elif (url_dist := _requirement_name(spec)) is not None:
+        args += ["--reinstall-package", url_dist]
     if constraints is not None:
         args += ["--constraint", constraints]
     if target:
@@ -1982,6 +2069,30 @@ def _force_install_package(
     ):
         # uv has no --user (astral-sh/uv#2077); install_package's workaround.
         args += ["--python", sys.executable, "--target", os.path.abspath(user_site)]
+    return args
+
+
+def _requirement_name(spec: str) -> str | None:
+    """Return the distribution name a spec installs, or None if unnamed.
+
+    ``name @ url`` and plain requirements yield their name; a bare URL
+    string (which does not parse as a requirement) yields None.
+    """
+    try:
+        return Requirement(spec).name
+    except InvalidRequirement:
+        return None
+
+
+def _run_uv_install(args: list[str], env: dict[str, str]) -> str | None:
+    """Run one uv install attempt; return None on success, else its stderr.
+
+    Bounded by ``_UV_INSTALL_TIMEOUT_SECONDS``: this runs inside the
+    process-wide tracked-install slot, and the extra-index fallback can run
+    it twice, so a wedged uv would otherwise pin an executor thread (and
+    block the next bring-up) with no upper bound. The budget is deliberately
+    generous — a cold ARM wheel build is slow but finite.
+    """
     try:
         result = subprocess.run(
             args,
@@ -1989,19 +2100,13 @@ def _force_install_package(
             text=True,
             check=False,
             env=env,
+            timeout=_UV_INSTALL_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.SubprocessError) as err:
-        _LOGGER.error("Could not install %r: %s", spec, err)
-        return False
+        return f"{type(err).__name__}: {err}"
     if result.returncode != 0:
-        _LOGGER.error(
-            "Install of %r exited %d: %s",
-            spec,
-            result.returncode,
-            (result.stderr or "").strip(),
-        )
-        return False
-    return True
+        return (result.stderr or "").strip() or f"exit code {result.returncode}"
+    return None
 
 
 def _exact_pinned_version(spec: str) -> str | None:

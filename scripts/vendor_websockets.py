@@ -52,49 +52,66 @@ def main() -> int:
     with urllib.request.urlopen(url, timeout=60) as response:
         payload: bytes = response.read()
 
-    if _TARGET.exists():
-        shutil.rmtree(_TARGET)
+    # Extract into a staging dir and swap at the end: extracting over the
+    # live tree would leave a half-populated vendored package behind on any
+    # mid-loop failure (a rejected traversal member, a write error), and the
+    # only recovery would be a git checkout the failure never mentions.
+    staging = _TARGET.with_name(_TARGET.name + ".incoming")
+    if staging.exists():
+        shutil.rmtree(staging)
 
     prefix = f"websockets-{version}/src/websockets/"
     license_name = f"websockets-{version}/LICENSE"
     extracted = 0
-    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tar:
-        for member in tar.getmembers():
-            if member.name == license_name:
-                _TARGET.mkdir(parents=True, exist_ok=True)
+    try:
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tar:
+            for member in tar.getmembers():
+                if member.name == license_name:
+                    staging.mkdir(parents=True, exist_ok=True)
+                    extract = tar.extractfile(member)
+                    assert extract is not None
+                    (staging / "LICENSE").write_bytes(extract.read())
+                    continue
+                if not member.name.startswith(prefix) or not member.isfile():
+                    continue
+                relative = member.name[len(prefix) :]
+                # Pure-Python only: the optional C accelerator (speedups.c) is
+                # deliberately left out — websockets falls back to its Python
+                # implementation when the extension is absent.
+                if relative.endswith((".c", ".so", ".pyd")):
+                    continue
+                destination = (staging / relative).resolve()
+                # Containment check (CWE-22): member names come from the
+                # downloaded archive, so a crafted ``../`` inside the matched
+                # prefix must never write outside the vendor dir.
+                if not destination.is_relative_to(staging.resolve()):
+                    raise SystemExit(
+                        f"refusing archive member escaping the vendor dir: "
+                        f"{member.name}"
+                    )
+                destination.parent.mkdir(parents=True, exist_ok=True)
                 extract = tar.extractfile(member)
                 assert extract is not None
-                (_TARGET / "LICENSE").write_bytes(extract.read())
-                continue
-            if not member.name.startswith(prefix) or not member.isfile():
-                continue
-            relative = member.name[len(prefix) :]
-            # Pure-Python only: the optional C accelerator (speedups.c) is
-            # deliberately left out — websockets falls back to its Python
-            # implementation when the extension is absent.
-            if relative.endswith((".c", ".so", ".pyd")):
-                continue
-            destination = (_TARGET / relative).resolve()
-            # Containment check (CWE-22): member names come from the
-            # downloaded archive, so a crafted ``../`` inside the matched
-            # prefix must never write outside the vendor dir.
-            if not destination.is_relative_to(_TARGET.resolve()):
-                raise SystemExit(
-                    f"refusing archive member escaping the vendor dir: {member.name}"
-                )
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            extract = tar.extractfile(member)
-            assert extract is not None
-            destination.write_bytes(extract.read())
-            extracted += 1
+                destination.write_bytes(extract.read())
+                extracted += 1
 
-    if not (_TARGET / "__init__.py").is_file():
-        raise SystemExit("sdist layout unexpected: no websockets/__init__.py")
-    (_TARGET / "VENDORED").write_text(
-        f"websockets=={version}\n"
-        "Vendored by scripts/vendor_websockets.py — do not edit by hand.\n",
-        encoding="utf-8",
-    )
+        if not (staging / "__init__.py").is_file():
+            raise SystemExit("sdist layout unexpected: no websockets/__init__.py")
+        (staging / "VENDORED").write_text(
+            f"websockets=={version}\n"
+            "Vendored by scripts/vendor_websockets.py — do not edit by hand.\n",
+            encoding="utf-8",
+        )
+    except BaseException:
+        # Never leave a half-written staging tree behind; the live vendored
+        # package has not been touched at this point.
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+    # Swap only once the staged tree is complete and validated.
+    if _TARGET.exists():
+        shutil.rmtree(_TARGET)
+    staging.rename(_TARGET)
     print(f"vendored websockets=={version}: {extracted} files -> {_TARGET}")
     return 0
 

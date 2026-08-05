@@ -91,17 +91,19 @@ class TestCheckAlignment:
 class TestRepoPyprojectIsAligned:
     """The repo's own dependency list passes both rules offline.
 
-    Uses a constraints sample frozen from HA 2026.7.4 for the packages ha-mcp
-    actually shares with HA — the live check against the current HA version
-    runs in CI (lockfile job), where drift on either side should fail the PR
-    that introduces it, not this offline test.
+    Uses a constraints sample frozen from the HA release the suite pins
+    (HA_TEST_IMAGE / HA_IMAGE_GHCR), covering the packages ha-mcp actually
+    shares with HA — the live check against that same version runs in CI
+    (lockfile job), where drift on either side should fail the PR that
+    introduces it, not this offline test.
     """
 
     def test_current_pyproject_has_no_violations(self):
         dependencies = checker.direct_dependencies(
             (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         )
-        frozen_2026_7_4 = "\n".join(
+        # Verbatim from homeassistant/package_constraints.txt @ 2026.8.0.
+        frozen_2026_8_0 = "\n".join(
             [
                 "websockets>=15.0.1",
                 "httpx==0.28.1",
@@ -112,7 +114,7 @@ class TestRepoPyprojectIsAligned:
             ]
         )
         violations = checker.check_alignment(
-            dependencies, checker.parse_requirement_lines(frozen_2026_7_4)
+            dependencies, checker.parse_requirement_lines(frozen_2026_8_0)
         )
         assert violations == []
 

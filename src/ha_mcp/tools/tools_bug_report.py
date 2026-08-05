@@ -8,6 +8,7 @@ on how to create effective bug reports.
 import asyncio
 import importlib
 import importlib.metadata
+import importlib.util
 import logging
 import os
 import platform
@@ -217,12 +218,19 @@ def _format_websockets_dependency_value(diagnostic_info: dict[str, Any]) -> str:
         return "not probed"
     if state.get("vendored_import_ok"):
         value = f"vendored {state.get('vendored_version') or 'unknown'}"
+        if state.get("vendored_c_speedups") is False:
+            value += " (pure-Python)"
     else:
         value = (
             f"vendored BROKEN: {state.get('vendored_import_error', 'import failed')}"
         )
-    shared = state.get("shared_metadata_version")
-    return f"{value} (shared env copy: {shared or 'absent'})"
+    if (error := state.get("shared_metadata_error")) is not None:
+        shared = f"metadata unreadable: {error}"
+    elif (version := state.get("shared_metadata_version")) is not None:
+        shared = f"{version} per dist metadata"
+    else:
+        shared = "absent"
+    return f"{value} | shared env copy: {shared}"
 
 
 def _websockets_dependency_state() -> dict[str, Any]:
@@ -247,10 +255,26 @@ def _websockets_dependency_state() -> dict[str, Any]:
         state["vendored_version"] = None
         state["vendored_import_ok"] = False
         state["vendored_import_error"] = f"{type(e).__name__}: {e}"
+    # Whether the vendored copy has its optional C accelerator. The vendor
+    # sync ships pure Python only (scripts/vendor_websockets.py strips the
+    # compiled extension), so this answers "did vendoring cost throughput?"
+    # without the reporter having to guess.
+    state["vendored_c_speedups"] = (
+        importlib.util.find_spec("ha_mcp._vendor.websockets.speedups") is not None
+    )
+    # Shared-copy context for triage, read from DIST METADATA only: ha-mcp
+    # never imports the shared copy, and probing it by import would mean
+    # touching the contested package this whole design avoids. Absent and
+    # unreadable are reported distinctly — collapsing a corrupt install into
+    # "absent" would read as a clean environment during exactly the failure
+    # class this field exists for.
     try:
         state["shared_metadata_version"] = importlib.metadata.version("websockets")
-    except Exception:
+    except importlib.metadata.PackageNotFoundError:
         state["shared_metadata_version"] = None
+    except Exception as e:
+        state["shared_metadata_version"] = None
+        state["shared_metadata_error"] = f"{type(e).__name__}: {e}"
     return state
 
 

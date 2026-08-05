@@ -28,6 +28,12 @@ keeps them current, and the embedded-lane no-stomp guard
 (tests/src/e2e/workflows/embedded/test_embedded_no_stomp.py) still catches a
 collision with an image-shipped transitive package empirically.
 
+Scope limit worth knowing: this reads ``[project.dependencies]`` only, so a
+package that reaches Home Assistant's environment TRANSITIVELY (websockets
+itself now arrives that way, via fastmcp) is invisible here. The no-stomp
+guard is what covers those, by diffing the real install against the real
+image.
+
 Usage:
     python scripts/check_ha_constraint_alignment.py --ha-version 2026.7.4
     python scripts/check_ha_constraint_alignment.py --constraints-file c.txt
@@ -52,6 +58,12 @@ _CONSTRAINTS_URL = (
     "https://raw.githubusercontent.com/home-assistant/core/"
     "{version}/homeassistant/package_constraints.txt"
 )
+# Worst-case fetch cost is bounded well inside the CI job's own timeout, so
+# a slow-but-not-dead network still reaches the distinct exit 2 instead of
+# being killed by the runner (which would read as an infra flake).
+_FETCH_ATTEMPTS = 3
+_FETCH_TIMEOUT_SECONDS = 10
+_FETCH_BACKOFF_SECONDS = 3
 
 
 def parse_requirement_lines(text: str) -> dict[str, SpecifierSet]:
@@ -72,9 +84,19 @@ def parse_requirement_lines(text: str) -> dict[str, SpecifierSet]:
             continue
         # HA's constraints can be marker-split (e.g. grpcio pinned
         # differently per python_version); keep only the clauses that apply
-        # to the interpreter running this check — CI runs the same Python
-        # line as the HA image, so the surviving clause is the binding one.
+        # to the interpreter running this check. That interpreter is not
+        # guaranteed to be the image's, so a dropped clause is announced
+        # rather than silently discarded — HA's constraints file carries no
+        # marker lines today, and this makes it visible the day one appears
+        # on a dependency we share.
         if requirement.marker is not None and not requirement.marker.evaluate():
+            print(
+                f"note: skipping {requirement.name} constraint that does not "
+                f"apply to this interpreter (marker: {requirement.marker}); "
+                "verify against the HA image's Python if this is a shared "
+                "dependency",
+                file=sys.stderr,
+            )
             continue
         name = canonicalize_name(requirement.name)
         if name in constraints:
@@ -139,14 +161,20 @@ def _fetch_constraints(ha_version: str) -> str | None:
     """
     url = _CONSTRAINTS_URL.format(version=ha_version)
     last_error: Exception | None = None
-    for attempt in range(3):
+    for attempt in range(_FETCH_ATTEMPTS):
         try:
-            with urllib.request.urlopen(url, timeout=30) as response:
+            with urllib.request.urlopen(
+                url, timeout=_FETCH_TIMEOUT_SECONDS
+            ) as response:
                 payload: bytes = response.read()
             return payload.decode("utf-8")
         except (urllib.error.URLError, OSError) as err:
             last_error = err
-            time.sleep(5 * (attempt + 1))
+            if attempt < _FETCH_ATTEMPTS - 1:
+                # No sleep after the final attempt — it would only push the
+                # worst case past the job's own timeout, turning a clean
+                # exit 2 into an opaque runner kill.
+                time.sleep(_FETCH_BACKOFF_SECONDS * (attempt + 1))
     print(f"ERROR: could not fetch {url}: {last_error}", file=sys.stderr)
     return None
 
