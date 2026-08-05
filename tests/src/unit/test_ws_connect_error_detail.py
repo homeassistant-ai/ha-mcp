@@ -159,66 +159,6 @@ class TestConnectCapturesReason:
         assert token not in client.last_connect_error
 
 
-class TestTornInstallImportError:
-    """An ImportError from the websockets import chain gets a repair hint.
-
-    Regression coverage for issues #2135/#2146: a torn in-place upgrade of
-    the ``websockets`` package (files from two releases in one tree) makes
-    the deep import chain behind ``websockets.connect`` raise ImportError on
-    every connect. Retrying can never succeed, and the generic "Check the
-    Home Assistant connection" suggestion sent users down the wrong path —
-    the surfaced reason must name the broken dependency and the repair.
-    """
-
-    @pytest.mark.asyncio
-    async def test_import_error_reason_names_the_broken_dependency(self):
-        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
-
-        client = HomeAssistantWebSocketClient(url="http://supervisor/core", token="t")
-
-        async def fake_connect(*_args, **_kwargs):
-            raise ImportError(
-                "cannot import name 'StatusLineTooLong' from 'websockets.exceptions'"
-            )
-
-        with patch(
-            "ha_mcp.client.websocket_client.websockets.connect",
-            side_effect=fake_connect,
-        ):
-            assert await client.connect() is False
-
-        reason = client.last_connect_error or ""
-        # The original error stays verbatim...
-        assert "ImportError" in reason
-        assert "StatusLineTooLong" in reason
-        # ...and the actionable diagnosis is appended: embedded installs are
-        # pointed at the component self-heal, standalone installs at the SAFE
-        # repair (metadata-recorded version, --no-deps — never a plain
-        # unconstrained reinstall that could upgrade the package).
-        assert "'websockets' package" in reason
-        assert "self-repair on the next restart" in reason
-        assert "--no-deps" in reason
-        assert "pip install --force-reinstall --no-deps websockets" in reason
-
-    @pytest.mark.asyncio
-    async def test_non_import_errors_get_no_reinstall_hint(self):
-        """The repair hint is ImportError-specific, not bolted onto every failure."""
-        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
-
-        client = HomeAssistantWebSocketClient(url="http://supervisor/core", token="t")
-
-        async def fake_connect(*_args, **_kwargs):
-            raise OSError("Connection refused")
-
-        with patch(
-            "ha_mcp.client.websocket_client.websockets.connect",
-            side_effect=fake_connect,
-        ):
-            assert await client.connect() is False
-
-        assert "reinstall" not in (client.last_connect_error or "").lower()
-
-
 class TestManagerSurfacesReason:
     """``WebSocketManager.get_client`` appends the reason to its raised error."""
 

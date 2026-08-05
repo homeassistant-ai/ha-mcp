@@ -413,24 +413,6 @@ jobs:
     - name: Run unit tests
       run: uv run pytest tests/src/unit/ -n auto --tb=short -v
 
-    - name: Unit tests at the websockets range floor
-      # websockets is a range (>=15.0.1,<18), floored at HA core's own
-      # package_constraints floor, so the embedded install can reuse the copy
-      # HA already ships instead of force-replacing it in place (#2135/#2146).
-      # The lockfile exercises the top of the range in the step above; this
-      # step overlays the floor version and re-runs the websockets-facing
-      # tests so both ends of the advertised range stay proven.
-      working-directory: tests
-      run: >-
-        uv run --with websockets==15.0.1 pytest
-        src/unit/test_websockets_floor_compat.py
-        src/unit/test_ws_connect_error_detail.py
-        src/unit/test_ws_close_pending_requests_1721.py
-        src/unit/test_rest_client_ws_transport_failure.py
-        src/unit/test_ssl_verification.py
-        src/unit/test_tools_addons.py
-        -n auto --tb=short -v
-
     - name: Run add-on structure tests
       # tests/addon/ validates add-on packaging / config.yaml structure (e.g.
       # the backup-filename-safe name guard, #1707) — previously these ran

@@ -85,8 +85,8 @@ _SKIP_CEILING_PER_LANE = {
     # Entries below are CI-observed item counts, bumped only for intentional
     # marker-gated additions rather than runtime skips.
     "container": 72,  # was 71; +1 Puppet-management test (haos_only + inaddon_only)
-    "haos": 47,  # was 46; +1 torn-websockets heal e2e (container_only, #2146)
-    "haos_inaddon": 76,  # was 75; +1 torn-websockets heal e2e (container_only, #2146)
+    "haos": 46,  # was 45; +1 py3.14 invalidate_caches recovery e2e (container_only)
+    "haos_inaddon": 75,  # was 74; +1 inline dashboard_resource auto-backup e2e (external_only, #2060)
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
     # lane's marker-skips PLUS two embedded-specific additions:
     #   - haos_only + inaddon_only tests skip on embedded just like on container
@@ -100,7 +100,7 @@ _SKIP_CEILING_PER_LANE = {
     # 1) + not_on_embedded 2 = 101. Initially set to 115 as a buffer for
     # parametrize item-inflation; round 6 (run 28709196071) observed the exact
     # item count and the entry below is pinned to it.
-    "embedded": 131,  # was 130; +1 torn-websockets heal e2e (not_on_embedded, #2146)
+    "embedded": 130,  # was 129; +1 inline dashboard_resource auto-backup e2e (external_only, #2060)
     # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it
     # skips the SAME set as the external HAOS lane (container_only + inaddon_only)
     # PLUS two haos_embedded-specific additions:
@@ -118,7 +118,7 @@ _SKIP_CEILING_PER_LANE = {
     # lanes show (haos def 30 → ~35 observed; haos_inaddon def 50 → ~58) gives
     # ~84; initially set to 90 with a small buffer, and round 8 observed
     # exactly 90 — the entry below is pinned to the observed count.
-    "haos_embedded": 105,  # was 104; +1 torn-websockets heal e2e (container_only, #2146)
+    "haos_embedded": 104,  # was 103; +1 inline dashboard_resource auto-backup e2e (external_only, #2060)
 }
 
 

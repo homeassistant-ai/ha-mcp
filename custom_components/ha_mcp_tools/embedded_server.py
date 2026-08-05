@@ -32,6 +32,7 @@ import importlib.metadata
 import importlib.util
 import logging
 import os
+import site
 import subprocess
 import sys
 import threading
@@ -45,12 +46,11 @@ from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.requirements import (
-    DATA_REQUIREMENTS_MANAGER,
     RequirementsNotFound,
     async_process_requirements,
     pip_kwargs,
 )
-from homeassistant.util.package import install_package
+from homeassistant.util.package import is_virtual_env
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
@@ -134,15 +134,6 @@ _PIP_INSTALL_TIMEOUT_SECONDS = 300
 # Uninstall just removes files/metadata, so it is quick; cap it so a wedged
 # subprocess can never tie up an executor thread indefinitely.
 _PIP_UNINSTALL_TIMEOUT_SECONDS = 120
-# Torn-websockets heal (#2135/#2146): a fresh-interpreter import probe plus a
-# same-version reinstall. The probe is a bare ``python -c import``; the
-# reinstall may download one wheel.
-_WEBSOCKETS_PROBE_TIMEOUT_SECONDS = 60
-_WEBSOCKETS_REINSTALL_TIMEOUT_SECONDS = 300
-# Fallback serialization for the heal when the requirements manager is
-# unavailable: module-level so two concurrent bring-ups in this process
-# still serialize against each other (a per-call lock would protect nothing).
-_WEBSOCKETS_HEAL_FALLBACK_LOCK = asyncio.Lock()
 
 # How long a bring-up waits for an install job orphaned by a CANCELLED
 # previous bring-up before giving up: asyncio cancellation detaches the
@@ -337,7 +328,6 @@ class EmbeddedServerManager:
         ready_version = await self._async_ensure_package(
             defer_mutations=_prune_and_check_importing_workers()
         )
-        await self._async_heal_torn_websockets()
         access_token = await self._async_provision_token()
         await self._hass.async_add_executor_job(self._prepare_config_dir)
 
@@ -643,130 +633,6 @@ class EmbeddedServerManager:
                 "the ha-mcp package underneath it. Reload the integration "
                 "to retry.",
                 kind="package",
-            )
-
-    async def _async_heal_torn_websockets(self) -> None:
-        """Detect and repair a torn ``websockets`` install (#2135/#2146).
-
-        Older ha-mcp releases pinned ``websockets`` exactly, which forced pip
-        to replace Home Assistant's image-shipped copy in place; interrupting
-        that non-atomic replacement left the package version-mixed on disk —
-        metadata reporting one release while the import chain behind
-        ``websockets.connect`` raises ImportError on every WS connect. The
-        pin is a range now, so ha-mcp no longer opens that window, but an
-        already-torn install never heals by itself (its metadata still
-        satisfies any range) and custom-component users have no shell to run
-        the manual repair. So the bring-up heals it — only when the mismatch
-        is unambiguous (metadata present, fresh-interpreter import broken),
-        and never by choosing a version: the exact recorded version is
-        reinstalled (``--no-deps``, under HA's own constraints file), making
-        disk agree with metadata again. Best-effort: a failed heal logs and
-        lets the bring-up continue (REST tools work without the WebSocket,
-        and the server names the problem at connect time).
-
-        The reinstall runs under the requirements manager's ``pip_lock`` —
-        the same process-wide lock ``async_process_requirements`` holds — so
-        it can never mutate the shared package while another integration's
-        requirement install is running (which would be the very corruption
-        class this heal repairs). Mirrors HA's own probe → lock → recheck
-        pattern; the healthy fast path takes no lock at all. The locked
-        section runs as its own task behind ``asyncio.shield``: cancelling
-        the bring-up (entry unload/reload, HA shutdown) mid-reinstall must
-        NOT release the pip lock while the shielded pip job is still
-        running — that would hand the lock to another integration's install
-        and reopen the tear window (Codex review on PR #2150).
-        """
-        failure = await self._hass.async_add_executor_job(_probe_websockets_import)
-        if failure is None:
-            return
-        pip_lock = getattr(
-            self._hass.data.get(DATA_REQUIREMENTS_MANAGER), "pip_lock", None
-        )
-        if not isinstance(pip_lock, asyncio.Lock):
-            # The singleton exists once any integration's requirements were
-            # processed — this bring-up's own package step already did — so
-            # a missing manager is unexpected; heal anyway under the
-            # module-level fallback lock (still serialized against other
-            # bring-ups in this process) rather than leave the WebSocket dead.
-            _LOGGER.debug(
-                "Requirements manager pip lock unavailable; healing under "
-                "the module-level fallback lock"
-            )
-            pip_lock = _WEBSOCKETS_HEAL_FALLBACK_LOCK
-        heal_task = asyncio.create_task(self._async_heal_locked(pip_lock))
-        try:
-            await asyncio.shield(heal_task)
-        except asyncio.CancelledError:
-            if not heal_task.done():
-                # The bring-up is going away but the heal keeps running
-                # detached, holding the pip lock until its pip job actually
-                # finishes; observe its outcome so a failure is never lost.
-                heal_task.add_done_callback(_log_detached_heal_result)
-            raise
-
-    async def _async_heal_locked(self, pip_lock: asyncio.Lock) -> None:
-        """The pip-lock-holding critical section of the websockets heal."""
-        async with pip_lock:
-            failure = await self._hass.async_add_executor_job(_probe_websockets_import)
-            if failure is None:
-                # A concurrent bring-up healed it while we waited on the lock.
-                return
-            version = await self._hass.async_add_executor_job(
-                _installed_dist_version, "websockets"
-            )
-            if version is None:
-                # No metadata: not the torn-install shape. A plainly missing
-                # dependency is the package installer's job, not the heal's.
-                _LOGGER.warning(
-                    "websockets import chain is broken (%s) but no websockets "
-                    "metadata is installed; leaving repair to the package "
-                    "install",
-                    failure,
-                )
-                return
-            try:
-                Version(version)
-            except InvalidVersion:
-                _LOGGER.error(
-                    "websockets metadata reports unparseable version %r; "
-                    "not attempting a heal",
-                    version,
-                )
-                return
-            _LOGGER.warning(
-                "Detected a torn websockets install: metadata records %s but "
-                "the import chain fails (%s). Reinstalling websockets==%s to "
-                "make disk agree with metadata (see ha-mcp issues "
-                "#2135/#2146).",
-                version,
-                failure,
-                version,
-            )
-            kwargs = pip_kwargs(self._hass.config.config_dir)
-            healed = await self._async_run_tracked_install_job(
-                partial(
-                    _reinstall_websockets,
-                    version,
-                    constraints=kwargs.get("constraints"),
-                    target=kwargs.get("target"),
-                )
-            )
-            if not healed:
-                return
-            recheck = await self._hass.async_add_executor_job(_probe_websockets_import)
-        if recheck is None:
-            _purge_websockets_modules()
-            _LOGGER.warning(
-                "Healed the torn websockets install (reinstalled %s); the "
-                "WebSocket client will import a consistent package now",
-                version,
-            )
-        else:
-            _LOGGER.error(
-                "websockets is still broken after reinstalling %s (%s); "
-                "restart Home Assistant to finish the repair",
-                version,
-                recheck,
             )
 
     async def _async_ensure_package(
@@ -1127,15 +993,27 @@ class EmbeddedServerManager:
 
         Mirrors how ``homeassistant.requirements`` builds its pip invocation
         (HA's own constraints file + ``config/deps`` target where applicable) so
-        the resolver honors Home Assistant's constraints, then installs with
-        ``upgrade=True`` and a generous per-download timeout.
+        the resolver honors Home Assistant's constraints, with one deliberate
+        difference from ``install_package(upgrade=True)``: that maps to uv's
+        EAGER ``--upgrade``, which re-resolves the whole dependency graph to
+        the newest allowed versions and replaces packages Home Assistant
+        already ships even when the installed version satisfies our spec —
+        exactly how the image's websockets kept getting force-replaced
+        (#2135/#2146). ``--upgrade-package`` scopes the upgrade to ha-mcp's
+        own distribution: the server still auto-updates, every other
+        installed package is kept whenever it satisfies the resolution.
         """
         kwargs = pip_kwargs(self._hass.config.config_dir)
-        kwargs["timeout"] = max(
-            int(kwargs.get("timeout") or 0), _PIP_INSTALL_TIMEOUT_SECONDS
-        )
+        timeout = max(int(kwargs.get("timeout") or 0), _PIP_INSTALL_TIMEOUT_SECONDS)
         installed = await self._async_run_tracked_install_job(
-            partial(install_package, self._pip_spec, upgrade=True, **kwargs)
+            partial(
+                _force_install_package,
+                self._pip_spec,
+                upgrade_dist=self._replaced_dist_name(),
+                constraints=kwargs.get("constraints"),
+                target=kwargs.get("target"),
+                timeout=timeout,
+            )
         )
         if not installed:
             raise EmbeddedServerError(
@@ -2054,125 +1932,76 @@ def _uninstall_distribution(dist_name: str, *, target: str | None = None) -> boo
     return True
 
 
-def _log_detached_heal_result(task: asyncio.Task) -> None:
-    """Observe a heal task left running after its awaiter was cancelled.
-
-    The task result would otherwise be silently dropped — Python only warns
-    about never-retrieved exceptions at GC time, long after the context is
-    gone.
-    """
-    if task.cancelled():
-        _LOGGER.warning("Detached websockets heal was cancelled before finishing")
-        return
-    err = task.exception()
-    if err is not None:
-        _LOGGER.error("Detached websockets heal failed: %s", err)
-
-
-def _probe_websockets_import() -> str | None:
-    """Probe the ``websockets`` import chain in a fresh interpreter (blocking).
-
-    Returns ``None`` when healthy, else the failure text. A subprocess keeps
-    the probe independent of this process's ``sys.modules`` (which may cache
-    modules from a pre-tear release) and therefore proves the ON-DISK state —
-    the thing a reinstall can actually fix. ``websockets.asyncio.client`` is
-    the exact chain behind ``websockets.connect`` that a torn install breaks
-    (#2135/#2146). A probe that cannot run at all reports healthy: the heal
-    must never take down a bring-up on probe machinery.
-    """
-    # Mirror THIS process's import path into the child: on HA Core installs
-    # pip installs requirements into config/deps, which HA's bootstrap adds
-    # to sys.path at runtime — a bare child interpreter would not see it and
-    # would misreport a healthy deps-dir install as torn (and a healed one
-    # as still broken). The probe must answer for the same import reality
-    # the server thread lives in.
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
-    try:
-        result = subprocess.run(
-            [sys.executable, "-c", "import websockets.asyncio.client"],
-            capture_output=True,
-            text=True,
-            timeout=_WEBSOCKETS_PROBE_TIMEOUT_SECONDS,
-            check=False,
-            env=env,
-        )
-    except (OSError, subprocess.SubprocessError) as err:
-        _LOGGER.warning("Could not probe the websockets import chain: %s", err)
-        return None
-    if result.returncode == 0:
-        return None
-    stderr_lines = (result.stderr or "").strip().splitlines()
-    return stderr_lines[-1] if stderr_lines else f"exit code {result.returncode}"
-
-
-def _reinstall_websockets(
-    version: str, *, constraints: str | None, target: str | None
+def _force_install_package(
+    spec: str,
+    *,
+    upgrade_dist: str | None,
+    constraints: str | None,
+    target: str | None,
+    timeout: int | None,
 ) -> bool:
-    """Force-reinstall the exact ``websockets`` version its metadata records.
+    """Install ``spec``, upgrading ONLY the named distribution (blocking).
 
-    Blocking, best-effort. This is deliberately NOT an upgrade: the version
-    is the one already recorded in the environment's metadata (i.e. the one
-    the dependency graph already resolved to), so the reinstall is pure file
-    repair — disk is made to agree with metadata again. ``--no-deps`` keeps
-    every other package untouched, and Home Assistant's own constraints file
-    is applied so a version HA forbids fails loudly instead of installing.
-    Mirrors :func:`_uninstall_distribution`'s ``<python> -m uv pip``
-    invocation style.
+    Mirrors ``homeassistant.util.package.install_package``'s uv invocation
+    (index strategy, constraints, target, the uv --user workaround, and the
+    HTTP_TIMEOUT env) but swaps its eager ``--upgrade`` — which re-resolves
+    EVERY dependency to the newest allowed version, replacing packages the
+    Home Assistant image already ships (#2135/#2146) — for
+    ``--upgrade-package`` scoped to ha-mcp's own distribution. A ``None``
+    ``upgrade_dist`` (a direct-URL spec, whose requirement uv re-fetches and
+    rebuilds regardless) installs with no upgrade flag at all.
     """
-    args = [sys.executable, "-m", "uv", "pip", "install"]
-    if target is not None:
-        args += ["--target", os.path.abspath(target)]
-    else:
-        args += ["--python", sys.executable]
+    env = os.environ.copy()
+    args = [
+        sys.executable,
+        "-m",
+        "uv",
+        "pip",
+        "install",
+        "--quiet",
+        spec,
+        # Mirrors install_package: custom components may need a different
+        # version of a package than the one HA built wheels for.
+        "--index-strategy",
+        "unsafe-first-match",
+    ]
+    if upgrade_dist is not None:
+        args += ["--upgrade-package", upgrade_dist]
+    if timeout:
+        env["HTTP_TIMEOUT"] = str(timeout)
     if constraints is not None:
         args += ["--constraint", constraints]
-    args += ["--reinstall", "--no-deps", f"websockets=={version}"]
+    if target:
+        args += ["--target", os.path.abspath(target)]
+    elif (
+        not is_virtual_env()
+        # install_package's _UV_ENV_PYTHON_VARS, mirrored: an explicit uv
+        # python selection means uv already installs to the right place.
+        and not any(var in env for var in ("UV_SYSTEM_PYTHON", "UV_PYTHON"))
+        and (user_site := site.getusersitepackages())
+    ):
+        # uv has no --user (astral-sh/uv#2077); install_package's workaround.
+        args += ["--python", sys.executable, "--target", os.path.abspath(user_site)]
     try:
         result = subprocess.run(
             args,
             capture_output=True,
             text=True,
-            timeout=_WEBSOCKETS_REINSTALL_TIMEOUT_SECONDS,
             check=False,
+            env=env,
         )
     except (OSError, subprocess.SubprocessError) as err:
-        _LOGGER.error("Could not reinstall websockets==%s: %s", version, err)
+        _LOGGER.error("Could not install %r: %s", spec, err)
         return False
     if result.returncode != 0:
         _LOGGER.error(
-            "Reinstall of websockets==%s exited %d: %s",
-            version,
+            "Install of %r exited %d: %s",
+            spec,
             result.returncode,
             (result.stderr or "").strip(),
         )
         return False
     return True
-
-
-def _purge_websockets_modules() -> None:
-    """Drop cached ``websockets`` modules after an on-disk heal.
-
-    Third-party dependencies are normally never purged (they are shared with
-    the rest of Home Assistant — see :func:`_purge_ha_mcp_modules`). The
-    confirmed-torn case is the exception that makes this safe: with the deep
-    import chain raising ImportError, no consumer in this process can have
-    finished importing it — at most the pre-tear release's leaf modules
-    (``websockets``, ``websockets.exceptions``, ...) are cached, and any
-    holder of those keeps its already-bound references. Without the purge,
-    the healed files on disk would still be mixed IN MEMORY with the stale
-    cached leaves and the retry would fail identically.
-    """
-    purged = [
-        name
-        for name in list(sys.modules)
-        if name == "websockets" or name.startswith("websockets.")
-    ]
-    for name in purged:
-        sys.modules.pop(name, None)
-    if purged:
-        _safe_invalidate_caches()
-        _LOGGER.debug("Purged %d cached websockets module(s) after heal", len(purged))
 
 
 def _exact_pinned_version(spec: str) -> str | None:

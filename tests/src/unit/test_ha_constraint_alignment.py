@@ -115,3 +115,53 @@ class TestRepoPyprojectIsAligned:
             dependencies, checker.parse_requirement_lines(frozen_2026_7_4)
         )
         assert violations == []
+
+
+class TestMarkerAndOperatorHandling:
+    def test_false_marker_clause_is_excluded(self):
+        constraints = checker.parse_requirement_lines(
+            "fakelib==1.0;python_version<'3.0'\nreallib==2.0\n"
+        )
+        assert "fakelib" not in constraints
+        assert str(constraints["reallib"]) == "==2.0"
+
+    def test_true_marker_clause_is_kept(self):
+        # python_version >= 3.11 is true on every interpreter this repo runs.
+        constraints = checker.parse_requirement_lines(
+            "grpcio==1.72.1;python_version>='3.11'"
+        )
+        assert str(constraints["grpcio"]) == "==1.72.1"
+
+    def test_duplicate_applicable_entries_combine(self):
+        constraints = checker.parse_requirement_lines("multidict>=6.0\nmultidict<7.0\n")
+        combined = constraints["multidict"]
+        assert combined.contains("6.5")
+        assert not combined.contains("7.1")
+
+    def test_arbitrary_equality_pin_counts_as_exact(self):
+        # PEP 440 ``===`` must not evade rule 2's exact-pin detection.
+        violations = checker.check_alignment(
+            [Requirement("websockets===17.0")],
+            checker.parse_requirement_lines("websockets>=15.0.1"),
+        )
+        assert len(violations) == 1
+
+
+class TestMainExitCodes:
+    """The lockfile CI job invokes main(); its exit codes are the contract."""
+
+    def test_clean_alignment_exits_zero(self, tmp_path):
+        constraints = tmp_path / "cons.txt"
+        constraints.write_text("websockets>=15.0.1\nhttpx==0.28.1\n", encoding="utf-8")
+        assert checker.main(["--constraints-file", str(constraints)]) == 0
+
+    def test_violation_exits_one(self, tmp_path):
+        # HA pinning fastmcp to a version our exact pin excludes -> rule 1.
+        constraints = tmp_path / "cons.txt"
+        constraints.write_text("fastmcp==0.0.1\n", encoding="utf-8")
+        assert checker.main(["--constraints-file", str(constraints)]) == 1
+
+    def test_unparseable_constraints_exit_two(self, tmp_path):
+        constraints = tmp_path / "cons.txt"
+        constraints.write_text("# nothing but comments\n", encoding="utf-8")
+        assert checker.main(["--constraints-file", str(constraints)]) == 2

@@ -1,0 +1,4 @@
+# Vendored-library pins. Renovate bumps these like any requirements file;
+# scripts/vendor_websockets.py regenerates the vendored tree from the pin and
+# tests/src/unit/test_vendored_websockets.py fails on any drift.
+websockets==17.0.1

@@ -112,55 +112,58 @@ def _fetch_requirements_all(ha_version: str) -> set[str]:
     )
 
 
-def test_embedded_preinstall_replaces_nothing_ha_governs(
-    ha_container_with_fresh_config,
-):
-    info = ha_container_with_fresh_config
-    if info.get("backend") != "embedded":
+_KNOWN_BACKENDS = {"container", "embedded", "haos", "haos_inaddon", "haos_embedded"}
+
+
+def _skip_unless_embedded(info) -> None:
+    """Runtime skip with a drift tripwire.
+
+    Runtime skips are invisible to the mass-skip detector (it counts only
+    collection-time markers), so a silently changed backend label would
+    disable this guard forever with nothing noticing. An UNKNOWN label
+    therefore fails loudly instead of skipping.
+    """
+    backend = info.get("backend")
+    assert backend in _KNOWN_BACKENDS, (
+        f"unknown backend label {backend!r} — the conftest's backend names "
+        "changed; update this guard so it keeps running on the embedded lane"
+    )
+    if backend != "embedded":
         pytest.skip(
             "freeze snapshots are written only by the embedded testcontainer "
             "backend's preinstall entrypoint (E2E_BACKEND=embedded)"
         )
 
-    config_path = Path(info["config_path"])
-    before_file = config_path / EMBEDDED_FREEZE_BEFORE
-    after_file = config_path / EMBEDDED_FREEZE_AFTER
+
+def _governed_names(config_path: Path) -> set[str]:
     constraints_file = config_path / EMBEDDED_HA_CONSTRAINTS_COPY
-    # The entrypoint chain writes all three before /init; a booted HA (which
-    # the session fixture guarantees) means they must exist.
-    assert before_file.is_file(), f"missing preinstall snapshot {before_file}"
-    assert after_file.is_file(), f"missing postinstall snapshot {after_file}"
     assert constraints_file.is_file(), (
         f"missing constraints copy {constraints_file} — the entrypoint could "
         "not find the image's package_constraints.txt"
     )
+    ha_version = HA_TEST_IMAGE.rsplit(":", 1)[-1]
+    return _parse_requirement_names(
+        constraints_file.read_text(encoding="utf-8")
+    ) | _fetch_requirements_all(ha_version)
 
-    before = _parse_freeze(before_file.read_text(encoding="utf-8"))
-    after = _parse_freeze(after_file.read_text(encoding="utf-8"))
-    assert before, "empty pip freeze snapshot — entrypoint capture broke"
 
+def _assert_no_governed_changes(
+    before: dict[str, str],
+    after: dict[str, str],
+    governed: set[str],
+    context: str,
+) -> None:
     replaced = {
         name: (version, after[name])
         for name, version in before.items()
         if name in after and after[name] != version
     }
     removed = sorted(name for name in before if name not in after)
-
-    # Removing anything the image shipped is never legitimate.
     assert not removed, (
-        f"Installing the ha-mcp wheel REMOVED image-shipped packages: "
-        f"{removed}. A removal is never a legitimate side effect of the "
-        "embedded install — find the dist conflict and resolve it in "
-        "pyproject.toml."
+        f"[{context}] packages present before the install are GONE after it: "
+        f"{removed}. A removal is never a legitimate side effect — find the "
+        "dist conflict and resolve it in pyproject.toml."
     )
-    if not replaced:
-        return
-
-    ha_version = HA_TEST_IMAGE.rsplit(":", 1)[-1]
-    governed = _parse_requirement_names(
-        constraints_file.read_text(encoding="utf-8")
-    ) | _fetch_requirements_all(ha_version)
-
     governed_replaced = {
         name: change for name, change in replaced.items() if name in governed
     }
@@ -172,24 +175,91 @@ def test_embedded_preinstall_replaces_nothing_ha_governs(
         # govern. Loud on purpose — a NEW name appearing here should be
         # noticed and traced, not discovered in an issue report.
         print(
-            "no-stomp guard: ungoverned transitive upgrades by the embedded "
-            f"install (ours to keep current): {ungoverned_replaced}"
+            f"no-stomp guard [{context}]: ungoverned transitive upgrades "
+            f"(ours to keep current): {ungoverned_replaced}"
         )
-
     assert not governed_replaced, (
-        "Installing the ha-mcp wheel replaced packages HA GOVERNS "
+        f"[{context}] the install replaced packages HA GOVERNS "
         f"(package_constraints.txt or requirements_all.txt): "
         f"{governed_replaced}. A forced in-place replacement of an "
         "HA-governed package is the #2135/#2146 torn-install window: loosen "
         "the conflicting dependency spec (pyproject.toml) to admit HA's "
         "shipped version instead of pinning past it."
     )
-
-    # websockets is the dependency that bit (#2146); assert it explicitly so
-    # a regression names the culprit even if the general message changes.
     if "websockets" in before:
         assert after.get("websockets") == before["websockets"], (
-            "the embedded install replaced HA's shipped websockets "
-            f"({before['websockets']} -> {after.get('websockets')}) — "
-            "the exact #2146 failure shape"
+            f"[{context}] the install replaced HA's shipped websockets "
+            f"({before['websockets']} -> {after.get('websockets')}) — the "
+            "exact #2146 failure shape (ha-mcp no longer even declares it; "
+            "the vendored copy is the only one we import)"
         )
+
+
+def test_embedded_preinstall_replaces_nothing_ha_governs(
+    ha_container_with_fresh_config,
+):
+    info = ha_container_with_fresh_config
+    _skip_unless_embedded(info)
+
+    config_path = Path(info["config_path"])
+    before_file = config_path / EMBEDDED_FREEZE_BEFORE
+    after_file = config_path / EMBEDDED_FREEZE_AFTER
+    # The entrypoint chain writes these before /init; a booted HA (which
+    # the session fixture guarantees) means they must exist.
+    assert before_file.is_file(), f"missing preinstall snapshot {before_file}"
+    assert after_file.is_file(), f"missing postinstall snapshot {after_file}"
+
+    before = _parse_freeze(before_file.read_text(encoding="utf-8"))
+    after = _parse_freeze(after_file.read_text(encoding="utf-8"))
+    assert before, "empty pip freeze snapshot — entrypoint capture broke"
+    # The bracketed install must have actually DONE something, or the guard
+    # is green while proving nothing (e.g. the install moved outside the
+    # freeze bracket): the wheel adds ha-mcp itself plus its tree.
+    added = set(after) - set(before)
+    assert "ha-mcp" in added or "ha-mcp-dev" in added, (
+        f"the preinstall added no ha-mcp distribution (added: {sorted(added)[:10]}"
+        " ...) — the freeze bracket no longer surrounds the wheel install"
+    )
+
+    _assert_no_governed_changes(
+        before, after, _governed_names(config_path), context="entrypoint preinstall"
+    )
+
+
+def test_embedded_runtime_install_replaces_nothing_ha_governs(
+    ha_container_with_fresh_config,
+):
+    """The RUNTIME install path is guarded too, not just the preinstall.
+
+    The component's bring-up runs its own force-install inside the live HA
+    (the path that carried the eager --upgrade bug the review caught: the
+    preinstall bracket alone would have stayed green while the runtime
+    install replaced HA's websockets). By the time any test runs, the
+    session fixture guarantees that bring-up completed — so a live
+    ``pip list`` from the container compared against the pre-install
+    snapshot covers everything every install path did.
+    """
+    info = ha_container_with_fresh_config
+    _skip_unless_embedded(info)
+
+    config_path = Path(info["config_path"])
+    before_file = config_path / EMBEDDED_FREEZE_BEFORE
+    assert before_file.is_file(), f"missing preinstall snapshot {before_file}"
+    before = _parse_freeze(before_file.read_text(encoding="utf-8"))
+    assert before, "empty pip freeze snapshot — entrypoint capture broke"
+
+    container = info["container"]
+    result = container.get_wrapped_container().exec_run(
+        ["pip", "list", "--format=freeze"]
+    )
+    output = (result.output or b"").decode("utf-8", "replace")
+    assert result.exit_code == 0, f"in-container pip list failed: {output[:500]}"
+    runtime = _parse_freeze(output)
+    assert "ha-mcp" in runtime or "ha-mcp-dev" in runtime, (
+        "ha-mcp missing from the live container environment — the runtime "
+        "install did not run, so this guard proved nothing"
+    )
+
+    _assert_no_governed_changes(
+        before, runtime, _governed_names(config_path), context="runtime install"
+    )

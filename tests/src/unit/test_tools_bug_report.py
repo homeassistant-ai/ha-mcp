@@ -2102,33 +2102,32 @@ class TestVersionRenderingHonesty:
 
 
 class TestWebsocketsDependencyState:
-    """The torn-install probe (#2135/#2146) in diagnostic_info.
+    """The websockets probe (#2135/#2146) in diagnostic_info + the report.
 
-    A version-mixed ``websockets`` install reports a version from its
-    metadata while the import chain behind ``websockets.connect`` raises
-    ImportError. ``websockets_dependency`` must carry both facts so a
-    "WebSocket dead, REST fine" report is a one-glance diagnosis.
+    ha-mcp runs on its vendored ``ha_mcp._vendor.websockets``; the probe
+    reports that copy's health (what the server actually runs) plus the
+    shared site-packages copy's metadata version (ecosystem context). The
+    rendered line must reach the human-pasteable formatted_report — for
+    this failure class that line IS the diagnosis.
     """
 
-    def test_healthy_install_reports_version_and_import_ok(self):
+    def test_healthy_vendored_copy_reports_version_and_ok(self):
+        from ha_mcp._vendor import websockets as vendored
         from ha_mcp.tools.tools_bug_report import _websockets_dependency_state
 
         state = _websockets_dependency_state()
-        assert state["import_ok"] is True
-        assert isinstance(state["version"], str) and state["version"]
-        assert "import_error" not in state
+        assert state["vendored_import_ok"] is True
+        assert state["vendored_version"] == vendored.__version__
+        assert "shared_metadata_version" in state
 
-    def test_torn_install_reports_import_error(self):
+    def test_broken_vendored_copy_reports_import_error(self):
         from ha_mcp.tools.tools_bug_report import _websockets_dependency_state
 
         real_import_module = __import__("importlib").import_module
 
         def fake_import_module(name):
-            if name == "websockets.asyncio.client":
-                raise ImportError(
-                    "cannot import name 'StatusLineTooLong' from "
-                    "'websockets.exceptions'"
-                )
+            if name.startswith("ha_mcp._vendor.websockets"):
+                raise ImportError("vendored copy damaged")
             return real_import_module(name)
 
         with patch(
@@ -2137,25 +2136,42 @@ class TestWebsocketsDependencyState:
         ):
             state = _websockets_dependency_state()
 
-        assert state["import_ok"] is False
-        assert state["version"]  # metadata version still readable
-        assert "StatusLineTooLong" in state["import_error"]
+        assert state["vendored_import_ok"] is False
+        assert "vendored copy damaged" in state["vendored_import_error"]
 
-    def test_missing_package_reports_import_error(self):
-        from ha_mcp.tools.tools_bug_report import _websockets_dependency_state
+    def test_format_renders_healthy_and_broken(self):
+        from ha_mcp.tools.tools_bug_report import (
+            _format_websockets_dependency_value,
+        )
 
-        with patch(
-            "ha_mcp.tools.tools_bug_report.importlib.import_module",
-            side_effect=ModuleNotFoundError("No module named 'websockets'"),
-        ):
-            state = _websockets_dependency_state()
+        healthy = _format_websockets_dependency_value(
+            {
+                "websockets_dependency": {
+                    "vendored_import_ok": True,
+                    "vendored_version": "17.0.1",
+                    "shared_metadata_version": "16.1.1",
+                }
+            }
+        )
+        assert "vendored 17.0.1" in healthy
+        assert "16.1.1" in healthy
 
-        assert state["import_ok"] is False
-        assert state["version"] is None
-        assert "websockets" in state["import_error"]
+        broken = _format_websockets_dependency_value(
+            {
+                "websockets_dependency": {
+                    "vendored_import_ok": False,
+                    "vendored_import_error": "ImportError: damaged",
+                    "shared_metadata_version": None,
+                }
+            }
+        )
+        assert "BROKEN" in broken
+        assert "damaged" in broken
+        assert "absent" in broken
 
     @pytest.mark.asyncio
-    async def test_probe_lands_in_diagnostic_info(self):
+    async def test_probe_reaches_formatted_report(self):
+        """The rendered line must survive into the report users paste."""
         from ha_mcp.tools.tools_bug_report import BugReportTools
 
         client = MagicMock()
@@ -2163,5 +2179,5 @@ class TestWebsocketsDependencyState:
         client.call_service = AsyncMock(side_effect=Exception("down"))
         result = await BugReportTools(client).ha_report_issue(tool_call_count=1)
         state = result["diagnostic_info"]["websockets_dependency"]
-        assert state["import_ok"] is True
-        assert state["version"]
+        assert state["vendored_import_ok"] is True
+        assert "websockets Dependency: vendored" in result["formatted_report"]

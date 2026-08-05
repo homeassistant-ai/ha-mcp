@@ -330,7 +330,7 @@ class TestChannelResolution:
             data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: "stale"},
         )
         monkeypatch.setattr(es, "async_process_requirements", AsyncMock())
-        monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
+        monkeypatch.setattr(es, "_force_install_package", MagicMock(return_value=True))
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
         monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.12.1")
@@ -357,7 +357,7 @@ class TestChannelResolution:
             data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: "stale"},
         )
         monkeypatch.setattr(es, "async_process_requirements", AsyncMock())
-        monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
+        monkeypatch.setattr(es, "_force_install_package", MagicMock(return_value=True))
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         # Whichever-present read sees the old dev build; the target-dist read
         # sees nothing (stable not installed on this machine yet).
@@ -421,7 +421,7 @@ class TestEnsurePackage:
         proc = AsyncMock()
         install_pkg = MagicMock(return_value=True)
         monkeypatch.setattr(es, "async_process_requirements", proc)
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
 
         await mgr._async_ensure_package()
@@ -444,7 +444,7 @@ class TestEnsurePackage:
         proc = AsyncMock()
         install_pkg = MagicMock(return_value=True)
         monkeypatch.setattr(es, "async_process_requirements", proc)
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
 
         await mgr._async_ensure_package()
@@ -466,7 +466,7 @@ class TestEnsurePackage:
         proc = AsyncMock()
         install_pkg = MagicMock(return_value=True)
         monkeypatch.setattr(es, "async_process_requirements", proc)
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
         monkeypatch.setattr(es, "_dist_installed", lambda name: False)
@@ -477,7 +477,7 @@ class TestEnsurePackage:
         proc.assert_not_awaited()
         install_pkg.assert_called_once()
         assert install_pkg.call_args.args[0] == DEFAULT_PIP_SPEC
-        assert install_pkg.call_args.kwargs.get("upgrade") is True
+        assert "upgrade_dist" in install_pkg.call_args.kwargs
 
     async def test_force_install_when_spec_changed(self, tmp_path, monkeypatch):
         # Configured spec differs from the last-installed one ⇒ force a real
@@ -494,7 +494,7 @@ class TestEnsurePackage:
         install_pkg = MagicMock(return_value=True)
         uninstall = MagicMock(return_value=True)
         monkeypatch.setattr(es, "async_process_requirements", proc)
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
         monkeypatch.setattr(
@@ -508,7 +508,7 @@ class TestEnsurePackage:
         uninstall.assert_not_called()
         install_pkg.assert_called_once()
         assert install_pkg.call_args.args[0] == "ha-mcp==7.12.1"
-        assert install_pkg.call_args.kwargs.get("upgrade") is True
+        assert "upgrade_dist" in install_pkg.call_args.kwargs
         # The just-installed spec is persisted so the next start takes the fast path.
         assert entry.data[DATA_LAST_PIP_SPEC] == "ha-mcp==7.12.1"
 
@@ -527,7 +527,7 @@ class TestEnsurePackage:
             options={OPT_AUTO_UPDATE: False},
             data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: DEFAULT_PIP_SPEC},
         )
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.13.0")
         monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.13.0")
@@ -562,7 +562,7 @@ class TestEnsurePackage:
             tmp_path,
             data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: tarball},
         )
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.13.0")
         monkeypatch.setattr(
@@ -575,7 +575,7 @@ class TestEnsurePackage:
         uninstall.assert_called_once_with(DIST_NAME_STABLE)
         install_pkg.assert_called_once()
         assert install_pkg.call_args.args[0] == DIST_NAME_STABLE
-        assert install_pkg.call_args.kwargs.get("upgrade") is True
+        assert "upgrade_dist" in install_pkg.call_args.kwargs
         assert calls == ["u", "i"]  # uninstall strictly before the install
         assert entry.data[DATA_LAST_PIP_SPEC] == DIST_NAME_STABLE
 
@@ -597,7 +597,7 @@ class TestEnsurePackage:
             options={OPT_PIP_SPEC: "ha-mcp==7.13.0"},
             data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: tarball},
         )
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.13.0")
         monkeypatch.setattr(
@@ -628,7 +628,7 @@ class TestEnsurePackage:
             tmp_path,
             data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: tarball},
         )
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.13.0")
         monkeypatch.setattr(
@@ -659,7 +659,7 @@ class TestEnsurePackage:
             tmp_path,
             data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: tarball},
         )
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.13.0")
         # In call order: conflicting-dist check (ha-mcp-dev absent), then the
@@ -695,7 +695,7 @@ class TestEnsurePackage:
             options={OPT_CHANNEL: CHANNEL_DEV, OPT_PIP_SPEC: "ha-mcp==7.13.0"},
             data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: tarball},
         )
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.13.0")
         monkeypatch.setattr(
@@ -729,7 +729,7 @@ class TestEnsurePackage:
             options={OPT_PIP_SPEC: new_tarball},
             data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: old_tarball},
         )
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.13.0")
         monkeypatch.setattr(es, "_dist_installed", lambda name: True)
@@ -753,7 +753,7 @@ class TestEnsurePackage:
             tmp_path,
             data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: "ha-mcp==7.11.0"},
         )
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(
             es, "_installed_ha_mcp_version", MagicMock(side_effect=[None, "7.13.0"])
@@ -785,7 +785,7 @@ class TestEnsurePackage:
             options={OPT_PIP_SPEC: "ha-mcp==7.14.0"},
             data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: tarball},
         )
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.13.0")
         monkeypatch.setattr(
@@ -812,7 +812,7 @@ class TestEnsurePackage:
         )
         install_pkg = MagicMock(return_value=True)
         uninstall = MagicMock()
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.13.0")
         monkeypatch.setattr(
@@ -830,7 +830,7 @@ class TestEnsurePackage:
         # unpinned stable distribution name).
         mgr, _hass, entry = _manager(tmp_path)  # no DATA_LAST_PIP_SPEC
         install_pkg = MagicMock(return_value=True)
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(
             es, "_installed_ha_mcp_version", MagicMock(side_effect=[None, "7.12.1"])
@@ -865,7 +865,7 @@ class TestEnsurePackage:
         self, tmp_path, monkeypatch
     ):
         mgr, _hass, _entry = _manager(tmp_path)
-        monkeypatch.setattr(es, "install_package", MagicMock(return_value=False))
+        monkeypatch.setattr(es, "_force_install_package", MagicMock(return_value=False))
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: None)
         with pytest.raises(es.EmbeddedServerError) as exc:
@@ -880,7 +880,7 @@ class TestEnsurePackage:
         mgr, _hass, _entry = _manager(tmp_path)
         install_pkg = MagicMock(return_value=True)
         uninstall = MagicMock(return_value=True)
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(
             es,
             "pip_kwargs",
@@ -915,7 +915,7 @@ class TestEnsurePackage:
         )
         install_pkg = MagicMock(return_value=True)
         uninstall = MagicMock(return_value=True)
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(
             es,
@@ -936,7 +936,7 @@ class TestEnsurePackage:
 
     async def test_post_install_legacy_version_is_rejected(self, tmp_path, monkeypatch):
         mgr, _hass, _entry = _manager(tmp_path)
-        monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
+        monkeypatch.setattr(es, "_force_install_package", MagicMock(return_value=True))
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(
             es,
@@ -962,7 +962,7 @@ class TestEnsurePackage:
     ):
         # Install "succeeds" but the package still doesn't import ⇒ package error.
         mgr, _hass, _entry = _manager(tmp_path)
-        monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
+        monkeypatch.setattr(es, "_force_install_package", MagicMock(return_value=True))
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: None)
         with pytest.raises(es.EmbeddedServerError) as exc:
@@ -981,7 +981,7 @@ class TestEnsurePackage:
         proc = AsyncMock()
         install_pkg = MagicMock(return_value=True)
         monkeypatch.setattr(es, "async_process_requirements", proc)
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(
             es, "_installed_ha_mcp_version", lambda preferred=None: "7.12.1.dev5"
@@ -1013,7 +1013,7 @@ class TestEnsurePackage:
                 return "7.12.1.dev5"
             return "6.2.0"
 
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", installed_version)
         monkeypatch.setattr(
@@ -1045,7 +1045,7 @@ class TestEnsurePackage:
                 return "7.12.1.dev5"
             return "6.2.0"
 
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", installed_version)
         monkeypatch.setattr(
@@ -1070,7 +1070,7 @@ class TestEnsurePackage:
             data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: DEFAULT_PIP_SPEC},
         )
         install_pkg = MagicMock(return_value=True)
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(
             es, "_installed_ha_mcp_version", lambda preferred=None: "7.12.1"
@@ -1100,7 +1100,7 @@ class TestEnsurePackage:
             data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: DEV_PIP_SPEC},
         )
         install_pkg = MagicMock(return_value=True)
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
         monkeypatch.setattr(es, "_dist_installed", lambda name: name == DIST_NAME_DEV)
@@ -1124,7 +1124,7 @@ class TestEnsurePackage:
             options={OPT_CHANNEL: CHANNEL_DEV, OPT_PIP_SPEC: "ha-mcp==7.11.0"},
             data={DATA_SECRET_PATH: "/p"},
         )
-        monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
+        monkeypatch.setattr(es, "_force_install_package", MagicMock(return_value=True))
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.11.0")
         monkeypatch.setattr(es, "_dist_installed", lambda name: True)
@@ -1151,7 +1151,7 @@ class TestPendingInstallMarker:
             data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.11.0"},
         )
         install_pkg = MagicMock(return_value=True)
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.11.0")
         monkeypatch.setattr(es, "_dist_installed", lambda name: False)
@@ -1176,7 +1176,7 @@ class TestPendingInstallMarker:
             data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.12.1"},
         )
         install_pkg = MagicMock(return_value=True)
-        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "_force_install_package", install_pkg)
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         # Currently-installed version differs from the requested pending one -
         # proves the marker, not the auto-update-off re-pin, decided the spec.
@@ -1237,7 +1237,7 @@ class TestPendingInstallMarker:
             tmp_path,
             data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.12.1"},
         )
-        monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
+        monkeypatch.setattr(es, "_force_install_package", MagicMock(return_value=True))
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
         monkeypatch.setattr(es, "_dist_installed", lambda name: False)
@@ -1257,7 +1257,7 @@ class TestPendingInstallMarker:
             tmp_path,
             data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.12.1"},
         )
-        monkeypatch.setattr(es, "install_package", MagicMock(return_value=False))
+        monkeypatch.setattr(es, "_force_install_package", MagicMock(return_value=False))
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: None)
 
@@ -3047,7 +3047,7 @@ class TestPendingInstallTracking:
                 observed.append(es._PENDING_INSTALL_DONE is not None)
             return True
 
-        monkeypatch.setattr(es, "install_package", _fake_install)
+        monkeypatch.setattr(es, "_force_install_package", _fake_install)
 
         await mgr._async_force_install()
 
@@ -3440,7 +3440,7 @@ class TestWarmCacheVersionAgreement:
                 return versions.get(preferred_dist)
             return versions.get(DIST_NAME_STABLE) or versions.get(DIST_NAME_DEV)
 
-        monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
+        monkeypatch.setattr(es, "_force_install_package", MagicMock(return_value=True))
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", installed_version)
         monkeypatch.setattr(es, "_installed_dist_version", versions.get)
@@ -3565,326 +3565,110 @@ class TestServeRunningVersionCapture:
 
 
 # =============================================================================
-# torn-websockets heal (#2135/#2146)
+# _force_install_package: scoped upgrade, never uv's eager --upgrade (#2146)
 # =============================================================================
 
 
-# The genuine probe, captured at import time: the autouse fixture below
-# replaces the module attribute for hermeticity, and the helper tests need
-# the real implementation back.
-_REAL_WEBSOCKETS_PROBE = es._probe_websockets_import
+class TestForceInstallPackage:
+    """The force install may upgrade ONLY ha-mcp's own distribution.
 
-
-@pytest.fixture(autouse=True)
-def _healthy_websockets_probe(monkeypatch):
-    """Keep every test hermetic: no real interpreter-probe subprocesses.
-
-    ``async_start`` now runs the torn-websockets heal, whose probe launches a
-    fresh interpreter. Stub it healthy by default; the heal tests below
-    override it per-case.
+    uv's bare ``--upgrade`` eagerly re-resolves the whole dependency graph
+    to the newest allowed versions, replacing packages the Home Assistant
+    image already ships even when the installed version satisfies our spec
+    — the #2135/#2146 torn-install window. ``--upgrade-package`` keeps the
+    auto-update behaviour for ha-mcp itself and leaves everything else at
+    the installed version whenever it satisfies the resolution.
     """
-    monkeypatch.setattr(es, "_probe_websockets_import", lambda: None)
 
-
-class TestTornWebsocketsHeal:
-    """The bring-up heals an unambiguously torn websockets install."""
-
-    @pytest.mark.asyncio
-    async def test_healthy_probe_is_a_no_op(self, tmp_path, monkeypatch):
-        manager, _hass, _entry = _manager(tmp_path)
-        reinstall = MagicMock(name="reinstall")
-        monkeypatch.setattr(es, "_reinstall_websockets", reinstall)
-
-        await manager._async_heal_torn_websockets()
-
-        reinstall.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_torn_install_reinstalls_metadata_version_and_purges(
-        self, tmp_path, monkeypatch
-    ):
-        manager, _hass, _entry = _manager(tmp_path)
-        torn_error = (
-            "ImportError: cannot import name 'StatusLineTooLong' from "
-            "'websockets.exceptions'"
-        )
-        # Torn on the gate probe AND the recheck under the pip lock; healed
-        # on the post-reinstall re-probe.
-        probes = iter([torn_error, torn_error, None])
-        monkeypatch.setattr(es, "_probe_websockets_import", lambda: next(probes))
-        monkeypatch.setattr(
-            es, "_installed_dist_version", MagicMock(return_value="17.0")
-        )
-        reinstall = MagicMock(name="reinstall", return_value=True)
-        monkeypatch.setattr(es, "_reinstall_websockets", reinstall)
-        purge = MagicMock(name="purge")
-        monkeypatch.setattr(es, "_purge_websockets_modules", purge)
-
-        await manager._async_heal_torn_websockets()
-
-        reinstall.assert_called_once()
-        # Never chooses a version: reinstalls exactly what metadata records.
-        assert reinstall.call_args.args == ("17.0",)
-        purge.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_missing_metadata_defers_to_package_installer(
-        self, tmp_path, monkeypatch
-    ):
-        manager, _hass, _entry = _manager(tmp_path)
-        monkeypatch.setattr(
-            es,
-            "_probe_websockets_import",
-            lambda: "ModuleNotFoundError: No module named websockets",
-        )
-        monkeypatch.setattr(es, "_installed_dist_version", MagicMock(return_value=None))
-        reinstall = MagicMock(name="reinstall")
-        monkeypatch.setattr(es, "_reinstall_websockets", reinstall)
-
-        await manager._async_heal_torn_websockets()
-
-        reinstall.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_unparseable_metadata_version_aborts_heal(
-        self, tmp_path, monkeypatch
-    ):
-        manager, _hass, _entry = _manager(tmp_path)
-        monkeypatch.setattr(
-            es, "_probe_websockets_import", lambda: "ImportError: broken"
-        )
-        monkeypatch.setattr(
-            es, "_installed_dist_version", MagicMock(return_value="not;a;version")
-        )
-        reinstall = MagicMock(name="reinstall")
-        monkeypatch.setattr(es, "_reinstall_websockets", reinstall)
-
-        await manager._async_heal_torn_websockets()
-
-        reinstall.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_failed_reinstall_neither_purges_nor_raises(
-        self, tmp_path, monkeypatch
-    ):
-        manager, _hass, _entry = _manager(tmp_path)
-        monkeypatch.setattr(
-            es, "_probe_websockets_import", lambda: "ImportError: broken"
-        )
-        monkeypatch.setattr(
-            es, "_installed_dist_version", MagicMock(return_value="17.0")
-        )
-        monkeypatch.setattr(es, "_reinstall_websockets", MagicMock(return_value=False))
-        purge = MagicMock(name="purge")
-        monkeypatch.setattr(es, "_purge_websockets_modules", purge)
-
-        # Best-effort: bring-up must survive a failed heal (REST still works).
-        await manager._async_heal_torn_websockets()
-
-        purge.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_still_broken_after_reinstall_does_not_purge(
-        self, tmp_path, monkeypatch
-    ):
-        manager, _hass, _entry = _manager(tmp_path)
-        monkeypatch.setattr(
-            es, "_probe_websockets_import", lambda: "ImportError: still broken"
-        )
-        monkeypatch.setattr(
-            es, "_installed_dist_version", MagicMock(return_value="17.0")
-        )
-        monkeypatch.setattr(es, "_reinstall_websockets", MagicMock(return_value=True))
-        purge = MagicMock(name="purge")
-        monkeypatch.setattr(es, "_purge_websockets_modules", purge)
-
-        await manager._async_heal_torn_websockets()
-
-        purge.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_recheck_clean_under_lock_skips_reinstall(
-        self, tmp_path, monkeypatch
-    ):
-        """A concurrent heal finishing while we waited on the lock wins."""
-        manager, _hass, _entry = _manager(tmp_path)
-        probes = iter(["ImportError: broken", None])  # clean on the recheck
-        monkeypatch.setattr(es, "_probe_websockets_import", lambda: next(probes))
-        reinstall = MagicMock(name="reinstall")
-        monkeypatch.setattr(es, "_reinstall_websockets", reinstall)
-
-        await manager._async_heal_torn_websockets()
-
-        reinstall.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_reinstall_runs_under_ha_pip_lock(self, tmp_path, monkeypatch):
-        """The heal serializes with HA's own requirement installs.
-
-        ``async_process_requirements`` holds the requirements manager's
-        ``pip_lock`` for every install; the heal must hold the same lock so
-        it can never rewrite the shared package under a live pip job.
-        """
-        manager, hass, _entry = _manager(tmp_path)
-        pip_lock = asyncio.Lock()
-        hass.data = {es.DATA_REQUIREMENTS_MANAGER: SimpleNamespace(pip_lock=pip_lock)}
-        probes = iter(["ImportError: broken", "ImportError: broken", None])
-        monkeypatch.setattr(es, "_probe_websockets_import", lambda: next(probes))
-        monkeypatch.setattr(
-            es, "_installed_dist_version", MagicMock(return_value="17.0")
-        )
-        held_during_reinstall = {}
-
-        def fake_reinstall(_version, *, constraints=None, target=None):
-            held_during_reinstall["locked"] = pip_lock.locked()
-            return True
-
-        monkeypatch.setattr(es, "_reinstall_websockets", fake_reinstall)
-        monkeypatch.setattr(es, "_purge_websockets_modules", MagicMock())
-
-        await manager._async_heal_torn_websockets()
-
-        assert held_during_reinstall["locked"] is True
-        assert not pip_lock.locked()  # released afterwards
-
-    @pytest.mark.asyncio
-    async def test_cancelled_bringup_keeps_pip_lock_until_job_ends(
-        self, tmp_path, monkeypatch
-    ):
-        """Cancelling the bring-up mid-reinstall must NOT release the lock.
-
-        _async_run_tracked_install_job shields its executor job, so the pip
-        process keeps running after a cancel; if the ``async with pip_lock``
-        unwound with it, another integration's install could acquire HA's
-        pip lock and run concurrently with our still-running reinstall —
-        the tear window again. The heal runs its locked section as a
-        detached task instead (Codex review on PR #2150).
-        """
-        manager, hass, _entry = _manager(tmp_path)
-        pip_lock = asyncio.Lock()
-        hass.data = {es.DATA_REQUIREMENTS_MANAGER: SimpleNamespace(pip_lock=pip_lock)}
-        probes = iter(["ImportError: broken", "ImportError: broken", None])
-        monkeypatch.setattr(es, "_probe_websockets_import", lambda: next(probes))
-        monkeypatch.setattr(
-            es, "_installed_dist_version", MagicMock(return_value="17.0")
-        )
-        monkeypatch.setattr(es, "_reinstall_websockets", MagicMock(return_value=True))
-        monkeypatch.setattr(es, "_purge_websockets_modules", MagicMock())
-        release = asyncio.Event()
-
-        async def slow_job(func):
-            await release.wait()
-            return func()
-
-        monkeypatch.setattr(manager, "_async_run_tracked_install_job", slow_job)
-
-        outer = asyncio.create_task(manager._async_heal_torn_websockets())
-        for _ in range(20):
-            await asyncio.sleep(0)
-            if pip_lock.locked():
-                break
-        assert pip_lock.locked(), "heal never reached the locked section"
-
-        outer.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await outer
-        # The awaiter is gone but the detached heal still holds HA's pip
-        # lock while its (shielded) job runs.
-        assert pip_lock.locked()
-
-        release.set()
-        for _ in range(20):
-            await asyncio.sleep(0)
-            if not pip_lock.locked():
-                break
-        assert not pip_lock.locked(), "detached heal never released the lock"
-
-    @pytest.mark.asyncio
-    async def test_async_start_runs_the_heal(self, tmp_path, monkeypatch):
-        """The heal is wired into the real bring-up path."""
-        manager, _hass, _entry = _manager(tmp_path)
-        heal = AsyncMock(name="heal")
-        monkeypatch.setattr(manager, "_async_heal_torn_websockets", heal)
-        monkeypatch.setattr(
-            manager, "_async_ensure_package", AsyncMock(return_value="9.9.9")
-        )
-        # Stop the bring-up right after the heal: token provisioning raises.
-        monkeypatch.setattr(
-            manager,
-            "_async_provision_token",
-            AsyncMock(side_effect=RuntimeError("stop here")),
-        )
-        with pytest.raises(RuntimeError, match="stop here"):
-            await manager.async_start()
-
-        heal.assert_awaited_once()
-
-
-class TestTornWebsocketsHealHelpers:
-    """The blocking helpers behind the heal."""
-
-    def test_probe_reports_last_stderr_line(self, monkeypatch):
-        result = SimpleNamespace(
-            returncode=1,
-            stderr=(
-                "Traceback (most recent call last):\n"
-                "  ...\n"
-                "ImportError: cannot import name 'StatusLineTooLong'"
-            ),
-        )
-        monkeypatch.setattr(es.subprocess, "run", MagicMock(return_value=result))
-        assert "StatusLineTooLong" in _REAL_WEBSOCKETS_PROBE()
-
-    def test_probe_failure_to_run_reports_healthy(self, monkeypatch):
-        monkeypatch.setattr(
-            es.subprocess, "run", MagicMock(side_effect=OSError("no exec"))
-        )
-        assert _REAL_WEBSOCKETS_PROBE() is None
-
-    def test_reinstall_invocation_shape(self, monkeypatch):
+    def _run_capture(self, monkeypatch):
         captured = {}
 
         def fake_run(args, **kwargs):
             captured["args"] = args
+            captured["kwargs"] = kwargs
             return SimpleNamespace(returncode=0, stderr="")
 
         monkeypatch.setattr(es.subprocess, "run", fake_run)
-        assert es._reinstall_websockets("17.0", constraints="/cons.txt", target=None)
-        args = captured["args"]
-        # HA-style uv pip invocation, constrained, exact same-version pin,
-        # no dependency mutations.
-        assert args[:5] == [sys.executable, "-m", "uv", "pip", "install"]
-        assert "--constraint" in args
-        assert "/cons.txt" in args
-        assert "--reinstall" in args
-        assert "--no-deps" in args
-        assert args[-1] == "websockets==17.0"
+        return captured
 
-    def test_reinstall_nonzero_exit_reports_failure(self, monkeypatch):
+    def test_scopes_upgrade_to_the_named_dist_only(self, monkeypatch):
+        captured = self._run_capture(monkeypatch)
+        assert es._force_install_package(
+            "ha-mcp",
+            upgrade_dist="ha-mcp",
+            constraints="/cons.txt",
+            target=None,
+            timeout=120,
+        )
+        args = captured["args"]
+        assert "--upgrade" not in args, (
+            "bare uv --upgrade eagerly replaces the whole graph — the exact "
+            "#2135/#2146 mechanism this function exists to prevent"
+        )
+        idx = args.index("--upgrade-package")
+        assert args[idx + 1] == "ha-mcp"
+        assert "--constraint" in args
+        assert args[args.index("--constraint") + 1] == "/cons.txt"
+        assert args[:6] == [sys.executable, "-m", "uv", "pip", "install", "--quiet"]
+        assert captured["kwargs"]["env"]["HTTP_TIMEOUT"] == "120"
+
+    def test_url_spec_installs_with_no_upgrade_flag_at_all(self, monkeypatch):
+        captured = self._run_capture(monkeypatch)
+        assert es._force_install_package(
+            "ha-mcp @ file:///config/ha_mcp-1.0-py3-none-any.whl",
+            upgrade_dist=None,
+            constraints=None,
+            target=None,
+            timeout=None,
+        )
+        args = captured["args"]
+        assert "--upgrade" not in args
+        assert "--upgrade-package" not in args
+
+    def test_target_install_uses_target_path(self, monkeypatch, tmp_path):
+        captured = self._run_capture(monkeypatch)
+        assert es._force_install_package(
+            "ha-mcp",
+            upgrade_dist="ha-mcp",
+            constraints=None,
+            target=str(tmp_path),
+            timeout=None,
+        )
+        args = captured["args"]
+        assert "--target" in args
+        assert args[args.index("--target") + 1] == os.path.abspath(str(tmp_path))
+
+    def test_nonzero_exit_reports_failure(self, monkeypatch):
         monkeypatch.setattr(
             es.subprocess,
             "run",
             MagicMock(return_value=SimpleNamespace(returncode=2, stderr="boom")),
         )
-        assert not es._reinstall_websockets("17.0", constraints=None, target=None)
+        assert not es._force_install_package(
+            "ha-mcp",
+            upgrade_dist="ha-mcp",
+            constraints=None,
+            target=None,
+            timeout=None,
+        )
 
-    def test_purge_drops_only_websockets_modules(self):
-        names = ("websockets", "websockets.exceptions", "websockets_not_it")
-        # Snapshot whatever this process already has cached (other test
-        # files import the real websockets) so the fakes never leak into,
-        # or evict, the rest of the suite.
-        originals = {name: sys.modules.get(name) for name in names}
-        sys.modules["websockets"] = ModuleType("websockets")
-        sys.modules["websockets.exceptions"] = ModuleType("websockets.exceptions")
-        sys.modules["websockets_not_it"] = ModuleType("websockets_not_it")
-        try:
-            es._purge_websockets_modules()
-            assert "websockets" not in sys.modules
-            assert "websockets.exceptions" not in sys.modules
-            assert "websockets_not_it" in sys.modules
-        finally:
-            for name, original in originals.items():
-                if original is not None:
-                    sys.modules[name] = original
-                else:
-                    sys.modules.pop(name, None)
+    @pytest.mark.asyncio
+    async def test_manager_threads_pip_kwargs_and_dist(self, tmp_path, monkeypatch):
+        """_async_force_install passes HA's constraints/target + the channel dist."""
+        manager, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(
+            es,
+            "pip_kwargs",
+            MagicMock(return_value={"constraints": "/hacons.txt", "timeout": 5}),
+        )
+        force = MagicMock(name="force_install", return_value=True)
+        monkeypatch.setattr(es, "_force_install_package", force)
+
+        await manager._async_force_install()
+
+        force.assert_called_once()
+        kwargs = force.call_args.kwargs
+        assert kwargs["constraints"] == "/hacons.txt"
+        assert kwargs["target"] is None
+        assert kwargs["upgrade_dist"] == "ha-mcp"
+        assert kwargs["timeout"] >= es._PIP_INSTALL_TIMEOUT_SECONDS

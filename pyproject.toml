@@ -33,17 +33,14 @@ dependencies = [
     "pydantic==2.13.4",
     "python-dotenv==1.2.2",
     "truststore==0.10.4",
-    # Range (not a hard pin), floored at HA core's own package_constraints
-    # floor (websockets>=15.0.1): when ha-mcp is installed into the HA venv
-    # for in-process embedding, an exact pin above the image-shipped version
-    # forces pip to replace HA's copy in place — a non-atomic upgrade that
-    # leaves a torn half-old/half-new package if interrupted, killing every
-    # WS connect with ImportError (#2135, #2146). With a range, pip keeps an
-    # already-satisfying copy untouched. Only long-stable APIs are used
-    # (connect kwargs, ClientConnection, exceptions) — pinned by
-    # tests/src/unit/test_websockets_floor_compat.py, which the unit-tests
-    # workflow re-runs with the floor version overlaid.
-    "websockets>=15.0.1,<18",
+    # websockets is deliberately ABSENT from this list: ha-mcp ships its own
+    # private copy (src/ha_mcp/_vendor/websockets, pinned in the vendor
+    # requirements.txt and synced by scripts/vendor_websockets.py) and never
+    # imports the shared site-packages copy. Inside Home Assistant that
+    # shared copy is unowned — ~20 integration libraries drag it in with
+    # conflicting version demands and any of their installs can replace or
+    # tear it in place (#2135/#2146); a declared dependency here would make
+    # ha-mcp one more writer to that contested copy.
     # Range (not a hard pin) so the resolver can satisfy Home Assistant's own
     # cryptography constraint when ha-mcp is installed into the HA venv for
     # in-process embedding (HA 2026.6 pins cryptography==48.0.0, 2026.7 pins
@@ -75,6 +72,11 @@ packages = { find = { where = ["src", "."], include = ["ha_mcp*", "tests"] } }
 
 [tool.setuptools.package-data]
 ha_mcp = ["py.typed", "_pypi_marker", "settings_ui/settings.html", "settings_ui/settings.js", "settings_ui/settings.css", "settings_ui/locales/*.json", "settings_ui/locales/README.md", "resources/skills-vendor/**/*"]
+# The vendored websockets tree's non-Python files: the upstream LICENSE
+# (BSD-3 requires shipping it), the VENDORED provenance marker, and the
+# renovate-managed pin file the drift test reads.
+"ha_mcp._vendor" = ["requirements.txt"]
+"ha_mcp._vendor.websockets" = ["LICENSE", "VENDORED", "py.typed"]
 
 [tool.mypy]
 python_version = "3.13"
@@ -104,6 +106,14 @@ module = [
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+# Vendored websockets: upstream's typing, not ours to check. follow_imports
+# skip keeps our client code checked against Any instead of dragging the
+# vendored tree into the run.
+module = ["ha_mcp._vendor.*"]
+follow_imports = "skip"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
 module = [
     "homeassistant.*",
     "aiohasupervisor",
@@ -127,6 +137,9 @@ target-version = "py313"
 line-length = 88
 extend-exclude = [
     "tests/initial_test_state",
+    # Vendored websockets — upstream's code style, not ours. Kept in sync
+    # with PATHS_IGNORE in scripts/codeql_quality_gate.py.
+    "src/ha_mcp/_vendor/websockets",
     # HA integration manifests must be strict JSON (no trailing commas);
     # ruff 0.15+ formats .json files as JSONC and inserts trailing commas
     # which makes Python's json.load() reject the file at HA startup.

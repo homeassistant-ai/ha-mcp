@@ -18,6 +18,10 @@ current, so drift on either side fails the very PR that introduces it):
 2. HA constrains it loosely (floor/range): our specifier must NOT be a lone
    exact pin — an exact pin above whatever the image shipped is precisely
    the forced in-place replacement that tears packages (websockets, #2146).
+   This rule is SHAPE-only by necessity: constraints files don't say which
+   version an image actually ships, so a range that still excludes the
+   shipped version passes here. The value-level backstop is the embedded
+   e2e no-stomp guard, which diffs the real install against the real image.
 
 Dependencies HA does not constrain at all are not managed here — renovate
 keeps them current, and the embedded-lane no-stomp guard
@@ -33,7 +37,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 import tomllib
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -64,7 +70,19 @@ def parse_requirement_lines(text: str) -> dict[str, SpecifierSet]:
             requirement = Requirement(line)
         except InvalidRequirement:
             continue
-        constraints[canonicalize_name(requirement.name)] = requirement.specifier
+        # HA's constraints can be marker-split (e.g. grpcio pinned
+        # differently per python_version); keep only the clauses that apply
+        # to the interpreter running this check — CI runs the same Python
+        # line as the HA image, so the surviving clause is the binding one.
+        if requirement.marker is not None and not requirement.marker.evaluate():
+            continue
+        name = canonicalize_name(requirement.name)
+        if name in constraints:
+            # Duplicate applicable entries combine (both must hold) instead
+            # of last-one-wins silently dropping a clause.
+            constraints[name] = constraints[name] & requirement.specifier
+        else:
+            constraints[name] = requirement.specifier
     return constraints
 
 
@@ -75,9 +93,9 @@ def direct_dependencies(pyproject_text: str) -> list[Requirement]:
 
 
 def _lone_exact_pin(specifier_set: SpecifierSet) -> str | None:
-    """Return the pinned version when the set is a single ``==`` clause."""
+    """Return the pinned version when the set is a single ``==``/``===`` clause."""
     specifiers = list(specifier_set)
-    if len(specifiers) == 1 and specifiers[0].operator == "==":
+    if len(specifiers) == 1 and specifiers[0].operator in ("==", "==="):
         return specifiers[0].version
     return None
 
@@ -112,11 +130,25 @@ def check_alignment(
     return violations
 
 
-def _fetch_constraints(ha_version: str) -> str:
+def _fetch_constraints(ha_version: str) -> str | None:
+    """Fetch HA's constraints file, retrying transient failures.
+
+    Returns None after three failed attempts; the caller exits 2 — a
+    distinct code from a real violation (1), so a network blip in the
+    required CI job is never mistaken for a dependency-drift failure.
+    """
     url = _CONSTRAINTS_URL.format(version=ha_version)
-    with urllib.request.urlopen(url, timeout=30) as response:
-        payload: bytes = response.read()
-    return payload.decode("utf-8")
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response:
+                payload: bytes = response.read()
+            return payload.decode("utf-8")
+        except (urllib.error.URLError, OSError) as err:
+            last_error = err
+            time.sleep(5 * (attempt + 1))
+    print(f"ERROR: could not fetch {url}: {last_error}", file=sys.stderr)
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -134,12 +166,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    constraints_text: str | None
     if args.constraints_file is not None:
         constraints_text = args.constraints_file.read_text(encoding="utf-8")
         origin = str(args.constraints_file)
     else:
         constraints_text = _fetch_constraints(args.ha_version)
         origin = f"HA core {args.ha_version}"
+    if constraints_text is None:
+        return 2
 
     ha_constraints = parse_requirement_lines(constraints_text)
     if not ha_constraints:

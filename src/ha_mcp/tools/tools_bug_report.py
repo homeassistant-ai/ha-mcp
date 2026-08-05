@@ -7,6 +7,7 @@ on how to create effective bug reports.
 
 import asyncio
 import importlib
+import importlib.metadata
 import logging
 import os
 import platform
@@ -203,34 +204,53 @@ def _detect_platform() -> dict[str, str]:
     }
 
 
-def _websockets_dependency_state() -> dict[str, Any]:
-    """Probe the installed ``websockets`` dependency for torn-install damage.
+def _format_websockets_dependency_value(diagnostic_info: dict[str, Any]) -> str:
+    """Render the websockets probe for the human-pasteable report.
 
-    A half-upgraded install (#2135/#2146) leaves the package version-mixed on
-    disk: its metadata still reports one version while the import chain
-    behind ``websockets.connect`` raises ImportError on every WS connect.
-    Surfacing both facts here turns a "WebSocket dead, REST fine" report
-    into a one-glance diagnosis. Any probe failure is captured as data —
-    the bug-report path itself must never break on a broken dependency.
+    Mirrors the sibling ``_format_*_value`` helpers: a degraded probe stays
+    visibly degraded instead of disappearing — for the #2135/#2146 failure
+    class this line IS the diagnosis, so it must survive into the report a
+    user pastes.
+    """
+    state = diagnostic_info.get("websockets_dependency") or {}
+    if not state:
+        return "not probed"
+    if state.get("vendored_import_ok"):
+        value = f"vendored {state.get('vendored_version') or 'unknown'}"
+    else:
+        value = (
+            f"vendored BROKEN: {state.get('vendored_import_error', 'import failed')}"
+        )
+    shared = state.get("shared_metadata_version")
+    return f"{value} (shared env copy: {shared or 'absent'})"
+
+
+def _websockets_dependency_state() -> dict[str, Any]:
+    """Report the vendored websockets copy plus the shared copy's state.
+
+    ha-mcp runs on its private ``ha_mcp._vendor.websockets``, immune to the
+    shared site-packages copy that ~20 HA integration libraries contend
+    over (#2135/#2146). The vendored version proves what the server
+    actually runs; the shared copy's metadata version is ecosystem context
+    for triage (a torn shared copy no longer affects ha-mcp, but still
+    breaks the integrations that use it). Any probe failure is captured as
+    data — the bug-report path itself must never break on a broken
+    dependency.
     """
     state: dict[str, Any] = {}
     try:
-        websockets_module = importlib.import_module("websockets")
-        state["version"] = getattr(websockets_module, "__version__", "Unknown")
+        vendored = importlib.import_module("ha_mcp._vendor.websockets")
+        importlib.import_module("ha_mcp._vendor.websockets.asyncio.client")
+        state["vendored_version"] = getattr(vendored, "__version__", "Unknown")
+        state["vendored_import_ok"] = True
     except Exception as e:
-        state["version"] = None
-        state["import_ok"] = False
-        state["import_error"] = f"{type(e).__name__}: {e}"
-        return state
+        state["vendored_version"] = None
+        state["vendored_import_ok"] = False
+        state["vendored_import_error"] = f"{type(e).__name__}: {e}"
     try:
-        # The version-sensitive chain a torn install breaks (client.py /
-        # http11.py importing exception names their sibling exceptions.py
-        # predates).
-        importlib.import_module("websockets.asyncio.client")
-        state["import_ok"] = True
-    except Exception as e:
-        state["import_ok"] = False
-        state["import_error"] = f"{type(e).__name__}: {e}"
+        state["shared_metadata_version"] = importlib.metadata.version("websockets")
+    except Exception:
+        state["shared_metadata_version"] = None
     return state
 
 
@@ -660,6 +680,7 @@ def _build_formatted_report(
         f"Home Assistant Version: {diagnostic_info['home_assistant_version']}",
         f"Connection Status: {diagnostic_info['connection_status']}",
         f"Entity Count: {diagnostic_info['entity_count']}",
+        f"websockets Dependency: {_format_websockets_dependency_value(diagnostic_info)}",
     ]
     if "location_name" in diagnostic_info:
         report_lines.append(f"Location Name: {diagnostic_info['location_name']}")
