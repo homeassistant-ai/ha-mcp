@@ -148,6 +148,10 @@ class TestFailurePaths:
 
         staging = target.with_name(target.name + ".incoming")
         assert not staging.exists(), "staging tree left behind after a failure"
+        # The other half of this test's name: nothing was vendored before the
+        # failure, so a live tree here would mean the failure path promoted a
+        # partial package instead of discarding it.
+        assert not target.exists(), "a failed sync created a live vendored tree"
 
     def test_a_failed_sync_does_not_touch_the_existing_tree(self, sandbox):
         """The live vendored package survives a failed re-sync intact."""

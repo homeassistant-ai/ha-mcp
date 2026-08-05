@@ -43,10 +43,6 @@ import pytest
 import requests
 from test_constants import HA_TEST_IMAGE
 
-# The component's own constant, so a rename cannot silently turn the
-# force-install marker below into a permanently-absent key.
-from custom_components.ha_mcp_tools.const import DATA_LAST_PIP_SPEC
-
 from ...conftest import (
     EMBEDDED_FREEZE_AFTER,
     EMBEDDED_FREEZE_BEFORE,
@@ -57,6 +53,28 @@ _REQUIREMENTS_ALL_URL = (
     "https://raw.githubusercontent.com/home-assistant/core/"
     "{version}/requirements_all.txt"
 )
+
+
+def _component_constant(name: str) -> str:
+    """Read a string constant out of the component's const.py by source.
+
+    Deliberately NOT an import: importing anything under
+    ``custom_components.ha_mcp_tools`` runs the package __init__, which
+    imports ``homeassistant`` — absent from the e2e runner's environment,
+    so the import would break COLLECTION of this whole suite. Reading the
+    source still fails loudly if the constant is renamed, which is the
+    property an inlined literal would lose.
+    """
+    source = (_REPO_ROOT / "custom_components" / "ha_mcp_tools" / "const.py").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(rf'^{name} = "([^"]+)"', source, re.MULTILINE)
+    assert match, f"{name} is gone from const.py — update this guard"
+    return match.group(1)
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+DATA_LAST_PIP_SPEC = _component_constant("DATA_LAST_PIP_SPEC")
 
 
 def _canonical(name: str) -> str:

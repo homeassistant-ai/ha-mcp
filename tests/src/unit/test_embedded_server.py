@@ -31,6 +31,10 @@ from ._embedded_stubs import RequirementsNotFound, install
 install()
 
 import custom_components.ha_mcp_tools.embedded_server as es  # noqa: E402
+
+# HA's wheels index, as a HOST — the installer's extra-index retry drops a
+# failing index by parsed hostname, and the fakes below match it the same way.
+_WHEELS_HOST = "wheels.home-assistant.io"
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     CHANNEL_DEV,
     CHANNEL_STABLE,
@@ -3759,14 +3763,15 @@ class TestForceInstallPackage:
         def fake_run(args, **kwargs):
             env = kwargs["env"]
             calls.append(env)
-            # Match the HOST, the way the installer's own retry does — a
-            # substring test over the whole index list would also "match" a
-            # URL that merely mentions the host in a path or query.
-            hosts = {
-                urlparse(url).hostname
+            # Match the HOST by equality, the way the installer's own retry
+            # does — a substring test over the whole index list would also
+            # "match" a URL that merely mentions the host in a path or query
+            # (and CodeQL's py/incomplete-url-substring-sanitization reads
+            # any `in` against URL-derived data as exactly that mistake).
+            if any(
+                urlparse(url).hostname == _WHEELS_HOST
                 for url in env.get("UV_EXTRA_INDEX_URL", "").split()
-            }
-            if "wheels.home-assistant.io" in hosts:
+            ):
                 return SimpleNamespace(
                     returncode=1,
                     stderr="error: failed to fetch https://wheels.home-assistant.io/x",
