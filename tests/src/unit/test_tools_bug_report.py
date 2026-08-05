@@ -2181,3 +2181,112 @@ class TestWebsocketsDependencyState:
         state = result["diagnostic_info"]["websockets_dependency"]
         assert state["vendored_import_ok"] is True
         assert "websockets Dependency: vendored" in result["formatted_report"]
+
+
+class TestWebsocketsProbeBranches:
+    """The probe's newer branches, each added for a specific triage need.
+
+    Every one of these renders into ``formatted_report`` — the text a user
+    pastes into an issue — so a branch that silently changes meaning
+    misleads triage during exactly the failure class the field exists for.
+    """
+
+    def _render(self, state):
+        from ha_mcp.tools.tools_bug_report import (
+            _format_websockets_dependency_value,
+        )
+
+        return _format_websockets_dependency_value({"websockets_dependency": state})
+
+    def test_pure_python_vendored_copy_is_labelled(self):
+        """The vendor sync drops the C accelerator; say so.
+
+        Without this a "WS throughput dropped after upgrading" report gives
+        the triager nothing to distinguish accelerator-absent from a real
+        regression.
+        """
+        rendered = self._render(
+            {
+                "vendored_import_ok": True,
+                "vendored_version": "17.0.1",
+                "vendored_c_speedups": False,
+                "shared_metadata_version": "16.1.1",
+            }
+        )
+        assert "pure-Python" in rendered
+
+    def test_accelerated_copy_is_not_labelled_pure_python(self):
+        rendered = self._render(
+            {
+                "vendored_import_ok": True,
+                "vendored_version": "17.0.1",
+                "vendored_c_speedups": True,
+                "shared_metadata_version": "16.1.1",
+            }
+        )
+        assert "pure-Python" not in rendered
+
+    def test_unreadable_shared_metadata_is_not_reported_as_absent(self):
+        """A corrupt shared install must not read as a clean environment.
+
+        Collapsing an unreadable dist-info into "absent" tells triage the
+        environment is fine during the one failure class (#2135/#2146)
+        this field was added to expose.
+        """
+        rendered = self._render(
+            {
+                "vendored_import_ok": True,
+                "vendored_version": "17.0.1",
+                "vendored_c_speedups": False,
+                "shared_metadata_version": None,
+                "shared_metadata_error": "OSError: dist-info unreadable",
+            }
+        )
+        assert "unreadable" in rendered
+        assert "absent" not in rendered
+
+    def test_genuinely_absent_shared_copy_says_absent(self):
+        rendered = self._render(
+            {
+                "vendored_import_ok": True,
+                "vendored_version": "17.0.1",
+                "vendored_c_speedups": False,
+                "shared_metadata_version": None,
+            }
+        )
+        assert "absent" in rendered
+
+    def test_probe_records_the_accelerator_state(self):
+        from ha_mcp.tools.tools_bug_report import _websockets_dependency_state
+
+        state = _websockets_dependency_state()
+        # The vendor sync strips compiled artifacts, so the shipped tree is
+        # always pure Python — pinned so a future change that starts
+        # vendoring the extension has to update this deliberately.
+        assert state["vendored_c_speedups"] is False
+
+    def test_probe_reports_an_unreadable_shared_dist_distinctly(self):
+        from ha_mcp.tools.tools_bug_report import _websockets_dependency_state
+
+        with patch(
+            "ha_mcp.tools.tools_bug_report.importlib.metadata.version",
+            side_effect=OSError("dist-info unreadable"),
+        ):
+            state = _websockets_dependency_state()
+
+        assert state["shared_metadata_version"] is None
+        assert "dist-info unreadable" in state["shared_metadata_error"]
+
+    def test_probe_reports_a_missing_shared_dist_as_plain_absence(self):
+        import importlib.metadata
+
+        from ha_mcp.tools.tools_bug_report import _websockets_dependency_state
+
+        with patch(
+            "ha_mcp.tools.tools_bug_report.importlib.metadata.version",
+            side_effect=importlib.metadata.PackageNotFoundError("websockets"),
+        ):
+            state = _websockets_dependency_state()
+
+        assert state["shared_metadata_version"] is None
+        assert "shared_metadata_error" not in state
