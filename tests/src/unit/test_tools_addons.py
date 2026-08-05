@@ -7,11 +7,14 @@ import httpx
 import pytest
 from fastmcp.exceptions import ToolError
 
-# The vendored copy — the same classes tools_addons raises/catches; the
+# The vendored classes — the same ones tools_addons raises/catches; the
 # shared site-packages websockets is a DIFFERENT set of classes that
 # except/isinstance would silently not match.
-import ha_mcp._vendor.websockets.exceptions  # noqa: F401  (binds .exceptions)
-from ha_mcp._vendor import websockets
+from ha_mcp._vendor.websockets.exceptions import (
+    ConnectionClosed,
+    InvalidHandshake,
+    InvalidStatus,
+)
 from ha_mcp.tools.tools_addons import (
     _apply_response_transform,
     _call_addon_api,
@@ -1261,9 +1264,7 @@ class TestCallAddonWsErrors:
         ):
             # Simulate a quick connection that closes immediately
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -1330,7 +1331,7 @@ class TestCallAddonWsErrors:
         ):
             response = Response(status, "Unauthorized", Headers())
             mock_ws_connect.return_value.__aenter__ = AsyncMock(
-                side_effect=websockets.exceptions.InvalidStatus(response),
+                side_effect=InvalidStatus(response),
             )
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -1366,7 +1367,7 @@ class TestCallAddonWsErrors:
         ):
             response = Response(404, "Not Found", Headers())
             mock_ws_connect.return_value.__aenter__ = AsyncMock(
-                side_effect=websockets.exceptions.InvalidStatus(response),
+                side_effect=InvalidStatus(response),
             )
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -1395,7 +1396,7 @@ class TestCallAddonWsErrors:
             ) as mock_ws_connect,
         ):
             mock_ws_connect.return_value.__aenter__ = AsyncMock(
-                side_effect=websockets.exceptions.InvalidHandshake("403 Forbidden"),
+                side_effect=InvalidHandshake("403 Forbidden"),
             )
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -1418,9 +1419,7 @@ class TestCallAddonWsErrors:
             captured["kwargs"] = kwargs
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -1458,9 +1457,7 @@ class TestCallAddonWsErrors:
             captured["headers"] = dict(kwargs.get("additional_headers", {}))
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -1497,9 +1494,7 @@ class TestCallAddonWsErrors:
             captured["url"] = url
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -1534,9 +1529,7 @@ class TestCallAddonWsErrors:
             captured["url"] = url
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -1695,9 +1688,7 @@ class TestCallAddonWsErrors:
             ) as mock_ws_connect,
         ):
             mock_ws = AsyncMock()
-            mock_ws.send.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.send.side_effect = ConnectionClosed(None, None)
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -1764,7 +1755,7 @@ class TestCallAddonWsErrors:
                 '{"event": "line", "data": "Compiling..."}',
                 '{"event": "line", "data": "Done."}',
                 '{"event": "exit", "code": 0}',
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -1796,7 +1787,7 @@ class TestCallAddonWsErrors:
             mock_ws = AsyncMock()
             mock_ws.recv.side_effect = [
                 "\x1b[32mSUCCESS\x1b[0m Build complete",
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -1825,7 +1816,7 @@ class TestCallAddonWsErrors:
             mock_ws.recv.side_effect = [
                 b"\x00\x01\x02",  # binary frame, should be skipped
                 "text message",
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -1918,9 +1909,7 @@ class TestCallAddonWsErrors:
             captured["headers"] = dict(kwargs.get("additional_headers", {}))
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -1965,9 +1954,7 @@ class TestCallAddonWsErrors:
             captured["url"] = url
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -2280,9 +2267,7 @@ class TestCallAddonWsNewParams:
             ) as mock_ws_connect,
         ):
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = messages_to_send + [
-                websockets.exceptions.ConnectionClosed(None, None)
-            ]
+            mock_ws.recv.side_effect = messages_to_send + [ConnectionClosed(None, None)]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -2324,9 +2309,7 @@ class TestCallAddonWsNewParams:
             ) as mock_ws_connect,
         ):
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = messages_to_send + [
-                websockets.exceptions.ConnectionClosed(None, None)
-            ]
+            mock_ws.recv.side_effect = messages_to_send + [ConnectionClosed(None, None)]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -2362,7 +2345,7 @@ class TestCallAddonWsNewParams:
                 "msg 1",
                 "msg 2",
                 "msg 3",
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -2403,7 +2386,7 @@ class TestCallAddonWsNewParams:
                 + yaml_lines
                 + [
                     "INFO Configuration is valid!",
-                    websockets.exceptions.ConnectionClosed(None, None),
+                    ConnectionClosed(None, None),
                 ]
             )
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
@@ -2438,9 +2421,7 @@ class TestCallAddonWsNewParams:
             ) as mock_ws_connect,
         ):
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = yaml_lines + [
-                websockets.exceptions.ConnectionClosed(None, None)
-            ]
+            mock_ws.recv.side_effect = yaml_lines + [ConnectionClosed(None, None)]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -2472,7 +2453,7 @@ class TestCallAddonWsNewParams:
                 '{"level": "INFO", "msg": "start"}',
                 '{"level": "ERROR", "msg": "boom"}',
                 '{"level": "INFO", "msg": "done"}',
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -2511,7 +2492,7 @@ class TestCallAddonWsNewParams:
             mock_ws = AsyncMock()
             mock_ws.recv.side_effect = [
                 "msg",
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -2550,9 +2531,7 @@ class TestCallAddonWsNewParams:
             ) as mock_ws_connect,
         ):
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = [big_msg] * 10 + [
-                websockets.exceptions.ConnectionClosed(None, None)
-            ]
+            mock_ws.recv.side_effect = [big_msg] * 10 + [ConnectionClosed(None, None)]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -2656,7 +2635,7 @@ class TestCallAddonWsNewParams:
             mock_ws = AsyncMock()
             mock_ws.recv.side_effect = [
                 "some message",
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
