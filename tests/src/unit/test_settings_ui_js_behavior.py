@@ -1152,6 +1152,18 @@ def _server_503_body() -> str:
     return POLICY_UNAVAILABLE_MESSAGE
 
 
+# One /api/settings/features reply carrying the policy-tool flag as off.
+# Reused across the save-flow tests below, whose `responses` arrays must
+# account for EVERY call to that URL, GET and POST alike — the queue is
+# keyed by URL, not method. Init alone makes TWO reads (loadTools ->
+# loadPolicyState, and loadFeatureFlags), so each sequence below opens with
+# three of these: the two init reads plus the explicit sync in `invoke`.
+_OFF_FLAG_RESPONSE: dict = {
+    "status": 200,
+    "json": {"flags": {"enable_security_policy_tool": {"value": False}}},
+}
+
+
 class TestPolicyTabFlow:
     """Locks in the new condition-builder UX wiring: master toggle
     posts to the same feature-flag endpoint the Server-Settings tab
@@ -1277,12 +1289,11 @@ class TestPolicyTabFlow:
             **DEFAULT_FETCHES,
             "/api/settings/features": {
                 "responses": [
-                    {
-                        "status": 200,
-                        "json": {
-                            "flags": {"enable_security_policy_tool": {"value": False}}
-                        },
-                    },
+                    _OFF_FLAG_RESPONSE,  # 1-2: the two init reads
+                    _OFF_FLAG_RESPONSE,
+                    _OFF_FLAG_RESPONSE,  # 3: the explicit sync below
+                    # 4: the save itself fails — the server still holds the
+                    # previous value, so reverting IS correct here.
                     {"status": 500, "json": {"error": {"message": "nope"}}},
                 ]
             },
@@ -1292,6 +1303,7 @@ class TestPolicyTabFlow:
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
             invoke="""
+              await new Promise(r => setTimeout(r, 250));
               await window.syncPolicyGlobalToggles();
               const cb = document.getElementById('policy-manage-tool-toggle');
               cb.checked = true;
@@ -1323,16 +1335,10 @@ class TestPolicyTabFlow:
                 **DEFAULT_FETCHES,
                 "/api/settings/features": {
                     "responses": [
-                        # init read: off
-                        {
-                            "status": 200,
-                            "json": {
-                                "flags": {
-                                    "enable_security_policy_tool": {"value": False}
-                                }
-                            },
-                        },
-                        # the save, echoing what it wrote
+                        _OFF_FLAG_RESPONSE,  # 1-2: the two init reads
+                        _OFF_FLAG_RESPONSE,
+                        _OFF_FLAG_RESPONSE,  # 3: the explicit sync below
+                        # 4: the save POST, echoing what it wrote
                         {
                             "status": 200,
                             "json": {
@@ -1340,12 +1346,13 @@ class TestPolicyTabFlow:
                                 "restart_required": True,
                             },
                         },
-                        # the confirming re-read fails
+                        # 5: the confirming re-read fails
                         {"status": 503, "json": {}},
                     ]
                 },
             },
             invoke="""
+              await new Promise(r => setTimeout(r, 250));
               await window.syncPolicyGlobalToggles();
               const cb = document.getElementById('policy-manage-tool-toggle');
               cb.checked = true;
@@ -1383,21 +1390,18 @@ class TestPolicyTabFlow:
                 **DEFAULT_FETCHES,
                 "/api/settings/features": {
                     "responses": [
-                        {
-                            "status": 200,
-                            "json": {
-                                "flags": {
-                                    "enable_security_policy_tool": {"value": False}
-                                }
-                            },
-                        },
-                        # 200 with no `applied` echo (truncated body).
+                        _OFF_FLAG_RESPONSE,  # 1-2: the two init reads
+                        _OFF_FLAG_RESPONSE,
+                        _OFF_FLAG_RESPONSE,  # 3: the explicit sync below
+                        # 4: the save — 200 with no `applied` echo
+                        # (truncated body).
                         {"status": 200, "json": {"restart_required": True}},
-                        {"status": 503, "json": {}},
+                        {"status": 503, "json": {}},  # 5: re-read fails
                     ]
                 },
             },
             invoke="""
+              await new Promise(r => setTimeout(r, 250));
               await window.syncPolicyGlobalToggles();
               const cb = document.getElementById('policy-manage-tool-toggle');
               cb.checked = true;
@@ -1421,6 +1425,66 @@ class TestPolicyTabFlow:
             f"and editable: {tag}"
         )
         assert 'data-shown="true"' in tag, f"unknown notice must show: {tag}"
+
+    def test_missing_flag_entry_is_unknown_not_off(self, settings_script: str) -> None:
+        """Known is per FLAG, not per response. A 200 that omits one flag
+        entry says nothing about that flag; rendering it as an editable
+        "off" invites a save that overwrites an enabled server value (a
+        server build older than this UI, or an overlay dropping the key).
+        The flag that IS present must still render normally."""
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "status": 200,
+                    "json": {
+                        "flags": {
+                            # Master present and on; the policy-tool flag is
+                            # absent from the payload entirely.
+                            "enable_tool_security_policies": {
+                                "value": True,
+                                "origin": "file",
+                                "editable": True,
+                            }
+                        }
+                    },
+                },
+            },
+            invoke="""
+              await window.syncPolicyGlobalToggles();
+              const master = document.getElementById('policy-master-toggle');
+              const tool = document.getElementById('policy-manage-tool-toggle');
+              const notice = document.getElementById('policyUnknownNotice');
+              const probe = document.createElement('div');
+              probe.id = '__missing_flag_probe';
+              probe.dataset.masterChecked = String(master.checked);
+              probe.dataset.masterBlocked = String(
+                master.indeterminate || master.disabled);
+              probe.dataset.toolBlocked = String(
+                tool.indeterminate && tool.disabled);
+              probe.dataset.shown = String(
+                !!notice && notice.classList.contains('show'));
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'<div[^>]*id="__missing_flag_probe"[^>]*>', result.dom)
+        assert m is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        tag = m.group(0)
+        assert 'data-master-checked="true"' in tag, (
+            f"the flag the payload DID carry must render from its value: {tag}"
+        )
+        assert 'data-master-blocked="false"' in tag, (
+            f"a present flag must stay editable: {tag}"
+        )
+        assert 'data-tool-blocked="true"' in tag, (
+            f"an omitted flag entry must render unknown, not off-and-editable: {tag}"
+        )
+        assert 'data-shown="true"' in tag, (
+            f"the notice must show when EITHER policy flag is unknown: {tag}"
+        )
 
     def test_env_pinned_flag_locks_the_switch(self, settings_script: str) -> None:
         """editable:false means every save is rejected server-side, so the
@@ -1454,8 +1518,12 @@ class TestPolicyTabFlow:
               probe.dataset.checked = String(cb.checked);
               probe.dataset.disabled = String(cb.disabled);
               probe.dataset.indeterminate = String(cb.indeterminate);
-              probe.dataset.note =
-                document.getElementById('policy-manage-tool-locked').innerHTML;
+              // Booleans, not the note's HTML: markup inside a data-
+              // attribute closes the probe tag early for the reader below.
+              const note = document.getElementById('policy-manage-tool-locked');
+              probe.dataset.noteNamesVar = String(
+                note.innerHTML.includes('ENABLE_SECURITY_POLICY_TOOL'));
+              probe.dataset.noteShown = String(note.style.display !== 'none');
               document.body.appendChild(probe);
             """,
         )
@@ -1469,7 +1537,10 @@ class TestPolicyTabFlow:
         # Known-but-locked is not the same as unknown: the value IS known.
         assert 'data-indeterminate="false"' in tag, tag
         assert 'data-checked="true"' in tag, tag
-        assert "ENABLE_SECURITY_POLICY_TOOL" in tag, (
+        assert 'data-note-shown="true"' in tag, (
+            f"the locked note must be visible: {tag}"
+        )
+        assert 'data-note-names-var="true"' in tag, (
             f"the locked note must name the env var that pins it: {tag}"
         )
 

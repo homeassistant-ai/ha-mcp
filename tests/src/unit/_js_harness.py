@@ -38,6 +38,23 @@ def _node_binary() -> str:
     return os.environ.get("NODE_BINARY", "node")
 
 
+def _default_timeout_s() -> float:
+    """Per-run node timeout, overridable via ``HA_MCP_JS_HARNESS_TIMEOUT``.
+
+    15s suits CI, where node + jsdom start up in about a second. On slower
+    hardware that start-up alone approaches the limit, so every test times
+    out and the suite is not merely slow but unrunnable — which is how a
+    developer ends up writing jsdom tests blind. An unparseable or
+    non-positive override falls back to the default rather than failing
+    collection.
+    """
+    try:
+        override = float(os.environ.get("HA_MCP_JS_HARNESS_TIMEOUT", ""))
+    except ValueError:
+        return 15.0
+    return override if override > 0 else 15.0
+
+
 def _esbuild_binary() -> Path:
     """Return the esbuild binary path. Default is the project-local
     install from ``tests/js/package-lock.json``; ``ESBUILD_BINARY`` env
@@ -120,7 +137,7 @@ def run_script(
     broadcast_events: list[dict[str, Any]] | None = None,
     initial_html: str | None = None,
     settle_ms: int = 120000,
-    timeout_s: float = 15.0,
+    timeout_s: float | None = None,
     language: str = "js",
     broadcast_channel_unavailable: bool = False,
 ) -> HarnessResult:
@@ -173,7 +190,7 @@ def run_script(
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=timeout_s,
+        timeout=_default_timeout_s() if timeout_s is None else timeout_s,
         check=False,
     )
     if proc.returncode != 0:

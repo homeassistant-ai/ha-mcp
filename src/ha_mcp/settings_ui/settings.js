@@ -265,6 +265,16 @@ const readOnlyState = {
 // from data.read_only_exempt in loadTools().
 let READ_ONLY_EXEMPT = new Set();
 
+// Whether the features payload actually reported one flag. "Known" is per
+// FLAG, not per response: /api/settings/features emits `value` for every
+// flag it knows, so a missing entry means this server build (or an overlay
+// in front of it) did not report that flag — not that it is off. Treating
+// absence as false renders the switch off-and-editable, and the next save
+// would overwrite an enabled server value with it.
+function flagReported(flag) {
+  return !!flag && flag.value !== undefined && flag.value !== null;
+}
+
 // Reset every flag-backed switch to "unknown". Shared by loadPolicyState's
 // two failure paths so a transient 503 and a network error leave identical
 // state — the switches then render indeterminate + disabled, not "off".
@@ -294,17 +304,18 @@ async function loadPolicyState() {
       // for its add-on-vs-standalone wording. Landing straight on the
       // Policies tab never runs loadFeatureFlags(), so pick it up here too.
       if (typeof fdata.is_addon === 'boolean') IS_ADDON_MODE = fdata.is_addon;
-      const flag = (fdata.flags || {})['enable_tool_security_policies'];
+      const flags = fdata.flags || {};
+      const flag = flags['enable_tool_security_policies'];
       policyState.enabled = !!(flag && flag.value);
-      policyState.enabledKnown = true;
+      policyState.enabledKnown = flagReported(flag);
       policyState.masterFlag = flag || null;
-      const toolFlag = (fdata.flags || {})['enable_security_policy_tool'];
+      const toolFlag = flags['enable_security_policy_tool'];
       policyState.manageToolEnabled = !!(toolFlag && toolFlag.value);
-      policyState.manageToolKnown = true;
+      policyState.manageToolKnown = flagReported(toolFlag);
       policyState.manageToolFlag = toolFlag || null;
-      const roFlag = (fdata.flags || {})['read_only_mode'];
+      const roFlag = flags['read_only_mode'];
       readOnlyState.enabled = !!(roFlag && roFlag.value);
-      readOnlyState.enabledKnown = true;
+      readOnlyState.enabledKnown = flagReported(roFlag);
       readOnlyState.flag = roFlag || null;
     } else {
       _clearFlagSwitchState();
@@ -2551,13 +2562,19 @@ function paintPolicyGlobalToggles() {
     known: policyState.manageToolKnown,
     flag: policyState.manageToolFlag,
   });
-  // When the features fetch failed, both flags are unknown and an
-  // unchecked-and-editable switch would claim "off" for a server that may
-  // well have them on. Surface that uncertainty (same treatment the
+  // When a flag could not be read — the whole fetch failed, or the payload
+  // simply didn't carry that entry — an unchecked-and-editable switch would
+  // claim "off" for a server that may well have it on. Surface that
+  // uncertainty whenever EITHER switch is unknown (same treatment the
   // Tools-tab read-only notice gets). Function-scope lookup (guarded) so
   // this id need not be a top-level handler binding.
   const notice = document.getElementById('policyUnknownNotice');
-  if (notice) notice.classList.toggle('show', !policyState.enabledKnown);
+  if (notice) {
+    notice.classList.toggle(
+      'show',
+      !policyState.enabledKnown || !policyState.manageToolKnown
+    );
+  }
 }
 
 // Paint one hand-written feature-flag switch — the two on this tab and the
