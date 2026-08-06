@@ -3601,6 +3601,144 @@ class TestBetaBlockRendersAtBottom:
         )
         assert json.loads(posts[0]["body"]).get("enable_dev_mode") is True
 
+    def test_security_policy_access_toggle_enable_is_confirm_gated(
+        self, settings_script: str
+    ) -> None:
+        """Enabling dev-tools security-policy access (issue #2141) must
+        pass its own confirm() gate — it is stored independently of the
+        dev-mode toggle (though effective only while dev mode is on):
+        declining reverts the checkbox and saves nothing; accepting
+        fires exactly one auto-save POST."""
+        adv_field = {
+            "field": "dev_tools_security_policy_access",
+            "env_var": "HAMCP_DEV_SECURITY_POLICY_ACCESS",
+            "value": False,
+            "type": "bool",
+            "section": "developer",
+            "origin": "default",
+            "editable": True,
+        }
+        applied = {"dev_tools_security_policy_access": True}
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [adv_field], "is_addon": False},
+                "responses": [
+                    {"status": 200, "json": {"fields": [adv_field], "is_addon": False}},
+                    {"status": 200, "json": {"applied": applied}},
+                    {"status": 200, "json": {"fields": [adv_field], "is_addon": False}},
+                ],
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const cb = document.querySelector(
+                '#advDeveloper input[data-adv-field="dev_tools_security_policy_access"]');
+              document.body.setAttribute('data-rendered', String(!!cb));
+              // Decline the warning: the toggle must revert and no save fires.
+              window.confirm = () => false;
+              cb.checked = true;
+              cb.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 1200));
+              document.body.setAttribute('data-declined-state', String(cb.checked));
+              // Accept the warning: the save proceeds.
+              window.confirm = () => true;
+              cb.checked = true;
+              cb.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 1500));
+            """,
+        )
+        _assert_clean_init(result)
+        assert 'data-rendered="true"' in result.dom, (
+            "dev_tools_security_policy_access row did not render into #advDeveloper"
+        )
+        assert 'data-declined-state="false"' in result.dom, (
+            "declining the confirm() must revert the policy-access checkbox"
+        )
+        posts = [
+            f
+            for f in result.fetches
+            if "/api/settings/advanced" in f["url"] and f["method"] == "POST"
+        ]
+        assert len(posts) == 1, (
+            f"expected exactly one save POST (declined change must not "
+            f"save), got {len(posts)}: {result.fetches}"
+        )
+        assert (
+            json.loads(posts[0]["body"]).get("dev_tools_security_policy_access") is True
+        )
+
+    def test_security_policy_access_toggle_disable_skips_confirm(
+        self, settings_script: str
+    ) -> None:
+        """Unchecking the policy-access toggle must save immediately with
+        NO confirm() prompt — the gate protects only the arming
+        direction. A confirm on disable whose Cancel path force-unchecks
+        would leave the UI showing OFF while the server keeps access ON."""
+        adv_field = {
+            "field": "dev_tools_security_policy_access",
+            "env_var": "HAMCP_DEV_SECURITY_POLICY_ACCESS",
+            "value": True,
+            "type": "bool",
+            "section": "developer",
+            "origin": "file",
+            "editable": True,
+        }
+        applied = {"dev_tools_security_policy_access": False}
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [adv_field], "is_addon": False},
+                "responses": [
+                    {"status": 200, "json": {"fields": [adv_field], "is_addon": False}},
+                    {"status": 200, "json": {"applied": applied}},
+                    {"status": 200, "json": {"fields": [adv_field], "is_addon": False}},
+                ],
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const cb = document.querySelector(
+                '#advDeveloper input[data-adv-field="dev_tools_security_policy_access"]');
+              document.body.setAttribute('data-rendered', String(!!cb && cb.checked));
+              let confirms = 0;
+              window.confirm = () => { confirms += 1; return false; };
+              cb.checked = false;
+              cb.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 1500));
+              document.body.setAttribute('data-confirms', String(confirms));
+            """,
+        )
+        _assert_clean_init(result)
+        assert 'data-rendered="true"' in result.dom, (
+            "policy-access row did not render checked into #advDeveloper"
+        )
+        assert 'data-confirms="0"' in result.dom, (
+            "disabling policy access must not prompt confirm()"
+        )
+        posts = [
+            f
+            for f in result.fetches
+            if "/api/settings/advanced" in f["url"] and f["method"] == "POST"
+        ]
+        assert len(posts) == 1, (
+            f"disable must auto-save exactly once, got {len(posts)}: {result.fetches}"
+        )
+        assert (
+            json.loads(posts[0]["body"]).get("dev_tools_security_policy_access")
+            is False
+        )
+
     def test_advanced_field_autosave_error_shows_error_toast(
         self, settings_script: str
     ) -> None:
