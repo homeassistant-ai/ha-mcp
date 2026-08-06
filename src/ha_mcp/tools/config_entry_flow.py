@@ -32,7 +32,12 @@ from typing import Any, Literal, NoReturn
 
 from fastmcp.exceptions import ToolError
 
-from ..client.rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
+from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from .config_entry_flow_form import _extract_schema_field_names
 from .config_entry_flow_walker import (
@@ -44,7 +49,10 @@ from .helpers import raise_tool_error, validate_identifier_not_empty
 
 logger = logging.getLogger(__name__)
 
-_KNOWN_AUXILIARY_ENTRY_DOMAINS = frozenset({"switch_as_x"})
+_KNOWN_AUXILIARY_ENTRY_DOMAINS = frozenset(
+    {"derivative", "switch_as_x", "threshold", "utility_meter"}
+)
+_DEVICE_CONNECTION_ID_TYPES = frozenset({"ieee", "mac", "zigbee"})
 
 
 def build_reconfigure_rollback_metadata(
@@ -166,12 +174,15 @@ async def _collect_reconfigure_identity(
         )
         identifiers: list[str] = []
         for row in matching_device_rows:
-            for field in ("identifiers", "connections"):
-                for identifier in row.get(field, []):
-                    if isinstance(identifier, (list, tuple)) and len(identifier) >= 2:
-                        identifiers.append(str(identifier[1]))
-                    elif isinstance(identifier, str):
-                        identifiers.append(identifier)
+            identifiers.extend(
+                str(identifier[1])
+                for identifier in row.get("connections", [])
+                if (
+                    isinstance(identifier, (list, tuple))
+                    and len(identifier) >= 2
+                    and str(identifier[0]).lower() in _DEVICE_CONNECTION_ID_TYPES
+                )
+            )
         identity["macs"] = sorted(
             {
                 _normalise_identity_value(value)
@@ -248,7 +259,7 @@ async def _optional_registry_rows(
     method_name: str,
     entry_id: str,
 ) -> list[dict[str, Any]] | None:
-    """Read one registry when available, without making offline devices a blocker."""
+    """Read one registry, preserving transport failures for fail-closed callers."""
     method: Any = getattr(client, method_name, None)
     if not callable(method):
         return None
@@ -262,6 +273,8 @@ async def _optional_registry_rows(
         OSError,
         TimeoutError,
         HomeAssistantConnectionError,
+        HomeAssistantCommandError,
+        HomeAssistantCommandTimeout,
     ) as err:
         raise (
             err
@@ -328,11 +341,13 @@ def _raise_post_commit_verification_error(
         payload = create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
             "Reconfiguration was applied but could not be verified",
+            details=str(error),
         )
     if not isinstance(payload, dict):
         payload = create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
             "Reconfiguration was applied but could not be verified",
+            details=str(error),
         )
 
     payload["status"] = (
@@ -608,11 +623,7 @@ def _verify_reconfigure_identity_fields(
     """Verify the identity anchors that must survive a reconfigure flow."""
     before_unique_id = before.get("unique_id")
     after_unique_id = after.get("unique_id")
-    if (
-        before_unique_id is not None
-        and after_unique_id is not None
-        and after_unique_id != before_unique_id
-    ):
+    if before_unique_id is not None and after_unique_id != before_unique_id:
         _raise_identity_mismatch(
             entry_id,
             "Reconfigure flow changed the original entry unique_id",
@@ -756,8 +767,8 @@ async def _verify_reconfigured_entry(
     if after_related_entry_ids:
         _raise_identity_mismatch(
             entry_id,
-            "Reconfigure flow left duplicate config entries sharing the registered "
-            "device from the same integration",
+            "Reconfigure flow left an incompatible related config entry in the same "
+            "domain",
             before=before_identity,
             after=after_identity,
             expected=expected_identity,
@@ -796,14 +807,14 @@ async def _verify_reconfigured_entry(
         )
 
     device_identity_verified = bool(
-        after_identity.get("device_registry_available")
-        and before_device_ids
+        before_identity.get("device_registry_available")
+        and after_identity.get("device_registry_available")
         and after_device_ids == before_device_ids
         and (not expected_device_id or expected_device_id in after_device_ids)
     )
     entity_identity_verified = bool(
-        after_identity.get("entity_registry_available")
-        and before_entity_ids
+        before_identity.get("entity_registry_available")
+        and after_identity.get("entity_registry_available")
         and after_entity_ids == before_entity_ids
         and (not expected_entity_ids or after_entity_ids == expected_entity_ids)
     )
@@ -944,8 +955,16 @@ async def _validate_reconfigure_identity_and_duplicates(
         ),
     )
     for expected, available, key, message in checks:
-        if expected is None or not available:
+        if expected is None:
             continue
+        if not available:
+            _raise_identity_mismatch(
+                entry_id,
+                f"Cannot compare expected {key}: identity evidence is unavailable",
+                before=before_identity,
+                after=before_identity,
+                expected=expected_identity,
+            )
         normalised = (
             {_normalise_identity_value(value) for value in available}
             if key == "mac"
@@ -962,14 +981,31 @@ async def _validate_reconfigure_identity_and_duplicates(
                 expected=expected_identity,
             )
     expected_entities = expected_identity["entity_ids"]
-    if (
-        expected_entities
-        and before_identity["entity_ids"]
-        and set(expected_entities) != set(before_identity["entity_ids"])
+    if expected_entities and not before_identity.get("entity_registry_available"):
+        _raise_identity_mismatch(
+            entry_id,
+            "Cannot compare expected entity_ids: entity registry is unavailable",
+            before=before_identity,
+            after=before_identity,
+            expected=expected_identity,
+        )
+    if expected_entities and set(expected_entities) != set(
+        before_identity["entity_ids"]
     ):
         _raise_identity_mismatch(
             entry_id,
             "The entry does not match expected entity_ids before reconfigure",
+            before=before_identity,
+            after=before_identity,
+            expected=expected_identity,
+        )
+    expected_mac = expected_identity.get("mac")
+    if expected_mac is not None and not before_identity.get(
+        "device_registry_available"
+    ):
+        _raise_identity_mismatch(
+            entry_id,
+            "Cannot compare expected MAC: device registry is unavailable",
             before=before_identity,
             after=before_identity,
             expected=expected_identity,
@@ -983,8 +1019,8 @@ async def _validate_reconfigure_identity_and_duplicates(
     if related_entry_ids:
         _raise_identity_mismatch(
             entry_id,
-            "The entry has a registered device shared with duplicate config entries "
-            "from the same integration",
+            "The entry has a registered device shared with a duplicate or incompatible "
+            "related config entry in the same domain",
             before=before_identity,
             after=before_identity,
             expected=expected_identity,
@@ -1103,6 +1139,13 @@ async def _verify_reconfigure_result(
             )
         except Exception as err:
             last_verification_error = err
+            logger.warning(
+                "Reconfigure verification attempt %d failed (%s): %s",
+                attempt + 1,
+                type(err).__name__,
+                err,
+                exc_info=True,
+            )
             if attempt < 2:
                 await asyncio.sleep(0.25 * (attempt + 1))
     if after is None or verification is None:

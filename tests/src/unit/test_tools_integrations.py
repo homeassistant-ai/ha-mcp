@@ -1962,6 +1962,7 @@ class TestSetIntegrationModes:
             expected_mac=None,
             expected_entity_ids=None,
             confirm=True,
+            confirm_token=None,
         )
         assert result is sentinel
 
@@ -1984,18 +1985,18 @@ class TestSetIntegrationModes:
                 "ha_mcp.tools.tools_integrations._validate_reconfigure_identity_and_duplicates",
                 new=AsyncMock(return_value=identity),
             ) as validate_mock,
-            pytest.raises(ToolError) as exc_info,
         ):
-            await tools._run_reconfigure(
+            preview = await tools._run_reconfigure(
                 "abc",
                 config={"host": "10.0.50.170"},
                 expected_device_id="device-1",
                 confirm=False,
             )
 
-        payload = json.loads(str(exc_info.value))
-        assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert payload["status"] == "validation_only"
+        assert preview["success"] is True
+        assert preview["preview"] is True
+        assert preview["status"] == "preview"
+        assert preview["confirm_token"].startswith("sha256:")
         validate_mock.assert_awaited_once_with(
             mock_client,
             entry,
@@ -2034,11 +2035,18 @@ class TestSetIntegrationModes:
                 new=AsyncMock(return_value={"success": True}),
             ) as apply_mock,
         ):
+            preview = await tools._run_reconfigure(
+                "abc",
+                config={"host": "10.0.50.170"},
+                expected_device_id="device-1",
+                confirm=False,
+            )
             result = await tools._run_reconfigure(
                 "abc",
                 config={"host": "10.0.50.170"},
                 expected_device_id="device-1",
                 confirm=True,
+                confirm_token=preview["confirm_token"],
             )
 
         assert result == {"success": True}
