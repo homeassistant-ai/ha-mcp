@@ -308,9 +308,11 @@ class TestIntegrationManagement:
                 "config": {},
             },
         )
-        assert result.get("success") is False
-        assert result.get("error", {}).get("code") == "VALIDATION_INVALID_PARAMETER"
-        assert result.get("status") == "validation_only"
+        assert result.get("success") is True
+        assert result.get("preview") is True
+        assert result.get("status") == "preview"
+        assert isinstance(result.get("confirm_token"), str)
+        assert result["confirm_token"].startswith("sha256:")
 
         after_result = await mcp_client.call_tool(
             "ha_get_integration", {"entry_id": entry_id}
@@ -345,6 +347,20 @@ class TestIntegrationManagement:
         assert isinstance(config, dict), (
             "HA_RECONFIGURE_E2E_CONFIG must be a JSON object"
         )
+        preview = await safe_call_tool(
+            mcp_client,
+            "ha_set_integration",
+            {
+                "entry_id": entry_id,
+                "reconfigure": True,
+                "config": config,
+            },
+        )
+        assert preview.get("success") is True, preview
+        assert preview.get("preview") is True, preview
+        confirm_token = preview.get("confirm_token")
+        assert isinstance(confirm_token, str) and confirm_token.startswith("sha256:")
+
         result = await safe_call_tool(
             mcp_client,
             "ha_set_integration",
@@ -353,6 +369,7 @@ class TestIntegrationManagement:
                 "reconfigure": True,
                 "config": config,
                 "confirm": True,
+                "confirm_token": confirm_token,
             },
         )
         assert result.get("success") is True, result
