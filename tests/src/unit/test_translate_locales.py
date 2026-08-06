@@ -47,6 +47,17 @@ _TRANSLATED_LOCALES = sorted(
     for path in _SETTINGS_LOCALES.glob("*.json")
     if path.stem != "en" and json.loads(path.read_text("utf-8")).get("messages")
 )
+# The other authored surface samples its own catalog, never the settings one
+# (`_surface_catalogs`), so it needs its own list. Read the production constant
+# rather than rebuilding the path: a catalog this list misses is a catalog the
+# check below silently never runs on. An empty catalog is excluded for the same
+# reason as above — AGENTS.md § Translations lets a component catalog start
+# empty, and there is no wording in one to sample.
+_COMPONENT_LOCALES = sorted(
+    path.stem
+    for path in translate_locales.COMPONENT_DIR.glob("*.json")
+    if path.stem != "en" and _flatten(json.loads(path.read_text("utf-8")))
+)
 
 
 _SAMPLE_ENGLISH = {
@@ -208,6 +219,38 @@ class TestStyleSamples:
         assert all(
             translate_locales._SECOND_PERSON_RE.search(english[key]) for key in keys
         ), f"{locale}.json samples {keys} do not address the reader"
+
+    def test_the_component_catalogs_are_discovered(self) -> None:
+        """Same glob guard as above, for the other authored surface."""
+        assert _COMPONENT_LOCALES, "no component catalogs found to check samples for"
+
+    @pytest.mark.parametrize("locale", _COMPONENT_LOCALES)
+    def test_every_shipped_component_catalog_gets_reader_addressing_samples(
+        self, locale: str
+    ) -> None:
+        """The component surface carries the same guarantee and less margin.
+
+        A settings catalog samples from hundreds of keys, so one English string
+        losing its second person costs it one candidate. A component catalog
+        starts empty and is filled a key at a time, so early on the whole
+        surface can rest on a single shared key — today `nl` is exactly that,
+        one key. Lose the addressing there and the engine is told nothing about
+        how this language addresses its reader and falls back to its own
+        register for every later string, and the only trace is a line on
+        stderr inside an unattended workflow run. Goes through
+        ``_surface_catalogs`` on purpose: that it reads the component catalog
+        rather than the settings one is the property at issue.
+        """
+        english, translated = translate_locales._surface_catalogs(locale, "component")
+        keys = translate_locales._style_sample_keys(english, translated)
+
+        assert keys, (
+            f"component {locale}.json yields no style sample, so the engine "
+            "gets no signal about how this catalog addresses its reader"
+        )
+        assert all(
+            translate_locales._SECOND_PERSON_RE.search(english[key]) for key in keys
+        ), f"component {locale}.json samples {keys} do not address the reader"
 
 
 class TestPromptRegisterRule:
