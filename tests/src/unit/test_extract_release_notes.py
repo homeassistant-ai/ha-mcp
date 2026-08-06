@@ -253,6 +253,15 @@ def test_an_info_string_line_does_not_close_an_open_fence() -> None:
     assert _after("```python\n", "```python\n", "```   \n").closers == ""
 
 
+def test_details_tags_on_one_line_are_counted_in_source_order() -> None:
+    """Netting a line's tags hides an opener that follows a closer."""
+    assert _after("</details><details>\n").closers == "\n</details>", (
+        "a close-then-open line nets to zero but really leaves one open"
+    )
+    assert _after("<details></details>\n").closers == ""
+    assert _after("<details>\n", "</details><details>\n").closers == "\n</details>"
+
+
 def test_feed_leaves_the_instance_it_was_called_on_untouched() -> None:
     """`cap_to_limit` peeks at the next state before deciding to take a line."""
     outside = extract._OpenBlocks()

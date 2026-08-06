@@ -49,6 +49,8 @@ _NEXT_SECTION_RE = re.compile(r"^## v\d")
 # notice included, then renders as code.
 _FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 
+_DETAILS_TAG_RE = re.compile(r"</?details>")
+
 # Truncation can land inside a block the changelog template opened: a fenced
 # code block, or the `<details><summary>Internal Changes</summary>` element
 # semantic-release wraps internal commits in. Both are closed after the cut --
@@ -136,8 +138,13 @@ class _OpenBlocks:
             return self
         if self.fence:  # `<details>` inside a code block is text, not markup
             return self
-        opened = line.count("<details>") - line.count("</details>")
-        return replace(self, details_depth=max(self.details_depth + opened, 0))
+        # Left to right, clamping after each close, rather than netting the
+        # line's tags: `</details><details>` nets to zero but really leaves one
+        # open, and its closer would then be dropped.
+        depth = self.details_depth
+        for tag in _DETAILS_TAG_RE.findall(line):
+            depth = depth + 1 if tag == "<details>" else max(depth - 1, 0)
+        return replace(self, details_depth=depth)
 
     @property
     def closers(self) -> str:
