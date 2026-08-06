@@ -223,9 +223,9 @@ async def self_gated_policy_mcp(ha_container_with_fresh_config, monkeypatch, tmp
     monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
     get_data_dir.cache_clear()
 
-    import ha_mcp.config
+    from ha_mcp import config as ha_mcp_config
 
-    monkeypatch.setattr(ha_mcp.config, "_settings", None)
+    monkeypatch.setattr(ha_mcp_config, "_settings", None)
 
     ha_client = HomeAssistantClient(
         base_url=container_info["base_url"],
@@ -292,10 +292,11 @@ async def test_policy_tool_can_gate_itself(self_gated_policy_mcp):
     assert installed.get("success") is True, installed
 
     # The rule now gates the tool: even a read needs approval.
+    # create_error_response spreads the middleware's context fields at the
+    # TOP level of the body, not under error.context.
     body = await _expect_approval_required(client, {"action": "get"})
-    context = body["error"]["context"]
-    assert context["matched_rule"]["tool_name"] == TOOL_NAME, body
-    pending = server.approval_queue.get(context["token"])
+    assert body["matched_rule"]["tool_name"] == TOOL_NAME, body
+    pending = server.approval_queue.get(body["token"])
     assert pending is not None and pending.tool_name == TOOL_NAME, body
 
     # And so does a write that would remove the gate.

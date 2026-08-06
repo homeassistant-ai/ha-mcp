@@ -781,9 +781,7 @@ def main() -> int:
     # so it is written unconditionally. In addon mode this export is the ONLY
     # channel that reaches the server: get_feature_flag_origin reports
     # 'addon' for every non-beta flag and the override-file applier skips it.
-    os.environ["ENABLE_SECURITY_POLICY_TOOL"] = str(
-        enable_security_policy_tool
-    ).lower()
+    os.environ["ENABLE_SECURITY_POLICY_TOOL"] = str(enable_security_policy_tool).lower()
     # ENABLE_MANDATORY_BPS is non-beta and default-ON, so it is written
     # unconditionally (like the stable core settings above) — never
     # presence-gated or beta-master-gated like the beta sub-flags below.
