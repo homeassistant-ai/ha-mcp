@@ -731,7 +731,7 @@ wheels = [
 
 [[package]]
 name = "ha-mcp"
-version = "8.1.0"
+version = "8.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
@@ -743,7 +743,6 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "truststore" },
     { name = "tzdata" },
-    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -769,6 +768,7 @@ dev = [
     { name = "testcontainers" },
     { name = "voluptuous" },
     { name = "voluptuous-openapi" },
+    { name = "websockets" },
 ]
 
 [package.metadata]
@@ -782,7 +782,6 @@ requires-dist = [
     { name = "python-dotenv", specifier = "==1.2.2" },
     { name = "truststore", specifier = "==0.10.4" },
     { name = "tzdata", specifier = ">=2024.1" },
-    { name = "websockets", specifier = "==17.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -808,6 +807,7 @@ dev = [
     { name = "testcontainers", specifier = ">=4.13.0" },
     { name = "voluptuous", specifier = ">=0.15.2" },
     { name = "voluptuous-openapi", specifier = ">=0.4.1" },
+    { name = "websockets", specifier = ">=15.0.1" },
 ]
 
 [[package]]

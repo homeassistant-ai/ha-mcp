@@ -87,6 +87,16 @@ is named):
   underneath, so a missing key shows English's own word rather than reading as
   a gap — and the bare enum literal where English lacks the key too. That is
   why they are owed at once rather than left to the sync.
+- `policies.pending.already_decided`, the sentence one of those `Decision`
+  words is interpolated into. `TestAlreadyDecidedCopy` in
+  `tests/src/unit/test_settings_ui_js_behavior.py` drives the real 409 handler
+  under every non-English catalog and compares the whole rendered alert, so
+  carrying the word without its host sentence fails on the missing key. Whole
+  sentence rather than containment is deliberate: a host that falls back to
+  English still reads as an English clause around a translated word.
+  **These JS behaviour tests skip unless `tests/js/` has its npm dependencies
+  installed** (`npm install` there) — locally they are silent, in CI they are
+  not.
 - At least one translated key whose English addresses the reader in the
   second person, so `scripts/translate_locales.py` can show the engine
   how this catalog addresses its reader

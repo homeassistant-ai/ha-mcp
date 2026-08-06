@@ -7,6 +7,8 @@ on how to create effective bug reports.
 
 import asyncio
 import importlib
+import importlib.metadata
+import importlib.util
 import logging
 import os
 import platform
@@ -201,6 +203,79 @@ def _detect_platform() -> dict[str, str]:
         "architecture": platform.machine(),
         "python_version": platform.python_version(),
     }
+
+
+def _format_websockets_dependency_value(diagnostic_info: dict[str, Any]) -> str:
+    """Render the websockets probe for the human-pasteable report.
+
+    Mirrors the sibling ``_format_*_value`` helpers: a degraded probe stays
+    visibly degraded instead of disappearing — for the #2135/#2146 failure
+    class this line IS the diagnosis, so it must survive into the report a
+    user pastes.
+    """
+    state = diagnostic_info.get("websockets_dependency") or {}
+    if not state:
+        return "not probed"
+    if state.get("vendored_import_ok"):
+        value = f"vendored {state.get('vendored_version') or 'unknown'}"
+        if state.get("vendored_c_speedups") is False:
+            value += " (pure-Python)"
+    else:
+        value = (
+            f"vendored BROKEN: {state.get('vendored_import_error', 'import failed')}"
+        )
+    if (error := state.get("shared_metadata_error")) is not None:
+        shared = f"metadata unreadable: {error}"
+    elif (version := state.get("shared_metadata_version")) is not None:
+        shared = f"{version} per dist metadata"
+    else:
+        shared = "absent"
+    return f"{value} | shared env copy: {shared}"
+
+
+def _websockets_dependency_state() -> dict[str, Any]:
+    """Report the vendored websockets copy plus the shared copy's state.
+
+    ha-mcp runs on its private ``ha_mcp._vendor.websockets``, immune to the
+    shared site-packages copy that ~20 HA integration libraries contend
+    over (#2135/#2146). The vendored version proves what the server
+    actually runs; the shared copy's metadata version is ecosystem context
+    for triage (a torn shared copy no longer affects ha-mcp, but still
+    breaks the integrations that use it). Any probe failure is captured as
+    data — the bug-report path itself must never break on a broken
+    dependency.
+    """
+    state: dict[str, Any] = {}
+    try:
+        vendored = importlib.import_module("ha_mcp._vendor.websockets")
+        importlib.import_module("ha_mcp._vendor.websockets.asyncio.client")
+        state["vendored_version"] = getattr(vendored, "__version__", "Unknown")
+        state["vendored_import_ok"] = True
+    except Exception as e:
+        state["vendored_version"] = None
+        state["vendored_import_ok"] = False
+        state["vendored_import_error"] = f"{type(e).__name__}: {e}"
+    # Whether the vendored copy has its optional C accelerator. The vendor
+    # sync ships pure Python only (scripts/vendor_websockets.py strips the
+    # compiled extension), so this answers "did vendoring cost throughput?"
+    # without the reporter having to guess.
+    state["vendored_c_speedups"] = (
+        importlib.util.find_spec("ha_mcp._vendor.websockets.speedups") is not None
+    )
+    # Shared-copy context for triage, read from DIST METADATA only: ha-mcp
+    # never imports the shared copy, and probing it by import would mean
+    # touching the contested package this whole design avoids. Absent and
+    # unreadable are reported distinctly — collapsing a corrupt install into
+    # "absent" would read as a clean environment during exactly the failure
+    # class this field exists for.
+    try:
+        state["shared_metadata_version"] = importlib.metadata.version("websockets")
+    except importlib.metadata.PackageNotFoundError:
+        state["shared_metadata_version"] = None
+    except Exception as e:
+        state["shared_metadata_version"] = None
+        state["shared_metadata_error"] = f"{type(e).__name__}: {e}"
+    return state
 
 
 # Tool-surface-shaping toggles surfaced in bug reports. The set is small on
@@ -629,6 +704,7 @@ def _build_formatted_report(
         f"Home Assistant Version: {diagnostic_info['home_assistant_version']}",
         f"Connection Status: {diagnostic_info['connection_status']}",
         f"Entity Count: {diagnostic_info['entity_count']}",
+        f"websockets Dependency: {_format_websockets_dependency_value(diagnostic_info)}",
     ]
     if "location_name" in diagnostic_info:
         report_lines.append(f"Location Name: {diagnostic_info['location_name']}")
@@ -886,6 +962,7 @@ class BugReportTools:
             "instance": _instance_identity(),
             "installation_method": install_method,
             "platform": platform_info,
+            "websockets_dependency": _websockets_dependency_state(),
             "mcp_transport": mcp_transport,
             "mcp_client_info": client_info,
             "config_toggles": config_toggles,

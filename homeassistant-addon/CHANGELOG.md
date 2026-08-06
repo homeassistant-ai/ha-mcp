@@ -3,6 +3,38 @@
 <!-- version list -->
 
 
+## v8.1.1 (2026-08-06)
+
+### Changed
+
+- Name the 409 host sentence among the strings a catalog owes
+  ([#2151](https://github.com/homeassistant-ai/ha-mcp/pull/2151))
+- Correct the meta-only stub claim in the add-a-language procedure
+  ([#2144](https://github.com/homeassistant-ai/ha-mcp/pull/2144))
+
+### Fixed
+
+- Vendor websockets and stop force-replacing HA's shipped packages
+  ([#2150](https://github.com/homeassistant-ai/ha-mcp/pull/2150))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- **addon**: Publish dev addon version 8.1.0.dev2247 [skip ci]
+  ([`2123bea`](https://github.com/homeassistant-ai/ha-mcp/commit/2123bea41224dbde58e4d4b0814f0cffe7f462bf))
+- **addon**: Publish dev addon version 8.1.0.dev2245 [skip ci]
+  ([`8aeb0ca`](https://github.com/homeassistant-ai/ha-mcp/commit/8aeb0ca8fa7f7c95f13a175d2911ab40c4cdfacf))
+- **addon**: Publish dev addon version 8.1.0.dev2243 [skip ci]
+  ([`210ac6f`](https://github.com/homeassistant-ai/ha-mcp/commit/210ac6f3fb031a6e066a18743e890263bfbf2248))
+- **addon**: Publish version 8.1.0 [skip ci]
+  ([`6213fc8`](https://github.com/homeassistant-ai/ha-mcp/commit/6213fc8047171a2731af6299f9bcecd73e96fcad))
+</details>
+
+
 ## v8.1.0 (2026-08-05)
 
 ### Added

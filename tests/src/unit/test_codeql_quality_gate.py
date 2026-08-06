@@ -109,11 +109,29 @@ def test_vendored_paths_are_ignored(tmp_path: Path) -> None:
         tmp_path,
         [
             _result("py/empty-except", "tests/initial_test_state/x.py", 1, "vendored"),
+            _result(
+                "py/empty-except",
+                "src/ha_mcp/_vendor/websockets/client.py",
+                1,
+                "vendored websockets",
+            ),
+            # Our OWN file inside _vendor/: the ignore is scoped to the
+            # library subtree, matching ruff's extend-exclude, so this must
+            # still gate. Ignoring all of _vendor/ would silently ungate it.
+            _result(
+                "py/empty-except",
+                "src/ha_mcp/_vendor/__init__.py",
+                1,
+                "authored",
+            ),
             _result("py/empty-except", "src/a.py", 1, "first-party"),
         ],
     )
     findings = gate.load_findings(path)
-    assert [f[0] for f in findings] == ["src/a.py"]
+    assert [f[0] for f in findings] == [
+        "src/a.py",
+        "src/ha_mcp/_vendor/__init__.py",
+    ]
 
 
 def test_javascript_findings_gate_and_vendored_js_is_ignored(tmp_path: Path) -> None:
