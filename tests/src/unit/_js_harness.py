@@ -14,6 +14,7 @@ syntax errors; this harness adds behavioural assertions.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -52,7 +53,7 @@ def _default_timeout_s() -> float:
         override = float(os.environ.get("HA_MCP_JS_HARNESS_TIMEOUT", ""))
     except ValueError:
         return 15.0
-    return override if override > 0 else 15.0
+    return override if math.isfinite(override) and override > 0 else 15.0
 
 
 def _esbuild_binary() -> Path:

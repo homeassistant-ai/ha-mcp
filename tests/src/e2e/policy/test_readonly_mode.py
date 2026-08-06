@@ -33,7 +33,11 @@ from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.settings_ui import MANDATORY_TOOLS
 from ha_mcp.utils.data_paths import get_data_dir
 
-from ..utilities.assertions import parse_mcp_result, tool_error_to_result
+from ..utilities.assertions import (
+    MCPAssertions,
+    parse_mcp_result,
+    tool_error_to_result,
+)
 
 
 async def _expect_read_only_blocked(
@@ -498,9 +502,10 @@ async def test_security_policy_tool_read_works_and_set_blocked(readonly_policyto
     names = {t.name for t in await client.list_tools()}
     assert "ha_manage_security_policy" in names, names
 
-    read = parse_mcp_result(
-        await client.call_tool("ha_manage_security_policy", {"action": "get"})
-    )
+    async with MCPAssertions(client) as mcp:
+        read = await mcp.call_tool_success(
+            "ha_manage_security_policy", {"action": "get"}
+        )
     assert read.get("success") is True, read
 
     body = await _expect_read_only_blocked(

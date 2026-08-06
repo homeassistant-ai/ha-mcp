@@ -1163,6 +1163,20 @@ _OFF_FLAG_RESPONSE: dict = {
     "json": {"flags": {"enable_security_policy_tool": {"value": False}}},
 }
 
+# Both Policies-tab flags reported and off: the state a real operator starts
+# from. The POST-body tests need it because an ABSENT flag entry now renders
+# its switch indeterminate and disabled — dispatching a synthetic change on
+# that switch would exercise a click no user could make.
+_BOTH_POLICY_FLAGS_OFF_RESPONSE: dict = {
+    "status": 200,
+    "json": {
+        "flags": {
+            "enable_tool_security_policies": {"value": False},
+            "enable_security_policy_tool": {"value": False},
+        }
+    },
+}
+
 
 class TestPolicyTabFlow:
     """Locks in the new condition-builder UX wiring: master toggle
@@ -1182,8 +1196,20 @@ class TestPolicyTabFlow:
         fetches = {
             **DEFAULT_FETCHES,
             "/api/settings/features": {
-                "status": 200,
-                "json": {"restart_required": True},
+                "responses": [
+                    _BOTH_POLICY_FLAGS_OFF_RESPONSE,  # 1-2: the two init reads
+                    _BOTH_POLICY_FLAGS_OFF_RESPONSE,
+                    _BOTH_POLICY_FLAGS_OFF_RESPONSE,  # 3: the explicit sync below
+                    # 4: the save POST (sticks for the follow-up re-read;
+                    # the applied echo then paints the confirmed state).
+                    {
+                        "status": 200,
+                        "json": {
+                            "applied": {"enable_tool_security_policies": True},
+                            "restart_required": True,
+                        },
+                    },
+                ]
             },
         }
         result = run_script(
@@ -1191,13 +1217,26 @@ class TestPolicyTabFlow:
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
             invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              await window.syncPolicyGlobalToggles();
               const cb = document.getElementById('policy-master-toggle');
+              const pre = document.createElement('div');
+              pre.id = '__master_pre_dispatch_probe';
+              pre.dataset.disabled = String(cb.disabled);
+              pre.dataset.indeterminate = String(cb.indeterminate);
+              document.body.appendChild(pre);
               cb.checked = true;
               cb.dispatchEvent(new Event('change'));
-              await new Promise(r => setTimeout(r, 50));
+              await new Promise(r => setTimeout(r, 100));
             """,
         )
         _assert_clean_init(result)
+        pre = re.search(r'<div[^>]*id="__master_pre_dispatch_probe"[^>]*>', result.dom)
+        assert pre is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        assert 'data-disabled="false"' in pre.group(0), (
+            f"switch must be editable before the synthetic click: {pre.group(0)}"
+        )
+        assert 'data-indeterminate="false"' in pre.group(0), pre.group(0)
         flag_posts = [
             f
             for f in result.fetches
@@ -1242,8 +1281,20 @@ class TestPolicyTabFlow:
         fetches = {
             **DEFAULT_FETCHES,
             "/api/settings/features": {
-                "status": 200,
-                "json": {"restart_required": True},
+                "responses": [
+                    _BOTH_POLICY_FLAGS_OFF_RESPONSE,  # 1-2: the two init reads
+                    _BOTH_POLICY_FLAGS_OFF_RESPONSE,
+                    _BOTH_POLICY_FLAGS_OFF_RESPONSE,  # 3: the explicit sync below
+                    # 4: the save POST (sticks for the follow-up re-read;
+                    # the applied echo then paints the confirmed state).
+                    {
+                        "status": 200,
+                        "json": {
+                            "applied": {"enable_security_policy_tool": True},
+                            "restart_required": True,
+                        },
+                    },
+                ]
             },
         }
         result = run_script(
@@ -1251,13 +1302,26 @@ class TestPolicyTabFlow:
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
             invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              await window.syncPolicyGlobalToggles();
               const cb = document.getElementById('policy-manage-tool-toggle');
+              const pre = document.createElement('div');
+              pre.id = '__manage_pre_dispatch_probe';
+              pre.dataset.disabled = String(cb.disabled);
+              pre.dataset.indeterminate = String(cb.indeterminate);
+              document.body.appendChild(pre);
               cb.checked = true;
               cb.dispatchEvent(new Event('change'));
-              await new Promise(r => setTimeout(r, 50));
+              await new Promise(r => setTimeout(r, 100));
             """,
         )
         _assert_clean_init(result)
+        pre = re.search(r'<div[^>]*id="__manage_pre_dispatch_probe"[^>]*>', result.dom)
+        assert pre is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        assert 'data-disabled="false"' in pre.group(0), (
+            f"switch must be editable before the synthetic click: {pre.group(0)}"
+        )
+        assert 'data-indeterminate="false"' in pre.group(0), pre.group(0)
         matched = False
         for f in result.fetches:
             if f["method"] != "POST" or "/api/settings/features" not in f["url"]:
@@ -1312,6 +1376,8 @@ class TestPolicyTabFlow:
               const probe = document.createElement('div');
               probe.id = '__manage_tool_probe';
               probe.dataset.checked = String(cb.checked);
+              probe.dataset.indeterminate = String(cb.indeterminate);
+              probe.dataset.disabled = String(cb.disabled);
               document.body.appendChild(probe);
             """,
         )
@@ -1321,6 +1387,10 @@ class TestPolicyTabFlow:
         assert 'data-checked="false"' in m.group(0), (
             f"failed save must revert the switch to its previous value: {m.group(0)}"
         )
+        # Reverted must also mean retryable: a rejected save leaves the
+        # server's value known, so the switch stays editable, not unknown.
+        assert 'data-indeterminate="false"' in m.group(0), m.group(0)
+        assert 'data-disabled="false"' in m.group(0), m.group(0)
 
     def test_unconfirmed_save_keeps_the_applied_value(
         self, settings_script: str

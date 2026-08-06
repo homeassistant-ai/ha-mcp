@@ -54,12 +54,14 @@ def _clear_remember_cache(server: Any | None) -> None:
 
 async def get_policy(server: Any) -> dict[str, Any]:
     """Return the full tool-security policy plus its enforcement status."""
+    import asyncio
+
     from ..config import get_global_settings
     from ..utils.data_paths import get_data_dir
     from .persistence import load_policy
 
     try:
-        policy = load_policy(get_data_dir())
+        policy = await asyncio.to_thread(load_policy, get_data_dir())
     except ValueError as exc:
         raise_tool_error(
             create_error_response(
