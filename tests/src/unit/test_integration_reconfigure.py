@@ -731,6 +731,73 @@ async def test_reconfigure_rejects_expected_mac_mismatch_before_flow(
 
 
 @pytest.mark.asyncio
+async def test_reconfigure_allows_entry_without_identity_and_reports_partial_verification() -> (
+    None
+):
+    """An offline entry may proceed, but new identity cannot prove continuity."""
+    before = {
+        "entry_id": "offline-entry",
+        "domain": "shelly",
+        "state": "setup_retry",
+        "supports_reconfigure": True,
+    }
+    after = {
+        **before,
+        "state": "loaded",
+        "unique_id": "new-device-identity",
+    }
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(side_effect=[before, after])
+    client.list_entity_registry = AsyncMock(
+        side_effect=[
+            [],
+            [
+                {
+                    "entity_id": "switch.offline",
+                    "config_entry_id": "offline-entry",
+                    "device_id": "new-device",
+                }
+            ],
+        ]
+    )
+    client.list_device_registry = AsyncMock(
+        side_effect=[
+            [],
+            [
+                {
+                    "id": "new-device",
+                    "config_entries": ["offline-entry"],
+                }
+            ],
+        ]
+    )
+    client.list_config_entries = AsyncMock(return_value=[after])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-offline-no-identity",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client,
+        "offline-entry",
+        config={"host": "10.0.50.187"},
+    )
+
+    assert result["status"] == "applied_but_unverified"
+    assert result["verification"]["identity_verification"] == "partial"
+    assert result["verification"]["device_id_verification"] == (
+        "available_after_change"
+    )
+    client.start_reconfigure_flow.assert_awaited_once_with("shelly", "offline-entry")
+
+
+@pytest.mark.asyncio
 async def test_reconfigure_does_not_treat_temporarily_missing_identity_as_change(
     reconfig_entry: dict[str, object],
 ) -> None:

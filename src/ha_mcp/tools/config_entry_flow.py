@@ -242,19 +242,6 @@ def _verification_state(before_available: bool, after_available: bool) -> str:
     return "unavailable_before_change"
 
 
-def _identity_anchor(identity: dict[str, Any], expected: dict[str, Any]) -> bool:
-    """Whether the entry has any identity anchor, even while its device is offline."""
-    return bool(
-        identity.get("unique_id")
-        or identity.get("device_ids")
-        or identity.get("entity_ids")
-        or expected.get("device_id")
-        or expected.get("unique_id")
-        or expected.get("mac")
-        or expected.get("entity_ids")
-    )
-
-
 def _raise_identity_mismatch(
     entry_id: str,
     message: str,
@@ -761,14 +748,14 @@ async def _verify_reconfigured_entry(
 
     device_identity_verified = bool(
         after_identity.get("device_registry_available")
-        and after_device_ids
-        and (not before_device_ids or after_device_ids == before_device_ids)
+        and before_device_ids
+        and after_device_ids == before_device_ids
         and (not expected_device_id or expected_device_id in after_device_ids)
     )
     entity_identity_verified = bool(
         after_identity.get("entity_registry_available")
-        and after_entity_ids
-        and (not before_entity_ids or after_entity_ids == before_entity_ids)
+        and before_entity_ids
+        and after_entity_ids == before_entity_ids
         and (not expected_entity_ids or after_entity_ids == expected_entity_ids)
     )
     mac_identity_verified = not expected_mac or bool(
@@ -885,24 +872,6 @@ async def _validate_reconfigure_identity_and_duplicates(
         if prepared_identity is not None
         else await _collect_reconfigure_identity(client, entry, entry_id)
     )
-    if not _identity_anchor(before_identity, expected_identity):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "The config entry has no available identity anchor for a safe "
-                "confirmed reconfiguration",
-                suggestions=[
-                    "Provide expected_device_id, expected_unique_id, expected_mac, "
-                    "or expected_entity_ids from an inventory or independent device "
-                    "check. The physical device may remain offline.",
-                ],
-                context={
-                    "entry_id": entry_id,
-                    "domain": domain,
-                    "identity": before_identity,
-                },
-            )
-        )
     checks = (
         (
             expected_identity.get("device_id"),
