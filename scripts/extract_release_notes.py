@@ -16,8 +16,9 @@ changelog rather than letting the API reject the whole release.
 Prints nothing on success; writes the notes to --out. A version that is absent
 -- or present with an empty section, which two released versions in this repo's
 own changelog are -- yields an empty file, which is the signal for the caller's
-own fallback text. The caller cannot tell those two apart, so it warns rather
-than treating the fallback as routine.
+own fallback text. Which of the two happened is reported on stderr, so the run
+log distinguishes a version we failed to find from one that genuinely shipped
+an empty section.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ import argparse
 import os
 import re
 import sys
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 # GitHub's maximum for a release body. The API validates a character count,
@@ -67,25 +69,24 @@ def _heading_re(version: str) -> re.Pattern[str]:
     return re.compile(rf"^## v{re.escape(version.removeprefix('v'))}(?![\w.+-])")
 
 
-def extract_section(changelog: str, version: str) -> str:
-    """Return the changelog body for `version`, or "" when there is none to return.
+def extract_section(changelog: str, version: str) -> str | None:
+    """Return the changelog body for `version`, or None when it has no heading.
 
     The body is everything after the version's heading up to the next version
     heading (or end of file), with surrounding blank lines stripped.
 
-    "" covers two cases the caller cannot distinguish: no heading for `version`
-    at all, and a heading whose section is empty (`## v4.8.0` and `## v1.0.0`
-    in this repo's changelog both are). Both want the caller's fallback text,
-    so the ambiguity is harmless here -- but it means an empty result is not
-    evidence that the heading was missing, and callers should say so in their
-    logs rather than shipping fallback notes silently.
+    None and "" are different answers: None means no `## v<version>` heading
+    exists, "" means the heading is there but its section is empty (`## v4.8.0`
+    and `## v1.0.0` in this repo's changelog both are). Both leave the caller
+    writing fallback notes, but only the first says the extractor failed to
+    find the release -- so they are reported differently.
     """
     heading = _heading_re(version)
     lines = changelog.splitlines(keepends=True)
 
     start = next((i for i, line in enumerate(lines) if heading.match(line)), None)
     if start is None:
-        return ""
+        return None
 
     body = lines[start + 1 :]
     end = next((i for i, line in enumerate(body) if _NEXT_SECTION_RE.match(line)), None)
@@ -103,27 +104,26 @@ def _truncation_notice(repo: str, version: str, limit: int) -> str:
     )
 
 
+@dataclass(frozen=True)
 class _OpenBlocks:
-    """Tracks which markdown blocks are still open as lines are consumed."""
+    """Which markdown blocks are still open after consuming some lines.
 
-    def __init__(self) -> None:
-        # The delimiter of the open fence ("```", "````", "~~~"), or None.
-        self.fence: str | None = None
-        self.details_depth = 0
+    Immutable so that `feed` can be used to ask "what would the state be if I
+    took this line?" without committing to it -- which is exactly what the
+    budget check in `cap_to_limit` needs.
+    """
 
-    def clone(self) -> _OpenBlocks:
-        """A detached copy, for testing whether a line would still fit."""
-        twin = _OpenBlocks()
-        twin.fence, twin.details_depth = self.fence, self.details_depth
-        return twin
+    # The delimiter of the open fence ("```", "````", "~~~"), or None.
+    fence: str | None = None
+    details_depth: int = 0
 
-    def feed(self, line: str) -> None:
+    def feed(self, line: str) -> _OpenBlocks:
+        """The state after `line`, leaving this instance untouched."""
         match = _FENCE_RE.match(line)
         if match:
             delimiter, trailing = match.group(1), match.group(2)
             if self.fence is None:
-                self.fence = delimiter
-                return
+                return replace(self, fence=delimiter)
             # Only the same character, repeated at least as often and carrying
             # nothing but whitespace, closes it. A closing fence cannot have an
             # info string, so ```python inside a ```-block is ordinary content.
@@ -132,12 +132,12 @@ class _OpenBlocks:
                 and len(delimiter) >= len(self.fence)
                 and not trailing.strip()
             ):
-                self.fence = None
-            return
+                return replace(self, fence=None)
+            return self
         if self.fence:  # `<details>` inside a code block is text, not markup
-            return
-        self.details_depth += line.count("<details>") - line.count("</details>")
-        self.details_depth = max(self.details_depth, 0)
+            return self
+        opened = line.count("<details>") - line.count("</details>")
+        return replace(self, details_depth=max(self.details_depth + opened, 0))
 
     @property
     def closers(self) -> str:
@@ -177,8 +177,7 @@ def cap_to_limit(body: str, repo: str, version: str, limit: int) -> str:
     kept: list[str] = []
     used = 0
     for line in body.splitlines(keepends=True):
-        candidate = open_blocks.clone()
-        candidate.feed(line)
+        candidate = open_blocks.feed(line)
         if used + len(line) + len(candidate.closers) > budget:
             break
         kept.append(line)
@@ -234,11 +233,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"extract_release_notes: {e}", file=sys.stderr)
         return 1
 
-    body = extract_section(changelog, args.version)
-    if body:
+    version = args.version.removeprefix("v")
+    section = extract_section(changelog, args.version)
+    body = ""
+    if section is None:
+        print(
+            f"extract_release_notes: no '## v{version}' heading in {args.changelog}",
+            file=sys.stderr,
+        )
+    elif not section:
+        print(
+            f"extract_release_notes: the '## v{version}' section is empty",
+            file=sys.stderr,
+        )
+    else:
         try:
             # Cap the trailing newline too, so the written file never exceeds --limit.
-            body = cap_to_limit(body + "\n", args.repo, args.version, args.limit)
+            body = cap_to_limit(section + "\n", args.repo, args.version, args.limit)
         except ValueError as e:
             print(f"extract_release_notes: {e}", file=sys.stderr)
             return 1

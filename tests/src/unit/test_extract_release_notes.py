@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -13,6 +15,9 @@ _SCRIPT = _REPO_ROOT / "scripts" / "extract_release_notes.py"
 _spec = importlib.util.spec_from_file_location("extract_release_notes", _SCRIPT)
 assert _spec and _spec.loader
 extract = importlib.util.module_from_spec(_spec)
+# Register before exec: @dataclass resolves its class through
+# sys.modules[cls.__module__], which module_from_spec alone does not populate.
+sys.modules[_spec.name] = extract
 _spec.loader.exec_module(extract)
 
 REPO = "homeassistant-ai/ha-mcp"
@@ -55,8 +60,18 @@ def test_leading_v_on_version_is_accepted() -> None:
     )
 
 
-def test_absent_version_yields_empty_so_caller_fallback_engages() -> None:
-    assert extract.extract_section(CHANGELOG, "9.9.9") == ""
+def test_absent_version_yields_none_so_caller_fallback_engages() -> None:
+    assert extract.extract_section(CHANGELOG, "9.9.9") is None
+
+
+def test_a_present_but_empty_section_is_distinguishable_from_an_absent_one() -> None:
+    """`## v4.8.0` and `## v1.0.0` are real released versions with empty sections."""
+    changelog = (
+        "# CHANGELOG\n\n## v4.8.0 (2025-12-01)\n\n\n## v4.7.7 (2025-12-01)\n\n- x\n"
+    )
+
+    assert extract.extract_section(changelog, "4.8.0") == ""
+    assert extract.extract_section(changelog, "4.9.0") is None
 
 
 @pytest.mark.parametrize(
@@ -72,7 +87,7 @@ def test_version_does_not_match_a_longer_version_sharing_its_prefix(
 ) -> None:
     """'8.0.0' must match none of these -- the old awk prefix match matched all."""
     changelog = f"# CHANGELOG\n\n{heading}\n\nwrong section\n"
-    assert extract.extract_section(changelog, "8.0.0") == ""
+    assert extract.extract_section(changelog, "8.0.0") is None
 
 
 def test_a_prerelease_version_still_finds_its_own_section() -> None:
@@ -208,29 +223,43 @@ def test_truncation_closes_a_fence_with_the_delimiter_it_was_opened_with(
     assert len(capped) <= LIMIT
 
 
-def test_a_shorter_or_foreign_fence_line_does_not_close_an_open_fence() -> None:
+def _after(*lines: str) -> Any:
+    """The block state after feeding `lines` through a fresh tracker."""
     blocks = extract._OpenBlocks()
-    blocks.feed("````python\n")
-    assert blocks.closers == "\n````"
+    for line in lines:
+        blocks = blocks.feed(line)
+    return blocks
 
-    blocks.feed("```\n")  # too short to close it
-    blocks.feed("~~~\n")  # wrong character
-    assert blocks.closers == "\n````", "an open fence was closed by a line that can't"
 
-    blocks.feed("`````\n")  # same character, longer — closes it
-    assert blocks.closers == ""
+def test_a_shorter_or_foreign_fence_line_does_not_close_an_open_fence() -> None:
+    assert _after("````python\n").closers == "\n````"
+
+    # too short to close it, then the wrong character
+    assert _after("````python\n", "```\n", "~~~\n").closers == "\n````", (
+        "an open fence was closed by a line that can't close it"
+    )
+
+    # same character, longer — closes it
+    assert _after("````python\n", "`````\n").closers == ""
 
 
 def test_an_info_string_line_does_not_close_an_open_fence() -> None:
     """A closing fence carries no info string, so ```python is content, not a closer."""
-    blocks = extract._OpenBlocks()
-    blocks.feed("```python\n")
-    blocks.feed("```python\n")
+    assert _after("```python\n", "```python\n").closers == "\n```", (
+        "an info-string line was treated as a closer"
+    )
 
-    assert blocks.closers == "\n```", "an info-string line was treated as a closer"
+    # delimiter plus whitespace only — a real closer
+    assert _after("```python\n", "```python\n", "```   \n").closers == ""
 
-    blocks.feed("```   \n")  # delimiter plus whitespace only — a real closer
-    assert blocks.closers == ""
+
+def test_feed_leaves_the_instance_it_was_called_on_untouched() -> None:
+    """`cap_to_limit` peeks at the next state before deciding to take a line."""
+    outside = extract._OpenBlocks()
+    inside = outside.feed("```python\n")
+
+    assert outside.closers == "", "feed mutated the state it was asked about"
+    assert inside.closers == "\n```"
 
 
 def test_truncation_closes_a_fence_whose_content_looks_like_a_fence() -> None:

@@ -44,7 +44,12 @@ def _release_step_run(workflow: str) -> str:
     assert len(steps) == 1, f"{workflow} must have exactly one {_STEP!r} step"
     run = steps[0].get("run")
     assert run, f"{workflow}'s {_STEP!r} step has no run body"
-    return _RUNS_OF_BLANKS.sub(" ", run)
+    # Comment lines are dropped first: the step is commented, and a commented-out
+    # command must not be able to satisfy an assertion about what it does.
+    active = "\n".join(
+        line for line in run.splitlines() if not line.lstrip().startswith("#")
+    )
+    return _RUNS_OF_BLANKS.sub(" ", active)
 
 
 def test_the_extractor_the_workflows_call_exists() -> None:
