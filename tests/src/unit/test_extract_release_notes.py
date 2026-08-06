@@ -221,6 +221,40 @@ def test_a_shorter_or_foreign_fence_line_does_not_close_an_open_fence() -> None:
     assert blocks.closers == ""
 
 
+def test_an_info_string_line_does_not_close_an_open_fence() -> None:
+    """A closing fence carries no info string, so ```python is content, not a closer."""
+    blocks = extract._OpenBlocks()
+    blocks.feed("```python\n")
+    blocks.feed("```python\n")
+
+    assert blocks.closers == "\n```", "an info-string line was treated as a closer"
+
+    blocks.feed("```   \n")  # delimiter plus whitespace only — a real closer
+    assert blocks.closers == ""
+
+
+def test_truncation_closes_a_fence_whose_content_looks_like_a_fence() -> None:
+    """Interior ```python lines keep the block open, so the cut still needs a closer."""
+    body = "```python\n" + ("```python\n" + "x" * 9 + "\n") * 20_000
+    assert len(body) > LIMIT, "body must actually need truncating"
+
+    capped = extract.cap_to_limit(body, REPO, "8.0.0", LIMIT)
+
+    kept = capped.split("\n\n---\n\n")[0]
+    assert kept.splitlines()[-1] == "```", "the still-open fence was left unclosed"
+    assert len(capped) <= LIMIT
+
+
+def test_a_limit_too_small_for_the_first_line_fails_loudly() -> None:
+    """A mid-line cut would strand an opening fence and swallow the notice."""
+    limit = 200
+    body = "```" + "z" * 300 + "\n" + "x" * 300 + "\n"
+    assert len(body) > limit
+
+    with pytest.raises(ValueError, match="first complete line"):
+        extract.cap_to_limit(body, REPO, "8.0.0", limit)
+
+
 def test_a_limit_too_small_for_the_notice_fails_loudly() -> None:
     """Silently emitting a notice-free body would look like complete notes."""
     body = "".join(f"- change number {i}\n" for i in range(12_000))

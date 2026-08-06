@@ -39,11 +39,13 @@ GITHUB_RELEASE_BODY_LIMIT = 125_000
 # below is the one that has to match a single exact version.
 _NEXT_SECTION_RE = re.compile(r"^## v\d")
 
-# A fence opens with three or more backticks or tildes. The delimiter is
-# captured because a fence can only be closed by the same character, repeated
-# at least as many times -- closing a ````-fence with ``` leaves it open, and
-# everything after the cut (including the truncation notice) renders as code.
-_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+# A fence opens with three or more backticks or tildes, optionally followed by
+# an info string. Both parts are captured: a fence can only be closed by the
+# same character repeated at least as many times *and* nothing but whitespace
+# after it. Closing a ````-fence with ```, or mistaking a second ```python for
+# a closer, leaves it open -- and everything after the cut, the truncation
+# notice included, then renders as code.
+_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 
 # Truncation can land inside a block the changelog template opened: a fenced
 # code block, or the `<details><summary>Internal Changes</summary>` element
@@ -118,13 +120,18 @@ class _OpenBlocks:
     def feed(self, line: str) -> None:
         match = _FENCE_RE.match(line)
         if match:
-            delimiter = match.group(1)
+            delimiter, trailing = match.group(1), match.group(2)
             if self.fence is None:
                 self.fence = delimiter
                 return
-            # Only the same character, repeated at least as often, closes it;
-            # anything else is just content sitting inside the open fence.
-            if delimiter[0] == self.fence[0] and len(delimiter) >= len(self.fence):
+            # Only the same character, repeated at least as often and carrying
+            # nothing but whitespace, closes it. A closing fence cannot have an
+            # info string, so ```python inside a ```-block is ordinary content.
+            if (
+                delimiter[0] == self.fence[0]
+                and len(delimiter) >= len(self.fence)
+                and not trailing.strip()
+            ):
                 self.fence = None
             return
         if self.fence:  # `<details>` inside a code block is text, not markup
@@ -147,11 +154,13 @@ def cap_to_limit(body: str, repo: str, version: str, limit: int) -> str:
     leaves open are charged against the budget before the line is accepted, so
     the result never exceeds `limit`.
 
-    Raises ValueError when `limit` leaves no room for any content beyond the
-    truncation notice. Silently emitting a notice-free body there would hand
-    GitHub a release that looks complete but is not, and a body consisting of
-    nothing but "these notes were truncated" is not worth publishing either, so
-    an unusable --limit fails loudly instead.
+    Raises ValueError when `limit` leaves no room for the truncation notice, or
+    no room for even the first complete line beyond it. Silently emitting a
+    notice-free body would hand GitHub a release that looks complete but is
+    not; a body of nothing but "these notes were truncated" is not worth
+    publishing; and a mid-line cut would strand an opening fence or `<details>`
+    with no closer, swallowing the notice. An unusable --limit fails loudly
+    instead of producing any of the three.
     """
     if len(body) <= limit:
         return body
@@ -176,8 +185,15 @@ def cap_to_limit(body: str, repo: str, version: str, limit: int) -> str:
         used += len(line)
         open_blocks = candidate
 
-    head = "".join(kept).rstrip() if kept else body[:budget].rstrip()
-    closers = open_blocks.closers if kept else ""
+    if not kept:
+        raise ValueError(
+            f"--limit {limit} cannot retain even the first complete line of the "
+            "notes; cutting mid-line would leave any opening fence or <details> "
+            "unclosed and swallow the truncation notice"
+        )
+
+    head = "".join(kept).rstrip()
+    closers = open_blocks.closers
     # Defensive clamp: rstrip only shortens, so this should already hold.
     overflow = len(head) + len(closers) + len(notice) - limit
     if overflow > 0:  # pragma: no cover - budget accounting makes this unreachable
