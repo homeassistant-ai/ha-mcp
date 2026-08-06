@@ -33,6 +33,7 @@ from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     _validate_reconfigure_identity_and_duplicates,
+    build_reconfigure_rollback_metadata,
     create_config_entry,
     prepare_reconfigure_request,
     reconfigure_config_entry,
@@ -45,10 +46,6 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
-)
-from .reconfigure_security import (
-    build_reconfigure_rollback_metadata,
-    redact_reconfigure_value,
 )
 from .tools_config_helpers import (
     SIMPLE_HELPER_TYPES,
@@ -1740,10 +1737,10 @@ class IntegrationTools:
                             "status": "validation_only",
                             "domain": domain,
                             "title": entry.get("title"),
-                            "target_config": redact_reconfigure_value(target_config),
+                            "target_config": target_config,
                             "identity": identity,
                             "rollback": build_reconfigure_rollback_metadata(
-                                entry_id, domain, entry
+                                entry_id, domain
                             ),
                             "expected_identity": expected_identity,
                             "supports_reconfigure": True,

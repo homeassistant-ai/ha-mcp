@@ -15,11 +15,6 @@ from ha_mcp.client.rest_client import (
 )
 from ha_mcp.tools.config_entry_flow import reconfigure_config_entry
 from ha_mcp.tools.config_entry_flow_walker import _handle_config_subentry_flow_steps
-from ha_mcp.tools.reconfigure_security import (
-    build_reconfigure_rollback_metadata,
-    redact_reconfigure_schema,
-    redact_reconfigure_value,
-)
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
 
@@ -32,6 +27,41 @@ def test_reconfigure_internal_contract_accepts_only_generic_config() -> None:
     assert "port" not in parameters
 
 
+@pytest.mark.asyncio
+async def test_reconfigure_result_preserves_caller_config_values(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """Reconfigure results do not transform caller-supplied configuration."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, reconfig_entry])
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-config-values",
+            "type": "form",
+            "step_id": "reconfigure",
+            "data_schema": [
+                {"name": "host", "required": True},
+                {"name": "password", "required": True},
+            ],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client,
+        "entry-123",
+        config={"host": "10.0.50.170", "password": "caller-value"},
+    )
+
+    assert result["target_config"] == {
+        "host": "10.0.50.170",
+        "password": "caller-value",
+    }
+
+
 @pytest.fixture
 def reconfig_entry() -> dict[str, object]:
     """Return a minimal Home Assistant config-entry representation."""
@@ -42,95 +72,6 @@ def reconfig_entry() -> dict[str, object]:
         "unique_id": "AA:BB:CC:DD:EE:FF",
         "supports_reconfigure": True,
     }
-
-
-def test_reconfigure_redaction_covers_nested_camel_case_secrets() -> None:
-    """Flow errors must not leak common credential key spellings."""
-    value = redact_reconfigure_value(
-        {
-            "apiKey": "hidden",
-            "nested": {"clientSecret": "hidden", "host": "10.0.50.170"},
-            "items": [{"refresh-token": "hidden"}],
-        }
-    )
-
-    assert value == {
-        "apiKey": "[REDACTED]",
-        "nested": {"clientSecret": "[REDACTED]", "host": "10.0.50.170"},
-        "items": [{"refresh-token": "[REDACTED]"}],
-    }
-
-
-def test_reconfigure_redaction_covers_psk_secrets() -> None:
-    """Encryption PSKs must never appear in generic flow output."""
-    assert redact_reconfigure_value(
-        {"psk": "hidden", "noise_psk": "hidden", "network": {"PSK": "hidden"}}
-    ) == {
-        "psk": "[REDACTED]",
-        "noise_psk": "[REDACTED]",
-        "network": {"PSK": "[REDACTED]"},
-    }
-
-
-def test_reconfigure_schema_redacts_sensitive_suggestions() -> None:
-    """Sensitive schema defaults cannot leak through reconfigure errors."""
-    schema = redact_reconfigure_schema(
-        [
-            {
-                "name": "password",
-                "default": "hidden",
-                "description": {"suggested_value": "hidden"},
-            },
-            {"name": "host", "default": "10.0.50.170"},
-        ]
-    )
-    assert schema == [
-        {
-            "name": "password",
-            "default": "[REDACTED]",
-            "description": {"suggested_value": "[REDACTED]"},
-        },
-        {"name": "host", "default": "10.0.50.170"},
-    ]
-
-
-def test_reconfigure_rollback_metadata_is_honest_about_redacted_secrets() -> None:
-    """Rollback uses the official flow and never promises replay of secrets."""
-    metadata = build_reconfigure_rollback_metadata(
-        "entry-123",
-        "shelly",
-        {
-            "data": {
-                "host": "10.0.50.170",
-                "port": 80,
-                "password": "do-not-return",
-            }
-        },
-    )
-
-    assert metadata["strategy"] == "official_reconfigure_flow"
-    assert metadata["automatic"] is False
-    assert metadata["operator_action_required"] is True
-    assert metadata["manual_required"] is True
-    assert metadata["manual_reason"] == "previous_config_contains_redacted_secrets"
-    assert metadata["previous_config"] == {
-        "host": "10.0.50.170",
-        "port": 80,
-        "password": "[REDACTED]",
-    }
-
-
-def test_reconfigure_rollback_metadata_without_secrets_is_replayable() -> None:
-    """A non-sensitive previous config can be replayed by an operator."""
-    metadata = build_reconfigure_rollback_metadata(
-        "entry-123",
-        "esphome",
-        {"data": {"host": "10.0.50.170", "port": 6053}},
-    )
-
-    assert metadata["manual_required"] is False
-    assert metadata["manual_reason"] is None
-    assert metadata["previous_config"] == {"host": "10.0.50.170", "port": 6053}
 
 
 @pytest.mark.asyncio

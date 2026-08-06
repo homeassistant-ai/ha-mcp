@@ -28,7 +28,6 @@ from .config_entry_flow_menu import (
     _handle_menu_step,
 )
 from .helpers import raise_tool_error
-from .reconfigure_security import redact_reconfigure_schema, redact_reconfigure_value
 
 logger = logging.getLogger(__name__)
 
@@ -288,9 +287,7 @@ async def _raise_flow_api_error(
         # `field_errors` tells "what failed", `data_schema` tells "what's
         # accepted"; together they're enough for self-correction.
         if schema is not None:
-            context["data_schema"] = (
-                redact_reconfigure_schema(schema) if is_reconfigure else schema
-            )
+            context["data_schema"] = schema
     else:
         # Unstructured — attach the data_schema so the LLM has something to use.
         message = (
@@ -298,9 +295,7 @@ async def _raise_flow_api_error(
             f"({status_code}): {parsed['message']}"
         )
         if schema is not None:
-            context["data_schema"] = (
-                redact_reconfigure_schema(schema) if is_reconfigure else schema
-            )
+            context["data_schema"] = schema
             suggestions.append(
                 "Inspect 'data_schema' in this error to see the fields HA expects, "
                 "then retry with a corrected config."
@@ -308,7 +303,6 @@ async def _raise_flow_api_error(
 
     if is_reconfigure:
         context["status"] = "apply_failed"
-        context = redact_reconfigure_value(context)
 
     raise_tool_error(
         create_error_response(

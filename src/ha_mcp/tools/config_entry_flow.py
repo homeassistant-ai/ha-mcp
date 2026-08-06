@@ -41,14 +41,40 @@ from .config_entry_flow_walker import (
     _handle_flow_steps,
 )
 from .helpers import raise_tool_error, validate_identifier_not_empty
-from .reconfigure_security import (
-    build_reconfigure_rollback_metadata,
-    redact_reconfigure_value,
-)
 
 logger = logging.getLogger(__name__)
 
 _KNOWN_AUXILIARY_ENTRY_DOMAINS = frozenset({"switch_as_x"})
+
+
+def build_reconfigure_rollback_metadata(
+    entry_id: str,
+    domain: str,
+) -> dict[str, Any]:
+    """Describe the manual rollback path for an existing config entry.
+
+    Home Assistant's config-entry REST representation does not expose the
+    entry's connection data. The generic backup is therefore audit evidence,
+    not an automatic endpoint rollback. An operator must repeat the official
+    reconfigure flow with the known previous values.
+    """
+    return {
+        "strategy": "official_reconfigure_flow",
+        "automatic": False,
+        "operator_action_required": True,
+        "manual_required": True,
+        "manual_reason": "previous_config_unavailable",
+        "entry_id": entry_id,
+        "domain": domain,
+        "previous_config": None,
+        "backup_scope": "edits",
+        "backup_restore_supported": False,
+        "backup_restore_note": (
+            "The generic integration snapshot is audit evidence only; its shared "
+            "restore handler does not restore connection settings. Use the official "
+            "reconfigure flow instead."
+        ),
+    }
 
 
 def _normalise_identity_value(value: Any) -> str:
@@ -289,7 +315,6 @@ def _raise_post_commit_verification_error(
             "Reconfiguration was applied but could not be verified",
         )
 
-    payload = redact_reconfigure_value(payload)
     payload["status"] = (
         payload.get("status")
         if payload.get("status") in {"applied_but_incomplete", "applied_but_unverified"}
@@ -674,7 +699,7 @@ async def _verify_reconfigured_entry(
                 context={
                     "entry_id": entry_id,
                     "expected_domain": domain,
-                    "verified_entry": redact_reconfigure_value(after),
+                    "verified_entry": after,
                 },
             )
         )
@@ -1127,7 +1152,7 @@ async def reconfigure_config_entry(
             )
         )
 
-    rollback_metadata = build_reconfigure_rollback_metadata(entry_id, domain, before)
+    rollback_metadata = build_reconfigure_rollback_metadata(entry_id, domain)
 
     expected_identity: dict[str, Any] = {
         "device_id": expected_device_id,
@@ -1181,7 +1206,7 @@ async def reconfigure_config_entry(
         ],
         "rollback_manual_required": rollback_metadata["manual_required"],
         "rollback_reference": rollback_metadata,
-        "target_config": redact_reconfigure_value(flow_config),
+        "target_config": flow_config,
     }
     if result.get("warnings"):
         response["warnings"] = result["warnings"]
