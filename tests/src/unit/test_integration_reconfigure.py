@@ -13,7 +13,10 @@ from ha_mcp.client.rest_client import (
     HomeAssistantClient,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools.config_entry_flow import reconfigure_config_entry
+from ha_mcp.tools.config_entry_flow import (
+    reconfigure_config_entry,
+    set_config_subentry,
+)
 from ha_mcp.tools.config_entry_flow_walker import _handle_config_subentry_flow_steps
 from ha_mcp.tools.tools_integrations import IntegrationTools
 
@@ -69,6 +72,7 @@ def reconfig_entry() -> dict[str, object]:
         "entry_id": "entry-123",
         "domain": "shelly",
         "title": "Living room relay",
+        "state": "loaded",
         "unique_id": "AA:BB:CC:DD:EE:FF",
         "supports_reconfigure": True,
     }
@@ -114,6 +118,8 @@ async def test_reconfigure_preserves_entry_and_submits_host_and_port(
     )
     assert result["target_config"] == {"host": "10.0.50.170", "port": 80}
     assert result["verification"] == {
+        "entry_state": "loaded",
+        "operational_state_verified": True,
         "entry_id_preserved": True,
         "domain_preserved": True,
         "unique_id_preserved": True,
@@ -301,9 +307,66 @@ async def test_reconfigure_allows_offline_entry_with_registry_identity() -> None
     )
 
     assert result["success"] is True
+    assert result["status"] == "applied_and_verified"
     assert result["verification"]["identity_verification"] == "complete"
     assert result["verification"]["device_id_verification"] == "preserved"
     assert result["verification"]["entity_verification"] == "preserved"
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_does_not_verify_setup_retry_as_loaded() -> None:
+    """Identity preservation is insufficient when HA leaves the entry degraded."""
+    before = {
+        "entry_id": "degraded-entry",
+        "domain": "shelly",
+        "state": "loaded",
+        "supports_reconfigure": True,
+        "unique_id": "84FCE6387220",
+    }
+    after = {**before, "state": "setup_retry"}
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(side_effect=[before, after])
+    client.list_entity_registry = AsyncMock(
+        return_value=[
+            {
+                "entity_id": "switch.degraded",
+                "config_entry_id": "degraded-entry",
+                "device_id": "device-degraded",
+            }
+        ]
+    )
+    client.list_device_registry = AsyncMock(
+        return_value=[
+            {
+                "id": "device-degraded",
+                "identifiers": [["shelly", "84:FC:E6:38:72:20"]],
+            }
+        ]
+    )
+    client.list_config_entries = AsyncMock(return_value=[after])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "degraded-flow",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client,
+        "degraded-entry",
+        config={"host": "10.0.50.170"},
+        expected_device_id="device-degraded",
+        expected_mac="84-FC-E6-38-72-20",
+        expected_entity_ids=["switch.degraded"],
+    )
+
+    assert result["status"] == "applied_but_unverified"
+    assert result["verification"]["entry_state"] == "setup_retry"
+    assert result["verification"]["operational_state_verified"] is False
 
 
 @pytest.mark.asyncio
@@ -333,6 +396,70 @@ async def test_reconfigure_reports_applied_but_unverified_after_commit(
 
     payload = json.loads(str(exc_info.value))
     assert payload["status"] == "applied_but_unverified"
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_submit_timeout_is_applied_but_unverified(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """A submit timeout may follow a commit and must retain rollback context."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-submit-timeout",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(side_effect=TimeoutError())
+    client.abort_config_flow = AsyncMock()
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client, "entry-123", config={"host": "10.0.50.183"}
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == "applied_but_unverified"
+    assert payload["rollback"]["manual_required"] is True
+    assert "timed out" in payload["error"]["message"]
+    client.abort_config_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_step_budget_aborts_pending_flow(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """Exhausting the walker budget aborts the still-pending reconfigure flow."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-budget",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={
+            "flow_id": "flow-budget",
+            "type": "form",
+            "step_id": "reconfigure",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.abort_config_flow = AsyncMock()
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client, "entry-123", config={"host": "10.0.50.184"}
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == "applied_but_unverified"
+    assert payload["rollback"]["manual_required"] is True
+    client.abort_config_flow.assert_awaited_once_with("flow-budget")
 
 
 @pytest.mark.asyncio
@@ -1235,3 +1362,38 @@ async def test_subentry_reconfigure_rejects_unconsumed_values() -> None:
 
     payload = json.loads(str(exc_info.value))
     assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+
+
+@pytest.mark.asyncio
+async def test_subentry_reconfigure_step_budget_aborts_pending_flow() -> None:
+    """Subentry budget exhaustion aborts the pending official flow too."""
+    client = MagicMock()
+    client.start_config_subentry_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-subentry-budget",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_subentry_flow_step = AsyncMock(
+        return_value={
+            "flow_id": "flow-subentry-budget",
+            "type": "form",
+            "step_id": "reconfigure",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.abort_config_subentry_flow = AsyncMock()
+
+    with pytest.raises(ToolError) as exc_info:
+        await set_config_subentry(
+            client,
+            "entry-123",
+            "network",
+            {"host": "10.0.50.190"},
+            subentry_id="subentry-123",
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == "applied_but_unverified"
+    client.abort_config_subentry_flow.assert_awaited_once_with("flow-subentry-budget")

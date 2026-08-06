@@ -77,6 +77,26 @@ def build_reconfigure_rollback_metadata(
     }
 
 
+async def _abort_flow_best_effort(client: Any, flow_id: str) -> None:
+    """Abort a still-pending flow without hiding the original failure."""
+    try:
+        await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
+    except Exception as abort_err:
+        logger.warning("Failed to abort flow %s after error: %s", flow_id, abort_err)
+
+
+async def _abort_subentry_flow_best_effort(client: Any, flow_id: str) -> None:
+    """Abort a pending subentry flow without hiding the original failure."""
+    try:
+        await asyncio.wait_for(client.abort_config_subentry_flow(flow_id), timeout=5.0)
+    except Exception as abort_err:
+        logger.warning(
+            "Failed to abort config subentry flow %s after error: %s",
+            flow_id,
+            abort_err,
+        )
+
+
 def _normalise_identity_value(value: Any) -> str:
     """Normalise registry identifiers for stable comparisons."""
     return "".join(character for character in str(value).upper() if character.isalnum())
@@ -427,17 +447,21 @@ async def set_config_subentry(
             config_dict,
             is_reconfigure=subentry_id is not None,
         )
-    except Exception:
-        try:
-            await asyncio.wait_for(
-                client.abort_config_subentry_flow(flow_id), timeout=5.0
-            )
-        except Exception as abort_err:
-            logger.warning(
-                "Failed to abort config subentry flow %s after error: %s",
-                flow_id,
-                abort_err,
-            )
+    except Exception as flow_error:
+        payload: dict[str, Any] = {}
+        if isinstance(flow_error, ToolError):
+            try:
+                parsed_payload = json.loads(str(flow_error))
+            except (TypeError, ValueError):
+                parsed_payload = {}
+            if isinstance(parsed_payload, dict):
+                payload = parsed_payload
+        post_commit_status = payload.get("status") in {
+            "applied_but_incomplete",
+            "applied_but_unverified",
+        }
+        if payload.get("flow_budget_exhausted") or not post_commit_status:
+            await _abort_subentry_flow_best_effort(client, flow_id)
         raise
 
     response = {
@@ -790,6 +814,8 @@ async def _verify_reconfigured_entry(
     )
 
     return {
+        "entry_state": after.get("state"),
+        "operational_state_verified": after.get("state") == "loaded",
         "entry_id_preserved": True,
         "domain_preserved": True,
         "unique_id_preserved": before_unique_id is not None,
@@ -1010,6 +1036,8 @@ async def _run_reconfigure_flow(
             "applied_but_incomplete",
             "applied_but_unverified",
         }:
+            if payload.get("flow_budget_exhausted"):
+                await _abort_flow_best_effort(client, flow_id)
             _raise_post_commit_verification_error(
                 flow_error,
                 entry_id=entry_id,
@@ -1190,7 +1218,10 @@ async def reconfigure_config_entry(
         "success": True,
         "status": (
             "applied_and_verified"
-            if verification.get("identity_verification") == "complete"
+            if (
+                verification.get("identity_verification") == "complete"
+                and verification.get("operational_state_verified") is True
+            )
             else "applied_but_unverified"
         ),
         "operation": "reconfigured",

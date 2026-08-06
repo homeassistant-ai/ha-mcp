@@ -340,6 +340,24 @@ async def _submit_step(
                 is_reconfigure=is_reconfigure,
             )
         raise
+    except TimeoutError:
+        if is_reconfigure:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.TIMEOUT_OPERATION,
+                    "Reconfigure flow submission timed out; the change may have been applied",
+                    suggestions=[
+                        "Do not retry automatically. Inspect the config entry in Home Assistant before attempting rollback."
+                    ],
+                    context={
+                        "flow_id": flow_id,
+                        "status": "applied_but_unverified",
+                        "submitted_keys": sorted(payload),
+                        "details": current_step,
+                    },
+                )
+            )
+        raise
 
 
 def _finish_flow_entry(
@@ -779,6 +797,7 @@ async def _handle_flow_steps(
             context={
                 "flow_id": flow_id,
                 "max_steps": max_steps,
+                "flow_budget_exhausted": True,
                 "consumed_menu_selections": consumed_menu_selections,
                 **({"status": "applied_but_unverified"} if is_reconfigure else {}),
             },
@@ -986,6 +1005,7 @@ async def _handle_config_subentry_flow_steps(
             context={
                 "flow_id": flow_id,
                 "max_steps": max_steps,
+                "flow_budget_exhausted": True,
                 "consumed_menu_selections": consumed_menu_selections,
                 **({"status": "applied_but_unverified"} if is_reconfigure else {}),
             },
