@@ -116,14 +116,21 @@ def cap_to_limit(body: str, repo: str, version: str, limit: int) -> str:
     taken when the *closed* form still fits -- the closers for whatever it
     leaves open are charged against the budget before the line is accepted, so
     the result never exceeds `limit`.
+
+    Raises ValueError when `limit` cannot even hold the truncation notice.
+    Silently emitting a notice-free body there would hand GitHub a release that
+    looks complete but is not, so an unusable --limit fails loudly instead.
     """
     if len(body) <= limit:
         return body
 
     notice = _truncation_notice(repo, version, limit)
     budget = limit - len(notice)
-    if budget <= 0:  # pragma: no cover - only reachable with an absurd --limit
-        return body[:limit]
+    if budget <= 0:
+        raise ValueError(
+            f"--limit {limit} cannot hold the {len(notice)}-character truncation "
+            "notice, so the notes would be silently cut with no indication"
+        )
 
     open_blocks = _OpenBlocks()
     kept: list[str] = []
@@ -183,8 +190,12 @@ def main(argv: list[str] | None = None) -> int:
 
     body = extract_section(changelog, args.version)
     if body:
-        # Cap the trailing newline too, so the written file never exceeds --limit.
-        body = cap_to_limit(body + "\n", args.repo, args.version, args.limit)
+        try:
+            # Cap the trailing newline too, so the written file never exceeds --limit.
+            body = cap_to_limit(body + "\n", args.repo, args.version, args.limit)
+        except ValueError as e:
+            print(f"extract_release_notes: {e}", file=sys.stderr)
+            return 1
     args.out.write_text(body, encoding="utf-8")
     return 0
 

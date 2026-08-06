@@ -161,6 +161,40 @@ def test_closing_fence_never_pushes_the_body_over_the_limit(line_width: int) -> 
     assert len(capped) <= LIMIT
 
 
+def test_a_limit_too_small_for_the_notice_fails_loudly() -> None:
+    """Silently emitting a notice-free body would look like complete notes."""
+    body = "".join(f"- change number {i}\n" for i in range(12_000))
+    notice_len = len(extract._truncation_notice(REPO, "8.0.0", 50))
+
+    with pytest.raises(ValueError, match="truncation notice"):
+        extract.cap_to_limit(body, REPO, "8.0.0", notice_len)
+
+
+def test_main_exits_nonzero_on_an_unusable_limit(tmp_path: Path) -> None:
+    changelog = tmp_path / "CHANGELOG.md"
+    section = "".join(f"- change number {i}\n" for i in range(12_000))
+    changelog.write_text(
+        f"# CHANGELOG\n\n## v8.0.0 (2026-08-02)\n\n{section}", encoding="utf-8"
+    )
+    out = tmp_path / "release_notes.md"
+
+    rc = extract.main(
+        [
+            "--version",
+            "8.0.0",
+            "--changelog",
+            str(changelog),
+            "--out",
+            str(out),
+            "--limit",
+            "10",
+        ]
+    )
+
+    assert rc == 1
+    assert not out.exists(), "no half-formed notes file on failure"
+
+
 def test_main_writes_capped_notes_to_out(tmp_path: Path) -> None:
     changelog = tmp_path / "CHANGELOG.md"
     section = "".join(f"- change number {i}\n" for i in range(12_000))
