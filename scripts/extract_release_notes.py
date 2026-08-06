@@ -36,10 +36,19 @@ _NEXT_SECTION_RE = re.compile(r"^## v\d")
 
 _FENCE_RE = re.compile(r"^\s*```")
 
+# Appended when truncation cuts inside a fenced block. Its length is reserved
+# up front, so closing the fence can never push the body back over the limit.
+_FENCE_CLOSE = "\n```"
+
 
 def _heading_re(version: str) -> re.Pattern[str]:
-    """Match the heading for exactly `version`, not a longer version sharing its prefix."""
-    return re.compile(rf"^## v{re.escape(version.lstrip('v'))}(?![\w.])")
+    """Match the heading for exactly `version`, not a longer version sharing its prefix.
+
+    The lookahead rejects `.` and word characters (so `8.0.0` misses
+    `## v8.0.01`) and also `-` / `+`, so a stable version never matches a
+    prerelease or build-metadata heading like `## v8.0.0-rc.1`.
+    """
+    return re.compile(rf"^## v{re.escape(version.lstrip('v'))}(?![\w.+-])")
 
 
 def extract_section(changelog: str, version: str) -> str:
@@ -74,7 +83,7 @@ def _truncation_notice(repo: str, version: str, limit: int) -> str:
 def _close_dangling_fence(text: str) -> str:
     """Append a closing fence if truncation cut inside a fenced code block."""
     if sum(1 for line in text.splitlines() if _FENCE_RE.match(line)) % 2:
-        return text + "\n```"
+        return text + _FENCE_CLOSE
     return text
 
 
@@ -89,7 +98,10 @@ def cap_to_limit(body: str, repo: str, version: str, limit: int) -> str:
         return body
 
     notice = _truncation_notice(repo, version, limit)
-    budget = limit - len(notice)
+    # Reserve the closing fence too: it is appended after the line-boundary cut,
+    # so without the reservation a fenced body overshoots `limit` by up to four
+    # characters whenever the cut lands that close to the budget.
+    budget = limit - len(notice) - len(_FENCE_CLOSE)
     if budget <= 0:  # pragma: no cover - only reachable with an absurd --limit
         return body[:limit]
 

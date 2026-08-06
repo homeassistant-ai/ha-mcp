@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 _SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "extract_release_notes.py"
 _spec = importlib.util.spec_from_file_location("extract_release_notes", _SCRIPT)
 assert _spec and _spec.loader
@@ -55,10 +57,25 @@ def test_absent_version_yields_empty_so_caller_fallback_engages() -> None:
     assert extract.extract_section(CHANGELOG, "9.9.9") == ""
 
 
-def test_version_does_not_match_a_longer_version_sharing_its_prefix() -> None:
-    """'8.0.0' must not match '## v8.0.01' -- the old awk prefix match did."""
-    changelog = "# CHANGELOG\n\n## v8.0.01 (2026-08-02)\n\nwrong section\n"
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "## v8.0.01 (2026-08-02)",  # longer version sharing the prefix
+        "## v8.0.0-rc.1 (2026-08-02)",  # prerelease
+        "## v8.0.0+build.5 (2026-08-02)",  # build metadata
+    ],
+)
+def test_version_does_not_match_a_longer_version_sharing_its_prefix(
+    heading: str,
+) -> None:
+    """'8.0.0' must match none of these -- the old awk prefix match matched all."""
+    changelog = f"# CHANGELOG\n\n{heading}\n\nwrong section\n"
     assert extract.extract_section(changelog, "8.0.0") == ""
+
+
+def test_a_prerelease_version_still_finds_its_own_section() -> None:
+    changelog = "# CHANGELOG\n\n## v8.0.0-rc.1 (2026-08-02)\n\n- the rc change\n"
+    assert "- the rc change" in extract.extract_section(changelog, "8.0.0-rc.1")
 
 
 def test_body_under_the_limit_is_returned_verbatim() -> None:
@@ -87,12 +104,32 @@ def test_truncation_cuts_on_a_line_boundary() -> None:
     assert all(line.startswith("- change number ") for line in kept.splitlines())
 
 
+def _fenced_body(line_width: int) -> str:
+    """An over-limit fenced block whose lines are `line_width` chars incl. newline."""
+    line = "x" * (line_width - 1) + "\n"
+    return "```python\n" + line * 40_000 + "```\n"
+
+
 def test_truncation_closes_a_code_fence_it_cut_into() -> None:
-    body = "```python\n" + "".join(f"x = {i}\n" for i in range(12_000)) + "```\n"
+    body = _fenced_body(12)
+    assert len(body) > LIMIT, "body must actually need truncating"
+
     capped = extract.cap_to_limit(body, REPO, "8.0.0", LIMIT)
 
     kept = capped.split("\n\n---\n\n")[0]
     assert kept.count("```") % 2 == 0, "truncation left an unclosed code fence"
+
+
+@pytest.mark.parametrize("line_width", [6, 7, 11, 12, 40])
+def test_closing_fence_never_pushes_the_body_over_the_limit(line_width: int) -> None:
+    """The closing fence is appended after the cut, so its length must be reserved.
+
+    Widths 6/7/11 are boundary cases where the line-boundary cut lands within
+    four characters of the budget -- without the reservation these produced
+    125,001-125,002 characters and GitHub would still 422.
+    """
+    capped = extract.cap_to_limit(_fenced_body(line_width), REPO, "8.0.0", LIMIT)
+    assert len(capped) <= LIMIT
 
 
 def test_main_writes_capped_notes_to_out(tmp_path: Path) -> None:
