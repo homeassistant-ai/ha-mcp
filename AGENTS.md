@@ -500,7 +500,6 @@ src/ha_mcp/
 - `delete` — delete dashboards, config entries, or files (`ha_config_delete_dashboard`, `ha_delete_file`)
 - `remove` — remove registry items (`ha_remove_entity`, `ha_remove_area_or_floor`)
 - `call` — execute (`ha_call_service`, `ha_call_event`)
-- `reconfigure` — apply an existing integration's official reconfigure flow through `ha_set_integration(reconfigure=True)`
 - `manage` — multi-modal tools combining several operations behind one interface (`ha_manage_addon`)
 
 **Namespace prefixes**: An optional `<namespace>_` prefix between `ha_` and the verb is allowed for grouped tool families that share a domain. The full shape becomes `ha_<namespace>_<verb>_<noun>`:
@@ -763,16 +762,9 @@ code (`de`, `es`, `fr`, `it`, `ru`, `zh-Hans`) names every file:
 That list of codes is itself pinned by
 `test_agents_md_lists_every_shipped_locale`: adding a language means adding its
 code here, in the same PR, or the suite goes red. To add a language, add the
-two authored catalogs (settings UI + component), regenerate, and let the
-translation pipeline below fill the strings. The component catalog may start
-empty; the settings one may not start `meta`-only, because three ungated
-checks read the shipped catalogs themselves: every decided `Decision` outcome
-and every `PredicateOp` operator needs a translated word
-(`policies.pending.decision.*`, `policies.operators.*` — a value that still
-spells the backend literal counts as untranslated), and at least one
-translated key must have English that addresses the reader in the second
-person, which is where `scripts/translate_locales.py` reads the catalog's
-address register. `src/ha_mcp/settings_ui/locales/README.md` names the tests.
+two authored catalogs (settings UI + component; the settings one can start as
+a `meta`-only stub), regenerate, and let the translation pipeline below fill
+the strings.
 
 Settings UI catalogs are auto-discovered (no registration). Their `messages` may
 omit keys — English is the per-key fallback — but may not carry one `en.json`
