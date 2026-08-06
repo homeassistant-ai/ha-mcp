@@ -42,7 +42,7 @@ _POLICY_CALLER = PolicyCaller("ha_manage_security_policy", "get", "set")
 class SecurityPolicyTools:
     """Read/write access to the tool security policy document."""
 
-    def __init__(self, client: Any, server: Any | None = None) -> None:
+    def __init__(self, client: Any, server: Any) -> None:
         self._client = client
         # The live server object, passed by the registry. Used only to
         # report whether the approval engine is running (``policies_live``)
@@ -158,4 +158,8 @@ def register_security_policy_tools(mcp: Any, client: Any, **kwargs: Any) -> None
         "read and rewrite the tool security policies, including removing "
         "approval gates."
     )
-    register_tool_methods(mcp, SecurityPolicyTools(client, server=kwargs.get("server")))
+    # kwargs["server"], not .get(): the registry always passes it, and a
+    # KeyError from a future call site that forgets is caught and logged
+    # loudly by the registry — better than silently registering a tool that
+    # cannot report whether the approval engine is live.
+    register_tool_methods(mcp, SecurityPolicyTools(client, server=kwargs["server"]))

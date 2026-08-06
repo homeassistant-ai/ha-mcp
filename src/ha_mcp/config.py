@@ -406,6 +406,7 @@ class Settings(BaseSettings):
     @field_validator(
         "enable_filesystem_tools",
         "enable_dashboard_screenshot",
+        "enable_security_policy_tool",
         mode="before",
     )
     @classmethod

@@ -1032,12 +1032,42 @@ class TestManagePolicy:
             )
 
     async def test_set_policy_invalid_schema_rejected(self, dev_tools):
-        # wait_seconds must be < approval_ttl_minutes * 60.
+        # wait_seconds must be < approval_ttl_minutes * 60. ``rules`` is
+        # required (see test_set_policy_without_rules_rejected) so the
+        # payload must carry it to reach schema validation at all.
         with pytest.raises(ToolError, match="schema validation"):
             await dev_tools.ha_dev_manage_settings(
                 action="set_policy",
-                policy={"wait_seconds": 599, "approval_ttl_minutes": 1},
+                policy={"wait_seconds": 599, "approval_ttl_minutes": 1, "rules": []},
             )
+
+    async def test_set_policy_without_rules_rejected(self, dev_tools):
+        """set_policy replaces the WHOLE document, so an omitted 'rules'
+        would silently delete every approval gate — both surfaces refuse
+        it (#2148 review)."""
+        await dev_tools.ha_dev_manage_settings(
+            action="set_policy",
+            policy={"rules": [{"tool_name": "ha_call_service"}], "version": 0},
+        )
+        with pytest.raises(ToolError, match="'rules' is missing") as exc:
+            await dev_tools.ha_dev_manage_settings(
+                action="set_policy", policy={"wait_seconds": 45}
+            )
+        assert "ha_dev_manage_settings('get_policy')" in str(exc.value)
+        got = await dev_tools.ha_dev_manage_settings(action="get_policy")
+        assert got["data"]["policy"]["rules"][0]["tool_name"] == "ha_call_service"
+
+    async def test_set_policy_warns_about_removed_rules(self, dev_tools):
+        await dev_tools.ha_dev_manage_settings(
+            action="set_policy",
+            policy={"rules": [{"tool_name": "ha_call_service"}], "version": 0},
+        )
+        result = await dev_tools.ha_dev_manage_settings(
+            action="set_policy", policy={"rules": [], "version": 1}
+        )
+        removed = [w for w in result["warnings"] if "removed 1 existing rule" in w]
+        assert removed, result["warnings"]
+        assert "ha_call_service" in removed[0]
 
     async def test_set_policy_requires_object(self, dev_tools):
         with pytest.raises(ToolError, match="'policy'"):

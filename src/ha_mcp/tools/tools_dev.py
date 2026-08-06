@@ -1062,24 +1062,12 @@ class DevTools:
         # (held on the loop while the file I/O runs in the worker thread);
         # the worker additionally takes the cross-process file lock so the
         # stdio sidecar's handlers can't interleave from another process.
-        from ..utils.config_write_lock import get_config_write_lock
+        from ..utils.config_write_lock import get_config_write_lock, run_with_file_lock
 
         async with get_config_write_lock():
             return await asyncio.to_thread(
-                self._with_file_lock, self._write_tool_all, tool, state, llm_api, gated
+                run_with_file_lock, self._write_tool_all, tool, state, llm_api, gated
             )
-
-    @staticmethod
-    def _with_file_lock(fn: Any, /, *args: Any) -> Any:
-        """Run ``fn(*args)`` holding the cross-process config file lock.
-
-        Thread-side companion of ``config_write_guard()``: callers hold the
-        asyncio lock on the loop, so the file lock never nests in-process.
-        """
-        from ..utils.config_write_lock import config_file_lock
-
-        with config_file_lock():
-            return fn(*args)
 
     def _write_tool_all(
         self, tool: str, state: str | None, llm_api: bool | None, gated: bool | None
