@@ -309,6 +309,11 @@
 
   <section id="policy-global-settings" style="margin-bottom:16px">
     <h3 style="font-size:1rem;margin-bottom:8px" data-i18n="policies.global.title">Global settings</h3>
+    <div class="pin-notice" id="policyUnknownNotice" data-i18n="policies.global.unknown">
+      Could not read server settings. The two switches below are shown as
+      unknown and cannot be changed until the page reloads successfully;
+      this view may not reflect what the server enforces.
+    </div>
     <div class="feature-row">
       <div class="feature-info">
         <div class="feature-name" id="policy-master-label" data-i18n="policies.global.enabled.label">Enable Tool Security Policies</div>
@@ -355,10 +360,11 @@
       <div class="ha-alert-body" data-i18n="policies.global.manage_tool.warning">
         Enabling this lets connected AI agents rewrite the security policies
         on this tab, including removing approval gates. To keep a human in
-        the loop on every policy edit, add a rule targeting
-        ha_manage_security_policy itself — it is gated like any other tool.
-        Restart the App (add-on) after toggling for the change to take
-        effect.
+        the loop, gate the tool BEFORE you enable it: on the Tools tab,
+        switch on "security gated" for Manage Security Policy. That rule can
+        be authored while the tool is still off, and it enforces once the
+        master switch above is on and the server has restarted. Restart the
+        App (add-on) after toggling either switch.
       </div>
     </div>
     <div class="feature-row">

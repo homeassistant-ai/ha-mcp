@@ -947,6 +947,12 @@ function render() {
         : (isFeatureGated ? false : (isMandatory || state === 'pinned' || DEFAULT_PINNED.includes(t.name))));
       const lockEnabled = roForcedOff || isEnvPinned || isMandatory || isFeatureGated;
       const lockPinned = roForcedOff || isEnvPinned || isMandatory || isFeatureGated || !isEnabled;
+      // The security gate is a policy RULE keyed by tool name, so it can be
+      // authored for a tool that is not registered yet. Feature-gated rows
+      // therefore keep this switch live (when policies are on): otherwise
+      // the first enable+restart would expose the tool ungated, which is
+      // exactly the window ha_manage_security_policy must not have.
+      const canGate = policyState.enabled && (isEnabled || isFeatureGated);
 
       const sourceDesc = (t.description || '').split('\n')[0].slice(0, 120);
       const toolCopy = localizedToolCopy(t, sourceDesc);
@@ -969,12 +975,24 @@ function render() {
       // destructive tool showing no tier badge would understate its risk.
       else badges += `<span class="badge unknown">${escapeHtml(category) || '?'}</span>`;
 
+      // Two flavors of "how to turn this on": beta gates point at the dev
+      // App (add-on) config, non-beta ones (the policy-editing tool) at
+      // their own settings tab. disabled_by_beta comes from the server so
+      // the client never has to know which flags are beta.
       const gatedNote = disabledBy
-        ? `<div class="disabled-by-note">${tHtml(
-            'tools.notes.beta_disabled',
-            {setting: `<code>${escapeHtml(disabledBy)}</code>`},
-            'Beta. Set {setting} in the dev App (add-on) config or the matching env var (see docs/beta.md).'
-          )}</div>`
+        ? `<div class="disabled-by-note">${
+            t.disabled_by_beta === false
+              ? tHtml(
+                  'tools.notes.gated_disabled',
+                  {setting: `<code>${escapeHtml(disabledBy)}</code>`},
+                  'Disabled. Turn on {setting} — the policy-editing tool\'s toggle is on the Tool Security Policies tab — then restart the App (add-on).'
+                )
+              : tHtml(
+                  'tools.notes.beta_disabled',
+                  {setting: `<code>${escapeHtml(disabledBy)}</code>`},
+                  'Beta. Set {setting} in the dev App (add-on) config or the matching env var (see docs/beta.md).'
+                )
+          }</div>`
         : '';
       const envPinnedNote = isEnvPinned
         ? `<div class="feature-locked-note">${tHtml(
@@ -1041,12 +1059,12 @@ function render() {
               `<span class="slider"></span></label>` +
             `<span>${escapeHtml(tr('tools.states.pinned', {}, 'pinned'))}</span>` +
           `</div>` +
-          `<div class="toggle-group ${(policyState.enabled && isEnabled) ? '' : 'disabled-toggle'}" ` +
+          `<div class="toggle-group ${canGate ? '' : 'disabled-toggle'}" ` +
                `title="${policyState.enabled ? '' : escapeHtml(tr('tools.security.enable_first', {}, 'Enable Tool Security Policies in App (add-on) config first.'))}">` +
             `<label class="switch"><input type="checkbox" name="tool:${escapeHtml(t.name)}:gated" data-tool="${escapeHtml(t.name)}" data-field="gated" ` +
               `aria-label="${escapeHtml(tr('tools.aria.security_gated', {title}, `${title} security gated`))}" ` +
               `${policyState.gatedTools.has(t.name) ? 'checked' : ''} ` +
-              `${(policyState.enabled && isEnabled) ? '' : 'disabled'}>` +
+              `${canGate ? '' : 'disabled'}>` +
               `<span class="slider"></span></label>` +
             `<span>${escapeHtml(tr('tools.states.security_gated', {}, 'security gated'))}</span>` +
           `</div>` +
@@ -2476,10 +2494,35 @@ async function syncPolicyGlobalToggles() {
   // ha_manage_security_policy is independent of whether the rules are
   // enforced, so the row stays usable with the master off.
   await loadPolicyState();
-  const cb = document.getElementById('policy-master-toggle');
-  if (cb) cb.checked = !!policyState.enabled;
-  const toolCb = document.getElementById('policy-manage-tool-toggle');
-  if (toolCb) toolCb.checked = !!policyState.manageToolEnabled;
+  applyPolicyToggle('policy-master-toggle', policyState.enabled, policyState.enabledKnown);
+  applyPolicyToggle(
+    'policy-manage-tool-toggle',
+    policyState.manageToolEnabled,
+    policyState.manageToolKnown
+  );
+  // When the features fetch failed, both flags are unknown and an
+  // unchecked-and-editable switch would claim "off" for a server that may
+  // well have them on. Surface that uncertainty (same treatment the
+  // Tools-tab read-only notice gets). Function-scope lookup (guarded) so
+  // this id need not be a top-level handler binding.
+  const notice = document.getElementById('policyUnknownNotice');
+  if (notice) notice.classList.toggle('show', !policyState.enabledKnown);
+}
+
+// Paint one Policies-tab flag switch. While the server's value is unknown
+// the switch goes indeterminate + disabled rather than rendering a
+// confident "off" the user could act on.
+function applyPolicyToggle(elementId, value, known) {
+  const cb = document.getElementById(elementId);
+  if (!cb) {
+    // Part of the Policies-tab template; a missing element means template
+    // drift. Warn once so the desync is debuggable instead of a silent no-op.
+    console.warn('applyPolicyToggle: #' + elementId + ' not found');
+    return;
+  }
+  cb.checked = !!value;
+  cb.indeterminate = !known;
+  cb.disabled = !known;
 }
 
 async function policyLoadConfig() {

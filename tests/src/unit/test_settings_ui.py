@@ -420,6 +420,65 @@ class TestFeatureGatedTools:
         ):
             assert FEATURE_GATED_TOOLS[name]["disabled_by"] == "enable_filesystem_tools"
 
+    def test_every_stub_names_a_real_feature_flag(self):
+        """A typo'd disabled_by would render a hint naming a setting that
+        does not exist, and would silently classify the gate as non-beta."""
+        from ha_mcp.config import FEATURE_FLAG_FIELDS
+
+        known = {f.field for f in FEATURE_FLAG_FIELDS}
+        for name, meta in FEATURE_GATED_TOOLS.items():
+            assert meta["disabled_by"] in known, (
+                f"{name}: disabled_by={meta['disabled_by']!r} is not a "
+                "registered feature flag"
+            )
+
+    def test_security_policy_stub_is_marked_non_beta(self):
+        """ha_manage_security_policy is gated by a NON-beta safety toggle
+        (#2148). The stub must say so: the UI picks its "how to enable"
+        copy from this, and _handlers_tools uses it for the LLM-API
+        exposure default."""
+        from ha_mcp.settings_ui._tools_meta import _render_stub, gate_is_beta
+
+        entry = FEATURE_GATED_TOOLS["ha_manage_security_policy"]
+        assert entry["disabled_by"] == "enable_security_policy_tool"
+        assert gate_is_beta("enable_security_policy_tool") is False
+        assert (
+            _render_stub("ha_manage_security_policy", entry)["disabled_by_beta"]
+            is False
+        )
+
+    def test_stale_cache_rows_are_classified_from_the_registry(self):
+        """The sidecar serves rows from tool_metadata.json, which an older
+        build wrote without ``disabled_by_beta``. A missing field must not
+        read as "not beta" — that would flip a beta stub's LLM-API exposure
+        from hidden to exposed on a stale cache."""
+        from ha_mcp.settings_ui._handlers_tools import _stub_gate_is_beta
+
+        assert _stub_gate_is_beta({"disabled_by": "enable_filesystem_tools"}) is True
+        assert (
+            _stub_gate_is_beta({"disabled_by": "enable_security_policy_tool"}) is False
+        )
+        # An explicit stamp wins over the registry fallback.
+        assert (
+            _stub_gate_is_beta(
+                {"disabled_by": "enable_filesystem_tools", "disabled_by_beta": False}
+            )
+            is False
+        )
+        # A registered (non-stub) row carries no gate at all.
+        assert _stub_gate_is_beta({"name": "ha_get_state"}) is False
+
+    def test_beta_stubs_are_marked_beta(self):
+        from ha_mcp.settings_ui._tools_meta import _render_stub, gate_is_beta
+
+        assert gate_is_beta("enable_filesystem_tools") is True
+        assert (
+            _render_stub("ha_write_file", FEATURE_GATED_TOOLS["ha_write_file"])[
+                "disabled_by_beta"
+            ]
+            is True
+        )
+
 
 class TestRouteRegistration:
     """Test register_settings_routes mounting under secret_path (Patch76 G1)."""
@@ -2739,7 +2798,9 @@ class TestEnvPinnedTools:
         assert body["llm_api_overrides"] == {"ha_get_state": False}
         # Override wins over the exposed default.
         assert body["llm_api"]["ha_get_state"] is False
-        # The stub renders hidden-by-default (feature-gated == beta).
+        # The stub renders hidden-by-default: its gate IS a beta flag, and
+        # this cached row predates the disabled_by_beta stamp, so the
+        # handler falls back to the flag registry to classify it (#2148).
         assert body["llm_api"]["ha_config_set_yaml"] is False
         # Not the in-process custom-component server: the UI hides the LLM API
         # toggle (nothing consumes the exposure on this install method).

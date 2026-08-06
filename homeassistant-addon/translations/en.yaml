@@ -62,9 +62,9 @@ configuration:
       AI agents read and rewrite the tool security policies — including removing approval
       gates. Off by default. Independent of the Tool Security Policies option above:
       this controls who can edit the rules, not whether they are enforced. The tool
-      cannot see or decide pending approvals. To keep a human in the loop on every
-      policy edit, gate ha_manage_security_policy itself from the Tool Security Policies
-      tab of the web UI. Requires restart to take effect.'
+      cannot see or decide pending approvals. To keep a human in the loop, gate the
+      tool before enabling it: switch on "security gated" for Manage Security Policy
+      in the Tools tab of the web UI. Requires restart to take effect.'
   read_only_mode:
     name: Read Only Mode
     description: Toggles all write tools off, and removes ability for tools to make
