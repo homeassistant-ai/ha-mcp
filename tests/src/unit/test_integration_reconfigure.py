@@ -470,6 +470,34 @@ async def test_reconfigure_rejects_registry_duplicate_without_unique_id() -> Non
 
 
 @pytest.mark.asyncio
+async def test_reconfigure_rejects_registry_transport_failure_before_flow() -> None:
+    """A dead registry transport must block the mutating flow."""
+    before = {
+        "entry_id": "offline-entry",
+        "domain": "shelly",
+        "state": "setup_retry",
+        "supports_reconfigure": True,
+    }
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=before)
+    client.list_entity_registry = AsyncMock(
+        side_effect=HomeAssistantConnectionError("registry unavailable")
+    )
+    client.list_device_registry = AsyncMock(return_value=[])
+    client.list_config_entries = AsyncMock(return_value=[before])
+    client.start_reconfigure_flow = AsyncMock()
+
+    with pytest.raises(HomeAssistantConnectionError, match="registry unavailable"):
+        await reconfigure_config_entry(
+            client,
+            "offline-entry",
+            config={"host": "10.0.50.185"},
+        )
+
+    client.start_reconfigure_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_reconfigure_allows_auxiliary_entry_sharing_same_device() -> None:
     """A switch_as_x light is not a duplicate physical Shelly entry."""
     shelly_entry = {
