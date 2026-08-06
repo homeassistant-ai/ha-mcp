@@ -1232,7 +1232,7 @@ def _raise_if_unknown_labels(
             )
 
 
-async def _validate_registry_ids(
+async def validate_registry_ids(
     client: Any,
     area_id: str | None,
     labels: list[str] | None,
@@ -2070,7 +2070,7 @@ async def _handle_flow_helper(
         )
 
     # Bug 16 (issue #1150): validate registry IDs BEFORE creating the config entry.
-    await _validate_registry_ids(client, area_id, labels_list, category)
+    await validate_registry_ids(client, area_id, labels_list, category)
 
     if action == "create":
         # Validate against EITHER the top-level `name` arg OR `config_dict["name"]`.
@@ -4741,7 +4741,7 @@ class HelperConfigTools:
                 )
 
             # Bug 16 (issue #1150): validate area_id / labels / category exist.
-            await _validate_registry_ids(self._client, area_id, labels, category)
+            await validate_registry_ids(self._client, area_id, labels, category)
 
             # Bug 13/17 (issue #1150): pre-validate per-type schema constraints.
             _validate_pre_dispatch_params(

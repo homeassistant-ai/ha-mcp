@@ -35,6 +35,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tools_config_helpers import validate_registry_ids
 from .tools_voice_assistant import KNOWN_ASSISTANTS
 from .util_helpers import (
     JSON_STRING_COERCION,
@@ -1775,6 +1776,7 @@ class EntityTools:
                     )
                 )
 
+            await validate_registry_ids(self._client, area_id, None, None)
             _validate_enabled_constraint(enabled, entity_ids)
 
             parsed_aliases = _parse_string_list_field(aliases, "aliases")

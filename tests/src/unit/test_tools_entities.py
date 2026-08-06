@@ -178,6 +178,26 @@ class TestHaSetEntityLabels:
         call_args = mock_client.send_websocket_message.call_args[0][0]
         assert "labels" not in call_args
 
+    @pytest.mark.asyncio
+    async def test_invalid_area_id_rejected_before_registry_update(
+        self, set_entity_tool, mock_client
+    ):
+        """Unknown area IDs must not create dangling entity assignments."""
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": [{"area_id": "living_room"}],
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id="light.test", area_id="extérieur nord")
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert error_data["area_id"] == "extérieur nord"
+        assert mock_client.send_websocket_message.call_args_list == [
+            (({"type": "config/area_registry/list"},), {})
+        ]
+
 
 class TestHaSetEntityExposeTo:
     """Test ha_set_entity expose_to parameter."""

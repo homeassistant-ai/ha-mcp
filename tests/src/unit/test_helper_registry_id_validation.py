@@ -273,7 +273,7 @@ class TestPhantomRejectedAgainstEmptyRegistry:
     """Pin the (ok=True, items=[]) contract: phantom IDs must be rejected even
     when the registry is genuinely empty.
 
-    The ``_validate_registry_ids`` helper returns a (ok, items) tuple to
+    The ``validate_registry_ids`` helper returns a (ok, items) tuple to
     distinguish a successful-but-empty lookup from a lookup failure. Without
     explicit coverage, a future refactor that fails open on empty results
     would silently regress phantom-ID rejection."""
