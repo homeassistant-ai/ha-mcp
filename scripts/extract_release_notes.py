@@ -64,7 +64,7 @@ def _heading_re(version: str) -> re.Pattern[str]:
     `## v8.0.01`) and also `-` / `+`, so a stable version never matches a
     prerelease or build-metadata heading like `## v8.0.0-rc.1`.
     """
-    return re.compile(rf"^## v{re.escape(version.lstrip('v'))}(?![\w.+-])")
+    return re.compile(rf"^## v{re.escape(version.removeprefix('v'))}(?![\w.+-])")
 
 
 def extract_section(changelog: str, version: str) -> str:
@@ -95,7 +95,7 @@ def extract_section(changelog: str, version: str) -> str:
 
 
 def _truncation_notice(repo: str, version: str, limit: int) -> str:
-    url = f"https://github.com/{repo}/blob/v{version.lstrip('v')}/CHANGELOG.md"
+    url = f"https://github.com/{repo}/blob/v{version.removeprefix('v')}/CHANGELOG.md"
     return (
         "\n\n---\n\n"
         f"_Release notes truncated to fit GitHub's {limit:,}-character release-body "
@@ -228,7 +228,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         changelog = args.changelog.read_text(encoding="utf-8")
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
+        # UnicodeDecodeError subclasses ValueError, not OSError, so a changelog
+        # with a bad byte would otherwise exit on a raw traceback.
         print(f"extract_release_notes: {e}", file=sys.stderr)
         return 1
 
@@ -240,7 +242,13 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as e:
             print(f"extract_release_notes: {e}", file=sys.stderr)
             return 1
-    args.out.write_text(body, encoding="utf-8")
+    try:
+        # newline="\n" so the file on disk matches the character budget the cap
+        # was computed against, on any platform rather than only on the runner.
+        args.out.write_text(body, encoding="utf-8", newline="\n")
+    except OSError as e:
+        print(f"extract_release_notes: {e}", file=sys.stderr)
+        return 1
     return 0
 
 
