@@ -85,6 +85,8 @@ _TOP_LEVEL_ELEMENT_IDS = [
     # Read Only Mode toggle (#1569) — Tools tab, above the search box.
     # Same save-then-verify flow as the policy master toggle.
     "read-only-mode-toggle",
+    # Where applyFlagToggle writes the env-locked note for that switch.
+    "read-only-locked",
     # Advanced settings panel — the 5 section containers that
     # loadAdvancedSettings() writes to via innerHTML. Without container
     # divs in MIN_DOM, renderSection silently no-ops (getElementById
@@ -1130,6 +1132,8 @@ def _policy_panel_dom() -> str:
       <input id="policy-wait-seconds" />
       <input id="policy-ttl-minutes" />
       <div class="pin-notice" id="policyUnknownNotice"></div>
+      <div class="feature-locked-note" id="policy-master-locked"></div>
+      <div class="feature-locked-note" id="policy-manage-tool-locked"></div>
     """
     return MIN_DOM.replace("</body>", extras + "</body>")
 
@@ -1304,6 +1308,169 @@ class TestPolicyTabFlow:
         assert m is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
         assert 'data-checked="false"' in m.group(0), (
             f"failed save must revert the switch to its previous value: {m.group(0)}"
+        )
+
+    def test_unconfirmed_save_keeps_the_applied_value(
+        self, settings_script: str
+    ) -> None:
+        """Save succeeded, follow-up read failed: the POST echoes `applied`
+        — the server stating what it persisted — so the switch shows that
+        instead of reverting to a pre-flip state the server no longer has."""
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "responses": [
+                        # init read: off
+                        {
+                            "status": 200,
+                            "json": {
+                                "flags": {
+                                    "enable_security_policy_tool": {"value": False}
+                                }
+                            },
+                        },
+                        # the save, echoing what it wrote
+                        {
+                            "status": 200,
+                            "json": {
+                                "applied": {"enable_security_policy_tool": True},
+                                "restart_required": True,
+                            },
+                        },
+                        # the confirming re-read fails
+                        {"status": 503, "json": {}},
+                    ]
+                },
+            },
+            invoke="""
+              await window.syncPolicyGlobalToggles();
+              const cb = document.getElementById('policy-manage-tool-toggle');
+              cb.checked = true;
+              cb.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 100));
+              const probe = document.createElement('div');
+              probe.id = '__applied_probe';
+              probe.dataset.checked = String(cb.checked);
+              probe.dataset.indeterminate = String(cb.indeterminate);
+              probe.dataset.disabled = String(cb.disabled);
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'<div[^>]*id="__applied_probe"[^>]*>', result.dom)
+        assert m is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        tag = m.group(0)
+        assert 'data-checked="true"' in tag, (
+            f"the echoed applied value must survive a failed re-read: {tag}"
+        )
+        assert 'data-indeterminate="false"' in tag, tag
+        assert 'data-disabled="false"' in tag, tag
+
+    def test_unconfirmed_save_without_echo_goes_unknown(
+        self, settings_script: str
+    ) -> None:
+        """Save succeeded but neither the response nor the re-read says
+        what the server now holds: the switch goes to the unknown
+        treatment. Reverting to the pre-flip value would assert a state
+        nobody verified."""
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "responses": [
+                        {
+                            "status": 200,
+                            "json": {
+                                "flags": {
+                                    "enable_security_policy_tool": {"value": False}
+                                }
+                            },
+                        },
+                        # 200 with no `applied` echo (truncated body).
+                        {"status": 200, "json": {"restart_required": True}},
+                        {"status": 503, "json": {}},
+                    ]
+                },
+            },
+            invoke="""
+              await window.syncPolicyGlobalToggles();
+              const cb = document.getElementById('policy-manage-tool-toggle');
+              cb.checked = true;
+              cb.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 100));
+              const notice = document.getElementById('policyUnknownNotice');
+              const probe = document.createElement('div');
+              probe.id = '__unconfirmed_probe';
+              probe.dataset.blocked = String(cb.indeterminate && cb.disabled);
+              probe.dataset.shown = String(
+                !!notice && notice.classList.contains('show'));
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'<div[^>]*id="__unconfirmed_probe"[^>]*>', result.dom)
+        assert m is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        tag = m.group(0)
+        assert 'data-blocked="true"' in tag, (
+            f"an unconfirmed save must leave the switch unknown, not reverted "
+            f"and editable: {tag}"
+        )
+        assert 'data-shown="true"' in tag, f"unknown notice must show: {tag}"
+
+    def test_env_pinned_flag_locks_the_switch(self, settings_script: str) -> None:
+        """editable:false means every save is rejected server-side, so the
+        switch must lock and name the env var instead of looking usable
+        (the treatment the generated Server Settings rows already get)."""
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "status": 200,
+                    "json": {
+                        "is_addon": False,
+                        "flags": {
+                            "enable_security_policy_tool": {
+                                "value": True,
+                                "origin": "env",
+                                "editable": False,
+                                "env_var": "ENABLE_SECURITY_POLICY_TOOL",
+                            }
+                        },
+                    },
+                },
+            },
+            invoke="""
+              await window.syncPolicyGlobalToggles();
+              const cb = document.getElementById('policy-manage-tool-toggle');
+              const probe = document.createElement('div');
+              probe.id = '__pinned_probe';
+              probe.dataset.checked = String(cb.checked);
+              probe.dataset.disabled = String(cb.disabled);
+              probe.dataset.indeterminate = String(cb.indeterminate);
+              probe.dataset.note =
+                document.getElementById('policy-manage-tool-locked').innerHTML;
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'<div[^>]*id="__pinned_probe"[^>]*>', result.dom)
+        assert m is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        tag = m.group(0)
+        assert 'data-disabled="true"' in tag, (
+            f"an env-pinned flag's switch must be disabled: {tag}"
+        )
+        # Known-but-locked is not the same as unknown: the value IS known.
+        assert 'data-indeterminate="false"' in tag, tag
+        assert 'data-checked="true"' in tag, tag
+        assert "ENABLE_SECURITY_POLICY_TOOL" in tag, (
+            f"the locked note must name the env var that pins it: {tag}"
         )
 
     def test_policy_toggles_unknown_when_features_fetch_fails(

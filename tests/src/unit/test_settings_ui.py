@@ -636,6 +636,22 @@ class TestAccessibilityMarkup:
             assert 'role="status"' in tag, f"{span_id} not role=status"
             assert 'aria-live="polite"' in tag, f"{span_id} not aria-live"
 
+    def test_unknown_state_notices_are_assertive_live_regions(self) -> None:
+        """Both "could not read server settings" notices are failure-path
+        regions: they appear only when a features fetch failed and the
+        switches they describe go indeterminate + disabled. A screen-reader
+        user must be interrupted (role=alert / aria-live=assertive) rather
+        than told politely, if at all — the polite regions above are for
+        transient progress text."""
+        for notice_id in ("roUnknownNotice", "policyUnknownNotice"):
+            idx = _SETTINGS_HTML.find(f'id="{notice_id}"')
+            assert idx != -1, f"unknown-state notice {notice_id} missing"
+            tag = _SETTINGS_HTML[idx : idx + 140]
+            assert 'role="alert"' in tag, f"{notice_id} is not role=alert"
+            assert 'aria-live="assertive"' in tag, (
+                f"{notice_id} is not aria-live=assertive"
+            )
+
     def test_tab_js_keeps_aria_state_in_sync(self) -> None:
         # activateTab() mirrors selection to aria-selected + roving tabindex,
         # and the tablist supports arrow-key navigation (WAI-ARIA APG).
