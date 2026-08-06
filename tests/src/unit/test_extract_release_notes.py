@@ -120,6 +120,35 @@ def test_truncation_closes_a_code_fence_it_cut_into() -> None:
     assert kept.count("```") % 2 == 0, "truncation left an unclosed code fence"
 
 
+def _details_body(line_width: int) -> str:
+    """An over-limit body wrapped in the changelog's `<details>` element."""
+    line = "- " + "x" * (line_width - 3) + "\n"
+    return (
+        "### Features\n\n- visible change\n\n"
+        "<details>\n<summary>Internal Changes</summary>\n\n"
+        + line * 40_000
+        + "\n</details>\n"
+    )
+
+
+def test_truncation_notice_is_not_swallowed_by_an_open_details_block() -> None:
+    """An unclosed `<details>` would collapse the notice out of sight."""
+    capped = extract.cap_to_limit(_details_body(30), REPO, "8.0.0", LIMIT)
+
+    assert capped.count("<details>") == capped.count("</details>"), (
+        "truncation left a <details> open, hiding the notice in a collapsed section"
+    )
+    assert capped.index("</details>") < capped.index("Release notes truncated"), (
+        "the notice must sit outside the collapsed block"
+    )
+
+
+@pytest.mark.parametrize("line_width", [8, 9, 12, 13, 30])
+def test_closing_details_never_pushes_the_body_over_the_limit(line_width: int) -> None:
+    capped = extract.cap_to_limit(_details_body(line_width), REPO, "8.0.0", LIMIT)
+    assert len(capped) <= LIMIT
+
+
 @pytest.mark.parametrize("line_width", [6, 7, 11, 12, 40])
 def test_closing_fence_never_pushes_the_body_over_the_limit(line_width: int) -> None:
     """The closing fence is appended after the cut, so its length must be reserved.

@@ -36,9 +36,15 @@ _NEXT_SECTION_RE = re.compile(r"^## v\d")
 
 _FENCE_RE = re.compile(r"^\s*```")
 
-# Appended when truncation cuts inside a fenced block. Its length is reserved
-# up front, so closing the fence can never push the body back over the limit.
+# Truncation can land inside a block the changelog template opened: a fenced
+# code block, or the `<details><summary>Internal Changes</summary>` element
+# semantic-release wraps internal commits in. Both are closed after the cut --
+# an unclosed `<details>` in particular would swallow the truncation notice
+# into a collapsed section, so a reader sees no sign the notes are incomplete.
+# Their lengths are reserved before lines are selected, so closing them can
+# never push the body back over the limit.
 _FENCE_CLOSE = "\n```"
+_DETAILS_CLOSE = "\n</details>"
 
 
 def _heading_re(version: str) -> re.Pattern[str]:
@@ -80,41 +86,68 @@ def _truncation_notice(repo: str, version: str, limit: int) -> str:
     )
 
 
-def _close_dangling_fence(text: str) -> str:
-    """Append a closing fence if truncation cut inside a fenced code block."""
-    if sum(1 for line in text.splitlines() if _FENCE_RE.match(line)) % 2:
-        return text + _FENCE_CLOSE
-    return text
+class _OpenBlocks:
+    """Tracks which markdown blocks are still open as lines are consumed."""
+
+    def __init__(self) -> None:
+        self.in_fence = False
+        self.details_depth = 0
+
+    def feed(self, line: str) -> None:
+        if _FENCE_RE.match(line):
+            self.in_fence = not self.in_fence
+            return
+        if self.in_fence:  # `<details>` inside a code block is text, not markup
+            return
+        self.details_depth += line.count("<details>") - line.count("</details>")
+        self.details_depth = max(self.details_depth, 0)
+
+    @property
+    def closers(self) -> str:
+        """The suffix that closes everything still open, innermost first."""
+        fence = _FENCE_CLOSE if self.in_fence else ""
+        return fence + _DETAILS_CLOSE * self.details_depth
 
 
 def cap_to_limit(body: str, repo: str, version: str, limit: int) -> str:
     """Return `body` unchanged, or truncated on a line boundary plus a notice.
 
-    Truncating on a line boundary keeps the markdown readable; a body whose
-    very first line already blows the budget is cut mid-line rather than
-    reduced to a bare notice.
+    Truncating on a line boundary keeps the markdown readable. A line is only
+    taken when the *closed* form still fits -- the closers for whatever it
+    leaves open are charged against the budget before the line is accepted, so
+    the result never exceeds `limit`.
     """
     if len(body) <= limit:
         return body
 
     notice = _truncation_notice(repo, version, limit)
-    # Reserve the closing fence too: it is appended after the line-boundary cut,
-    # so without the reservation a fenced body overshoots `limit` by up to four
-    # characters whenever the cut lands that close to the budget.
-    budget = limit - len(notice) - len(_FENCE_CLOSE)
+    budget = limit - len(notice)
     if budget <= 0:  # pragma: no cover - only reachable with an absurd --limit
         return body[:limit]
 
+    open_blocks = _OpenBlocks()
     kept: list[str] = []
     used = 0
     for line in body.splitlines(keepends=True):
-        if used + len(line) > budget:
+        candidate = _OpenBlocks()
+        candidate.in_fence, candidate.details_depth = (
+            open_blocks.in_fence,
+            open_blocks.details_depth,
+        )
+        candidate.feed(line)
+        if used + len(line) + len(candidate.closers) > budget:
             break
         kept.append(line)
         used += len(line)
+        open_blocks = candidate
 
     head = "".join(kept).rstrip() if kept else body[:budget].rstrip()
-    return _close_dangling_fence(head) + notice
+    closers = open_blocks.closers if kept else ""
+    # Defensive clamp: rstrip only shortens, so this should already hold.
+    overflow = len(head) + len(closers) + len(notice) - limit
+    if overflow > 0:  # pragma: no cover - budget accounting makes this unreachable
+        head = head[:-overflow]
+    return head + closers + notice
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
