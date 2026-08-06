@@ -175,6 +175,10 @@ jobs:
         # (an over-long body is a 422 that strands the already-pushed tag).
         python3 scripts/extract_release_notes.py --version "$VERSION" --out release_notes.md
         if [ ! -s release_notes.md ]; then
+          # An empty extract means either no "## v${VERSION}" heading or an
+          # empty section, and the file cannot tell those apart — so warn
+          # instead of letting a one-line release body pass for a normal run.
+          echo "::warning::no changelog section extracted for v${VERSION} — releasing with fallback notes"
           echo "Release v${VERSION}" > release_notes.md
         fi
 

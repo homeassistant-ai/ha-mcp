@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import tomllib
 from pathlib import Path
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "extract_release_notes.py"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_SCRIPT = _REPO_ROOT / "scripts" / "extract_release_notes.py"
 _spec = importlib.util.spec_from_file_location("extract_release_notes", _SCRIPT)
 assert _spec and _spec.loader
 extract = importlib.util.module_from_spec(_spec)
@@ -76,6 +78,29 @@ def test_version_does_not_match_a_longer_version_sharing_its_prefix(
 def test_a_prerelease_version_still_finds_its_own_section() -> None:
     changelog = "# CHANGELOG\n\n## v8.0.0-rc.1 (2026-08-02)\n\n- the rc change\n"
     assert "- the rc change" in extract.extract_section(changelog, "8.0.0-rc.1")
+
+
+def test_the_heading_pattern_still_matches_the_real_changelog() -> None:
+    """Pin the regexes to the heading `templates/CHANGELOG.md.j2` actually emits.
+
+    Every other test builds its own `## vX.Y.Z` fixture, so a change to that
+    template or to semantic-release's `tag_format` would leave the whole file
+    green while `extract_section` returned "" for every real release — the
+    workflows would then ship `Release vX.Y.Z` as the entire release body,
+    indefinitely and with CI green. `pyproject.toml`'s version is bumped by
+    semantic-release in the same commit that writes the changelog section, so
+    the two are always in sync on any branch.
+    """
+    pyproject = tomllib.loads(
+        (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    version = pyproject["project"]["version"]
+    changelog = (_REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    assert extract.extract_section(changelog, version) != "", (
+        f"no changelog section extracted for the current version {version} — "
+        "the heading format and the extractor's regexes have drifted apart"
+    )
 
 
 def test_body_under_the_limit_is_returned_verbatim() -> None:
@@ -159,6 +184,41 @@ def test_closing_fence_never_pushes_the_body_over_the_limit(line_width: int) -> 
     """
     capped = extract.cap_to_limit(_fenced_body(line_width), REPO, "8.0.0", LIMIT)
     assert len(capped) <= LIMIT
+
+
+@pytest.mark.parametrize("delimiter", ["```", "````", "~~~", "~~~~"])
+def test_truncation_closes_a_fence_with_the_delimiter_it_was_opened_with(
+    delimiter: str,
+) -> None:
+    """Closing a ````-fence with ``` leaves it open — and eats the notice.
+
+    Markdown only ends a fence on the same character repeated at least as many
+    times, so a fixed three-backtick closer renders the truncation notice and
+    the full-changelog link as code instead of as the warning they are.
+    """
+    body = f"{delimiter}python\n" + ("x" * 11 + "\n") * 40_000 + f"{delimiter}\n"
+    assert len(body) > LIMIT, "body must actually need truncating"
+
+    capped = extract.cap_to_limit(body, REPO, "8.0.0", LIMIT)
+
+    kept = capped.split("\n\n---\n\n")[0]
+    assert kept.splitlines()[-1] == delimiter, (
+        "fence closed with a delimiter that cannot close it"
+    )
+    assert len(capped) <= LIMIT
+
+
+def test_a_shorter_or_foreign_fence_line_does_not_close_an_open_fence() -> None:
+    blocks = extract._OpenBlocks()
+    blocks.feed("````python\n")
+    assert blocks.closers == "\n````"
+
+    blocks.feed("```\n")  # too short to close it
+    blocks.feed("~~~\n")  # wrong character
+    assert blocks.closers == "\n````", "an open fence was closed by a line that can't"
+
+    blocks.feed("`````\n")  # same character, longer — closes it
+    assert blocks.closers == ""
 
 
 def test_a_limit_too_small_for_the_notice_fails_loudly() -> None:
