@@ -169,6 +169,26 @@ async def readonly_codemode_mcp(ha_container_with_fresh_config, monkeypatch, tmp
     get_data_dir.cache_clear()
 
 
+@pytest.fixture
+async def readonly_policytool_mcp(
+    ha_container_with_fresh_config, monkeypatch, tmp_path
+):
+    """Read-only server with the security-policy tool enabled so
+    ha_manage_security_policy (a mixed read/write exempt tool) is
+    registered — its get read must work while set is blocked."""
+    server, ha_client = await _build_readonly_server(
+        ha_container_with_fresh_config,
+        monkeypatch,
+        tmp_path,
+        extra_env={"ENABLE_SECURITY_POLICY_TOOL": "true"},
+    )
+    client = Client(server.mcp)
+    async with client:
+        yield client, server
+    await ha_client.close()
+    get_data_dir.cache_clear()
+
+
 @pytest.mark.asyncio
 async def test_write_tools_hidden_exempt_and_read_tools_listed(readonly_mcp):
     client, _server = readonly_mcp
@@ -215,11 +235,12 @@ async def test_real_catalog_mandatory_tools_stay_available(readonly_mcp):
         )
     # Exempt names must reference real tools (typo guard). Feature-gated
     # tools are only registered when their flag is on — this fixture has
-    # code mode off, so ha_manage_custom_tool is skipped here; its real
-    # registration + read/write classification is covered against a
-    # code-mode-enabled server by
-    # test_code_mode_tool_read_works_and_execution_blocked.
-    feature_gated = {"ha_manage_custom_tool"}
+    # code mode and the security-policy tool off, so those two are skipped
+    # here; their real registration + read/write classification is covered
+    # against flag-enabled servers by
+    # test_code_mode_tool_read_works_and_execution_blocked and
+    # test_security_policy_tool_read_works_and_set_blocked.
+    feature_gated = {"ha_manage_custom_tool", "ha_manage_security_policy"}
     for name in READ_ONLY_EXEMPT_TOOLS:
         if name in feature_gated:
             continue
@@ -465,6 +486,29 @@ async def test_code_mode_tool_read_works_and_execution_blocked(readonly_codemode
         {"code": "1 + 1", "justification": "read-only mode test"},
     )
     assert body["tool_name"] == "ha_manage_custom_tool", body
+
+
+@pytest.mark.asyncio
+async def test_security_policy_tool_read_works_and_set_blocked(readonly_policytool_mcp):
+    """With the policy tool enabled, ha_manage_security_policy (a mixed
+    read/write exempt tool) is listed; action='get' works, and action='set'
+    is blocked with READ_ONLY_MODE."""
+    client, _server = readonly_policytool_mcp
+
+    names = {t.name for t in await client.list_tools()}
+    assert "ha_manage_security_policy" in names, names
+
+    read = parse_mcp_result(
+        await client.call_tool("ha_manage_security_policy", {"action": "get"})
+    )
+    assert read.get("success") is True, read
+
+    body = await _expect_read_only_blocked(
+        client,
+        "ha_manage_security_policy",
+        {"action": "set", "policy": {"rules": []}},
+    )
+    assert body["tool_name"] == "ha_manage_security_policy", body
 
 
 @pytest.mark.inaddon_only
