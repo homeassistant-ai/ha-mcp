@@ -1937,8 +1937,9 @@ class IntegrationTools:
                 default=False,
                 description=(
                     "Use the existing config entry's official reconfigure flow "
-                    "instead of its options flow. Requires confirm=True to apply; "
-                    "confirm=False performs read-only preflight."
+                    "instead of its options flow. confirm=False performs a "
+                    "read-only preflight; confirm=True requires the returned "
+                    "confirm_token to apply."
                 ),
             ),
         ] = False,
@@ -1970,7 +1971,10 @@ class IntegrationTools:
             bool,
             Field(
                 default=False,
-                description="Required when reconfigure=True to apply the change.",
+                description=(
+                    "Required with confirm_token when reconfigure=True to apply; "
+                    "leave false for the read-only preflight."
+                ),
             ),
         ] = False,
         confirm_token: Annotated[
@@ -1990,8 +1994,9 @@ class IntegrationTools:
         - Update options: entry_id + config — drives the entry's options
           flow (what the "Configure" button does in the HA UI).
         - Reconfigure: entry_id + reconfigure=True + config — drives the
-          existing entry's official reconfigure flow; pass confirm=False for
-          read-only preflight and confirm=True to apply.
+          existing entry's official reconfigure flow. First call with
+          confirm=False for a read-only preview; repeat with confirm=True and
+          that preview's confirm_token to apply.
 
         WHEN NOT TO USE:
         - Helpers (template, group, utility_meter, ...): use
@@ -2015,7 +2020,8 @@ class IntegrationTools:
         - Update options: ha_set_integration(entry_id="abc123", config={"scan_interval": 30})
         - Reconfigure preflight: ha_set_integration(
           entry_id="abc123", reconfigure=True, config={"host": "10.0.0.5"}
-        )
+        ) → review the returned confirm_token, then repeat with
+          confirm=True and that token.
         """
         try:
             if reconfigure:
