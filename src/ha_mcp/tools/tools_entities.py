@@ -1062,6 +1062,12 @@ class EntityTools:
         original_entity_id = entity_id
 
         # Phase 3: Send entity registry update (covers all fields except expose_to)
+        # Repeat the preflight immediately before this write: Home Assistant
+        # accepts unknown area IDs, so a deleted area must not slip through
+        # after the earlier validation while preparing the update.
+        await validate_registry_ids(
+            self._client, area_id, None, None, fail_closed_area=True
+        )
         (
             entity_id,
             entity_entry,
@@ -1776,7 +1782,9 @@ class EntityTools:
                     )
                 )
 
-            await validate_registry_ids(self._client, area_id, None, None)
+            await validate_registry_ids(
+                self._client, area_id, None, None, fail_closed_area=True
+            )
             _validate_enabled_constraint(enabled, entity_ids)
 
             parsed_aliases = _parse_string_list_field(aliases, "aliases")

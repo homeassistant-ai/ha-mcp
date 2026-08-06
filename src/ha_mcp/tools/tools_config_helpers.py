@@ -1232,11 +1232,27 @@ def _raise_if_unknown_labels(
             )
 
 
+def _raise_if_area_lookup_failed(
+    ok: bool, area_id: str | None, fail_closed_area: bool
+) -> None:
+    """Fail entity area assignment when its registry cannot be read."""
+    if fail_closed_area and not ok:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONNECTION_FAILED,
+                "Could not validate area_id because the area registry is unavailable.",
+                context={"area_id": area_id},
+            )
+        )
+
+
 async def validate_registry_ids(
     client: Any,
     area_id: str | None,
     labels: list[str] | None,
     category: str | None,
+    *,
+    fail_closed_area: bool = False,
 ) -> None:
     """Validate that area_id, labels, and category reference existing registry entries.
 
@@ -1252,6 +1268,8 @@ async def validate_registry_ids(
 
     Raises VALIDATION_INVALID_PARAMETER on the first unknown ID encountered, with
     the available IDs included in the suggestions list so the caller can correct.
+    ``fail_closed_area`` also rejects an unavailable area registry; entity
+    assignments use it because HA otherwise persists dangling area references.
     """
     needs_area = area_id is not None and area_id != ""
     needs_labels = bool(labels)
@@ -1287,6 +1305,7 @@ async def validate_registry_ids(
 
     if needs_area:
         ok, areas = by_param["area"]
+        _raise_if_area_lookup_failed(ok, area_id, fail_closed_area)
         valid_area_ids = _registry_id_values(areas, "area_id")
         if ok and area_id not in valid_area_ids:
             raise_tool_error(
