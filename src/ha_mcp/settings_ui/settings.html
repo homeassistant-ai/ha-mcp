@@ -326,6 +326,41 @@
         </label>
       </div>
     </div>
+    <!-- Registers ha_manage_security_policy. Deliberately rendered here and
+         not in the Server Settings feature list (the flag ships no
+         features.* locale keys, so it never enters FEATURE_META): the
+         warning below only makes sense next to the rules it governs. -->
+    <div class="feature-row">
+      <div class="feature-info">
+        <div class="feature-name" id="policy-manage-tool-label" data-i18n="policies.global.manage_tool.label">Let AI agents edit these policies (ha_manage_security_policy)</div>
+        <div class="feature-help" data-i18n="policies.global.manage_tool.help">
+          Registers the ha_manage_security_policy tool, which reads and
+          replaces the policy document this tab edits. Off by default.
+          Independent of the master switch above: this controls who can
+          edit the rules, not whether they are enforced. The tool never
+          reaches the pending-approval queue.
+        </div>
+      </div>
+      <div class="feature-control">
+        <label class="switch">
+          <input type="checkbox" id="policy-manage-tool-toggle" aria-labelledby="policy-manage-tool-label">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+    <div class="ha-alert ha-alert-warning" role="note">
+      <svg class="ha-alert-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M12,2L1,21H23M12,6L19.53,19H4.47M11,10V14H13V10M11,16V18H13V16"/>
+      </svg>
+      <div class="ha-alert-body" data-i18n="policies.global.manage_tool.warning">
+        Enabling this lets connected AI agents rewrite the security policies
+        on this tab, including removing approval gates. To keep a human in
+        the loop on every policy edit, add a rule targeting
+        ha_manage_security_policy itself — it is gated like any other tool.
+        Restart the App (add-on) after toggling for the change to take
+        effect.
+      </div>
+    </div>
     <div class="feature-row">
       <div class="feature-info">
         <div class="feature-name" data-i18n="policies.global.wait.label">Wait seconds (5-600)</div>

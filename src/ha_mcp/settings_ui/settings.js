@@ -232,6 +232,11 @@ const policyState = {
   enabled: false,
   enabledKnown: false,
   gatedTools: new Set(),
+  // enable_security_policy_tool — registers ha_manage_security_policy, the
+  // MCP tool that can rewrite these rules. Independent of `enabled`: it
+  // governs who may edit the policy, not whether it is enforced.
+  manageToolEnabled: false,
+  manageToolKnown: false,
 };
 
 // Read Only Mode (read_only_mode feature flag) — same tri-state shape
@@ -263,18 +268,25 @@ async function loadPolicyState() {
       const flag = (fdata.flags || {})['enable_tool_security_policies'];
       policyState.enabled = !!(flag && flag.value);
       policyState.enabledKnown = true;
+      const toolFlag = (fdata.flags || {})['enable_security_policy_tool'];
+      policyState.manageToolEnabled = !!(toolFlag && toolFlag.value);
+      policyState.manageToolKnown = true;
       const roFlag = (fdata.flags || {})['read_only_mode'];
       readOnlyState.enabled = !!(roFlag && roFlag.value);
       readOnlyState.enabledKnown = true;
     } else {
       policyState.enabled = false;
       policyState.enabledKnown = false;
+      policyState.manageToolEnabled = false;
+      policyState.manageToolKnown = false;
       readOnlyState.enabled = false;
       readOnlyState.enabledKnown = false;
     }
   } catch (_e) {
     policyState.enabled = false;
     policyState.enabledKnown = false;
+    policyState.manageToolEnabled = false;
+    policyState.manageToolKnown = false;
     readOnlyState.enabled = false;
     readOnlyState.enabledKnown = false;
   }
@@ -2451,20 +2463,27 @@ async function saveFeatureFlag(fieldName, value) {
 // This mirrors the syncPolicyRule() flow used by the Tools-tab toggle.
 let policyRuleEdits = {};
 
-async function syncPolicyMasterToggle() {
+async function syncPolicyGlobalToggles() {
   // The master toggle on this tab is just a UI mirror of the same
   // `enable_tool_security_policies` feature flag the Server Settings
   // tab exposes — the addon-config flag is the single source of truth.
   // We rely on loadPolicyState() to have populated policyState.enabled
   // (it fetches /api/settings/features) so the only work here is to
   // reflect that bit into the checkbox.
+  //
+  // The policy-editing tool toggle (enable_security_policy_tool) rides
+  // the same fetch. It is NOT nested under the master: registering
+  // ha_manage_security_policy is independent of whether the rules are
+  // enforced, so the row stays usable with the master off.
   await loadPolicyState();
   const cb = document.getElementById('policy-master-toggle');
   if (cb) cb.checked = !!policyState.enabled;
+  const toolCb = document.getElementById('policy-manage-tool-toggle');
+  if (toolCb) toolCb.checked = !!policyState.manageToolEnabled;
 }
 
 async function policyLoadConfig() {
-  await syncPolicyMasterToggle();
+  await syncPolicyGlobalToggles();
   const errEl = document.getElementById('policy-load-error');
   if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
   let resp;
@@ -3395,6 +3414,36 @@ document.getElementById('policy-master-toggle').addEventListener('change', async
   await loadPolicyState();
   if (policyState.enabledKnown) {
     e.target.checked = !!policyState.enabled;
+  } else {
+    e.target.checked = previous;
+  }
+});
+
+// Policy-editing tool toggle (enable_security_policy_tool) — same
+// save-then-verify flow as the master above. The tool only appears in or
+// disappears from the MCP catalog on the next restart, which
+// saveFeatureFlag's restart-required banner already tells the user.
+document.getElementById('policy-manage-tool-toggle').addEventListener('change', async (e) => {
+  const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
+  const ok = await saveFeatureFlag('enable_security_policy_tool', e.target.checked);
+  if (!ok) {
+    // Save definitely failed — the server still has the old value.
+    // Revert the checkbox and surface the failure (set the status AFTER
+    // the revert so it isn't clobbered).
+    e.target.checked = previous;
+    updateStatus(t(
+      'policies.errors.manage_tool_save',
+      {},
+      'Policy-editing tool change did not save. The server still has the previous value'
+    ), false, true);
+    return;
+  }
+  // Re-read the truth from the server and sync the checkbox back to it.
+  // If the follow-up read can't confirm what the server has, revert to
+  // the pre-flip value so the UI doesn't lie about persisted state.
+  await loadPolicyState();
+  if (policyState.manageToolKnown) {
+    e.target.checked = !!policyState.manageToolEnabled;
   } else {
     e.target.checked = previous;
   }

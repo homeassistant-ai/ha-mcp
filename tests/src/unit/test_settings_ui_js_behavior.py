@@ -78,6 +78,9 @@ _TOP_LEVEL_ELEMENT_IDS = [
     # mirrors the Server-Settings flag and posts to /api/settings/features;
     # the global-settings save button writes wait_seconds / TTL.
     "policy-master-toggle",
+    # enable_security_policy_tool (#2148) — registers
+    # ha_manage_security_policy; same save-then-verify flow as the master.
+    "policy-manage-tool-toggle",
     "policy-save-global-btn",
     # Read Only Mode toggle (#1569) — Tools tab, above the search box.
     # Same save-then-verify flow as the policy master toggle.
@@ -151,7 +154,11 @@ def _min_dom_row_tail(el_id: str) -> str | None:
         return None  # rendered as a child of restartNotice above
     if el_id == "search":
         return '<input id="search" />'
-    if el_id in ("policy-master-toggle", "read-only-mode-toggle"):
+    if el_id in (
+        "policy-master-toggle",
+        "policy-manage-tool-toggle",
+        "read-only-mode-toggle",
+    ):
         return f'<input id="{el_id}" type="checkbox" />'
     if el_id == "policy-save-global-btn":
         return '<button id="policy-save-global-btn"></button>'

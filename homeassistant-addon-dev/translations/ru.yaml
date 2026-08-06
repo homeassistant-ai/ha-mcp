@@ -54,6 +54,15 @@ configuration:
       вызов будет выполнен. Правила для отдельных инструментов с необязательными условиями
       для аргументов настраиваются на вкладке «Политики безопасности инструментов».
       По умолчанию выключено. Для применения требуется перезапуск.
+  enable_security_policy_tool:
+    name: Let AI agents edit tool security policies
+    description: 'Registers the ha_manage_security_policy tool, which lets connected
+      AI agents read and rewrite the tool security policies — including removing approval
+      gates. Off by default. Independent of the Tool Security Policies option above:
+      this controls who can edit the rules, not whether they are enforced. The tool
+      cannot see or decide pending approvals. To keep a human in the loop on every
+      policy edit, gate ha_manage_security_policy itself from the Tool Security Policies
+      tab of the web UI. Requires restart to take effect.'
   read_only_mode:
     name: Режим только для чтения
     description: Отключает все инструменты записи и запрещает инструментам выполнять
