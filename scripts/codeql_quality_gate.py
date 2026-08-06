@@ -30,7 +30,14 @@ from typing import Any
 # Findings under these path prefixes are dropped before gating. These are
 # vendored / third-party trees we do not own and ruff already excludes them
 # (see ``extend-exclude`` in pyproject.toml). Keep this in sync with that list.
-PATHS_IGNORE: tuple[str, ...] = ("tests/initial_test_state/",)
+PATHS_IGNORE: tuple[str, ...] = (
+    "tests/initial_test_state/",
+    # Vendored websockets (synced by scripts/vendor_websockets.py from the
+    # pin in src/ha_mcp/_vendor/requirements.txt) — upstream's code, not
+    # ours. Scoped to the library subtree, NOT all of _vendor/, so our own
+    # _vendor/__init__.py stays gated exactly as ruff lints it.
+    "src/ha_mcp/_vendor/websockets/",
+)
 
 # Per-finding allowlist for verified false positives and intentional patterns
 # that cannot be cleared without breaking or contorting correct code. Each entry

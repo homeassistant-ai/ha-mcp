@@ -286,6 +286,12 @@ jobs:
         run: |
           sudo chmod +r /boot/vmlinuz-* || true
           mkdir -p /tmp/haos-inaddon-diagnostics
+          # A bake-stage failure leaves its serial log + image under
+          # /tmp/haos-build (build_image.py's work dir); capture them so
+          # the artifact is never empty on the failure hardest to see
+          # (2026-08-05: day-of-release HA 2026.8.0 bake timeouts shipped
+          # an empty artifact).
+          cp /tmp/haos-build/haos-serial.log /tmp/haos-inaddon-diagnostics/bake-serial.log 2>/dev/null || true
           # In pytest-xdist (parallel) mode each worker boots its OWN
           # backing-file overlay (haos-test-image-<worker>.qcow2); the base
           # /tmp/haos-test-image.qcow2 is never booted, so the per-PR source
@@ -301,6 +307,10 @@ jobs:
           targets=(/tmp/haos-test-image-gw*.qcow2)
           if [ ${#targets[@]} -eq 0 ]; then
             targets=(/tmp/haos-test-image.qcow2)
+          fi
+          if [ ! -f "${targets[0]}" ] && [ -f /tmp/haos-build/haos-test-image.qcow2 ]; then
+            # Bake-stage failure: probe the half-baked image instead.
+            targets=(/tmp/haos-build/haos-test-image.qcow2)
           fi
           for img in "${targets[@]}"; do
             label=$(basename "$img" .qcow2)

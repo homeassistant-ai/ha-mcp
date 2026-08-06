@@ -19,8 +19,12 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlparse
 
-import websockets
-
+# The vendored copy, NEVER the shared site-packages one: inside Home
+# Assistant that copy is unowned — ~20 integration libraries drag it in with
+# conflicting version demands and any of their installs can replace or tear
+# it in place (#2135/#2146). The private copy is immune, and CI tests
+# exactly the version production runs.
+from .._vendor import websockets
 from ..config import get_global_settings
 from .rest_client import (
     HomeAssistantAuthError,

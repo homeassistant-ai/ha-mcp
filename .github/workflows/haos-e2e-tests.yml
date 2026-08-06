@@ -278,9 +278,20 @@ jobs:
         run: |
           sudo chmod +r /boot/vmlinuz-* || true
           mkdir -p /tmp/haos-diagnostics
+          # Bake-stage failures leave their image + serial log under
+          # /tmp/haos-build (build_image.py's work dir), not the test-run
+          # paths probed below - without this the whole diagnostics
+          # artifact is empty exactly when the failure is hardest to see
+          # (the 2026-08-05 bake timeouts against the day-of-release HA
+          # 2026.8.0 shipped a 263-byte artifact). Capture the bake
+          # serial log and point the guestfish probes at whichever qcow2
+          # exists.
+          cp /tmp/haos-build/haos-serial.log /tmp/haos-diagnostics/bake-serial.log 2>/dev/null || true
+          QCOW2=/tmp/haos-test-image.qcow2
+          [ -f "$QCOW2" ] || QCOW2=/tmp/haos-build/haos-test-image.qcow2
           # Probe: full directory listing of HA's config dir. Captures
           # whatever HA actually writes (log filenames vary by config).
-          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
+          guestfish --ro -a "$QCOW2" run \
             : mount /dev/sda8 / \
             : ll /supervisor/homeassistant \
             > /tmp/haos-diagnostics/config-dir-listing.txt 2>&1 \
@@ -288,12 +299,12 @@ jobs:
           # Pull everything log-shaped + the .storage tree out as a tar.
           # tar-out includes the full subtree so anything-named-log gets
           # captured; .storage gives us config_entries + other state.
-          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
+          guestfish --ro -a "$QCOW2" run \
             : mount /dev/sda8 / \
             : tar-out /supervisor/homeassistant/.storage /tmp/haos-diagnostics/storage.tar \
             || echo ".storage tar-out failed"
           # Same for any log files in the config root.
-          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
+          guestfish --ro -a "$QCOW2" run \
             : mount /dev/sda8 / \
             : glob copy-out '/supervisor/homeassistant/*.log*' /tmp/haos-diagnostics/ \
             || echo "log glob copy failed"
