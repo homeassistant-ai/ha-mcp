@@ -29,7 +29,18 @@ and merge: the post-merge `locale-sync.yml` workflow machine-fills every string
 over its next daily runs. The component catalog may start as an empty object;
 this one needs `meta` (`native_name`, `dir`) plus the handful of `messages`
 keys the ungated checks below demand — a `meta`-only catalog is red in PR CI.
-To fill them in your own PR instead, run
+Two things that list will not lead you to: `policies.operators.exists_long` is
+the condition editor's own dropdown label rather than a `PredicateOp` member,
+so no check asks for it and a catalog without it reads English there until the
+sync fills it; and because each surface samples its own catalog for the address
+register the engine imitates, a component catalog left at a key or two rests
+entirely on whichever of them addresses the reader —
+`test_every_shipped_component_catalog_gets_reader_addressing_samples` pins that
+one. Leaving that catalog empty is fine, but the moment you author anything in
+it, at least one key must be one whose English addresses the reader in the
+second person. Most component strings do not, so starting at the top of the
+file leaves the catalog anchorless and that check red until you add one that
+does. To fill them in your own PR instead, run
 `scripts/translate_locales.py` yourself and review its output like any
 other diff. Also add the new code to the locale list in the repository-root
 `AGENTS.md`
