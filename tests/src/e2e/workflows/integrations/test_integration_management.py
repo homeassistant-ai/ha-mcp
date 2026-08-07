@@ -4,6 +4,7 @@ E2E tests for integration management tools.
 
 import json
 import logging
+import os
 
 import pytest
 
@@ -277,3 +278,102 @@ class TestIntegrationManagement:
         assert "already_deleted" not in json.dumps(data), (
             f"Stale already_deleted marker leaked into error: {data!r}"
         )
+
+    async def test_reconfigure_preflight_is_read_only(self, mcp_client):
+        """Exercise the live MCP payload without starting a mutating flow."""
+        list_result = await mcp_client.call_tool("ha_get_integration", {})
+        data = assert_mcp_success(list_result, "List reconfigurable integrations")
+        entry = next(
+            (
+                item
+                for item in data.get("entries", [])
+                if item.get("supports_reconfigure")
+            ),
+            None,
+        )
+        if entry is None:
+            pytest.skip("No integration with an official reconfigure flow is available")
+
+        entry_id = entry["entry_id"]
+        before_result = await mcp_client.call_tool(
+            "ha_get_integration", {"entry_id": entry_id}
+        )
+        before = assert_mcp_success(before_result, "Read reconfigure target")
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_set_integration",
+            {
+                "entry_id": entry_id,
+                "reconfigure": True,
+                "config": {},
+            },
+        )
+        assert result.get("success") is True
+        assert result.get("preview") is True
+        assert result.get("status") == "preview"
+        assert isinstance(result.get("confirm_token"), str)
+        assert result["confirm_token"].startswith("sha256:")
+
+        after_result = await mcp_client.call_tool(
+            "ha_get_integration", {"entry_id": entry_id}
+        )
+        after = assert_mcp_success(
+            after_result, "Read reconfigure target after preflight"
+        )
+        before_entry = before.get("entry", before)
+        after_entry = after.get("entry", after)
+        stable_fields = (
+            "entry_id",
+            "domain",
+            "unique_id",
+            "title",
+            "state",
+            "disabled_by",
+        )
+        assert {field: after_entry.get(field) for field in stable_fields} == {
+            field: before_entry.get(field) for field in stable_fields
+        }
+
+    async def test_reconfigure_confirmed_opt_in(self, mcp_client):
+        """Run a real reconfigure flow only for an explicitly provisioned E2E target."""
+        entry_id = os.environ.get("HA_RECONFIGURE_E2E_ENTRY_ID")
+        raw_config = os.environ.get("HA_RECONFIGURE_E2E_CONFIG")
+        if not entry_id or not raw_config:
+            pytest.skip(
+                "Set HA_RECONFIGURE_E2E_ENTRY_ID and HA_RECONFIGURE_E2E_CONFIG "
+                "for an explicit confirmed reconfigure E2E target"
+            )
+        config = json.loads(raw_config)
+        assert isinstance(config, dict), (
+            "HA_RECONFIGURE_E2E_CONFIG must be a JSON object"
+        )
+        preview = await safe_call_tool(
+            mcp_client,
+            "ha_set_integration",
+            {
+                "entry_id": entry_id,
+                "reconfigure": True,
+                "config": config,
+            },
+        )
+        assert preview.get("success") is True, preview
+        assert preview.get("preview") is True, preview
+        confirm_token = preview.get("confirm_token")
+        assert isinstance(confirm_token, str) and confirm_token.startswith("sha256:")
+
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_set_integration",
+            {
+                "entry_id": entry_id,
+                "reconfigure": True,
+                "config": config,
+                "confirm": True,
+                "confirm_token": confirm_token,
+            },
+        )
+        assert result.get("success") is True, result
+        assert result.get("status") in {
+            "applied_and_verified",
+            "applied_but_unverified",
+        }

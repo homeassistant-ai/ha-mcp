@@ -6,8 +6,9 @@ integrations (config entries) via the REST and WebSocket APIs.
 """
 
 import asyncio
+import hmac
 import logging
-from typing import Annotated, Any, Literal, NoReturn, get_args
+from typing import Annotated, Any, Literal, NoReturn, cast, get_args
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -22,6 +23,7 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
+from ..utils.config_hash import compute_config_hash
 from .auto_backup import with_auto_backup
 from .component_api import (
     component_supports,
@@ -32,7 +34,11 @@ from .component_api import (
 from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
+    PreparedReconfigure,
+    build_reconfigure_rollback_metadata,
     create_config_entry,
+    prepare_reconfigure_request,
+    reconfigure_config_entry,
     update_config_entry_options,
 )
 from .config_entry_flow_form import iter_schema_fields
@@ -65,6 +71,49 @@ logger = logging.getLogger(__name__)
 # dance + subentries WS call. Module-local constant per the component-routing
 # idiom (see ``component_devices.WS_DEVICE_GET``).
 WS_CONFIG_ENTRIES = "ha_mcp_tools/config_entries"
+
+
+def _reject_reconfigure_only_parameters(
+    *,
+    confirm: bool,
+    confirm_token: str | None,
+    expected_device_id: str | None,
+    expected_unique_id: str | None,
+    expected_mac: str | None,
+    expected_entity_ids: list[str] | None,
+) -> None:
+    """Reject confirmation and identity guards outside reconfigure mode."""
+    reconfigure_only_parameters = {
+        name
+        for name, value in (
+            ("expected_device_id", expected_device_id),
+            ("expected_unique_id", expected_unique_id),
+            ("expected_mac", expected_mac),
+            ("expected_entity_ids", expected_entity_ids),
+            ("confirm_token", confirm_token),
+        )
+        if value is not None
+    }
+    if not confirm and not reconfigure_only_parameters:
+        return
+
+    ignored_parameters = sorted(
+        ({"confirm"} if confirm else set())
+        | ({"confirm_token"} if confirm_token is not None else set())
+        | reconfigure_only_parameters
+    )
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            "The following parameters require reconfigure=True: "
+            + ", ".join(ignored_parameters),
+            suggestions=[
+                "Pass reconfigure=True to use confirmation and "
+                "identity safeguards for the official reconfigure flow."
+            ],
+            context={"ignored_parameters": ignored_parameters},
+        )
+    )
 
 
 FlowLookupReason = Literal[
@@ -419,6 +468,62 @@ async def _get_entry_id_for_flow_helper(
     if not config_entry_id:
         return None, "no_config_entry"
     return config_entry_id, "ok"
+
+
+def _reconfigure_preflight_token(
+    *,
+    entry: dict[str, Any],
+    target_config: dict[str, Any],
+    identity: dict[str, Any],
+    expected_identity: dict[str, Any],
+) -> str:
+    """Bind confirmation to stable entry identity and requested values.
+
+    Runtime state and error fields are deliberately excluded because Home
+    Assistant may change them while an entry reloads between preflight and
+    confirmation. ``identity`` remains an input for API compatibility, but
+    identity anchors are represented by ``expected_identity`` and the stable
+    entry fields below.
+    """
+    del identity
+    payload = {
+        "entry_id": entry.get("entry_id"),
+        "domain": entry.get("domain"),
+        "unique_id": entry.get("unique_id"),
+        "title": entry.get("title"),
+        "target_config": target_config,
+        "expected_identity": expected_identity,
+    }
+    return f"sha256:{compute_config_hash(payload)}"
+
+
+def _reconfigure_preview_response(
+    *,
+    entry_id: str,
+    domain: str,
+    entry: dict[str, Any],
+    target_config: dict[str, Any],
+    identity: dict[str, Any],
+    expected_identity: dict[str, Any],
+    confirm_token: str,
+) -> dict[str, Any]:
+    """Build the non-mutating response returned by reconfigure preflight."""
+    return {
+        "success": True,
+        "status": "preview",
+        "preview": True,
+        "operation": "reconfigure",
+        "entry_id": entry_id,
+        "domain": domain,
+        "title": entry.get("title"),
+        "message": "Reconfigure preflight completed; no changes were applied",
+        "confirm_token": confirm_token,
+        "target_config": target_config,
+        "identity": identity,
+        "expected_identity": expected_identity,
+        "supports_reconfigure": True,
+        "rollback_reference": build_reconfigure_rollback_metadata(entry_id, domain),
+    }
 
 
 class IntegrationTools:
@@ -1572,6 +1677,7 @@ class IntegrationTools:
             "source": entry.get("source"),
             "supports_options": entry.get("supports_options", False),
             "supports_unload": entry.get("supports_unload", False),
+            "supports_reconfigure": entry.get("supports_reconfigure", False),
             "disabled_by": entry.get("disabled_by"),
         }
 
@@ -1635,16 +1741,163 @@ class IntegrationTools:
         matches.sort(key=lambda x: x[0], reverse=True)
         return [match[1] for match in matches]
 
+    @with_auto_backup(
+        domain="integration",
+        id_param="entry_id",
+    )
+    async def _apply_reconfigure_after_confirmation(
+        self,
+        entry_id: str,
+        *,
+        prepared: PreparedReconfigure,
+    ) -> dict[str, Any]:
+        """Capture the normal edit backup only after confirmation validation."""
+        return await reconfigure_config_entry(
+            self._client,
+            entry_id,
+            prepared=prepared,
+        )
+
+    async def _run_reconfigure(
+        self,
+        entry_id: str,
+        *,
+        config: dict[str, Any] | None = None,
+        expected_device_id: str | None = None,
+        expected_unique_id: str | None = None,
+        expected_mac: str | None = None,
+        expected_entity_ids: list[str] | None = None,
+        confirm: bool = False,
+        confirm_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Change an existing integration's configuration safely.
+
+        This is not Shelly-specific. It works only for entries whose
+        integration implements Home Assistant's official
+        ``async_step_reconfigure`` flow. Home Assistant keeps ownership of
+        integration-specific validation and updates the existing entry in
+        place, preserving its entry/device/entity relationships. Auto-backup
+        follows the normal integration backup policy; it is not a separate
+        mandatory gate. The returned rollback metadata describes repeating the
+        official flow with operator intervention; it does not promise automatic
+        restoration of connection endpoints or credentials.
+        """
+        if not confirm and confirm_token is not None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "confirm_token requires confirm=True",
+                    suggestions=[
+                        "Set confirm=True to apply with this token, or omit "
+                        "confirm_token to request a fresh preflight."
+                    ],
+                    context={
+                        "entry_id": entry_id,
+                        "status": "confirmation_required",
+                    },
+                )
+            )
+        try:
+            expected_identity = {
+                "device_id": expected_device_id,
+                "unique_id": expected_unique_id,
+                "mac": expected_mac,
+                "entity_ids": list(expected_entity_ids or []),
+            }
+            prepared = await prepare_reconfigure_request(
+                self._client,
+                entry_id,
+                config=config,
+                expected_identity=expected_identity,
+            )
+            current_confirm_token = _reconfigure_preflight_token(
+                entry=prepared.entry,
+                target_config=prepared.flow_config,
+                identity=prepared.identity,
+                expected_identity=prepared.expected_identity,
+            )
+            if not confirm:
+                return _reconfigure_preview_response(
+                    entry_id=prepared.entry_id,
+                    domain=prepared.entry["domain"],
+                    entry=prepared.entry,
+                    target_config=prepared.flow_config,
+                    identity=prepared.identity,
+                    expected_identity=prepared.expected_identity,
+                    confirm_token=current_confirm_token,
+                )
+            if not confirm_token:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "confirm_token is required when confirm=True",
+                        suggestions=[
+                            "Run the same reconfigure call with confirm=False, "
+                            "review the preview, then repeat it with its confirm_token."
+                        ],
+                        context={
+                            "entry_id": entry_id,
+                            "status": "confirmation_required",
+                        },
+                    )
+                )
+            if not hmac.compare_digest(confirm_token, current_confirm_token):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "The reconfigure confirmation is stale; the entry or identity changed",
+                        suggestions=[
+                            "Discard the old token and repeat the preflight to obtain a new confirm_token."
+                        ],
+                        context={
+                            "entry_id": entry_id,
+                            "status": "stale_preflight",
+                        },
+                    )
+                )
+
+            return cast(
+                dict[str, Any],
+                await self._apply_reconfigure_after_confirmation(
+                    entry_id=prepared.entry_id,
+                    prepared=prepared,
+                ),
+            )
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error("Failed to reconfigure integration: %s", e)
+            exception_to_structured_error(
+                e,
+                context={
+                    "entry_id": entry_id,
+                    "config_keys": sorted(config or {}),
+                },
+                suggestions=[
+                    "Verify the entry ID and that the integration supports its official "
+                    "reconfigure flow.",
+                ],
+            )
+            return None  # unreachable: exception_to_structured_error raises
+
     @tool(
         name="ha_set_integration",
         tags={"Integrations"},
         annotations={
             "openWorldHint": False,
             "destructiveHint": True,
+            "readOnlyHint": False,
+            "idempotentHint": False,
             "title": "Set Integration",
         },
     )
-    @with_auto_backup(domain="integration", id_param="entry_id")
+    @with_auto_backup(
+        domain="integration",
+        id_param="entry_id",
+        # Every reconfigure request validates the entry and confirmation before
+        # the inner apply helper captures the normal edit snapshot.
+        skip_fn=lambda kwargs: bool(kwargs.get("reconfigure")),
+    )
     @log_tool_usage
     async def ha_set_integration(
         self,
@@ -1697,8 +1950,61 @@ class IntegrationTools:
                 default=None,
             ),
         ] = None,
+        reconfigure: Annotated[
+            bool,
+            Field(
+                default=False,
+                description=(
+                    "Use the existing config entry's official reconfigure flow "
+                    "instead of its options flow. confirm=False performs a "
+                    "read-only preflight; confirm=True requires the returned "
+                    "confirm_token to apply."
+                ),
+            ),
+        ] = False,
+        expected_device_id: Annotated[
+            str | None,
+            Field(
+                default=None, description="Expected Home Assistant device registry ID."
+            ),
+        ] = None,
+        expected_unique_id: Annotated[
+            str | None,
+            Field(default=None, description="Expected config-entry unique ID."),
+        ] = None,
+        expected_mac: Annotated[
+            str | None,
+            Field(
+                default=None, description="Expected physical device MAC or IEEE value."
+            ),
+        ] = None,
+        expected_entity_ids: Annotated[
+            list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                default=None,
+                description="Exact entity IDs expected to remain associated.",
+            ),
+        ] = None,
+        confirm: Annotated[
+            bool,
+            Field(
+                default=False,
+                description=(
+                    "Required with confirm_token when reconfigure=True to apply; "
+                    "leave false for the read-only preflight."
+                ),
+            ),
+        ] = False,
+        confirm_token: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="Token returned by the immediately preceding reconfigure preflight.",
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """Manage an integration (config entry): enable/disable, add, or update options.
+        """Manage an integration (config entry): enable/disable, add, update options, or reconfigure.
 
         Modes (pick one):
         - Enable/disable: entry_id + enabled.
@@ -1706,6 +2012,10 @@ class IntegrationTools:
           flow, including menus and multi-step forms.
         - Update options: entry_id + config — drives the entry's options
           flow (what the "Configure" button does in the HA UI).
+        - Reconfigure: entry_id + reconfigure=True + config — drives the
+          existing entry's official reconfigure flow. First call with
+          confirm=False for a read-only preview; repeat with confirm=True and
+          that preview's confirm_token to apply.
 
         WHEN NOT TO USE:
         - Helpers (template, group, utility_meter, ...): use
@@ -1727,8 +2037,35 @@ class IntegrationTools:
         - Disable: ha_set_integration(entry_id="abc123", enabled=False)
         - Add: ha_set_integration(domain="workday", config={"name": "Workday"})
         - Update options: ha_set_integration(entry_id="abc123", config={"scan_interval": 30})
+        - Reconfigure preflight: ha_set_integration(
+          entry_id="abc123", reconfigure=True, config={"host": "10.0.0.5"}
+        ) → review the returned confirm_token, then repeat with
+          confirm=True and that token.
         """
         try:
+            if reconfigure:
+                return await self._handle_reconfigure_mode(
+                    entry_id=entry_id,
+                    domain=domain,
+                    enabled=enabled,
+                    config=config,
+                    expected_device_id=expected_device_id,
+                    expected_unique_id=expected_unique_id,
+                    expected_mac=expected_mac,
+                    expected_entity_ids=expected_entity_ids,
+                    confirm=confirm,
+                    confirm_token=confirm_token,
+                )
+
+            _reject_reconfigure_only_parameters(
+                confirm=confirm,
+                confirm_token=confirm_token,
+                expected_device_id=expected_device_id,
+                expected_unique_id=expected_unique_id,
+                expected_mac=expected_mac,
+                expected_entity_ids=expected_entity_ids,
+            )
+
             if domain is not None and entry_id is not None:
                 raise_tool_error(
                     create_error_response(
@@ -1819,6 +2156,55 @@ class IntegrationTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
+
+    async def _handle_reconfigure_mode(
+        self,
+        *,
+        entry_id: str | None,
+        domain: str | None,
+        enabled: bool | None,
+        config: dict[str, Any] | None,
+        expected_device_id: str | None,
+        expected_unique_id: str | None,
+        expected_mac: str | None,
+        expected_entity_ids: list[str] | None,
+        confirm: bool,
+        confirm_token: str | None,
+    ) -> dict[str, Any]:
+        """Validate and dispatch the reconfigure mode of ``ha_set_integration``."""
+        if domain is not None or enabled is not None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Reconfigure mode requires entry_id and config; do not "
+                    "combine it with domain or enabled",
+                    context={
+                        "entry_id": entry_id,
+                        "domain": domain,
+                        "enabled": enabled,
+                    },
+                )
+            )
+        if entry_id is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Reconfigure mode requires an existing entry_id",
+                    suggestions=[
+                        "Use ha_get_integration() to find a valid config entry ID"
+                    ],
+                )
+            )
+        return await self._run_reconfigure(
+            entry_id,
+            config=config,
+            expected_device_id=expected_device_id,
+            expected_unique_id=expected_unique_id,
+            expected_mac=expected_mac,
+            expected_entity_ids=expected_entity_ids,
+            confirm=confirm,
+            confirm_token=confirm_token,
+        )
 
     @staticmethod
     def _set_integration_error_context(
