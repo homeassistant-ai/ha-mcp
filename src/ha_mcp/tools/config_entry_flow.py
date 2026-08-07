@@ -508,6 +508,9 @@ async def set_config_subentry(
             config_dict,
             is_reconfigure=subentry_id is not None,
         )
+    except asyncio.CancelledError:
+        await _abort_subentry_flow_best_effort(client, flow_id)
+        raise
     except Exception as flow_error:
         payload: dict[str, Any] = {}
         if isinstance(flow_error, ToolError):
@@ -1144,6 +1147,9 @@ async def _run_reconfigure_flow(
             helper_type=domain,
             is_reconfigure=True,
         )
+    except asyncio.CancelledError:
+        await _abort_flow_best_effort(client, flow_id)
+        raise
     except ToolError as flow_error:
         try:
             payload = json.loads(str(flow_error))

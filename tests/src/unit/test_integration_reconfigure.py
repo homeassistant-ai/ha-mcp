@@ -1,5 +1,6 @@
 """Tests for generic config-entry reconfiguration."""
 
+import asyncio
 import inspect
 import json
 from typing import Any, cast
@@ -544,6 +545,31 @@ async def test_reconfigure_submit_timeout_is_applied_but_unverified(
     assert payload["rollback"]["manual_required"] is True
     assert "timed out" in payload["error"]["message"]
     client.abort_config_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_cancellation_aborts_pending_flow(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """Caller cancellation must not leave a pending HA reconfigure flow."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-cancelled",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(side_effect=asyncio.CancelledError())
+    client.abort_config_flow = AsyncMock()
+
+    with pytest.raises(asyncio.CancelledError):
+        await reconfigure_config_entry(
+            client, "entry-123", config={"host": "10.0.50.185"}
+        )
+
+    client.abort_config_flow.assert_awaited_once_with("flow-cancelled")
 
 
 @pytest.mark.asyncio
@@ -1822,3 +1848,33 @@ async def test_subentry_reconfigure_step_budget_aborts_pending_flow() -> None:
     assert payload["status"] == "flow_aborted_before_apply"
     assert payload["flow_budget_exhausted"] is True
     client.abort_config_subentry_flow.assert_awaited_once_with("flow-subentry-budget")
+
+
+@pytest.mark.asyncio
+async def test_subentry_reconfigure_cancellation_aborts_pending_flow() -> None:
+    """Cancellation must also clean up a pending config subentry flow."""
+    client = MagicMock()
+    client.start_config_subentry_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-subentry-cancelled",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_subentry_flow_step = AsyncMock(
+        side_effect=asyncio.CancelledError()
+    )
+    client.abort_config_subentry_flow = AsyncMock()
+
+    with pytest.raises(asyncio.CancelledError):
+        await set_config_subentry(
+            client,
+            "entry-123",
+            "network",
+            {"host": "10.0.50.191"},
+            subentry_id="subentry-123",
+        )
+
+    client.abort_config_subentry_flow.assert_awaited_once_with(
+        "flow-subentry-cancelled"
+    )
