@@ -162,8 +162,9 @@ class TestStyleSamples:
 
     @pytest.mark.parametrize("blank", ["", " ", "\n\t "])
     def test_skips_keys_whose_translation_is_blank(self, blank: str) -> None:
-        """A blank value is a present key with nothing in it, and the sampler is
-        the only thing that looks: `_validate_string_map` type-checks, and the
+        """A blank value is a present key with nothing in it, and this sampler
+        is where one still turns up: `_validate_string_map` rejects it at load,
+        but this script reads the catalogs with `json.loads` instead, and the
         parity ceilings count a key untranslated only when it equals the English
         or is missing, so `""` reads there as translated. Sampled, it spends one
         of three slots on a pair whose target side is empty — and a catalog
