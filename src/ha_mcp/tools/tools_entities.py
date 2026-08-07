@@ -1012,6 +1012,7 @@ class EntityTools:
         new_device_name: str | None = None,
         device_class: str | None = None,
         parsed_options: dict[str, dict[str, Any]] | None = None,
+        preflighted: bool = False,
     ) -> dict[str, Any]:
         """Update a single entity. Orchestrates the phase pipeline."""
         # Phase 1: For add/remove label operations, fetch current labels first
@@ -1061,13 +1062,24 @@ class EntityTools:
         # Save original entity_id before potential rename
         original_entity_id = entity_id
 
+        # Issue #2159: validate cross-registry references immediately before
+        # the write — the narrowest window against a concurrent registry
+        # deletion (#2160 placed the area check here for the same reason).
+        # The bulk path preflights its shared labels/categories once at tool
+        # entry and passes preflighted=True so N entities don't repeat the
+        # lookups. For label add, only the added IDs are checked: the merged
+        # set may legitimately carry pre-existing dangling labels, whose
+        # cleanup path (label_operation="remove") must stay open.
+        if not preflighted:
+            await validate_registry_ids(
+                self._client,
+                area_id,
+                parsed_labels if label_operation in ("set", "add") else None,
+                parsed_categories,
+                fail_closed=True,
+            )
+
         # Phase 3: Send entity registry update (covers all fields except expose_to)
-        # Repeat the preflight immediately before this write: Home Assistant
-        # accepts unknown area IDs, so a deleted area must not slip through
-        # after the earlier validation while preparing the update.
-        await validate_registry_ids(
-            self._client, area_id, None, None, fail_closed_area=True
-        )
         (
             entity_id,
             entity_entry,
@@ -1200,6 +1212,7 @@ class EntityTools:
                     parsed_labels,
                     label_operation,
                     None,  # expose_to batched separately below
+                    preflighted=True,  # labels/categories validated at entry
                 )
                 for eid in entity_ids
             ],
@@ -1782,9 +1795,6 @@ class EntityTools:
                     )
                 )
 
-            await validate_registry_ids(
-                self._client, area_id, None, None, fail_closed_area=True
-            )
             _validate_enabled_constraint(enabled, entity_ids)
 
             parsed_aliases = _parse_string_list_field(aliases, "aliases")
@@ -1792,6 +1802,21 @@ class EntityTools:
             parsed_labels = _parse_string_list_field(labels, "labels")
             parsed_options = _parse_options_param(options)
             parsed_expose_to = _parse_expose_to_param(expose_to)
+
+            # Issue #2159 bulk preflight: labels/categories are shared across
+            # the fan-out, so validate them once here instead of once per
+            # entity inside _update_single_entity (area_id was rejected for
+            # bulk above). The single-entity path instead validates
+            # immediately before its registry write, minimizing the
+            # check-to-write window.
+            if is_bulk:
+                await validate_registry_ids(
+                    self._client,
+                    None,
+                    parsed_labels if label_operation in ("set", "add") else None,
+                    parsed_categories,
+                    fail_closed=True,
+                )
 
             # Single entity case
             if not is_bulk:
