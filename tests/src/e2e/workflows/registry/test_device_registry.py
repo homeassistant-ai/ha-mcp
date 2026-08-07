@@ -396,18 +396,21 @@ class TestDeviceSet:
         assert detail_data.get("success"), f"Failed to get device: {detail_data}"
         original_labels = detail_data.get("device", {}).get("labels", [])
 
-        # Create the labels this test assigns.
+        # Create the labels this test assigns. Creation happens inside the
+        # cleanup guard so a failed second create still removes the first.
         test_labels = []
-        for label_name in ("Device E2E Label A", "Device E2E Label B"):
-            create_result = await mcp_client.call_tool(
-                "ha_config_set_label", {"name": label_name}
-            )
-            create_data = parse_mcp_result(create_result)
-            assert create_data.get("success"), f"Failed to create label: {create_data}"
-            test_labels.append(create_data["label_id"])
-        logger.info(f"Updating device {device_id} labels: {test_labels}")
-
         try:
+            for label_name in ("Device E2E Label A", "Device E2E Label B"):
+                create_result = await mcp_client.call_tool(
+                    "ha_config_set_label", {"name": label_name}
+                )
+                create_data = parse_mcp_result(create_result)
+                assert create_data.get("success"), (
+                    f"Failed to create label: {create_data}"
+                )
+                test_labels.append(create_data["label_id"])
+            logger.info(f"Updating device {device_id} labels: {test_labels}")
+
             # Update device labels
             update_result = await mcp_client.call_tool(
                 "ha_set_device",

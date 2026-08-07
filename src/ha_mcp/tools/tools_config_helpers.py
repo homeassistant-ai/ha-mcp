@@ -1164,27 +1164,30 @@ logger = logging.getLogger(__name__)
 
 async def _ws_registry_lookup(
     client: Any, message: dict[str, Any]
-) -> tuple[bool, list[dict[str, Any]]]:
-    """Return (ok, items). ok=False means the lookup itself failed.
+) -> tuple[bool, list[dict[str, Any]], Exception | None]:
+    """Return (ok, items, exc). ok=False means the lookup itself failed.
 
     ok=True with empty list means the registry exists and is genuinely empty —
     distinct from failure so phantom IDs can still be rejected. The fail-open
     ok=False path keeps transient HA outages from blocking legitimate calls.
+    ``exc`` carries the raising exception (None for a failure-shaped
+    response), so a fail-closed caller can classify auth/timeout errors
+    instead of blaming the connection.
     """
     try:
         result = await client.send_websocket_message(message)
     except Exception as e:
         logger.debug("_ws_registry_lookup: failed for %r: %s", message.get("type"), e)
-        return False, []
+        return False, [], e
     if isinstance(result, list):
-        return True, result
+        return True, result, None
     if isinstance(result, dict):
         if result.get("success") is False:
-            return False, []
+            return False, [], None
         inner = result.get("result", [])
         if isinstance(inner, list):
-            return True, inner
-    return False, []
+            return True, inner, None
+    return False, [], None
 
 
 def _registry_id_values(items: list[dict[str, Any]], field: str) -> list[str]:
@@ -1210,10 +1213,13 @@ def _raise_if_unknown_labels(
 ) -> None:
     """Raise VALIDATION_INVALID_PARAMETER if any label_id is not in the registry."""
     valid_label_ids = _registry_id_values(ws_labels, "label_id")
+    # An empty string inside a non-empty list is NOT the clear sentinel
+    # (that's the empty list itself) — treat it as an unknown ID so it can't
+    # ride along into the registry write.
     unknown = [
         label_id
         for label_id in labels or []
-        if label_id and label_id not in valid_label_ids
+        if not label_id or label_id not in valid_label_ids
     ]
     if unknown:
         raise_tool_error(
@@ -1358,10 +1364,18 @@ def _apply_registry_check(
     value: Any,
     ok: bool,
     items: list[dict[str, Any]],
+    exc: Exception | None,
     fail_closed: bool,
 ) -> None:
     """Reject an unknown ID, or an unreadable registry when failing closed."""
-    if fail_closed:
+    if fail_closed and not ok:
+        if exc is not None:
+            # Preserve the original failure class — an expired token must
+            # surface as an auth error, a timeout as a timeout, not as
+            # generic connection guidance.
+            exception_to_structured_error(
+                exc, context=_registry_check_context(kind, scope, value)
+            )
         _raise_if_lookup_failed(ok, kind, scope, value)
     if not ok:
         return
@@ -1415,8 +1429,8 @@ async def validate_registry_ids(
     results = await asyncio.gather(
         *(_ws_registry_lookup(client, message) for *_, message in checks)
     )
-    for (kind, scope, value, _), (ok, items) in zip(checks, results, strict=True):
-        _apply_registry_check(kind, scope, value, ok, items, fail_closed)
+    for (kind, scope, value, _), (ok, items, exc) in zip(checks, results, strict=True):
+        _apply_registry_check(kind, scope, value, ok, items, exc, fail_closed)
 
 
 def _slugify_helper_name(name: str) -> str:

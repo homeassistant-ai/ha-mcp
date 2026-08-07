@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_entities import register_entity_tools
 
 
@@ -219,7 +220,7 @@ class TestHaSetEntityLabels:
         "area_lookup",
         [
             {"success": False, "error": {"message": "registry unavailable"}},
-            RuntimeError("connection lost"),
+            HomeAssistantConnectionError("connection lost"),
         ],
     )
     async def test_area_registry_lookup_failure_rejects_entity_update(

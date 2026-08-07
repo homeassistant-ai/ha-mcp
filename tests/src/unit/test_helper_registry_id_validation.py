@@ -13,11 +13,18 @@ references in the registry. These tests assert that:
     CONNECTION_FAILED (issue #2159) rather than skipping the check.
 """
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
+
+from ha_mcp.client.rest_client import (
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
+from ha_mcp.tools.tools_config_helpers import validate_registry_ids
 
 # ---------------------------------------------------------------------------
 # Fixtures — match the local-fixture style used by the other helper unit tests.
@@ -376,7 +383,7 @@ class TestUnreadableRegistryFailsClosed:
         async def handler(msg: dict) -> dict:
             if msg.get("type") == registry_type:
                 if raises:
-                    raise RuntimeError("connection lost")
+                    raise HomeAssistantConnectionError("connection lost")
                 return {
                     "success": False,
                     "error": {"message": "registry unavailable"},
@@ -424,3 +431,58 @@ class TestUnreadableRegistryFailsClosed:
                 **kwargs,
             )
         _assert_connection_failed(excinfo)
+
+
+class TestEmptyLabelElementRejected:
+    """An empty string INSIDE a labels list is an unknown ID, not a clear.
+
+    The empty LIST is the documented clear sentinel; an empty ELEMENT would
+    ride the write into the registry as a dangling reference (issue #2159).
+    """
+
+    async def test_empty_string_label_element_rejected(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": [{"label_id": "valid"}]}
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await validate_registry_ids(client, None, ["valid", ""], None)
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "" in error_data["unknown_labels"]
+
+
+class TestLookupFailurePreservesClassification:
+    """Fail-closed must not relabel auth failures as connection guidance.
+
+    ``_ws_registry_lookup`` collapses raises into ok=False; the fail-closed
+    branch classifies the captured exception via the repository's normal
+    error taxonomy instead of always reporting CONNECTION_FAILED.
+    """
+
+    async def test_auth_error_not_masked_as_connection_failed(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantAuthError("token expired")
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await validate_registry_ids(client, "kitchen", None, None, fail_closed=True)
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] != "CONNECTION_FAILED"
+        assert error_data["error"]["code"].startswith("AUTH")
+
+    async def test_connection_error_still_reports_connection_failed(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantConnectionError("socket closed")
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await validate_registry_ids(client, "kitchen", None, None, fail_closed=True)
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "CONNECTION_FAILED"

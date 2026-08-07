@@ -8,7 +8,7 @@ especially for blueprint-based scripts (issue #466).
 import json
 import logging
 from typing import Any, ClassVar
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -606,3 +606,36 @@ class TestSetScriptCategoryValidation:
         ]
         assert category_updates
         assert category_updates[0]["categories"] == {"script": "lighting"}
+
+    async def test_transform_category_targets_renamed_entity(
+        self, transform_tools, mock_client
+    ):
+        """A registry-renamed script gets its category on the CURRENT entity.
+
+        The storage key stays the registry unique_id after a rename, so the
+        resolver must be asked for the entity_id instead of constructing
+        ``script.<storage_key>``.
+        """
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._ws_handler("lighting")
+        )
+
+        with patch(
+            "ha_mcp.tools.tools_config_scripts.fetch_entity_lookup_via_component",
+            new_callable=AsyncMock,
+            return_value=[{"entity_id": "script.renamed_target"}],
+        ):
+            result = await transform_tools.ha_config_set_script(
+                script_id="test_script",
+                python_transform="config['mode'] = 'single'",
+                config_hash="prior_hash",
+                category="lighting",
+            )
+
+        assert result["success"] is True
+        update_call = next(
+            c[0][0]
+            for c in mock_client.send_websocket_message.call_args_list
+            if c[0][0].get("type") == "config/entity_registry/update"
+        )
+        assert update_call["entity_id"] == "script.renamed_target"
