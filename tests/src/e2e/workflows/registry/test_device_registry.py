@@ -388,6 +388,14 @@ class TestDeviceSet:
 
         device_id = list_data["devices"][0]["device_id"]
 
+        # Capture the original labels so cleanup restores the device exactly.
+        detail_result = await mcp_client.call_tool(
+            "ha_get_device", {"device_id": device_id}
+        )
+        detail_data = parse_mcp_result(detail_result)
+        assert detail_data.get("success"), f"Failed to get device: {detail_data}"
+        original_labels = detail_data.get("device", {}).get("labels", [])
+
         # Create the labels this test assigns.
         test_labels = []
         for label_name in ("Device E2E Label A", "Device E2E Label B"):
@@ -430,6 +438,12 @@ class TestDeviceSet:
             assert clear_data.get("success"), f"Failed to clear labels: {clear_data}"
             logger.info("Labels cleared")
         finally:
+            # Restore the device's original labels even when an assertion
+            # above fails, then drop the labels this test created.
+            await mcp_client.call_tool(
+                "ha_set_device",
+                {"device_id": device_id, "labels": original_labels},
+            )
             for label_id in test_labels:
                 await mcp_client.call_tool(
                     "ha_config_remove_label", {"label_id": label_id}
