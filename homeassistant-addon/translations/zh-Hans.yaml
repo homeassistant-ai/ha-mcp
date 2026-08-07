@@ -41,6 +41,15 @@ configuration:
     name: 只读模式
     description: 关闭所有写入工具，并移除工具进行任何写入或破坏性调用的能力。读写混合工具（备份、插件、能源偏好、语音流水线和启用时的代码模式）仍可用，其写入操作被阻止。与
       Web UI 工具选项卡中的开关相同。默认关闭。需要重启才能生效。
+  redact_secrets:
+    name: Redact Secrets
+    description: Redacts secrets from tool responses before they reach the AI assistant.
+      Add-on options and integration fields marked as passwords are replaced with
+      a set/empty marker (so "is this credential configured?" stays answerable), and
+      other tool responses are scrubbed of secret values the server has already seen
+      (values shorter than 6 characters are skipped, since replacing tiny fragments
+      would corrupt unrelated output). Fields not marked as passwords by their schema
+      cannot be detected. Off by default.
   enable_mandatory_bps:
     name: 写入时附加最佳实践技能
     description: '写入工具技能内容投递功能（issue #1182）的主开关。启用时（默认），六个配置写入工具（自动化、脚本、场景、辅助元素、仪表盘、原始

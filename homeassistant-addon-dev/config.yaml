@@ -31,6 +31,7 @@ options:
   # which rejects any option the schema does not declare.
   enable_security_policy_tool: false
   read_only_mode: false
+  redact_secrets: false
   # Master beta gate — also dev-only (stable's schema does not declare
   # this key; the stable web UI master remains the gate there). Default
   # ON in dev so the master is pre-unlocked; the user only has to
@@ -79,6 +80,7 @@ schema:
   enable_tool_security_policies: bool?
   enable_security_policy_tool: bool?
   read_only_mode: bool?
+  redact_secrets: bool?
   enable_beta_features: bool?
   enable_yaml_config_editing: bool?
   enable_yaml_packages_automation: bool?

@@ -371,6 +371,29 @@ The same toggle appears at the top of the **Tools** tab in the web UI. Off by de
 read_only_mode: true
 ```
 
+### redact_secrets
+
+**Default:** `false`
+
+Redacts secrets from tool responses before they reach the AI assistant. When enabled:
+
+- **Add-on options** (`ha_get_addon`, `ha_manage_addon`): any option value whose add-on schema marks it `format: password` is replaced with `<redacted: set>` or `<redacted: empty>` — so "is this credential configured at all?" stays answerable without disclosing the value.
+- **Integration options** (`ha_get_integration`): fields the options flow marks with a password selector get the same treatment, including the `include_schema=True` schema echo.
+- **All other tool responses** (logs, file reads, diagnostics, etc.): occurrences of secret values the server has already seen on the surfaces above are scrubbed to `<redacted>`.
+
+Redaction is schema-driven — fields not marked as passwords by their schema cannot be detected and are returned as-is until the value scrub has seen them. The value scrub skips secrets shorter than 6 characters (replacing tiny fragments would corrupt unrelated output). Writes through `ha_manage_addon` keep working with partial updates (merging uses the real current options server-side), and submitting a redaction marker as a value is rejected so a redacted read can never be written back into a live config.
+
+**When to enable:**
+- Add-on or integration configs hold credentials (API tokens, PATs, database passwords) that must not land in AI conversation transcripts
+
+Off by default. Requires add-on restart to take effect.
+
+**Example Configuration:**
+
+```yaml
+redact_secrets: true
+```
+
 ---
 
 ## Tool Settings Web UI
