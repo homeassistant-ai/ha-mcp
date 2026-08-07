@@ -29,6 +29,13 @@ from ..errors import (
     create_error_response,
     create_validation_error,
 )
+from ..redaction import (
+    collect_addon_secret_values,
+    redact_addon_options,
+    redaction_enabled,
+    register_known_secret_values,
+    sentinel_option_keys,
+)
 from ..utils.python_sandbox import (
     PythonSandboxError,
     format_sandbox_error,
@@ -585,9 +592,22 @@ async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, An
     addon = response["result"] if isinstance(response["result"], dict) else {}
     result: dict[str, Any] = {"success": True, "addon": addon}
 
+    # log_level is extracted from the raw options BEFORE redaction so an
+    # add-on that (oddly) schema-marks log_level as a password still
+    # surfaces a value here rather than a sentinel.
     log_level = _extract_addon_log_level(addon)
     if log_level is not None:
         result["log_level"] = log_level
+
+    if redaction_enabled():
+        options = addon.get("options")
+        schema = addon.get("schema")
+        if isinstance(options, dict) and isinstance(schema, list):
+            register_known_secret_values(collect_addon_secret_values(options, schema))
+            result["addon"] = {
+                **addon,
+                "options": redact_addon_options(options, schema),
+            }
 
     return result
 
@@ -2038,6 +2058,29 @@ class AddOnTools:
             )
         )
 
+    @staticmethod
+    def _reject_sentinel_options(options: dict[str, Any]) -> None:
+        """Reject redaction sentinels before any merge/write (#2157).
+
+        A caller round-tripping a redacted ha_get_addon read must not
+        overwrite a live credential with the placeholder string. Omitting
+        the key keeps the current value (writes merge server-side). No-op
+        while redact_secrets is off.
+        """
+        if not redaction_enabled():
+            return
+        sentinel_keys = sentinel_option_keys(options)
+        if sentinel_keys:
+            raise_tool_error(
+                create_validation_error(
+                    "options contains redaction placeholder values for: "
+                    f"{', '.join(sentinel_keys)}. These came from a "
+                    "redacted read, not real values — omit these keys to "
+                    "keep the current values, or submit the real value.",
+                    parameter="options",
+                )
+            )
+
     async def _execute_config_mode(
         self,
         slug: str,
@@ -2045,6 +2088,7 @@ class AddOnTools:
     ) -> dict[str, Any]:
         ignored_fields: list[str] = []
         if "options" in config_data:
+            self._reject_sentinel_options(config_data["options"])
             info_result = await _supervisor_api_call(
                 self._client, f"/addons/{slug}/info"
             )
@@ -2064,6 +2108,14 @@ class AddOnTools:
             # merging makes that transparent.
             current_options: dict = addon_info.get("options") or {}
             merged_options = _merge_options(current_options, config_data["options"])
+
+            # The live current options are password-bearing; remember them
+            # for the global known-value scrub (this path fetches info
+            # directly, bypassing get_addon_info's harvesting).
+            if redaction_enabled() and isinstance(addon_info.get("schema"), list):
+                register_known_secret_values(
+                    collect_addon_secret_values(current_options, addon_info["schema"])
+                )
 
             # Pre-write schema check: identify fields not in the add-on's schema.
             # Supervisor silently drops unknown fields on write; surfacing them

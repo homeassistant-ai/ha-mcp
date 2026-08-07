@@ -22,6 +22,14 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
+from ..redaction import (
+    is_password_flow_field,
+    redact_flow_schema,
+    redact_options_by_flow_schema,
+    redaction_enabled,
+    register_known_secret_values,
+    sentinel_for,
+)
 from .auto_backup import with_auto_backup
 from .component_api import (
     component_supports,
@@ -145,6 +153,7 @@ def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
     data_schema = flow.get("data_schema")
     if not isinstance(data_schema, list):
         return out
+    redact = redaction_enabled()
     for field in iter_schema_fields(data_schema):
         name = field.get("name")
         if name is None:
@@ -156,7 +165,15 @@ def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
         if value is None:
             value = field.get("default", field.get("value"))
         if value is not None:
-            out[name] = value
+            if redact and is_password_flow_field(field):
+                # Password-marked field (issue #2157): remember the live
+                # value for the global known-value scrub, then emit the
+                # set/empty sentinel instead of the value itself.
+                if isinstance(value, str) and value:
+                    register_known_secret_values([value])
+                out[name] = sentinel_for(value)
+            else:
+                out[name] = value
     return out
 
 
@@ -1332,13 +1349,32 @@ class IntegrationTools:
             flow_type = flow_result.get("type")
             entry = resp.get("entry") if isinstance(resp.get("entry"), dict) else None
             if flow_type == "form":
+                data_schema = flow_result.get("data_schema", [])
+                # The schema echo carries the live persisted value of every
+                # field in description.suggested_value — under redact_secrets
+                # password-marked fields get sentinels here too (#2157).
+                # redact_flow_schema deep-copies, so flow_result stays raw for
+                # the options extraction below (which redacts independently).
+                schema_out = (
+                    redact_flow_schema(data_schema)
+                    if redaction_enabled()
+                    else data_schema
+                )
                 resp["options_schema"] = {
                     "flow_type": "form",
                     "step_id": flow_result.get("step_id"),
-                    "data_schema": flow_result.get("data_schema", []),
+                    "data_schema": schema_out,
                 }
                 if entry is not None and populate_options:
                     entry["options"] = self._options_from_form_flow(flow_result)
+                elif entry is not None and redaction_enabled():
+                    # Component-served path: options carry raw persisted
+                    # values (the component only scrubs resolved !secret
+                    # references). Now that the flow schema is in hand,
+                    # redact the fields it marks as passwords.
+                    entry["options"] = redact_options_by_flow_schema(
+                        entry.get("options"), data_schema
+                    )
             elif flow_type == "menu":
                 resp["options_schema"] = {
                     "flow_type": "menu",

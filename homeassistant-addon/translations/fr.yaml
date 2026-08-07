@@ -72,6 +72,13 @@ configuration:
       vocaux et mode code lorsqu'il est activé) restent disponibles avec leurs opérations
       d'écriture bloquées. Même bouton que l'onglet Outils de l'interface Web. Désactivé
       par défaut. Nécessite un redémarrage pour prendre effet.
+  redact_secrets:
+    name: Redact Secrets
+    description: Redacts secrets from tool responses before they reach the AI assistant.
+      Add-on options and integration fields marked as passwords are replaced with
+      a set/empty marker (so "is this credential configured?" stays answerable), and
+      other tool responses are scrubbed of secret values the server has already seen.
+      Fields not marked as passwords by their schema cannot be detected. Off by default.
   enable_mandatory_bps:
     name: Attacher les compétences de bonnes pratiques aux écritures
     description: 'Interrupteur principal pour la fonction de livraison de contenu

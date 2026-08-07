@@ -69,6 +69,13 @@ configuration:
       con le operazioni di scrittura bloccate. È la stessa opzione della scheda Strumenti
       nell'interfaccia web. Disattivata per impostazione predefinita. Richiede il
       riavvio per avere effetto.
+  redact_secrets:
+    name: Redact Secrets
+    description: Redacts secrets from tool responses before they reach the AI assistant.
+      Add-on options and integration fields marked as passwords are replaced with
+      a set/empty marker (so "is this credential configured?" stays answerable), and
+      other tool responses are scrubbed of secret values the server has already seen.
+      Fields not marked as passwords by their schema cannot be detected. Off by default.
   enable_mandatory_bps:
     name: Allega le skill di buone pratiche alle scritture
     description: 'Interruttore principale della funzione che consegna il contenuto

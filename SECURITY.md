@@ -359,8 +359,9 @@ and carries a larger attack surface than the standard LLAT setup.
   `MCP_SETTINGS_SECRET_PATH` is set, never advertised to MCP clients, and
   printed only in the startup log (GHSA-mx64-982r-65vg). That path is a
   credential: the surface behind it edits feature flags (including
-  `read_only_mode` and the filesystem tools), tool configuration, the
-  tool-security policy and entity visibility, and can restore or delete
+  `read_only_mode`, `redact_secrets`, and the filesystem tools), tool
+  configuration, the tool-security policy and entity visibility, and can
+  restore or delete
   backups. Set `HA_MCP_DISABLE_SETTINGS_UI` to not serve the UI at all.
   Standard mode instead mounts the UI under the MCP secret path, which already
   gates the tool surface. The add-on mounts it twice: under that secret path

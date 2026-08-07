@@ -65,6 +65,13 @@ configuration:
       sus operaciones de escritura bloqueadas. Es la misma opción que la de la pestaña
       Herramientas de la interfaz web. Desactivado de forma predeterminada. Requiere
       reiniciar para que surta efecto.
+  redact_secrets:
+    name: Redact Secrets
+    description: Redacts secrets from tool responses before they reach the AI assistant.
+      Add-on options and integration fields marked as passwords are replaced with
+      a set/empty marker (so "is this credential configured?" stays answerable), and
+      other tool responses are scrubbed of secret values the server has already seen.
+      Fields not marked as passwords by their schema cannot be detected. Off by default.
   enable_beta_features:
     name: Activar las funciones beta (principal)
     description: '⚠ PELIGRO: estas herramientas pueden DAÑAR DE FORMA PERMANENTE tu

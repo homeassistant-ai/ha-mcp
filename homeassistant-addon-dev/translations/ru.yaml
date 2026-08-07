@@ -62,6 +62,13 @@ configuration:
       конвейеры и режим кода, если он включён) остаются доступными, но их операции
       записи блокируются. Это тот же переключатель, что и на вкладке «Инструменты»
       веб-интерфейса. По умолчанию выключено. Для применения требуется перезапуск.
+  redact_secrets:
+    name: Redact Secrets
+    description: Redacts secrets from tool responses before they reach the AI assistant.
+      Add-on options and integration fields marked as passwords are replaced with
+      a set/empty marker (so "is this credential configured?" stays answerable), and
+      other tool responses are scrubbed of secret values the server has already seen.
+      Fields not marked as passwords by their schema cannot be detected. Off by default.
   enable_beta_features:
     name: Включить бета-функции (главный переключатель)
     description: ⚠ ОПАСНОСТЬ — эти инструменты могут НЕОБРАТИМО ПОВРЕДИТЬ вашу установку

@@ -142,6 +142,9 @@ class TestAddonStructure:
             # (an on-by-default value would silently break every write
             # tool on upgrade).
             "read_only_mode": ("bool?", False),
+            # Redact Secrets (#2157) — non-beta safety toggle, default OFF
+            # (current behavior unchanged unless the operator opts in).
+            "redact_secrets": ("bool?", False),
         }
         for key, (schema_type, default) in expected.items():
             assert key in config["options"], f"{key!r} must be in stable options"
@@ -162,6 +165,7 @@ class TestAddonStructure:
             "disabled_tools",
             "pinned_tools",
             "read_only_mode",
+            "redact_secrets",
         )
         with open(f"{ADDON_DIR}/config.yaml") as f:
             stable = yaml.safe_load(f)
@@ -244,6 +248,35 @@ class TestAddonStructure:
             f"enable_strict_mandatory_bps env name in config.py is "
             f"{m.group(1)!r}, but start.py exports "
             'os.environ["ENABLE_STRICT_MANDATORY_BPS"] — they must match'
+        )
+
+    def test_start_py_wires_redact_secrets_env(self):
+        """start.py must read the ``redact_secrets`` addon option and export
+        it as the ``REDACT_SECRETS`` env var, and that env name must match the
+        one ``config.FEATURE_FLAG_FIELDS`` registers for the ``redact_secrets``
+        flag. Source-level contract mirroring the read_only_mode wiring test
+        (issue #2157)."""
+        start_src = (_REPO_ROOT / ADDON_DIR / "start.py").read_text(encoding="utf-8")
+        assert 'resolve_bool_option(config, "redact_secrets"' in start_src, (
+            "start.py must resolve the redact_secrets addon option via "
+            "resolve_bool_option"
+        )
+        assert 'os.environ["REDACT_SECRETS"]' in start_src, (
+            "start.py must export the REDACT_SECRETS env var the server reads"
+        )
+
+        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config.py").read_text(
+            encoding="utf-8"
+        )
+        m = re.search(
+            r'FeatureFlagField\(\s*"redact_secrets"\s*,\s*"([^"]+)"', config_src
+        )
+        assert m is not None, (
+            "config.py FEATURE_FLAG_FIELDS must register a redact_secrets entry"
+        )
+        assert m.group(1) == "REDACT_SECRETS", (
+            f"redact_secrets env name in config.py is {m.group(1)!r}, but "
+            'start.py exports os.environ["REDACT_SECRETS"] — they must match'
         )
 
     @pytest.mark.skipif(

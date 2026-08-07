@@ -155,6 +155,15 @@ class Settings(BaseSettings):
     # read_only.py:READ_ONLY_EXEMPT_TOOLS). Off by default.
     read_only_mode: bool = Field(False, alias="READ_ONLY_MODE")
 
+    # Redact Secrets — opt-in secret redaction (issue #2157). When on,
+    # add-on option values whose schema entry carries ``format: password``
+    # and integration option fields marked with a password selector are
+    # replaced with set/empty sentinels, and any tool response is scrubbed
+    # of secret values already seen while serving those surfaces (see
+    # redaction.py). Off by default: current behavior is unchanged unless
+    # the operator opts in.
+    redact_secrets: bool = Field(False, alias="REDACT_SECRETS")
+
     # Master beta-features toggle. UI-only — intentionally not in any
     # addon config.yaml schema. Consumed by the master gate in
     # ``_apply_feature_flag_overrides``, which force-sets the
@@ -696,6 +705,10 @@ FEATURE_FLAG_FIELDS: tuple[FeatureFlagField, ...] = (
     # /api/settings/features plumbing, override-file persistence, and
     # addon Supervisor routing as every other feature flag.
     FeatureFlagField("read_only_mode", "READ_ONLY_MODE", bool),
+    # Non-beta secret-redaction toggle (issue #2157). Same shared plumbing
+    # as read_only_mode: web-UI row, override-file persistence, addon
+    # Supervisor routing, stdio sidecar — all registry-driven.
+    FeatureFlagField("redact_secrets", "REDACT_SECRETS", bool),
     # Non-beta, default-ON master switch for write-tool skill_content
     # delivery (#1182). Grouped with the non-beta flags above the beta
     # run below; intentionally NOT in BETA_FEATURE_FIELDS (it must not be

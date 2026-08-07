@@ -4431,3 +4431,188 @@ class TestManageAddonRepositoryAction:
             )
         payload = _parse_tool_error(exc_info)
         assert payload["success"] is False
+
+
+# ---------------------------------------------------------------------------
+# redact_secrets (issue 2157)
+# ---------------------------------------------------------------------------
+
+_REDACTION_ADDON_PAYLOAD = {
+    "success": True,
+    "result": {
+        "name": "Secretful",
+        "slug": "secretful",
+        "options": {
+            "github_pat": "github_pat_LIVESECRETVALUE",
+            "log_level": "info",
+            "empty_pw": "",
+            "unlisted": "no schema entry",
+        },
+        "schema": [
+            {
+                "name": "github_pat",
+                "required": True,
+                "type": "string",
+                "format": "password",
+            },
+            {"name": "log_level", "type": "list", "options": ["info", "debug"]},
+            {"name": "empty_pw", "type": "string", "format": "password"},
+        ],
+    },
+}
+
+
+@pytest.fixture
+def _redaction_registry_clean():
+    from ha_mcp.redaction import _clear_known_secret_values
+
+    _clear_known_secret_values()
+    yield
+    _clear_known_secret_values()
+
+
+@pytest.fixture
+def redact_on(monkeypatch, _redaction_registry_clean):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "ha_mcp.redaction.get_global_settings",
+        lambda: SimpleNamespace(redact_secrets=True),
+    )
+
+
+@pytest.fixture
+def redact_off(monkeypatch, _redaction_registry_clean):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "ha_mcp.redaction.get_global_settings",
+        lambda: SimpleNamespace(redact_secrets=False),
+    )
+
+
+class TestGetAddonInfoRedaction:
+    """get_addon_info under the redact_secrets toggle (issue 2157)."""
+
+    async def _fetch(self):
+        import copy
+
+        client = _make_mock_client()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value=copy.deepcopy(_REDACTION_ADDON_PAYLOAD),
+        ):
+            return await get_addon_info(client, "secretful")
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_redacts_password_options(self, redact_on):
+        from ha_mcp.redaction import REDACTED_EMPTY, REDACTED_SET
+
+        result = await self._fetch()
+        options = result["addon"]["options"]
+        assert options["github_pat"] == REDACTED_SET
+        assert options["empty_pw"] == REDACTED_EMPTY
+        assert options["log_level"] == "info"
+        assert options["unlisted"] == "no schema entry"
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_leaves_schema_intact(self, redact_on):
+        result = await self._fetch()
+        assert result["addon"]["schema"] == _REDACTION_ADDON_PAYLOAD["result"]["schema"]
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_registers_known_secret_values(self, redact_on):
+        from ha_mcp.redaction import known_secret_values
+
+        await self._fetch()
+        assert "github_pat_LIVESECRETVALUE" in known_secret_values()
+
+    @pytest.mark.asyncio
+    async def test_toggle_off_is_byte_identical_legacy_output(self, redact_off):
+        result = await self._fetch()
+        assert result["addon"] == _REDACTION_ADDON_PAYLOAD["result"]
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_without_schema_leaves_options_untouched(self, redact_on):
+        import copy
+
+        payload = copy.deepcopy(_REDACTION_ADDON_PAYLOAD)
+        del payload["result"]["schema"]
+        client = _make_mock_client()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value=payload,
+        ):
+            result = await get_addon_info(client, "secretful")
+        assert result["addon"]["options"]["github_pat"] == "github_pat_LIVESECRETVALUE"
+
+
+class TestConfigModeSentinelRejection:
+    """ha_manage_addon config mode must reject redaction sentinels (issue 2157)."""
+
+    def _tools(self):
+        from ha_mcp.tools.tools_addons import AddOnTools
+
+        return AddOnTools(_make_mock_client())
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_rejects_sentinel_value(self, redact_on):
+        from ha_mcp.redaction import REDACTED_SET
+
+        with pytest.raises(ToolError) as exc_info:
+            await self._tools()._execute_config_mode(
+                "secretful", {"options": {"github_pat": REDACTED_SET}}
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        assert "github_pat" in payload["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_clean_write_proceeds_and_harvests(self, redact_on):
+        import copy
+
+        from ha_mcp.redaction import known_secret_values
+
+        responses = [
+            copy.deepcopy(_REDACTION_ADDON_PAYLOAD),
+            {"success": True, "result": {}},
+        ]
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=responses,
+        ) as mock_call:
+            result = await self._tools()._execute_config_mode(
+                "secretful", {"options": {"log_level": "debug"}}
+            )
+        assert result["status"] == "pending_restart"
+        # The write merged the REAL current password value, not a sentinel.
+        posted = mock_call.call_args.kwargs["data"]["options"]
+        assert posted["github_pat"] == "github_pat_LIVESECRETVALUE"
+        assert posted["log_level"] == "debug"
+        # Current live values were remembered for the known-value scrub.
+        assert "github_pat_LIVESECRETVALUE" in known_secret_values()
+
+    @pytest.mark.asyncio
+    async def test_toggle_off_sentinel_passes_through_legacy(self, redact_off):
+        import copy
+
+        from ha_mcp.redaction import REDACTED_SET
+
+        responses = [
+            copy.deepcopy(_REDACTION_ADDON_PAYLOAD),
+            {"success": True, "result": {}},
+        ]
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=responses,
+        ) as mock_call:
+            result = await self._tools()._execute_config_mode(
+                "secretful", {"options": {"github_pat": REDACTED_SET}}
+            )
+        assert result["status"] == "pending_restart"
+        posted = mock_call.call_args.kwargs["data"]["options"]
+        assert posted["github_pat"] == REDACTED_SET
