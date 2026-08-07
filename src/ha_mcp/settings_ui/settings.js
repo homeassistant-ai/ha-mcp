@@ -3731,6 +3731,7 @@ const ADVANCED_FIELD_META = {
   extra_yaml_write_keys:     { label: "Extra YAML write keys",        help: "Comma-separated top-level keys ha_config_set_yaml may write in addition to the built-in ones, for YAML-first integrations on this install (e.g. alert2). Keys that redefine Home Assistant's own trust boundary can never be added and are ignored. Requires custom component 1.2.4 or newer." },
   sidecar_pin_port:    { label: "Settings UI sidecar port",    help: "0 picks a free port on first start and keeps it for later restarts; 1024–65535 pins a preferred port (falls back to a free one if taken). Restart required." },
   enable_dev_mode:     { label: "Developer mode",               help: "⚠ DANGER: registers hidden developer tools (ha_dev_manage_server, ha_dev_manage_settings) that let AI agents change server settings and replace the running server version (e.g. install a PR build). For development and testing only. Restart required." },
+  dev_tools_security_policy_access: { label: "Dev tools security policy access", help: "⚠ DANGER: while developer mode is on, lets the developer tools rewrite tool security policies, add or remove per-tool approval gates, and approve or deny pending approvals on your behalf — an AI agent can accept its own gated calls. For policy testing only. Takes effect without a restart." },
 };
 
 // Fields that require an MCP-host restart to take effect when changed
@@ -3944,6 +3945,20 @@ function renderAdvancedSection(containerId, fields) {
           'advanced.enable_dev_mode.confirm',
           {},
           '⚠ Enable developer mode?\n\nAfter the next restart, hidden developer tools are exposed to connected AI agents. They can change server settings and replace the running server version. Only enable this for development and testing.'
+        )
+      )) {
+        input.checked = false;
+        return;
+      }
+      // Policy access hands the same agents the security policies that
+      // gate them (and the approval queue) — its own confirm, since it
+      // is stored independently of the dev-mode toggle above (it only
+      // takes effect while dev mode is on).
+      if (fname === 'dev_tools_security_policy_access' && input.checked && !confirm(
+        t(
+          'advanced.dev_tools_security_policy_access.confirm',
+          {},
+          '⚠ Let developer tools change security policies?\n\nWhile developer mode is on, connected AI agents will be able to rewrite tool security policies, add or remove per-tool approval gates, and approve or deny pending approvals — including their own gated calls. Enable only while testing policies.'
         )
       )) {
         input.checked = false;

@@ -129,6 +129,129 @@ def is_dev_mode_enabled() -> bool:
     return bool(getattr(get_global_settings(), "enable_dev_mode", False))
 
 
+def _security_policy_access_enabled() -> bool:
+    """Check whether dev tools may change tool-security policy state.
+
+    Deliberately NOT read through the ``get_global_settings()`` singleton:
+    in stdio deployments the web settings UI runs in a detached sidecar
+    process, so its POST resets only the sidecar's own cached settings —
+    this process would keep serving the stale value until restart. Reading
+    the env var, then the override file, fresh per call keeps the toggle
+    live in every deployment mode, in the same env-over-file ORDER the
+    settings loader applies. Coercion is per source: an env string is
+    parsed with pydantic's truthy set (matching what ``Settings`` would
+    have read from the same var), and a file value goes through the
+    loader's own ``_coerce_advanced_override_value`` — so the guard can
+    never disagree with what Settings and the web UI checkbox read from
+    the same file (a hand-edited ``"true"`` string, which the loader
+    rejects and renders as OFF, must fail closed here too). The read is a
+    tiny synchronous stat/parse; guard call sites take it inline, and the
+    ``_settings_rows`` caller already runs on a worker thread.
+    """
+    import os
+
+    from ..config import (
+        _coerce_advanced_override_value,
+        _read_feature_flag_override_file,
+    )
+
+    env_raw = os.environ.get("HAMCP_DEV_SECURITY_POLICY_ACCESS")
+    if env_raw is not None:
+        return env_raw.strip().lower() in ("1", "true", "t", "yes", "y", "on")
+    # The override file is keyed by FIELD name (see
+    # _apply_one_advanced_override), not env-var name.
+    raw = _read_feature_flag_override_file().get("dev_tools_security_policy_access")
+    if raw is None:
+        return False
+    ok, coerced = _coerce_advanced_override_value(
+        "dev_tools_security_policy_access", bool, raw
+    )
+    return bool(coerced) if ok else False
+
+
+def _apply_policy_guard_row_locks(fname: str, row: dict[str, Any]) -> None:
+    """Reflect the policy-access write guards in the ``list`` matrix rows.
+
+    Without this, agents reading the matrix to choose writable settings
+    see ``editable: true`` on rows whose set/reset the guards refuse:
+    ``enable_tool_security_policies`` while access is off, and
+    ``dev_tools_security_policy_access`` always (web UI / env var only).
+    A row that is ALREADY non-editable (env-pinned) keeps its plain env
+    story: the pin refuses the write before these guards would, and
+    stamping a policy reason there would misdirect the fix toward the
+    wrong lock. The toggle's displayed value is also re-read fresh so a
+    sidecar-process edit shows here without a restart, matching what the
+    guard enforces.
+    """
+    if fname == "enable_tool_security_policies":
+        if row["editable"] and not _security_policy_access_enabled():
+            row["editable"] = False
+            row["locked_reason"] = "policy_access_required"
+    elif fname == "dev_tools_security_policy_access":
+        if row["editable"]:
+            row["editable"] = False
+            row["locked_reason"] = "web_ui_or_env_only"
+        row["value"] = _security_policy_access_enabled()
+
+
+def _require_security_policy_access(operation: str) -> None:
+    """Refuse ``operation`` unless security-policy access is enabled (#2141).
+
+    Guards every dev-tools surface that can weaken the tool-security
+    policies gating the agent itself, so dev mode can stay on for
+    everything else while policy override stays off.
+    """
+    if _security_policy_access_enabled():
+        return
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+            f"Dev tools may not {operation}: security-policy access is "
+            "disabled (dev_tools_security_policy_access=false).",
+            context={
+                "operation": operation,
+                "setting": "dev_tools_security_policy_access",
+            },
+            suggestions=[
+                "Enable 'Dev tools security policy access' in the web "
+                "settings UI (Server Settings tab, Developer section), or set "
+                "HAMCP_DEV_SECURITY_POLICY_ACCESS=true — it takes effect "
+                "without a restart.",
+            ],
+        )
+    )
+
+
+def _guard_security_policy_setting(setting: str) -> None:
+    """Gate set/reset of the two settings that define the dev tools' leash.
+
+    ``dev_tools_security_policy_access`` is refused unconditionally — even
+    with access ON — so the agent can neither grant itself policy access
+    nor revoke it; that toggle belongs to the web settings UI and the env
+    var alone. ``enable_tool_security_policies`` is the whole gating
+    engine's master switch, so writing it needs access.
+    """
+    if setting == "dev_tools_security_policy_access":
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+                "'dev_tools_security_policy_access' cannot be changed by dev "
+                "tools: it is the toggle governing their own access to tool "
+                "security policies.",
+                context={"setting": setting},
+                suggestions=[
+                    "Change it in the web settings UI (Server Settings tab, "
+                    "Developer section) or via the "
+                    "HAMCP_DEV_SECURITY_POLICY_ACCESS env var.",
+                ],
+            )
+        )
+    if setting == "enable_tool_security_policies":
+        _require_security_policy_access(
+            "enable or disable the tool-security-policy engine"
+        )
+
+
 def _spawn_background(coro: Any) -> None:
     """Run ``coro`` as a strongly-referenced fire-and-forget task."""
     task = asyncio.get_running_loop().create_task(coro)
@@ -415,6 +538,7 @@ class DevTools:
             bounds = _FEATURE_FLAG_INT_BOUNDS.get(fname)
             if bounds is not None:
                 row["min"], row["max"] = bounds
+            _apply_policy_guard_row_locks(fname, row)
             rows.append(row)
         for (
             fname,
@@ -448,6 +572,7 @@ class DevTools:
             choices = _ADVANCED_SETTINGS_CHOICES.get(fname)
             if choices is not None:
                 row["choices"] = list(choices)
+            _apply_policy_guard_row_locks(fname, row)
             rows.append(row)
         return rows
 
@@ -703,7 +828,8 @@ class DevTools:
                 default=None,
                 description=(
                     "set_policy: the full policy object "
-                    "{wait_seconds, approval_ttl_minutes, rules, version}"
+                    "{wait_seconds, approval_ttl_minutes, rules, version, "
+                    "schema_version}"
                 ),
             ),
         ] = None,
@@ -747,7 +873,13 @@ class DevTools:
         LLM-API exposure, security gates, and policy edits apply live.
         Env-pinned settings/tools are read-only until the env var is unset.
         These actions can flip security-sensitive state — treat with the
-        same care as editing the web UI.
+        same care as editing the web UI. The policy-override surfaces
+        (set_policy, set_tool with gated=, and set/reset of
+        enable_tool_security_policies) additionally require the
+        'dev_tools_security_policy_access' setting, which is off by
+        default; reads are always available. That setting itself is never
+        writable by these tools — change it in the web settings UI or via
+        HAMCP_DEV_SECURITY_POLICY_ACCESS.
 
         EXAMPLES:
         ha_dev_manage_settings("list_tools")
@@ -813,6 +945,8 @@ class DevTools:
                     f"'setting' is required for action={action!r}",
                 )
             )
+        # set/reset only; 'list' returned above, and reads are never gated.
+        _guard_security_policy_setting(setting)
 
         from ..config import (
             _ADVANCED_SETTINGS_BOUNDS,
@@ -1032,6 +1166,11 @@ class DevTools:
                     "set_tool needs at least one of state / llm_api / gated",
                 )
             )
+        # The gate flag writes a security-policy rule (#2141); state /
+        # llm_api changes stay available without policy access. Checked
+        # before any write so a combined state+gated call is refused whole.
+        if gated is not None:
+            _require_security_policy_access("change a tool's security gate")
         # Reject unknown tool names BEFORE persisting anything: a typo'd
         # security gate ("ha_call_servce") would otherwise save a rule for a
         # nonexistent tool and report success while the intended tool stays
@@ -1362,6 +1501,8 @@ class DevTools:
         self, policy: dict[str, Any] | None, expected_version: int | None
     ) -> dict[str, Any]:
         """Write the full tool-security policy (validated, version-guarded)."""
+        _require_security_policy_access("rewrite the tool security policy")
+
         from ..policy.editing import set_policy
 
         return await set_policy(policy, expected_version, _POLICY_CALLER, self._server)
@@ -1675,11 +1816,12 @@ class DevTools:
         arrives just before the server goes down) and supports those
         two deployments only (standalone processes must be restarted
         externally). list_pending/approve/deny are exempt from policy
-        gating (gating queue management would deadlock approvals) —
-        and since gated-call errors include the approval token, an
-        agent can self-approve its own gated calls while dev mode is
-        on. Dev mode is a trusted-operator feature; leave it off
-        otherwise.
+        gating (gating queue management would deadlock approvals), so
+        approve/deny instead require the separate
+        'dev_tools_security_policy_access' setting — off by default,
+        because gated-call errors carry the approval token and an agent
+        could otherwise self-approve its own gated calls. Dev mode is a
+        trusted-operator feature; leave it off otherwise.
 
         EXAMPLES:
         ha_dev_manage_server("info")
@@ -2156,6 +2298,10 @@ class DevTools:
         self, token: str | None, *, approve: bool
     ) -> dict[str, Any]:
         """Approve or deny one blocked tool call by token."""
+        # Deciding an approval is the agent clicking "accept" on its own
+        # gated call — the surface #2141 exists to close. list_pending
+        # stays open: reading the queue decides nothing.
+        _require_security_policy_access("decide a pending approval")
         if not token:
             raise_tool_error(
                 create_error_response(
@@ -2205,9 +2351,12 @@ def register_dev_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         logger.debug(f"Dev tools disabled (set {FEATURE_FLAG}=true to enable)")
         return
 
+    access = "on" if _security_policy_access_enabled() else "off"
     logger.warning(
-        "Developer mode is ON: ha_dev_manage_server / ha_dev_manage_settings "
-        "are registered. These tools can change server settings, tool "
-        "visibility, security policies, and replace the running server version."
+        f"Developer mode is ON: ha_dev_manage_server / ha_dev_manage_settings "
+        f"are registered. These tools can change server settings, tool "
+        f"visibility, and replace the running server version. Rewriting tool "
+        f"security policies and deciding approvals additionally require "
+        f"dev_tools_security_policy_access (currently {access})."
     )
     register_tool_methods(mcp, DevTools(client, server=kwargs.get("server")))

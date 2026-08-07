@@ -313,6 +313,29 @@ class Settings(BaseSettings):
     # schemas so it stays out of the add-on Configuration page.
     enable_dev_mode: bool = Field(False, alias="HAMCP_ENABLE_DEV_MODE")
 
+    # Dev-tools access to tool-security policy state (issue #2141).
+    # Developer mode may stay on while this stays off: the dev tools'
+    # policy-override surfaces — set_policy, set_tool(gated=...),
+    # approve/deny of queued approvals, and set/reset of
+    # enable_tool_security_policies — are refused while it is off, so a
+    # connected agent cannot rewrite the rules that gate it nor click
+    # "accept" on its own gated calls. The guard reads env var + override
+    # file fresh per call (NOT this cached Settings object), so a change
+    # applies live without a restart even in stdio mode, where the web
+    # settings UI runs in a detached sidecar process whose POST cannot
+    # reset this process' settings singleton. Editable
+    # from the web settings UI (Developer section) or the env var ONLY —
+    # the dev tools' own settings surfaces refuse to write this field, in
+    # either direction, and it is absent from the add-on config schemas
+    # like enable_dev_mode. A leash on those surfaces, NOT a sandbox: dev
+    # mode's update_source/restart can still replace the running server
+    # build, and in add-on mode ha_manage_addon can reach the add-on's
+    # own options and ingress — gate those tools with policy rules (or
+    # keep dev mode off) where that boundary matters.
+    dev_tools_security_policy_access: bool = Field(
+        False, alias="HAMCP_DEV_SECURITY_POLICY_ACCESS"
+    )
+
     # Code Mode — sandboxed Python execution via pydantic-monty.
     # Provides an "escape hatch" tool (ha_manage_custom_tool) that lets LLMs write
     # custom one-off Python code when no existing tool covers the request.
@@ -933,6 +956,17 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
     # among the feature toggles, and stays independent of the beta
     # master gate.
     AdvancedField("enable_dev_mode", "HAMCP_ENABLE_DEV_MODE", bool, "developer", True),
+    # Dev-tools security-policy access (issue #2141). Renders directly
+    # below the dev-mode toggle in the same Developer section. Editable
+    # here and via the env var; the dev tools themselves refuse to write
+    # it, so the AI cannot grant itself policy access.
+    AdvancedField(
+        "dev_tools_security_policy_access",
+        "HAMCP_DEV_SECURITY_POLICY_ACCESS",
+        bool,
+        "developer",
+        True,
+    ),
 )
 
 

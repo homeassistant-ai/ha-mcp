@@ -354,6 +354,16 @@ class TestCorruptPolicyFile:
 class TestCrossSurfaceInterop:
     """The dev tool and this tool are two doors onto one document."""
 
+    @pytest.fixture(autouse=True)
+    def _dev_policy_access(self, monkeypatch):
+        # The dev-side write path is gated by #2141's access toggle
+        # (default OFF); these tests exercise the write itself, not the
+        # gate, so turn it on. The new tool's own path is never gated
+        # by this flag.
+        monkeypatch.setenv("HAMCP_DEV_SECURITY_POLICY_ACCESS", "true")
+        reset_global_settings()
+        yield
+
     async def test_dev_write_is_visible_to_the_new_tool(self):
         from ha_mcp.tools.tools_dev import DevTools
 
