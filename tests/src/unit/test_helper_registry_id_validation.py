@@ -273,10 +273,11 @@ class TestPhantomRejectedAgainstEmptyRegistry:
     """Pin the (ok=True, items=[]) contract: phantom IDs must be rejected even
     when the registry is genuinely empty.
 
-    The ``_validate_registry_ids`` helper returns a (ok, items) tuple to
-    distinguish a successful-but-empty lookup from a lookup failure. Without
-    explicit coverage, a future refactor that fails open on empty results
-    would silently regress phantom-ID rejection."""
+    ``validate_registry_ids`` returns ``None`` for valid input and raises
+    ``ToolError`` for invalid input. The underlying registry lookup returns
+    ``(ok, items)`` to distinguish a successful-but-empty lookup from a lookup
+    failure. Without explicit coverage, a future refactor that fails open on
+    empty results would silently regress phantom-ID rejection."""
 
     async def test_phantom_area_rejected_against_empty_area_registry(
         self, register_tools, mock_client

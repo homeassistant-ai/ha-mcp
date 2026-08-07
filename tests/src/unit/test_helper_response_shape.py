@@ -269,7 +269,7 @@ class TestUniformResponseShape:
         A regression that re-nests this string under ``data``, or drops the
         ``warnings.append`` entirely, would slip past the category test —
         this fills that gap. The ``area.kitchen`` is registered (so the
-        upstream ``_validate_registry_ids`` lookup passes) and the failure
+        upstream ``validate_registry_ids`` lookup passes) and the failure
         happens at the post-create registry-update step itself.
         """
 
