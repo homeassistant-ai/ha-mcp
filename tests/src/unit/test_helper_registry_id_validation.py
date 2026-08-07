@@ -485,19 +485,24 @@ class TestLookupFailurePreservesClassification:
         the acquisition wrap (HomeAssistantConnectionError ``from e``) ->
         fail-closed cause-chain discrimination. Drives the REAL
         ``send_websocket_message``, not a mocked shape."""
-        client = HomeAssistantClient("http://ha.local:8123", "test-token")
-
-        with (
-            patch(
-                "ha_mcp.client.websocket_client.get_websocket_client",
-                new_callable=AsyncMock,
-                side_effect=HomeAssistantAuthError(
-                    "WebSocket authentication failed: Invalid token"
+        # verify_ssl passed explicitly so __init__ never reads the real
+        # config dir; async-with closes the owned httpx client.
+        async with HomeAssistantClient(
+            "http://ha.local:8123", "test-token", verify_ssl=True
+        ) as client:
+            with (
+                patch(
+                    "ha_mcp.client.websocket_client.get_websocket_client",
+                    new_callable=AsyncMock,
+                    side_effect=HomeAssistantAuthError(
+                        "WebSocket authentication failed: Invalid token"
+                    ),
                 ),
-            ),
-            pytest.raises(ToolError) as exc_info,
-        ):
-            await validate_registry_ids(client, "kitchen", None, None, fail_closed=True)
+                pytest.raises(ToolError) as exc_info,
+            ):
+                await validate_registry_ids(
+                    client, "kitchen", None, None, fail_closed=True
+                )
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] != "CONNECTION_FAILED"
