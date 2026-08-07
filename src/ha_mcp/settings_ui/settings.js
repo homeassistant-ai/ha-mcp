@@ -1924,7 +1924,7 @@ const FEATURE_META = {
   },
   redact_secrets: {
     label: "Redact Secrets",
-    help: "Redacts secrets from tool responses before they reach the AI assistant. Add-on options and integration fields marked as passwords are replaced with a set/empty marker (so \"is this credential configured?\" stays answerable), and other tool responses are scrubbed of secret values the server has already seen. Fields not marked as passwords by their schema cannot be detected. Off by default.",
+    help: "Redacts secrets from tool responses before they reach the AI assistant. Add-on options and integration fields marked as passwords are replaced with a set/empty marker (so \"is this credential configured?\" stays answerable), and other tool responses are scrubbed of secret values the server has already seen (values shorter than 6 characters are skipped, since replacing tiny fragments would corrupt unrelated output). Fields not marked as passwords by their schema cannot be detected. Off by default.",
   },
   enable_mandatory_bps: {
     label: "Attach best-practice skills on writes",

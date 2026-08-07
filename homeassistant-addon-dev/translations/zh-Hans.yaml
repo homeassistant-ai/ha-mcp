@@ -43,8 +43,10 @@ configuration:
     description: Redacts secrets from tool responses before they reach the AI assistant.
       Add-on options and integration fields marked as passwords are replaced with
       a set/empty marker (so "is this credential configured?" stays answerable), and
-      other tool responses are scrubbed of secret values the server has already seen.
-      Fields not marked as passwords by their schema cannot be detected. Off by default.
+      other tool responses are scrubbed of secret values the server has already seen
+      (values shorter than 6 characters are skipped, since replacing tiny fragments
+      would corrupt unrelated output). Fields not marked as passwords by their schema
+      cannot be detected. Off by default.
   enable_beta_features:
     name: 启用测试版功能（主开关）
     description: ⚠ 危险——这些工具可能永久损坏您的 Home Assistant 安装。它们会写入您的 YAML 配置、文件系统，安装自定义组件，运行任意沙箱
