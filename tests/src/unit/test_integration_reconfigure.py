@@ -973,10 +973,8 @@ async def test_reconfigure_rejects_expected_mac_mismatch_before_flow(
 
 
 @pytest.mark.asyncio
-async def test_reconfigure_allows_entry_without_identity_and_reports_partial_verification() -> (
-    None
-):
-    """An offline entry may proceed, but new identity cannot prove continuity."""
+async def test_reconfigure_rejects_entry_without_identity_before_flow() -> None:
+    """An offline entry without an anchor is rejected before mutation."""
     before = {
         "entry_id": "offline-entry",
         "domain": "shelly",
@@ -1025,18 +1023,53 @@ async def test_reconfigure_allows_entry_without_identity_and_reports_partial_ver
         return_value={"type": "abort", "reason": "reconfigure_successful"}
     )
 
-    result = await reconfigure_config_entry(
-        client,
-        "offline-entry",
-        config={"host": "10.0.50.187"},
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client,
+            "offline-entry",
+            config={"host": "10.0.50.187"},
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert "identity anchor" in payload["error"]["message"]
+    client.start_reconfigure_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_rejects_entry_without_identity_anchor_before_flow() -> None:
+    """A bare config entry must not reach the mutating flow without an anchor."""
+    entry = {
+        "entry_id": "unanchored-entry",
+        "domain": "mqtt",
+        "state": "loaded",
+        "supports_reconfigure": True,
+    }
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=entry)
+    client.list_entity_registry = AsyncMock(return_value=[])
+    client.list_device_registry = AsyncMock(return_value=[])
+    client.list_config_entries = AsyncMock(return_value=[entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-unanchored",
+            "type": "form",
+            "data_schema": [{"name": "broker", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
     )
 
-    assert result["status"] == "applied_but_unverified"
-    assert result["verification"]["identity_verification"] == "partial"
-    assert result["verification"]["device_id_verification"] == (
-        "available_after_change"
-    )
-    client.start_reconfigure_flow.assert_awaited_once_with("shelly", "offline-entry")
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client,
+            "unanchored-entry",
+            config={"broker": "mosquitto"},
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert "identity anchor" in payload["error"]["message"]
+    client.start_reconfigure_flow.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -332,6 +332,22 @@ async def _optional_registry_rows(
     return result
 
 
+def _has_reconfigure_identity_anchor(
+    identity: dict[str, Any], expected_identity: dict[str, Any]
+) -> bool:
+    """Return whether preflight has stable or caller-supplied identity evidence."""
+    return bool(
+        identity.get("unique_id")
+        or identity.get("device_ids")
+        or identity.get("entity_ids")
+        or identity.get("macs")
+        or expected_identity.get("device_id")
+        or expected_identity.get("unique_id")
+        or expected_identity.get("mac")
+        or expected_identity.get("entity_ids")
+    )
+
+
 def _verification_state(before_available: bool, after_available: bool) -> str:
     if before_available and after_available:
         return "preserved"
@@ -994,6 +1010,26 @@ async def prepare_reconfigure_request(
         expected_identity=expected,
         prepared_identity=None,
     )
+    if not _has_reconfigure_identity_anchor(identity, expected):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Cannot safely reconfigure an entry without an identity anchor",
+                suggestions=[
+                    "Provide expected_device_id, expected_unique_id, expected_mac, "
+                    "or expected_entity_ids, or choose an entry with stable registry identity."
+                ],
+                context={
+                    "entry_id": validated_entry_id,
+                    "domain": domain,
+                    "available_identity": {
+                        key: identity.get(key)
+                        for key in ("unique_id", "device_ids", "entity_ids", "macs")
+                    },
+                    "expected_identity": expected,
+                },
+            )
+        )
     return PreparedReconfigure(
         entry_id=validated_entry_id,
         entry=entry,
