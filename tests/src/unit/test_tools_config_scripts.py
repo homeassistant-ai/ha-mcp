@@ -741,3 +741,6 @@ class TestScriptEntityResolutionFallbacks:
 
         assert result["success"] is True
         lookup.assert_not_called()
+        # The gate must skip the raw registry fallbacks too, and this path
+        # has no other expected WebSocket request (no category validation).
+        mock_client.send_websocket_message.assert_not_called()
