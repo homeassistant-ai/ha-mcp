@@ -1,0 +1,5 @@
+{
+  "common": {
+    "oauth_not_serving": "Legacy OAuth jeszcze ich nie udostępnia — uruchom ponownie Home Assistant, gdy pojawi się taka prośba, aby je aktywować."
+  }
+}

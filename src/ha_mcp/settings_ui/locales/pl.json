@@ -1,0 +1,22 @@
+{
+  "meta": {
+    "native_name": "Polski",
+    "dir": "ltr"
+  },
+  "messages": {
+    "policies.pending.decision.approved": "zatwierdzone",
+    "policies.pending.decision.denied": "odrzucone",
+    "policies.operators.exists": "istnieje",
+    "policies.operators.eq": "równa się",
+    "policies.operators.neq": "NIE równa się",
+    "policies.operators.in": "jest jednym z",
+    "policies.operators.not_in": "NIE jest jednym z",
+    "policies.operators.contains": "zawiera",
+    "policies.operators.regex": "pasuje do wyrażenia regularnego",
+    "policies.operators.gt": "jest większe niż",
+    "policies.operators.lt": "jest mniejsze niż",
+    "accessibility.storage_blocked": "Twoja przeglądarka blokuje przechowywanie danych witryny; wybrane opcje obowiązują tylko w tej sesji.",
+    "policies.pending.already_decided": "To zatwierdzenie zostało już {decision}, prawdopodobnie przez inną kartę lub sesję.",
+    "policies.operators.exists_long": "jest obecne (dowolna wartość)"
+  }
+}
