@@ -22,11 +22,13 @@ spawn on an unchanged version — costs one file read and no WebSocket traffic.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from pathlib import Path
 from typing import Any
 
+from ._vendor import websockets
 from ._version import get_version, is_embedded
 from .client.rest_client import (
     HomeAssistantCommandError,
@@ -50,8 +52,11 @@ CANDIDATE_REPO_FULL_NAMES = (
 
 # Marker file (in the ha-mcp data dir) recording the state the last completed
 # nudge ran against. Written only on a completed pass, so a failed pass (HA
-# still booting, HACS not loaded yet) is retried on the next startup.
-MARKER_FILENAME = "hacs_refresh_marker.json"
+# still booting, HACS not loaded yet) is retried on the next startup. One file
+# PER Home Assistant target: server configs sharing a data dir but pointing at
+# different instances must neither suppress each other's nudge nor invalidate
+# each other's marker on every alternating spawn (review finding).
+MARKER_FILENAME_PREFIX = "hacs_refresh_marker"
 
 # The add-on can start before HA Core finishes booting (and before HACS is
 # loaded), so the first attempts may fail; spread retries over ~8 minutes,
@@ -59,13 +64,14 @@ MARKER_FILENAME = "hacs_refresh_marker.json"
 RETRY_DELAYS = (30.0, 60.0, 120.0, 300.0)
 
 
-def _marker_path() -> Path:
-    return get_data_dir() / MARKER_FILENAME
+def _marker_path(ha_url: str) -> Path:
+    digest = hashlib.sha256(ha_url.rstrip("/").encode()).hexdigest()[:12]
+    return get_data_dir() / f"{MARKER_FILENAME_PREFIX}_{digest}.json"
 
 
-def _read_marker() -> dict[str, Any] | None:
+def _read_marker(ha_url: str) -> dict[str, Any] | None:
     """Return the last completed pass's marker, or None when there isn't one."""
-    path = _marker_path()
+    path = _marker_path(ha_url)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -76,9 +82,9 @@ def _read_marker() -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _write_marker(marker: dict[str, Any]) -> None:
+def _write_marker(ha_url: str, marker: dict[str, Any]) -> None:
     """Record the state this pass ran against; an unwritable dir just retries."""
-    path = _marker_path()
+    path = _marker_path(ha_url)
     try:
         path.write_text(json.dumps(marker), encoding="utf-8")
     except OSError as err:
@@ -87,22 +93,20 @@ def _write_marker(marker: dict[str, Any]) -> None:
 
 def _nudge_due(
     current_version: str,
-    ha_url: str,
     info: UpdateInfo | None,
     marker: dict[str, Any] | None,
 ) -> bool:
-    """Decide whether this startup should ask HACS for a refresh."""
+    """Decide whether this startup should ask HACS for a refresh.
+
+    Instance scoping lives in the marker PATH (one file per HA target), so a
+    marker handed in here always describes the current instance.
+    """
     if marker is None:
-        # First run ever, or no pass has ever completed.
+        # First run ever, or no pass has ever completed for this HA target.
         return True
     if marker.get("server_version") != current_version:
         # The server was just updated, and the paired component release is
         # exactly what HACS needs to surface.
-        return True
-    if marker.get("ha_url") != ha_url:
-        # Same data dir, different Home Assistant target (multi-instance
-        # setups, or a changed HOMEASSISTANT_URL): the recorded pass says
-        # nothing about THIS instance's HACS.
         return True
     # A release appeared while this build sat idle — surface its component side.
     return bool(
@@ -171,6 +175,10 @@ async def _refresh_with_retries() -> dict[str, Any] | None:
             HomeAssistantConnectionError,
             HomeAssistantCommandError,
             HomeAssistantCommandTimeout,
+            # send_command deliberately re-raises the ORIGINAL exception when
+            # the socket closes mid-send (ambiguous-write contract), so raw
+            # websocket closures reach this loop unwrapped (review finding).
+            websockets.exceptions.WebSocketException,
             OSError,
         ) as err:
             logger.debug("HACS repository refresh attempt failed: %s", err)
@@ -209,8 +217,8 @@ async def maybe_refresh_hacs_after_update() -> None:
         # Normally a cache hit — the startup banner warms the lru_cache — but
         # offloaded anyway so a cold call can never touch the event loop.
         info = await asyncio.to_thread(get_update_info)
-        marker = await asyncio.to_thread(_read_marker)
-        if not _nudge_due(current, ha_url, info, marker):
+        marker = await asyncio.to_thread(_read_marker, ha_url)
+        if not _nudge_due(current, info, marker):
             return
 
         result = await _refresh_with_retries()
@@ -223,9 +231,9 @@ async def maybe_refresh_hacs_after_update() -> None:
 
         await asyncio.to_thread(
             _write_marker,
+            ha_url,
             {
                 "server_version": current,
-                "ha_url": ha_url,
                 "latest": info.latest if info else None,
                 "hacs": result["hacs"],
             },

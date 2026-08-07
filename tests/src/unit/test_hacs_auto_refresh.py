@@ -91,8 +91,8 @@ def data_dir(tmp_path):
         yield tmp_path
 
 
-def _written_marker(data_dir):
-    path = data_dir / hacs_auto_refresh.MARKER_FILENAME
+def _written_marker(data_dir, ha_url=HA_URL):
+    path = hacs_auto_refresh._marker_path(ha_url)
     return json.loads(path.read_text()) if path.exists() else None
 
 
@@ -100,57 +100,52 @@ def _refreshed_ids(mocks):
     return [call.args[1] for call in mocks.refresh.await_args_list]
 
 
-def _marker(version="1.0.0", latest="1.0.0", ha_url=HA_URL, **extra):
-    return {"server_version": version, "latest": latest, "ha_url": ha_url, **extra}
+def _marker(version="1.0.0", latest="1.0.0", **extra):
+    return {"server_version": version, "latest": latest, **extra}
 
 
 class TestNudgeDue:
     def test_no_marker_is_due(self):
-        assert hacs_auto_refresh._nudge_due("1.0.0", HA_URL, _info(), None) is True
+        assert hacs_auto_refresh._nudge_due("1.0.0", _info(), None) is True
 
     def test_changed_server_version_is_due(self):
         # The just-updated case: the paired component release is what HACS
         # needs to surface.
         marker = _marker(version="0.9.0", latest="1.1.0")
-        assert hacs_auto_refresh._nudge_due("1.0.0", HA_URL, _info(), marker) is True
-
-    def test_changed_ha_instance_is_due(self):
-        # Shared data dir, different HA target (or a changed
-        # HOMEASSISTANT_URL): one instance's pass must not suppress the
-        # other's nudge.
-        marker = _marker(latest="1.1.0")
-        due = hacs_auto_refresh._nudge_due(
-            "1.0.0", "http://other-ha:8123", _info(), marker
-        )
-        assert due is True
+        assert hacs_auto_refresh._nudge_due("1.0.0", _info(), marker) is True
 
     def test_same_version_without_an_update_is_not_due(self):
         marker = _marker()
         info = _info(latest="1.0.0", update_available=False)
-        assert hacs_auto_refresh._nudge_due("1.0.0", HA_URL, info, marker) is False
+        assert hacs_auto_refresh._nudge_due("1.0.0", info, marker) is False
 
     def test_release_appearing_since_the_last_pass_is_due(self):
         marker = _marker()
         info = _info(latest="1.1.0")
 
-        assert hacs_auto_refresh._nudge_due("1.0.0", HA_URL, info, marker) is True
+        assert hacs_auto_refresh._nudge_due("1.0.0", info, marker) is True
 
     def test_already_recorded_latest_is_not_due(self):
         marker = _marker(latest="1.1.0")
         info = _info(latest="1.1.0")
 
-        assert hacs_auto_refresh._nudge_due("1.0.0", HA_URL, info, marker) is False
+        assert hacs_auto_refresh._nudge_due("1.0.0", info, marker) is False
 
     def test_missing_update_info_on_the_same_version_is_not_due(self):
         marker = _marker(latest=None)
-        assert hacs_auto_refresh._nudge_due("1.0.0", HA_URL, None, marker) is False
+        assert hacs_auto_refresh._nudge_due("1.0.0", None, marker) is False
 
 
 def test_candidate_names_match_the_component_constants():
     # CANDIDATE_REPO_FULL_NAMES duplicates the component's constants (the
     # server package cannot import the component at runtime); this pins the
     # two sources together so a rename cannot silently strand the server
-    # refresh on stale repository names.
+    # refresh on stale repository names. The component package pulls
+    # homeassistant on import, so stub it first (same as test_hacs_nudge).
+    from ._embedded_stubs import install
+
+    install()
+
     from custom_components.ha_mcp_tools.const import (
         HACS_LEGACY_REPO_FULL_NAME,
         HACS_MIRROR_REPO_FULL_NAME,
@@ -165,22 +160,41 @@ def test_candidate_names_match_the_component_constants():
 class TestMarkerFile:
     def test_roundtrip(self, data_dir):
         marker = {"server_version": "1.0.0", "latest": "1.1.0", "hacs": "present"}
-        hacs_auto_refresh._write_marker(marker)
+        hacs_auto_refresh._write_marker(HA_URL, marker)
 
-        assert hacs_auto_refresh._read_marker() == marker
+        assert hacs_auto_refresh._read_marker(HA_URL) == marker
 
     def test_missing_file_reads_as_none(self, data_dir):
-        assert hacs_auto_refresh._read_marker() is None
+        assert hacs_auto_refresh._read_marker(HA_URL) is None
 
     def test_corrupt_file_reads_as_none(self, data_dir):
-        (data_dir / hacs_auto_refresh.MARKER_FILENAME).write_text("{not json")
+        hacs_auto_refresh._marker_path(HA_URL).write_text("{not json")
 
-        assert hacs_auto_refresh._read_marker() is None
+        assert hacs_auto_refresh._read_marker(HA_URL) is None
 
     def test_non_dict_payload_reads_as_none(self, data_dir):
-        (data_dir / hacs_auto_refresh.MARKER_FILENAME).write_text('["nope"]')
+        hacs_auto_refresh._marker_path(HA_URL).write_text('["nope"]')
 
-        assert hacs_auto_refresh._read_marker() is None
+        assert hacs_auto_refresh._read_marker(HA_URL) is None
+
+    def test_markers_are_scoped_per_ha_target(self, data_dir):
+        # Two server configs sharing one data dir but targeting different
+        # instances keep independent markers — neither suppresses the other's
+        # nudge nor invalidates the other's marker on alternating spawns.
+        hacs_auto_refresh._write_marker(HA_URL, {"server_version": "1.0.0"})
+        other = "http://other-ha:8123"
+
+        assert hacs_auto_refresh._read_marker(other) is None
+        hacs_auto_refresh._write_marker(other, {"server_version": "2.0.0"})
+        assert hacs_auto_refresh._read_marker(HA_URL) == {"server_version": "1.0.0"}
+        assert hacs_auto_refresh._read_marker(other) == {"server_version": "2.0.0"}
+
+    def test_trailing_slash_is_the_same_target(self, data_dir):
+        hacs_auto_refresh._write_marker(HA_URL, {"server_version": "1.0.0"})
+
+        assert hacs_auto_refresh._read_marker(HA_URL + "/") == {
+            "server_version": "1.0.0"
+        }
 
 
 class TestMaybeRefreshHacsAfterUpdate:
@@ -228,7 +242,6 @@ class TestMaybeRefreshHacsAfterUpdate:
         assert _refreshed_ids(mocks) == ["123", "456"]
         assert _written_marker(data_dir) == {
             "server_version": "1.0.0",
-            "ha_url": HA_URL,
             "latest": "1.1.0",
             "hacs": "present",
         }
@@ -324,10 +337,28 @@ class TestMaybeRefreshHacsAfterUpdate:
         mocks.refresh.assert_not_awaited()
         assert _written_marker(data_dir) is None
 
+    async def test_websocket_closure_is_retried(self, data_dir):
+        # send_command re-raises raw websocket exceptions on a mid-send
+        # closure (ambiguous-write contract), so they arrive here unwrapped —
+        # they must consume a retry, not escape to the outer advisory catch.
+        from ha_mcp._vendor import websockets
+
+        ws = _ws(error=websockets.exceptions.WebSocketException("closed"))
+
+        with (
+            _server(ws, info=_info()) as mocks,
+            patch.object(hacs_auto_refresh, "RETRY_DELAYS", (0.001,)),
+        ):
+            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
+
+        assert ws.send_command.await_count == 2
+        mocks.refresh.assert_not_awaited()
+        assert _written_marker(data_dir) is None
+
     async def test_matching_marker_skips_the_websocket(self, data_dir):
         # The stdio hot path: a per-conversation spawn on an unchanged version
         # costs one file read and no WebSocket traffic.
-        (data_dir / hacs_auto_refresh.MARKER_FILENAME).write_text(
+        hacs_auto_refresh._marker_path(HA_URL).write_text(
             json.dumps(_marker(latest="1.1.0", hacs="present"))
         )
         ws = _ws([_repo(123, MIRROR)])
