@@ -22,6 +22,7 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import (
     HomeAssistantAuthError,
+    HomeAssistantClient,
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools.tools_config_helpers import validate_registry_ids
@@ -462,13 +463,40 @@ class TestLookupFailurePreservesClassification:
     error taxonomy instead of always reporting CONNECTION_FAILED.
     """
 
-    async def test_auth_error_not_masked_as_connection_failed(self):
+    async def test_auth_cause_chain_not_masked_as_connection_failed(self):
+        """The transport wrap re-raises acquisition failures as
+        HomeAssistantConnectionError ``from`` the original — the auth type
+        survives only as ``__cause__``, and that is the shape the client
+        actually produces."""
+        wrapped = HomeAssistantConnectionError("WebSocket transport failed")
+        wrapped.__cause__ = HomeAssistantAuthError("Invalid token")
         client = MagicMock()
-        client.send_websocket_message = AsyncMock(
-            side_effect=HomeAssistantAuthError("token expired")
-        )
+        client.send_websocket_message = AsyncMock(side_effect=wrapped)
 
         with pytest.raises(ToolError) as exc_info:
+            await validate_registry_ids(client, "kitchen", None, None, fail_closed=True)
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] != "CONNECTION_FAILED"
+        assert error_data["error"]["code"].startswith("AUTH")
+
+    async def test_auth_during_acquisition_classifies_through_real_transport(self):
+        """Pin the full chain the review traced: the manager's auth raise ->
+        the acquisition wrap (HomeAssistantConnectionError ``from e``) ->
+        fail-closed cause-chain discrimination. Drives the REAL
+        ``send_websocket_message``, not a mocked shape."""
+        client = HomeAssistantClient("http://ha.local:8123", "test-token")
+
+        with (
+            patch(
+                "ha_mcp.client.websocket_client.get_websocket_client",
+                new_callable=AsyncMock,
+                side_effect=HomeAssistantAuthError(
+                    "WebSocket authentication failed: Invalid token"
+                ),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
             await validate_registry_ids(client, "kitchen", None, None, fail_closed=True)
 
         error_data = json.loads(str(exc_info.value))

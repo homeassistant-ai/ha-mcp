@@ -18,6 +18,7 @@ from pydantic import AliasChoices, Field
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
 )
@@ -1365,6 +1366,17 @@ def _registry_checks(
 _AUTH_WS_ERROR_CODES = frozenset({"unauthorized"})
 
 
+def _auth_error_in_chain(exc: BaseException | None) -> bool:
+    """True when the failure or its ``__cause__`` chain is an auth rejection."""
+    depth = 0
+    while exc is not None and depth < 10:
+        if isinstance(exc, HomeAssistantAuthError):
+            return True
+        exc = exc.__cause__
+        depth += 1
+    return False
+
+
 def _apply_registry_check(
     kind: str,
     scope: str,
@@ -1378,9 +1390,23 @@ def _apply_registry_check(
     """Reject an unknown ID, or an unreadable registry when failing closed."""
     if fail_closed and not ok:
         if exc is not None:
-            # Preserve the original failure class — an expired token must
-            # surface as an auth error, a timeout as a timeout, not as
-            # generic connection guidance.
+            # The transport wrap re-raises acquisition failures as
+            # HomeAssistantConnectionError ``from`` the original exception
+            # (phase-before-type, pinned by
+            # test_failure_to_acquire_a_client_raises), so an auth rejection
+            # during connect survives only in the ``__cause__`` chain —
+            # discriminate on it the same way the envelope branch below
+            # discriminates on ``error_code``.
+            if _auth_error_in_chain(exc):
+                raise_tool_error(
+                    create_auth_error(
+                        f"Could not validate {_REGISTRY_KINDS[kind][0]}: Home "
+                        "Assistant rejected the credentials.",
+                        context=_registry_check_context(kind, scope, value),
+                    )
+                )
+            # Preserve the original failure class — a timeout must surface
+            # as a timeout, not as generic connection guidance.
             exception_to_structured_error(
                 exc, context=_registry_check_context(kind, scope, value)
             )
