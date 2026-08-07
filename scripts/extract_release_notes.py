@@ -13,8 +13,12 @@ reachable stable tag into a single section). So this script does the same
 extraction, then truncates on a line boundary and appends a pointer to the full
 changelog rather than letting the API reject the whole release.
 
-Prints nothing on success; writes the notes to --out. An absent version yields
-an empty file, which is the signal for the caller's own fallback text.
+Prints nothing on success; writes the notes to --out. A version that is absent
+-- or present with an empty section, which two released versions in this repo's
+own changelog are -- yields an empty file, which is the signal for the caller's
+own fallback text. Which of the two happened is reported on stderr, so the run
+log distinguishes a version we failed to find from one that genuinely shipped
+an empty section.
 """
 
 from __future__ import annotations
@@ -23,18 +27,33 @@ import argparse
 import os
 import re
 import sys
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-# GitHub's documented maximum for a release body. Characters, not bytes --
-# the changelog carries emoji in headings, so a byte-based cut would be wrong.
+# GitHub's maximum for a release body. The API validates a character count,
+# not a byte count -- its rejection reads "body is too long (maximum is 125000
+# characters)" -- so the cut below is made in characters to match.
 GITHUB_RELEASE_BODY_LIMIT = 125_000
 
-# Section headings look like "## v8.0.0 (2026-08-02)". The negative lookahead
-# keeps "8.0.0" from also matching "## v8.0.01", which a bare prefix match
-# (what the old awk did) accepts.
+# Section headings look like "## v8.0.0 (2026-08-02)", emitted by
+# templates/CHANGELOG.md.j2. This pattern only has to find where the current
+# section ends, so it deliberately matches any version heading; `_heading_re`
+# below is the one that has to match a single exact version.
 _NEXT_SECTION_RE = re.compile(r"^## v\d")
 
-_FENCE_RE = re.compile(r"^\s*```")
+# A fence opens with three or more backticks or tildes, optionally followed by
+# an info string. Both parts are captured: a fence can only be closed by the
+# same character repeated at least as many times *and* nothing but whitespace
+# after it. Closing a ````-fence with ```, or mistaking a second ```python for
+# a closer, leaves it open -- and everything after the cut, the truncation
+# notice included, then renders as code.
+#
+# At most three spaces of indentation: four or more makes the line indented
+# code, not a fence, so treating it as one would open a fence that never
+# closes and silence `<details>` tracking behind it.
+_FENCE_RE = re.compile(r"^( {0,3})(`{3,}|~{3,})(.*)$")
+
+_DETAILS_TAG_RE = re.compile(r"</?details>")
 
 # Truncation can land inside a block the changelog template opened: a fenced
 # code block, or the `<details><summary>Internal Changes</summary>` element
@@ -43,7 +62,6 @@ _FENCE_RE = re.compile(r"^\s*```")
 # into a collapsed section, so a reader sees no sign the notes are incomplete.
 # Their lengths are reserved before lines are selected, so closing them can
 # never push the body back over the limit.
-_FENCE_CLOSE = "\n```"
 _DETAILS_CLOSE = "\n</details>"
 
 
@@ -54,21 +72,27 @@ def _heading_re(version: str) -> re.Pattern[str]:
     `## v8.0.01`) and also `-` / `+`, so a stable version never matches a
     prerelease or build-metadata heading like `## v8.0.0-rc.1`.
     """
-    return re.compile(rf"^## v{re.escape(version.lstrip('v'))}(?![\w.+-])")
+    return re.compile(rf"^## v{re.escape(version.removeprefix('v'))}(?![\w.+-])")
 
 
-def extract_section(changelog: str, version: str) -> str:
-    """Return the changelog body for `version`, or "" when the version is absent.
+def extract_section(changelog: str, version: str) -> str | None:
+    """Return the changelog body for `version`, or None when it has no heading.
 
     The body is everything after the version's heading up to the next version
     heading (or end of file), with surrounding blank lines stripped.
+
+    None and "" are different answers: None means no `## v<version>` heading
+    exists, "" means the heading is there but its section is empty (`## v4.8.0`
+    and `## v1.0.0` in this repo's changelog both are). Both leave the caller
+    writing fallback notes, but only the first says the extractor failed to
+    find the release -- so they are reported differently.
     """
     heading = _heading_re(version)
     lines = changelog.splitlines(keepends=True)
 
     start = next((i for i, line in enumerate(lines) if heading.match(line)), None)
     if start is None:
-        return ""
+        return None
 
     body = lines[start + 1 :]
     end = next((i for i, line in enumerate(body) if _NEXT_SECTION_RE.match(line)), None)
@@ -78,7 +102,7 @@ def extract_section(changelog: str, version: str) -> str:
 
 
 def _truncation_notice(repo: str, version: str, limit: int) -> str:
-    url = f"https://github.com/{repo}/blob/v{version.lstrip('v')}/CHANGELOG.md"
+    url = f"https://github.com/{repo}/blob/v{version.removeprefix('v')}/CHANGELOG.md"
     return (
         "\n\n---\n\n"
         f"_Release notes truncated to fit GitHub's {limit:,}-character release-body "
@@ -86,26 +110,60 @@ def _truncation_notice(repo: str, version: str, limit: int) -> str:
     )
 
 
+@dataclass(frozen=True)
 class _OpenBlocks:
-    """Tracks which markdown blocks are still open as lines are consumed."""
+    """Which markdown blocks are still open after consuming some lines.
 
-    def __init__(self) -> None:
-        self.in_fence = False
-        self.details_depth = 0
+    Immutable so that `feed` can be used to ask "what would the state be if I
+    took this line?" without committing to it -- which is exactly what the
+    budget check in `cap_to_limit` needs.
+    """
 
-    def feed(self, line: str) -> None:
-        if _FENCE_RE.match(line):
-            self.in_fence = not self.in_fence
-            return
-        if self.in_fence:  # `<details>` inside a code block is text, not markup
-            return
-        self.details_depth += line.count("<details>") - line.count("</details>")
-        self.details_depth = max(self.details_depth, 0)
+    # The delimiter of the open fence ("```", "````", "~~~"), or None, and the
+    # indentation it opened at -- the closer has to reproduce that indentation
+    # or it leaves the container the fence lives in instead of closing it.
+    fence: str | None = None
+    fence_indent: str = ""
+    details_depth: int = 0
+
+    def feed(self, line: str) -> _OpenBlocks:
+        """The state after `line`, leaving this instance untouched."""
+        match = _FENCE_RE.match(line)
+        if match:
+            indent, delimiter, trailing = match.group(1), match.group(2), match.group(3)
+            if self.fence is not None:
+                # Only the same character, repeated at least as often and
+                # carrying nothing but whitespace, closes it. A closing fence
+                # cannot have an info string, so ```python inside a ```-block
+                # is ordinary content.
+                if (
+                    delimiter[0] == self.fence[0]
+                    and len(delimiter) >= len(self.fence)
+                    and not trailing.strip()
+                ):
+                    return replace(self, fence=None, fence_indent="")
+                return self
+            # A backtick fence's info string may not itself contain a backtick.
+            # GFM reads such a line as ordinary text, so opening a fence here
+            # would make the closer emitted later read as a new opening fence
+            # and swallow everything after it, the notice included.
+            if delimiter[0] != "`" or "`" not in trailing:
+                return replace(self, fence=delimiter, fence_indent=indent)
+            # Not a fence after all -- fall through and treat it as text.
+        if self.fence:  # `<details>` inside a code block is text, not markup
+            return self
+        # Left to right, clamping after each close, rather than netting the
+        # line's tags: `</details><details>` nets to zero but really leaves one
+        # open, and its closer would then be dropped.
+        depth = self.details_depth
+        for tag in _DETAILS_TAG_RE.findall(line):
+            depth = depth + 1 if tag == "<details>" else max(depth - 1, 0)
+        return replace(self, details_depth=depth)
 
     @property
     def closers(self) -> str:
         """The suffix that closes everything still open, innermost first."""
-        fence = _FENCE_CLOSE if self.in_fence else ""
+        fence = f"\n{self.fence_indent}{self.fence}" if self.fence else ""
         return fence + _DETAILS_CLOSE * self.details_depth
 
 
@@ -117,9 +175,13 @@ def cap_to_limit(body: str, repo: str, version: str, limit: int) -> str:
     leaves open are charged against the budget before the line is accepted, so
     the result never exceeds `limit`.
 
-    Raises ValueError when `limit` cannot even hold the truncation notice.
-    Silently emitting a notice-free body there would hand GitHub a release that
-    looks complete but is not, so an unusable --limit fails loudly instead.
+    Raises ValueError when `limit` leaves no room for the truncation notice, or
+    no room for even the first complete line beyond it. Silently emitting a
+    notice-free body would hand GitHub a release that looks complete but is
+    not; a body of nothing but "these notes were truncated" is not worth
+    publishing; and a mid-line cut would strand an opening fence or `<details>`
+    with no closer, swallowing the notice. An unusable --limit fails loudly
+    instead of producing any of the three.
     """
     if len(body) <= limit:
         return body
@@ -136,20 +198,22 @@ def cap_to_limit(body: str, repo: str, version: str, limit: int) -> str:
     kept: list[str] = []
     used = 0
     for line in body.splitlines(keepends=True):
-        candidate = _OpenBlocks()
-        candidate.in_fence, candidate.details_depth = (
-            open_blocks.in_fence,
-            open_blocks.details_depth,
-        )
-        candidate.feed(line)
+        candidate = open_blocks.feed(line)
         if used + len(line) + len(candidate.closers) > budget:
             break
         kept.append(line)
         used += len(line)
         open_blocks = candidate
 
-    head = "".join(kept).rstrip() if kept else body[:budget].rstrip()
-    closers = open_blocks.closers if kept else ""
+    if not kept:
+        raise ValueError(
+            f"--limit {limit} cannot retain even the first complete line of the "
+            "notes; cutting mid-line would leave any opening fence or <details> "
+            "unclosed and swallow the truncation notice"
+        )
+
+    head = "".join(kept).rstrip()
+    closers = open_blocks.closers
     # Defensive clamp: rstrip only shortens, so this should already hold.
     overflow = len(head) + len(closers) + len(notice) - limit
     if overflow > 0:  # pragma: no cover - budget accounting makes this unreachable
@@ -184,19 +248,39 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         changelog = args.changelog.read_text(encoding="utf-8")
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
+        # UnicodeDecodeError subclasses ValueError, not OSError, so a changelog
+        # with a bad byte would otherwise exit on a raw traceback.
         print(f"extract_release_notes: {e}", file=sys.stderr)
         return 1
 
-    body = extract_section(changelog, args.version)
-    if body:
+    version = args.version.removeprefix("v")
+    section = extract_section(changelog, args.version)
+    body = ""
+    if section is None:
+        print(
+            f"extract_release_notes: no '## v{version}' heading in {args.changelog}",
+            file=sys.stderr,
+        )
+    elif not section:
+        print(
+            f"extract_release_notes: the '## v{version}' section is empty",
+            file=sys.stderr,
+        )
+    else:
         try:
             # Cap the trailing newline too, so the written file never exceeds --limit.
-            body = cap_to_limit(body + "\n", args.repo, args.version, args.limit)
+            body = cap_to_limit(section + "\n", args.repo, args.version, args.limit)
         except ValueError as e:
             print(f"extract_release_notes: {e}", file=sys.stderr)
             return 1
-    args.out.write_text(body, encoding="utf-8")
+    try:
+        # newline="\n" so the file on disk matches the character budget the cap
+        # was computed against, on any platform rather than only on the runner.
+        args.out.write_text(body, encoding="utf-8", newline="\n")
+    except OSError as e:
+        print(f"extract_release_notes: {e}", file=sys.stderr)
+        return 1
     return 0
 
 
