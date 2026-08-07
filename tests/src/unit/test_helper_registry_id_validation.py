@@ -486,3 +486,63 @@ class TestLookupFailurePreservesClassification:
 
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "CONNECTION_FAILED"
+
+    async def test_unauthorized_envelope_not_masked_as_connection_failed(self):
+        """Past-acquisition auth rejections arrive as a failure envelope with
+        HA's preserved ``error_code``, not as a raised exception — the
+        fail-closed branch must classify that channel too."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Unauthorized",
+                "error_code": "unauthorized",
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await validate_registry_ids(client, "kitchen", None, None, fail_closed=True)
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] != "CONNECTION_FAILED"
+        assert error_data["error"]["code"].startswith("AUTH")
+
+
+class TestFlowHelperFailClosedPinned:
+    """Pins fail_closed=True at the ``_handle_flow_helper`` call site.
+
+    The sibling ha_config_set_helper site is covered by
+    ``TestUnreadableRegistryFailsClosed``; without this test, flipping the
+    flow-helper flag back to fail-open changes no test result.
+    """
+
+    async def test_unreadable_area_registry_rejects_flow_helper_write(
+        self, register_tools, mock_client
+    ):
+        async def handler(msg: dict) -> dict:
+            if msg.get("type") == "config/area_registry/list":
+                return {
+                    "success": False,
+                    "error": {"message": "registry unavailable"},
+                }
+            return {"success": True, "result": {}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=handler)
+        mock_client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "f1",
+                "result": {"entry_id": "e1", "title": "m", "domain": "min_max"},
+            }
+        )
+
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="min_max",
+                name="m",
+                config={"entity_ids": ["sensor.a"], "type": "mean"},
+                area_id="kitchen",
+                wait=False,
+            )
+
+        _assert_connection_failed(excinfo)

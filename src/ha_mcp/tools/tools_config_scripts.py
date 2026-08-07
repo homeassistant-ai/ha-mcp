@@ -1012,10 +1012,15 @@ class ConfigScriptTools:
 
         result = await self._upsert_script(config_dict, script_id, resolved_key)
 
-        # Wait for script to be queryable. Resolve the storage key first: a
-        # registry-renamed script no longer lives at script.<storage_key>
-        # (fresh creates fall back to the constructed id).
-        entity_id = await self._resolve_script_entity_id(script_id)
+        # Resolve the storage key only when the entity_id is consumed (the
+        # wait poll or the category write): with wait=False and no category —
+        # the documented bulk path — the resolution round-trips would be pure
+        # cost. A registry-renamed script no longer lives at
+        # script.<storage_key>; fresh creates fall back to the constructed id.
+        if wait or effective_category:
+            entity_id = await self._resolve_script_entity_id(script_id)
+        else:
+            entity_id = f"script.{script_id}"
         if wait:
             try:
                 registered = await wait_for_entity_registered(self._client, entity_id)

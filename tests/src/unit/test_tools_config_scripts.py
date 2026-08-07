@@ -639,3 +639,105 @@ class TestSetScriptCategoryValidation:
             if c[0][0].get("type") == "config/entity_registry/update"
         )
         assert update_call["entity_id"] == "script.renamed_target"
+
+
+class TestScriptEntityResolutionFallbacks:
+    """The registry-scan branch carries the rename fix on installs without
+    the component; the resolver is also skipped entirely when its result
+    would go unused (wait=False, no category)."""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.upsert_script_config = AsyncMock(
+            return_value={"success": True, "script_id": "test_script"}
+        )
+        client.get_services = AsyncMock(return_value=[])
+        client.get_states = AsyncMock(return_value=[])
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        return ConfigScriptTools(mock_client)
+
+    @pytest.fixture
+    def transform_tools(self, tools):
+        tools._fetch_and_verify_hash = AsyncMock(
+            return_value=(
+                {"alias": "Test Script", "sequence": [{"delay": {"seconds": 1}}]},
+                "test_script",
+            )
+        )
+        tools._get_script_config_internal = AsyncMock(
+            return_value=({}, "newhash", None)
+        )
+        return tools
+
+    async def test_registry_scan_resolves_rename_without_component(
+        self, transform_tools, mock_client
+    ):
+        """Component unavailable (None): the registry-list unique_id scan
+        must find the renamed entity, not fall to the constructed id."""
+
+        async def handler(msg: dict) -> dict:
+            msg_type = msg.get("type")
+            if msg_type == "config/category_registry/list":
+                return {"success": True, "result": [{"category_id": "lighting"}]}
+            if msg_type == "config/entity_registry/get":
+                return {"success": False, "error": "not found"}
+            if msg_type == "config/entity_registry/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "platform": "script",
+                            "unique_id": "test_script",
+                            "entity_id": "script.renamed_target",
+                        }
+                    ],
+                }
+            return {"success": True, "result": {"categories": {}}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=handler)
+
+        with patch(
+            "ha_mcp.tools.tools_config_scripts.fetch_entity_lookup_via_component",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            result = await transform_tools.ha_config_set_script(
+                script_id="test_script",
+                python_transform="config['mode'] = 'single'",
+                config_hash="prior_hash",
+                category="lighting",
+            )
+
+        assert result["success"] is True
+        update_call = next(
+            c[0][0]
+            for c in mock_client.send_websocket_message.call_args_list
+            if c[0][0].get("type") == "config/entity_registry/update"
+        )
+        assert update_call["entity_id"] == "script.renamed_target"
+
+    async def test_no_resolution_when_result_unused(self, tools, mock_client):
+        """wait=False without a category skips the resolver round-trips."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {}}
+        )
+
+        with patch(
+            "ha_mcp.tools.tools_config_scripts.fetch_entity_lookup_via_component",
+            new_callable=AsyncMock,
+        ) as lookup:
+            result = await tools.ha_config_set_script(
+                script_id="test_script",
+                config={
+                    "alias": "Test Script",
+                    "sequence": [{"delay": {"seconds": 1}}],
+                },
+                wait=False,
+            )
+
+        assert result["success"] is True
+        lookup.assert_not_called()
