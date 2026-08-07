@@ -91,13 +91,14 @@ rows honestly: `enable_tool_security_policies` reports `editable: false` with
 keeps its plain env story instead — the pin is the lock an operator must lift
 first.
 
-The toggle applies **live** — no restart needed — and the dev tools' settings
-surfaces never write it: `set` and `reset` of
+`dev_tools_security_policy_access` applies **live** — no restart needed —
+while `enable_security_policy_tool` takes effect on the next restart. The dev
+tools' settings surfaces never write either: `set` and `reset` of
 `dev_tools_security_policy_access` are refused even while access is on, and so
 are `set` and `reset` of `enable_security_policy_tool` — flipping that flag
-registers `ha_manage_security_policy` (which can rewrite the policies) on the
-next restart, the same end state as unbuckling the leash. Flip either in the
-web settings UI or via the env vars.
+registers `ha_manage_security_policy` (which can rewrite the policies) once
+the server restarts, the same end state as unbuckling the leash. Flip either
+in the web settings UI or via the env vars.
 
 This is a leash on the dev tools' settings surfaces, **not a sandbox**. Dev
 mode's `update_source` / `restart` can still replace the running server
