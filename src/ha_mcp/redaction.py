@@ -402,7 +402,10 @@ def scrub_obj(obj: Any, secrets: Sequence[str]) -> Any:
     if isinstance(obj, dict):
         out: dict[Any, Any] = {}
         for key, value in obj.items():
-            new_key = scrub_obj(key, secrets)
+            # Keys are scrubbed via scrub_text directly: a dict key is
+            # always hashable, so a string is the only key shape that can
+            # carry a secret.
+            new_key = scrub_text(key, secrets) if isinstance(key, str) else key
             if isinstance(new_key, str) and new_key in out:
                 suffix = 2
                 while f"{new_key}#{suffix}" in out:
