@@ -435,6 +435,19 @@ class TestRedactSecretsMiddleware:
         assert out.structured_content == {"pw": REDACTED_KNOWN}
 
     @pytest.mark.asyncio
+    async def test_longest_first_order_survives_the_variant_union(self, redact_on):
+        # The middleware does not scrub with known_secret_values() directly —
+        # with_serialized_variants rebuilds and re-sorts the union it passes
+        # on. Pin the ordering on that value: a shorter secret that is a
+        # substring of a longer one must not scrub first and leave the
+        # remainder of the longer secret exposed.
+        register_known_secret_values(["SECRET-x", "SECRET-xLONGER"])
+        result = _tool_result("a SECRET-xLONGER b", {"v": "SECRET-xLONGER"})
+        out = await self._call(result)
+        assert out.content[0].text == f"a {REDACTED_KNOWN} b"
+        assert out.structured_content == {"v": REDACTED_KNOWN}
+
+    @pytest.mark.asyncio
     async def test_generic_exception_args_scrubbed(self, redact_on):
         # FastMCP forwards non-ToolError exception text to clients too
         # (mask_error_details is not enabled) — those must be scrubbed while
