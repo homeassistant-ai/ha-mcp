@@ -38,9 +38,10 @@ entirely on whichever of them addresses the reader —
 `test_every_shipped_component_catalog_gets_reader_addressing_samples` pins that
 one. Leaving that catalog empty is fine, but the moment you author anything in
 it, at least one key must be one whose English addresses the reader in the
-second person. Most component strings do not, so starting at the top of the
-file leaves the catalog anchorless and that check red until you add one that
-does. To fill them in your own PR instead, run
+second person, and it must carry a non-empty translation — a key left blank is
+skipped like a missing one rather than sampled empty. Most component strings do
+not address the reader, so starting at the top of the file leaves the catalog
+anchorless and that check red until you add one that does. To fill them in your own PR instead, run
 `scripts/translate_locales.py` yourself and review its output like any
 other diff. Also add the new code to the locale list in the repository-root
 `AGENTS.md`

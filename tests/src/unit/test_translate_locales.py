@@ -160,6 +160,22 @@ class TestStyleSamples:
             "long"
         ]
 
+    @pytest.mark.parametrize("blank", ["", " ", "\n\t "])
+    def test_skips_keys_whose_translation_is_blank(self, blank: str) -> None:
+        """A blank value is a present key with nothing in it, and the sampler is
+        the only thing that looks: `_validate_string_map` type-checks, and the
+        parity ceilings count a key untranslated only when it equals the English
+        or is missing, so `""` reads there as translated. Sampled, it spends one
+        of three slots on a pair whose target side is empty — and a catalog
+        whose register rests on one key would hand the engine that and nothing
+        else. Whitespace counts as blank: it renders the same.
+        """
+        translated = dict.fromkeys(_SAMPLE_ENGLISH, "…") | {"short": blank}
+        assert translate_locales._style_sample_keys(_SAMPLE_ENGLISH, translated) == [
+            "middle",
+            "long",
+        ]
+
     def test_no_addressing_source_yields_no_samples(self) -> None:
         """Degenerate but defined: an English catalog that never addresses the
         reader gives the prompt no style block rather than a neutral one."""
