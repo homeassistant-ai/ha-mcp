@@ -23,6 +23,7 @@ from .hacs_registration import (
     HACS_ADD_REGISTRATION_TIMEOUT,
     HACS_RESOLVE_REGISTRATION_TIMEOUT,
     _filter_and_score_repos,
+    send_hacs_repository_refresh,
     wait_for_repo_registration,
 )
 from .helpers import (
@@ -120,7 +121,7 @@ class HacsTools:
     read path keeps ``readOnlyHint`` and is never flagged ``destructive``:
 
     - ``ha_get_hacs_info`` (read): ``search`` the store / ``info`` for one repo.
-    - ``ha_manage_hacs`` (write): ``download`` install/update / ``remove`` / ``add_repository``.
+    - ``ha_manage_hacs`` (write): ``download`` install/update / ``remove`` / ``add_repository`` / ``update_information`` refresh.
     """
 
     def __init__(self, client: Any) -> None:
@@ -243,11 +244,13 @@ class HacsTools:
     async def ha_manage_hacs(
         self,
         action: Annotated[
-            Literal["download", "add_repository", "remove"],
+            Literal["download", "add_repository", "remove", "update_information"],
             Field(
                 description=(
                     "'download' to install/update, 'add_repository' to register "
-                    "a custom repo, or 'remove' to uninstall a downloaded repo"
+                    "a custom repo, 'remove' to uninstall a downloaded repo, or "
+                    "'update_information' to refresh a repository's release data "
+                    "from GitHub"
                 )
             ),
         ],
@@ -256,7 +259,7 @@ class HacsTools:
             Field(
                 description=(
                     "Numeric HACS ID or 'owner/repo' path "
-                    "(action='download' / action='remove')"
+                    "(action='download' / 'remove' / 'update_information')"
                 )
             ),
         ] = None,
@@ -282,20 +285,26 @@ class HacsTools:
         ``action="remove"`` to uninstall a downloaded repository, or
         ``action="add_repository"`` to register a custom GitHub repository with HACS. This
         tool performs writes; to search the store or read repository details use
-        ``ha_get_hacs_info``.
+        ``ha_get_hacs_info``. Use ``action="update_information"`` to run the HACS UI's
+        "Update information" action — a forced re-fetch of one repository's release data
+        from GitHub, so a pending update becomes visible to HACS and its update entity
+        immediately.
 
         **Examples:**
         - Install latest: ha_manage_hacs(action="download", repository_id="441028036")
         - Install a version: ha_manage_hacs(action="download", repository_id="piitaya/lovelace-mushroom", version="v4.0.0")
         - Remove: ha_manage_hacs(action="remove", repository_id="owner/repo")
         - Add a custom repo: ha_manage_hacs(action="add_repository", repository="owner/repo", category="lovelace")
+        - Refresh release data: ha_manage_hacs(action="update_information", repository_id="owner/repo")
 
         **Caveats:** Installing an integration usually needs a Home Assistant restart to
         activate; new Lovelace cards need a browser cache clear. ``repository_id`` accepts a
         numeric HACS ID or an ``owner/repo`` path; ``add_repository`` requires ``owner/repo``
         format plus a matching ``category``. Removing an integration deletes its files but
         the loaded module persists until the next Home Assistant restart — delete its config
-        entries first (``ha_remove_helpers_integrations``).
+        entries first (``ha_remove_helpers_integrations``). HACS refreshes custom
+        repositories on its own only about every 48 hours, so ``update_information`` is the
+        way to surface a just-published release.
         """
         try:
             # Reject parameters that don't belong to the chosen action rather
@@ -312,6 +321,11 @@ class HacsTools:
                     "category": category,
                 },
                 add_repository={"repository_id": repository_id, "version": version},
+                update_information={
+                    "version": version,
+                    "repository": repository,
+                    "category": category,
+                },
             )
 
             if action == "download":
@@ -319,6 +333,9 @@ class HacsTools:
 
             if action == "remove":
                 return await self._hacs_remove(repository_id)
+
+            if action == "update_information":
+                return await self._hacs_update_information(repository_id)
 
             # action == "add_repository"
             repository = validate_identifier_not_empty(
@@ -345,7 +362,7 @@ class HacsTools:
                 context={"tool": "ha_manage_hacs", "action": action},
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
-                    "For action='download' or action='remove', pass a valid repository_id (use ha_get_hacs_info(action='search') to find it)",
+                    "For action='download', 'remove', or 'update_information', pass a valid repository_id (use ha_get_hacs_info(action='search') to find it)",
                     "For action='add_repository', use 'owner/repo' format and a matching category",
                 ],
             )
@@ -686,6 +703,55 @@ class HacsTools:
                 "note": (
                     "Files are deleted, but an already-loaded integration "
                     "module persists until the next Home Assistant restart."
+                ),
+                "data": response.get("result", {}),
+            },
+        )
+        return {"success": True, **wrapped}
+
+    async def _hacs_update_information(
+        self, repository_id: str | None
+    ) -> dict[str, Any]:
+        # Same up-front guard as ``_hacs_download``: an empty identifier must
+        # fail before any backend call.
+        repository_id = validate_identifier_not_empty(
+            repository_id,
+            "repository_id",
+            suggestions=[
+                "Use ha_get_hacs_info(action='search') to find valid repository IDs",
+                "Or pass a GitHub path like 'owner/repo' to refresh by name",
+            ],
+        )
+        await _assert_hacs_available()
+
+        from ..client.websocket_client import get_websocket_client
+
+        ws_client = await get_websocket_client()
+
+        actual_id, repo_name = await _resolve_hacs_repo_id(ws_client, repository_id)
+
+        response = await send_hacs_repository_refresh(ws_client, actual_id)
+
+        if not response.get("success"):
+            exception_to_structured_error(
+                Exception(f"HACS refresh request failed: {response}"),
+                context={
+                    "command": "hacs/repository/refresh",
+                    "repository_id": repository_id,
+                },
+                raise_error=True,
+            )
+
+        wrapped = await add_timezone_metadata(
+            self._client,
+            {
+                "repository_id": actual_id,
+                "repository": repo_name,
+                "message": f"Refreshed repository information for {repo_name}",
+                "note": (
+                    "HACS re-fetched this repository's release data from GitHub; "
+                    "a pending update is now visible in HACS and on its update "
+                    "entity."
                 ),
                 "data": response.get("result", {}),
             },

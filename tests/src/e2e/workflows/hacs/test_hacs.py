@@ -709,6 +709,48 @@ class TestHacsWriteOperations:
 
 
 @pytest.mark.hacs
+async def test_hacs_update_information(mcp_client):
+    """ha_manage_hacs(action="update_information") refreshes a repository's
+    release data (the HACS UI "Update information" action)."""
+    logger.info("Testing ha_manage_hacs update_information...")
+
+    search_data = await safe_hacs_call(
+        mcp_client,
+        "ha_get_hacs_info",
+        {"action": "search", "max_results": 1},
+    )
+
+    unavailable, reason = is_hacs_unavailable(search_data)
+    if unavailable:
+        pytest.skip(f"HACS not available: {reason}")
+
+    results = search_data.get("results") or []
+    if not results:
+        pytest.skip("HACS returned no repositories to refresh")
+    repo_id = str(results[0]["id"])
+
+    logger.info(f"Refreshing repository information for: {repo_id}")
+
+    data = await safe_hacs_call(
+        mcp_client,
+        "ha_manage_hacs",
+        {"action": "update_information", "repository_id": repo_id},
+    )
+
+    if not data.get("success"):
+        # The refresh re-fetches from GitHub, so an unreachable / rate-limited
+        # GitHub is an environment limitation, not a tool failure.
+        unavailable, reason = is_hacs_unavailable(data)
+        if unavailable:
+            pytest.skip(f"HACS not available: {reason}")
+
+    assert data.get("success") is True, f"Refresh failed: {data.get('error')}"
+    assert data.get("repository_id"), "Response should include repository_id"
+
+    logger.info("Update information test passed")
+
+
+@pytest.mark.hacs
 async def test_hacs_discovery(mcp_client):
     """
     Test: Basic HACS discovery

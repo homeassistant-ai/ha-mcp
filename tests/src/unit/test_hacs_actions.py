@@ -1,10 +1,11 @@
 """Unit tests for the consolidated HACS action tools.
 
 Exercise the per-action handler success paths (``_hacs_info`` /
-``_hacs_download`` / ``_hacs_remove`` / ``_hacs_add_repository``) and the
-dispatcher's error-routing with a mocked WebSocket client. Complements the
-validation-guard tests in ``test_identifier_validation_family.py`` and the
-ctx/progress test in ``test_context_injection.py``.
+``_hacs_download`` / ``_hacs_remove`` / ``_hacs_update_information`` /
+``_hacs_add_repository``) and the dispatcher's error-routing with a mocked
+WebSocket client. Complements the validation-guard tests in
+``test_identifier_validation_family.py`` and the ctx/progress test in
+``test_context_injection.py``.
 """
 
 from contextlib import contextmanager
@@ -424,6 +425,91 @@ class TestManageHacsRemove:
         assert result["success"] is True
         assert result["data"]["repository_id"] == "401454435"
         assert "metadata" in result
+
+
+class TestManageHacsUpdateInformation:
+    async def test_update_information_numeric_id_sends_refresh(self, tools):
+        ws = _ws({})
+        with _patched_hacs(ws):
+            result = await tools.ha_manage_hacs(
+                action="update_information", repository_id="441028036"
+            )
+
+        assert result["success"] is True
+        # A numeric id needs no resolution round-trip — exactly one WS call.
+        ws.send_command.assert_awaited_once()
+        assert ws.send_command.await_args.args[0] == "hacs/repository/refresh"
+        # HACS's WS API is asymmetric: refresh takes repository (like remove),
+        # not repository_id (like info). The 60 s budget covers HACS's forced
+        # GitHub re-fetch, which the 30 s default would report as a false
+        # failure.
+        assert ws.send_command.await_args.kwargs["repository"] == "441028036"
+        assert ws.send_command.await_args.kwargs["_wait_timeout"] == 60.0
+
+    async def test_update_information_path_resolves_then_refreshes(self, tools):
+        ws = _ws({})
+        registered = {"id": 123, "name": "lovelace-mushroom"}
+        with (
+            _patched_hacs(ws),
+            patch(
+                "ha_mcp.tools.tools_hacs.wait_for_repo_registration",
+                new_callable=AsyncMock,
+            ) as wait_mock,
+        ):
+            wait_mock.return_value = registered
+            result = await tools.ha_manage_hacs(
+                action="update_information",
+                repository_id="piitaya/lovelace-mushroom",
+            )
+
+        assert result["success"] is True
+        assert result["repository"] == "lovelace-mushroom"  # resolved display name
+        assert ws.send_command.await_args.args[0] == "hacs/repository/refresh"
+        # The resolved numeric id, not the owner/repo path, reaches HACS.
+        assert ws.send_command.await_args.kwargs["repository"] == "123"
+
+    async def test_update_information_empty_id_raises(self, tools):
+        ws = _ws({})
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="update_information", repository_id="")
+        assert "repository_id" in str(excinfo.value)
+        ws.send_command.assert_not_awaited()
+
+    async def test_update_information_missing_id_raises(self, tools):
+        ws = _ws({})
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="update_information")
+        assert "repository_id" in str(excinfo.value)
+        ws.send_command.assert_not_awaited()
+
+    async def test_update_information_rejects_foreign_params(self, tools):
+        # update_information takes only repository_id; a download-only
+        # parameter must fail loudly rather than be silently dropped.
+        ws = _ws({})
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(
+                action="update_information",
+                repository_id="1",
+                version="v1.0.0",
+            )
+        assert "VALIDATION_INVALID_PARAMETER" in str(excinfo.value)
+        assert "version" in str(excinfo.value)
+        assert "do not apply" in str(excinfo.value)
+        ws.send_command.assert_not_awaited()
+
+    async def test_update_information_failed_response_raises(self, tools):
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            return_value={"success": False, "error": {"message": "boom"}}
+        )
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(
+                action="update_information", repository_id="441028036"
+            )
+        # HACS's own error text must survive the wrap, alongside the command
+        # context that names which call failed.
+        assert "boom" in str(excinfo.value)
+        assert "hacs/repository/refresh" in str(excinfo.value)
 
 
 class TestDispatcherErrorRouting:
