@@ -190,9 +190,8 @@ class TestManageHacsDownload:
         )
         with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
             await tools.ha_manage_hacs(action="download", repository_id="441028036")
-        assert (
-            "Operation 'hacs/repository/download' timed out after 60.0s"
-            in str(excinfo.value)
+        assert "Operation 'hacs/repository/download' timed out after 60.0s" in str(
+            excinfo.value
         )
 
 
@@ -413,9 +412,8 @@ class TestManageHacsRemove:
         )
         with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
             await tools.ha_manage_hacs(action="remove", repository_id="401454435")
-        assert (
-            "Operation 'hacs/repository/remove' timed out after 60.0s"
-            in str(excinfo.value)
+        assert "Operation 'hacs/repository/remove' timed out after 60.0s" in str(
+            excinfo.value
         )
 
     async def test_remove_timeout_says_outcome_is_unknown(self, tools):
