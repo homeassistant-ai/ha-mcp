@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import pytest
 from fastmcp import Client
-from fastmcp.exceptions import ToolError
 from test_constants import TEST_TOKEN
 
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -31,7 +30,7 @@ from ha_mcp.redaction import REDACTED_SET, is_sentinel
 from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.utils.data_paths import get_data_dir
 
-from ..utilities.assertions import parse_mcp_result, tool_error_to_result
+from ..utilities.assertions import parse_mcp_result, safe_call_tool
 
 
 async def _build_redacting_server(container_info, monkeypatch, tmp_path):
@@ -103,22 +102,18 @@ async def test_reads_work_and_secret_free_options_pass_through(redacting_mcp):
 
 async def _expect_sentinel_rejected(client: Client) -> None:
     """Create a flow helper with a sentinel-valued field; expect rejection."""
-    try:
-        result = await client.call_tool(
-            "ha_config_set_helper",
-            {
-                "helper_type": "group",
-                "config": {
-                    "name": "redact e2e group",
-                    "group_type": "light",
-                    "entities": [REDACTED_SET],
-                },
+    body = await safe_call_tool(
+        client,
+        "ha_config_set_helper",
+        {
+            "helper_type": "group",
+            "config": {
+                "name": "redact e2e group",
+                "group_type": "light",
+                "entities": [REDACTED_SET],
             },
-        )
-    except ToolError as exc:
-        body = tool_error_to_result(exc)
-    else:
-        body = parse_mcp_result(result)
+        },
+    )
     error = body.get("error") or {}
     assert error.get("code") == "VALIDATION_INVALID_PARAMETER", body
     assert "placeholder" in error.get("message", ""), body
