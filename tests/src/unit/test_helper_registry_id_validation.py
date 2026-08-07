@@ -9,6 +9,8 @@ references in the registry. These tests assert that:
   - Existing values pass through untouched (control case).
   - Empty-string area_id (the documented "clear" sentinel) does NOT trigger a
     registry lookup or rejection.
+  - A registry that cannot be read fails the write closed with
+    CONNECTION_FAILED (issue #2159) rather than skipping the check.
 """
 
 from typing import Any
@@ -54,6 +56,13 @@ def _assert_invalid_param(excinfo) -> None:
     msg = str(excinfo.value)
     assert "VALIDATION_INVALID_PARAMETER" in msg, (
         f"expected VALIDATION_INVALID_PARAMETER in error, got: {msg!r}"
+    )
+
+
+def _assert_connection_failed(excinfo) -> None:
+    msg = str(excinfo.value)
+    assert "CONNECTION_FAILED" in msg, (
+        f"expected CONNECTION_FAILED in error, got: {msg!r}"
     )
 
 
@@ -345,3 +354,73 @@ class TestPhantomRejectedAgainstEmptyRegistry:
             )
         _assert_invalid_param(excinfo)
         assert "phantom_category" in str(excinfo.value)
+
+
+class TestUnreadableRegistryFailsClosed:
+    """Issue #2159: a degraded lookup must not wave the reference through.
+
+    The helper path used to fail open when a registry lookup failed, so a
+    transient outage was enough for a phantom ID to reach HA and persist as a
+    dangling reference — the exact state this validation exists to prevent.
+    """
+
+    @staticmethod
+    def _handler_with_failing_registry(registry_type: str, *, raises: bool):
+        """Healthy registries except ``registry_type``, which is unreadable."""
+        healthy = _make_ws_handler(
+            area_ids=["kitchen"],
+            label_ids=["important"],
+            category_ids=["lighting"],
+        )
+
+        async def handler(msg: dict) -> dict:
+            if msg.get("type") == registry_type:
+                if raises:
+                    raise RuntimeError("connection lost")
+                return {
+                    "success": False,
+                    "error": {"message": "registry unavailable"},
+                }
+            return await healthy(msg)
+
+        return handler
+
+    @pytest.mark.parametrize("raises", [False, True], ids=["ws_error", "exception"])
+    @pytest.mark.parametrize(
+        ("kwargs", "registry_type"),
+        [
+            pytest.param(
+                {"area_id": "kitchen"}, "config/area_registry/list", id="area"
+            ),
+            pytest.param(
+                {"labels": ["important"]}, "config/label_registry/list", id="labels"
+            ),
+            pytest.param(
+                {"category": "lighting"},
+                "config/category_registry/list",
+                id="category",
+            ),
+        ],
+    )
+    async def test_unreadable_registry_rejects_helper_write(
+        self, register_tools, mock_client, kwargs, registry_type, raises
+    ):
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._handler_with_failing_registry(
+                registry_type, raises=raises
+            )
+        )
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                name="Test",
+                **kwargs,
+            )
+        _assert_connection_failed(excinfo)

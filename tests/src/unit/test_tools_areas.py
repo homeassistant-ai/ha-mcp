@@ -208,6 +208,93 @@ class TestSetAreaOrFloorCrossKindRejection:
         tools._client.send_websocket_message.assert_not_called()
 
 
+class TestSetAreaFloorReferenceValidation:
+    """An area may not be created or updated onto a floor that does not exist.
+
+    HA's area registry stores whatever floor_id it is handed, so the orphan is
+    only visible later as an entry in ``orphaned_areas`` (issue #2159).
+    """
+
+    @staticmethod
+    def _ws_handler(*floor_ids):
+        """Answer the floor-registry preflight, then ack the area write."""
+
+        async def handler(msg):
+            if msg.get("type") == "config/floor_registry/list":
+                return {
+                    "success": True,
+                    "result": [{"floor_id": fid} for fid in floor_ids],
+                }
+            return {
+                "success": True,
+                "result": {"area_id": "kitchen", "name": "Kitchen"},
+            }
+
+        return handler
+
+    @pytest.fixture
+    def tools(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return AreaTools(client)
+
+    @staticmethod
+    def _sent_types(tools):
+        return [
+            call.args[0]["type"]
+            for call in tools._client.send_websocket_message.call_args_list
+        ]
+
+    async def test_unknown_floor_rejected_on_create(self, tools):
+        tools._client.send_websocket_message.side_effect = self._ws_handler("ground")
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_area_or_floor(
+                kind="area", name="Kitchen", floor_id="ghost_floor"
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert error_data["floor_id"] == "ghost_floor"
+        assert self._sent_types(tools) == ["config/floor_registry/list"]
+
+    async def test_unknown_floor_rejected_on_update(self, tools):
+        tools._client.send_websocket_message.side_effect = self._ws_handler("ground")
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_area_or_floor(
+                kind="area", id="kitchen", floor_id="ghost_floor"
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert self._sent_types(tools) == ["config/floor_registry/list"]
+
+    async def test_empty_floor_id_clears_without_lookup(self, tools):
+        """floor_id='' is the documented clear sentinel — no floor to validate."""
+        tools._client.send_websocket_message.side_effect = self._ws_handler()
+
+        result = await tools.ha_set_area_or_floor(
+            kind="area", id="kitchen", floor_id=""
+        )
+
+        assert result["success"] is True
+        assert self._sent_types(tools) == ["config/area_registry/update"]
+
+    async def test_existing_floor_accepted(self, tools):
+        tools._client.send_websocket_message.side_effect = self._ws_handler("ground")
+
+        result = await tools.ha_set_area_or_floor(
+            kind="area", name="Kitchen", floor_id="ground"
+        )
+
+        assert result["success"] is True
+        assert self._sent_types(tools) == [
+            "config/floor_registry/list",
+            "config/area_registry/create",
+        ]
+
+
 class TestListFloorsAreasFieldsProjection:
     """Unit tests for fields= top-level projection in ha_list_floors_areas."""
 

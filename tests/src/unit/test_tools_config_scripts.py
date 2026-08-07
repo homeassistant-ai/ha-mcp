@@ -429,3 +429,125 @@ class TestStripEmptyScriptFields:
 
         assert "sequence" not in result
         assert result == config
+
+
+class TestSetScriptCategoryValidation:
+    """A category that does not exist must not reach the script.
+
+    ``apply_entity_category`` runs after the upsert and HA accepts any category
+    ID, so an unvalidated typo used to leave the script created with a dangling
+    category reference (issue #2159). Validation happens at tool entry so
+    nothing is written when the category is wrong.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.upsert_script_config = AsyncMock(
+            return_value={"success": True, "script_id": "test_script"}
+        )
+        client.get_entity_state = AsyncMock(
+            return_value={"state": "off", "entity_id": "script.test_script"}
+        )
+        # Reference validator (#940) walks these during set_script.
+        client.get_services = AsyncMock(return_value=[])
+        client.get_states = AsyncMock(return_value=[])
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        return ConfigScriptTools(mock_client)
+
+    @staticmethod
+    def _ws_handler(*category_ids):
+        """Answer the category-registry preflight; ack everything else."""
+
+        async def handler(msg):
+            if msg.get("type") == "config/category_registry/list":
+                return {
+                    "success": True,
+                    "result": [{"category_id": cid} for cid in category_ids],
+                }
+            return {"success": True, "result": {"categories": {}}}
+
+        return handler
+
+    @pytest.fixture
+    def sequence_config(self):
+        return {"alias": "Test Script", "sequence": [{"delay": {"seconds": 1}}]}
+
+    async def test_unknown_category_param_rejected_before_upsert(
+        self, tools, mock_client, sequence_config
+    ):
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._ws_handler("lighting")
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_script(
+                script_id="test_script",
+                config=sequence_config,
+                category="ghost_category",
+                wait=False,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert error_data["category"] == "ghost_category"
+        assert error_data["scope"] == "script"
+        mock_client.upsert_script_config.assert_not_called()
+
+    async def test_unknown_category_in_config_rejected_before_upsert(
+        self, tools, mock_client, sequence_config
+    ):
+        """The config dict is the second category source — it needs the same gate."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._ws_handler("lighting")
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_script(
+                script_id="test_script",
+                config={**sequence_config, "category": "ghost_category"},
+                wait=False,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        mock_client.upsert_script_config.assert_not_called()
+
+    async def test_category_registry_lookup_failure_fails_closed(
+        self, tools, mock_client, sequence_config
+    ):
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": {"message": "unavailable"}}
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_script(
+                script_id="test_script",
+                config=sequence_config,
+                category="lighting",
+                wait=False,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "CONNECTION_FAILED"
+        mock_client.upsert_script_config.assert_not_called()
+
+    async def test_existing_category_proceeds(
+        self, tools, mock_client, sequence_config
+    ):
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._ws_handler("lighting")
+        )
+
+        result = await tools.ha_config_set_script(
+            script_id="test_script",
+            config=sequence_config,
+            category="lighting",
+            wait=False,
+        )
+
+        assert result["success"] is True
+        mock_client.upsert_script_config.assert_called_once()
