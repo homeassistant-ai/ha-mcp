@@ -23,6 +23,7 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
+from ..redaction import redact_flow_schema, redaction_enabled
 from ..strict_bps import BestPracticeKeyParam
 from .auto_backup import with_auto_backup
 from .component_api import (
@@ -747,7 +748,13 @@ async def _flow_helper_error_context(
         )
         info = {}
     if "schema" in info:
-        context["data_schema"] = info["schema"]
+        # Under redact_secrets, password-field current values must not ride
+        # into the error context verbatim (#2157).
+        context["data_schema"] = (
+            redact_flow_schema(info["schema"])
+            if redaction_enabled()
+            else info["schema"]
+        )
     elif helper_type in _MENU_ROOTED_FLOW_HELPER_TYPES and not menu_choice:
         context["data_schema_unavailable_reason"] = "menu_helper_requires_branch"
         if "menu_options" in info:

@@ -381,7 +381,7 @@ Redacts secrets from tool responses before they reach the AI assistant. When ena
 - **Integration options** (`ha_get_integration`): fields the options flow marks with a password selector get the same treatment, including the `include_schema=True` schema echo.
 - **All other tool responses** (logs, file reads, diagnostics, etc.): occurrences of secret values the server has already seen on the surfaces above are scrubbed to `<redacted>`.
 
-Redaction is schema-driven — fields not marked as passwords by their schema cannot be detected and are returned as-is until the value scrub has seen them. Writes through `ha_manage_addon` keep working with partial updates (merging uses the real current options server-side), and submitting a redaction marker as a value is rejected so a redacted read can never be written back into a live config.
+Redaction is schema-driven — fields not marked as passwords by their schema cannot be detected and are returned as-is until the value scrub has seen them. The value scrub skips secrets shorter than 6 characters (replacing tiny fragments would corrupt unrelated output). Writes through `ha_manage_addon` keep working with partial updates (merging uses the real current options server-side), and submitting a redaction marker as a value is rejected so a redacted read can never be written back into a live config.
 
 **When to enable:**
 - Add-on or integration configs hold credentials (API tokens, PATs, database passwords) that must not land in AI conversation transcripts

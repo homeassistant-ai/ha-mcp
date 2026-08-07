@@ -1,6 +1,7 @@
 """Unit tests for schema-driven secret redaction (issue 2157, redaction.py)."""
 
 import json
+import typing
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -551,3 +552,257 @@ class TestRedactComponentOptions:
         await tools._redact_component_options("e1", entry, warnings)
         assert entry["options"] == {"api_key": REDACTED_SET}
         assert warnings == []
+
+
+class TestEmbeddedSentinelRejection:
+    """Strings CONTAINING a sentinel are rejected, not only exact matches."""
+
+    def test_sentinel_option_keys_flags_embedded_marker(self):
+        options = {
+            "dsn": f"postgres://u:{REDACTED_KNOWN}@db/x",
+            "ok": "clean-value",
+            "items": [f"prefix {REDACTED_SET} suffix"],
+        }
+        assert sentinel_option_keys(options) == ["dsn", "items[0]"]
+
+    def test_reject_helper_rejects_embedded_marker(self, redact_on):
+        with pytest.raises(ToolError):
+            _reject_redaction_sentinels({"dsn": f"postgres://u:{REDACTED_KNOWN}@db"})
+
+
+class TestMultiValuePasswordFields:
+    """multiple:true password selectors carry list values (issue 2157)."""
+
+    def test_flow_schema_list_suggested_value_harvested_and_shape_kept(self):
+        schema = [
+            {
+                "name": "tokens",
+                "selector": {"text": {"type": "password", "multiple": True}},
+                "description": {"suggested_value": ["tok-AAA111", "tok-BBB222"]},
+            }
+        ]
+        out = redact_flow_schema(schema)
+        assert out[0]["description"]["suggested_value"] == [
+            REDACTED_SET,
+            REDACTED_SET,
+        ]
+        assert {"tok-AAA111", "tok-BBB222"} <= set(known_secret_values())
+
+    def test_options_from_form_flow_list_value(self, redact_on):
+        flow = {
+            "data_schema": [
+                {
+                    "name": "tokens",
+                    "selector": {"text": {"type": "password", "multiple": True}},
+                    "description": {"suggested_value": ["tok-AAA111", ""]},
+                }
+            ]
+        }
+        out = options_from_form_flow(flow)
+        assert out["tokens"] == [REDACTED_SET, REDACTED_EMPTY]
+        assert "tok-AAA111" in known_secret_values()
+
+    def test_redact_options_by_flow_schema_list_value(self):
+        schema = [
+            {"name": "tokens", "selector": {"text": {"type": "password"}}},
+        ]
+        out = redact_options_by_flow_schema({"tokens": ["tok-AAA111", ""]}, schema)
+        assert out["tokens"] == [REDACTED_SET, REDACTED_EMPTY]
+        assert "tok-AAA111" in known_secret_values()
+
+
+class TestWriteFlowErrorSchemaRedaction:
+    """Flow 4xx error contexts must not carry raw password suggested_values."""
+
+    _PW_SCHEMA: typing.ClassVar[list] = [
+        {
+            "name": "api_key",
+            "selector": {"text": {"type": "password"}},
+            "description": {"suggested_value": "sk-LIVEFLOWSECRET"},
+        }
+    ]
+
+    @pytest.mark.asyncio
+    async def test_raise_flow_api_error_redacts_current_step_schema(
+        self, redact_on, monkeypatch
+    ):
+        from ha_mcp.client.rest_client import HomeAssistantAPIError
+        from ha_mcp.tools import config_entry_flow_walker as walker
+
+        monkeypatch.setattr(
+            walker, "fetch_helper_flow_info", AsyncMock(return_value={})
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await walker._raise_flow_api_error(
+                HomeAssistantAPIError("bad value", status_code=400),
+                client=MagicMock(),
+                flow_id="f1",
+                helper_type="filter",
+                menu_choice=None,
+                current_step={"type": "form", "data_schema": self._PW_SCHEMA},
+                submitted={"api_key": "x"},
+            )
+        body = json.loads(str(exc_info.value))
+        schema = body["data_schema"]
+        assert schema[0]["description"]["suggested_value"] == REDACTED_SET
+        assert "sk-LIVEFLOWSECRET" in known_secret_values()
+
+    @pytest.mark.asyncio
+    async def test_flow_helper_error_context_redacts_schema(self, redact_on):
+        from ha_mcp.tools.tools_config_helpers import _flow_helper_error_context
+
+        client = AsyncMock()
+        client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "form",
+                "flow_id": "f1",
+                "step_id": "user",
+                "data_schema": self._PW_SCHEMA,
+            }
+        )
+        client.abort_config_flow = AsyncMock(return_value={})
+        ctx = await _flow_helper_error_context(client, "filter")
+        assert ctx["data_schema"][0]["description"]["suggested_value"] == REDACTED_SET
+
+
+class TestEmptyFormSchemaFailsClosed:
+    @pytest.mark.asyncio
+    async def test_empty_form_schema_treated_as_unreadable(self):
+        from ha_mcp.tools.tools_integrations import IntegrationTools
+
+        client = MagicMock()
+        client.start_options_flow = AsyncMock(
+            return_value={"flow_id": "f1", "type": "form", "data_schema": []}
+        )
+        client.abort_options_flow = AsyncMock()
+        tools = IntegrationTools(client)
+        entry = {
+            "entry_id": "e1",
+            "supports_options": True,
+            "options": {"maybe_pw": "hunter2secret"},
+        }
+        warnings: list[str] = []
+        await tools._redact_component_options("e1", entry, warnings)
+        assert entry["options"] == {"maybe_pw": REDACTED_SET}
+        assert len(warnings) == 1
+
+
+class TestWriteEntryPointsRejectSentinels:
+    """Every flow-write entry point calls the sentinel guard before any
+    client traffic — not just create_config_entry."""
+
+    @pytest.mark.asyncio
+    async def test_update_config_entry_options_rejects_before_flow(self, redact_on):
+        from ha_mcp.tools.config_entry_flow import update_config_entry_options
+
+        client = AsyncMock()
+        with pytest.raises(ToolError):
+            await update_config_entry_options(client, "e1", {"api_key": REDACTED_SET})
+        client.get_config_entry.assert_not_awaited()
+        client.start_options_flow.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_set_config_subentry_rejects_before_flow(self, redact_on):
+        from ha_mcp.tools.config_entry_flow import set_config_subentry
+
+        client = AsyncMock()
+        with pytest.raises(ToolError):
+            await set_config_subentry(client, "e1", "device", {"token": REDACTED_EMPTY})
+        client.start_config_subentry_flow.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_config_entry_rejects_before_flow(self, redact_on):
+        from ha_mcp.tools.config_entry_flow import create_config_entry
+
+        client = AsyncMock()
+        with pytest.raises(ToolError):
+            await create_config_entry(client, "group", {"pw": REDACTED_SET})
+        client.start_config_flow.assert_not_awaited()
+
+
+class TestComponentPathEndToEndRedaction:
+    """Component-served reads through the real formatting paths (issue 2157)."""
+
+    def _tools(self, monkeypatch):
+        from ha_mcp.tools import tools_integrations as ti
+
+        monkeypatch.setattr(ti, "get_logger_levels", AsyncMock(return_value={}))
+        client = MagicMock()
+        client.start_options_flow = AsyncMock(
+            return_value={
+                "flow_id": "f1",
+                "type": "form",
+                "data_schema": FLOW_SCHEMA,
+            }
+        )
+        client.abort_options_flow = AsyncMock()
+        return ti.IntegrationTools(client)
+
+    @pytest.mark.asyncio
+    async def test_single_entry_include_schema_redacts_options_and_schema(
+        self, redact_on, monkeypatch
+    ):
+        tools = self._tools(monkeypatch)
+        rows = [
+            {
+                "entry_id": "e1",
+                "domain": "demo",
+                "supports_options": True,
+                "options": {"api_key": "sk-LIVEFLOWSECRET", "host": "1.2.3.4"},
+            }
+        ]
+        resp = await tools._single_entry_from_component(
+            "e1",
+            rows,
+            True,
+            include_subentries=False,
+            include_subentry_schema=False,
+            subentry_type=None,
+            subentry_id=None,
+            show_advanced_options=False,
+        )
+        assert resp["entry"]["options"]["api_key"] == REDACTED_SET
+        assert resp["entry"]["options"]["host"] == "1.2.3.4"
+        schema = resp["options_schema"]["data_schema"]
+        api_field = next(f for f in schema if f.get("name") == "api_key")
+        assert api_field["description"]["suggested_value"] == REDACTED_SET
+
+    @pytest.mark.asyncio
+    async def test_list_page_redacts_options(self, redact_on, monkeypatch):
+        tools = self._tools(monkeypatch)
+        rows = [
+            {
+                "entry_id": "e1",
+                "domain": "demo",
+                "title": "Demo",
+                "state": "loaded",
+                "supports_options": True,
+                "options": {"api_key": "sk-LIVEFLOWSECRET"},
+            }
+        ]
+        resp = await tools._list_entries_from_component(
+            rows, None, None, True, None, 50, 0
+        )
+        assert resp["entries"][0]["options"]["api_key"] == REDACTED_SET
+
+
+class TestScrubObjKeyCollision:
+    def test_colliding_scrubbed_keys_get_suffixes(self):
+        obj = {"SECRETVALUE1": "a", "SECRETVALUE2": "b", "ok": "c"}
+        out = scrub_obj(obj, ("SECRETVALUE1", "SECRETVALUE2"))
+        assert out == {
+            REDACTED_KNOWN: "a",
+            f"{REDACTED_KNOWN}#2": "b",
+            "ok": "c",
+        }
+
+
+class TestMiddlewareNonStringErrorArgs:
+    @pytest.mark.asyncio
+    async def test_dict_arg_scrubbed(self, redact_on):
+        register_known_secret_values(["SECRETVALUE1"])
+        middleware = RedactSecretsMiddleware()
+        call_next = AsyncMock(side_effect=ValueError({"detail": "boom SECRETVALUE1"}))
+        with pytest.raises(ValueError) as exc_info:
+            await middleware.on_call_tool(MagicMock(), call_next)
+        assert exc_info.value.args[0] == {"detail": f"boom {REDACTED_KNOWN}"}

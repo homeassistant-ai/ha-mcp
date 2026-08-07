@@ -15,15 +15,17 @@ surfaces stop returning operator secrets verbatim:
    schema echo (whose ``suggested_value`` carries the live value).
 3. **Every other tool response**: password values seen while serving 1 and 2
    are remembered in a process-local known-secrets set, and
-   :class:`RedactSecretsMiddleware` (registered innermost) scrubs any
+   :class:`RedactSecretsMiddleware` (registered just outside the
+   entity-visibility outbound scan, which stays innermost) scrubs any
    occurrence in any tool response or tool error to ``<redacted>``.
 
 The set/empty sentinel split keeps the genuinely useful diagnostic — "is
 this credential configured at all?" — answerable without disclosing the
-value. ``ha_manage_addon`` rejects submitted option values equal to a
-sentinel so a redacted marker can never be round-tripped into a live add-on
-config (writes still merge from the real, unredacted current options
-server-side).
+value. ``ha_manage_addon`` and the config-entry flow writes reject
+submitted values that are (or contain) a sentinel — unconditionally, not
+only while the flag is on — so a redacted marker can never be round-tripped
+into a live config (add-on writes still merge from the real, unredacted
+current options server-side).
 
 With the flag off (the default) every code path here is a passthrough and
 tool output is byte-identical to the legacy behavior.
@@ -80,6 +82,33 @@ def is_sentinel(value: Any) -> bool:
     return isinstance(value, str) and value in _SENTINELS
 
 
+def carries_sentinel(value: Any) -> bool:
+    """True when ``value`` is or CONTAINS a redaction sentinel.
+
+    The known-value scrub can rewrite a secret embedded in a larger unmarked
+    string (``postgres://u:<redacted>@db``); a caller resubmitting that
+    corrupted value must be rejected just like an exact sentinel.
+    """
+    return isinstance(value, str) and any(s in value for s in _SENTINELS)
+
+
+def harvest_secret_strings(value: Any) -> None:
+    """Register a password-marked value (scalar or ``multiple`` list)."""
+    if isinstance(value, str) and value:
+        register_known_secret_values([value])
+    elif isinstance(value, list):
+        register_known_secret_values(
+            [item for item in value if isinstance(item, str) and item]
+        )
+
+
+def sentinel_replacement(value: Any) -> Any:
+    """Sentinel(s) for a password-marked value, keeping list container shape."""
+    if isinstance(value, list):
+        return [item if is_sentinel(item) else sentinel_for(item) for item in value]
+    return value if is_sentinel(value) else sentinel_for(value)
+
+
 # ---------------------------------------------------------------------------
 # Surface 1: Supervisor add-on options + schema
 # ---------------------------------------------------------------------------
@@ -127,14 +156,9 @@ def redact_addon_options(options: Any, schema: Any) -> Any:
                 ]
             continue
         if entry.get("format") == "password":
-            # multiple: true passwords are a list — keep the container shape
-            # so the option's type survives redaction.
-            if isinstance(value, list):
-                out[name] = [
-                    item if is_sentinel(item) else sentinel_for(item) for item in value
-                ]
-            elif not is_sentinel(value):
-                out[name] = sentinel_for(value)
+            # multiple: true passwords are a list — sentinel_replacement
+            # keeps the container shape so the option's type survives.
+            out[name] = sentinel_replacement(value)
     return out
 
 
@@ -171,13 +195,13 @@ def sentinel_option_keys(options: Any, _prefix: str = "") -> list[str]:
         return keys
     for name, value in options.items():
         path = f"{_prefix}.{name}" if _prefix else str(name)
-        if is_sentinel(value):
+        if carries_sentinel(value):
             keys.append(path)
         elif isinstance(value, dict):
             keys.extend(sentinel_option_keys(value, path))
         elif isinstance(value, list):
             for idx, item in enumerate(value):
-                if is_sentinel(item):
+                if carries_sentinel(item):
                     keys.append(f"{path}[{idx}]")
                 elif isinstance(item, dict):
                     keys.extend(sentinel_option_keys(item, f"{path}[{idx}]"))
@@ -235,13 +259,13 @@ def _redact_flow_schema_in_place(data_schema: list[Any]) -> None:
         description = field.get("description")
         if isinstance(description, dict) and "suggested_value" in description:
             value = description["suggested_value"]
-            register_known_secret_values([value] if isinstance(value, str) else [])
-            description["suggested_value"] = sentinel_for(value)
+            harvest_secret_strings(value)
+            description["suggested_value"] = sentinel_replacement(value)
         for key in ("default", "value"):
             if key in field and field[key] is not None:
                 value = field[key]
-                register_known_secret_values([value] if isinstance(value, str) else [])
-                field[key] = sentinel_for(value)
+                harvest_secret_strings(value)
+                field[key] = sentinel_replacement(value)
 
 
 def redact_options_by_flow_schema(options: Any, data_schema: Any) -> Any:
@@ -270,9 +294,8 @@ def redact_options_by_flow_schema(options: Any, data_schema: Any) -> Any:
         value = out[name]
         if is_sentinel(value):
             continue
-        if isinstance(value, str) and value:
-            register_known_secret_values([value])
-        out[name] = sentinel_for(value)
+        harvest_secret_strings(value)
+        out[name] = sentinel_replacement(value)
     return out
 
 
@@ -362,14 +385,25 @@ def with_serialized_variants(secrets: Sequence[str]) -> tuple[str, ...]:
 
 
 def scrub_obj(obj: Any, secrets: Sequence[str]) -> Any:
-    """Recursively scrub known secret values from a JSON-shaped object."""
+    """Recursively scrub known secret values from a JSON-shaped object.
+
+    Dict keys are scrubbed too (a key can carry a secret); when two scrubbed
+    keys collide, later ones get a deterministic ``#N`` suffix so no entry is
+    silently dropped.
+    """
     if isinstance(obj, str):
         return scrub_text(obj, secrets)
     if isinstance(obj, dict):
-        return {
-            scrub_obj(key, secrets): scrub_obj(value, secrets)
-            for key, value in obj.items()
-        }
+        out: dict[Any, Any] = {}
+        for key, value in obj.items():
+            new_key = scrub_obj(key, secrets)
+            if isinstance(new_key, str) and new_key in out:
+                suffix = 2
+                while f"{new_key}#{suffix}" in out:
+                    suffix += 1
+                new_key = f"{new_key}#{suffix}"
+            out[new_key] = scrub_obj(value, secrets)
+        return out
     if isinstance(obj, list):
         return [scrub_obj(item, secrets) for item in obj]
     return obj
@@ -399,10 +433,10 @@ class RedactSecretsMiddleware(Middleware):
             if redaction_enabled():
                 secrets = with_serialized_variants(known_secret_values())
                 if secrets and getattr(exc, "args", None):
-                    exc.args = tuple(
-                        scrub_text(arg, secrets) if isinstance(arg, str) else arg
-                        for arg in exc.args
-                    )
+                    # scrub_obj covers non-string args too (dicts/lists a
+                    # library packed into the exception); non-JSON-shaped
+                    # args pass through unchanged.
+                    exc.args = tuple(scrub_obj(arg, secrets) for arg in exc.args)
             raise
         if not redaction_enabled():
             return result

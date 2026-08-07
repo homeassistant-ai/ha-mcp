@@ -16,6 +16,7 @@ from typing import Any, NoReturn
 
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
+from ..redaction import redact_flow_schema, redaction_enabled
 from .config_entry_flow_form import (
     _MENU_SELECTION_KEYS,
     _auto_confirm_form_payload,
@@ -269,6 +270,12 @@ async def _raise_flow_api_error(
     # Single introspection round-trip — used by both branches below.
     info = await fetch_helper_flow_info(client, helper_type, menu_choice)
     schema = info.get("schema") or current_schema
+    # An options/reconfigure step's schema carries the persisted values in
+    # description.suggested_value — under redact_secrets those must not ride
+    # into the error context verbatim (#2157). Deep-copies, so the live
+    # flow_result is untouched.
+    if schema is not None and redaction_enabled():
+        schema = redact_flow_schema(schema)
 
     if field_errors:
         # Structured field errors — tell the caller which fields failed.

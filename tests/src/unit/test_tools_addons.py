@@ -4533,21 +4533,6 @@ class TestGetAddonInfoRedaction:
         result = await self._fetch()
         assert result["addon"] == _REDACTION_ADDON_PAYLOAD["result"]
 
-    @pytest.mark.asyncio
-    async def test_toggle_on_without_schema_leaves_options_untouched(self, redact_on):
-        import copy
-
-        payload = copy.deepcopy(_REDACTION_ADDON_PAYLOAD)
-        del payload["result"]["schema"]
-        client = _make_mock_client()
-        with patch(
-            "ha_mcp.tools.tools_addons._supervisor_api_call",
-            new_callable=AsyncMock,
-            return_value=payload,
-        ):
-            result = await get_addon_info(client, "secretful")
-        assert result["addon"]["options"]["github_pat"] == "github_pat_LIVESECRETVALUE"
-
 
 class TestConfigModeSentinelRejection:
     """ha_manage_addon config mode must reject redaction sentinels (issue 2157)."""
@@ -4637,3 +4622,111 @@ class TestGetAddonInfoPasswordLogLevel:
 
         assert result["log_level"] == REDACTED_SET
         assert result["addon"]["options"]["log_level"] == REDACTED_SET
+
+
+class TestProxy403HintRedaction:
+    """The 403 addon_config hint must carry redacted options (issue 2157) —
+    exercised through the REAL get_addon_info, not a pre-baked addon dict."""
+
+    @pytest.mark.asyncio
+    async def test_403_addon_config_options_redacted(
+        self, mock_ingress_session, redact_on
+    ):
+        from ha_mcp.redaction import REDACTED_SET
+
+        client = _make_mock_client()
+        addon_payload = {
+            "success": True,
+            "result": {
+                "name": "Secretful",
+                "slug": "secretful",
+                "state": "started",
+                "ingress": True,
+                "ingress_entry": "/api/hassio_ingress/abc123",
+                "ip_address": "172.30.33.99",
+                "ingress_port": 5000,
+                "options": {"github_pat": "github_pat_LIVESECRETVALUE"},
+                "schema": [
+                    {
+                        "name": "github_pat",
+                        "type": "string",
+                        "format": "password",
+                    }
+                ],
+            },
+        }
+
+        async def fake_request(*, method, url, headers, content):
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = 403
+            response.json.return_value = {}
+            response.text = "{}"
+            return response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value=addon_payload,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = fake_request
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "secretful", "/api/test")
+
+        assert result["status_code"] == 403
+        assert result["addon_config"]["options"] == {"github_pat": REDACTED_SET}
+
+
+class TestGetAddonInfoUnreadableSchema:
+    """Missing/malformed/empty schemas fail closed on the read path (2157)."""
+
+    async def _fetch_with(self, result_payload, redacted=True):
+        import copy
+
+        client = _make_mock_client()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": copy.deepcopy(result_payload)},
+        ):
+            return await get_addon_info(client, "secretful")
+
+    @pytest.mark.asyncio
+    async def test_missing_schema_fails_closed(self, redact_on):
+        from ha_mcp.redaction import REDACTED_SET
+
+        result = await self._fetch_with(
+            {"slug": "s", "options": {"maybe_pw": "hunter2secret"}}
+        )
+        assert result["addon"]["options"] == {"maybe_pw": REDACTED_SET}
+        assert len(result["warnings"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_legacy_dict_schema_fails_closed(self, redact_on):
+        from ha_mcp.redaction import REDACTED_SET
+
+        result = await self._fetch_with(
+            {
+                "slug": "s",
+                "options": {"maybe_pw": "hunter2secret"},
+                "schema": {"maybe_pw": "password"},
+            }
+        )
+        assert result["addon"]["options"] == {"maybe_pw": REDACTED_SET}
+        assert len(result["warnings"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_options_untouched_without_schema(self, redact_on):
+        result = await self._fetch_with({"slug": "s", "options": {}})
+        assert result["addon"]["options"] == {}
+        assert "warnings" not in result

@@ -23,13 +23,12 @@ from ..client.rest_client import (
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from ..redaction import (
+    harvest_secret_strings,
     is_password_flow_field,
-    is_sentinel,
     redact_flow_schema,
     redact_options_by_flow_schema,
     redaction_enabled,
-    register_known_secret_values,
-    sentinel_for,
+    sentinel_replacement,
 )
 from .auto_backup import with_auto_backup
 from .component_api import (
@@ -168,11 +167,11 @@ def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
         if value is not None:
             if redact and is_password_flow_field(field):
                 # Password-marked field (issue #2157): remember the live
-                # value for the global known-value scrub, then emit the
-                # set/empty sentinel instead of the value itself.
-                if isinstance(value, str) and value:
-                    register_known_secret_values([value])
-                out[name] = sentinel_for(value)
+                # value(s) for the global known-value scrub, then emit
+                # set/empty sentinel(s) instead of the value itself
+                # (multiple-value selectors keep their list shape).
+                harvest_secret_strings(value)
+                out[name] = sentinel_replacement(value)
             else:
                 out[name] = value
     return out
@@ -1377,7 +1376,14 @@ class IntegrationTools:
             flow = await self._client.start_options_flow(entry_id)
             flow_id = flow.get("flow_id")
             if flow.get("type") == "form":
-                data_schema = flow.get("data_schema", [])
+                # An empty/missing schema on a form (e.g. a confirm-only
+                # step) classifies nothing — persisted options can outlive
+                # fields removed from the flow, so treat it as unreadable
+                # and take the fail-closed branch below instead of
+                # "redacting" zero fields.
+                candidate = flow.get("data_schema")
+                if isinstance(candidate, list) and candidate:
+                    data_schema = candidate
         except Exception as exc:
             logger.warning(
                 "redact_secrets: options-flow probe failed for %s: %r", entry_id, exc
@@ -1396,8 +1402,7 @@ class IntegrationTools:
             entry["options"] = redact_options_by_flow_schema(options, data_schema)
         else:
             entry["options"] = {
-                key: value if is_sentinel(value) else sentinel_for(value)
-                for key, value in options.items()
+                key: sentinel_replacement(value) for key, value in options.items()
             }
             warnings.append(
                 f"redact_secrets: no options schema readable for {entry_id} — "
