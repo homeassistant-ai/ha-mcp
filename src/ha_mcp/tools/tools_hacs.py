@@ -597,6 +597,7 @@ class HacsTools:
                     "command": "hacs/repository/download",
                     "repository_id": repository_id,
                     "version": version,
+                    "timeout_seconds": 60.0,
                 },
                 raise_error=True,
             )
@@ -726,6 +727,7 @@ class HacsTools:
                 context={
                     "command": "hacs/repository/remove",
                     "repository_id": repository_id,
+                    "timeout_seconds": 60.0,
                 },
                 raise_error=True,
             )

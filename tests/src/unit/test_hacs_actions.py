@@ -179,6 +179,22 @@ class TestManageHacsDownload:
         assert "kaboom" in str(excinfo.value)
         assert "hacs/repository/download" in str(excinfo.value)
 
+    async def test_download_command_timeout_error_reports_real_budget(self, tools):
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            side_effect=HomeAssistantCommandError(
+                "Command failed: backend timeout", "unknown_error"
+            )
+        )
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="download", repository_id="441028036")
+        assert (
+            "Operation 'hacs/repository/download' timed out after 60.0s"
+            in str(excinfo.value)
+        )
+
 
 class TestManageHacsAddRepository:
     async def test_add_repository_translates_category_and_returns_registered_id(
@@ -382,6 +398,25 @@ class TestManageHacsRemove:
             await tools.ha_manage_hacs(action="remove", repository_id="401454435")
         assert "kaboom" in str(excinfo.value)
         assert "hacs/repository/remove" in str(excinfo.value)
+
+    async def test_remove_command_timeout_error_reports_real_budget(self, tools):
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            side_effect=[
+                {"success": True, "result": {"installed": True}},
+                HomeAssistantCommandError(
+                    "Command failed: backend timeout", "unknown_error"
+                ),
+            ]
+        )
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="remove", repository_id="401454435")
+        assert (
+            "Operation 'hacs/repository/remove' timed out after 60.0s"
+            in str(excinfo.value)
+        )
 
     async def test_remove_timeout_says_outcome_is_unknown(self, tools):
         # HACS force-refreshes from GitHub before uninstalling; when that
