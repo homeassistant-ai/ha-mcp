@@ -535,3 +535,19 @@ class TestRedactComponentOptions:
         await tools._redact_component_options("e1", entry, [])
         assert entry["options"] == {}
         tools._client.start_options_flow.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_abort_failure_does_not_break_redaction(self):
+        tools = self._tools_with_flow(
+            {"flow_id": "f1", "type": "form", "data_schema": FLOW_SCHEMA},
+            abort_raises=True,
+        )
+        entry = {
+            "entry_id": "e1",
+            "supports_options": True,
+            "options": {"api_key": "sk-LIVEFLOWSECRET"},
+        }
+        warnings: list[str] = []
+        await tools._redact_component_options("e1", entry, warnings)
+        assert entry["options"] == {"api_key": REDACTED_SET}
+        assert warnings == []

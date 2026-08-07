@@ -1155,12 +1155,12 @@ class IntegrationTools:
 
         # Component options are raw persisted values — under redact_secrets
         # they must be redacted on EVERY read, not only when a schema was
-        # requested (#2157). Skipped when the include_schema fetch below will
-        # run: that path redacts from the schema it fetches anyway, and
-        # running both would double-probe the options flow.
-        if redaction_enabled() and not (
-            include_schema and entry.get("supports_options")
-        ):
+        # requested (#2157). Runs even when the include_schema fetch below
+        # will probe again: that path only redacts when the flow opens with
+        # a form, so relying on it alone would fail OPEN on menu-first flows
+        # and probe failures. Redaction is idempotent, so the double
+        # application costs one extra probe and nothing else.
+        if redaction_enabled():
             redact_warnings: list[str] = []
             await self._redact_component_options(entry_id, entry, redact_warnings)
             if redact_warnings:
@@ -1579,12 +1579,15 @@ class IntegrationTools:
         """List config entries from a component ``config_entries`` read.
 
         The component already filtered by ``domain`` (server-side) and
-        materialized each entry's ``options`` on the row, so there is no
-        per-entry OptionsFlow probe and thus no probe-failure warnings.
-        ``options`` are raw persisted values (a field never set may be absent),
-        may contain ``"**redacted**"`` markers, and have nested option sections
-        additively flattened one level (raw nesting preserved) — see
+        materialized each entry's ``options`` on the row, so the read itself
+        needs no per-entry OptionsFlow probe. ``options`` are raw persisted
+        values (a field never set may be absent), may contain
+        ``"**redacted**"`` markers, and have nested option sections additively
+        flattened one level (raw nesting preserved) — see
         ``ha_get_integration``'s OPTIONS note and ``_flatten_option_sections``.
+        With ``redact_secrets`` on, the returned page IS probed per entry
+        after pagination (``_redact_component_options``) to learn each
+        entry's password markers — the one case where this path probes.
         """
         level_warnings: list[str] = []
         logger_levels = await get_logger_levels(self._client, level_warnings)
@@ -1601,22 +1604,7 @@ class IntegrationTools:
                 formatted["options"] = _flatten_option_sections(
                     formatted.get("options", {})
                 )
-            # Component options are raw persisted values — under
-            # redact_secrets every row must be redacted before the response
-            # (#2157). Probes run per options-flow-bearing entry, mirroring
-            # the legacy list path's per-entry probe fan-out.
-            if redaction_enabled():
-                redact_warnings: list[str] = []
-                await asyncio.gather(
-                    *(
-                        self._redact_component_options(
-                            formatted.get("entry_id"), formatted, redact_warnings
-                        )
-                        for formatted in formatted_entries
-                    )
-                )
-                level_warnings.extend(redact_warnings)
-        return self._finalize_entry_list(
+        result = self._finalize_entry_list(
             formatted_entries,
             domain,
             query,
@@ -1626,6 +1614,24 @@ class IntegrationTools:
             [],
             level_warnings,
         )
+        # Component options are raw persisted values — under redact_secrets
+        # every RETURNED row must be redacted (#2157). Runs on the paginated
+        # slice only: entries outside it are not in the response, and
+        # bounding the probe fan-out to the page keeps the component fast
+        # path from probing an entire installation per list call.
+        if include_opts and redaction_enabled():
+            redaction_warnings: list[str] = []
+            await asyncio.gather(
+                *(
+                    self._redact_component_options(
+                        formatted.get("entry_id"), formatted, redaction_warnings
+                    )
+                    for formatted in result["entries"]
+                )
+            )
+            if redaction_warnings:
+                result.setdefault("warnings", []).extend(redaction_warnings)
+        return result
 
     def _finalize_entry_list(
         self,
