@@ -66,7 +66,10 @@ or constructed — needs no pipeline change.
   rejected when the catalog loads, because the runtime resolves by key
   presence, so an empty value would win over English and render as nothing.
 - `tool_groups`: one entry per renderable MCP tool tag, keyed by the English
-  tag. Not optional, and exact: no key more and none fewer.
+  tag. Not optional, and exact: no key more and none fewer. Blank is rejected
+  here too, but dropping the key is not the escape hatch it is for `messages` —
+  the exact key set forbids that. A heading you have not translated yet keeps
+  the English tag as its value.
 - `tools`: `title` and `description` per tool, keyed by the stable MCP tool
   name. The key set is not optional and exact in the same way; either field on
   its own may be left out, but a missing one counts as untranslated against the

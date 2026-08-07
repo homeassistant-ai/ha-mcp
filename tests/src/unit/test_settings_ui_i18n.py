@@ -257,8 +257,9 @@ def test_blank_catalog_value_is_rejected(
         load_catalogs(tmp_path)
 
 
+@pytest.mark.parametrize("blank", ["", " ", "\n\t "])
 @pytest.mark.parametrize("field", ["title", "description"])
-def test_blank_tool_field_is_rejected(tmp_path: Path, field: str) -> None:
+def test_blank_tool_field_is_rejected(tmp_path: Path, field: str, blank: str) -> None:
     """Same rule on the per-tool surface, which validates separately."""
     (tmp_path / "en.json").write_text(
         json.dumps(
@@ -266,7 +267,7 @@ def test_blank_tool_field_is_rejected(tmp_path: Path, field: str) -> None:
                 "meta": {"native_name": "English", "dir": "ltr"},
                 "messages": {},
                 "tool_groups": {},
-                "tools": {"ha_get_state": {field: "  "}},
+                "tools": {"ha_get_state": {field: blank}},
             }
         ),
         encoding="utf-8",

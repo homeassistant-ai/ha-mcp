@@ -45,8 +45,9 @@ def _validate_string_map(value: Any, *, context: str) -> dict[str, str]:
             raise ValueError(f"{context} must contain only string keys and values")
         if not text.strip():
             raise ValueError(
-                f"{context}.{key} is blank — omit the key instead, so English "
-                "renders as the fallback"
+                f"{context}.{key} is blank — English renders only for an "
+                "absent key, so translate it, or leave the key out where the "
+                "section allows a missing one"
             )
         result[key] = text
     return result

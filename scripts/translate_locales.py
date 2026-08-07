@@ -465,10 +465,13 @@ def _style_sample_keys(
     right-hand side into the prompt, so the pair it contributes shows the model
     nothing to imitate while still counting against the sample budget — and on
     a catalog whose register rests on a single key, that is the whole signal.
-    Nothing upstream stops it reaching here: an engine answer this shape is
-    rejected (`_validate`), but a hand-committed one is only type-checked
-    (`_validate_string_map`), and the parity ceilings count a key untranslated
-    only when it equals the English or is absent, so `""` reads as translated.
+    An engine answer this shape is rejected (`_validate`), and a hand-committed
+    one no longer survives a catalog load (`_validate_string_map`) — but this
+    script reads the catalogs with `json.loads` rather than through
+    `load_catalogs`, so one still reaches here out of a working tree the app has
+    not loaded. The parity ceilings would not object either: they count a key
+    untranslated only when it equals the English or is absent, so `""` reads
+    there as translated.
     """
     return sorted(
         (
