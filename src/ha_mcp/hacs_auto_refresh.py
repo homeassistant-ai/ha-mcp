@@ -150,8 +150,11 @@ async def _refresh_installed_candidates() -> dict[str, Any] | None:
         try:
             await send_hacs_repository_refresh(ws_client, str(repo["id"]))
         except Exception as err:
-            # A user mid legacy->mirror migration has both entries installed;
-            # one failing must not cost the other its refresh.
+            # Both entries read installed only when someone downloaded the
+            # mirror without removing the legacy record — HACS guards against
+            # adding the same repository twice but not against two
+            # repositories sharing a domain. Rare, but one failing must not
+            # cost the other its refresh.
             logger.debug("HACS refresh failed for %s: %s", full_name, err)
             continue
         refreshed.append(full_name)

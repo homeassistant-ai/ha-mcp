@@ -151,9 +151,11 @@ async def _async_force_hacs_repo_refresh(hass: HomeAssistant) -> bool:
     if not installed_candidates:
         return False
 
-    # Every installed candidate, not just the first: a user migrating
-    # legacy->mirror can have BOTH entries installed, each with its own update
-    # entity, and refreshing only the mirror left the legacy one stale.
+    # Every installed candidate, not just the first. Two entries read
+    # installed when the mirror was downloaded without removing the legacy
+    # record — HACS blocks adding the same repository twice but not two
+    # repositories sharing a domain — and each carries its own update entity,
+    # so refreshing only the first left the other stale.
     refreshed_any = False
     for repository in installed_candidates:
         # The repository's "Update information" menu action: re-fetch its
