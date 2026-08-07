@@ -14,12 +14,16 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools.config_entry_flow import (
+    PreparedReconfigure,
     _same_domain_related_entry_ids,
     reconfigure_config_entry,
     set_config_subentry,
 )
 from ha_mcp.tools.config_entry_flow_walker import _handle_config_subentry_flow_steps
-from ha_mcp.tools.tools_integrations import IntegrationTools
+from ha_mcp.tools.tools_integrations import (
+    IntegrationTools,
+    _reconfigure_preflight_token,
+)
 
 
 def test_reconfigure_internal_contract_accepts_only_generic_config() -> None:
@@ -29,6 +33,23 @@ def test_reconfigure_internal_contract_accepts_only_generic_config() -> None:
     assert "config" in parameters
     assert "host" not in parameters
     assert "port" not in parameters
+
+
+def test_reconfigure_apply_contract_uses_one_prepared_request() -> None:
+    """Prepared entry, flow config, and identity travel as one value object."""
+    parameters = inspect.signature(reconfigure_config_entry).parameters
+
+    assert "prepared" in parameters
+    assert "_prepared_entry" not in parameters
+    assert "_prepared_flow_config" not in parameters
+    assert "_prepared_identity" not in parameters
+    assert set(PreparedReconfigure.__dataclass_fields__) >= {
+        "entry_id",
+        "entry",
+        "flow_config",
+        "identity",
+        "expected_identity",
+    }
 
 
 @pytest.mark.asyncio
@@ -77,6 +98,48 @@ def reconfig_entry() -> dict[str, object]:
         "unique_id": "AA:BB:CC:DD:EE:FF",
         "supports_reconfigure": True,
     }
+
+
+def test_reconfigure_token_ignores_volatile_entry_state() -> None:
+    """A reload-state transition must not invalidate the confirmation hash."""
+    entry = {
+        "entry_id": "entry-123",
+        "domain": "shelly",
+        "title": "Living room relay",
+        "state": "setup_retry",
+        "reason": "cannot_connect",
+        "unique_id": "AA:BB:CC:DD:EE:FF",
+        "supports_reconfigure": True,
+    }
+    identity = {"device_ids": ["device-1"], "entity_ids": [], "macs": []}
+    expected_identity = {
+        "device_id": None,
+        "unique_id": None,
+        "mac": None,
+        "entity_ids": [],
+    }
+
+    original = _reconfigure_preflight_token(
+        entry=entry,
+        target_config={"host": "10.0.50.170"},
+        identity=identity,
+        expected_identity=expected_identity,
+    )
+    changed_state = {
+        **entry,
+        "state": "setup_in_progress",
+        "reason": "reloading",
+    }
+
+    assert (
+        _reconfigure_preflight_token(
+            entry=changed_state,
+            target_config={"host": "10.0.50.170"},
+            identity=identity,
+            expected_identity=expected_identity,
+        )
+        == original
+    )
 
 
 @pytest.mark.asyncio
@@ -206,7 +269,7 @@ async def test_reconfigure_fails_when_success_abort_ignores_requested_values(
         )
 
     payload = json.loads(str(exc_info.value))
-    assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
     assert "consum" in payload["error"]["message"].lower()
     assert payload["status"] == "applied_but_incomplete"
     client.abort_config_flow.assert_not_awaited()
@@ -366,6 +429,7 @@ async def test_reconfigure_does_not_verify_setup_retry_as_loaded() -> None:
     )
 
     assert result["status"] == "applied_but_unverified"
+    assert result["verification"]["identity_verification"] == "complete"
     assert result["verification"]["entry_state"] == "setup_retry"
     assert result["verification"]["operational_state_verified"] is False
 
@@ -458,8 +522,8 @@ async def test_reconfigure_step_budget_aborts_pending_flow(
         )
 
     payload = json.loads(str(exc_info.value))
-    assert payload["status"] == "applied_but_unverified"
-    assert payload["rollback"]["manual_required"] is True
+    assert payload["status"] == "flow_aborted_before_apply"
+    assert payload["flow_budget_exhausted"] is True
     client.abort_config_flow.assert_awaited_once_with("flow-budget")
 
 
@@ -707,14 +771,17 @@ async def test_reconfigure_allows_known_auxiliary_domains(
         ]
     )
 
+    identity = {"related_entry_ids": ["primary", "auxiliary"]}
     blocking = await _same_domain_related_entry_ids(
         client,
-        {"related_entry_ids": ["primary", "auxiliary"]},
+        identity,
         entry_id="primary",
         domain="shelly",
     )
 
     assert blocking == []
+    assert identity["auxiliary_related_entry_ids"] == ["auxiliary"]
+    assert identity["blocking_related_entry_ids"] == []
 
 
 @pytest.mark.asyncio
@@ -1110,7 +1177,8 @@ async def test_reconfigure_rejects_stale_confirmation_token(
 
     payload = json.loads(str(exc_info.value))
     assert payload["status"] == "stale_preflight"
-    assert payload["preview"] is True
+    assert payload.get("preview") is not True
+    assert payload.get("context", {}).get("preview") is not True
     client.start_reconfigure_flow.assert_not_awaited()
 
 
@@ -1450,7 +1518,8 @@ async def test_subentry_reconfigure_rejects_unconsumed_values() -> None:
         )
 
     payload = json.loads(str(exc_info.value))
-    assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert payload["status"] == "applied_but_incomplete"
 
 
 @pytest.mark.asyncio
@@ -1484,5 +1553,6 @@ async def test_subentry_reconfigure_step_budget_aborts_pending_flow() -> None:
         )
 
     payload = json.loads(str(exc_info.value))
-    assert payload["status"] == "applied_but_unverified"
+    assert payload["status"] == "flow_aborted_before_apply"
+    assert payload["flow_budget_exhausted"] is True
     client.abort_config_subentry_flow.assert_awaited_once_with("flow-subentry-budget")

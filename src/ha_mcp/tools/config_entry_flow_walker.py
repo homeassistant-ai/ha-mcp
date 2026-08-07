@@ -43,6 +43,7 @@ _RECONFIGURE_SUCCESS_REASONS = frozenset(
         "reconfigure_successful",
     }
 )
+FLOW_ABORTED_BEFORE_APPLY = "flow_aborted_before_apply"
 
 
 class _FlowType(StrEnum):
@@ -494,12 +495,13 @@ def _reconfigure_abort_result(
     if unresolved:
         raise_tool_error(
             create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                ErrorCode.SERVICE_CALL_FAILED,
                 "Reconfigure flow completed without consuming all supplied "
                 "configuration values",
                 suggestions=[
-                    "Match the supplied config keys and menu selections to the "
-                    "flow data_schema/menu_options, then retry.",
+                    "Inspect the existing entry state before taking any further "
+                    "action; Home Assistant may already have applied part of the "
+                    "requested change.",
                 ],
                 context={
                     "flow_id": flow_id,
@@ -799,7 +801,7 @@ async def _handle_flow_steps(
                 "max_steps": max_steps,
                 "flow_budget_exhausted": True,
                 "consumed_menu_selections": consumed_menu_selections,
-                **({"status": "applied_but_unverified"} if is_reconfigure else {}),
+                **({"status": FLOW_ABORTED_BEFORE_APPLY} if is_reconfigure else {}),
             },
         )
     )
@@ -1007,7 +1009,7 @@ async def _handle_config_subentry_flow_steps(
                 "max_steps": max_steps,
                 "flow_budget_exhausted": True,
                 "consumed_menu_selections": consumed_menu_selections,
-                **({"status": "applied_but_unverified"} if is_reconfigure else {}),
+                **({"status": FLOW_ABORTED_BEFORE_APPLY} if is_reconfigure else {}),
             },
         )
     )

@@ -6,11 +6,9 @@ integrations (config entries) via the REST and WebSocket APIs.
 """
 
 import asyncio
-import hashlib
 import hmac
-import json
 import logging
-from typing import Annotated, Any, Literal, NoReturn, get_args
+from typing import Annotated, Any, Literal, NoReturn, cast, get_args
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -25,6 +23,7 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
+from ..utils.config_hash import compute_config_hash
 from .auto_backup import with_auto_backup
 from .component_api import (
     component_supports,
@@ -35,7 +34,7 @@ from .component_api import (
 from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
-    _validate_reconfigure_identity_and_duplicates,
+    PreparedReconfigure,
     build_reconfigure_rollback_metadata,
     create_config_entry,
     prepare_reconfigure_request,
@@ -478,19 +477,24 @@ def _reconfigure_preflight_token(
     identity: dict[str, Any],
     expected_identity: dict[str, Any],
 ) -> str:
-    """Bind confirmation to the exact entry, identity, and requested config."""
-    payload = json.dumps(
-        {
-            "entry": entry,
-            "target_config": target_config,
-            "identity": identity,
-            "expected_identity": expected_identity,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")
-    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+    """Bind confirmation to stable entry identity and requested values.
+
+    Runtime state and error fields are deliberately excluded because Home
+    Assistant may change them while an entry reloads between preflight and
+    confirmation. ``identity`` remains an input for API compatibility, but
+    identity anchors are represented by ``expected_identity`` and the stable
+    entry fields below.
+    """
+    del identity
+    payload = {
+        "entry_id": entry.get("entry_id"),
+        "domain": entry.get("domain"),
+        "unique_id": entry.get("unique_id"),
+        "title": entry.get("title"),
+        "target_config": target_config,
+        "expected_identity": expected_identity,
+    }
+    return f"sha256:{compute_config_hash(payload)}"
 
 
 def _reconfigure_preview_response(
@@ -1737,6 +1741,23 @@ class IntegrationTools:
         matches.sort(key=lambda x: x[0], reverse=True)
         return [match[1] for match in matches]
 
+    @with_auto_backup(
+        domain="integration",
+        id_param="entry_id",
+    )
+    async def _apply_reconfigure_after_confirmation(
+        self,
+        entry_id: str,
+        *,
+        prepared: PreparedReconfigure,
+    ) -> dict[str, Any]:
+        """Capture the normal edit backup only after confirmation validation."""
+        return await reconfigure_config_entry(
+            self._client,
+            entry_id,
+            prepared=prepared,
+        )
+
     async def _run_reconfigure(
         self,
         entry_id: str,
@@ -1761,41 +1782,48 @@ class IntegrationTools:
         official flow with operator intervention; it does not promise automatic
         restoration of connection endpoints or credentials.
         """
-        try:
-            entry_id, entry, target_config = await prepare_reconfigure_request(
-                self._client,
-                entry_id,
-                config=config,
+        if not confirm and confirm_token is not None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "confirm_token requires confirm=True",
+                    suggestions=[
+                        "Set confirm=True to apply with this token, or omit "
+                        "confirm_token to request a fresh preflight."
+                    ],
+                    context={
+                        "entry_id": entry_id,
+                        "status": "confirmation_required",
+                    },
+                )
             )
-            domain = entry["domain"]
+        try:
             expected_identity = {
                 "device_id": expected_device_id,
                 "unique_id": expected_unique_id,
                 "mac": expected_mac,
                 "entity_ids": list(expected_entity_ids or []),
             }
-            identity = await _validate_reconfigure_identity_and_duplicates(
+            prepared = await prepare_reconfigure_request(
                 self._client,
-                entry,
-                entry_id=entry_id,
-                domain=domain,
+                entry_id,
+                config=config,
                 expected_identity=expected_identity,
-                prepared_identity=None,
             )
             current_confirm_token = _reconfigure_preflight_token(
-                entry=entry,
-                target_config=target_config,
-                identity=identity,
-                expected_identity=expected_identity,
+                entry=prepared.entry,
+                target_config=prepared.flow_config,
+                identity=prepared.identity,
+                expected_identity=prepared.expected_identity,
             )
             if not confirm:
                 return _reconfigure_preview_response(
-                    entry_id=entry_id,
-                    domain=domain,
-                    entry=entry,
-                    target_config=target_config,
-                    identity=identity,
-                    expected_identity=expected_identity,
+                    entry_id=prepared.entry_id,
+                    domain=prepared.entry["domain"],
+                    entry=prepared.entry,
+                    target_config=prepared.flow_config,
+                    identity=prepared.identity,
+                    expected_identity=prepared.expected_identity,
                     confirm_token=current_confirm_token,
                 )
             if not confirm_token:
@@ -1824,23 +1852,16 @@ class IntegrationTools:
                         context={
                             "entry_id": entry_id,
                             "status": "stale_preflight",
-                            "preview": True,
-                            "confirm_token": current_confirm_token,
                         },
                     )
                 )
 
-            return await reconfigure_config_entry(
-                self._client,
-                entry_id,
-                config=config,
-                expected_device_id=expected_device_id,
-                expected_unique_id=expected_unique_id,
-                expected_mac=expected_mac,
-                expected_entity_ids=expected_entity_ids,
-                _prepared_entry=entry,
-                _prepared_flow_config=target_config,
-                _prepared_identity=identity,
+            return cast(
+                dict[str, Any],
+                await self._apply_reconfigure_after_confirmation(
+                    entry_id=prepared.entry_id,
+                    prepared=prepared,
+                ),
             )
         except ToolError:
             raise
@@ -1873,11 +1894,9 @@ class IntegrationTools:
     @with_auto_backup(
         domain="integration",
         id_param="entry_id",
-        # A reconfigure preflight is read-only: do not resolve settings, create
-        # a snapshot, or let backup policy affect the confirmation response.
-        skip_fn=lambda kwargs: (
-            bool(kwargs.get("reconfigure")) and not bool(kwargs.get("confirm"))
-        ),
+        # Every reconfigure request validates the entry and confirmation before
+        # the inner apply helper captures the normal edit snapshot.
+        skip_fn=lambda kwargs: bool(kwargs.get("reconfigure")),
     )
     @log_tool_usage
     async def ha_set_integration(

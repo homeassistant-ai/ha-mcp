@@ -28,6 +28,7 @@ import asyncio
 import inspect
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any, Literal, NoReturn
 
 from fastmcp.exceptions import ToolError
@@ -53,6 +54,17 @@ _KNOWN_AUXILIARY_ENTRY_DOMAINS = frozenset(
     {"derivative", "switch_as_x", "threshold", "utility_meter"}
 )
 _DEVICE_CONNECTION_ID_TYPES = frozenset({"ieee", "mac", "zigbee"})
+
+
+@dataclass(frozen=True)
+class PreparedReconfigure:
+    """Validated state shared by reconfigure preflight and confirmed apply."""
+
+    entry_id: str
+    entry: dict[str, Any]
+    flow_config: dict[str, Any]
+    identity: dict[str, Any]
+    expected_identity: dict[str, Any]
 
 
 def build_reconfigure_rollback_metadata(
@@ -882,8 +894,9 @@ async def prepare_reconfigure_request(
     entry_id: str,
     *,
     config: dict[str, Any] | None = None,
-) -> tuple[str, dict[str, Any], dict[str, Any]]:
-    """Prepare one reconfigure request for preflight and confirmed execution."""
+    expected_identity: dict[str, Any] | None = None,
+) -> PreparedReconfigure:
+    """Prepare and validate one reconfigure request for all execution paths."""
     validated_entry_id = validate_identifier_not_empty(
         entry_id,
         "entry_id",
@@ -916,7 +929,29 @@ async def prepare_reconfigure_request(
                 },
             )
         )
-    return validated_entry_id, entry, flow_config
+
+    expected = {
+        "device_id": None,
+        "unique_id": None,
+        "mac": None,
+        "entity_ids": [],
+        **(expected_identity or {}),
+    }
+    identity = await _validate_reconfigure_identity_and_duplicates(
+        client,
+        entry,
+        entry_id=validated_entry_id,
+        domain=domain,
+        expected_identity=expected,
+        prepared_identity=None,
+    )
+    return PreparedReconfigure(
+        entry_id=validated_entry_id,
+        entry=entry,
+        flow_config=flow_config,
+        identity=identity,
+        expected_identity=expected,
+    )
 
 
 async def _validate_reconfigure_identity_and_duplicates(
@@ -1179,9 +1214,7 @@ async def reconfigure_config_entry(
     expected_unique_id: str | None = None,
     expected_mac: str | None = None,
     expected_entity_ids: list[str] | None = None,
-    _prepared_entry: dict[str, Any] | None = None,
-    _prepared_flow_config: dict[str, Any] | None = None,
-    _prepared_identity: dict[str, Any] | None = None,
+    prepared: PreparedReconfigure | None = None,
 ) -> dict[str, Any]:
     """Reconfigure an existing integration through HA's official flow.
 
@@ -1189,14 +1222,60 @@ async def reconfigure_config_entry(
     ``async_step_reconfigure`` and decide how the submitted values are
     validated. The existing config entry is never deleted or recreated.
     """
-    if _prepared_entry is None or _prepared_flow_config is None:
-        entry_id, before, flow_config = await prepare_reconfigure_request(
-            client, entry_id, config=config
+    expected_identity: dict[str, Any] = {
+        "device_id": expected_device_id,
+        "unique_id": expected_unique_id,
+        "mac": expected_mac,
+        "entity_ids": list(expected_entity_ids or []),
+    }
+    if prepared is None:
+        prepared = await prepare_reconfigure_request(
+            client,
+            entry_id,
+            config=config,
+            expected_identity=expected_identity,
         )
     else:
-        entry_id = validate_identifier_not_empty(entry_id, "entry_id")
-        before = _prepared_entry
-        flow_config = dict(_prepared_flow_config)
+        validated_entry_id = validate_identifier_not_empty(entry_id, "entry_id")
+        if validated_entry_id != prepared.entry_id:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Prepared reconfigure state belongs to a different entry_id",
+                    context={
+                        "entry_id": validated_entry_id,
+                        "prepared_entry_id": prepared.entry_id,
+                    },
+                )
+            )
+        if config is not None and config != prepared.flow_config:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "config does not match the prepared reconfigure request",
+                    context={"entry_id": prepared.entry_id},
+                )
+            )
+        supplied_identity = {
+            "device_id": expected_device_id,
+            "unique_id": expected_unique_id,
+            "mac": expected_mac,
+            "entity_ids": list(expected_entity_ids or []),
+        }
+        if any(value is not None for value in supplied_identity.values()) and (
+            supplied_identity != prepared.expected_identity
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Identity anchors do not match the prepared reconfigure request",
+                    context={"entry_id": prepared.entry_id},
+                )
+            )
+
+    entry_id = prepared.entry_id
+    before = prepared.entry
+    flow_config = prepared.flow_config
     domain = before.get("domain")
     if not isinstance(domain, str) or not domain:
         raise_tool_error(
@@ -1206,39 +1285,9 @@ async def reconfigure_config_entry(
                 context={"entry_id": entry_id, "entry": before},
             )
         )
-    if not before.get("supports_reconfigure", False):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Integration '{domain}' does not support the official reconfigure flow",
-                suggestions=[
-                    "Use ha_get_integration(entry_id=...) to inspect the entry; "
-                    "only integrations implementing async_step_reconfigure can be changed this way.",
-                ],
-                context={
-                    "entry_id": entry_id,
-                    "domain": domain,
-                    "supports_reconfigure": False,
-                },
-            )
-        )
 
     rollback_metadata = build_reconfigure_rollback_metadata(entry_id, domain)
-
-    expected_identity: dict[str, Any] = {
-        "device_id": expected_device_id,
-        "unique_id": expected_unique_id,
-        "mac": expected_mac,
-        "entity_ids": list(expected_entity_ids or []),
-    }
-    before_identity = await _validate_reconfigure_identity_and_duplicates(
-        client,
-        before,
-        entry_id=entry_id,
-        domain=domain,
-        expected_identity=expected_identity,
-        prepared_identity=_prepared_identity,
-    )
+    before_identity = prepared.identity
 
     _, result = await _run_reconfigure_flow(
         client,
@@ -1253,7 +1302,7 @@ async def reconfigure_config_entry(
         entry_id=entry_id,
         domain=domain,
         before_identity=before_identity,
-        expected_identity=expected_identity,
+        expected_identity=prepared.expected_identity,
         rollback_metadata=rollback_metadata,
     )
 
