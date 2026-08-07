@@ -30,8 +30,10 @@ from typing import Any
 from ._version import get_version, is_embedded
 from .client.rest_client import (
     HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
+from .config import OAUTH_MODE_TOKEN, get_global_settings
 from .update_check import UpdateInfo, get_update_info, is_update_check_disabled
 from .utils.data_paths import get_data_dir
 
@@ -84,7 +86,10 @@ def _write_marker(marker: dict[str, Any]) -> None:
 
 
 def _nudge_due(
-    current_version: str, info: UpdateInfo | None, marker: dict[str, Any] | None
+    current_version: str,
+    ha_url: str,
+    info: UpdateInfo | None,
+    marker: dict[str, Any] | None,
 ) -> bool:
     """Decide whether this startup should ask HACS for a refresh."""
     if marker is None:
@@ -93,6 +98,11 @@ def _nudge_due(
     if marker.get("server_version") != current_version:
         # The server was just updated, and the paired component release is
         # exactly what HACS needs to surface.
+        return True
+    if marker.get("ha_url") != ha_url:
+        # Same data dir, different Home Assistant target (multi-instance
+        # setups, or a changed HOMEASSISTANT_URL): the recorded pass says
+        # nothing about THIS instance's HACS.
         return True
     # A release appeared while this build sat idle — surface its component side.
     return bool(
@@ -124,6 +134,7 @@ async def _refresh_installed_candidates() -> dict[str, Any] | None:
 
     wanted = {name.lower() for name in CANDIDATE_REPO_FULL_NAMES}
     refreshed: list[str] = []
+    attempted = 0
     for repo in response.get("result", []):
         full_name = (repo.get("full_name") or "").lower()
         # HACS keeps a record for every ADDED repo but only creates an update
@@ -131,6 +142,7 @@ async def _refresh_installed_candidates() -> dict[str, Any] | None:
         # lights up nothing.
         if full_name not in wanted or not repo.get("installed"):
             continue
+        attempted += 1
         try:
             await send_hacs_repository_refresh(ws_client, str(repo["id"]))
         except Exception as err:
@@ -139,12 +151,17 @@ async def _refresh_installed_candidates() -> dict[str, Any] | None:
             logger.debug("HACS refresh failed for %s: %s", full_name, err)
             continue
         refreshed.append(full_name)
+    if attempted and not refreshed:
+        # Every attempted refresh failed — the pass is undetermined, not
+        # complete. Returning a result here would write the marker and cancel
+        # the retry schedule and the next startup's pass (review finding).
+        return None
     return {"hacs": "present", "refreshed": refreshed}
 
 
 async def _refresh_with_retries() -> dict[str, Any] | None:
     """Run the refresh pass, retrying transport failures over ``RETRY_DELAYS``."""
-    result: dict[str, Any] | None = None
+    absent_result: dict[str, Any] | None = None
     for delay in (0.0, *RETRY_DELAYS):
         if delay:
             await asyncio.sleep(delay)
@@ -153,13 +170,22 @@ async def _refresh_with_retries() -> dict[str, Any] | None:
         except (
             HomeAssistantConnectionError,
             HomeAssistantCommandError,
+            HomeAssistantCommandTimeout,
             OSError,
         ) as err:
             logger.debug("HACS repository refresh attempt failed: %s", err)
             continue
-        if result is not None:
-            break
-    return result
+        if result is None:
+            continue
+        if result["hacs"] == "absent":
+            # ``unknown_command`` also happens while HA is still booting,
+            # before HACS registers its WS handlers — indistinguishable from
+            # no HACS at all. Keep retrying; record absence only once the
+            # schedule is exhausted (review finding).
+            absent_result = result
+            continue
+        return result
+    return absent_result
 
 
 async def maybe_refresh_hacs_after_update() -> None:
@@ -172,12 +198,19 @@ async def maybe_refresh_hacs_after_update() -> None:
         if is_update_check_disabled():
             return
 
+        settings = get_global_settings()
+        if settings.homeassistant_token == OAUTH_MODE_TOKEN:
+            # Per-user OAuth mode holds no server-level HA credential — the
+            # nudge would only burn its retry schedule on auth failures.
+            return
+        ha_url = settings.homeassistant_url
+
         current = get_version()
         # Normally a cache hit — the startup banner warms the lru_cache — but
         # offloaded anyway so a cold call can never touch the event loop.
         info = await asyncio.to_thread(get_update_info)
         marker = await asyncio.to_thread(_read_marker)
-        if not _nudge_due(current, info, marker):
+        if not _nudge_due(current, ha_url, info, marker):
             return
 
         result = await _refresh_with_retries()
@@ -192,6 +225,7 @@ async def maybe_refresh_hacs_after_update() -> None:
             _write_marker,
             {
                 "server_version": current,
+                "ha_url": ha_url,
                 "latest": info.latest if info else None,
                 "hacs": result["hacs"],
             },

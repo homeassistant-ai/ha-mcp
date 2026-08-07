@@ -24,8 +24,10 @@ from ha_mcp import hacs_auto_refresh
 from ha_mcp.__main__ import _run_with_shutdown
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
+from ha_mcp.config import OAUTH_MODE_TOKEN
 from ha_mcp.update_check import UpdateInfo
 
 MIRROR, LEGACY = hacs_auto_refresh.CANDIDATE_REPO_FULL_NAMES
@@ -52,16 +54,26 @@ def _ws(repos=(), error=None):
     return ws
 
 
+HA_URL = "http://ha.local:8123"
+
+
 @contextmanager
-def _server(ws, *, info=None, version="1.0.0", embedded=False, disabled=False):
+def _server(
+    ws, *, info=None, version="1.0.0", embedded=False, disabled=False, oauth=False
+):
     """Patch the startup gates, the WS client factory and the HACS refresh call."""
     get_ws = AsyncMock(return_value=ws)
     refresh = AsyncMock(return_value={"success": True})
+    settings = SimpleNamespace(
+        homeassistant_token=OAUTH_MODE_TOKEN if oauth else "a-real-llat",
+        homeassistant_url=HA_URL,
+    )
     with (
         patch("ha_mcp.hacs_auto_refresh.is_embedded", return_value=embedded),
         patch(
             "ha_mcp.hacs_auto_refresh.is_update_check_disabled", return_value=disabled
         ),
+        patch("ha_mcp.hacs_auto_refresh.get_global_settings", return_value=settings),
         patch("ha_mcp.hacs_auto_refresh.get_version", return_value=version),
         patch("ha_mcp.hacs_auto_refresh.get_update_info", return_value=info),
         patch(
@@ -88,36 +100,66 @@ def _refreshed_ids(mocks):
     return [call.args[1] for call in mocks.refresh.await_args_list]
 
 
+def _marker(version="1.0.0", latest="1.0.0", ha_url=HA_URL, **extra):
+    return {"server_version": version, "latest": latest, "ha_url": ha_url, **extra}
+
+
 class TestNudgeDue:
     def test_no_marker_is_due(self):
-        assert hacs_auto_refresh._nudge_due("1.0.0", _info(), None) is True
+        assert hacs_auto_refresh._nudge_due("1.0.0", HA_URL, _info(), None) is True
 
     def test_changed_server_version_is_due(self):
         # The just-updated case: the paired component release is what HACS
         # needs to surface.
-        marker = {"server_version": "0.9.0", "latest": "1.1.0"}
-        assert hacs_auto_refresh._nudge_due("1.0.0", _info(), marker) is True
+        marker = _marker(version="0.9.0", latest="1.1.0")
+        assert hacs_auto_refresh._nudge_due("1.0.0", HA_URL, _info(), marker) is True
+
+    def test_changed_ha_instance_is_due(self):
+        # Shared data dir, different HA target (or a changed
+        # HOMEASSISTANT_URL): one instance's pass must not suppress the
+        # other's nudge.
+        marker = _marker(latest="1.1.0")
+        due = hacs_auto_refresh._nudge_due(
+            "1.0.0", "http://other-ha:8123", _info(), marker
+        )
+        assert due is True
 
     def test_same_version_without_an_update_is_not_due(self):
-        marker = {"server_version": "1.0.0", "latest": "1.0.0"}
+        marker = _marker()
         info = _info(latest="1.0.0", update_available=False)
-        assert hacs_auto_refresh._nudge_due("1.0.0", info, marker) is False
+        assert hacs_auto_refresh._nudge_due("1.0.0", HA_URL, info, marker) is False
 
     def test_release_appearing_since_the_last_pass_is_due(self):
-        marker = {"server_version": "1.0.0", "latest": "1.0.0"}
+        marker = _marker()
         info = _info(latest="1.1.0")
 
-        assert hacs_auto_refresh._nudge_due("1.0.0", info, marker) is True
+        assert hacs_auto_refresh._nudge_due("1.0.0", HA_URL, info, marker) is True
 
     def test_already_recorded_latest_is_not_due(self):
-        marker = {"server_version": "1.0.0", "latest": "1.1.0"}
+        marker = _marker(latest="1.1.0")
         info = _info(latest="1.1.0")
 
-        assert hacs_auto_refresh._nudge_due("1.0.0", info, marker) is False
+        assert hacs_auto_refresh._nudge_due("1.0.0", HA_URL, info, marker) is False
 
     def test_missing_update_info_on_the_same_version_is_not_due(self):
-        marker = {"server_version": "1.0.0", "latest": None}
-        assert hacs_auto_refresh._nudge_due("1.0.0", None, marker) is False
+        marker = _marker(latest=None)
+        assert hacs_auto_refresh._nudge_due("1.0.0", HA_URL, None, marker) is False
+
+
+def test_candidate_names_match_the_component_constants():
+    # CANDIDATE_REPO_FULL_NAMES duplicates the component's constants (the
+    # server package cannot import the component at runtime); this pins the
+    # two sources together so a rename cannot silently strand the server
+    # refresh on stale repository names.
+    from custom_components.ha_mcp_tools.const import (
+        HACS_LEGACY_REPO_FULL_NAME,
+        HACS_MIRROR_REPO_FULL_NAME,
+    )
+
+    assert hacs_auto_refresh.CANDIDATE_REPO_FULL_NAMES == (
+        HACS_MIRROR_REPO_FULL_NAME,
+        HACS_LEGACY_REPO_FULL_NAME,
+    )
 
 
 class TestMarkerFile:
@@ -164,6 +206,18 @@ class TestMaybeRefreshHacsAfterUpdate:
         read_marker.assert_not_called()
         mocks.get_websocket_client.assert_not_awaited()
 
+    async def test_oauth_mode_is_a_no_op(self, data_dir):
+        # Per-user OAuth mode holds no server-level HA credential; the nudge
+        # would only burn its retry schedule on auth failures.
+        with (
+            _server(_ws(), info=_info(), oauth=True) as mocks,
+            patch("ha_mcp.hacs_auto_refresh._read_marker") as read_marker,
+        ):
+            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
+
+        read_marker.assert_not_called()
+        mocks.get_websocket_client.assert_not_awaited()
+
     async def test_both_installed_candidates_are_refreshed(self, data_dir, caplog):
         ws = _ws([_repo(123, MIRROR), _repo(456, LEGACY), _repo(789, "other/repo")])
 
@@ -174,6 +228,7 @@ class TestMaybeRefreshHacsAfterUpdate:
         assert _refreshed_ids(mocks) == ["123", "456"]
         assert _written_marker(data_dir) == {
             "server_version": "1.0.0",
+            "ha_url": HA_URL,
             "latest": "1.1.0",
             "hacs": "present",
         }
@@ -214,7 +269,11 @@ class TestMaybeRefreshHacsAfterUpdate:
         assert _refreshed_ids(mocks) == ["123", "456"]
         assert _written_marker(data_dir)["hacs"] == "present"
 
-    async def test_absent_hacs_is_recorded(self, data_dir):
+    async def test_absent_hacs_is_recorded_only_after_retries_exhaust(self, data_dir):
+        # unknown_command is also what a still-booting HA returns before HACS
+        # registers its WS handlers, so absence must survive the whole retry
+        # schedule before it is recorded. RETRY_DELAYS is trimmed (not
+        # emptied) so the test proves the re-attempt without sleeping long.
         ws = _ws(
             error=HomeAssistantCommandError(
                 "Command failed: unknown command: hacs/repositories/list",
@@ -222,11 +281,32 @@ class TestMaybeRefreshHacsAfterUpdate:
             )
         )
 
-        with _server(ws, info=_info()) as mocks:
+        with (
+            _server(ws, info=_info()) as mocks,
+            patch.object(hacs_auto_refresh, "RETRY_DELAYS", (0.001,)),
+        ):
             await hacs_auto_refresh.maybe_refresh_hacs_after_update()
 
+        # Immediate attempt + one retry: absence was NOT accepted first try.
+        assert ws.send_command.await_count == 2
         mocks.refresh.assert_not_awaited()
         assert _written_marker(data_dir)["hacs"] == "absent"
+
+    async def test_all_refreshes_failing_leaves_the_marker_unwritten(self, data_dir):
+        # list succeeded but every installed candidate's refresh failed — an
+        # undetermined pass must not write the marker, or the retry schedule
+        # and the next startup's pass are both cancelled.
+        ws = _ws([_repo(123, MIRROR), _repo(456, LEGACY)])
+
+        with (
+            _server(ws, info=_info()) as mocks,
+            patch.object(hacs_auto_refresh, "RETRY_DELAYS", ()),
+        ):
+            mocks.refresh.side_effect = HomeAssistantCommandTimeout("no answer")
+            await hacs_auto_refresh.maybe_refresh_hacs_after_update()
+
+        assert mocks.refresh.await_count == 2
+        assert _written_marker(data_dir) is None
 
     async def test_unreachable_hacs_leaves_the_marker_unwritten(self, data_dir):
         # Nothing was determined, so the next startup must retry — which is
@@ -248,9 +328,7 @@ class TestMaybeRefreshHacsAfterUpdate:
         # The stdio hot path: a per-conversation spawn on an unchanged version
         # costs one file read and no WebSocket traffic.
         (data_dir / hacs_auto_refresh.MARKER_FILENAME).write_text(
-            json.dumps(
-                {"server_version": "1.0.0", "latest": "1.1.0", "hacs": "present"}
-            )
+            json.dumps(_marker(latest="1.1.0", hacs="present"))
         )
         ws = _ws([_repo(123, MIRROR)])
 
