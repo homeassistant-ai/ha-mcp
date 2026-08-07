@@ -51,7 +51,7 @@ _NEXT_SECTION_RE = re.compile(r"^## v\d")
 # At most three spaces of indentation: four or more makes the line indented
 # code, not a fence, so treating it as one would open a fence that never
 # closes and silence `<details>` tracking behind it.
-_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+_FENCE_RE = re.compile(r"^( {0,3})(`{3,}|~{3,})(.*)$")
 
 _DETAILS_TAG_RE = re.compile(r"</?details>")
 
@@ -119,27 +119,37 @@ class _OpenBlocks:
     budget check in `cap_to_limit` needs.
     """
 
-    # The delimiter of the open fence ("```", "````", "~~~"), or None.
+    # The delimiter of the open fence ("```", "````", "~~~"), or None, and the
+    # indentation it opened at -- the closer has to reproduce that indentation
+    # or it leaves the container the fence lives in instead of closing it.
     fence: str | None = None
+    fence_indent: str = ""
     details_depth: int = 0
 
     def feed(self, line: str) -> _OpenBlocks:
         """The state after `line`, leaving this instance untouched."""
         match = _FENCE_RE.match(line)
         if match:
-            delimiter, trailing = match.group(1), match.group(2)
-            if self.fence is None:
-                return replace(self, fence=delimiter)
-            # Only the same character, repeated at least as often and carrying
-            # nothing but whitespace, closes it. A closing fence cannot have an
-            # info string, so ```python inside a ```-block is ordinary content.
-            if (
-                delimiter[0] == self.fence[0]
-                and len(delimiter) >= len(self.fence)
-                and not trailing.strip()
-            ):
-                return replace(self, fence=None)
-            return self
+            indent, delimiter, trailing = match.group(1), match.group(2), match.group(3)
+            if self.fence is not None:
+                # Only the same character, repeated at least as often and
+                # carrying nothing but whitespace, closes it. A closing fence
+                # cannot have an info string, so ```python inside a ```-block
+                # is ordinary content.
+                if (
+                    delimiter[0] == self.fence[0]
+                    and len(delimiter) >= len(self.fence)
+                    and not trailing.strip()
+                ):
+                    return replace(self, fence=None, fence_indent="")
+                return self
+            # A backtick fence's info string may not itself contain a backtick.
+            # GFM reads such a line as ordinary text, so opening a fence here
+            # would make the closer emitted later read as a new opening fence
+            # and swallow everything after it, the notice included.
+            if delimiter[0] != "`" or "`" not in trailing:
+                return replace(self, fence=delimiter, fence_indent=indent)
+            # Not a fence after all -- fall through and treat it as text.
         if self.fence:  # `<details>` inside a code block is text, not markup
             return self
         # Left to right, clamping after each close, rather than netting the
@@ -153,7 +163,7 @@ class _OpenBlocks:
     @property
     def closers(self) -> str:
         """The suffix that closes everything still open, innermost first."""
-        fence = f"\n{self.fence}" if self.fence else ""
+        fence = f"\n{self.fence_indent}{self.fence}" if self.fence else ""
         return fence + _DETAILS_CLOSE * self.details_depth
 
 

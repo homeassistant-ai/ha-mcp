@@ -112,9 +112,15 @@ def test_the_heading_pattern_still_matches_the_real_changelog() -> None:
     version = pyproject["project"]["version"]
     changelog = (_REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
-    assert extract.extract_section(changelog, version) != "", (
-        f"no changelog section extracted for the current version {version} — "
-        "the heading format and the extractor's regexes have drifted apart"
+    section = extract.extract_section(changelog, version)
+
+    # Truthiness, not `!= ""`: a missing heading returns None, and `None != ""`
+    # is true, so the looser assertion stayed green in the exact scenario this
+    # test exists to catch.
+    assert section, (
+        f"no changelog section extracted for the current version {version} "
+        f"(got {section!r}) — the heading format and the extractor's regexes "
+        "have drifted apart"
     )
 
 
@@ -253,13 +259,34 @@ def test_an_info_string_line_does_not_close_an_open_fence() -> None:
     assert _after("```python\n", "```python\n", "```   \n").closers == ""
 
 
+def test_a_backtick_info_string_containing_a_backtick_is_not_a_fence() -> None:
+    """GFM forbids backticks in a backtick fence's info string.
+
+    Opening a fence on such a line means the closer emitted later reads as a
+    *new* opening fence, putting the truncation notice inside code to EOF.
+    """
+    assert _after("```py`x\n").closers == "", "opened a fence GFM would not open"
+    assert _after("```py\n").closers == "\n```"
+    # The restriction is specific to backticks; tilde info strings may hold them.
+    assert _after("~~~py`x\n").closers == "\n~~~"
+
+
+def test_a_closer_reproduces_the_indentation_its_fence_opened_at() -> None:
+    """An unindented closer exits the list container instead of closing the fence."""
+    assert _after("  ~~~\n").closers == "\n  ~~~"
+    assert _after("   ```py\n").closers == "\n   ```"
+    assert _after("```py\n").closers == "\n```"
+
+
 def test_four_space_indentation_is_indented_code_not_a_fence() -> None:
     """GFM allows at most three spaces before a fence; four makes it a code block.
 
     Treating an indented code sample as a fence opens one that never closes,
     which also silences `<details>` tracking for everything behind it.
     """
-    assert _after("   ```python\n").closers == "\n```", "three spaces is still a fence"
+    assert _after("   ```python\n").closers == "\n   ```", (
+        "three spaces is still a fence, and its closer keeps that indentation"
+    )
     assert _after("    ```python\n").closers == "", "four spaces is indented code"
     assert _after("\t```python\n").closers == "", "a tab indents past the fence limit"
 
