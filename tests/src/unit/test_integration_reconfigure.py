@@ -379,6 +379,76 @@ async def test_reconfigure_allows_offline_entry_with_registry_identity() -> None
 
 
 @pytest.mark.asyncio
+async def test_reconfigure_apply_accepts_prepared_identity_anchors() -> None:
+    """The confirmed path must preserve anchors carried by PreparedReconfigure."""
+    entry = {
+        "entry_id": "prepared-entry",
+        "domain": "shelly",
+        "state": "loaded",
+        "supports_reconfigure": True,
+    }
+    after = {**entry, "unique_id": "84FCE6387220"}
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=after)
+    client.list_entity_registry = AsyncMock(
+        return_value=[
+            {
+                "entity_id": "switch.prepared",
+                "config_entry_id": "prepared-entry",
+                "device_id": "device-prepared",
+            }
+        ]
+    )
+    client.list_device_registry = AsyncMock(
+        return_value=[
+            {
+                "id": "device-prepared",
+                "connections": [["mac", "84:FC:E6:38:72:20"]],
+            }
+        ]
+    )
+    client.list_config_entries = AsyncMock(return_value=[after])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "prepared-flow",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+    prepared = PreparedReconfigure(
+        entry_id="prepared-entry",
+        entry=entry,
+        flow_config={"host": "10.0.50.170"},
+        identity={
+            "device_ids": ["device-prepared"],
+            "entity_ids": ["switch.prepared"],
+            "macs": ["84FCE6387220"],
+        },
+        expected_identity={
+            "device_id": "device-prepared",
+            "unique_id": None,
+            "mac": None,
+            "entity_ids": ["switch.prepared"],
+        },
+    )
+
+    result = await reconfigure_config_entry(
+        client,
+        "prepared-entry",
+        prepared=prepared,
+    )
+
+    assert result["success"] is True
+    assert result["status"] == "applied_but_unverified"
+    client.submit_config_flow_step.assert_awaited_once_with(
+        "prepared-flow", {"host": "10.0.50.170"}
+    )
+
+
+@pytest.mark.asyncio
 async def test_reconfigure_does_not_verify_setup_retry_as_loaded() -> None:
     """Identity preservation is insufficient when HA leaves the entry degraded."""
     before = {

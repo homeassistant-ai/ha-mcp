@@ -1357,9 +1357,12 @@ async def reconfigure_config_entry(
             "mac": expected_mac,
             "entity_ids": list(expected_entity_ids or []),
         }
-        if any(value is not None for value in supplied_identity.values()) and (
-            supplied_identity != prepared.expected_identity
-        ):
+        if (
+            expected_device_id is not None
+            or expected_unique_id is not None
+            or expected_mac is not None
+            or expected_entity_ids is not None
+        ) and supplied_identity != prepared.expected_identity:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
