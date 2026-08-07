@@ -171,9 +171,14 @@ jobs:
         VERSION="${{ steps.semantic.outputs.version }}"
         TAG="v${VERSION}"
 
-        # Extract changelog for this version (content between version headers)
-        awk -v ver="## v${VERSION}" '$0 ~ "^"ver {found=1; next} found && /^## v[0-9]/ {exit} found' CHANGELOG.md > release_notes.md
+        # Extract changelog for this version, capped at GitHub's release-body limit
+        # (an over-long body is a 422 that strands the already-pushed tag).
+        python3 scripts/extract_release_notes.py --version "$VERSION" --out release_notes.md
         if [ ! -s release_notes.md ]; then
+          # An empty extract means either no "## v${VERSION}" heading or an
+          # empty section, and the file cannot tell those apart — so warn
+          # instead of letting a one-line release body pass for a normal run.
+          echo "::warning::no changelog section extracted for v${VERSION} — releasing with fallback notes"
           echo "Release v${VERSION}" > release_notes.md
         fi
 
