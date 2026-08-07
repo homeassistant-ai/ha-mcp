@@ -92,6 +92,20 @@ class TestGetHacsInfo:
         ws.send_command.assert_awaited_once()
         assert ws.send_command.await_args.args[0] == "hacs/repository/info"
 
+    async def test_info_command_error_keeps_command_context(self, tools):
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            side_effect=HomeAssistantCommandError(
+                "Command failed: kaboom", "unknown_error"
+            )
+        )
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_get_hacs_info(action="info", repository_id="441028036")
+        assert "kaboom" in str(excinfo.value)
+        assert "hacs/repository/info" in str(excinfo.value)
+
 
 class TestManageHacsDownload:
     async def test_download_defaults_version_to_latest(self, tools):
@@ -133,6 +147,37 @@ class TestManageHacsDownload:
             wait_mock.await_args.kwargs.get("timeout")
             == HACS_RESOLVE_REGISTRATION_TIMEOUT
         )
+
+    async def test_download_timeout_reports_the_real_budget(self, tools):
+        # Download runs on the same 60 s budget as remove/refresh; without its
+        # own timeout context the classifier claims the 30 s default, and a
+        # false failure invites a blind retry of work HACS finishes anyway.
+        from ha_mcp.client.rest_client import HomeAssistantCommandTimeout
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            side_effect=HomeAssistantCommandTimeout("Command timeout")
+        )
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="download", repository_id="441028036")
+        msg = str(excinfo.value)
+        assert "60" in msg
+        assert "Operation 'hacs/repository/download'" in msg
+        assert "may still have completed" in msg
+
+    async def test_download_command_error_keeps_command_context(self, tools):
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            side_effect=HomeAssistantCommandError(
+                "Command failed: kaboom", "unknown_error"
+            )
+        )
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="download", repository_id="441028036")
+        assert "kaboom" in str(excinfo.value)
+        assert "hacs/repository/download" in str(excinfo.value)
 
 
 class TestManageHacsAddRepository:
@@ -511,6 +556,28 @@ class TestManageHacsUpdateInformation:
                 action="update_information", repository_id="441028036"
             )
         assert "60" in str(excinfo.value)
+        assert "hacs/repository/refresh" in str(excinfo.value)
+        # The rendered message must name the command that timed out. Without
+        # the command fallback in the classifier it reads "Operation
+        # 'operation' timed out", which no other assertion here would catch.
+        assert "Operation 'hacs/repository/refresh'" in str(excinfo.value)
+
+    async def test_update_information_command_error_keeps_command_context(self, tools):
+        # The raised path is the one real HACS failures take; the dict branch
+        # below it only serves stubbed clients.
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            side_effect=HomeAssistantCommandError(
+                "Command failed: kaboom", "unknown_error"
+            )
+        )
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(
+                action="update_information", repository_id="441028036"
+            )
+        assert "kaboom" in str(excinfo.value)
         assert "hacs/repository/refresh" in str(excinfo.value)
 
     async def test_update_information_failed_response_raises(self, tools):

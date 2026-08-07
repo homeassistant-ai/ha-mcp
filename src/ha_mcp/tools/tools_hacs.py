@@ -465,10 +465,23 @@ class HacsTools:
         # If repository_id contains a slash, it's a GitHub path - look up numeric ID
         actual_id, _ = await _resolve_hacs_repo_id(ws_client, repository_id)
 
-        # Get repository info via WebSocket using numeric ID
-        response = await ws_client.send_command(
-            "hacs/repository/info", repository_id=actual_id
-        )
+        # Get repository info via WebSocket using numeric ID. The WS client
+        # RAISES on a failed result frame, so that — not the dict branch
+        # below, which serves stubbed clients — is where a real HACS failure
+        # lands; keep the command context attached (mirrors ``_hacs_remove``).
+        try:
+            response = await ws_client.send_command(
+                "hacs/repository/info", repository_id=actual_id
+            )
+        except HomeAssistantCommandError as cmd_err:
+            exception_to_structured_error(
+                cmd_err,
+                context={
+                    "command": "hacs/repository/info",
+                    "repository_id": repository_id,
+                },
+                raise_error=True,
+            )
 
         if not response.get("success"):
             exception_to_structured_error(
@@ -553,9 +566,40 @@ class HacsTools:
         # Download/install the repository. Same 60 s budget as remove: HACS
         # refreshes from GitHub before acting, and a slow GitHub past the
         # 30 s default reports a false failure for work that completes.
-        response = await ws_client.send_command(
-            "hacs/repository/download", _wait_timeout=60.0, **download_kwargs
-        )
+        try:
+            response = await ws_client.send_command(
+                "hacs/repository/download", _wait_timeout=60.0, **download_kwargs
+            )
+        except HomeAssistantCommandTimeout as timeout_err:
+            # Same false-failure shape remove documents: HACS finishes the
+            # download regardless, so name the real 60 s budget (the generic
+            # classifier would claim 30) and say the outcome is unknown
+            # instead of inviting a blind retry.
+            exception_to_structured_error(
+                timeout_err,
+                context={
+                    "command": "hacs/repository/download",
+                    "repository_id": repository_id,
+                    "version": version,
+                    "timeout_seconds": 60.0,
+                },
+                suggestions=[
+                    "The download may still have completed on the HACS side — "
+                    "verify with ha_get_hacs_info(action='info', "
+                    f"repository_id='{actual_id}') before retrying",
+                ],
+                raise_error=True,
+            )
+        except HomeAssistantCommandError as cmd_err:
+            exception_to_structured_error(
+                cmd_err,
+                context={
+                    "command": "hacs/repository/download",
+                    "repository_id": repository_id,
+                    "version": version,
+                },
+                raise_error=True,
+            )
 
         if not response.get("success"):
             exception_to_structured_error(
@@ -749,6 +793,22 @@ class HacsTools:
                 suggestions=[
                     "GitHub may be slow; the refresh is safe to retry",
                 ],
+                raise_error=True,
+            )
+        except HomeAssistantCommandError as cmd_err:
+            # The WS client RAISES on a failed result frame (it never returns
+            # success=False), so this — not the dict branch below, which
+            # serves stubbed clients — is where a real HACS refresh failure
+            # lands. ``timeout_seconds`` rides along because a HACS-side
+            # message containing "timeout" routes to the by-message timeout
+            # branch, which would otherwise claim 30 s against this budget.
+            exception_to_structured_error(
+                cmd_err,
+                context={
+                    "command": "hacs/repository/refresh",
+                    "repository_id": repository_id,
+                    "timeout_seconds": HACS_REFRESH_TIMEOUT,
+                },
                 raise_error=True,
             )
 
