@@ -171,8 +171,11 @@ class Settings(BaseSettings):
     # and integration option fields marked with a password selector are
     # replaced with set/empty sentinels, and any tool response is scrubbed
     # of secret values already seen while serving those surfaces (see
-    # redaction.py). Off by default: current behavior is unchanged unless
-    # the operator opts in.
+    # redaction.py). Off by default; no redaction runs while off, with one
+    # deliberate exception: the sentinel write guards are unconditional, so
+    # a submitted value that is or contains a redaction marker is rejected
+    # even with the flag off — a marker captured while it was on must never
+    # overwrite a live credential.
     redact_secrets: bool = Field(False, alias="REDACT_SECRETS")
 
     # Master beta-features toggle. UI-only — intentionally not in any

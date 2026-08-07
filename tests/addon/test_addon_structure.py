@@ -144,7 +144,8 @@ class TestAddonStructure:
             # tool on upgrade).
             "read_only_mode": ("bool?", False),
             # Redact Secrets (#2157) — non-beta safety toggle, default OFF
-            # (current behavior unchanged unless the operator opts in).
+            # (no redaction runs while off; the sentinel write guards are
+            # unconditional — see config.py).
             "redact_secrets": ("bool?", False),
             # Policy-editing tool (#2148) — non-beta, default OFF (an
             # on-by-default value would hand every connected agent the

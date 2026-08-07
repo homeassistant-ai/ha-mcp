@@ -27,8 +27,9 @@ only while the flag is on — so a redacted marker can never be round-tripped
 into a live config (add-on writes still merge from the real, unredacted
 current options server-side).
 
-With the flag off (the default) every code path here is a passthrough and
-tool output is byte-identical to the legacy behavior.
+With the flag off (the default) every redaction path here is a passthrough
+and tool output is byte-identical to the legacy behavior. The sentinel write
+guards are the deliberate exception and stay active either way.
 """
 
 from __future__ import annotations
