@@ -4581,6 +4581,33 @@ class TestConfigModeSentinelRejection:
         assert "github_pat_LIVESECRETVALUE" in known_secret_values()
 
     @pytest.mark.asyncio
+    async def test_newly_written_password_is_registered_for_the_scrub(self, redact_on):
+        # A password submitted through this path is live from the moment it
+        # is written; registering only the pre-write current options would
+        # leave it unscrubbed in logs and diagnostics until some later read
+        # happened to harvest it.
+        import copy
+
+        from ha_mcp.redaction import known_secret_values
+
+        responses = [
+            copy.deepcopy(_REDACTION_ADDON_PAYLOAD),
+            {"success": True, "result": {}},
+        ]
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=responses,
+        ):
+            await self._tools()._execute_config_mode(
+                "secretful", {"options": {"github_pat": "github_pat_BRANDNEWVALUE"}}
+            )
+        assert "github_pat_BRANDNEWVALUE" in known_secret_values()
+        # The replaced value stays registered too — it can still appear in
+        # already-captured logs.
+        assert "github_pat_LIVESECRETVALUE" in known_secret_values()
+
+    @pytest.mark.asyncio
     async def test_toggle_off_still_rejects_sentinels(self, redact_off):
         # Deliberately NOT gated on the toggle: a sentinel captured while
         # redaction was on must not overwrite a credential after the

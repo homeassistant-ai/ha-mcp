@@ -2129,12 +2129,17 @@ class AddOnTools:
             current_options: dict = addon_info.get("options") or {}
             merged_options = _merge_options(current_options, config_data["options"])
 
-            # The live current options are password-bearing; remember them
-            # for the global known-value scrub (this path fetches info
-            # directly, bypassing get_addon_info's harvesting).
+            # Both the live current options and the merged result are
+            # password-bearing; remember them for the global known-value
+            # scrub (this path fetches info directly, bypassing
+            # get_addon_info's harvesting). The merged copy carries any
+            # password the caller is submitting right now — without it a
+            # freshly written secret stays unknown to the scrub until some
+            # later read harvests it.
             if redaction_enabled() and isinstance(addon_info.get("schema"), list):
                 register_known_secret_values(
                     collect_addon_secret_values(current_options, addon_info["schema"])
+                    | collect_addon_secret_values(merged_options, addon_info["schema"])
                 )
 
             # Pre-write schema check: identify fields not in the add-on's schema.
