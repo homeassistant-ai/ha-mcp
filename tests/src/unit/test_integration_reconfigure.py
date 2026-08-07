@@ -1572,6 +1572,57 @@ async def test_reconfigure_reads_mac_from_device_identifiers(
 
 
 @pytest.mark.asyncio
+async def test_reconfigure_rejects_expected_mac_when_after_registry_loses_it(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """An expected hardware anchor must remain verifiable after apply."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, reconfig_entry])
+    client.list_entity_registry = AsyncMock(return_value=[])
+    client.list_device_registry = AsyncMock(
+        side_effect=[
+            [
+                {
+                    "id": "device-living-room",
+                    "config_entries": ["entry-123"],
+                    "connections": [["mac", "AA:BB:CC:DD:EE:FF"]],
+                }
+            ],
+            [
+                {
+                    "id": "device-living-room",
+                    "config_entries": ["entry-123"],
+                    "connections": [],
+                }
+            ],
+        ]
+    )
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-missing-after-mac",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client,
+            "entry-123",
+            config={"host": "10.0.50.188"},
+            expected_mac="AA:BB:CC:DD:EE:FF",
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == "applied_but_unverified"
+    assert "expected MAC" in payload["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_reconfigure_rejects_mac_identity_drift(
     reconfig_entry: dict[str, object],
 ) -> None:

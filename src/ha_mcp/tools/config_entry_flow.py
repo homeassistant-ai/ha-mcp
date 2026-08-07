@@ -703,11 +703,7 @@ def _verify_reconfigure_identity_fields(
             after=after_identity,
             expected=expected_identity,
         )
-    if (
-        expected_device_id is not None
-        and after_identity.get("device_registry_available")
-        and expected_device_id not in after_device_ids
-    ):
+    if expected_device_id is not None and expected_device_id not in after_device_ids:
         _raise_identity_mismatch(
             entry_id,
             "Reconfigure result does not match expected device_id",
@@ -731,11 +727,7 @@ def _verify_reconfigure_identity_fields(
             after=after_identity,
             expected=expected_identity,
         )
-    if (
-        expected_entity_ids
-        and after_identity.get("entity_registry_available")
-        and after_entity_ids != expected_entity_ids
-    ):
+    if expected_entity_ids and after_entity_ids != expected_entity_ids:
         _raise_identity_mismatch(
             entry_id,
             "Reconfigure result does not match expected entity_ids",
@@ -755,15 +747,16 @@ def _verify_reconfigure_identity_fields(
             after=after_identity,
             expected=expected_identity,
         )
-    if expected_mac is not None:
-        if after_macs and _normalise_identity_value(expected_mac) not in after_macs:
-            _raise_identity_mismatch(
-                entry_id,
-                "Reconfigure result does not match expected MAC",
-                before=before_identity,
-                after=after_identity,
-                expected=expected_identity,
-            )
+    if expected_mac is not None and (
+        not after_macs or _normalise_identity_value(expected_mac) not in after_macs
+    ):
+        _raise_identity_mismatch(
+            entry_id,
+            "Reconfigure result does not match expected MAC",
+            before=before_identity,
+            after=after_identity,
+            expected=expected_identity,
+        )
 
 
 async def _verify_reconfigured_entry(
@@ -890,7 +883,11 @@ async def _verify_reconfigured_entry(
         "operational_state_verified": after.get("state") == "loaded",
         "entry_id_preserved": True,
         "domain_preserved": True,
-        "unique_id_preserved": before_unique_id is not None,
+        "unique_id_preserved": (
+            before_unique_id == after_unique_id
+            if before_unique_id is not None and after_unique_id is not None
+            else None
+        ),
         "unique_id_verification": (
             _verification_state(
                 before_unique_id is not None,
