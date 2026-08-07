@@ -21,6 +21,7 @@ from ..errors import ErrorCode, create_error_response
 from .hacs_registration import (
     CATEGORY_MAP,
     HACS_ADD_REGISTRATION_TIMEOUT,
+    HACS_REFRESH_TIMEOUT,
     HACS_RESOLVE_REGISTRATION_TIMEOUT,
     _filter_and_score_repos,
     send_hacs_repository_refresh,
@@ -279,7 +280,7 @@ class HacsTools:
             Field(description="Repository category (action='add_repository')"),
         ] = None,
     ) -> dict[str, Any]:
-        """Manage HACS (Home Assistant Community Store) — install/update, remove, or add custom repositories.
+        """Manage HACS (Home Assistant Community Store) — install/update, remove, add custom repositories, or refresh repository information.
 
         Use ``action="download"`` to install or update a repository,
         ``action="remove"`` to uninstall a downloaded repository, or
@@ -662,6 +663,7 @@ class HacsTools:
                 context={
                     "command": "hacs/repository/remove",
                     "repository_id": repository_id,
+                    "timeout_seconds": 60.0,
                 },
                 suggestions=[
                     "The removal may still have completed on the HACS side — "
@@ -730,7 +732,25 @@ class HacsTools:
 
         actual_id, repo_name = await _resolve_hacs_repo_id(ws_client, repository_id)
 
-        response = await send_hacs_repository_refresh(ws_client, actual_id)
+        # Without the explicit timeout context, the generic classifier reports
+        # its 30 s default — a false claim against this call's 60 s budget.
+        # The refresh is idempotent, so unlike remove no unknown-outcome
+        # warning is needed: retrying a completed refresh is harmless.
+        try:
+            response = await send_hacs_repository_refresh(ws_client, actual_id)
+        except HomeAssistantCommandTimeout as timeout_err:
+            exception_to_structured_error(
+                timeout_err,
+                context={
+                    "command": "hacs/repository/refresh",
+                    "repository_id": repository_id,
+                    "timeout_seconds": HACS_REFRESH_TIMEOUT,
+                },
+                suggestions=[
+                    "GitHub may be slow; the refresh is safe to retry",
+                ],
+                raise_error=True,
+            )
 
         if not response.get("success"):
             exception_to_structured_error(
@@ -749,9 +769,9 @@ class HacsTools:
                 "repository": repo_name,
                 "message": f"Refreshed repository information for {repo_name}",
                 "note": (
-                    "HACS re-fetched this repository's release data from GitHub; "
-                    "a pending update is now visible in HACS and on its update "
-                    "entity."
+                    "HACS re-fetched this repository's release data from GitHub. "
+                    "If a newer release exists, HACS now shows it (and, for "
+                    "downloaded repositories, so does the update entity)."
                 ),
                 "data": response.get("result", {}),
             },

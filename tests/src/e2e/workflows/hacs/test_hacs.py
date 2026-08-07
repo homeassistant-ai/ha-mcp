@@ -739,10 +739,14 @@ async def test_hacs_update_information(mcp_client):
 
     if not data.get("success"):
         # The refresh re-fetches from GitHub, so an unreachable / rate-limited
-        # GitHub is an environment limitation, not a tool failure.
+        # GitHub is an environment limitation, not a tool failure. Only those
+        # reasons may skip: the broad is_hacs_unavailable matcher classifies
+        # EVERY INTERNAL_ERROR as unavailable, which would silently skip past
+        # an implementation defect (the search probe above already covered
+        # HACS availability itself).
         unavailable, reason = is_hacs_unavailable(data)
-        if unavailable:
-            pytest.skip(f"HACS not available: {reason}")
+        if unavailable and reason in ("GitHub rate limit", "GitHub access issue"):
+            pytest.skip(f"GitHub not reachable from HACS: {reason}")
 
     assert data.get("success") is True, f"Refresh failed: {data.get('error')}"
     assert data.get("repository_id"), "Response should include repository_id"

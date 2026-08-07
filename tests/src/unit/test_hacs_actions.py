@@ -497,6 +497,22 @@ class TestManageHacsUpdateInformation:
         assert "do not apply" in str(excinfo.value)
         ws.send_command.assert_not_awaited()
 
+    async def test_update_information_timeout_reports_the_real_budget(self, tools):
+        # The generic timeout classifier defaults to a 30 s message; the
+        # refresh handler must attach its actual 60 s budget instead.
+        from ha_mcp.client.rest_client import HomeAssistantCommandTimeout
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(
+            side_effect=HomeAssistantCommandTimeout("Command timeout")
+        )
+        with _patched_hacs(ws), pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(
+                action="update_information", repository_id="441028036"
+            )
+        assert "60" in str(excinfo.value)
+        assert "hacs/repository/refresh" in str(excinfo.value)
+
     async def test_update_information_failed_response_raises(self, tools):
         ws = AsyncMock()
         ws.send_command = AsyncMock(
