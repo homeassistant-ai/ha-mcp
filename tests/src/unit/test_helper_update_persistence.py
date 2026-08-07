@@ -887,6 +887,7 @@ class TestFlowHelperRouting:
                 "result": {"entry_id": "entry-r1", "title": "m", "domain": "min_max"},
             }
         )
+
         # The area-registry preflight (issue #2159, fail-closed) must
         # succeed; every OTHER send_websocket_message — including the
         # post-create entity_registry/list under test — raises, simulating a
