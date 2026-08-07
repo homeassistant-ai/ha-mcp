@@ -47,6 +47,11 @@ options:
   enable_tool_search: false
   tool_search_max_results: 5
   enable_tool_security_policies: false
+  # Registers ha_manage_security_policy, which can rewrite the policies the
+  # option above enforces. Declared here (not beta) because the web UI's
+  # Policies-tab toggle routes its save through Supervisor in add-on mode,
+  # which rejects any option the schema does not declare.
+  enable_security_policy_tool: false
   read_only_mode: false
   enable_mandatory_bps: true
   enable_strict_mandatory_bps: true
@@ -68,6 +73,7 @@ schema:
   enable_tool_search: bool?
   tool_search_max_results: int(2,10)?
   enable_tool_security_policies: bool?
+  enable_security_policy_tool: bool?
   read_only_mode: bool?
   enable_mandatory_bps: bool?
   enable_strict_mandatory_bps: bool?

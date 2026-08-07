@@ -1121,9 +1121,10 @@ def test_the_tools_share_counts_both_english_renderings() -> None:
 
     A description pasted from the *parsed* English of a feature-gated tool is
     English on screen but byte-differs from the rendered text, so counting only
-    the rendered one reads it as translated. Six of the 174 keys differ between
-    the renderings today — 3.4%, invisible under the ceiling on their own and
-    enough to hide a genuinely untranslated remainder underneath it.
+    the rendered one reads it as translated. A handful of keys (the
+    feature-gated stubs) differ between the renderings — a small share,
+    invisible under the ceiling on their own and enough to hide a genuinely
+    untranslated remainder underneath it.
     """
     english = _english_tool_texts()
     as_parsed = _english_tool_texts(as_rendered=False)

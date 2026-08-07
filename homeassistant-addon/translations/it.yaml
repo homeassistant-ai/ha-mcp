@@ -60,6 +60,15 @@ configuration:
       strumento, con condizioni facoltative sugli argomenti, si configurano nella
       scheda Criteri di sicurezza degli strumenti. Disattivato per impostazione predefinita.
       Richiede il riavvio per avere effetto.
+  enable_security_policy_tool:
+    name: Let AI agents edit tool security policies
+    description: 'Registers the ha_manage_security_policy tool, which lets connected
+      AI agents read and rewrite the tool security policies — including removing approval
+      gates. Off by default. Independent of the Tool Security Policies option above:
+      this controls who can edit the rules, not whether they are enforced. The tool
+      cannot see or decide pending approvals. To keep a human in the loop, gate the
+      tool before enabling it: switch on "security gated" for Manage Security Policy
+      in the Tools tab of the web UI. Requires restart to take effect.'
   read_only_mode:
     name: Modalità di sola lettura
     description: Disattiva tutti gli strumenti di scrittura e impedisce a qualunque
