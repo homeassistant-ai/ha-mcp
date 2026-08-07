@@ -23,7 +23,18 @@ _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
 
 def _validate_string_map(value: Any, *, context: str) -> dict[str, str]:
-    """Return a validated ``str -> str`` catalog section."""
+    """Return a validated ``str -> str`` catalog section.
+
+    A blank value is rejected rather than stored. English is the per-key
+    fallback, but only for a key that is ABSENT: ``t()`` and ``tHtml()`` pick
+    the catalog value with ``hasOwnProperty``, so a present-but-empty string
+    wins over English and renders as nothing at all. Omitting a key and
+    emptying it therefore look identical in the JSON and behave oppositely on
+    screen, which is the kind of difference no reviewer catches by reading.
+    Nothing else covers it either — the parity ceilings count a key
+    untranslated only when it equals the English or is missing, so ``""``
+    reads there as translated.
+    """
     if value is None:
         return {}
     if not isinstance(value, dict):
@@ -32,6 +43,11 @@ def _validate_string_map(value: Any, *, context: str) -> dict[str, str]:
     for key, text in value.items():
         if not isinstance(key, str) or not isinstance(text, str):
             raise ValueError(f"{context} must contain only string keys and values")
+        if not text.strip():
+            raise ValueError(
+                f"{context}.{key} is blank — omit the key instead, so English "
+                "renders as the fallback"
+            )
         result[key] = text
     return result
 
@@ -53,6 +69,13 @@ def _validate_tools(value: Any, *, context: str) -> dict[str, dict[str, str]]:
                 continue
             if not isinstance(field_value, str):
                 raise ValueError(f"{context}.{tool_name}.{field} must be a string")
+            # Same rule as _validate_string_map: blank loses to nothing, an
+            # omitted field falls back to the tool's own English metadata.
+            if not field_value.strip():
+                raise ValueError(
+                    f"{context}.{tool_name}.{field} is blank — omit the field "
+                    "instead, so the English tool metadata renders"
+                )
             translated[field] = field_value
         unknown = set(tool_values) - {"title", "description"}
         if unknown:
