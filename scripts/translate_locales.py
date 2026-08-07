@@ -460,12 +460,22 @@ def _style_sample_keys(
     to imitate, and when the key is itself in the batch the model answers with
     the stale text it was just shown — which validates, gets written, and
     repins the baseline as if it were current.
+
+    A blank translation is skipped like a missing one. It renders as an empty
+    right-hand side into the prompt, so the pair it contributes shows the model
+    nothing to imitate while still counting against the sample budget — and on
+    a catalog whose register rests on a single key, that is the whole signal.
+    Nothing upstream stops it reaching here: an engine answer this shape is
+    rejected (`_validate`), but a hand-committed one is only type-checked
+    (`_validate_string_map`), and the parity ceilings count a key untranslated
+    only when it equals the English or is absent, so `""` reads as translated.
     """
     return sorted(
         (
             key
             for key, text in english.items()
             if key in translated
+            and translated[key].strip()
             and key not in exclude
             and _SECOND_PERSON_RE.search(text)
         ),
