@@ -253,6 +253,20 @@ def test_an_info_string_line_does_not_close_an_open_fence() -> None:
     assert _after("```python\n", "```python\n", "```   \n").closers == ""
 
 
+def test_four_space_indentation_is_indented_code_not_a_fence() -> None:
+    """GFM allows at most three spaces before a fence; four makes it a code block.
+
+    Treating an indented code sample as a fence opens one that never closes,
+    which also silences `<details>` tracking for everything behind it.
+    """
+    assert _after("   ```python\n").closers == "\n```", "three spaces is still a fence"
+    assert _after("    ```python\n").closers == "", "four spaces is indented code"
+    assert _after("\t```python\n").closers == "", "a tab indents past the fence limit"
+
+    # An indented look-alike must not close a fence that is genuinely open.
+    assert _after("```python\n", "    ```\n").closers == "\n```"
+
+
 def test_details_tags_on_one_line_are_counted_in_source_order() -> None:
     """Netting a line's tags hides an opener that follows a closer."""
     assert _after("</details><details>\n").closers == "\n</details>", (

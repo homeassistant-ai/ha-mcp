@@ -47,7 +47,11 @@ _NEXT_SECTION_RE = re.compile(r"^## v\d")
 # after it. Closing a ````-fence with ```, or mistaking a second ```python for
 # a closer, leaves it open -- and everything after the cut, the truncation
 # notice included, then renders as code.
-_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+#
+# At most three spaces of indentation: four or more makes the line indented
+# code, not a fence, so treating it as one would open a fence that never
+# closes and silence `<details>` tracking behind it.
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 _DETAILS_TAG_RE = re.compile(r"</?details>")
 
