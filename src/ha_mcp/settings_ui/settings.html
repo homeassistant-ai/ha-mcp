@@ -344,8 +344,9 @@
           Registers the ha_manage_security_policy tool, which reads and
           replaces the policy document this tab edits. Off by default.
           Independent of the master switch above: this controls who can
-          edit the rules, not whether they are enforced. The tool never
-          reaches the pending-approval queue.
+          edit the rules, not whether they are enforced. The tool does not
+          expose pending-approval queue operations, but a policy-gated set
+          action can still require approval.
         </div>
         <div class="feature-locked-note" id="policy-manage-tool-locked" style="display:none"></div>
       </div>

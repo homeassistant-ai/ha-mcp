@@ -275,8 +275,8 @@ async def test_policy_tool_can_gate_itself(self_gated_policy_mcp):
     """
     client, server = self_gated_policy_mcp
 
-    installed = parse_mcp_result(
-        await client.call_tool(
+    async with MCPAssertions(client) as mcp:
+        await mcp.call_tool_success(
             TOOL_NAME,
             {
                 "action": "set",
@@ -288,8 +288,6 @@ async def test_policy_tool_can_gate_itself(self_gated_policy_mcp):
                 },
             },
         )
-    )
-    assert installed.get("success") is True, installed
 
     # The rule now gates the tool: even a read needs approval.
     # create_error_response spreads the middleware's context fields at the
