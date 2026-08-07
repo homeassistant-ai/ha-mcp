@@ -7,7 +7,18 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_entities import register_entity_tools
+
+
+def _registry_list(id_field, *ids):
+    """WS response for a registry-list preflight.
+
+    ``ha_set_entity`` validates referenced area / label / category IDs before
+    it touches the entity registry (issue #2159), so mocks for calls carrying
+    those parameters must answer the lookup first.
+    """
+    return {"success": True, "result": [{id_field: entry_id} for entry_id in ids]}
 
 
 class TestHaSetEntityLabels:
@@ -44,22 +55,25 @@ class TestHaSetEntityLabels:
     async def test_set_labels_list(self, mock_mcp, mock_client):
         """Setting labels with a list should include labels in the registry update."""
         mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {
-                    "entity_entry": {
-                        "entity_id": "light.test",
-                        "name": None,
-                        "original_name": "Test",
-                        "icon": None,
-                        "area_id": None,
-                        "disabled_by": None,
-                        "hidden_by": None,
-                        "aliases": [],
-                        "labels": ["outdoor", "smart"],
-                    }
+            side_effect=[
+                _registry_list("label_id", "outdoor", "smart"),
+                {
+                    "success": True,
+                    "result": {
+                        "entity_entry": {
+                            "entity_id": "light.test",
+                            "name": None,
+                            "original_name": "Test",
+                            "icon": None,
+                            "area_id": None,
+                            "disabled_by": None,
+                            "hidden_by": None,
+                            "aliases": [],
+                            "labels": ["outdoor", "smart"],
+                        }
+                    },
                 },
-            }
+            ]
         )
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
@@ -109,22 +123,25 @@ class TestHaSetEntityLabels:
     async def test_set_labels_json_string(self, mock_mcp, mock_client):
         """Labels as JSON array string should be parsed."""
         mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {
-                    "entity_entry": {
-                        "entity_id": "light.test",
-                        "name": None,
-                        "original_name": "Test",
-                        "icon": None,
-                        "area_id": None,
-                        "disabled_by": None,
-                        "hidden_by": None,
-                        "aliases": [],
-                        "labels": ["label1", "label2"],
-                    }
+            side_effect=[
+                _registry_list("label_id", "label1", "label2"),
+                {
+                    "success": True,
+                    "result": {
+                        "entity_entry": {
+                            "entity_id": "light.test",
+                            "name": None,
+                            "original_name": "Test",
+                            "icon": None,
+                            "area_id": None,
+                            "disabled_by": None,
+                            "hidden_by": None,
+                            "aliases": [],
+                            "labels": ["label1", "label2"],
+                        }
+                    },
                 },
-            }
+            ]
         )
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
@@ -203,7 +220,7 @@ class TestHaSetEntityLabels:
         "area_lookup",
         [
             {"success": False, "error": {"message": "registry unavailable"}},
-            RuntimeError("connection lost"),
+            HomeAssistantConnectionError("connection lost"),
         ],
     )
     async def test_area_registry_lookup_failure_rejects_entity_update(
@@ -223,14 +240,16 @@ class TestHaSetEntityLabels:
         ]
 
     @pytest.mark.asyncio
-    async def test_area_id_revalidated_immediately_before_registry_update(
-        self, set_entity_tool, mock_client
-    ):
-        """An area deleted after preflight is not submitted to HA."""
-        mock_client.send_websocket_message.side_effect = [
-            {"success": True, "result": [{"area_id": "living_room"}]},
-            {"success": True, "result": []},
-        ]
+    async def test_area_id_validated_once_per_call(self, set_entity_tool, mock_client):
+        """The preflight is a single lookup, not one per write path.
+
+        Validation lives at the tool entry so the bulk path is covered too;
+        a second per-entity lookup would multiply into N round-trips there.
+        """
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": [],
+        }
 
         with pytest.raises(ToolError) as exc_info:
             await set_entity_tool(entity_id="light.test", area_id="living_room")
@@ -238,8 +257,151 @@ class TestHaSetEntityLabels:
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert mock_client.send_websocket_message.call_args_list == [
-            (({"type": "config/area_registry/list"},), {}),
-            (({"type": "config/area_registry/list"},), {}),
+            (({"type": "config/area_registry/list"},), {})
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("label_operation", ["set", "add"])
+    async def test_unknown_label_rejected(
+        self, set_entity_tool, mock_client, label_operation
+    ):
+        """Assigning a label that is not in the registry must not be persisted."""
+        label_lookup = _registry_list("label_id", "outdoor")
+        if label_operation == "add":
+            # "add" resolves the entity's current labels before the pre-write
+            # validation runs.
+            mock_client.send_websocket_message.side_effect = [
+                {"success": True, "result": {"labels": []}},
+                label_lookup,
+            ]
+            expected_calls = [
+                {"type": "config/entity_registry/get", "entity_id": "light.test"},
+                {"type": "config/label_registry/list"},
+            ]
+        else:
+            mock_client.send_websocket_message.side_effect = [label_lookup]
+            expected_calls = [{"type": "config/label_registry/list"}]
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(
+                entity_id="light.test",
+                labels=["ghost_label"],
+                label_operation=label_operation,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert error_data["unknown_labels"] == ["ghost_label"]
+        assert [
+            c[0][0] for c in mock_client.send_websocket_message.call_args_list
+        ] == expected_calls
+
+    @pytest.mark.asyncio
+    async def test_unknown_label_removal_still_allowed(
+        self, set_entity_tool, mock_client
+    ):
+        """Removing a dangling label is the cleanup path — it must not be blocked."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"labels": ["ghost_label", "outdoor"]}},
+            {
+                "success": True,
+                "result": {"entity_entry": {"entity_id": "light.test"}},
+            },
+        ]
+
+        result = await set_entity_tool(
+            entity_id="light.test",
+            labels=["ghost_label"],
+            label_operation="remove",
+        )
+
+        assert result["success"] is True
+        sent_types = [
+            call[0][0]["type"]
+            for call in mock_client.send_websocket_message.call_args_list
+        ]
+        assert "config/label_registry/list" not in sent_types
+        update_call = mock_client.send_websocket_message.call_args_list[1][0][0]
+        assert update_call["type"] == "config/entity_registry/update"
+        assert update_call["labels"] == ["outdoor"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_category_rejected(self, set_entity_tool, mock_client):
+        """A category is validated against its own scope's registry."""
+        mock_client.send_websocket_message.return_value = _registry_list(
+            "category_id", "lighting"
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(
+                entity_id="light.test",
+                categories={"automation": "ghost_category"},
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert error_data["category"] == "ghost_category"
+        assert mock_client.send_websocket_message.call_args_list == [
+            (
+                (
+                    {
+                        "type": "config/category_registry/list",
+                        "scope": "automation",
+                    },
+                ),
+                {},
+            )
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("kwargs", "lookup_type"),
+        [
+            ({"labels": ["outdoor"]}, "config/label_registry/list"),
+            (
+                {"categories": {"automation": "lighting"}},
+                "config/category_registry/list",
+            ),
+        ],
+    )
+    async def test_registry_lookup_failure_rejects_update(
+        self, set_entity_tool, mock_client, kwargs, lookup_type
+    ):
+        """Label and category assignment fail closed when the registry is unreadable."""
+        mock_client.send_websocket_message.return_value = {
+            "success": False,
+            "error": {"message": "registry unavailable"},
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id="light.test", **kwargs)
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "CONNECTION_FAILED"
+        sent_types = [
+            call[0][0]["type"]
+            for call in mock_client.send_websocket_message.call_args_list
+        ]
+        assert sent_types == [lookup_type]
+
+    @pytest.mark.asyncio
+    async def test_bulk_unknown_label_rejected_before_any_update(
+        self, set_entity_tool, mock_client
+    ):
+        """One entry-point preflight guards the bulk path — no entity is touched."""
+        mock_client.send_websocket_message.return_value = _registry_list(
+            "label_id", "outdoor"
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(
+                entity_id=["light.a", "light.b"], labels=["ghost_label"]
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert mock_client.send_websocket_message.call_args_list == [
+            (({"type": "config/label_registry/list"},), {})
         ]
 
 
@@ -470,6 +632,7 @@ class TestHaSetEntityCombined:
         """Combined name + labels + expose_to updates registry, exposes, then refetches."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
+                _registry_list("label_id", "outdoor"),
                 # First call: entity registry update (name + labels), pre-exposure options
                 {
                     "success": True,
@@ -527,20 +690,21 @@ class TestHaSetEntityCombined:
             "conversation": {"should_expose": True}
         }
 
-        # Verify first call was registry update with name + labels
-        first_call = mock_client.send_websocket_message.call_args_list[0][0][0]
+        # Verify the registry update carried name + labels (call 0 is the
+        # label-registry preflight)
+        first_call = mock_client.send_websocket_message.call_args_list[1][0][0]
         assert first_call["type"] == "config/entity_registry/update"
         assert first_call["name"] == "My Light"
         assert first_call["labels"] == ["outdoor"]
 
-        # Verify second call was expose
-        second_call = mock_client.send_websocket_message.call_args_list[1][0][0]
+        # Verify the following call was expose
+        second_call = mock_client.send_websocket_message.call_args_list[2][0][0]
         assert second_call["type"] == "homeassistant/expose_entity"
 
         # Verify third call refetched current registry state after exposure
-        third_call = mock_client.send_websocket_message.call_args_list[2][0][0]
+        third_call = mock_client.send_websocket_message.call_args_list[3][0][0]
         assert third_call["type"] == "config/entity_registry/get"
-        assert mock_client.send_websocket_message.call_count == 3
+        assert mock_client.send_websocket_message.call_count == 4
 
     @pytest.mark.asyncio
     async def test_expose_after_prior_phase_refetches_fresh_state(
@@ -967,10 +1131,10 @@ class TestHaSetEntityCombined:
     async def test_registry_failure_with_labels(self, mock_mcp, mock_client):
         """Registry update failure when labels are included should raise ToolError."""
         mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": False,
-                "error": {"message": "Entity not found"},
-            }
+            side_effect=[
+                _registry_list("label_id", "outdoor"),
+                {"success": False, "error": {"message": "Entity not found"}},
+            ]
         )
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
@@ -1088,7 +1252,9 @@ class TestHaSetEntityLabelOperations:
                         "labels": ["existing_label"],
                     },
                 },
-                # Second call: update entity with combined labels
+                # Second call: label-registry preflight for the added IDs
+                _registry_list("label_id", "existing_label", "new_label"),
+                # Third call: update entity with combined labels
                 {
                     "success": True,
                     "result": {
@@ -1118,7 +1284,7 @@ class TestHaSetEntityLabelOperations:
 
         assert result["success"] is True
         # Verify the update call included both old and new labels
-        update_call = mock_client.send_websocket_message.call_args_list[1][0][0]
+        update_call = mock_client.send_websocket_message.call_args_list[2][0][0]
         assert "existing_label" in update_call["labels"]
         assert "new_label" in update_call["labels"]
 
@@ -1182,7 +1348,9 @@ class TestHaSetEntityLabelOperations:
                         "labels": ["label_a", "label_b"],
                     },
                 },
-                # Second call: update entity
+                # Second call: label-registry preflight for the added IDs
+                _registry_list("label_id", "label_a", "label_b", "label_c"),
+                # Third call: update entity
                 {
                     "success": True,
                     "result": {
@@ -1211,7 +1379,7 @@ class TestHaSetEntityLabelOperations:
         )
 
         assert result["success"] is True
-        update_call = mock_client.send_websocket_message.call_args_list[1][0][0]
+        update_call = mock_client.send_websocket_message.call_args_list[2][0][0]
         # Should have 3 unique labels, not 4
         assert len(update_call["labels"]) == 3
 
@@ -1254,11 +1422,14 @@ class TestHaSetEntityBulkOperations:
             "aliases": [],
             "labels": ["outdoor"],
         }
+        update_ack = {"success": True, "result": {"entity_entry": entity_entry}}
         mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {"entity_entry": entity_entry},
-            }
+            side_effect=[
+                _registry_list("label_id", "outdoor"),
+                update_ack,
+                update_ack,
+                update_ack,
+            ]
         )
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
@@ -1359,6 +1530,7 @@ class TestHaSetEntityBulkOperations:
         }
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
+                _registry_list("label_id", "outdoor"),
                 # light.a succeeds
                 {"success": True, "result": {"entity_entry": entity_entry}},
                 # light.b fails
@@ -1405,6 +1577,7 @@ class TestHaSetEntityBulkOperations:
         """Bulk operation with label_operation='add' should work."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
+                _registry_list("label_id", "new_label"),
                 # Get labels for light.a
                 {"success": True, "result": {"labels": ["existing"]}},
                 # Update light.a
@@ -1472,11 +1645,13 @@ class TestHaSetEntityBulkOperations:
             "labels": [],
             "categories": {"automation": "cat_id"},
         }
+        update_ack = {"success": True, "result": {"entity_entry": entity_entry}}
         mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {"entity_entry": entity_entry},
-            }
+            side_effect=[
+                _registry_list("category_id", "cat_id"),
+                update_ack,
+                update_ack,
+            ]
         )
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
@@ -1489,8 +1664,13 @@ class TestHaSetEntityBulkOperations:
         assert result["success"] is True
         assert result["succeeded_count"] == 2
         # Verify each per-entity WS message included categories
-        for call in mock_client.send_websocket_message.call_args_list:
-            ws_msg = call[0][0]
+        update_calls = [
+            call[0][0]
+            for call in mock_client.send_websocket_message.call_args_list
+            if call[0][0]["type"] == "config/entity_registry/update"
+        ]
+        assert len(update_calls) == 2
+        for ws_msg in update_calls:
             assert ws_msg.get("categories") == {"automation": "cat_id"}
 
 

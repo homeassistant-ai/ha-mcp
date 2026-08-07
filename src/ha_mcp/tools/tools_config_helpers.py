@@ -18,11 +18,12 @@ from pydantic import AliasChoices, Field
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
 )
 from ..client.websocket_client import get_websocket_client
-from ..errors import ErrorCode, create_error_response
+from ..errors import ErrorCode, create_auth_error, create_error_response
 from ..strict_bps import BestPracticeKeyParam
 from .auto_backup import with_auto_backup
 from .component_api import (
@@ -1164,27 +1165,32 @@ logger = logging.getLogger(__name__)
 
 async def _ws_registry_lookup(
     client: Any, message: dict[str, Any]
-) -> tuple[bool, list[dict[str, Any]]]:
-    """Return (ok, items). ok=False means the lookup itself failed.
+) -> tuple[bool, list[dict[str, Any]], Exception | None, str | None]:
+    """Return (ok, items, exc, error_code). ok=False means the lookup failed.
 
     ok=True with empty list means the registry exists and is genuinely empty —
     distinct from failure so phantom IDs can still be rejected. The fail-open
     ok=False path keeps transient HA outages from blocking legitimate calls.
+    ``exc`` carries the raising exception and ``error_code`` the failure
+    envelope's preserved HA code (the two failure channels are exclusive), so
+    a fail-closed caller can classify auth errors instead of blaming the
+    connection.
     """
     try:
         result = await client.send_websocket_message(message)
     except Exception as e:
         logger.debug("_ws_registry_lookup: failed for %r: %s", message.get("type"), e)
-        return False, []
+        return False, [], e, None
     if isinstance(result, list):
-        return True, result
+        return True, result, None, None
     if isinstance(result, dict):
         if result.get("success") is False:
-            return False, []
+            code = result.get("error_code")
+            return False, [], None, code if isinstance(code, str) else None
         inner = result.get("result", [])
         if isinstance(inner, list):
-            return True, inner
-    return False, []
+            return True, inner, None, None
+    return False, [], None, None
 
 
 def _registry_id_values(items: list[dict[str, Any]], field: str) -> list[str]:
@@ -1206,142 +1212,274 @@ def _ws_error_msg(response: dict[str, Any]) -> str:
 
 
 def _raise_if_unknown_labels(
-    ok: bool, ws_labels: list[dict[str, Any]], labels: list[str] | None
+    ws_labels: list[dict[str, Any]], labels: list[str] | None
 ) -> None:
     """Raise VALIDATION_INVALID_PARAMETER if any label_id is not in the registry."""
     valid_label_ids = _registry_id_values(ws_labels, "label_id")
-    if ok:
-        unknown = [
-            label_id
-            for label_id in labels or []
-            if label_id and label_id not in valid_label_ids
-        ]
-        if unknown:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Unknown label_id(s): {unknown}. These do not exist in "
-                    "the label registry.",
-                    context={"labels": labels, "unknown_labels": unknown},
-                    suggestions=[
-                        "Use ha_config_get_label() to list valid label IDs.",
-                        "Use ha_config_set_label() to create a new label.",
-                        f"Available label_ids: {sorted(valid_label_ids)}",
-                    ],
-                )
-            )
-
-
-def _raise_if_area_lookup_failed(
-    ok: bool, area_id: str | None, fail_closed_area: bool
-) -> None:
-    """Fail entity area assignment when its registry cannot be read."""
-    if fail_closed_area and not ok:
+    # An empty string inside a non-empty list is NOT the clear sentinel
+    # (that's the empty list itself) — treat it as an unknown ID so it can't
+    # ride along into the registry write.
+    unknown = [
+        label_id
+        for label_id in labels or []
+        if not label_id or label_id not in valid_label_ids
+    ]
+    if unknown:
         raise_tool_error(
             create_error_response(
-                ErrorCode.CONNECTION_FAILED,
-                "Could not validate area_id because the area registry is unavailable.",
-                context={"area_id": area_id},
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Unknown label_id(s): {unknown}. These do not exist in "
+                "the label registry.",
+                context={"labels": labels, "unknown_labels": unknown},
+                suggestions=[
+                    "Use ha_config_get_label() to list valid label IDs.",
+                    "Use ha_config_set_label() to create a new label.",
+                    f"Available label_ids: {sorted(valid_label_ids)}",
+                ],
             )
         )
+
+
+def _raise_if_unknown_area(areas: list[dict[str, Any]], area_id: str) -> None:
+    """Raise VALIDATION_INVALID_PARAMETER if area_id is not in the registry."""
+    valid_area_ids = _registry_id_values(areas, "area_id")
+    if area_id not in valid_area_ids:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"area_id={area_id!r} does not exist in the area registry.",
+                context={"area_id": area_id},
+                suggestions=[
+                    "Use ha_list_floors_areas() to list valid area IDs.",
+                    'Pass area_id="" to clear the area assignment.',
+                    f"Available area_ids: {sorted(valid_area_ids)}",
+                ],
+            )
+        )
+
+
+def _raise_if_unknown_category(
+    ws_categories: list[dict[str, Any]], category: str, scope: str
+) -> None:
+    """Raise VALIDATION_INVALID_PARAMETER if category is not in the scope's registry."""
+    valid_category_ids = _registry_id_values(ws_categories, "category_id")
+    if category not in valid_category_ids:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"category={category!r} does not exist in the {scope} "
+                "category registry.",
+                context={"category": category, "scope": scope},
+                suggestions=[
+                    f"Use ha_config_get_category(scope='{scope}') to list valid category IDs.",
+                    "Use ha_config_set_category() to create a new category.",
+                    f"Available category_ids: {sorted(valid_category_ids)}",
+                ],
+            )
+        )
+
+
+def _raise_if_unknown_floor(floors: list[dict[str, Any]], floor_id: str) -> None:
+    """Raise VALIDATION_INVALID_PARAMETER if floor_id is not in the registry."""
+    valid_floor_ids = _registry_id_values(floors, "floor_id")
+    if floor_id not in valid_floor_ids:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"floor_id={floor_id!r} does not exist in the floor registry.",
+                context={"floor_id": floor_id},
+                suggestions=[
+                    "Use ha_list_floors_areas() to list valid floor IDs.",
+                    'Pass floor_id="" to clear the floor assignment.',
+                    f"Available floor_ids: {sorted(valid_floor_ids)}",
+                ],
+            )
+        )
+
+
+# kind -> (param name used in messages/context, registry name used in messages)
+_REGISTRY_KINDS = {
+    "area": ("area_id", "area"),
+    "labels": ("labels", "label"),
+    "category": ("category", "category"),
+    "floor": ("floor_id", "floor"),
+}
+
+
+def _registry_check_context(kind: str, scope: str, value: Any) -> dict[str, Any]:
+    """Error context naming the offending value for the given registry kind."""
+    if kind == "category":
+        return {"category": value, "scope": scope}
+    return {_REGISTRY_KINDS[kind][0]: value}
+
+
+def _raise_if_lookup_failed(ok: bool, kind: str, scope: str, value: Any) -> None:
+    """Fail the write when a registry needed for validation cannot be read."""
+    if ok:
+        return
+    param, registry = _REGISTRY_KINDS[kind]
+    registry_name = f"{scope} {registry}" if scope else registry
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.CONNECTION_FAILED,
+            f"Could not validate {param} because the {registry_name} "
+            "registry is unavailable.",
+            context=_registry_check_context(kind, scope, value),
+        )
+    )
+
+
+def _registry_checks(
+    area_id: str | None,
+    labels: list[str] | None,
+    categories: dict[str, str | None] | None,
+    floor_id: str | None,
+) -> list[tuple[str, str, Any, dict[str, Any]]]:
+    """Build the (kind, scope, value, ws_message) lookups a validation needs.
+
+    ``scope`` is only meaningful for category checks; other kinds carry "".
+    Falsy values are skipped: None means "caller did not pass", and empty
+    string / empty list are the documented "clear" sentinels HA accepts.
+    """
+    checks: list[tuple[str, str, Any, dict[str, Any]]] = []
+    if area_id:
+        checks.append(("area", "", area_id, {"type": "config/area_registry/list"}))
+    if labels:
+        checks.append(("labels", "", labels, {"type": "config/label_registry/list"}))
+    for scope, category_id in (categories or {}).items():
+        if category_id:
+            checks.append(
+                (
+                    "category",
+                    scope,
+                    category_id,
+                    {"type": "config/category_registry/list", "scope": scope},
+                )
+            )
+    if floor_id:
+        checks.append(("floor", "", floor_id, {"type": "config/floor_registry/list"}))
+    return checks
+
+
+# HA WS error codes that mean the caller's credentials were rejected —
+# preserved by the client's failure envelope (rest_client keeps ``e.code``).
+_AUTH_WS_ERROR_CODES = frozenset({"unauthorized"})
+
+
+def _auth_error_in_chain(exc: BaseException | None) -> bool:
+    """True when the failure or its ``__cause__`` chain is an auth rejection."""
+    depth = 0
+    while exc is not None and depth < 10:
+        if isinstance(exc, HomeAssistantAuthError):
+            return True
+        exc = exc.__cause__
+        depth += 1
+    return False
+
+
+def _apply_registry_check(
+    kind: str,
+    scope: str,
+    value: Any,
+    ok: bool,
+    items: list[dict[str, Any]],
+    exc: Exception | None,
+    error_code: str | None,
+    fail_closed: bool,
+) -> None:
+    """Reject an unknown ID, or an unreadable registry when failing closed."""
+    if fail_closed and not ok:
+        if exc is not None:
+            # The transport wrap re-raises acquisition failures as
+            # HomeAssistantConnectionError ``from`` the original exception
+            # (phase-before-type, pinned by
+            # test_failure_to_acquire_a_client_raises), so an auth rejection
+            # during connect survives only in the ``__cause__`` chain —
+            # discriminate on it the same way the envelope branch below
+            # discriminates on ``error_code``.
+            if _auth_error_in_chain(exc):
+                raise_tool_error(
+                    create_auth_error(
+                        f"Could not validate {_REGISTRY_KINDS[kind][0]}: Home "
+                        "Assistant rejected the credentials.",
+                        context=_registry_check_context(kind, scope, value),
+                    )
+                )
+            # Preserve the original failure class — a timeout must surface
+            # as a timeout, not as generic connection guidance.
+            exception_to_structured_error(
+                exc, context=_registry_check_context(kind, scope, value)
+            )
+        if error_code in _AUTH_WS_ERROR_CODES:
+            # Failure-shaped envelope with HA's preserved code: past-
+            # acquisition auth rejections arrive on this channel, not as a
+            # raised exception.
+            raise_tool_error(
+                create_auth_error(
+                    f"Could not validate {_REGISTRY_KINDS[kind][0]}: Home "
+                    "Assistant rejected the request as unauthorized.",
+                    context=_registry_check_context(kind, scope, value),
+                )
+            )
+        _raise_if_lookup_failed(ok, kind, scope, value)
+    if not ok:
+        return
+    if kind == "area":
+        _raise_if_unknown_area(items, value)
+    elif kind == "labels":
+        _raise_if_unknown_labels(items, value)
+    elif kind == "category":
+        _raise_if_unknown_category(items, value, scope)
+    else:
+        _raise_if_unknown_floor(items, value)
 
 
 async def validate_registry_ids(
     client: Any,
     area_id: str | None,
     labels: list[str] | None,
-    category: str | None,
+    categories: dict[str, str | None] | None,
     *,
-    fail_closed_area: bool = False,
+    floor_id: str | None = None,
+    fail_closed: bool = False,
 ) -> None:
-    """Validate that area_id, labels, and category reference existing registry entries.
+    """Validate that registry references point at entries that actually exist.
 
-    Bug 16 (issue #1150): the entity-registry update path previously accepted any
-    string and forwarded it to HA, leaving phantom references like
-    `area_id="nonexistent_xyz"` in the registry. Validate before sending so the
-    caller gets a clear error with the available IDs to choose from.
+    Bug 16 (issue #1150) / issue #2159: HA's registry-update APIs accept any
+    string for a cross-registry reference and store it verbatim, so a typo or a
+    since-deleted ID becomes a dangling reference the write tool still reports
+    as a success. Validate before sending so the caller gets a clear error with
+    the available IDs to choose from.
+
+    ``categories`` maps a category SCOPE ("helpers", "automation", "script",
+    "scene") to the category_id being assigned in that scope; each distinct
+    scope is a separate registry lookup. Every lookup runs concurrently.
 
     Skips:
-      - None values (caller did not pass — no change to apply).
-      - Empty string area_id / category (these mean "clear" — HA accepts them).
+      - None values (caller did not pass — no change to apply). Inside
+        ``categories``, a None value means "clear" for that scope.
+      - Empty string area_id / category / floor_id (these mean "clear").
       - Empty list labels (clear semantics).
 
-    Raises VALIDATION_INVALID_PARAMETER on the first unknown ID encountered, with
-    the available IDs included in the suggestions list so the caller can correct.
-    ``fail_closed_area`` also rejects an unavailable area registry; entity
-    assignments use it because HA otherwise persists dangling area references.
+    Returns None. Raises ToolError with VALIDATION_INVALID_PARAMETER on the
+    first unknown ID encountered, with the available IDs included in the
+    suggestions list so the caller can correct. ``fail_closed`` additionally
+    rejects the write with CONNECTION_FAILED when any requested registry cannot
+    be read — a degraded lookup must never let a dangling reference through.
     """
-    needs_area = area_id is not None and area_id != ""
-    needs_labels = bool(labels)
-    needs_category = category is not None and category != ""
-    if not (needs_area or needs_labels or needs_category):
+    checks = _registry_checks(area_id, labels, categories, floor_id)
+    if not checks:
         return
 
-    # Run the three registry lookups concurrently — they're independent WS round-trips.
-    lookups: list[tuple[str, Any]] = []
-    if needs_area:
-        lookups.append(
-            ("area", _ws_registry_lookup(client, {"type": "config/area_registry/list"}))
+    results = await asyncio.gather(
+        *(_ws_registry_lookup(client, message) for *_, message in checks)
+    )
+    for (kind, scope, value, _), (ok, items, exc, error_code) in zip(
+        checks, results, strict=True
+    ):
+        _apply_registry_check(
+            kind, scope, value, ok, items, exc, error_code, fail_closed
         )
-    if needs_labels:
-        lookups.append(
-            (
-                "labels",
-                _ws_registry_lookup(client, {"type": "config/label_registry/list"}),
-            )
-        )
-    if needs_category:
-        lookups.append(
-            (
-                "category",
-                _ws_registry_lookup(
-                    client,
-                    {"type": "config/category_registry/list", "scope": "helpers"},
-                ),
-            )
-        )
-    raw = await asyncio.gather(*(coro for _, coro in lookups))
-    by_param = {key: result for (key, _), result in zip(lookups, raw, strict=True)}
-
-    if needs_area:
-        ok, areas = by_param["area"]
-        _raise_if_area_lookup_failed(ok, area_id, fail_closed_area)
-        valid_area_ids = _registry_id_values(areas, "area_id")
-        if ok and area_id not in valid_area_ids:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"area_id={area_id!r} does not exist in the area registry.",
-                    context={"area_id": area_id},
-                    suggestions=[
-                        "Use ha_list_floors_areas() to list valid area IDs.",
-                        'Pass area_id="" to clear the area assignment.',
-                        f"Available area_ids: {sorted(valid_area_ids)}",
-                    ],
-                )
-            )
-
-    if needs_labels:
-        ok, ws_labels = by_param["labels"]
-        _raise_if_unknown_labels(ok, ws_labels, labels)
-
-    if needs_category:
-        ok, categories = by_param["category"]
-        valid_category_ids = _registry_id_values(categories, "category_id")
-        if ok and category not in valid_category_ids:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"category={category!r} does not exist in the helpers "
-                    "category registry.",
-                    context={"category": category},
-                    suggestions=[
-                        "Use ha_config_get_category(scope='helpers') to list valid category IDs.",
-                        "Use ha_config_set_category() to create a new category.",
-                        f"Available category_ids: {sorted(valid_category_ids)}",
-                    ],
-                )
-            )
 
 
 def _slugify_helper_name(name: str) -> str:
@@ -2089,7 +2227,13 @@ async def _handle_flow_helper(
         )
 
     # Bug 16 (issue #1150): validate registry IDs BEFORE creating the config entry.
-    await validate_registry_ids(client, area_id, labels_list, category)
+    await validate_registry_ids(
+        client,
+        area_id,
+        labels_list,
+        {"helpers": category},
+        fail_closed=True,
+    )
 
     if action == "create":
         # Validate against EITHER the top-level `name` arg OR `config_dict["name"]`.
@@ -4760,7 +4904,13 @@ class HelperConfigTools:
                 )
 
             # Bug 16 (issue #1150): validate area_id / labels / category exist.
-            await validate_registry_ids(self._client, area_id, labels, category)
+            await validate_registry_ids(
+                self._client,
+                area_id,
+                labels,
+                {"helpers": category},
+                fail_closed=True,
+            )
 
             # Bug 13/17 (issue #1150): pre-validate per-type schema constraints.
             _validate_pre_dispatch_params(

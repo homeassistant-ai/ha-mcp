@@ -9,13 +9,23 @@ references in the registry. These tests assert that:
   - Existing values pass through untouched (control case).
   - Empty-string area_id (the documented "clear" sentinel) does NOT trigger a
     registry lookup or rejection.
+  - A registry that cannot be read fails the write closed with
+    CONNECTION_FAILED (issue #2159) rather than skipping the check.
 """
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
+
+from ha_mcp.client.rest_client import (
+    HomeAssistantAuthError,
+    HomeAssistantClient,
+    HomeAssistantConnectionError,
+)
+from ha_mcp.tools.tools_config_helpers import validate_registry_ids
 
 # ---------------------------------------------------------------------------
 # Fixtures — match the local-fixture style used by the other helper unit tests.
@@ -54,6 +64,13 @@ def _assert_invalid_param(excinfo) -> None:
     msg = str(excinfo.value)
     assert "VALIDATION_INVALID_PARAMETER" in msg, (
         f"expected VALIDATION_INVALID_PARAMETER in error, got: {msg!r}"
+    )
+
+
+def _assert_connection_failed(excinfo) -> None:
+    msg = str(excinfo.value)
+    assert "CONNECTION_FAILED" in msg, (
+        f"expected CONNECTION_FAILED in error, got: {msg!r}"
     )
 
 
@@ -345,3 +362,220 @@ class TestPhantomRejectedAgainstEmptyRegistry:
             )
         _assert_invalid_param(excinfo)
         assert "phantom_category" in str(excinfo.value)
+
+
+class TestUnreadableRegistryFailsClosed:
+    """Issue #2159: a degraded lookup must not wave the reference through.
+
+    The helper path used to fail open when a registry lookup failed, so a
+    transient outage was enough for a phantom ID to reach HA and persist as a
+    dangling reference — the exact state this validation exists to prevent.
+    """
+
+    @staticmethod
+    def _handler_with_failing_registry(registry_type: str, *, raises: bool):
+        """Healthy registries except ``registry_type``, which is unreadable."""
+        healthy = _make_ws_handler(
+            area_ids=["kitchen"],
+            label_ids=["important"],
+            category_ids=["lighting"],
+        )
+
+        async def handler(msg: dict) -> dict:
+            if msg.get("type") == registry_type:
+                if raises:
+                    raise HomeAssistantConnectionError("connection lost")
+                return {
+                    "success": False,
+                    "error": {"message": "registry unavailable"},
+                }
+            return await healthy(msg)
+
+        return handler
+
+    @pytest.mark.parametrize("raises", [False, True], ids=["ws_error", "exception"])
+    @pytest.mark.parametrize(
+        ("kwargs", "registry_type"),
+        [
+            pytest.param(
+                {"area_id": "kitchen"}, "config/area_registry/list", id="area"
+            ),
+            pytest.param(
+                {"labels": ["important"]}, "config/label_registry/list", id="labels"
+            ),
+            pytest.param(
+                {"category": "lighting"},
+                "config/category_registry/list",
+                id="category",
+            ),
+        ],
+    )
+    async def test_unreadable_registry_rejects_helper_write(
+        self, register_tools, mock_client, kwargs, registry_type, raises
+    ):
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._handler_with_failing_registry(
+                registry_type, raises=raises
+            )
+        )
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
+            await register_tools["ha_config_set_helper"](
+                helper_type="input_boolean",
+                name="Test",
+                **kwargs,
+            )
+        _assert_connection_failed(excinfo)
+
+
+class TestEmptyLabelElementRejected:
+    """An empty string INSIDE a labels list is an unknown ID, not a clear.
+
+    The empty LIST is the documented clear sentinel; an empty ELEMENT would
+    ride the write into the registry as a dangling reference (issue #2159).
+    """
+
+    async def test_empty_string_label_element_rejected(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": [{"label_id": "valid"}]}
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await validate_registry_ids(client, None, ["valid", ""], None)
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "" in error_data["unknown_labels"]
+
+
+class TestLookupFailurePreservesClassification:
+    """Fail-closed must not relabel auth failures as connection guidance.
+
+    ``_ws_registry_lookup`` collapses raises into ok=False; the fail-closed
+    branch classifies the captured exception via the repository's normal
+    error taxonomy instead of always reporting CONNECTION_FAILED.
+    """
+
+    async def test_auth_cause_chain_not_masked_as_connection_failed(self):
+        """The transport wrap re-raises acquisition failures as
+        HomeAssistantConnectionError ``from`` the original — the auth type
+        survives only as ``__cause__``, and that is the shape the client
+        actually produces."""
+        wrapped = HomeAssistantConnectionError("WebSocket transport failed")
+        wrapped.__cause__ = HomeAssistantAuthError("Invalid token")
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(side_effect=wrapped)
+
+        with pytest.raises(ToolError) as exc_info:
+            await validate_registry_ids(client, "kitchen", None, None, fail_closed=True)
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] != "CONNECTION_FAILED"
+        assert error_data["error"]["code"].startswith("AUTH")
+
+    async def test_auth_during_acquisition_classifies_through_real_transport(self):
+        """Pin the full chain the review traced: the manager's auth raise ->
+        the acquisition wrap (HomeAssistantConnectionError ``from e``) ->
+        fail-closed cause-chain discrimination. Drives the REAL
+        ``send_websocket_message``, not a mocked shape."""
+        # verify_ssl passed explicitly so __init__ never reads the real
+        # config dir; async-with closes the owned httpx client.
+        async with HomeAssistantClient(
+            "http://ha.local:8123", "test-token", verify_ssl=True
+        ) as client:
+            with (
+                patch(
+                    "ha_mcp.client.websocket_client.get_websocket_client",
+                    new_callable=AsyncMock,
+                    side_effect=HomeAssistantAuthError(
+                        "WebSocket authentication failed: Invalid token"
+                    ),
+                ),
+                pytest.raises(ToolError) as exc_info,
+            ):
+                await validate_registry_ids(
+                    client, "kitchen", None, None, fail_closed=True
+                )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] != "CONNECTION_FAILED"
+        assert error_data["error"]["code"].startswith("AUTH")
+
+    async def test_connection_error_still_reports_connection_failed(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantConnectionError("socket closed")
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await validate_registry_ids(client, "kitchen", None, None, fail_closed=True)
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "CONNECTION_FAILED"
+
+    async def test_unauthorized_envelope_not_masked_as_connection_failed(self):
+        """Past-acquisition auth rejections arrive as a failure envelope with
+        HA's preserved ``error_code``, not as a raised exception — the
+        fail-closed branch must classify that channel too."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Unauthorized",
+                "error_code": "unauthorized",
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await validate_registry_ids(client, "kitchen", None, None, fail_closed=True)
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] != "CONNECTION_FAILED"
+        assert error_data["error"]["code"].startswith("AUTH")
+
+
+class TestFlowHelperFailClosedPinned:
+    """Pins fail_closed=True at the ``_handle_flow_helper`` call site.
+
+    The sibling ha_config_set_helper site is covered by
+    ``TestUnreadableRegistryFailsClosed``; without this test, flipping the
+    flow-helper flag back to fail-open changes no test result.
+    """
+
+    async def test_unreadable_area_registry_rejects_flow_helper_write(
+        self, register_tools, mock_client
+    ):
+        async def handler(msg: dict) -> dict:
+            if msg.get("type") == "config/area_registry/list":
+                return {
+                    "success": False,
+                    "error": {"message": "registry unavailable"},
+                }
+            return {"success": True, "result": {}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=handler)
+        mock_client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "f1",
+                "result": {"entry_id": "e1", "title": "m", "domain": "min_max"},
+            }
+        )
+
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_helper"](
+                helper_type="min_max",
+                name="m",
+                config={"entity_ids": ["sensor.a"], "type": "mean"},
+                area_id="kitchen",
+                wait=False,
+            )
+
+        _assert_connection_failed(excinfo)
