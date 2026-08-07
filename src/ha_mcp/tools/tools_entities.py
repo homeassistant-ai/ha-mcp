@@ -1062,12 +1062,6 @@ class EntityTools:
         original_entity_id = entity_id
 
         # Phase 3: Send entity registry update (covers all fields except expose_to)
-        # Repeat the preflight immediately before this write: Home Assistant
-        # accepts unknown area IDs, so a deleted area must not slip through
-        # after the earlier validation while preparing the update.
-        await validate_registry_ids(
-            self._client, area_id, None, None, fail_closed_area=True
-        )
         (
             entity_id,
             entity_entry,
@@ -1782,9 +1776,6 @@ class EntityTools:
                     )
                 )
 
-            await validate_registry_ids(
-                self._client, area_id, None, None, fail_closed_area=True
-            )
             _validate_enabled_constraint(enabled, entity_ids)
 
             parsed_aliases = _parse_string_list_field(aliases, "aliases")
@@ -1792,6 +1783,19 @@ class EntityTools:
             parsed_labels = _parse_string_list_field(labels, "labels")
             parsed_options = _parse_options_param(options)
             parsed_expose_to = _parse_expose_to_param(expose_to)
+
+            # Issue #2159: one preflight for both the single and bulk paths —
+            # HA stores unknown area/label/category IDs verbatim. Labels are
+            # only checked for "set"/"add": removing a label that no longer
+            # exists is the cleanup path for exactly the dangling references
+            # this bug class creates, so it must stay possible.
+            await validate_registry_ids(
+                self._client,
+                area_id,
+                parsed_labels if label_operation in ("set", "add") else None,
+                parsed_categories,
+                fail_closed=True,
+            )
 
             # Single entity case
             if not is_bulk:
