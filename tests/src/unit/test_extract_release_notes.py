@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
+import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "extract_release_notes.py"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_SCRIPT = _REPO_ROOT / "scripts" / "extract_release_notes.py"
 _spec = importlib.util.spec_from_file_location("extract_release_notes", _SCRIPT)
 assert _spec and _spec.loader
 extract = importlib.util.module_from_spec(_spec)
+# Register before exec: @dataclass resolves its class through
+# sys.modules[cls.__module__], which module_from_spec alone does not populate.
+sys.modules[_spec.name] = extract
 _spec.loader.exec_module(extract)
 
 REPO = "homeassistant-ai/ha-mcp"
@@ -53,8 +60,18 @@ def test_leading_v_on_version_is_accepted() -> None:
     )
 
 
-def test_absent_version_yields_empty_so_caller_fallback_engages() -> None:
-    assert extract.extract_section(CHANGELOG, "9.9.9") == ""
+def test_absent_version_yields_none_so_caller_fallback_engages() -> None:
+    assert extract.extract_section(CHANGELOG, "9.9.9") is None
+
+
+def test_a_present_but_empty_section_is_distinguishable_from_an_absent_one() -> None:
+    """`## v4.8.0` and `## v1.0.0` are real released versions with empty sections."""
+    changelog = (
+        "# CHANGELOG\n\n## v4.8.0 (2025-12-01)\n\n\n## v4.7.7 (2025-12-01)\n\n- x\n"
+    )
+
+    assert extract.extract_section(changelog, "4.8.0") == ""
+    assert extract.extract_section(changelog, "4.9.0") is None
 
 
 @pytest.mark.parametrize(
@@ -70,12 +87,41 @@ def test_version_does_not_match_a_longer_version_sharing_its_prefix(
 ) -> None:
     """'8.0.0' must match none of these -- the old awk prefix match matched all."""
     changelog = f"# CHANGELOG\n\n{heading}\n\nwrong section\n"
-    assert extract.extract_section(changelog, "8.0.0") == ""
+    assert extract.extract_section(changelog, "8.0.0") is None
 
 
 def test_a_prerelease_version_still_finds_its_own_section() -> None:
     changelog = "# CHANGELOG\n\n## v8.0.0-rc.1 (2026-08-02)\n\n- the rc change\n"
     assert "- the rc change" in extract.extract_section(changelog, "8.0.0-rc.1")
+
+
+def test_the_heading_pattern_still_matches_the_real_changelog() -> None:
+    """Pin the regexes to the heading `templates/CHANGELOG.md.j2` actually emits.
+
+    Every other test builds its own `## vX.Y.Z` fixture, so a change to that
+    template or to semantic-release's `tag_format` would leave the whole file
+    green while `extract_section` returned "" for every real release — the
+    workflows would then ship `Release vX.Y.Z` as the entire release body,
+    indefinitely and with CI green. `pyproject.toml`'s version is bumped by
+    semantic-release in the same commit that writes the changelog section, so
+    the two are always in sync on any branch.
+    """
+    pyproject = tomllib.loads(
+        (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    version = pyproject["project"]["version"]
+    changelog = (_REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    section = extract.extract_section(changelog, version)
+
+    # Truthiness, not `!= ""`: a missing heading returns None, and `None != ""`
+    # is true, so the looser assertion stayed green in the exact scenario this
+    # test exists to catch.
+    assert section, (
+        f"no changelog section extracted for the current version {version} "
+        f"(got {section!r}) — the heading format and the extractor's regexes "
+        "have drifted apart"
+    )
 
 
 def test_body_under_the_limit_is_returned_verbatim() -> None:
@@ -159,6 +205,133 @@ def test_closing_fence_never_pushes_the_body_over_the_limit(line_width: int) -> 
     """
     capped = extract.cap_to_limit(_fenced_body(line_width), REPO, "8.0.0", LIMIT)
     assert len(capped) <= LIMIT
+
+
+@pytest.mark.parametrize("delimiter", ["```", "````", "~~~", "~~~~"])
+def test_truncation_closes_a_fence_with_the_delimiter_it_was_opened_with(
+    delimiter: str,
+) -> None:
+    """Closing a ````-fence with ``` leaves it open — and eats the notice.
+
+    Markdown only ends a fence on the same character repeated at least as many
+    times, so a fixed three-backtick closer renders the truncation notice and
+    the full-changelog link as code instead of as the warning they are.
+    """
+    body = f"{delimiter}python\n" + ("x" * 11 + "\n") * 40_000 + f"{delimiter}\n"
+    assert len(body) > LIMIT, "body must actually need truncating"
+
+    capped = extract.cap_to_limit(body, REPO, "8.0.0", LIMIT)
+
+    kept = capped.split("\n\n---\n\n")[0]
+    assert kept.splitlines()[-1] == delimiter, (
+        "fence closed with a delimiter that cannot close it"
+    )
+    assert len(capped) <= LIMIT
+
+
+def _after(*lines: str) -> Any:
+    """The block state after feeding `lines` through a fresh tracker."""
+    blocks = extract._OpenBlocks()
+    for line in lines:
+        blocks = blocks.feed(line)
+    return blocks
+
+
+def test_a_shorter_or_foreign_fence_line_does_not_close_an_open_fence() -> None:
+    assert _after("````python\n").closers == "\n````"
+
+    # too short to close it, then the wrong character
+    assert _after("````python\n", "```\n", "~~~\n").closers == "\n````", (
+        "an open fence was closed by a line that can't close it"
+    )
+
+    # same character, longer — closes it
+    assert _after("````python\n", "`````\n").closers == ""
+
+
+def test_an_info_string_line_does_not_close_an_open_fence() -> None:
+    """A closing fence carries no info string, so ```python is content, not a closer."""
+    assert _after("```python\n", "```python\n").closers == "\n```", (
+        "an info-string line was treated as a closer"
+    )
+
+    # delimiter plus whitespace only — a real closer
+    assert _after("```python\n", "```python\n", "```   \n").closers == ""
+
+
+def test_a_backtick_info_string_containing_a_backtick_is_not_a_fence() -> None:
+    """GFM forbids backticks in a backtick fence's info string.
+
+    Opening a fence on such a line means the closer emitted later reads as a
+    *new* opening fence, putting the truncation notice inside code to EOF.
+    """
+    assert _after("```py`x\n").closers == "", "opened a fence GFM would not open"
+    assert _after("```py\n").closers == "\n```"
+    # The restriction is specific to backticks; tilde info strings may hold them.
+    assert _after("~~~py`x\n").closers == "\n~~~"
+
+
+def test_a_closer_reproduces_the_indentation_its_fence_opened_at() -> None:
+    """An unindented closer exits the list container instead of closing the fence."""
+    assert _after("  ~~~\n").closers == "\n  ~~~"
+    assert _after("   ```py\n").closers == "\n   ```"
+    assert _after("```py\n").closers == "\n```"
+
+
+def test_four_space_indentation_is_indented_code_not_a_fence() -> None:
+    """GFM allows at most three spaces before a fence; four makes it a code block.
+
+    Treating an indented code sample as a fence opens one that never closes,
+    which also silences `<details>` tracking for everything behind it.
+    """
+    assert _after("   ```python\n").closers == "\n   ```", (
+        "three spaces is still a fence, and its closer keeps that indentation"
+    )
+    assert _after("    ```python\n").closers == "", "four spaces is indented code"
+    assert _after("\t```python\n").closers == "", "a tab indents past the fence limit"
+
+    # An indented look-alike must not close a fence that is genuinely open.
+    assert _after("```python\n", "    ```\n").closers == "\n```"
+
+
+def test_details_tags_on_one_line_are_counted_in_source_order() -> None:
+    """Netting a line's tags hides an opener that follows a closer."""
+    assert _after("</details><details>\n").closers == "\n</details>", (
+        "a close-then-open line nets to zero but really leaves one open"
+    )
+    assert _after("<details></details>\n").closers == ""
+    assert _after("<details>\n", "</details><details>\n").closers == "\n</details>"
+
+
+def test_feed_leaves_the_instance_it_was_called_on_untouched() -> None:
+    """`cap_to_limit` peeks at the next state before deciding to take a line."""
+    outside = extract._OpenBlocks()
+    inside = outside.feed("```python\n")
+
+    assert outside.closers == "", "feed mutated the state it was asked about"
+    assert inside.closers == "\n```"
+
+
+def test_truncation_closes_a_fence_whose_content_looks_like_a_fence() -> None:
+    """Interior ```python lines keep the block open, so the cut still needs a closer."""
+    body = "```python\n" + ("```python\n" + "x" * 9 + "\n") * 20_000
+    assert len(body) > LIMIT, "body must actually need truncating"
+
+    capped = extract.cap_to_limit(body, REPO, "8.0.0", LIMIT)
+
+    kept = capped.split("\n\n---\n\n")[0]
+    assert kept.splitlines()[-1] == "```", "the still-open fence was left unclosed"
+    assert len(capped) <= LIMIT
+
+
+def test_a_limit_too_small_for_the_first_line_fails_loudly() -> None:
+    """A mid-line cut would strand an opening fence and swallow the notice."""
+    limit = 200
+    body = "```" + "z" * 300 + "\n" + "x" * 300 + "\n"
+    assert len(body) > limit
+
+    with pytest.raises(ValueError, match="first complete line"):
+        extract.cap_to_limit(body, REPO, "8.0.0", limit)
 
 
 def test_a_limit_too_small_for_the_notice_fails_loudly() -> None:

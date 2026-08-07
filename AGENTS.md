@@ -755,7 +755,7 @@ identity holds by construction.
 
 A language ships on all four surfaces or not at all —
 `tests/src/unit/test_locale_parity.py` enforces it. One Home Assistant language
-code (`de`, `es`, `fr`, `it`, `ru`, `zh-Hans`) names every file:
+code (`de`, `es`, `fr`, `it`, `nl`, `ru`, `zh-Hans`) names every file:
 `src/ha_mcp/settings_ui/locales/<code>.json`,
 `custom_components/ha_mcp_tools/translations/<code>.json`, and
 `homeassistant-addon{,-dev}/translations/<code>.yaml`.
@@ -773,6 +773,15 @@ spells the backend literal counts as untranslated), so does
 into, and at least one translated key must have English that addresses the
 reader in the second person, which is where `scripts/translate_locales.py`
 reads the catalog's address register.
+`policies.operators.exists_long` is the trap in that list: the condition editor
+renders it as its own dropdown label, but it is UI-only rather than a
+`PredicateOp` member, so no enum-derived check asks for it and a catalog
+without it reads English there until the sync fills it. Each surface reads that
+register from its own catalog, so a component catalog left at a key or two
+rests on whichever of them addresses the reader — losing it costs the engine
+the register for every later string of that language and says so only on
+stderr, which is why
+`test_every_shipped_component_catalog_gets_reader_addressing_samples` pins it.
 `src/ha_mcp/settings_ui/locales/README.md` names the tests — including the one
 that skips locally until `tests/js/` has its npm dependencies.
 
