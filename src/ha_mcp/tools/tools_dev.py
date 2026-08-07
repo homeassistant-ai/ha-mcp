@@ -175,7 +175,8 @@ def _apply_policy_guard_row_locks(fname: str, row: dict[str, Any]) -> None:
     Without this, agents reading the matrix to choose writable settings
     see ``editable: true`` on rows whose set/reset the guards refuse:
     ``enable_tool_security_policies`` while access is off, and
-    ``dev_tools_security_policy_access`` always (web UI / env var only).
+    ``dev_tools_security_policy_access`` plus
+    ``enable_security_policy_tool`` always (web UI / env var only).
     A row that is ALREADY non-editable (env-pinned) keeps its plain env
     story: the pin refuses the write before these guards would, and
     stamping a policy reason there would misdirect the fix toward the
@@ -192,6 +193,10 @@ def _apply_policy_guard_row_locks(fname: str, row: dict[str, Any]) -> None:
             row["editable"] = False
             row["locked_reason"] = "web_ui_or_env_only"
         row["value"] = _security_policy_access_enabled()
+    elif fname == "enable_security_policy_tool":
+        if row["editable"]:
+            row["editable"] = False
+            row["locked_reason"] = "web_ui_or_env_only"
 
 
 def _require_security_policy_access(operation: str) -> None:
@@ -223,14 +228,34 @@ def _require_security_policy_access(operation: str) -> None:
 
 
 def _guard_security_policy_setting(setting: str) -> None:
-    """Gate set/reset of the two settings that define the dev tools' leash.
+    """Gate set/reset of the settings that define the dev tools' leash.
 
     ``dev_tools_security_policy_access`` is refused unconditionally — even
     with access ON — so the agent can neither grant itself policy access
     nor revoke it; that toggle belongs to the web settings UI and the env
-    var alone. ``enable_tool_security_policies`` is the whole gating
-    engine's master switch, so writing it needs access.
+    var alone. ``enable_security_policy_tool`` gets the same unconditional
+    refusal: it registers ha_manage_security_policy, which can rewrite the
+    policies gating the agent, and its toggle belongs to the Tool Security
+    Policies tab (issue #2148) — a dev-tools write would reach the same
+    end state as unbuckling the leash, one restart later.
+    ``enable_tool_security_policies`` is the whole gating engine's master
+    switch, so writing it needs access.
     """
+    if setting == "enable_security_policy_tool":
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+                "'enable_security_policy_tool' cannot be changed by dev "
+                "tools: it registers ha_manage_security_policy, which can "
+                "rewrite the tool security policies gating the agent.",
+                context={"setting": setting},
+                suggestions=[
+                    "Change it in the web settings UI (Tool Security "
+                    "Policies tab) or via the ENABLE_SECURITY_POLICY_TOOL "
+                    "env var.",
+                ],
+            )
+        )
     if setting == "dev_tools_security_policy_access":
         raise_tool_error(
             create_error_response(

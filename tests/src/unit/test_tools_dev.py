@@ -1488,6 +1488,24 @@ class TestSecurityPolicyAccessGuard:
                 action="set", setting="enable_tool_security_policies", value=False
             )
 
+    async def test_policy_tool_flag_refused_without_access(self):
+        # Enabling the flag registers ha_manage_security_policy after the
+        # next restart — a shorter route to dropping gates than set_policy.
+        with pytest.raises(ToolError, match="enable_security_policy_tool"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set", setting="enable_security_policy_tool", value=True
+            )
+
+    @pytest.mark.usefixtures("_policy_access_on")
+    async def test_policy_tool_flag_refused_even_with_access(self):
+        # Unconditional, like the access toggle itself: exposing the
+        # policy-rewriting tool is a human decision made on the Tool
+        # Security Policies tab, never a dev-tools write.
+        with pytest.raises(ToolError, match="enable_security_policy_tool"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set", setting="enable_security_policy_tool", value=True
+            )
+
     @pytest.mark.usefixtures("_policy_access_on")
     async def test_policy_engine_toggle_allowed_with_access(self):
         result = await DevTools(MagicMock()).ha_dev_manage_settings(
@@ -1592,6 +1610,9 @@ class TestSecurityPolicyAccessGuard:
         assert toggle["editable"] is False
         assert toggle["locked_reason"] == "web_ui_or_env_only"
         assert toggle["value"] is False
+        tool_flag = rows["enable_security_policy_tool"]
+        assert tool_flag["editable"] is False
+        assert tool_flag["locked_reason"] == "web_ui_or_env_only"
 
     async def test_list_unlocks_engine_row_with_access(self):
         # Access granted via the override file (the web-UI path): the
@@ -1612,6 +1633,10 @@ class TestSecurityPolicyAccessGuard:
         assert toggle["editable"] is False
         assert toggle["locked_reason"] == "web_ui_or_env_only"
         assert toggle["value"] is True
+        # The policy-tool flag stays locked even with access granted.
+        tool_flag = rows["enable_security_policy_tool"]
+        assert tool_flag["editable"] is False
+        assert tool_flag["locked_reason"] == "web_ui_or_env_only"
 
     async def test_env_pinned_engine_row_keeps_env_story(self, monkeypatch):
         # An env-pinned row is refused by the pin before the guard would
