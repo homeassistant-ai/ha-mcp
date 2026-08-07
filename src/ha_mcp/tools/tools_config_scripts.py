@@ -707,6 +707,21 @@ class ConfigScriptTools:
                 transformed_config, resolved_id = await self._prepare_script_transform(
                     script_id, config_hash, python_transform
                 )
+                # Mirror the automations transform path (issue #2159): honor
+                # the category param and a transform-set "category" key (the
+                # REST API rejects unknown keys), validate before the write,
+                # and apply post-upsert.
+                transform_category = transformed_config.pop("category", None)
+                effective_category = (
+                    category if category is not None else transform_category
+                )
+                await validate_registry_ids(
+                    self._client,
+                    None,
+                    None,
+                    {"script": effective_category},
+                    fail_closed=True,
+                )
                 bp_warnings = _check_best_practices(transformed_config)
                 return await self._commit_script_transform(
                     script_id,
@@ -715,6 +730,7 @@ class ConfigScriptTools:
                     python_transform,
                     bp_warnings,
                     MandatoryBPS,
+                    effective_category,
                 )
 
             if config is None:
@@ -879,6 +895,7 @@ class ConfigScriptTools:
         python_transform: str,
         bp_warnings: BestPracticeCheckResult,
         MandatoryBPS: bool,
+        effective_category: str | None = None,
     ) -> dict[str, Any]:
         """Upsert a transformed script config and build the tool response.
 
@@ -897,6 +914,18 @@ class ConfigScriptTools:
 
         # Re-fetch to get authoritative hash (HA may normalize after save)
         _, new_config_hash, _ = await self._get_script_config_internal(script_id)
+
+        # Apply category to entity registry if provided (parity with the
+        # full-config branch — issue #2159)
+        if effective_category:
+            await apply_entity_category(
+                self._client,
+                f"script.{script_id}",
+                effective_category,
+                "script",
+                result,
+                "script",
+            )
 
         response: dict[str, Any] = {
             "success": True,

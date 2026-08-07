@@ -265,9 +265,21 @@ class TestHaSetEntityLabels:
         self, set_entity_tool, mock_client, label_operation
     ):
         """Assigning a label that is not in the registry must not be persisted."""
-        mock_client.send_websocket_message.return_value = _registry_list(
-            "label_id", "outdoor"
-        )
+        label_lookup = _registry_list("label_id", "outdoor")
+        if label_operation == "add":
+            # "add" resolves the entity's current labels before the pre-write
+            # validation runs.
+            mock_client.send_websocket_message.side_effect = [
+                {"success": True, "result": {"labels": []}},
+                label_lookup,
+            ]
+            expected_calls = [
+                {"type": "config/entity_registry/get", "entity_id": "light.test"},
+                {"type": "config/label_registry/list"},
+            ]
+        else:
+            mock_client.send_websocket_message.side_effect = [label_lookup]
+            expected_calls = [{"type": "config/label_registry/list"}]
 
         with pytest.raises(ToolError) as exc_info:
             await set_entity_tool(
@@ -279,9 +291,9 @@ class TestHaSetEntityLabels:
         error_data = json.loads(str(exc_info.value))
         assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert error_data["unknown_labels"] == ["ghost_label"]
-        assert mock_client.send_websocket_message.call_args_list == [
-            (({"type": "config/label_registry/list"},), {})
-        ]
+        assert [
+            c[0][0] for c in mock_client.send_websocket_message.call_args_list
+        ] == expected_calls
 
     @pytest.mark.asyncio
     async def test_unknown_label_removal_still_allowed(
@@ -1231,7 +1243,6 @@ class TestHaSetEntityLabelOperations:
         """label_operation='add' should add to existing labels."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
-                _registry_list("label_id", "existing_label", "new_label"),
                 # First call: get current entity (to fetch existing labels)
                 {
                     "success": True,
@@ -1240,7 +1251,9 @@ class TestHaSetEntityLabelOperations:
                         "labels": ["existing_label"],
                     },
                 },
-                # Second call: update entity with combined labels
+                # Second call: label-registry preflight for the added IDs
+                _registry_list("label_id", "existing_label", "new_label"),
+                # Third call: update entity with combined labels
                 {
                     "success": True,
                     "result": {
@@ -1326,7 +1339,6 @@ class TestHaSetEntityLabelOperations:
         """label_operation='add' should not create duplicates."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
-                _registry_list("label_id", "label_a", "label_b", "label_c"),
                 # First call: get current entity
                 {
                     "success": True,
@@ -1335,7 +1347,9 @@ class TestHaSetEntityLabelOperations:
                         "labels": ["label_a", "label_b"],
                     },
                 },
-                # Second call: update entity
+                # Second call: label-registry preflight for the added IDs
+                _registry_list("label_id", "label_a", "label_b", "label_c"),
+                # Third call: update entity
                 {
                     "success": True,
                     "result": {

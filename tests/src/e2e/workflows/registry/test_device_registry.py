@@ -370,9 +370,10 @@ class TestDeviceSet:
         """
         Test: Update device labels
 
-        Note: Labels must exist in Home Assistant's label registry before they
-        can be assigned to devices. This test verifies the update mechanism
-        works, even if labels don't exist (they'll be empty in that case).
+        Labels must exist in Home Assistant's label registry before they can
+        be assigned — unknown label IDs are rejected instead of being stored
+        as dangling references (issue #2159) — so the test creates its labels
+        first and removes them afterwards.
         """
         logger.info("Testing device labels update")
 
@@ -386,50 +387,53 @@ class TestDeviceSet:
             pytest.skip("No devices in test environment")
 
         device_id = list_data["devices"][0]["device_id"]
-        test_labels = ["test_label", "e2e_test"]
+
+        # Create the labels this test assigns.
+        test_labels = []
+        for label_name in ("Device E2E Label A", "Device E2E Label B"):
+            create_result = await mcp_client.call_tool(
+                "ha_config_set_label", {"name": label_name}
+            )
+            create_data = parse_mcp_result(create_result)
+            assert create_data.get("success"), f"Failed to create label: {create_data}"
+            test_labels.append(create_data["label_id"])
         logger.info(f"Updating device {device_id} labels: {test_labels}")
 
-        # Update device labels
-        # Note: If labels don't exist in label registry, they won't be applied
-        update_result = await mcp_client.call_tool(
-            "ha_set_device",
-            {
-                "device_id": device_id,
-                "labels": test_labels,
-            },
-        )
-        update_data = parse_mcp_result(update_result)
-
-        assert update_data.get("success"), f"Failed to update labels: {update_data}"
-        logger.info("Labels update command succeeded")
-
-        # Verify the response structure contains labels field
-        updated_entry = update_data.get("device_entry", {})
-        assert "labels" in updated_entry, "Response should contain labels field"
-        updated_labels = updated_entry.get("labels", [])
-        logger.info(f"Labels in response: {updated_labels}")
-
-        # Note: Labels may be empty if the labels don't exist in label_registry
-        # The important thing is that the API accepted the request
-        if updated_labels:
-            logger.info(f"Labels applied: {updated_labels}")
-        else:
-            logger.info(
-                "Labels were not applied (likely labels don't exist in label registry)"
+        try:
+            # Update device labels
+            update_result = await mcp_client.call_tool(
+                "ha_set_device",
+                {
+                    "device_id": device_id,
+                    "labels": test_labels,
+                },
             )
+            update_data = parse_mcp_result(update_result)
 
-        # Clear labels (set to empty)
-        logger.info("Clearing device labels")
-        clear_result = await mcp_client.call_tool(
-            "ha_set_device",
-            {
-                "device_id": device_id,
-                "labels": [],
-            },
-        )
-        clear_data = parse_mcp_result(clear_result)
-        assert clear_data.get("success"), f"Failed to clear labels: {clear_data}"
-        logger.info("Labels cleared")
+            assert update_data.get("success"), f"Failed to update labels: {update_data}"
+            updated_labels = update_data.get("device_entry", {}).get("labels", [])
+            assert sorted(updated_labels) == sorted(test_labels), (
+                f"Labels not applied: {update_data}"
+            )
+            logger.info(f"Labels applied: {updated_labels}")
+
+            # Clear labels (set to empty)
+            logger.info("Clearing device labels")
+            clear_result = await mcp_client.call_tool(
+                "ha_set_device",
+                {
+                    "device_id": device_id,
+                    "labels": [],
+                },
+            )
+            clear_data = parse_mcp_result(clear_result)
+            assert clear_data.get("success"), f"Failed to clear labels: {clear_data}"
+            logger.info("Labels cleared")
+        finally:
+            for label_id in test_labels:
+                await mcp_client.call_tool(
+                    "ha_config_remove_label", {"label_id": label_id}
+                )
 
     async def test_update_device_no_changes(self, mcp_client):
         """

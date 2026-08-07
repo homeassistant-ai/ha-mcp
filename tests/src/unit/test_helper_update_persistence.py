@@ -887,11 +887,16 @@ class TestFlowHelperRouting:
                 "result": {"entry_id": "entry-r1", "title": "m", "domain": "min_max"},
             }
         )
-        # First (and only) send_websocket_message raises — simulates
+        # The area-registry preflight (issue #2159, fail-closed) must
+        # succeed; every OTHER send_websocket_message — including the
+        # post-create entity_registry/list under test — raises, simulating a
         # connection drop or HA mid-restart during the registry list.
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=ConnectionError("WebSocket closed")
-        )
+        async def ws_handler(message):
+            if message.get("type") == "config/area_registry/list":
+                return {"success": True, "result": [{"area_id": "hallway"}]}
+            raise ConnectionError("WebSocket closed")
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
 
         result = await register_tools["ha_config_set_helper"](
             helper_type="min_max",

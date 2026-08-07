@@ -551,3 +551,58 @@ class TestSetScriptCategoryValidation:
 
         assert result["success"] is True
         mock_client.upsert_script_config.assert_called_once()
+
+    @pytest.fixture
+    def transform_tools(self, tools, sequence_config):
+        """Bypass hash arithmetic for python_transform tests (mirrors the
+        automations transform fixture)."""
+        tools._fetch_and_verify_hash = AsyncMock(
+            return_value=(dict(sequence_config), "test_script")
+        )
+        tools._get_script_config_internal = AsyncMock(
+            return_value=({}, "newhash", None)
+        )
+        return tools
+
+    async def test_unknown_category_rejected_on_python_transform(
+        self, transform_tools, mock_client
+    ):
+        """The transform path applies a category too — and must gate it too."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._ws_handler("lighting")
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await transform_tools.ha_config_set_script(
+                script_id="test_script",
+                python_transform="config['mode'] = 'single'",
+                config_hash="prior_hash",
+                category="ghost_category",
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        mock_client.upsert_script_config.assert_not_called()
+
+    async def test_transform_category_param_applied(self, transform_tools, mock_client):
+        """The category param is honored on the transform path (was ignored)."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._ws_handler("lighting")
+        )
+
+        result = await transform_tools.ha_config_set_script(
+            script_id="test_script",
+            python_transform="config['mode'] = 'single'",
+            config_hash="prior_hash",
+            category="lighting",
+        )
+
+        assert result["success"] is True
+        assert result["category"] == "lighting"
+        category_updates = [
+            c[0][0]
+            for c in mock_client.send_websocket_message.call_args_list
+            if c[0][0].get("type") == "config/entity_registry/update"
+        ]
+        assert category_updates
+        assert category_updates[0]["categories"] == {"script": "lighting"}
