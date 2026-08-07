@@ -435,6 +435,60 @@ async def test_reconfigure_does_not_verify_setup_retry_as_loaded() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reconfigure_retries_transient_reload_before_classifying_state() -> None:
+    """A transient setup-in-progress state is re-read before reporting unknown."""
+    before = {
+        "entry_id": "reload-entry",
+        "domain": "shelly",
+        "state": "loaded",
+        "supports_reconfigure": True,
+        "unique_id": "84FCE6387220",
+    }
+    transitional = {**before, "state": "setup_in_progress", "reason": "reloading"}
+    after = {**before, "state": "loaded"}
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(side_effect=[before, transitional, after])
+    client.list_entity_registry = AsyncMock(
+        return_value=[
+            {
+                "entity_id": "switch.reload",
+                "config_entry_id": "reload-entry",
+                "device_id": "device-reload",
+            }
+        ]
+    )
+    client.list_device_registry = AsyncMock(
+        return_value=[
+            {
+                "id": "device-reload",
+                "connections": [["mac", "84:FC:E6:38:72:20"]],
+            }
+        ]
+    )
+    client.list_config_entries = AsyncMock(return_value=[after])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "reload-flow",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client,
+        "reload-entry",
+        config={"host": "10.0.50.170"},
+    )
+
+    assert result["status"] == "applied_and_verified"
+    assert result["verification"]["entry_state"] == "loaded"
+    assert client.get_config_entry.await_count == 3
+
+
+@pytest.mark.asyncio
 async def test_reconfigure_reports_applied_but_unverified_after_commit(
     reconfig_entry: dict[str, object],
 ) -> None:
@@ -1352,6 +1406,46 @@ async def test_reconfigure_rejects_malformed_registry_response() -> None:
             client,
             "malformed-registry-entry",
             config={"host": "10.0.50.186"},
+        )
+
+    client.start_reconfigure_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_rejects_malformed_config_entry_row() -> None:
+    """A malformed config-entry row cannot disable duplicate protection."""
+    before = {
+        "entry_id": "malformed-entry-row",
+        "domain": "shelly",
+        "supports_reconfigure": True,
+    }
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=before)
+    client.list_entity_registry = AsyncMock(
+        return_value=[
+            {
+                "entity_id": "switch.malformed",
+                "config_entry_id": "malformed-entry-row",
+                "device_id": "shared-device",
+            }
+        ]
+    )
+    client.list_device_registry = AsyncMock(
+        return_value=[
+            {
+                "id": "shared-device",
+                "config_entries": ["malformed-entry-row", "related-entry"],
+            }
+        ]
+    )
+    client.list_config_entries = AsyncMock(return_value=["malformed"])
+    client.start_reconfigure_flow = AsyncMock()
+
+    with pytest.raises(HomeAssistantAPIError):
+        await reconfigure_config_entry(
+            client,
+            "malformed-entry-row",
+            config={"host": "10.0.50.191"},
         )
 
     client.start_reconfigure_flow.assert_not_awaited()

@@ -54,6 +54,7 @@ _KNOWN_AUXILIARY_ENTRY_DOMAINS = frozenset(
     {"derivative", "switch_as_x", "threshold", "utility_meter"}
 )
 _DEVICE_CONNECTION_ID_TYPES = frozenset({"ieee", "mac", "zigbee"})
+_TRANSIENT_RECONFIGURE_STATES = frozenset({"setup_in_progress"})
 
 
 @dataclass(frozen=True)
@@ -246,7 +247,7 @@ async def _same_domain_related_entry_ids(
     if not related_entry_ids:
         return []
 
-    entries = await client.list_config_entries()
+    entries = await _validated_config_entry_rows(client, entry_id)
     entries_by_id = {
         item.get("entry_id"): item
         for item in entries
@@ -276,6 +277,22 @@ async def _same_domain_related_entry_ids(
     identity["auxiliary_related_entry_ids"] = auxiliary
     identity["blocking_related_entry_ids"] = blocking
     return blocking
+
+
+async def _validated_config_entry_rows(
+    client: Any, entry_id: str
+) -> list[dict[str, Any]]:
+    """Read config entries and reject malformed rows before identity checks."""
+    result = await client.list_config_entries()
+    if not isinstance(result, list) or any(
+        not isinstance(row, dict) or not isinstance(row.get("entry_id"), str)
+        for row in result
+    ):
+        raise HomeAssistantAPIError(
+            f"Unexpected config-entry registry response for {entry_id}",
+            status_code=500,
+        )
+    return result
 
 
 async def _optional_registry_rows(
@@ -323,6 +340,11 @@ def _verification_state(before_available: bool, after_available: bool) -> str:
     if before_available:
         return "unavailable_after_change"
     return "unavailable_before_change"
+
+
+def _is_transient_reconfigure_state(entry: dict[str, Any]) -> bool:
+    """Return whether HA is still transitioning the entry after a flow."""
+    return entry.get("state") in _TRANSIENT_RECONFIGURE_STATES
 
 
 def _raise_identity_mismatch(
@@ -812,7 +834,7 @@ async def _verify_reconfigured_entry(
     identity_unique_ids = {
         value for value in (before_unique_id, after_unique_id) if value is not None
     }
-    entries = await client.list_config_entries()
+    entries = await _validated_config_entry_rows(client, entry_id)
     same_identity_entries = [
         entry
         for entry in entries
@@ -1191,6 +1213,13 @@ async def _verify_reconfigure_result(
                 after_identity=after_identity,
                 expected_identity=expected_identity,
             )
+            if _is_transient_reconfigure_state(current_after) and attempt < 2:
+                logger.info(
+                    "Reconfigure verification observed transient state %s; retrying",
+                    current_after.get("state"),
+                )
+                await asyncio.sleep(0.25 * (attempt + 1))
+                continue
             break
         except ToolError as verification_error:
             _raise_post_commit_verification_error(
