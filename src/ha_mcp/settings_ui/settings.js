@@ -232,6 +232,17 @@ const policyState = {
   enabled: false,
   enabledKnown: false,
   gatedTools: new Set(),
+  // enable_security_policy_tool — registers ha_manage_security_policy, the
+  // MCP tool that can rewrite these rules. Independent of `enabled`: it
+  // governs who may edit the policy, not whether it is enforced.
+  manageToolEnabled: false,
+  manageToolKnown: false,
+  // The raw /api/settings/features entries behind the two switches
+  // (origin / editable / env_var), or null when the fetch failed. An
+  // env-pinned flag reports editable:false and every save is rejected, so
+  // the switch must lock and explain — same as the generated feature rows.
+  masterFlag: null,
+  manageToolFlag: null,
 };
 
 // Read Only Mode (read_only_mode feature flag) — same tri-state shape
@@ -243,12 +254,41 @@ const policyState = {
 const readOnlyState = {
   enabled: false,
   enabledKnown: false,
+  // Raw flag entry, as with the policy switches above: READ_ONLY_MODE can
+  // be env-pinned (Docker / standalone), and a switch that looks live
+  // while every save 4xxs is worse than one that says why it is locked.
+  flag: null,
 };
 
 // Mixed read/write tools that stay enabled in Read Only Mode (their
 // write operations are blocked server-side at call time). Populated
 // from data.read_only_exempt in loadTools().
 let READ_ONLY_EXEMPT = new Set();
+
+// Whether the features payload actually reported one flag. "Known" is per
+// FLAG, not per response: /api/settings/features emits `value` for every
+// flag it knows, so a missing entry means this server build (or an overlay
+// in front of it) did not report that flag — not that it is off. Treating
+// absence as false renders the switch off-and-editable, and the next save
+// would overwrite an enabled server value with it.
+function flagReported(flag) {
+  return !!flag && flag.value !== undefined && flag.value !== null;
+}
+
+// Reset every flag-backed switch to "unknown". Shared by loadPolicyState's
+// two failure paths so a transient 503 and a network error leave identical
+// state — the switches then render indeterminate + disabled, not "off".
+function _clearFlagSwitchState() {
+  policyState.enabled = false;
+  policyState.enabledKnown = false;
+  policyState.masterFlag = null;
+  policyState.manageToolEnabled = false;
+  policyState.manageToolKnown = false;
+  policyState.manageToolFlag = null;
+  readOnlyState.enabled = false;
+  readOnlyState.enabledKnown = false;
+  readOnlyState.flag = null;
+}
 
 async function loadPolicyState() {
   // policyState.enabled mirrors the addon-config flag
@@ -260,23 +300,28 @@ async function loadPolicyState() {
     const fresp = await fetch('./api/settings/features');
     if (fresp.ok) {
       const fdata = await fresp.json();
-      const flag = (fdata.flags || {})['enable_tool_security_policies'];
+      // The payload also carries is_addon, which envLockedNoteHtml needs
+      // for its add-on-vs-standalone wording. Landing straight on the
+      // Policies tab never runs loadFeatureFlags(), so pick it up here too.
+      if (typeof fdata.is_addon === 'boolean') IS_ADDON_MODE = fdata.is_addon;
+      const flags = fdata.flags || {};
+      const flag = flags['enable_tool_security_policies'];
       policyState.enabled = !!(flag && flag.value);
-      policyState.enabledKnown = true;
-      const roFlag = (fdata.flags || {})['read_only_mode'];
+      policyState.enabledKnown = flagReported(flag);
+      policyState.masterFlag = flag || null;
+      const toolFlag = flags['enable_security_policy_tool'];
+      policyState.manageToolEnabled = !!(toolFlag && toolFlag.value);
+      policyState.manageToolKnown = flagReported(toolFlag);
+      policyState.manageToolFlag = toolFlag || null;
+      const roFlag = flags['read_only_mode'];
       readOnlyState.enabled = !!(roFlag && roFlag.value);
-      readOnlyState.enabledKnown = true;
+      readOnlyState.enabledKnown = flagReported(roFlag);
+      readOnlyState.flag = roFlag || null;
     } else {
-      policyState.enabled = false;
-      policyState.enabledKnown = false;
-      readOnlyState.enabled = false;
-      readOnlyState.enabledKnown = false;
+      _clearFlagSwitchState();
     }
   } catch (_e) {
-    policyState.enabled = false;
-    policyState.enabledKnown = false;
-    readOnlyState.enabled = false;
-    readOnlyState.enabledKnown = false;
+    _clearFlagSwitchState();
   }
   try {
     const r = await fetch('./api/policy/config');
@@ -752,15 +797,14 @@ function isReadOnlyForcedOff(t) {
 }
 
 function syncReadOnlyToggle() {
-  const cb = document.getElementById('read-only-mode-toggle');
-  if (cb) {
-    cb.checked = !!readOnlyState.enabled;
-  } else {
-    // The toggle is part of the Tools-tab template; a missing element
-    // means template drift (or this surface lacks the row). Warn once so
-    // the desync is debuggable instead of silently no-op.
-    console.warn('syncReadOnlyToggle: #read-only-mode-toggle not found');
-  }
+  applyFlagToggle({
+    toggleId: 'read-only-mode-toggle',
+    noteId: 'read-only-locked',
+    fieldName: 'read_only_mode',
+    value: readOnlyState.enabled,
+    known: readOnlyState.enabledKnown,
+    flag: readOnlyState.flag,
+  });
   // When the features fetch failed, readOnlyState.enabledKnown is false
   // and render() paints write tools as enabled even though the server may
   // still block them. Surface that uncertainty. Function-scope lookup
@@ -935,6 +979,12 @@ function render() {
         : (isFeatureGated ? false : (isMandatory || state === 'pinned' || DEFAULT_PINNED.includes(t.name))));
       const lockEnabled = roForcedOff || isEnvPinned || isMandatory || isFeatureGated;
       const lockPinned = roForcedOff || isEnvPinned || isMandatory || isFeatureGated || !isEnabled;
+      // The security gate is a policy RULE keyed by tool name, so it can be
+      // authored for a tool that is not registered yet. Feature-gated rows
+      // therefore keep this switch live (when policies are on): otherwise
+      // the first enable+restart would expose the tool ungated, which is
+      // exactly the window ha_manage_security_policy must not have.
+      const canGate = policyState.enabled && (isEnabled || isFeatureGated);
 
       const sourceDesc = (t.description || '').split('\n')[0].slice(0, 120);
       const toolCopy = localizedToolCopy(t, sourceDesc);
@@ -957,12 +1007,24 @@ function render() {
       // destructive tool showing no tier badge would understate its risk.
       else badges += `<span class="badge unknown">${escapeHtml(category) || '?'}</span>`;
 
+      // Two flavors of "how to turn this on": beta gates point at the dev
+      // App (add-on) config, non-beta ones (the policy-editing tool) at
+      // their own settings tab. disabled_by_beta comes from the server so
+      // the client never has to know which flags are beta.
       const gatedNote = disabledBy
-        ? `<div class="disabled-by-note">${tHtml(
-            'tools.notes.beta_disabled',
-            {setting: `<code>${escapeHtml(disabledBy)}</code>`},
-            'Beta. Set {setting} in the dev App (add-on) config or the matching env var (see docs/beta.md).'
-          )}</div>`
+        ? `<div class="disabled-by-note">${
+            t.disabled_by_beta === false
+              ? tHtml(
+                  'tools.notes.gated_disabled',
+                  {setting: `<code>${escapeHtml(disabledBy)}</code>`},
+                  'Disabled. Turn on {setting} — the policy-editing tool\'s toggle is on the Tool Security Policies tab — then restart the App (add-on).'
+                )
+              : tHtml(
+                  'tools.notes.beta_disabled',
+                  {setting: `<code>${escapeHtml(disabledBy)}</code>`},
+                  'Beta. Set {setting} in the dev App (add-on) config or the matching env var (see docs/beta.md).'
+                )
+          }</div>`
         : '';
       const envPinnedNote = isEnvPinned
         ? `<div class="feature-locked-note">${tHtml(
@@ -1029,12 +1091,12 @@ function render() {
               `<span class="slider"></span></label>` +
             `<span>${escapeHtml(tr('tools.states.pinned', {}, 'pinned'))}</span>` +
           `</div>` +
-          `<div class="toggle-group ${(policyState.enabled && isEnabled) ? '' : 'disabled-toggle'}" ` +
+          `<div class="toggle-group ${canGate ? '' : 'disabled-toggle'}" ` +
                `title="${policyState.enabled ? '' : escapeHtml(tr('tools.security.enable_first', {}, 'Enable Tool Security Policies in App (add-on) config first.'))}">` +
             `<label class="switch"><input type="checkbox" name="tool:${escapeHtml(t.name)}:gated" data-tool="${escapeHtml(t.name)}" data-field="gated" ` +
               `aria-label="${escapeHtml(tr('tools.aria.security_gated', {title}, `${title} security gated`))}" ` +
               `${policyState.gatedTools.has(t.name) ? 'checked' : ''} ` +
-              `${(policyState.enabled && isEnabled) ? '' : 'disabled'}>` +
+              `${canGate ? '' : 'disabled'}>` +
               `<span class="slider"></span></label>` +
             `<span>${escapeHtml(tr('tools.states.security_gated', {}, 'security gated'))}</span>` +
           `</div>` +
@@ -2439,7 +2501,20 @@ async function saveFeatureFlag(fieldName, value) {
   if (data?.restart_required) {
     markRestartRequired();
   }
-  return true;
+  // The parsed body (truthy, so `if (!ok)` call sites are unaffected), not
+  // a bare true: both save paths echo `applied` — the server stating what
+  // it persisted — which a caller can fall back on when the follow-up
+  // re-read fails.
+  return data || {};
+}
+
+// The value the server echoed back for one field of a saveFeatureFlag
+// response, or undefined when the body carried no usable echo (a 200 with
+// a truncated body, or a future response shape without `applied`).
+function appliedFlagValue(saved, fieldName) {
+  const applied = saved && saved.applied;
+  const value = applied ? applied[fieldName] : undefined;
+  return typeof value === 'boolean' ? value : undefined;
 }
 
 // ===== Tool Security Policies tab =====
@@ -2455,20 +2530,100 @@ async function saveFeatureFlag(fieldName, value) {
 // This mirrors the syncPolicyRule() flow used by the Tools-tab toggle.
 let policyRuleEdits = {};
 
-async function syncPolicyMasterToggle() {
+async function syncPolicyGlobalToggles() {
   // The master toggle on this tab is just a UI mirror of the same
   // `enable_tool_security_policies` feature flag the Server Settings
   // tab exposes — the addon-config flag is the single source of truth.
   // We rely on loadPolicyState() to have populated policyState.enabled
   // (it fetches /api/settings/features) so the only work here is to
   // reflect that bit into the checkbox.
+  //
+  // The policy-editing tool toggle (enable_security_policy_tool) rides
+  // the same fetch. It is NOT nested under the master: registering
+  // ha_manage_security_policy is independent of whether the rules are
+  // enforced, so the row stays usable with the master off.
   await loadPolicyState();
-  const cb = document.getElementById('policy-master-toggle');
-  if (cb) cb.checked = !!policyState.enabled;
+  paintPolicyGlobalToggles();
+}
+
+// Paint-only half of the sync above: both switches plus the unknown-state
+// notice, from whatever policyState currently holds. Split out so a save
+// handler that has just re-read the state can repaint without refetching.
+function paintPolicyGlobalToggles() {
+  applyFlagToggle({
+    toggleId: 'policy-master-toggle',
+    noteId: 'policy-master-locked',
+    fieldName: 'enable_tool_security_policies',
+    value: policyState.enabled,
+    known: policyState.enabledKnown,
+    flag: policyState.masterFlag,
+  });
+  applyFlagToggle({
+    toggleId: 'policy-manage-tool-toggle',
+    noteId: 'policy-manage-tool-locked',
+    fieldName: 'enable_security_policy_tool',
+    value: policyState.manageToolEnabled,
+    known: policyState.manageToolKnown,
+    flag: policyState.manageToolFlag,
+  });
+  // When a flag could not be read — the whole fetch failed, or the payload
+  // simply didn't carry that entry — an unchecked-and-editable switch would
+  // claim "off" for a server that may well have it on. Surface that
+  // uncertainty whenever EITHER switch is unknown (same treatment the
+  // Tools-tab read-only notice gets). Function-scope lookup (guarded) so
+  // this id need not be a top-level handler binding.
+  const notice = document.getElementById('policyUnknownNotice');
+  if (notice) {
+    notice.classList.toggle(
+      'show',
+      !policyState.enabledKnown || !policyState.manageToolKnown
+    );
+  }
+}
+
+// Paint one hand-written feature-flag switch — the two on this tab and the
+// Tools-tab Read Only Mode one — giving them what renderFeatureRows gives
+// the generated Server Settings rows:
+//   unknown (the features fetch failed) -> indeterminate + disabled, so
+//     the checkbox cannot be read as the server's answer;
+//   env-pinned (editable:false) -> disabled with the same locked note,
+//     because every save of a pinned flag is rejected server-side;
+//   otherwise -> checked from the value, editable.
+function applyFlagToggle({toggleId, noteId, fieldName, value, known, flag}) {
+  const cb = document.getElementById(toggleId);
+  if (!cb) {
+    // Part of a static panel template; a missing element means template
+    // drift. Warn so the desync is debuggable instead of a silent no-op.
+    console.warn('applyFlagToggle: #' + toggleId + ' not found');
+    return;
+  }
+  const locked = known && !!flag && flag.editable === false;
+  cb.checked = !!value;
+  cb.indeterminate = !known;
+  cb.disabled = !known || locked;
+  const row = cb.closest('.feature-row');
+  if (row) row.classList.toggle('locked', locked);
+  const note = document.getElementById(noteId);
+  if (!note) {
+    console.warn('applyFlagToggle: #' + noteId + ' not found');
+    return;
+  }
+  if (!locked) {
+    note.innerHTML = '';
+    note.style.display = 'none';
+    return;
+  }
+  // Same two-branch copy renderFeatureRows uses: env vars get the
+  // addon-aware "unset it to edit" banner, other non-editable origins
+  // their own note. tHtml/escapeHtml keep catalog strings safe in innerHTML.
+  note.innerHTML = flag.origin === 'env'
+    ? envLockedNoteHtml(flag.env_var, fieldName)
+    : escapeHtml(ORIGIN_LOCKED_NOTE[flag.origin] || '');
+  note.style.display = '';
 }
 
 async function policyLoadConfig() {
-  await syncPolicyMasterToggle();
+  await syncPolicyGlobalToggles();
   const errEl = document.getElementById('policy-load-error');
   if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
   let resp;
@@ -3380,8 +3535,8 @@ document.getElementById('policy-save-global-btn').addEventListener('click', save
 // shows up in Server Settings (and the addon's config.yaml) on reload.
 document.getElementById('policy-master-toggle').addEventListener('change', async (e) => {
   const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
-  const ok = await saveFeatureFlag('enable_tool_security_policies', e.target.checked);
-  if (!ok) {
+  const saved = await saveFeatureFlag('enable_tool_security_policies', e.target.checked);
+  if (!saved) {
     // Save definitely failed — the server still has the old value.
     // Revert the checkbox and surface the failure (set the status AFTER
     // the revert so it isn't clobbered).
@@ -3393,15 +3548,51 @@ document.getElementById('policy-master-toggle').addEventListener('change', async
     ), false, true);
     return;
   }
-  // Re-read the truth from the server and sync the checkbox back to
-  // it. If the follow-up read can't confirm what the server has, revert
-  // to the pre-flip value so the UI doesn't lie about persisted state.
+  // Re-read the truth from the server. If that read can't confirm, fall
+  // back to the value the save echoed — still the server telling us what
+  // it wrote. Only when neither is available does the switch go to the
+  // unknown treatment; reverting to the pre-flip value would assert a
+  // state the server no longer has.
   await loadPolicyState();
-  if (policyState.enabledKnown) {
-    e.target.checked = !!policyState.enabled;
-  } else {
-    e.target.checked = previous;
+  if (!policyState.enabledKnown) {
+    const applied = appliedFlagValue(saved, 'enable_tool_security_policies');
+    if (applied !== undefined) {
+      policyState.enabled = applied;
+      policyState.enabledKnown = true;
+    }
   }
+  paintPolicyGlobalToggles();
+});
+
+// Policy-editing tool toggle (enable_security_policy_tool) — same
+// save-then-verify flow as the master above. The tool only appears in or
+// disappears from the MCP catalog on the next restart, which
+// saveFeatureFlag's restart-required banner already tells the user.
+document.getElementById('policy-manage-tool-toggle').addEventListener('change', async (e) => {
+  const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
+  const saved = await saveFeatureFlag('enable_security_policy_tool', e.target.checked);
+  if (!saved) {
+    // Save definitely failed — the server still has the old value.
+    // Revert the checkbox and surface the failure (set the status AFTER
+    // the revert so it isn't clobbered).
+    e.target.checked = previous;
+    updateStatus(t(
+      'policies.errors.manage_tool_save',
+      {},
+      'Policy-editing tool change did not save. The server still has the previous value'
+    ), false, true);
+    return;
+  }
+  // Same confirm-then-fall-back order as the master toggle above.
+  await loadPolicyState();
+  if (!policyState.manageToolKnown) {
+    const applied = appliedFlagValue(saved, 'enable_security_policy_tool');
+    if (applied !== undefined) {
+      policyState.manageToolEnabled = applied;
+      policyState.manageToolKnown = true;
+    }
+  }
+  paintPolicyGlobalToggles();
 });
 
 // Read Only Mode toggle (Tools tab, above the search box) — same flag
@@ -3409,8 +3600,8 @@ document.getElementById('policy-master-toggle').addEventListener('change', async
 // /api/settings/features, re-read server truth, revert on failure.
 document.getElementById('read-only-mode-toggle').addEventListener('change', async (e) => {
   const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
-  const ok = await saveFeatureFlag('read_only_mode', e.target.checked);
-  if (!ok) {
+  const saved = await saveFeatureFlag('read_only_mode', e.target.checked);
+  if (!saved) {
     // Save definitely failed — the server still has the previous value.
     // Revert the checkbox and leave readOnlyState.enabled untouched (do
     // NOT write an unconfirmed value). Set the status AFTER the revert
@@ -3424,15 +3615,19 @@ document.getElementById('read-only-mode-toggle').addEventListener('change', asyn
     ), false, true);
     return;
   }
-  // Re-read the truth from the server and sync the checkbox back to it.
+  // Re-read the truth from the server; if that read couldn't confirm,
+  // fall back to the value the save echoed rather than reverting to a
+  // pre-flip state the server no longer has. Neither available means the
+  // switch goes unknown (indeterminate + the #roUnknownNotice).
   await loadPolicyState();
-  if (readOnlyState.enabledKnown) {
-    e.target.checked = !!readOnlyState.enabled;
-  } else {
-    // Save reported OK but the follow-up read couldn't confirm — revert
-    // to the pre-flip value rather than assert an unconfirmed state.
-    e.target.checked = previous;
+  if (!readOnlyState.enabledKnown) {
+    const applied = appliedFlagValue(saved, 'read_only_mode');
+    if (applied !== undefined) {
+      readOnlyState.enabled = applied;
+      readOnlyState.enabledKnown = true;
+    }
   }
+  syncReadOnlyToggle();
   // Re-render so write-tool rows reflect the forced-off state instantly.
   render();
 });

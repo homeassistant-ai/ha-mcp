@@ -96,7 +96,16 @@ def _register_module(mcp: Any, module: Any, func_name: str | None) -> None:
             None,
         )
     if register_fn is not None:
-        register_fn(mcp, MagicMock(), smart_tools=MagicMock(), device_tools=MagicMock())
+        # Same kwargs ToolsRegistry.register_all builds — including
+        # ``server``, which register_security_policy_tools reads strictly
+        # (kwargs["server"]) because the registry always supplies it.
+        register_fn(
+            mcp,
+            MagicMock(),
+            smart_tools=MagicMock(),
+            device_tools=MagicMock(),
+            server=MagicMock(),
+        )
 
 
 def _all_registered_tools() -> dict[str, Any]:

@@ -531,6 +531,7 @@ def main() -> int:
     enable_tool_security_policies = False  # default
     read_only_mode = False  # default (discussion #1569 — non-beta, off by default)
     redact_secrets = False  # default (issue #2157 — non-beta, off by default)
+    enable_security_policy_tool = False  # default (issue #2148 — non-beta, off)
     enable_yaml_config_editing = False  # default
     yaml_config_in_config = False  # presence flag
     # Per-key sub-gates of enable_yaml_config_editing (dev-addon schema
@@ -604,6 +605,9 @@ def main() -> int:
             )
             read_only_mode = resolve_bool_option(config, "read_only_mode", False)
             redact_secrets = resolve_bool_option(config, "redact_secrets", False)
+            enable_security_policy_tool = resolve_bool_option(
+                config, "enable_security_policy_tool", False
+            )
             # Beta sub-flag presence tracking. On stable-addon, the 5
             # beta keys are NOT in config.yaml
             # schema — options.json carries none of them. If we wrote
@@ -777,6 +781,11 @@ def main() -> int:
     os.environ["READ_ONLY_MODE"] = str(read_only_mode).lower()
     # REDACT_SECRETS is likewise non-beta and in both addon schemas.
     os.environ["REDACT_SECRETS"] = str(redact_secrets).lower()
+    # ENABLE_SECURITY_POLICY_TOOL is non-beta and in BOTH addon schemas too,
+    # so it is written unconditionally. In addon mode this export is the ONLY
+    # channel that reaches the server: get_feature_flag_origin reports
+    # 'addon' for every non-beta flag and the override-file applier skips it.
+    os.environ["ENABLE_SECURITY_POLICY_TOOL"] = str(enable_security_policy_tool).lower()
     # ENABLE_MANDATORY_BPS is non-beta and default-ON, so it is written
     # unconditionally (like the stable core settings above) — never
     # presence-gated or beta-master-gated like the beta sub-flags below.

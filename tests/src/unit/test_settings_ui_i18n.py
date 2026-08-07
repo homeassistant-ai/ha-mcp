@@ -230,6 +230,55 @@ def test_catalog_without_a_native_name_is_rejected(tmp_path: Path) -> None:
         load_catalogs(tmp_path)
 
 
+@pytest.mark.parametrize("blank", ["", " ", "\n\t "])
+@pytest.mark.parametrize("section", ["messages", "tool_groups"])
+def test_blank_catalog_value_is_rejected(
+    tmp_path: Path, section: str, blank: str
+) -> None:
+    """Blank and absent look the same in JSON and behave oppositely on screen.
+
+    English is the per-key fallback only for a key that is ABSENT: `t()` and
+    `tHtml()` resolve with `hasOwnProperty`, so an empty string wins over the
+    English source and renders as nothing. A translator emptying a value to
+    mean "not translated yet" would silently blank that piece of UI, and no
+    other check objects — the parity ceilings count a key untranslated only
+    when it equals the English or is missing.
+    """
+    catalog = {
+        "meta": {"native_name": "English", "dir": "ltr"},
+        "messages": {},
+        "tool_groups": {},
+        "tools": {},
+    }
+    catalog[section] = {"a": blank}
+    (tmp_path / "en.json").write_text(json.dumps(catalog), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=re.escape(f"en.json.{section}.a is blank")):
+        load_catalogs(tmp_path)
+
+
+@pytest.mark.parametrize("blank", ["", " ", "\n\t "])
+@pytest.mark.parametrize("field", ["title", "description"])
+def test_blank_tool_field_is_rejected(tmp_path: Path, field: str, blank: str) -> None:
+    """Same rule on the per-tool surface, which validates separately."""
+    (tmp_path / "en.json").write_text(
+        json.dumps(
+            {
+                "meta": {"native_name": "English", "dir": "ltr"},
+                "messages": {},
+                "tool_groups": {},
+                "tools": {"ha_get_state": {field: blank}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError, match=re.escape(f"en.json.tools.ha_get_state.{field} is blank")
+    ):
+        load_catalogs(tmp_path)
+
+
 def test_inline_payload_escapes_script_breakout() -> None:
     serialized = serialize_payload({"messages": {"unsafe": "</script><b>&"}})
 

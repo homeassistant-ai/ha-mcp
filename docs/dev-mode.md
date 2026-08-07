@@ -86,14 +86,19 @@ Reads stay available either way: `get_policy`, `list_tools`, `list_pending`,
 and the `list` settings matrix are never gated. The matrix marks the guarded
 rows honestly: `enable_tool_security_policies` reports `editable: false` with
 `locked_reason: policy_access_required` while access is off, and
-`dev_tools_security_policy_access` reports `editable: false` with
-`locked_reason: web_ui_or_env_only`. An env-pinned row keeps its plain env
-story instead — the pin is the lock an operator must lift first.
+`dev_tools_security_policy_access` and `enable_security_policy_tool` report
+`editable: false` with `locked_reason: web_ui_or_env_only`. An env-pinned row
+keeps its plain env story instead — the pin is the lock an operator must lift
+first.
 
-The toggle applies **live** — no restart needed — and the dev tools' settings
-surfaces never write it: `set` and `reset` of
-`dev_tools_security_policy_access` are refused even while access is on. Flip
-it in the web settings UI or via the env var.
+`dev_tools_security_policy_access` applies **live** — no restart needed —
+while `enable_security_policy_tool` takes effect on the next restart. The dev
+tools' settings surfaces never write either: `set` and `reset` of
+`dev_tools_security_policy_access` are refused even while access is on, and so
+are `set` and `reset` of `enable_security_policy_tool` — flipping that flag
+registers `ha_manage_security_policy` (which can rewrite the policies) once
+the server restarts, the same end state as unbuckling the leash. Flip either
+in the web settings UI or via the env vars.
 
 This is a leash on the dev tools' settings surfaces, **not a sandbox**. Dev
 mode's `update_source` / `restart` can still replace the running server
