@@ -1431,6 +1431,127 @@ async def test_reconfigure_reads_mac_from_device_connections(
 
 
 @pytest.mark.asyncio
+async def test_reconfigure_reads_mac_from_device_identifiers(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """Expected MAC validation also accepts device-registry identifiers."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.list_entity_registry = AsyncMock(
+        return_value=[
+            {
+                "entity_id": "switch.living_room",
+                "config_entry_id": "entry-123",
+                "device_id": "device-living-room",
+            }
+        ]
+    )
+    client.list_device_registry = AsyncMock(
+        return_value=[
+            {
+                "id": "device-living-room",
+                "connections": [],
+                "identifiers": [["shelly", "AA:BB:CC:DD:EE:FF"]],
+            }
+        ]
+    )
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-identifier-mac",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client,
+        "entry-123",
+        config={"host": "10.0.50.187"},
+        expected_mac="AA:BB:CC:DD:EE:FF",
+    )
+
+    assert result["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_rejects_mac_identity_drift(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """A changed registry MAC is applied-but-unverified, not a clean success."""
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.list_entity_registry = AsyncMock(side_effect=[[], []])
+    client.list_device_registry = AsyncMock(
+        side_effect=[
+            [
+                {
+                    "id": "device-living-room",
+                    "config_entries": ["entry-123"],
+                    "connections": [["mac", "AA:BB:CC:DD:EE:FF"]],
+                }
+            ],
+            [
+                {
+                    "id": "device-living-room",
+                    "config_entries": ["entry-123"],
+                    "connections": [["mac", "11:22:33:44:55:66"]],
+                }
+            ],
+        ]
+    )
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-mac-drift",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client,
+            "entry-123",
+            config={"host": "10.0.50.188"},
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == "applied_but_unverified"
+    assert "MAC" in payload["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_rejects_malformed_registry_row() -> None:
+    """A malformed registry row fails closed with an API error."""
+    before = {
+        "entry_id": "malformed-row-entry",
+        "domain": "shelly",
+        "supports_reconfigure": True,
+    }
+    client = MagicMock()
+    client.get_config_entry = AsyncMock(return_value=before)
+    client.list_entity_registry = AsyncMock(return_value=["malformed"])
+    client.list_device_registry = AsyncMock(return_value=[])
+    client.start_reconfigure_flow = AsyncMock()
+
+    with pytest.raises(HomeAssistantAPIError):
+        await reconfigure_config_entry(
+            client,
+            "malformed-row-entry",
+            config={"host": "10.0.50.189"},
+        )
+
+    client.start_reconfigure_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_reconfigure_seeds_device_identity_without_entities() -> None:
     """A device linked directly to an entry remains an identity anchor without entities."""
     before = {

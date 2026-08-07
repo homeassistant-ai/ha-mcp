@@ -122,6 +122,14 @@ def _normalise_identity_value(value: Any) -> str:
     return "".join(character for character in str(value).upper() if character.isalnum())
 
 
+def _is_hardware_identifier(value: Any) -> bool:
+    """Return whether ``value`` looks like a MAC or IEEE hardware ID."""
+    normalised = _normalise_identity_value(value)
+    return len(normalised) in {12, 16} and all(
+        character in "0123456789ABCDEF" for character in normalised
+    )
+
+
 async def _collect_reconfigure_identity(
     client: Any,
     entry: dict[str, Any],
@@ -184,17 +192,21 @@ async def _collect_reconfigure_identity(
             }
             | device_ids
         )
-        identifiers: list[str] = []
+        identifiers: list[Any] = []
         for row in matching_device_rows:
-            identifiers.extend(
-                str(identifier[1])
-                for identifier in row.get("connections", [])
+            for identifier in (
+                *row.get("connections", []),
+                *row.get("identifiers", []),
+            ):
+                if not isinstance(identifier, (list, tuple)) or len(identifier) < 2:
+                    continue
+                identifier_type = str(identifier[0]).lower()
+                identifier_value = identifier[1]
                 if (
-                    isinstance(identifier, (list, tuple))
-                    and len(identifier) >= 2
-                    and str(identifier[0]).lower() in _DEVICE_CONNECTION_ID_TYPES
-                )
-            )
+                    identifier_type in _DEVICE_CONNECTION_ID_TYPES
+                    or _is_hardware_identifier(identifier_value)
+                ):
+                    identifiers.append(identifier_value)
         identity["macs"] = sorted(
             {
                 _normalise_identity_value(value)
@@ -295,7 +307,7 @@ async def _optional_registry_rows(
                 f"{method_name} transport unavailable for {entry_id}"
             )
         ) from err
-    if not isinstance(result, list):
+    if not isinstance(result, list) or any(not isinstance(row, dict) for row in result):
         raise HomeAssistantAPIError(
             f"Unexpected response from {method_name} for {entry_id}",
             status_code=500,
@@ -711,9 +723,18 @@ def _verify_reconfigure_identity_fields(
         )
 
     expected_mac = expected_identity.get("mac")
+    before_macs = set(before_identity.get("macs", []))
+    after_macs = set(after_identity.get("macs", []))
+    if before_macs and after_macs and before_macs != after_macs:
+        _raise_identity_mismatch(
+            entry_id,
+            "Reconfigure flow changed the associated MAC/IEEE identity",
+            before=before_identity,
+            after=after_identity,
+            expected=expected_identity,
+        )
     if expected_mac is not None:
-        known_macs = set(after_identity.get("macs", []))
-        if known_macs and _normalise_identity_value(expected_mac) not in known_macs:
+        if after_macs and _normalise_identity_value(expected_mac) not in after_macs:
             _raise_identity_mismatch(
                 entry_id,
                 "Reconfigure result does not match expected MAC",
@@ -769,6 +790,8 @@ async def _verify_reconfigured_entry(
     after_entity_ids = set(after_identity.get("entity_ids", []))
     expected_entity_ids = set(expected_identity.get("entity_ids", []))
     expected_mac = expected_identity.get("mac")
+    before_macs = set(before_identity.get("macs", []))
+    after_macs = set(after_identity.get("macs", []))
 
     after_related_entry_ids = await _same_domain_related_entry_ids(
         client,
@@ -830,11 +853,15 @@ async def _verify_reconfigured_entry(
         and after_entity_ids == before_entity_ids
         and (not expected_entity_ids or after_entity_ids == expected_entity_ids)
     )
-    mac_identity_verified = not expected_mac or bool(
-        after_identity.get("device_registry_available")
-        and _normalise_identity_value(expected_mac)
-        in set(after_identity.get("macs", []))
-    )
+    if expected_mac is not None:
+        mac_identity_verified = bool(
+            after_identity.get("device_registry_available")
+            and _normalise_identity_value(expected_mac) in after_macs
+        )
+    elif before_macs:
+        mac_identity_verified = before_macs == after_macs
+    else:
+        mac_identity_verified = True
 
     return {
         "entry_state": after.get("state"),
