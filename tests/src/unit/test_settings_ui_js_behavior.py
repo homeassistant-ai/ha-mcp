@@ -78,10 +78,15 @@ _TOP_LEVEL_ELEMENT_IDS = [
     # mirrors the Server-Settings flag and posts to /api/settings/features;
     # the global-settings save button writes wait_seconds / TTL.
     "policy-master-toggle",
+    # enable_security_policy_tool (#2148) — registers
+    # ha_manage_security_policy; same save-then-verify flow as the master.
+    "policy-manage-tool-toggle",
     "policy-save-global-btn",
     # Read Only Mode toggle (#1569) — Tools tab, above the search box.
     # Same save-then-verify flow as the policy master toggle.
     "read-only-mode-toggle",
+    # Where applyFlagToggle writes the env-locked note for that switch.
+    "read-only-locked",
     # Advanced settings panel — the 5 section containers that
     # loadAdvancedSettings() writes to via innerHTML. Without container
     # divs in MIN_DOM, renderSection silently no-ops (getElementById
@@ -151,7 +156,11 @@ def _min_dom_row_tail(el_id: str) -> str | None:
         return None  # rendered as a child of restartNotice above
     if el_id == "search":
         return '<input id="search" />'
-    if el_id in ("policy-master-toggle", "read-only-mode-toggle"):
+    if el_id in (
+        "policy-master-toggle",
+        "policy-manage-tool-toggle",
+        "read-only-mode-toggle",
+    ):
         return f'<input id="{el_id}" type="checkbox" />'
     if el_id == "policy-save-global-btn":
         return '<button id="policy-save-global-btn"></button>'
@@ -1122,6 +1131,9 @@ def _policy_panel_dom() -> str:
       <div id="policy-rules-list"></div>
       <input id="policy-wait-seconds" />
       <input id="policy-ttl-minutes" />
+      <div class="pin-notice" id="policyUnknownNotice"></div>
+      <div class="feature-locked-note" id="policy-master-locked"></div>
+      <div class="feature-locked-note" id="policy-manage-tool-locked"></div>
     """
     return MIN_DOM.replace("</body>", extras + "</body>")
 
@@ -1138,6 +1150,32 @@ def _server_503_body() -> str:
     from ha_mcp.settings_ui import POLICY_UNAVAILABLE_MESSAGE
 
     return POLICY_UNAVAILABLE_MESSAGE
+
+
+# One /api/settings/features reply carrying the policy-tool flag as off.
+# Reused across the save-flow tests below, whose `responses` arrays must
+# account for EVERY call to that URL, GET and POST alike — the queue is
+# keyed by URL, not method. Init alone makes TWO reads (loadTools ->
+# loadPolicyState, and loadFeatureFlags), so each sequence below opens with
+# three of these: the two init reads plus the explicit sync in `invoke`.
+_OFF_FLAG_RESPONSE: dict = {
+    "status": 200,
+    "json": {"flags": {"enable_security_policy_tool": {"value": False}}},
+}
+
+# Both Policies-tab flags reported and off: the state a real operator starts
+# from. The POST-body tests need it because an ABSENT flag entry now renders
+# its switch indeterminate and disabled — dispatching a synthetic change on
+# that switch would exercise a click no user could make.
+_BOTH_POLICY_FLAGS_OFF_RESPONSE: dict = {
+    "status": 200,
+    "json": {
+        "flags": {
+            "enable_tool_security_policies": {"value": False},
+            "enable_security_policy_tool": {"value": False},
+        }
+    },
+}
 
 
 class TestPolicyTabFlow:
@@ -1158,8 +1196,20 @@ class TestPolicyTabFlow:
         fetches = {
             **DEFAULT_FETCHES,
             "/api/settings/features": {
-                "status": 200,
-                "json": {"restart_required": True},
+                "responses": [
+                    _BOTH_POLICY_FLAGS_OFF_RESPONSE,  # 1-2: the two init reads
+                    _BOTH_POLICY_FLAGS_OFF_RESPONSE,
+                    _BOTH_POLICY_FLAGS_OFF_RESPONSE,  # 3: the explicit sync below
+                    # 4: the save POST (sticks for the follow-up re-read;
+                    # the applied echo then paints the confirmed state).
+                    {
+                        "status": 200,
+                        "json": {
+                            "applied": {"enable_tool_security_policies": True},
+                            "restart_required": True,
+                        },
+                    },
+                ]
             },
         }
         result = run_script(
@@ -1167,13 +1217,26 @@ class TestPolicyTabFlow:
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
             invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              await window.syncPolicyGlobalToggles();
               const cb = document.getElementById('policy-master-toggle');
+              const pre = document.createElement('div');
+              pre.id = '__master_pre_dispatch_probe';
+              pre.dataset.disabled = String(cb.disabled);
+              pre.dataset.indeterminate = String(cb.indeterminate);
+              document.body.appendChild(pre);
               cb.checked = true;
               cb.dispatchEvent(new Event('change'));
-              await new Promise(r => setTimeout(r, 50));
+              await new Promise(r => setTimeout(r, 100));
             """,
         )
         _assert_clean_init(result)
+        pre = re.search(r'<div[^>]*id="__master_pre_dispatch_probe"[^>]*>', result.dom)
+        assert pre is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        assert 'data-disabled="false"' in pre.group(0), (
+            f"switch must be editable before the synthetic click: {pre.group(0)}"
+        )
+        assert 'data-indeterminate="false"' in pre.group(0), pre.group(0)
         flag_posts = [
             f
             for f in result.fetches
@@ -1206,6 +1269,391 @@ class TestPolicyTabFlow:
             "expected POST body containing "
             f"{{'flags': {{'enable_tool_security_policies': True}}}}; "
             f"got {[f.get('body') for f in flag_posts]}"
+        )
+
+    def test_manage_tool_toggle_change_posts_to_features_endpoint(
+        self, settings_script: str
+    ) -> None:
+        """The policy-editing-tool toggle must POST
+        ``{flags: {enable_security_policy_tool: true}}`` to the same
+        feature-flag endpoint the master toggle uses (#2148) — it is an
+        ordinary feature flag, not a policy-document field."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "responses": [
+                    _BOTH_POLICY_FLAGS_OFF_RESPONSE,  # 1-2: the two init reads
+                    _BOTH_POLICY_FLAGS_OFF_RESPONSE,
+                    _BOTH_POLICY_FLAGS_OFF_RESPONSE,  # 3: the explicit sync below
+                    # 4: the save POST (sticks for the follow-up re-read;
+                    # the applied echo then paints the confirmed state).
+                    {
+                        "status": 200,
+                        "json": {
+                            "applied": {"enable_security_policy_tool": True},
+                            "restart_required": True,
+                        },
+                    },
+                ]
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              await window.syncPolicyGlobalToggles();
+              const cb = document.getElementById('policy-manage-tool-toggle');
+              const pre = document.createElement('div');
+              pre.id = '__manage_pre_dispatch_probe';
+              pre.dataset.disabled = String(cb.disabled);
+              pre.dataset.indeterminate = String(cb.indeterminate);
+              document.body.appendChild(pre);
+              cb.checked = true;
+              cb.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 100));
+            """,
+        )
+        _assert_clean_init(result)
+        pre = re.search(r'<div[^>]*id="__manage_pre_dispatch_probe"[^>]*>', result.dom)
+        assert pre is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        assert 'data-disabled="false"' in pre.group(0), (
+            f"switch must be editable before the synthetic click: {pre.group(0)}"
+        )
+        assert 'data-indeterminate="false"' in pre.group(0), pre.group(0)
+        matched = False
+        for f in result.fetches:
+            if f["method"] != "POST" or "/api/settings/features" not in f["url"]:
+                continue
+            try:
+                body = json.loads(f.get("body", ""))
+            except (json.JSONDecodeError, TypeError):
+                continue
+            flags = body.get("flags") if isinstance(body, dict) else None
+            if (
+                isinstance(flags, dict)
+                and flags.get("enable_security_policy_tool") is True
+            ):
+                matched = True
+                break
+        assert matched, (
+            "expected POST body containing "
+            "{'flags': {'enable_security_policy_tool': True}}; got "
+            f"{[f.get('body') for f in result.fetches if f['method'] == 'POST']}"
+        )
+
+    def test_manage_tool_toggle_reverts_when_save_fails(
+        self, settings_script: str
+    ) -> None:
+        """A failed save must snap the switch back to its previous value.
+        Leaving it visually on would tell the operator that agents can edit
+        the policies when the server still says they cannot (or vice versa)."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "responses": [
+                    _OFF_FLAG_RESPONSE,  # 1-2: the two init reads
+                    _OFF_FLAG_RESPONSE,
+                    _OFF_FLAG_RESPONSE,  # 3: the explicit sync below
+                    # 4: the save itself fails — the server still holds the
+                    # previous value, so reverting IS correct here.
+                    {"status": 500, "json": {"error": {"message": "nope"}}},
+                ]
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              await window.syncPolicyGlobalToggles();
+              const cb = document.getElementById('policy-manage-tool-toggle');
+              cb.checked = true;
+              cb.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 100));
+              const probe = document.createElement('div');
+              probe.id = '__manage_tool_probe';
+              probe.dataset.checked = String(cb.checked);
+              probe.dataset.indeterminate = String(cb.indeterminate);
+              probe.dataset.disabled = String(cb.disabled);
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'<div[^>]*id="__manage_tool_probe"[^>]*>', result.dom)
+        assert m is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        assert 'data-checked="false"' in m.group(0), (
+            f"failed save must revert the switch to its previous value: {m.group(0)}"
+        )
+        # Reverted must also mean retryable: a rejected save leaves the
+        # server's value known, so the switch stays editable, not unknown.
+        assert 'data-indeterminate="false"' in m.group(0), m.group(0)
+        assert 'data-disabled="false"' in m.group(0), m.group(0)
+
+    def test_unconfirmed_save_keeps_the_applied_value(
+        self, settings_script: str
+    ) -> None:
+        """Save succeeded, follow-up read failed: the POST echoes `applied`
+        — the server stating what it persisted — so the switch shows that
+        instead of reverting to a pre-flip state the server no longer has."""
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "responses": [
+                        _OFF_FLAG_RESPONSE,  # 1-2: the two init reads
+                        _OFF_FLAG_RESPONSE,
+                        _OFF_FLAG_RESPONSE,  # 3: the explicit sync below
+                        # 4: the save POST, echoing what it wrote
+                        {
+                            "status": 200,
+                            "json": {
+                                "applied": {"enable_security_policy_tool": True},
+                                "restart_required": True,
+                            },
+                        },
+                        # 5: the confirming re-read fails
+                        {"status": 503, "json": {}},
+                    ]
+                },
+            },
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              await window.syncPolicyGlobalToggles();
+              const cb = document.getElementById('policy-manage-tool-toggle');
+              cb.checked = true;
+              cb.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 100));
+              const probe = document.createElement('div');
+              probe.id = '__applied_probe';
+              probe.dataset.checked = String(cb.checked);
+              probe.dataset.indeterminate = String(cb.indeterminate);
+              probe.dataset.disabled = String(cb.disabled);
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'<div[^>]*id="__applied_probe"[^>]*>', result.dom)
+        assert m is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        tag = m.group(0)
+        assert 'data-checked="true"' in tag, (
+            f"the echoed applied value must survive a failed re-read: {tag}"
+        )
+        assert 'data-indeterminate="false"' in tag, tag
+        assert 'data-disabled="false"' in tag, tag
+
+    def test_unconfirmed_save_without_echo_goes_unknown(
+        self, settings_script: str
+    ) -> None:
+        """Save succeeded but neither the response nor the re-read says
+        what the server now holds: the switch goes to the unknown
+        treatment. Reverting to the pre-flip value would assert a state
+        nobody verified."""
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "responses": [
+                        _OFF_FLAG_RESPONSE,  # 1-2: the two init reads
+                        _OFF_FLAG_RESPONSE,
+                        _OFF_FLAG_RESPONSE,  # 3: the explicit sync below
+                        # 4: the save — 200 with no `applied` echo
+                        # (truncated body).
+                        {"status": 200, "json": {"restart_required": True}},
+                        {"status": 503, "json": {}},  # 5: re-read fails
+                    ]
+                },
+            },
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              await window.syncPolicyGlobalToggles();
+              const cb = document.getElementById('policy-manage-tool-toggle');
+              cb.checked = true;
+              cb.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 100));
+              const notice = document.getElementById('policyUnknownNotice');
+              const probe = document.createElement('div');
+              probe.id = '__unconfirmed_probe';
+              probe.dataset.blocked = String(cb.indeterminate && cb.disabled);
+              probe.dataset.shown = String(
+                !!notice && notice.classList.contains('show'));
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'<div[^>]*id="__unconfirmed_probe"[^>]*>', result.dom)
+        assert m is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        tag = m.group(0)
+        assert 'data-blocked="true"' in tag, (
+            f"an unconfirmed save must leave the switch unknown, not reverted "
+            f"and editable: {tag}"
+        )
+        assert 'data-shown="true"' in tag, f"unknown notice must show: {tag}"
+
+    def test_missing_flag_entry_is_unknown_not_off(self, settings_script: str) -> None:
+        """Known is per FLAG, not per response. A 200 that omits one flag
+        entry says nothing about that flag; rendering it as an editable
+        "off" invites a save that overwrites an enabled server value (a
+        server build older than this UI, or an overlay dropping the key).
+        The flag that IS present must still render normally."""
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "status": 200,
+                    "json": {
+                        "flags": {
+                            # Master present and on; the policy-tool flag is
+                            # absent from the payload entirely.
+                            "enable_tool_security_policies": {
+                                "value": True,
+                                "origin": "file",
+                                "editable": True,
+                            }
+                        }
+                    },
+                },
+            },
+            invoke="""
+              await window.syncPolicyGlobalToggles();
+              const master = document.getElementById('policy-master-toggle');
+              const tool = document.getElementById('policy-manage-tool-toggle');
+              const notice = document.getElementById('policyUnknownNotice');
+              const probe = document.createElement('div');
+              probe.id = '__missing_flag_probe';
+              probe.dataset.masterChecked = String(master.checked);
+              probe.dataset.masterBlocked = String(
+                master.indeterminate || master.disabled);
+              probe.dataset.toolBlocked = String(
+                tool.indeterminate && tool.disabled);
+              probe.dataset.shown = String(
+                !!notice && notice.classList.contains('show'));
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'<div[^>]*id="__missing_flag_probe"[^>]*>', result.dom)
+        assert m is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        tag = m.group(0)
+        assert 'data-master-checked="true"' in tag, (
+            f"the flag the payload DID carry must render from its value: {tag}"
+        )
+        assert 'data-master-blocked="false"' in tag, (
+            f"a present flag must stay editable: {tag}"
+        )
+        assert 'data-tool-blocked="true"' in tag, (
+            f"an omitted flag entry must render unknown, not off-and-editable: {tag}"
+        )
+        assert 'data-shown="true"' in tag, (
+            f"the notice must show when EITHER policy flag is unknown: {tag}"
+        )
+
+    def test_env_pinned_flag_locks_the_switch(self, settings_script: str) -> None:
+        """editable:false means every save is rejected server-side, so the
+        switch must lock and name the env var instead of looking usable
+        (the treatment the generated Server Settings rows already get)."""
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "status": 200,
+                    "json": {
+                        "is_addon": False,
+                        "flags": {
+                            "enable_security_policy_tool": {
+                                "value": True,
+                                "origin": "env",
+                                "editable": False,
+                                "env_var": "ENABLE_SECURITY_POLICY_TOOL",
+                            }
+                        },
+                    },
+                },
+            },
+            invoke="""
+              await window.syncPolicyGlobalToggles();
+              const cb = document.getElementById('policy-manage-tool-toggle');
+              const probe = document.createElement('div');
+              probe.id = '__pinned_probe';
+              probe.dataset.checked = String(cb.checked);
+              probe.dataset.disabled = String(cb.disabled);
+              probe.dataset.indeterminate = String(cb.indeterminate);
+              // Booleans, not the note's HTML: markup inside a data-
+              // attribute closes the probe tag early for the reader below.
+              const note = document.getElementById('policy-manage-tool-locked');
+              probe.dataset.noteNamesVar = String(
+                note.innerHTML.includes('ENABLE_SECURITY_POLICY_TOOL'));
+              probe.dataset.noteShown = String(note.style.display !== 'none');
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'<div[^>]*id="__pinned_probe"[^>]*>', result.dom)
+        assert m is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        tag = m.group(0)
+        assert 'data-disabled="true"' in tag, (
+            f"an env-pinned flag's switch must be disabled: {tag}"
+        )
+        # Known-but-locked is not the same as unknown: the value IS known.
+        assert 'data-indeterminate="false"' in tag, tag
+        assert 'data-checked="true"' in tag, tag
+        assert 'data-note-shown="true"' in tag, (
+            f"the locked note must be visible: {tag}"
+        )
+        assert 'data-note-names-var="true"' in tag, (
+            f"the locked note must name the env var that pins it: {tag}"
+        )
+
+    def test_policy_toggles_unknown_when_features_fetch_fails(
+        self, settings_script: str
+    ) -> None:
+        """When /api/settings/features fails, both Policies-tab switches are
+        unknown: the notice shows and each switch goes indeterminate +
+        disabled rather than rendering a confident "off" (#2148). Mirrors the
+        Tools-tab read-only unknown-state treatment."""
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {"status": 503, "json": {}},
+            },
+            invoke="""
+              await window.syncPolicyGlobalToggles();
+              const notice = document.getElementById('policyUnknownNotice');
+              const master = document.getElementById('policy-master-toggle');
+              const tool = document.getElementById('policy-manage-tool-toggle');
+              const probe = document.createElement('div');
+              probe.id = '__policy_unknown_probe';
+              probe.dataset.shown = String(
+                !!notice && notice.classList.contains('show'));
+              probe.dataset.masterBlocked = String(
+                master.indeterminate && master.disabled);
+              probe.dataset.toolBlocked = String(
+                tool.indeterminate && tool.disabled);
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'<div[^>]*id="__policy_unknown_probe"[^>]*>', result.dom)
+        assert m is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        tag = m.group(0)
+        assert 'data-shown="true"' in tag, f"unknown notice must show: {tag}"
+        assert 'data-master-blocked="true"' in tag, (
+            f"master switch must be indeterminate + disabled while unknown: {tag}"
+        )
+        assert 'data-tool-blocked="true"' in tag, (
+            f"policy-tool switch must be indeterminate + disabled while unknown: {tag}"
         )
 
     def test_gate_toggle_preserves_conditional_rules(
@@ -6358,3 +6806,152 @@ class TestExtraYamlWriteKeysNesting:
         assert rows, "expected yaml-packages-sub row"
         for row in rows:
             assert "dimmed" in row, f"expected dimmed row: {row}"
+
+
+class TestFeatureGatedStubRow:
+    """Feature-gated stub rows (#2148): the "how to enable this" hint is
+    worded per ``disabled_by_beta``, and the security-gate switch stays
+    operable so a rule can be authored BEFORE the tool is registered."""
+
+    @staticmethod
+    def _fetches(*, policies_enabled: bool) -> dict:
+        return {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [
+                        {
+                            "name": "ha_manage_security_policy",
+                            "title": "Manage Security Policy",
+                            "primary_tag": "System",
+                            "annotations": {"destructiveHint": True},
+                            "disabled_by": "enable_security_policy_tool",
+                            "disabled_by_beta": False,
+                        },
+                        {
+                            "name": "ha_write_file",
+                            "title": "Write File",
+                            "primary_tag": "Files",
+                            "annotations": {"destructiveHint": True},
+                            "disabled_by": "enable_filesystem_tools",
+                            "disabled_by_beta": True,
+                        },
+                    ],
+                    "states": {},
+                    "env_pinned": {},
+                    "read_only_exempt": [],
+                },
+            },
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_tool_security_policies": {"value": policies_enabled}
+                    }
+                },
+            },
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "version": 1,
+                    "rules": [],
+                },
+            },
+        }
+
+    @staticmethod
+    def _gate_input(dom: str, tool: str) -> str:
+        m = re.search(rf'<input[^>]*name="tool:{tool}:gated"[^>]*>', dom)
+        assert m is not None, f"gated input for {tool} missing; dom tail: {dom[-2000:]}"
+        return m.group(0)
+
+    def test_non_beta_stub_renders_non_beta_hint(self, settings_script: str) -> None:
+        """A non-beta gated row must NOT claim to be beta or point at the dev
+        add-on config — its toggle is on the Tool Security Policies tab."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._fetches(policies_enabled=True),
+            invoke="await new Promise(r => setTimeout(r, 250));",
+        )
+        _assert_clean_init(result)
+        row = re.search(
+            r'<div class="tool"[^>]*data-name="ha_manage_security_policy".*?'
+            r'name="tool:ha_manage_security_policy:gated"',
+            result.dom,
+            re.S,
+        )
+        assert row is not None, f"stub row missing; dom tail: {result.dom[-2000:]}"
+        assert "Tool Security Policies tab" in row.group(0), (
+            f"non-beta gated row must name where its toggle lives: {row.group(0)}"
+        )
+        assert "docs/beta.md" not in row.group(0), (
+            f"non-beta gated row must not render the beta hint: {row.group(0)}"
+        )
+
+    def test_beta_stub_still_renders_beta_hint(self, settings_script: str) -> None:
+        """Regression guard on the other branch: beta-gated rows keep the
+        beta wording (dev add-on config / docs/beta.md)."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._fetches(policies_enabled=True),
+            invoke="await new Promise(r => setTimeout(r, 250));",
+        )
+        _assert_clean_init(result)
+        row = re.search(
+            r'<div class="tool"[^>]*data-name="ha_write_file".*?'
+            r'name="tool:ha_write_file:gated"',
+            result.dom,
+            re.S,
+        )
+        assert row is not None, f"beta stub row missing; dom tail: {result.dom[-2000:]}"
+        assert "docs/beta.md" in row.group(0), (
+            f"beta gated row must keep the beta hint: {row.group(0)}"
+        )
+
+    def test_gate_switch_operable_on_stub_when_policies_enabled(
+        self, settings_script: str
+    ) -> None:
+        """The chicken-and-egg fix: with policies on, a gated-off tool's
+        security-gate switch must be live so the rule can be authored before
+        the tool is enabled. Its enable/pin switches stay locked."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._fetches(policies_enabled=True),
+            invoke="await new Promise(r => setTimeout(r, 250));",
+        )
+        _assert_clean_init(result)
+        gate = self._gate_input(result.dom, "ha_manage_security_policy")
+        assert "disabled" not in gate, (
+            f"gate switch must be operable on a stub row while policies are on: {gate}"
+        )
+        enabled_input = re.search(
+            r'<input[^>]*name="tool:ha_manage_security_policy:enabled"[^>]*>',
+            result.dom,
+        )
+        assert enabled_input is not None and "disabled" in enabled_input.group(0), (
+            "the enable switch on a gated stub row must stay locked: "
+            f"{enabled_input and enabled_input.group(0)}"
+        )
+
+    def test_gate_switch_locked_on_stub_when_policies_disabled(
+        self, settings_script: str
+    ) -> None:
+        """Without the master switch there is nothing to gate with, so the
+        stub's gate switch stays disabled (same as every other row)."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._fetches(policies_enabled=False),
+            invoke="await new Promise(r => setTimeout(r, 250));",
+        )
+        _assert_clean_init(result)
+        gate = self._gate_input(result.dom, "ha_manage_security_policy")
+        assert "disabled" in gate, (
+            f"gate switch must stay locked while policies are off: {gate}"
+        )

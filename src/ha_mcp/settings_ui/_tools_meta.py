@@ -37,8 +37,10 @@ class ToolStub(TypedDict):
     runtime (``TRANSFORM_GENERATED_TOOLS``), or it's feature-gated and
     only registers when a setting is on (``FEATURE_GATED_TOOLS``). The
     consumer (`_get_tool_metadata`) renders the same shape for both;
-    ``disabled_by`` is the only field that differs and signals UI
-    placement of the "Beta — set X" hint.
+    ``disabled_by`` is the only field that differs and names the setting
+    that turns the tool on. Whether that setting is a beta flag decides
+    which "how to enable this" hint the UI shows (see ``gate_is_beta``) —
+    most gated tools are beta, ``ha_manage_security_policy`` is not.
     """
 
     title: str
@@ -202,7 +204,35 @@ FEATURE_GATED_TOOLS: dict[str, ToolStub] = {
         "disabled_by": "enable_filesystem_tools",
         "destructiveHint": True,
     },
+    # The one NON-beta gated tool (#2148): its toggle lives on the Tool
+    # Security Policies tab, not in the dev add-on's beta options. The row
+    # has to exist while the flag is off so a gate rule can be authored
+    # BEFORE the tool is registered — otherwise the first enable+restart
+    # exposes it ungated.
+    "ha_manage_security_policy": {
+        "title": "Manage Security Policy",
+        "primary_tag": "System",
+        "description": (
+            "Read and rewrite the tool security policy that gates "
+            "high-stakes tool calls behind user approval."
+        ),
+        "disabled_by": "enable_security_policy_tool",
+        "destructiveHint": True,
+    },
 }
+
+
+def gate_is_beta(disabled_by: str) -> bool:
+    """Whether a ``disabled_by`` gate names a beta feature flag.
+
+    Feature-gated used to mean beta by definition; ``enable_security_policy_tool``
+    (#2148) broke that, and the two classes need different UI copy (dev
+    add-on / docs/beta.md vs the Tool Security Policies tab) and different
+    LLM-API exposure defaults.
+    """
+    from ..config import BETA_FEATURE_FIELDS
+
+    return disabled_by in BETA_FEATURE_FIELDS
 
 
 def _capability_fields(
@@ -234,8 +264,8 @@ def _render_stub(name: str, meta: ToolStub) -> dict[str, Any]:
 
     Both transform-generated and feature-gated stubs share the same UI
     representation; the only meaningful difference is whether
-    ``disabled_by`` carries the safety-toggle name (which the JS
-    template renders as a "Beta — set X" hint).
+    ``disabled_by`` carries the safety-toggle name (which the JS template
+    renders as an "enable it here" hint, worded per ``disabled_by_beta``).
     """
     rendered: dict[str, Any] = {
         "name": name,
@@ -251,6 +281,9 @@ def _render_stub(name: str, meta: ToolStub) -> dict[str, Any]:
     }
     if "disabled_by" in meta:
         rendered["disabled_by"] = meta["disabled_by"]
+        # Tells the UI which "how to enable this" hint to render: the beta
+        # one (dev add-on config / docs/beta.md) or the plain one.
+        rendered["disabled_by_beta"] = gate_is_beta(meta["disabled_by"])
     return rendered
 
 

@@ -69,13 +69,15 @@ LLM_API_CONFIG_KEY = "llm_api"
 
 # Tools hidden from conversation agents by default regardless of tags:
 # operational hazards where an agent mistake is expensive (restart loops,
-# config reloads mid-edit, backup churn). Users can still enable each in the
-# settings UI.
+# config reloads mid-edit, backup churn) — and ha_manage_security_policy,
+# which can rewrite the approval gates themselves. Users can still enable
+# each in the settings UI.
 LLM_API_DEFAULT_OFF_TOOLS: frozenset[str] = frozenset(
     {
         "ha_restart",
         "ha_reload_core",
         "ha_manage_backup",
+        "ha_manage_security_policy",
     }
 )
 

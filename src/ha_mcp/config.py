@@ -147,6 +147,17 @@ class Settings(BaseSettings):
         False, alias="ENABLE_TOOL_SECURITY_POLICIES"
     )
 
+    # Security-policy editing tool (issue #2148) — registers
+    # ha_manage_security_policy, an ordinary MCP tool that reads and rewrites
+    # the same tool_policy.json the Tool Security Policies tab edits. Disabled
+    # by default, and deliberately NOT a beta flag: it is a standing safety
+    # decision, not a preview feature, so it must stay out of
+    # BETA_FEATURE_FIELDS (where the beta master would force it off). Its
+    # toggle renders on the Policies tab, next to the master switch above.
+    enable_security_policy_tool: bool = Field(
+        False, alias="ENABLE_SECURITY_POLICY_TOOL"
+    )
+
     # Read Only Mode — global safety toggle (discussion #1569). When on,
     # write-capable tools are hidden from the MCP catalog and every write
     # operation is blocked at call time with a structured READ_ONLY_MODE
@@ -418,6 +429,7 @@ class Settings(BaseSettings):
     @field_validator(
         "enable_filesystem_tools",
         "enable_dashboard_screenshot",
+        "enable_security_policy_tool",
         mode="before",
     )
     @classmethod
@@ -690,6 +702,15 @@ FEATURE_FLAG_FIELDS: tuple[FeatureFlagField, ...] = (
     FeatureFlagField("tool_search_max_results", "TOOL_SEARCH_MAX_RESULTS", int),
     FeatureFlagField(
         "enable_tool_security_policies", "ENABLE_TOOL_SECURITY_POLICIES", bool
+    ),
+    # Registers ha_manage_security_policy (#2148). Non-beta, like the master
+    # policy flag above it, so it is deliberately NOT in BETA_FEATURE_FIELDS.
+    # It carries no ``features.*`` locale keys either: that is what keeps it
+    # out of the generated FEATURE_META and therefore out of the generic
+    # Server Settings feature list, while /api/settings/features still serves
+    # and persists it for the Policies-tab toggle.
+    FeatureFlagField(
+        "enable_security_policy_tool", "ENABLE_SECURITY_POLICY_TOOL", bool
     ),
     # Non-beta global safety toggle (discussion #1569). Lives here so the
     # Tools-tab toggle and the Server Settings row share the same

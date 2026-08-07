@@ -1052,12 +1052,42 @@ class TestManagePolicy:
             )
 
     async def test_set_policy_invalid_schema_rejected(self, dev_tools):
-        # wait_seconds must be < approval_ttl_minutes * 60.
+        # wait_seconds must be < approval_ttl_minutes * 60. ``rules`` is
+        # required (see test_set_policy_without_rules_rejected) so the
+        # payload must carry it to reach schema validation at all.
         with pytest.raises(ToolError, match="schema validation"):
             await dev_tools.ha_dev_manage_settings(
                 action="set_policy",
-                policy={"wait_seconds": 599, "approval_ttl_minutes": 1},
+                policy={"wait_seconds": 599, "approval_ttl_minutes": 1, "rules": []},
             )
+
+    async def test_set_policy_without_rules_rejected(self, dev_tools):
+        """set_policy replaces the WHOLE document, so an omitted 'rules'
+        would silently delete every approval gate — both surfaces refuse
+        it (#2148 review)."""
+        await dev_tools.ha_dev_manage_settings(
+            action="set_policy",
+            policy={"rules": [{"tool_name": "ha_call_service"}], "version": 0},
+        )
+        with pytest.raises(ToolError, match="'rules' is missing") as exc:
+            await dev_tools.ha_dev_manage_settings(
+                action="set_policy", policy={"wait_seconds": 45}
+            )
+        assert "ha_dev_manage_settings('get_policy')" in str(exc.value)
+        got = await dev_tools.ha_dev_manage_settings(action="get_policy")
+        assert got["data"]["policy"]["rules"][0]["tool_name"] == "ha_call_service"
+
+    async def test_set_policy_warns_about_removed_rules(self, dev_tools):
+        await dev_tools.ha_dev_manage_settings(
+            action="set_policy",
+            policy={"rules": [{"tool_name": "ha_call_service"}], "version": 0},
+        )
+        result = await dev_tools.ha_dev_manage_settings(
+            action="set_policy", policy={"rules": [], "version": 1}
+        )
+        removed = [w for w in result["warnings"] if "removed 1 existing rule" in w]
+        assert removed, result["warnings"]
+        assert "ha_call_service" in removed[0]
 
     async def test_set_policy_requires_object(self, dev_tools):
         with pytest.raises(ToolError, match="'policy'"):
@@ -1458,6 +1488,24 @@ class TestSecurityPolicyAccessGuard:
                 action="set", setting="enable_tool_security_policies", value=False
             )
 
+    async def test_policy_tool_flag_refused_without_access(self):
+        # Enabling the flag registers ha_manage_security_policy after the
+        # next restart — a shorter route to dropping gates than set_policy.
+        with pytest.raises(ToolError, match="enable_security_policy_tool"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set", setting="enable_security_policy_tool", value=True
+            )
+
+    @pytest.mark.usefixtures("_policy_access_on")
+    async def test_policy_tool_flag_refused_even_with_access(self):
+        # Unconditional, like the access toggle itself: exposing the
+        # policy-rewriting tool is a human decision made on the Tool
+        # Security Policies tab, never a dev-tools write.
+        with pytest.raises(ToolError, match="enable_security_policy_tool"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set", setting="enable_security_policy_tool", value=True
+            )
+
     @pytest.mark.usefixtures("_policy_access_on")
     async def test_policy_engine_toggle_allowed_with_access(self):
         result = await DevTools(MagicMock()).ha_dev_manage_settings(
@@ -1562,6 +1610,9 @@ class TestSecurityPolicyAccessGuard:
         assert toggle["editable"] is False
         assert toggle["locked_reason"] == "web_ui_or_env_only"
         assert toggle["value"] is False
+        tool_flag = rows["enable_security_policy_tool"]
+        assert tool_flag["editable"] is False
+        assert tool_flag["locked_reason"] == "web_ui_or_env_only"
 
     async def test_list_unlocks_engine_row_with_access(self):
         # Access granted via the override file (the web-UI path): the
@@ -1582,6 +1633,10 @@ class TestSecurityPolicyAccessGuard:
         assert toggle["editable"] is False
         assert toggle["locked_reason"] == "web_ui_or_env_only"
         assert toggle["value"] is True
+        # The policy-tool flag stays locked even with access granted.
+        tool_flag = rows["enable_security_policy_tool"]
+        assert tool_flag["editable"] is False
+        assert tool_flag["locked_reason"] == "web_ui_or_env_only"
 
     async def test_env_pinned_engine_row_keeps_env_story(self, monkeypatch):
         # An env-pinned row is refused by the pin before the guard would
