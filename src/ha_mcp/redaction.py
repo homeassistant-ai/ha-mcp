@@ -32,12 +32,12 @@ tool output is byte-identical to the legacy behavior.
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import threading
-from collections.abc import Collection, Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any
 
-from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 
 from .config import get_global_settings
@@ -127,7 +127,14 @@ def redact_addon_options(options: Any, schema: Any) -> Any:
                 ]
             continue
         if entry.get("format") == "password":
-            out[name] = sentinel_for(value)
+            # multiple: true passwords are a list — keep the container shape
+            # so the option's type survives redaction.
+            if isinstance(value, list):
+                out[name] = [
+                    item if is_sentinel(item) else sentinel_for(item) for item in value
+                ]
+            elif not is_sentinel(value):
+                out[name] = sentinel_for(value)
     return out
 
 
@@ -253,6 +260,7 @@ def redact_options_by_flow_schema(options: Any, data_schema: Any) -> Any:
     from .tools.config_entry_flow_form import iter_schema_fields
 
     out = dict(options)
+    _redact_nested_section_copies(out, data_schema)
     for field in iter_schema_fields(data_schema):
         if not is_password_flow_field(field):
             continue
@@ -260,10 +268,30 @@ def redact_options_by_flow_schema(options: Any, data_schema: Any) -> Any:
         if not isinstance(name, str) or name not in out:
             continue
         value = out[name]
+        if is_sentinel(value):
+            continue
         if isinstance(value, str) and value:
             register_known_secret_values([value])
         out[name] = sentinel_for(value)
     return out
+
+
+def _redact_nested_section_copies(out: dict[str, Any], data_schema: list[Any]) -> None:
+    """Redact the RAW nested dict a named section keeps alongside its leaves.
+
+    Sections are additively flattened — the flattened copies are handled by
+    the ``iter_schema_fields`` pass in :func:`redact_options_by_flow_schema`,
+    but the preserved nested dict must be redacted too or it would carry the
+    secret verbatim.
+    """
+    for field in data_schema:
+        if not isinstance(field, dict):
+            continue
+        nested = field.get("schema")
+        if isinstance(nested, list):
+            name = field.get("name")
+            if isinstance(name, str) and isinstance(out.get(name), dict):
+                out[name] = redact_options_by_flow_schema(out[name], nested)
 
 
 # ---------------------------------------------------------------------------
@@ -288,10 +316,14 @@ def register_known_secret_values(values: Iterable[str]) -> None:
         _known_secrets.update(filtered)
 
 
-def known_secret_values() -> frozenset[str]:
-    """Snapshot of the registered secret values."""
+def known_secret_values() -> tuple[str, ...]:
+    """Snapshot of the registered secret values, ordered longest-first.
+
+    The ordering is computed once per snapshot so ``scrub_obj`` does not
+    re-sort for every string node of a large structured payload.
+    """
     with _known_secrets_lock:
-        return frozenset(_known_secrets)
+        return tuple(sorted(_known_secrets, key=len, reverse=True))
 
 
 def _clear_known_secret_values() -> None:
@@ -300,19 +332,36 @@ def _clear_known_secret_values() -> None:
         _known_secrets.clear()
 
 
-def scrub_text(text: str, secrets: Collection[str]) -> str:
+def scrub_text(text: str, secrets: Sequence[str]) -> str:
     """Replace every occurrence of each known secret with ``<redacted>``.
 
-    Longest-first so a secret that is a substring of another cannot leave
+    ``secrets`` must be ordered longest-first (``known_secret_values``
+    provides that) so a secret that is a substring of another cannot leave
     fragments behind.
     """
-    for secret in sorted(secrets, key=len, reverse=True):
+    for secret in secrets:
         if secret in text:
             text = text.replace(secret, REDACTED_KNOWN)
     return text
 
 
-def scrub_obj(obj: Any, secrets: Collection[str]) -> Any:
+def with_serialized_variants(secrets: Sequence[str]) -> tuple[str, ...]:
+    """Secrets plus their JSON-escaped forms, ordered longest-first.
+
+    FastMCP serializes a dict response into its text content block, so a
+    secret containing a quote, backslash, or newline appears there in its
+    JSON-escaped form (``abc\\"def``) — a raw-value scrub would miss it.
+    ToolError payloads are JSON strings with the same property.
+    """
+    variants = set(secrets)
+    for secret in secrets:
+        escaped = json.dumps(secret)[1:-1]
+        if escaped != secret:
+            variants.add(escaped)
+    return tuple(sorted(variants, key=len, reverse=True))
+
+
+def scrub_obj(obj: Any, secrets: Sequence[str]) -> Any:
     """Recursively scrub known secret values from a JSON-shaped object."""
     if isinstance(obj, str):
         return scrub_text(obj, secrets)
@@ -329,11 +378,12 @@ def scrub_obj(obj: Any, secrets: Collection[str]) -> Any:
 class RedactSecretsMiddleware(Middleware):
     """Scrub known secret values from every tool response and tool error.
 
-    Registered innermost (after the visibility outbound scan) so it rewrites
-    the raw tool output; the visibility middleware only refuses or passes
-    through, so ordering between the two is otherwise inert. Consults the
-    live flag per call and is a passthrough while it is off or no secret
-    values are known.
+    Registered immediately BEFORE the visibility outbound scan, which must
+    stay innermost so it sees truly raw output (a secret value could embed a
+    hidden entity id); since that middleware only refuses or passes through
+    — never rewrites — this scrubber still sees the unmodified tool output.
+    Consults the live flag per call and is a passthrough while it is off or
+    no secret values are known.
     """
 
     async def on_call_tool(
@@ -341,9 +391,13 @@ class RedactSecretsMiddleware(Middleware):
     ) -> Any:
         try:
             result = await call_next(context)
-        except ToolError as exc:
+        except Exception as exc:
+            # Not just ToolError: FastMCP forwards non-ToolError exception
+            # text to clients too (mask_error_details is not enabled), so a
+            # ValueError carrying a credential would leak through. Mutating
+            # args preserves the exception type and traceback.
             if redaction_enabled():
-                secrets = known_secret_values()
+                secrets = with_serialized_variants(known_secret_values())
                 if secrets and getattr(exc, "args", None):
                     exc.args = tuple(
                         scrub_text(arg, secrets) if isinstance(arg, str) else arg
@@ -352,7 +406,7 @@ class RedactSecretsMiddleware(Middleware):
             raise
         if not redaction_enabled():
             return result
-        secrets = known_secret_values()
+        secrets = with_serialized_variants(known_secret_values())
         if not secrets:
             return result
         for block in getattr(result, "content", None) or []:

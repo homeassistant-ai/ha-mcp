@@ -4596,23 +4596,44 @@ class TestConfigModeSentinelRejection:
         assert "github_pat_LIVESECRETVALUE" in known_secret_values()
 
     @pytest.mark.asyncio
-    async def test_toggle_off_sentinel_passes_through_legacy(self, redact_off):
-        import copy
-
+    async def test_toggle_off_still_rejects_sentinels(self, redact_off):
+        # Deliberately NOT gated on the toggle: a sentinel captured while
+        # redaction was on must not overwrite a credential after the
+        # operator turns it off.
         from ha_mcp.redaction import REDACTED_SET
 
-        responses = [
-            copy.deepcopy(_REDACTION_ADDON_PAYLOAD),
-            {"success": True, "result": {}},
-        ]
+        with pytest.raises(ToolError) as exc_info:
+            await self._tools()._execute_config_mode(
+                "secretful", {"options": {"github_pat": REDACTED_SET}}
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+
+class TestGetAddonInfoPasswordLogLevel:
+    """A schema that marks log_level as a password must not leak it (issue 2157)."""
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_surfaces_sentinel_not_value(self, redact_on):
+        from ha_mcp.redaction import REDACTED_SET
+
+        client = _make_mock_client()
         with patch(
             "ha_mcp.tools.tools_addons._supervisor_api_call",
             new_callable=AsyncMock,
-            side_effect=responses,
-        ) as mock_call:
-            result = await self._tools()._execute_config_mode(
-                "secretful", {"options": {"github_pat": REDACTED_SET}}
-            )
-        assert result["status"] == "pending_restart"
-        posted = mock_call.call_args.kwargs["data"]["options"]
-        assert posted["github_pat"] == REDACTED_SET
+            return_value={
+                "success": True,
+                "result": {
+                    "name": "Odd",
+                    "slug": "odd",
+                    "options": {"log_level": "secret-log-pw"},
+                    "schema": [
+                        {"name": "log_level", "type": "string", "format": "password"}
+                    ],
+                },
+            },
+        ):
+            result = await get_addon_info(client, "odd")
+
+        assert result["log_level"] == REDACTED_SET
+        assert result["addon"]["options"]["log_level"] == REDACTED_SET

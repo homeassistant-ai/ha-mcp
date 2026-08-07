@@ -24,6 +24,7 @@ from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from ..redaction import (
     is_password_flow_field,
+    is_sentinel,
     redact_flow_schema,
     redact_options_by_flow_schema,
     redaction_enabled,
@@ -1152,6 +1153,19 @@ class IntegrationTools:
         if level_warnings:
             resp.setdefault("warnings", []).extend(level_warnings)
 
+        # Component options are raw persisted values — under redact_secrets
+        # they must be redacted on EVERY read, not only when a schema was
+        # requested (#2157). Skipped when the include_schema fetch below will
+        # run: that path redacts from the schema it fetches anyway, and
+        # running both would double-probe the options flow.
+        if redaction_enabled() and not (
+            include_schema and entry.get("supports_options")
+        ):
+            redact_warnings: list[str] = []
+            await self._redact_component_options(entry_id, entry, redact_warnings)
+            if redact_warnings:
+                resp.setdefault("warnings", []).extend(redact_warnings)
+
         # Options schema only exists in a live options flow — read it from the
         # legacy flow, but keep the component-provided options (populate_options
         # False) so the raw persisted values win over the flow-derived shape.
@@ -1305,7 +1319,14 @@ class IntegrationTools:
                 ),
             }
             if flow_type == "form":
-                schema["data_schema"] = flow_result.get("data_schema", [])
+                data_schema = flow_result.get("data_schema", [])
+                # Subentry schema echoes carry live suggested_values just
+                # like the options-flow echo — same redaction (#2157).
+                schema["data_schema"] = (
+                    redact_flow_schema(data_schema)
+                    if redaction_enabled()
+                    else data_schema
+                )
             elif flow_type == "menu":
                 schema["menu_options"] = flow_result.get("menu_options", [])
             else:
@@ -1329,6 +1350,60 @@ class IntegrationTools:
     def _options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
         """Class-method alias for :func:`options_from_form_flow`."""
         return options_from_form_flow(flow)
+
+    async def _redact_component_options(
+        self, entry_id: Any, entry: dict[str, Any], warnings: list[str]
+    ) -> None:
+        """Redact password-marked fields on component-served options (#2157).
+
+        The component row carries raw persisted options with no schema, so
+        the password markers must come from a live options-flow probe. When
+        the entry supports an options flow but no form schema could be read
+        (probe failed, or the flow opens with a menu), every option value is
+        replaced with a set/empty sentinel — without the schema the password
+        fields cannot be told apart, so this fails closed. Entries without
+        an options flow carry no password markers anywhere (the documented
+        metadata limit of the toggle); their options pass through and the
+        known-value scrub remains the only line for them.
+        """
+        options = entry.get("options")
+        if not isinstance(options, dict) or not options:
+            return
+        if not entry.get("supports_options"):
+            return
+        data_schema: Any = None
+        flow_id = None
+        try:
+            flow = await self._client.start_options_flow(entry_id)
+            flow_id = flow.get("flow_id")
+            if flow.get("type") == "form":
+                data_schema = flow.get("data_schema", [])
+        except Exception as exc:
+            logger.warning(
+                "redact_secrets: options-flow probe failed for %s: %r", entry_id, exc
+            )
+        finally:
+            if flow_id:
+                try:
+                    await self._client.abort_options_flow(flow_id)
+                except Exception as abort_err:
+                    logger.warning(
+                        "redact_secrets: failed to abort probe flow %s: %r",
+                        flow_id,
+                        abort_err,
+                    )
+        if isinstance(data_schema, list):
+            entry["options"] = redact_options_by_flow_schema(options, data_schema)
+        else:
+            entry["options"] = {
+                key: value if is_sentinel(value) else sentinel_for(value)
+                for key, value in options.items()
+            }
+            warnings.append(
+                f"redact_secrets: no options schema readable for {entry_id} — "
+                "every option value was redacted conservatively (the password "
+                "fields cannot be told apart without the schema)"
+            )
 
     async def _fetch_options_schema(
         self, entry_id: str, resp: dict[str, Any], *, populate_options: bool = True
@@ -1526,6 +1601,21 @@ class IntegrationTools:
                 formatted["options"] = _flatten_option_sections(
                     formatted.get("options", {})
                 )
+            # Component options are raw persisted values — under
+            # redact_secrets every row must be redacted before the response
+            # (#2157). Probes run per options-flow-bearing entry, mirroring
+            # the legacy list path's per-entry probe fan-out.
+            if redaction_enabled():
+                redact_warnings: list[str] = []
+                await asyncio.gather(
+                    *(
+                        self._redact_component_options(
+                            formatted.get("entry_id"), formatted, redact_warnings
+                        )
+                        for formatted in formatted_entries
+                    )
+                )
+                level_warnings.extend(redact_warnings)
         return self._finalize_entry_list(
             formatted_entries,
             domain,

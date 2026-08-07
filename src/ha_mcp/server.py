@@ -280,19 +280,21 @@ class HomeAssistantSmartMCPServer:
         # wraps the final tool surface (including the search proxies).
         self._apply_tool_security_policies()
 
+        # Known-secret-value scrub (#2157) — registered just before the
+        # visibility outbound half so that half stays innermost (its scan
+        # must see truly raw output; a secret value could embed a hidden
+        # entity id). Since the visibility scan only refuses or passes
+        # through — never rewrites — this scrubber still sees the unmodified
+        # tool output on the way back out. Consults the live redact_secrets
+        # flag per call and is a passthrough while the flag is off.
+        from .redaction import RedactSecretsMiddleware
+
+        self.mcp.add_middleware(RedactSecretsMiddleware())
+
         # Entity visibility enforce mode, OUTBOUND half (#2015) — added LAST
         # so it is innermost: its result scan sees the raw tool output before
         # any other middleware transforms it.
         self._apply_visibility_outbound_middleware()
-
-        # Known-secret-value scrub (#2157) — innermost of all so it rewrites
-        # the raw tool output. Ordering relative to the visibility scan is
-        # otherwise inert: that middleware only refuses or passes through,
-        # it never rewrites. Consults the live redact_secrets flag per call
-        # and is a passthrough while the flag is off.
-        from .redaction import RedactSecretsMiddleware
-
-        self.mcp.add_middleware(RedactSecretsMiddleware())
 
     def _get_skills_dir(self) -> Path | None:
         """Return the bundled skills directory if it exists.

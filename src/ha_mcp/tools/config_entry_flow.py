@@ -29,7 +29,7 @@ import logging
 from typing import Any, Literal
 
 from ..errors import ErrorCode, create_error_response
-from ..redaction import redaction_enabled, sentinel_option_keys
+from ..redaction import sentinel_option_keys
 from .config_entry_flow_form import _extract_schema_field_names
 from .config_entry_flow_walker import (
     _FlowType,
@@ -46,10 +46,11 @@ def _reject_redaction_sentinels(config_dict: dict[str, Any]) -> None:
 
     A caller round-tripping a redacted read back through a flow write would
     overwrite the live credential with the placeholder string. Omitting the
-    key keeps the current value, so rejection loses nothing.
+    key keeps the current value, so rejection loses nothing. Active
+    regardless of the redact_secrets toggle: a sentinel captured while
+    redaction was on must not overwrite a credential after the operator
+    turns it off.
     """
-    if not redaction_enabled():
-        return
     sentinel_keys = sentinel_option_keys(config_dict)
     if sentinel_keys:
         raise_tool_error(
@@ -131,6 +132,7 @@ async def set_config_subentry(
     ``show_advanced_options`` is a no-op on HA 2026.6+ and kept only for older
     HA versions pending removal before HA 2027.6.
     """
+    _reject_redaction_sentinels(config_dict)
     flow_result = await client.start_config_subentry_flow(
         entry_id,
         subentry_type,

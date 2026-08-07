@@ -130,6 +130,19 @@ class TestRedactAddonOptions:
         assert redact_addon_options(ADDON_OPTIONS, None) == ADDON_OPTIONS
         assert redact_addon_options(ADDON_OPTIONS, "bogus") == ADDON_OPTIONS
 
+    def test_multiple_password_list_keeps_container_shape(self):
+        schema = [
+            {"name": "tokens", "type": "string", "format": "password", "multiple": True}
+        ]
+        options = {"tokens": ["tok_one_11", "", "tok_two_22"]}
+        out = redact_addon_options(options, schema)
+        assert out["tokens"] == [REDACTED_SET, REDACTED_EMPTY, REDACTED_SET]
+
+    def test_redaction_is_idempotent(self):
+        once = redact_addon_options(ADDON_OPTIONS, ADDON_SCHEMA)
+        twice = redact_addon_options(once, ADDON_SCHEMA)
+        assert twice == once
+
 
 class TestCollectAddonSecretValues:
     def test_collects_all_nonempty_password_values(self):
@@ -232,7 +245,7 @@ class TestRedactFlowSchema:
 
     def test_harvests_replaced_values(self):
         redact_flow_schema(FLOW_SCHEMA)
-        assert {"sk-LIVEFLOWSECRET", "legacypw99", "tok-INNERSECRET"} <= (
+        assert {"sk-LIVEFLOWSECRET", "legacypw99", "tok-INNERSECRET"} <= set(
             known_secret_values()
         )
 
@@ -253,6 +266,24 @@ class TestRedactOptionsByFlowSchema:
         options = {"api_key": "keep"}
         assert redact_options_by_flow_schema(options, None) == options
 
+    def test_nested_section_raw_copy_redacted(self):
+        # Sections are additively flattened: the leaf appears BOTH at the
+        # top level and inside the raw nested dict — both copies must be
+        # redacted.
+        options = {
+            "inner_token": "tok-INNERSECRET",
+            "advanced": {"inner_token": "tok-INNERSECRET"},
+        }
+        out = redact_options_by_flow_schema(options, FLOW_SCHEMA)
+        assert out["inner_token"] == REDACTED_SET
+        assert out["advanced"] == {"inner_token": REDACTED_SET}
+
+    def test_redaction_is_idempotent(self):
+        options = {"api_key": "sk-LIVEFLOWSECRET", "empty_pw": ""}
+        once = redact_options_by_flow_schema(options, FLOW_SCHEMA)
+        twice = redact_options_by_flow_schema(once, FLOW_SCHEMA)
+        assert twice == once
+
 
 class TestOptionsFromFormFlowRedaction:
     def _flow(self):
@@ -270,29 +301,35 @@ class TestOptionsFromFormFlowRedaction:
         out = options_from_form_flow(self._flow())
         assert out["api_key"] == "sk-LIVEFLOWSECRET"
         assert out["legacy_pw"] == "legacypw99"
-        assert known_secret_values() == frozenset()
+        assert known_secret_values() == ()
 
 
 class TestKnownSecretRegistry:
     def test_short_values_never_registered(self):
         register_known_secret_values(["abc", "12345", "long-enough-secret"])
-        assert known_secret_values() == frozenset({"long-enough-secret"})
+        assert known_secret_values() == ("long-enough-secret",)
 
     def test_non_strings_ignored(self):
         register_known_secret_values([None, 123456, "real-secret-value"])  # type: ignore[list-item]
-        assert known_secret_values() == frozenset({"real-secret-value"})
+        assert known_secret_values() == ("real-secret-value",)
+
+    def test_snapshot_ordered_longest_first(self):
+        register_known_secret_values(["shorter-1", "the-much-longer-secret"])
+        assert known_secret_values() == ("the-much-longer-secret", "shorter-1")
 
 
 class TestScrub:
     def test_scrub_text_replaces_all_occurrences(self):
-        out = scrub_text("token=SECRETVALUE1 again SECRETVALUE1", {"SECRETVALUE1"})
+        out = scrub_text("token=SECRETVALUE1 again SECRETVALUE1", ("SECRETVALUE1",))
         assert out == f"token={REDACTED_KNOWN} again {REDACTED_KNOWN}"
 
     def test_scrub_text_longest_first(self):
-        # The longer secret contains the shorter one; scrubbing must not
-        # leave fragments of the longer secret behind.
-        out = scrub_text("x SECRETLONGER y SECRET z", {"SECRET", "SECRETLONGER"})
-        assert out == f"x {REDACTED_KNOWN} y {REDACTED_KNOWN} z"
+        # The longer secret contains the shorter one; with the longest-first
+        # order the registry provides, scrubbing must not leave fragments of
+        # the longer secret behind.
+        register_known_secret_values(["SECRET-x", "SECRET-xLONGER"])
+        out = scrub_text("a SECRET-xLONGER b SECRET-x c", known_secret_values())
+        assert out == f"a {REDACTED_KNOWN} b {REDACTED_KNOWN} c"
 
     def test_scrub_obj_walks_dicts_lists_and_keys(self):
         obj = {
@@ -300,7 +337,7 @@ class TestScrub:
             "SECRETVALUE1": "as key",
             "nested": [{"v": "SECRETVALUE1"}, 42, None],
         }
-        out = scrub_obj(obj, {"SECRETVALUE1"})
+        out = scrub_obj(obj, ("SECRETVALUE1",))
         assert out == {
             "note": f"uses {REDACTED_KNOWN} here",
             REDACTED_KNOWN: "as key",
@@ -319,8 +356,12 @@ class TestRejectRedactionSentinels:
     def test_toggle_on_accepts_clean_config(self, redact_on):
         _reject_redaction_sentinels({"password": "real-value"})
 
-    def test_toggle_off_is_noop(self, redact_off):
-        _reject_redaction_sentinels({"password": REDACTED_SET})
+    def test_toggle_off_still_rejects(self, redact_off):
+        # The guard is deliberately NOT gated on the toggle: a sentinel
+        # captured while redaction was on must not overwrite a credential
+        # after the operator turns it off.
+        with pytest.raises(ToolError):
+            _reject_redaction_sentinels({"password": REDACTED_SET})
 
 
 def _tool_result(text: str, structured: dict | None):
@@ -377,3 +418,120 @@ class TestRedactSecretsMiddleware:
         with pytest.raises(ToolError) as exc_info:
             await middleware.on_call_tool(MagicMock(), call_next)
         assert str(exc_info.value) == "failed with SECRETVALUE1"
+
+    @pytest.mark.asyncio
+    async def test_json_escaped_form_scrubbed_from_text_block(self, redact_on):
+        # FastMCP serializes the structured dict into the text block, so a
+        # secret containing a quote appears there JSON-escaped — the scrub
+        # must catch that form too.
+        secret = 'pass"word\\x'
+        register_known_secret_values([secret])
+        escaped = json.dumps(secret)[1:-1]
+        assert escaped != secret
+        result = _tool_result(f'{{"pw": "{escaped}"}}', {"pw": secret})
+        out = await self._call(result)
+        assert out.content[0].text == f'{{"pw": "{REDACTED_KNOWN}"}}'
+        assert out.structured_content == {"pw": REDACTED_KNOWN}
+
+    @pytest.mark.asyncio
+    async def test_generic_exception_args_scrubbed(self, redact_on):
+        # FastMCP forwards non-ToolError exception text to clients too
+        # (mask_error_details is not enabled) — those must be scrubbed while
+        # preserving the exception type.
+        register_known_secret_values(["SECRETVALUE1"])
+        middleware = RedactSecretsMiddleware()
+        call_next = AsyncMock(side_effect=ValueError("boom SECRETVALUE1"))
+        with pytest.raises(ValueError) as exc_info:
+            await middleware.on_call_tool(MagicMock(), call_next)
+        assert str(exc_info.value) == f"boom {REDACTED_KNOWN}"
+
+
+class TestRedactComponentOptions:
+    """IntegrationTools._redact_component_options — component path (issue 2157)."""
+
+    def _tools_with_flow(self, flow_response, abort_raises=False):
+        from ha_mcp.tools.tools_integrations import IntegrationTools
+
+        client = MagicMock()
+        client.start_options_flow = AsyncMock(return_value=flow_response)
+        client.abort_options_flow = (
+            AsyncMock(side_effect=RuntimeError("abort failed"))
+            if abort_raises
+            else AsyncMock()
+        )
+        return IntegrationTools(client)
+
+    @pytest.mark.asyncio
+    async def test_form_schema_redacts_marked_fields(self):
+        tools = self._tools_with_flow(
+            {"flow_id": "f1", "type": "form", "data_schema": FLOW_SCHEMA}
+        )
+        entry = {
+            "entry_id": "e1",
+            "supports_options": True,
+            "options": {"host": "1.2.3.4", "api_key": "sk-LIVEFLOWSECRET"},
+        }
+        warnings: list[str] = []
+        await tools._redact_component_options("e1", entry, warnings)
+        assert entry["options"] == {"host": "1.2.3.4", "api_key": REDACTED_SET}
+        assert warnings == []
+        tools._client.abort_options_flow.assert_awaited_once_with("f1")
+
+    @pytest.mark.asyncio
+    async def test_menu_flow_fails_closed_with_warning(self):
+        tools = self._tools_with_flow(
+            {"flow_id": "f1", "type": "menu", "menu_options": ["a"]}
+        )
+        entry = {
+            "entry_id": "e1",
+            "supports_options": True,
+            "options": {"host": "1.2.3.4", "maybe_pw": "hunter2secret", "empty": ""},
+        }
+        warnings: list[str] = []
+        await tools._redact_component_options("e1", entry, warnings)
+        assert entry["options"] == {
+            "host": REDACTED_SET,
+            "maybe_pw": REDACTED_SET,
+            "empty": REDACTED_EMPTY,
+        }
+        assert len(warnings) == 1
+
+    @pytest.mark.asyncio
+    async def test_probe_failure_fails_closed_with_warning(self):
+        from ha_mcp.tools.tools_integrations import IntegrationTools
+
+        client = MagicMock()
+        client.start_options_flow = AsyncMock(side_effect=RuntimeError("boom"))
+        client.abort_options_flow = AsyncMock()
+        tools = IntegrationTools(client)
+        entry = {
+            "entry_id": "e1",
+            "supports_options": True,
+            "options": {"api_key": "sk-LIVEFLOWSECRET"},
+        }
+        warnings: list[str] = []
+        await tools._redact_component_options("e1", entry, warnings)
+        assert entry["options"] == {"api_key": REDACTED_SET}
+        assert len(warnings) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_options_flow_passes_through(self):
+        tools = self._tools_with_flow({"flow_id": "f1", "type": "form"})
+        entry = {
+            "entry_id": "e1",
+            "supports_options": False,
+            "options": {"plain": "value"},
+        }
+        warnings: list[str] = []
+        await tools._redact_component_options("e1", entry, warnings)
+        assert entry["options"] == {"plain": "value"}
+        assert warnings == []
+        tools._client.start_options_flow.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_empty_options_skip_probe(self):
+        tools = self._tools_with_flow({"flow_id": "f1", "type": "form"})
+        entry = {"entry_id": "e1", "supports_options": True, "options": {}}
+        await tools._redact_component_options("e1", entry, [])
+        assert entry["options"] == {}
+        tools._client.start_options_flow.assert_not_awaited()

@@ -592,13 +592,6 @@ async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, An
     addon = response["result"] if isinstance(response["result"], dict) else {}
     result: dict[str, Any] = {"success": True, "addon": addon}
 
-    # log_level is extracted from the raw options BEFORE redaction so an
-    # add-on that (oddly) schema-marks log_level as a password still
-    # surfaces a value here rather than a sentinel.
-    log_level = _extract_addon_log_level(addon)
-    if log_level is not None:
-        result["log_level"] = log_level
-
     if redaction_enabled():
         options = addon.get("options")
         schema = addon.get("schema")
@@ -608,6 +601,12 @@ async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, An
                 **addon,
                 "options": redact_addon_options(options, schema),
             }
+
+    # Extracted AFTER redaction so an add-on that schema-marks log_level as
+    # a password surfaces the sentinel here, never the live value.
+    log_level = _extract_addon_log_level(result["addon"])
+    if log_level is not None:
+        result["log_level"] = log_level
 
     return result
 
@@ -2064,11 +2063,11 @@ class AddOnTools:
 
         A caller round-tripping a redacted ha_get_addon read must not
         overwrite a live credential with the placeholder string. Omitting
-        the key keeps the current value (writes merge server-side). No-op
-        while redact_secrets is off.
+        the key keeps the current value (writes merge server-side). Active
+        regardless of the redact_secrets toggle: a sentinel captured while
+        redaction was on must not overwrite a credential after the operator
+        turns it off.
         """
-        if not redaction_enabled():
-            return
         sentinel_keys = sentinel_option_keys(options)
         if sentinel_keys:
             raise_tool_error(
