@@ -806,3 +806,9 @@ class TestMiddlewareNonStringErrorArgs:
         with pytest.raises(ValueError) as exc_info:
             await middleware.on_call_tool(MagicMock(), call_next)
         assert exc_info.value.args[0] == {"detail": f"boom {REDACTED_KNOWN}"}
+
+
+class TestNestedListSentinelPaths:
+    def test_sentinel_inside_nested_list_flagged(self):
+        options = {"opt": [[REDACTED_SET], ["clean"]], "ok": [["fine"]]}
+        assert sentinel_option_keys(options) == ["opt[0][0]"]

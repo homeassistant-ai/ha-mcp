@@ -195,17 +195,23 @@ def sentinel_option_keys(options: Any, _prefix: str = "") -> list[str]:
         return keys
     for name, value in options.items():
         path = f"{_prefix}.{name}" if _prefix else str(name)
-        if carries_sentinel(value):
-            keys.append(path)
-        elif isinstance(value, dict):
-            keys.extend(sentinel_option_keys(value, path))
-        elif isinstance(value, list):
-            for idx, item in enumerate(value):
-                if carries_sentinel(item):
-                    keys.append(f"{path}[{idx}]")
-                elif isinstance(item, dict):
-                    keys.extend(sentinel_option_keys(item, f"{path}[{idx}]"))
+        _collect_sentinel_paths(value, path, keys)
     return keys
+
+
+def _collect_sentinel_paths(value: Any, path: str, keys: list[str]) -> None:
+    """Append ``path`` (or deeper paths) for every sentinel-carrying value.
+
+    Recurses through dicts AND lists at any nesting depth so a sentinel at
+    e.g. ``opt[0][0]`` cannot slip past the write guard.
+    """
+    if carries_sentinel(value):
+        keys.append(path)
+    elif isinstance(value, dict):
+        keys.extend(sentinel_option_keys(value, path))
+    elif isinstance(value, list):
+        for idx, item in enumerate(value):
+            _collect_sentinel_paths(item, f"{path}[{idx}]", keys)
 
 
 # ---------------------------------------------------------------------------
