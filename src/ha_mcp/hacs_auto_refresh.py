@@ -224,6 +224,15 @@ async def maybe_refresh_hacs_after_update() -> None:
         info = await asyncio.to_thread(get_update_info)
         marker = await asyncio.to_thread(_read_marker, ha_url)
         if not _nudge_due(current, info, marker):
+            # DEBUG, not INFO: the not-due return is the per-conversation
+            # stdio hot path and must stay quiet at default levels. The line
+            # exists so a DEBUG-level launcher (the HAOS add-on lane) can
+            # prove scheduling even when a completed earlier pass makes every
+            # later boot legitimately not due.
+            logger.debug(
+                "HACS auto-refresh: pass not due (marker current for server %s)",
+                current,
+            )
             return
 
         # The one unconditional line a due pass emits BEFORE any WebSocket

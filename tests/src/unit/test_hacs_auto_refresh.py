@@ -371,12 +371,15 @@ class TestMaybeRefreshHacsAfterUpdate:
         )
         ws = _ws([_repo(123, MIRROR)])
 
-        with caplog.at_level(logging.INFO), _server(ws, info=_info()) as mocks:
+        with caplog.at_level(logging.DEBUG), _server(ws, info=_info()) as mocks:
             await hacs_auto_refresh.maybe_refresh_hacs_after_update()
 
         mocks.get_websocket_client.assert_not_awaited()
         mocks.refresh.assert_not_awaited()
         assert "startup pass due" not in caplog.text
+        # The not-due DEBUG line is contract too: it is what the HAOS add-on
+        # lane greps for once an earlier completed pass makes boots not due.
+        assert "pass not due" in caplog.text
 
 
 class TestLifespanWiring:
