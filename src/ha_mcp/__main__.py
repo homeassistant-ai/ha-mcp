@@ -666,13 +666,6 @@ async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
     server_task = asyncio.create_task(server_coro)
     shutdown_task = asyncio.create_task(_shutdown_event.wait())
 
-    # Fire-and-forget: ask HACS to surface a paired component update after a
-    # server update (advisory; see hacs_auto_refresh). Not in the wait set —
-    # its completion must not stop the server.
-    from ha_mcp.hacs_auto_refresh import maybe_refresh_hacs_after_update
-
-    hacs_refresh_task = asyncio.create_task(maybe_refresh_hacs_after_update())
-
     try:
         done, pending = await asyncio.wait(
             [server_task, shutdown_task],
@@ -732,7 +725,7 @@ async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
             logger.warning("Resource cleanup timed out")
 
         try:
-            await _cancel_tasks(server_task, shutdown_task, hacs_refresh_task)
+            await _cancel_tasks(server_task, shutdown_task)
         except Exception as e:
             # Teardown must never mask the exception being propagated from the
             # try block (Python drops the original if finally raises).

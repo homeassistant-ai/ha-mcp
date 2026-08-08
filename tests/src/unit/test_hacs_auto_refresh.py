@@ -12,6 +12,7 @@ schedule empties it first.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from contextlib import contextmanager
@@ -21,7 +22,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ha_mcp import hacs_auto_refresh
-from ha_mcp.__main__ import _run_with_shutdown
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
@@ -370,21 +370,51 @@ class TestMaybeRefreshHacsAfterUpdate:
         mocks.refresh.assert_not_awaited()
 
 
-class TestStartupWiring:
-    async def test_run_with_shutdown_fires_the_nudge(self):
-        # The task is created but deliberately kept out of the wait set, so
-        # the server's own exit is what ends _run_with_shutdown.
-        nudge = AsyncMock(return_value=None)
+class TestLifespanWiring:
+    async def test_lifespan_schedules_and_cancels_the_nudge(self):
+        # Entering the lifespan starts the task; exiting cancels it, so a
+        # nudge parked in a retry sleep cannot stall shutdown.
+        started = asyncio.Event()
+        cancelled = False
 
-        async def clean_server():
-            return None
+        async def never_finishes():
+            nonlocal cancelled
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
+
+        with patch(
+            "ha_mcp.hacs_auto_refresh.maybe_refresh_hacs_after_update",
+            new=never_finishes,
+        ):
+            async with hacs_auto_refresh.hacs_refresh_lifespan(object()):
+                # The lifespan hands the task to the loop; wait on the flag
+                # the fake sets rather than sleeping.
+                await started.wait()
+
+        assert cancelled, "exiting the lifespan must cancel the pending nudge"
+
+    async def test_server_attaches_the_lifespan(self):
+        # The built server's FastMCP instance carries the lifespan — the pin
+        # that catches a future constructor change dropping it, which is the
+        # sibling of the add-on gap this wiring replaced.
+        from ha_mcp.server import HomeAssistantSmartMCPServer
 
         with (
+            patch("ha_mcp.server.get_global_settings") as get_settings,
+            patch("ha_mcp.server.HomeAssistantSmartMCPServer._initialize_server"),
             patch(
-                "ha_mcp.hacs_auto_refresh.maybe_refresh_hacs_after_update", new=nudge
+                "ha_mcp.server.HomeAssistantSmartMCPServer._build_skills_instructions",
+                return_value=None,
             ),
-            patch("ha_mcp.__main__._cleanup_resources", new=AsyncMock()),
         ):
-            await _run_with_shutdown(clean_server())
+            settings = get_settings.return_value
+            settings.mcp_server_name = "test"
+            settings.mcp_server_version = "0.0.1"
+            settings.read_only_mode = False
+            server = HomeAssistantSmartMCPServer()
 
-        nudge.assert_awaited_once()
+        assert server.mcp._lifespan is hacs_auto_refresh.hacs_refresh_lifespan

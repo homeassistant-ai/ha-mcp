@@ -25,6 +25,8 @@ import asyncio
 import hashlib
 import json
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -250,3 +252,26 @@ async def maybe_refresh_hacs_after_update() -> None:
         raise
     except Exception:
         logger.debug("HACS auto-refresh nudge skipped", exc_info=True)
+
+
+@asynccontextmanager
+async def hacs_refresh_lifespan(_server: Any) -> AsyncIterator[dict[str, Any]]:
+    """Schedule the startup nudge for the lifetime of any server run.
+
+    Attached as the FastMCP ``lifespan`` so it runs on EVERY launcher —
+    stdio, the HTTP CLI entry points, and the add-on's ``start.py``, which
+    calls ``mcp.run()`` directly and never passes through ``__main__``'s
+    ``_run_with_shutdown`` (the wiring this replaces; the add-on gap was
+    found live, not by CI, because the e2e suites launch via the CLI
+    entry points).
+    """
+    task = asyncio.create_task(maybe_refresh_hacs_after_update())
+    try:
+        yield {}
+    finally:
+        # The nudge may be mid-retry-sleep; a cancelled task must not
+        # stall shutdown. maybe_refresh_hacs_after_update re-raises
+        # CancelledError by design, so this await returns promptly.
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
