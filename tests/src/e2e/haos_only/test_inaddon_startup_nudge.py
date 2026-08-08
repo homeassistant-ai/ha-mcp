@@ -29,9 +29,8 @@ import httpx
 import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
-from fastmcp.exceptions import ToolError
 
-from ..utilities.assertions import MCPAssertions, parse_mcp_result
+from ..utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
 from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
 
 LOG = logging.getLogger(__name__)
@@ -121,28 +120,28 @@ async def _warm_shared_client(mcp_client: Any) -> None:
     """
     deadline = time.monotonic() + _WARM_TIMEOUT
     last: object = None
-    while True:
+    while (remaining := deadline - time.monotonic()) > 0:
         try:
-            # Bounded like the fresh calls: an unbounded read on the shared
-            # session mid-bounce parks the loop past every deadline.
-            await asyncio.wait_for(mcp_client.call_tool("ha_get_overview", {}), 30)
-            return
-        except ToolError:
-            # Warm-up only cares that the shared session round-trips again;
-            # a tool-level failure IS a completed round-trip. (Payload
+            # safe_call_tool: a returned dict — success OR ToolError shape —
+            # is a completed round-trip, which is all warm-up needs. (Payload
             # inspection here proved harmful: it kept the loop spinning on a
-            # healthy session — the two prior CI failures.)
+            # healthy session — two prior CI failures.) wait_for bounds the
+            # exchange, capped to the remaining budget so the last iteration
+            # cannot overshoot the deadline.
+            await asyncio.wait_for(
+                safe_call_tool(mcp_client, "ha_get_overview", {}),
+                timeout=min(30.0, remaining),
+            )
             return
         except _RESTORE_TRANSIENT as err:
-            # Transient while the addon bounces underneath us; the deadline
-            # check below bounds the retries.
+            # Transient while the addon bounces underneath us; the loop
+            # condition bounds the retries.
             last = err
-        if time.monotonic() >= deadline:
-            raise AssertionError(
-                "Shared mcp_client never warmed back up after the restore "
-                f"restart within {_WARM_TIMEOUT}s (last={last!r})"
-            )
-        await asyncio.sleep(_POLL_INTERVAL)
+        await asyncio.sleep(min(_POLL_INTERVAL, max(deadline - time.monotonic(), 0)))
+    raise AssertionError(
+        "Shared mcp_client never warmed back up after the restore "
+        f"restart within {_WARM_TIMEOUT}s (last={last!r})"
+    )
 
 
 @pytest.mark.inaddon_only
