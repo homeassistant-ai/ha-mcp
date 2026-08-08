@@ -114,6 +114,8 @@ async def _warm_shared_client(mcp_client: Any) -> None:
             if payload.get("success", True) and "error" not in payload:
                 return
         except _RESTORE_TRANSIENT:
+            # Transient while the addon bounces underneath us; the deadline
+            # check below bounds the retries.
             pass
         if time.monotonic() >= deadline:
             raise AssertionError(
