@@ -78,6 +78,15 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "completion, which is the required shutdown-sequencing effect.",
     ),
     (
+        "py/ineffectual-statement",
+        "src/ha_mcp/hacs_auto_refresh.py",
+        "This statement has no effect",
+        "False positive on the bare 'await task' inside contextlib.suppress "
+        "in hacs_refresh_lifespan: awaiting the cancelled nudge task IS the "
+        "effect (it waits for the task to finish unwinding before the server "
+        "lifespan exits).",
+    ),
+    (
         "py/unused-global-variable",
         "src/ha_mcp/__main__.py",
         "_shutdown_in_progress",
