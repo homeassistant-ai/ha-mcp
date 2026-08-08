@@ -712,7 +712,7 @@ def _normalize_endpoint(endpoint: Any) -> str:
     return ep
 
 
-def _decode_sandbox_response(response: Any, binary: bool) -> Any:
+def _decode_sandbox_response(response: Any, binary: bool, max_binary_size: int) -> Any:
     """Decode an ``httpx`` response body for return into sandbox code.
 
     HA REST responses are normally JSON (or plain text for a handful of
@@ -723,37 +723,82 @@ def _decode_sandbox_response(response: Any, binary: bool) -> Any:
     ``application/pdf``/image bytes through its own ``HomeAssistantView``.
     Monty (the sandbox interpreter) has no filesystem or raw-socket
     access, so ``api_get``/``api_post`` are the only way sandbox code can
-    reach such a view — but forcing ``response.text`` on a non-text body
-    raises ``UnicodeDecodeError``, which the caller previously surfaced
-    as an opaque generic error with no way to recover the bytes.
+    reach such a view.
+
+    httpx's ``Response.json()`` decodes ``response.content`` with a
+    guessed encoding *without* error replacement, so a non-UTF-8 body
+    (a real PDF, say) raises ``UnicodeDecodeError`` there — not
+    ``json.JSONDecodeError``. Missing that exception type is exactly
+    how the original bug surfaced: the caller's blanket ``except
+    Exception`` turned it into an opaque ``"'utf-8' codec can't decode
+    byte ..."`` error with no way to recover the bytes. That case must
+    go straight to the binary-hint error below rather than falling
+    through to ``response.text`` — ``.text`` uses replacement-decoding
+    and does not raise on the same bytes, so falling through there
+    would silently return corrupted text (with U+FFFD replacement
+    characters standing in for whatever the original bytes were)
+    instead of surfacing that the body isn't text at all. A
+    ``json.JSONDecodeError`` is different: it means the body decoded
+    fine as text but isn't valid JSON, so falling through to
+    ``response.text`` there is the correct, intentional plain-text
+    path. ``response.text`` is still guarded against
+    ``UnicodeDecodeError`` for defense-in-depth, since which decode
+    stage can raise is an httpx implementation detail this function
+    shouldn't have to assume.
 
     ``binary=True`` skips JSON/text parsing entirely and returns the raw
     body as base64 so sandbox code (and, downstream, the calling LLM) can
-    decode it outside the sandbox. ``binary=False`` keeps the original
-    JSON-first-then-text behavior, now with a clear error instead of a
-    crash when the body turns out to be non-text after all.
+    decode it outside the sandbox. Monty's own memory limit only covers
+    the sandbox interpreter, not bytes buffered on the host side of an
+    external function call, so ``max_binary_size`` (the operator's
+    ``CODE_MODE_MAX_MEMORY``) bounds the base64 payload here — otherwise
+    a single large file download could balloon host memory well past
+    what the sandbox's own ``ResourceLimits`` are meant to represent.
     """
     if binary:
+        size = len(response.content)
+        if size > max_binary_size:
+            return {
+                "error": (
+                    f"Response body ({size} bytes) exceeds the "
+                    f"binary=True size limit ({max_binary_size} bytes, "
+                    "CODE_MODE_MAX_MEMORY). Ask the operator to raise "
+                    "CODE_MODE_MAX_MEMORY, or fetch a smaller resource."
+                ),
+                "content_type": response.headers.get("content-type"),
+                "size": size,
+            }
         return {
             "content_type": response.headers.get("content-type"),
-            "size": len(response.content),
+            "size": size,
             "base64": base64.b64encode(response.content).decode("ascii"),
         }
     try:
         return response.json()
     except json.JSONDecodeError:
-        try:
-            return response.text
-        except UnicodeDecodeError:
-            return {
-                "error": (
-                    "Response body is not UTF-8 text (likely binary, e.g. "
-                    "a PDF or image). Retry the call with binary=True to "
-                    "receive it as base64."
-                ),
-                "content_type": response.headers.get("content-type"),
-                "size": len(response.content),
-            }
+        pass
+    except UnicodeDecodeError:
+        return _binary_hint_error(response)
+    try:
+        return response.text
+    except UnicodeDecodeError:
+        return _binary_hint_error(response)
+
+
+def _binary_hint_error(response: Any) -> dict[str, Any]:
+    """Error payload for a response body that turned out to be non-text.
+
+    Shared by both decode-failure sites in ``_decode_sandbox_response``.
+    """
+    return {
+        "error": (
+            "Response body is not UTF-8 text (likely binary, e.g. "
+            "a PDF or image). Retry the call with binary=True to "
+            "receive it as base64."
+        ),
+        "content_type": response.headers.get("content-type"),
+        "size": len(response.content),
+    }
 
 
 class _SandboxBridge:
@@ -797,7 +842,9 @@ class _SandboxBridge:
         (``{"content_type", "size", "base64"}``) instead of the default
         JSON/text decoding — required for endpoints that serve non-text
         bytes, e.g. a custom integration's authenticated file-download
-        view. See ``_decode_sandbox_response`` for the full rationale.
+        view. The body is capped at ``CODE_MODE_MAX_MEMORY`` bytes; a
+        larger response comes back as an ``"error"`` dict instead of
+        base64. See ``_decode_sandbox_response`` for the full rationale.
         """
         if self._over_invocation_limit():
             return {
@@ -810,7 +857,9 @@ class _SandboxBridge:
             return {"error": str(exc)}
         try:
             response = await self.client.httpx_client.request("GET", normalized)
-            return _decode_sandbox_response(response, binary)
+            return _decode_sandbox_response(
+                response, binary, self.settings.code_mode_max_memory
+            )
         except Exception as exc:
             logger.warning("api_get(%r) failed", endpoint, exc_info=True)
             return {"error": str(exc)[:200]}
@@ -865,7 +914,9 @@ class _SandboxBridge:
             response = await self.client.httpx_client.request(
                 "POST", normalized, **post_kwargs
             )
-            return _decode_sandbox_response(response, binary)
+            return _decode_sandbox_response(
+                response, binary, self.settings.code_mode_max_memory
+            )
         except Exception as exc:
             logger.warning("api_post(%r) failed", endpoint, exc_info=True)
             return {"error": str(exc)[:200]}
@@ -1386,6 +1437,7 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
           Pass ``binary=True`` to get ``{"content_type", "size", "base64"}``
           instead of JSON/text decoding — needed for endpoints that stream
           non-text bytes, e.g. a custom integration's file-download view.
+          Capped at ``CODE_MODE_MAX_MEMORY`` bytes.
         - ``api_post(endpoint, data, binary=False)`` — POST request to HA
           REST API; same ``binary`` behavior as ``api_get`` for the response.
         - ``ws_send(message)`` — send a HA WebSocket command (e.g. registry
