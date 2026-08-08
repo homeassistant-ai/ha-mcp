@@ -1,9 +1,10 @@
 """Unit tests for the HACS refresh nudge (#1783/#1785 follow-up).
 
 When the component detects that a newer custom component exists — the auto-update
-hold or the component-outdated repair — it asks HACS to force-refresh this
-component's repository so HACS surfaces the update promptly instead of waiting
-out its ~48h custom-repository cache. The interaction reaches into HACS internals
+hold or the component-outdated repair — it asks HACS to force-refresh every
+repository entry this component is installed under, so HACS surfaces the update
+promptly instead of waiting out its ~48h custom-repository cache. The
+interaction reaches into HACS internals
 and is advisory: any failure degrades to a debug log and never faults the caller.
 
 HACS is faked in ``hass.data["hacs"]``; HACS itself is never imported. Home
@@ -74,7 +75,7 @@ class TestNudge:
         # ...then the update entity's coordinator is nudged to re-publish.
         coordinator.async_update_listeners.assert_called_once()
 
-    async def test_falls_back_to_legacy_repo_name(self):
+    async def test_legacy_only_install_is_refreshed(self):
         hass = _make_hass()
         repo = _fake_repo()
         hacs, _ = _fake_hacs(repos={HACS_LEGACY_REPO_FULL_NAME: repo})
@@ -86,6 +87,78 @@ class TestNudge:
         tried = [c.args[0] for c in hacs.repositories.get_by_full_name.call_args_list]
         assert tried == [HACS_MIRROR_REPO_FULL_NAME, HACS_LEGACY_REPO_FULL_NAME]
         repo.update_repository.assert_awaited_once()
+
+    async def test_both_installed_candidates_are_refreshed(self):
+        # A legacy->mirror migration can leave BOTH records installed, each
+        # with its own update entity — refreshing only the mirror left the
+        # legacy entry stale.
+        hass = _make_hass()
+        mirror = _fake_repo(category="integration")
+        legacy = _fake_repo(category="integration")
+        hacs, coordinator = _fake_hacs(
+            repos={
+                HACS_MIRROR_REPO_FULL_NAME: mirror,
+                HACS_LEGACY_REPO_FULL_NAME: legacy,
+            },
+            category="integration",
+        )
+        hass.data["hacs"] = hacs
+
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
+
+        for repo in (mirror, legacy):
+            repo.update_repository.assert_awaited_once_with(
+                ignore_issues=True, force=True
+            )
+        # One poke per refreshed candidate (both share the integration
+        # category, so both land on the same coordinator).
+        assert coordinator.async_update_listeners.call_count == 2
+        assert "1.2.0" in hass.data[DOMAIN][nudge._DATA_HACS_NUDGED_VERSIONS]
+
+    async def test_one_failing_candidate_does_not_skip_the_other(self):
+        hass = _make_hass()
+        mirror = _fake_repo()
+        mirror.update_repository = AsyncMock(side_effect=RuntimeError("github down"))
+        legacy = _fake_repo()
+        hacs, _ = _fake_hacs(
+            repos={
+                HACS_MIRROR_REPO_FULL_NAME: mirror,
+                HACS_LEGACY_REPO_FULL_NAME: legacy,
+            }
+        )
+        hass.data["hacs"] = hacs
+
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
+
+        legacy.update_repository.assert_awaited_once_with(
+            ignore_issues=True, force=True
+        )
+        # One completed refresh is enough to throttle this version.
+        assert "1.2.0" in hass.data[DOMAIN][nudge._DATA_HACS_NUDGED_VERSIONS]
+
+    async def test_every_candidate_failing_leaves_the_throttle_unset(self):
+        # Nothing was refreshed, so a later pass for this same version must
+        # still get its one refresh.
+        hass = _make_hass()
+        mirror = _fake_repo()
+        mirror.update_repository = AsyncMock(side_effect=RuntimeError("github down"))
+        legacy = _fake_repo()
+        legacy.update_repository = AsyncMock(side_effect=RuntimeError("github down"))
+        hacs, _ = _fake_hacs(
+            repos={
+                HACS_MIRROR_REPO_FULL_NAME: mirror,
+                HACS_LEGACY_REPO_FULL_NAME: legacy,
+            }
+        )
+        hass.data["hacs"] = hacs
+
+        await nudge.async_nudge_hacs_refresh(hass, "1.2.0")
+
+        mirror.update_repository.assert_awaited_once()
+        legacy.update_repository.assert_awaited_once()
+        assert "1.2.0" not in hass.data.get(DOMAIN, {}).get(
+            nudge._DATA_HACS_NUDGED_VERSIONS, set()
+        )
 
     async def test_uninstalled_mirror_falls_through_to_installed_legacy(self):
         # Legacy->mirror migration limbo: the mirror repo has been ADDED to
