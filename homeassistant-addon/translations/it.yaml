@@ -61,14 +61,16 @@ configuration:
       scheda Criteri di sicurezza degli strumenti. Disattivato per impostazione predefinita.
       Richiede il riavvio per avere effetto.
   enable_security_policy_tool:
-    name: Let AI agents edit tool security policies
-    description: 'Registers the ha_manage_security_policy tool, which lets connected
-      AI agents read and rewrite the tool security policies — including removing approval
-      gates. Off by default. Independent of the Tool Security Policies option above:
-      this controls who can edit the rules, not whether they are enforced. The tool
-      cannot see or decide pending approvals. To keep a human in the loop, gate the
-      tool before enabling it: switch on "security gated" for Manage Security Policy
-      in the Tools tab of the web UI. Requires restart to take effect.'
+    name: Consenti agli agenti IA di modificare le policy di sicurezza degli strumenti
+    description: 'Registra lo strumento ha_manage_security_policy, che consente agli
+      agenti IA connessi di leggere e riscrivere le policy di sicurezza degli strumenti
+      — inclusa la rimozione dei gate di approvazione. Disattivato per impostazione
+      predefinita. Indipendente dall''opzione Policy di Sicurezza degli Strumenti
+      sopra: questo controlla chi può modificare le regole, non se vengono applicate.
+      Lo strumento non può vedere o decidere le approvazioni in sospeso. Per mantenere
+      un essere umano nel ciclo, proteggi lo strumento prima di abilitarlo: attiva
+      "protetto da sicurezza" per Gestisci Policy di Sicurezza nella scheda Strumenti
+      dell''interfaccia web. Richiede un riavvio per avere effetto.'
   read_only_mode:
     name: Modalità di sola lettura
     description: Disattiva tutti gli strumenti di scrittura e impedisce a qualunque
@@ -79,14 +81,16 @@ configuration:
       nell'interfaccia web. Disattivata per impostazione predefinita. Richiede il
       riavvio per avere effetto.
   redact_secrets:
-    name: Redact Secrets
-    description: Redacts secrets from tool responses before they reach the AI assistant.
-      Add-on options and integration fields marked as passwords are replaced with
-      a set/empty marker (so "is this credential configured?" stays answerable), and
-      other tool responses are scrubbed of secret values the server has already seen
-      (values shorter than 6 characters are skipped, since replacing tiny fragments
-      would corrupt unrelated output). Fields not marked as passwords by their schema
-      cannot be detected. Off by default.
+    name: Rimuovi Segreti
+    description: Rimuove i segreti dalle risposte degli strumenti prima che raggiungano
+      l'assistente IA. Le opzioni dell'add-on e i campi di integrazione contrassegnati
+      come password vengono sostituiti con un marcatore impostato/vuoto (così "questa
+      credenziale è configurata?" rimane una domanda a cui si può rispondere), e altre
+      risposte degli strumenti vengono ripulite dai valori segreti che il server ha
+      già visto (i valori più corti di 6 caratteri vengono saltati, poiché la sostituzione
+      di frammenti minuscoli corromperebbe l'output non correlato). I campi non contrassegnati
+      come password dal loro schema non possono essere rilevati. Disattivato per impostazione
+      predefinita.
   enable_mandatory_bps:
     name: Allega le skill di buone pratiche alle scritture
     description: 'Interruttore principale della funzione che consegna il contenuto

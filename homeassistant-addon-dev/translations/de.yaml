@@ -55,14 +55,16 @@ configuration:
       Tool-Sicherheitsrichtlinien konfiguriert. Standardmäßig ausgeschaltet. Erfordert
       Neustart, um wirksam zu werden.
   enable_security_policy_tool:
-    name: Let AI agents edit tool security policies
-    description: 'Registers the ha_manage_security_policy tool, which lets connected
-      AI agents read and rewrite the tool security policies — including removing approval
-      gates. Off by default. Independent of the Tool Security Policies option above:
-      this controls who can edit the rules, not whether they are enforced. The tool
-      cannot see or decide pending approvals. To keep a human in the loop, gate the
-      tool before enabling it: switch on "security gated" for Manage Security Policy
-      in the Tools tab of the web UI. Requires restart to take effect.'
+    name: KI-Agenten erlauben, Tool-Sicherheitsrichtlinien zu bearbeiten
+    description: 'Registriert das Tool ha_manage_security_policy, das verbundenen
+      KI-Agenten erlaubt, die Tool-Sicherheitsrichtlinien zu lesen und neu zu schreiben
+      — einschließlich des Entfernens von Genehmigungsschranken. Standardmäßig deaktiviert.
+      Unabhängig von der Option „Tool-Sicherheitsrichtlinien“ oben: Dies steuert,
+      wer die Regeln bearbeiten kann, nicht ob sie erzwungen werden. Das Tool kann
+      ausstehende Genehmigungen nicht sehen oder entscheiden. Um einen Menschen in
+      der Schleife zu halten, schütze das Tool, bevor du es aktivierst: Aktiviere
+      „security gated“ für „Manage Security Policy“ auf dem Tab „Tools“ der Web-UI.
+      Erfordert einen Neustart, um wirksam zu werden.'
   read_only_mode:
     name: Nur-Lese-Modus
     description: Schaltet alle Schreibtools aus und nimmt Tools die Möglichkeit, Schreib-
@@ -72,14 +74,16 @@ configuration:
       wie im Web-UI-Tab Tools. Standardmäßig ausgeschaltet. Erfordert Neustart, um
       wirksam zu werden.
   redact_secrets:
-    name: Redact Secrets
-    description: Redacts secrets from tool responses before they reach the AI assistant.
-      Add-on options and integration fields marked as passwords are replaced with
-      a set/empty marker (so "is this credential configured?" stays answerable), and
-      other tool responses are scrubbed of secret values the server has already seen
-      (values shorter than 6 characters are skipped, since replacing tiny fragments
-      would corrupt unrelated output). Fields not marked as passwords by their schema
-      cannot be detected. Off by default.
+    name: Geheimnisse schwärzen
+    description: Schwärzt Geheimnisse aus Tool-Antworten, bevor sie den KI-Assistenten
+      erreichen. Add-on-Optionen und Integrationsfelder, die als Passwörter markiert
+      sind, werden durch einen gesetzt/leer-Marker ersetzt (damit „ist dieses Anmeldeinformationen
+      konfiguriert?“ weiterhin beantwortbar bleibt), und andere Tool-Antworten werden
+      von geheimen Werten bereinigt, die der Server bereits gesehen hat (Werte, die
+      kürzer als 6 Zeichen sind, werden übersprungen, da das Ersetzen kleiner Fragmente
+      zu einer Beschädigung der nicht zusammenhängenden Ausgabe führen würde). Felder,
+      die nicht durch ihr Schema als Passwörter markiert sind, können nicht erkannt
+      werden. Standardmäßig deaktiviert.
   enable_beta_features:
     name: Beta-Funktionen aktivieren (Master)
     description: ⚠ GEFAHR – diese Tools können deine Home-Assistant-Installation DAUERHAFT

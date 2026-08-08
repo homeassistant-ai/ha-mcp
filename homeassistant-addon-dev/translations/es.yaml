@@ -57,14 +57,16 @@ configuration:
       pestaña. Desactivado de forma predeterminada. Requiere reiniciar para que surta
       efecto.
   enable_security_policy_tool:
-    name: Let AI agents edit tool security policies
-    description: 'Registers the ha_manage_security_policy tool, which lets connected
-      AI agents read and rewrite the tool security policies — including removing approval
-      gates. Off by default. Independent of the Tool Security Policies option above:
-      this controls who can edit the rules, not whether they are enforced. The tool
-      cannot see or decide pending approvals. To keep a human in the loop, gate the
-      tool before enabling it: switch on "security gated" for Manage Security Policy
-      in the Tools tab of the web UI. Requires restart to take effect.'
+    name: Permitir que los agentes de IA editen las políticas de seguridad de la herramienta
+    description: 'Registra la herramienta ha_manage_security_policy, que permite a
+      los agentes de IA conectados leer y reescribir las políticas de seguridad de
+      la herramienta — incluyendo la eliminación de las puertas de aprobación. Desactivado
+      por defecto. Independiente de la opción Políticas de seguridad de la herramienta
+      de arriba: esto controla quién puede editar las reglas, no si se aplican. La
+      herramienta no puede ver ni decidir aprobaciones pendientes. Para mantener a
+      un humano en el bucle, protege la herramienta antes de habilitarla: activa "security
+      gated" para Manage Security Policy en la pestaña Herramientas de la interfaz
+      de usuario web. Requiere un reinicio para que surta efecto.'
   read_only_mode:
     name: Modo de solo lectura
     description: Desactiva todas las herramientas de escritura y les retira la capacidad
@@ -75,14 +77,15 @@ configuration:
       Herramientas de la interfaz web. Desactivado de forma predeterminada. Requiere
       reiniciar para que surta efecto.
   redact_secrets:
-    name: Redact Secrets
-    description: Redacts secrets from tool responses before they reach the AI assistant.
-      Add-on options and integration fields marked as passwords are replaced with
-      a set/empty marker (so "is this credential configured?" stays answerable), and
-      other tool responses are scrubbed of secret values the server has already seen
-      (values shorter than 6 characters are skipped, since replacing tiny fragments
-      would corrupt unrelated output). Fields not marked as passwords by their schema
-      cannot be detected. Off by default.
+    name: Redactar secretos
+    description: Redacta secretos de las respuestas de las herramientas antes de que
+      lleguen al asistente de IA. Las opciones del complemento y los campos de integración
+      marcados como contraseñas se reemplazan con un marcador de establecido/vacío
+      (para que "¿está configurada esta credencial?" siga siendo respondible), y otras
+      respuestas de herramientas se limpian de valores secretos que el servidor ya
+      ha visto (los valores de menos de 6 caracteres se omiten, ya que reemplazar
+      fragmentos pequeños corrompería la salida no relacionada). Los campos no marcados
+      como contraseñas por su esquema no pueden ser detectados. Desactivado por defecto.
   enable_beta_features:
     name: Activar las funciones beta (principal)
     description: '⚠ PELIGRO: estas herramientas pueden DAÑAR DE FORMA PERMANENTE tu

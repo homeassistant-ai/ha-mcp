@@ -26,27 +26,17 @@ configuration:
     name: 启用工具安全策略（高级）
     description: 将高风险工具调用（锁具/报警控制、自动化写入等）置于用户审批之后。当调用受保护工具时，智能体会提示用户打开 Web UI 中的工具安全策略选项卡并点击批准，调用才会继续。逐工具规则及可选的参数条件在工具安全策略选项卡中配置。默认关闭。需要重启才能生效。
   enable_security_policy_tool:
-    name: Let AI agents edit tool security policies
-    description: 'Registers the ha_manage_security_policy tool, which lets connected
-      AI agents read and rewrite the tool security policies — including removing approval
-      gates. Off by default. Independent of the Tool Security Policies option above:
-      this controls who can edit the rules, not whether they are enforced. The tool
-      cannot see or decide pending approvals. To keep a human in the loop, gate the
-      tool before enabling it: switch on "security gated" for Manage Security Policy
-      in the Tools tab of the web UI. Requires restart to take effect.'
+    name: 允许 AI 代理编辑工具安全策略
+    description: 注册 ha_manage_security_policy 工具，该工具允许连接的 AI 代理读取和重写工具安全策略 — 包括移除批准门。默认关闭。独立于上面的“工具安全策略”选项：这控制的是谁可以编辑规则，而不是规则是否被强制执行。该工具无法查看或决定待批准项。为了保持人工参与，请在启用该工具之前对其进行门控：在
+      Web UI 的“工具”标签页中，为“Manage Security Policy”打开“security gated”选项。需要重启才能生效。
   read_only_mode:
     name: 只读模式
     description: 关闭所有写入工具，并移除工具进行任何写入或破坏性调用的能力。读写混合工具（备份、插件、能源偏好、语音流水线和启用时的代码模式）仍可用，其写入操作被阻止。与
       Web UI 工具选项卡中的开关相同。默认关闭。需要重启才能生效。
   redact_secrets:
-    name: Redact Secrets
-    description: Redacts secrets from tool responses before they reach the AI assistant.
-      Add-on options and integration fields marked as passwords are replaced with
-      a set/empty marker (so "is this credential configured?" stays answerable), and
-      other tool responses are scrubbed of secret values the server has already seen
-      (values shorter than 6 characters are skipped, since replacing tiny fragments
-      would corrupt unrelated output). Fields not marked as passwords by their schema
-      cannot be detected. Off by default.
+    name: 遮盖密文
+    description: 在工具响应到达 AI 助手之前，从中遮盖密文。附加组件选项和标记为密码的集成字段将替换为已设置/空标记（因此“此凭据是否已配置？”仍可回答），其他工具响应中会清除服务器已见过的密文值（长度小于
+      6 个字符的值将被跳过，因为替换微小片段会破坏不相关的输出）。未被其架构标记为密码的字段无法被检测到。默认关闭。
   enable_beta_features:
     name: 启用测试版功能（主开关）
     description: ⚠ 危险——这些工具可能永久损坏您的 Home Assistant 安装。它们会写入您的 YAML 配置、文件系统，安装自定义组件，运行任意沙箱

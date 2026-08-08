@@ -52,8 +52,12 @@
     "policies.title": "Políticas de seguridad de herramientas",
     "policies.intro": "Control de aprobación por herramienta para llamadas de alto riesgo. Usa la pestaña <strong>Herramientas</strong> para activar el control de una herramienta y afina aquí las condiciones de coincidencia y la duración de la aprobación. Operadores de condición: es igual a, es uno de, regex, contiene, está presente, mayor que, menor que.",
     "policies.global.title": "Ajustes globales",
+    "policies.global.unknown": "No se pudieron leer los ajustes del servidor. Los dos interruptores de abajo se muestran como desconocidos y no se pueden cambiar hasta que la página se recargue correctamente; esta vista puede no reflejar lo que el servidor aplica.",
     "policies.global.enabled.label": "Activar las políticas de seguridad de herramientas",
     "policies.global.enabled.help": "Interruptor principal. Refleja la opción de Ajustes del servidor. Desactivado de forma predeterminada. Actívalo y reinicia la app (complemento) para activar el middleware de control. Mientras esté desactivado, las reglas de abajo se conservan pero no se aplican.",
+    "policies.global.manage_tool.label": "Permitir que los agentes de IA editen estas políticas (ha_manage_security_policy)",
+    "policies.global.manage_tool.help": "Registra la herramienta ha_manage_security_policy, que lee y reemplaza el documento de política que edita esta pestaña. Desactivado por defecto. Independiente del interruptor maestro de arriba: esto controla quién puede editar las reglas, no si se aplican. La herramienta no expone operaciones de cola de aprobación pendientes, pero una acción de conjunto protegida por política aún puede requerir aprobación.",
+    "policies.global.manage_tool.warning": "Habilitar esto permite a los agentes de IA conectados reescribir las políticas de seguridad en esta pestaña, incluyendo la eliminación de las puertas de aprobación. Para mantener a un humano en el bucle, protege la herramienta ANTES de habilitarla: en la pestaña Herramientas, activa \"security gated\" para Manage Security Policy. Esa regla puede ser creada mientras la herramienta aún está desactivada, y se aplica una vez que el interruptor maestro de arriba está activado y el servidor se ha reiniciado. Reinicia la App (complemento) después de alternar cualquiera de los interruptores.",
     "policies.global.wait.label": "Segundos de espera (5-600)",
     "policies.global.wait.help": "Cuánto espera el middleware una aprobación antes de agotar el tiempo.",
     "policies.global.ttl.label": "TTL de la aprobación en minutos (1-60)",
@@ -117,6 +121,8 @@
     "features.enable_tool_security_policies.help": "Somete a aprobación del usuario las llamadas a herramientas de alto riesgo (control de cerraduras y alarmas, escritura de automatizaciones, etc.). Cuando se llama a una herramienta protegida, el agente indica al usuario que abra la pestaña Políticas de seguridad de herramientas en la interfaz web y pulse Aprobar antes de que la llamada continúe. Las reglas por herramienta, con condiciones opcionales sobre los argumentos, se configuran en esa misma pestaña. Desactivado de forma predeterminada. Requiere reiniciar para que surta efecto.",
     "features.read_only_mode.label": "Modo de solo lectura",
     "features.read_only_mode.help": "Desactiva todas las herramientas de escritura y les retira la capacidad de hacer llamadas de escritura o destructivas. Las herramientas mixtas de lectura/escritura (copias de seguridad, complementos, preferencias de energía, canalizaciones de voz y el modo de código cuando está activado) siguen disponibles, pero con sus operaciones de escritura bloqueadas. Es la misma opción que la de la pestaña Herramientas de la interfaz web. Desactivado de forma predeterminada. Requiere reiniciar para que surta efecto.",
+    "features.redact_secrets.label": "Redactar secretos",
+    "features.redact_secrets.help": "Redacta secretos de las respuestas de las herramientas antes de que lleguen al asistente de IA. Las opciones del complemento y los campos de integración marcados como contraseñas se reemplazan con un marcador de establecido/vacío (para que \"¿está configurada esta credencial?\" siga siendo respondible), y otras respuestas de herramientas se limpian de valores secretos que el servidor ya ha visto (los valores de menos de 6 caracteres se omiten, ya que reemplazar fragmentos pequeños corrompería la salida no relacionada). Los campos no marcados como contraseñas por su esquema no pueden ser detectados. Desactivado por defecto.",
     "features.enable_mandatory_bps.label": "Adjuntar skills de buenas prácticas en las escrituras",
     "features.enable_mandatory_bps.help": "Interruptor principal de la entrega de contenido de skills en las herramientas de escritura (issue #1182). Cuando está activado (predeterminado), las seis herramientas de escritura de configuración (automatizaciones, scripts, escenas, auxiliares, paneles, YAML en bruto) adjuntan los archivos de referencia canónicos de buenas prácticas de Home Assistant en `skill_content` tras cada escritura correcta, y además incrustan automáticamente las secciones de referencia citadas por los avisos de buenas prácticas. Cada herramienta expone también un parámetro `MandatoryBPS` por llamada que el agente puede poner a false en llamadas posteriores una vez que tiene el contenido. Con este interruptor principal desactivado NO se envía ningún skill_content, independientemente del parámetro por llamada o de los avisos de buenas prácticas. Se recomienda dejarlo activado; desactívalo solo para modelos con ventanas de contexto muy pequeñas. Desactivarlo puede degradar la precisión de las escrituras. Requiere reiniciar para que surta efecto.",
     "features.enable_strict_mandatory_bps.label": "Modo estricto de buenas prácticas",
@@ -205,6 +211,7 @@
     "tools.badges.read_only": "solo lectura",
     "tools.badges.writes": "escribe",
     "tools.badges.deletes": "elimina",
+    "tools.notes.gated_disabled": "Desactivado. Activa {setting} — el interruptor de la herramienta de edición de políticas está en la pestaña Políticas de seguridad de la herramienta — luego reinicia la App (complemento).",
     "tools.notes.beta_disabled": "Beta. Configura {setting} en la configuración de la app (complemento) de desarrollo o la variable de entorno equivalente (consulta docs/beta.md).",
     "tools.notes.env_pinned": "Fijada por {variable}. Quita la variable de entorno para editarla aquí.",
     "tools.notes.bps_locked": "Bloqueada mientras el modo estricto de buenas prácticas esté activado. Desactiva antes ese ajuste para poder desactivar esta herramienta.",
@@ -300,6 +307,7 @@
     "policies.errors.update_tool": "Fallo al actualizar la política de seguridad de la herramienta: {message}",
     "policies.errors.remove_rule": "Fallo al quitar la regla: {message}",
     "policies.errors.master_save": "El cambio de las políticas de seguridad de herramientas no se ha guardado. El servidor mantiene el valor anterior.",
+    "policies.errors.manage_tool_save": "El cambio de la herramienta de edición de políticas no se guardó. El servidor aún tiene el valor anterior.",
     "policies.operations.sync_gated": "Sincronizar la opción de control",
     "policies.operations.save_rule": "Guardar la regla",
     "policies.operations.save_global": "Guardar los ajustes globales",
@@ -430,6 +438,8 @@
     "addon.backup_hint.description": "Ajusta la redacción de la indicación que el LLM ve en la descripción de la\nherramienta `ha_manage_backup(scope='snapshot')` sobre cuándo sugerir una\ncopia de seguridad completa de Home Assistant antes de operaciones\narriesgadas (p. ej. borrados masivos de dispositivos). Afecta ÚNICAMENTE a\nesa frase dirigida al LLM.\n\nPara instantáneas automáticas por edición de automatizaciones / scripts /\nauxiliares / etc., usa la opción independiente **Activar copia de\nseguridad automática de las ediciones** que aparece más abajo.",
     "addon.secret_path.name": "Ruta secreta personalizada",
     "addon.secret_path.description": "Ruta HTTP personalizada opcional para el servidor MCP. Déjala vacía para usar la ruta segura generada automáticamente.\n",
+    "addon.enable_security_policy_tool.name": "Permitir que los agentes de IA editen las políticas de seguridad de la herramienta",
+    "addon.enable_security_policy_tool.description": "Registra la herramienta ha_manage_security_policy, que permite a los agentes de IA conectados leer y reescribir las políticas de seguridad de la herramienta — incluyendo la eliminación de las puertas de aprobación. Desactivado por defecto. Independiente de la opción Políticas de seguridad de la herramienta de arriba: esto controla quién puede editar las reglas, no si se aplican. La herramienta no puede ver ni decidir aprobaciones pendientes. Para mantener a un humano en el bucle, protege la herramienta antes de habilitarla: activa \"security gated\" para Manage Security Policy en la pestaña Herramientas de la interfaz de usuario web. Requiere un reinicio para que surta efecto.",
     "addon.enable_auto_backup.name": "Activar copia de seguridad automática de las ediciones",
     "addon.enable_auto_backup.description": "Captura una instantánea por entidad antes de cada llamada a una herramienta MCP de escritura o destructiva cubierta (automatización, script, escena, auxiliar, panel, etiqueta, categoría, grupo, zona, área, calendario, tareas pendientes, entidad, integración y las herramientas hermanas de eliminación). Las instantáneas se guardan como archivos YAML en /data/ha_mcp_backups/ (se puede cambiar con HAMCP_BACKUP_DIR) y se listan, restauran o eliminan desde la pestaña Copias de seguridad de la interfaz web de ajustes o mediante ha_manage_backup(scope='edits', ...). Funciona en la medida de lo posible: los fallos registran un WARNING pero nunca bloquean la escritura subyacente. Activado de forma predeterminada; desmárcalo para excluirte. Requiere reiniciar para que surta efecto.",
     "addon.auto_backup_throttle_minutes.name": "Limitación de la copia automática (minutos)",
@@ -738,7 +748,7 @@
     },
     "ha_manage_hacs": {
       "title": "Gestionar HACS",
-      "description": "Gestionar HACS (Home Assistant Community Store) — instalar/actualizar, eliminar o añadir repositorios personalizados."
+      "description": "Gestionar HACS (Home Assistant Community Store) — instalar/actualizar, eliminar, añadir repositorios personalizados o actualizar repositorio en"
     },
     "ha_manage_pipeline": {
       "title": "Gestionar canalización de Assist",
@@ -747,6 +757,10 @@
     "ha_manage_radio": {
       "title": "Gestionar radios (Z-Wave / Zigbee / Matter / Thread)",
       "description": "Gestiona las radios de Home Assistant: Z-Wave, Zigbee, Matter y Thread."
+    },
+    "ha_manage_security_policy": {
+      "title": "Gestionar política de seguridad",
+      "description": "Leer y reescribir la política de seguridad de la herramienta que protege las llamadas a herramientas de alto riesgo detrás de la aprobación del usuario."
     },
     "ha_manage_theme": {
       "title": "Gestionar temas de la interfaz",

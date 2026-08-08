@@ -4,255 +4,288 @@
 # addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
   backup_hint:
-    name: Full-HA snapshot suggestion level (LLM-facing)
-    description: 'Tunes the wording of the hint the LLM sees in the
+    name: Suggestieniveau voor volledige HA-snapshot (LLM-gericht)
+    description: 'Stem de formulering af van de hint die de LLM ziet in de
 
-      `ha_manage_backup(scope=''snapshot'')` tool description for when to
+      beschrijving van de tool `ha_manage_backup(scope=''snapshot'')` voor wanneer
+      een
 
-      suggest a full Home Assistant tarball backup before risky operations
+      volledige Home Assistant tarball-backup moet worden voorgesteld vóór risicovolle
+      bewerkingen
 
-      (e.g. mass device deletes). Affects ONLY this one LLM-facing prompt
+      (bijv. massale apparaatverwijderingen). Beïnvloedt ALLEEN deze ene LLM-gerichte
+      prompts
 
-      sentence.
+      zin.
 
 
-      For per-edit automatic snapshots of automations / scripts / helpers /
+      Voor automatische snapshots per bewerking van automatiseringen / scripts / helpers
+      /
 
-      etc., use the separate **Enable auto-backup of edits** toggle below.'
+      enz., gebruik de afzonderlijke schakelaar **Automatische back-up van bewerkingen
+      inschakelen** hieronder.'
   secret_path:
-    name: Secret path override
-    description: 'Optional custom HTTP path for the MCP server. Leave empty to use
-      the auto-generated secure path.
+    name: Overschrijving van geheim pad
+    description: 'Optioneel aangepast HTTP-pad voor de MCP-server. Laat leeg om het
+      automatisch gegenereerde veilige pad te gebruiken.
 
       '
   enable_tool_search:
-    name: Enable tool search
-    description: 'Replace the full tool catalog with search-based discovery. Reduces
-      idle context by roughly 90%, to about 5K tokens. ⚠️ Do NOT enable this in clients
-      with their own built-in tool search / deferred tools (claude.ai, Claude Desktop,
-      Claude Code) — the two search layers conflict, and the client''s built-in tool
-      search is the better choice there; leave this off. Whether tools are deferred
-      depends on your client and model combination: use this when your setup loads
-      the full catalog up front — models without native deferred tools (e.g. Gemini,
-      OpenAI-compatible local models, Claude Haiku), clients that inline all tool
-      schemas regardless of model (e.g. GitHub Copilot CLI), or smaller context windows.
-      Some Codex models and ChatGPT include deferred tools too — check your client/model
-      directly to confirm its features so you don''t leave this enabled unnecessarily.
-      Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete).
-      Requires restart to take effect.'
+    name: Schakel tool-zoekfunctie in
+    description: 'Vervang de volledige toolcatalogus door zoekgebaseerde ontdekking.
+      Vermindert de inactieve context met ongeveer 90%, tot ongeveer 5K tokens. ⚠️
+      Schakel dit NIET in bij clients met hun eigen ingebouwde tool-zoekfunctie /
+      uitgestelde tools (claude.ai, Claude Desktop, Claude Code) — de twee zoeklagen
+      conflicteren, en de ingebouwde tool-zoekfunctie van de client is daar de betere
+      keuze; laat dit uitgeschakeld. Of tools worden uitgesteld, hangt af van je client-
+      en modelcombinatie: gebruik dit wanneer je setup de volledige catalogus vooraf
+      laadt — modellen zonder native uitgestelde tools (bijv. Gemini, OpenAI-compatibele
+      lokale modellen, Claude Haiku), clients die alle tool-schema''s inline zetten
+      ongeacht het model (bijv. GitHub Copilot CLI), of kleinere contextvensters.
+      Sommige Codex-modellen en ChatGPT bevatten ook uitgestelde tools — controleer
+      je client/model direct om de functies ervan te bevestigen, zodat je dit niet
+      onnodig ingeschakeld laat. Tools worden gevonden via ha_search_tools en uitgevoerd
+      via gecategoriseerde proxies (lezen/schrijven/verwijderen). Vereist een herstart
+      om van kracht te worden.'
   enable_tool_security_policies:
-    name: Enable Tool Security Policies (advanced)
-    description: Gate high-stakes tool calls (lock/alarm control, automation writes,
-      etc.) behind user approval. When a guarded tool is called, the agent tells the
-      user to open the Tool Security Policies tab in the web UI and click Approve
-      before the call proceeds. Per-tool rules with optional argument conditions are
-      configured in the Tool Security Policies tab. Off by default. Requires restart
-      to take effect.
+    name: Schakel Tool Beveiligingsbeleid in (geavanceerd)
+    description: Beveilig risicovolle tool-aanroepen (vergrendelings-/alarmbediening,
+      automatiseringsschrijvingen, enz.) achter gebruikersgoedkeuring. Wanneer een
+      beveiligde tool wordt aangeroepen, instrueert de agent de gebruiker om het tabblad
+      'Tool Security Policies' in de web-UI te openen en op 'Goedkeuren' te klikken
+      voordat de aanroep doorgaat. Per-tool regels met optionele argumentcondities
+      worden geconfigureerd in het tabblad 'Tool Security Policies'. Standaard uitgeschakeld.
+      Vereist een herstart om van kracht te worden.
   enable_security_policy_tool:
-    name: Let AI agents edit tool security policies
-    description: 'Registers the ha_manage_security_policy tool, which lets connected
-      AI agents read and rewrite the tool security policies — including removing approval
-      gates. Off by default. Independent of the Tool Security Policies option above:
-      this controls who can edit the rules, not whether they are enforced. The tool
-      cannot see or decide pending approvals. To keep a human in the loop, gate the
-      tool before enabling it: switch on "security gated" for Manage Security Policy
-      in the Tools tab of the web UI. Requires restart to take effect.'
+    name: Laat AI-agenten het beveiligingsbeleid van tools bewerken
+    description: 'Registreert de ha_manage_security_policy tool, waarmee verbonden
+      AI-agenten het beveiligingsbeleid van tools kunnen lezen en herschrijven — inclusief
+      het verwijderen van goedkeuringspoorten. Standaard uitgeschakeld. Onafhankelijk
+      van de optie ''Tool Security Policies'' hierboven: dit bepaalt wie de regels
+      kan bewerken, niet of ze worden afgedwongen. De tool kan openstaande goedkeuringen
+      niet zien of beslissen. Om een mens in de lus te houden, sluit de tool af voordat
+      je deze inschakelt: schakel "security gated" in voor ''Manage Security Policy''
+      op het tabblad ''Tools'' van de web-UI. Vereist herstart om van kracht te worden.'
   read_only_mode:
-    name: Read Only Mode
-    description: Toggles all write tools off, and removes ability for tools to make
-      any write or destructive calls. Mixed read/write tools (backups, add-ons, energy
-      preferences, voice pipelines, and code mode when enabled) stay available with
-      their write operations blocked. Same toggle as the web UI Tools tab. Off by
-      default. Requires restart to take effect.
+    name: Alleen-lezen modus
+    description: Schakelt alle schrijftools uit en verwijdert de mogelijkheid voor
+      tools om schrijf- of destructieve aanroepen te doen. Gemengde lees-/schrijftools
+      (back-ups, add-ons, energievoorkeuren, spraakpijplijnen en codemodus indien
+      ingeschakeld) blijven beschikbaar, maar hun schrijfbewerkingen zijn geblokkeerd.
+      Zelfde schakelaar als het tabblad 'Tools' in de web-UI. Standaard uitgeschakeld.
+      Vereist een herstart om van kracht te worden.
   redact_secrets:
-    name: Redact Secrets
-    description: Redacts secrets from tool responses before they reach the AI assistant.
-      Add-on options and integration fields marked as passwords are replaced with
-      a set/empty marker (so "is this credential configured?" stays answerable), and
-      other tool responses are scrubbed of secret values the server has already seen
-      (values shorter than 6 characters are skipped, since replacing tiny fragments
-      would corrupt unrelated output). Fields not marked as passwords by their schema
-      cannot be detected. Off by default.
+    name: Geheimen redigeren
+    description: Redigeert geheimen uit tool-antwoorden voordat ze de AI-assistent
+      bereiken. Add-on-opties en integratievelden die als wachtwoorden zijn gemarkeerd,
+      worden vervangen door een ingestelde/lege markering (zodat "is deze referentie
+      geconfigureerd?" beantwoordbaar blijft), en andere tool-antwoorden worden ontdaan
+      van geheime waarden die de server al heeft gezien (waarden korter dan 6 tekens
+      worden overgeslagen, aangezien het vervangen van kleine fragmenten ongerelateerde
+      uitvoer zou beschadigen). Velden die niet als wachtwoorden zijn gemarkeerd door
+      hun schema, kunnen niet worden gedetecteerd. Standaard uitgeschakeld.
   enable_beta_features:
-    name: Enable beta features (master)
-    description: ⚠ DANGER — these tools can PERMANENTLY DAMAGE your Home Assistant
-      installation. They write to your YAML config, your filesystem, install custom
-      components, run arbitrary sandboxed Python, and edit tool docstrings the AI
-      sees. There is no warranty and no support guarantee — you enable them at your
-      OWN RISK. Take a Home Assistant backup before turning this on, and never enable
-      in production without one. Master gate for the 5 experimental sub-flags below;
-      sub-flags are ignored at runtime while this master is off, even when explicitly
-      set to true. The same toggle is also surfaced in the web settings UI under "Beta
-      features (dangerous)" — either surface reflects the other on restart.
+    name: Schakel bètafuncties in (hoofd)
+    description: ⚠ GEVAAR — deze tools kunnen je Home Assistant-installatie PERMANENT
+      BESCHADIGEN. Ze schrijven naar je YAML-configuratie, je bestandssysteem, installeren
+      aangepaste componenten, voeren willekeurige gesandboxte Python uit en bewerken
+      tool-docstrings die de AI ziet. Er is geen garantie en geen ondersteuningsgarantie
+      — je schakelt ze in op EIGEN RISICO. Maak een Home Assistant-back-up voordat
+      je dit inschakelt, en schakel het nooit in productie in zonder een back-up.
+      Hoofdschakelaar voor de 5 experimentele sub-vlaggen hieronder; sub-vlaggen worden
+      tijdens runtime genegeerd wanneer deze hoofdschakelaar uit staat, zelfs wanneer
+      ze expliciet op 'true' zijn ingesteld. Dezelfde schakelaar is ook zichtbaar
+      in de webinstellingen-UI onder "Bètafuncties (gevaarlijk)" — beide weergaven
+      reflecteren elkaar bij herstart.
   enable_yaml_config_editing:
-    name: Enable YAML config editing (beta)
-    description: Beta feature. Allows AI assistants to add, replace, or remove top-level
-      keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed
-      (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant,
-      http, and recorder are blocked. Each edit validates YAML syntax, runs a config
-      check, and creates an automatic backup. Changes to most keys require a full
-      HA restart to take effect. See docs/beta.md for known limitations. Dedicated
-      tools (automations, scripts, scenes, helpers, template sensors) should be preferred
-      when available. REQUIRES the master "Enable beta features" toggle above (and
-      in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless
-      of its value here.
+    name: YAML-configuratie bewerken inschakelen (bèta)
+    description: Bètafunctie. Stelt AI-assistenten in staat om top-level sleutels
+      toe te voegen, te vervangen of te verwijderen in configuration.yaml en packages/*.yaml.
+      Alleen toegestane sleutels zijn toegestaan (bijv. template, sensor, command_line,
+      mqtt, knx); kernsleutels zoals homeassistant, http en recorder zijn geblokkeerd.
+      Elke bewerking valideert de YAML-syntaxis, voert een configuratiecontrole uit
+      en maakt een automatische back-up. Wijzigingen aan de meeste sleutels vereisen
+      een volledige HA-herstart om van kracht te worden. Zie docs/beta.md voor bekende
+      beperkingen. Specifieke tools (automations, scripts, scenes, helpers, template
+      sensors) moeten de voorkeur krijgen indien beschikbaar. VEREIST dat de hoofdschakelaar
+      "Bètafuncties inschakelen" hierboven (en in de web-UI) is ingeschakeld — anders
+      wordt deze sub-vlag tijdens runtime genegeerd, ongeacht de waarde hier.
   enable_yaml_packages_automation:
-    name: Allow automation in packages/*.yaml
-    description: Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts
-      yaml_path='automation' inside packages/*.yaml. When off, the call is rejected
-      both client-side and server-side. The storage-mode tool (ha_config_set_automation)
-      is unaffected. Default OFF; only takes effect when "Enable YAML config editing"
-      above is also on.
+    name: Automatisering toestaan in packages/*.yaml
+    description: Sub-schakelaar van YAML-configuratiebewerking. Wanneer ingeschakeld,
+      accepteert ha_config_set_yaml yaml_path='automation' binnen packages/*.yaml.
+      Wanneer uitgeschakeld, wordt de aanroep zowel client-side als server-side geweigerd.
+      De storage-mode tool (ha_config_set_automation) wordt niet beïnvloed. Standaard
+      UIT; wordt alleen van kracht wanneer "YAML-configuratie bewerken inschakelen"
+      hierboven ook is ingeschakeld.
   enable_yaml_packages_script:
-    name: Allow script in packages/*.yaml
-    description: Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts
-      yaml_path='script' inside packages/*.yaml. When off, the call is rejected both
-      client-side and server-side. The storage-mode tool (ha_config_set_script) is
-      unaffected. Default OFF; only takes effect when "Enable YAML config editing"
-      above is also on.
+    name: Script toestaan in packages/*.yaml
+    description: Sub-schakelaar van YAML-configuratiebewerking. Wanneer ingeschakeld,
+      accepteert ha_config_set_yaml yaml_path='script' binnen packages/*.yaml. Wanneer
+      uitgeschakeld, wordt de aanroep zowel client-side als server-side geweigerd.
+      De storage-mode tool (ha_config_set_script) wordt niet beïnvloed. Standaard
+      UIT; wordt alleen van kracht wanneer "YAML-configuratie bewerken inschakelen"
+      hierboven ook is ingeschakeld.
   enable_yaml_packages_scene:
-    name: Allow scene in packages/*.yaml
-    description: Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts
-      yaml_path='scene' inside packages/*.yaml. When off, the call is rejected both
-      client-side and server-side. The storage-mode tool (ha_config_set_scene) is
-      unaffected. Default OFF; only takes effect when "Enable YAML config editing"
-      above is also on.
+    name: Scène toestaan in packages/*.yaml
+    description: Sub-schakelaar van YAML-configuratiebewerking. Wanneer ingeschakeld,
+      accepteert ha_config_set_yaml yaml_path='scene' binnen packages/*.yaml. Wanneer
+      uitgeschakeld, wordt de aanroep zowel client-side als server-side geweigerd.
+      De storage-mode tool (ha_config_set_scene) wordt niet beïnvloed. Standaard UIT;
+      wordt alleen van kracht wanneer "YAML-configuratie bewerken inschakelen" hierboven
+      ook is ingeschakeld.
   enable_yaml_edit_confirm:
-    name: Require confirmation for YAML edits (diff preview)
-    description: 'Sub-toggle of YAML config editing, ON by default (recommended).
-      The first ha_config_set_yaml call returns a unified diff of exactly what would
-      change on disk plus a confirm token and writes nothing; the edit only lands
-      when the call is repeated with that token. Exists so unintended changes outside
-      the requested edit are caught before they reach disk (issue #1720). Turn off
-      only to save one round-trip per edit.'
+    name: Bevestiging vereisen voor YAML-bewerkingen (diff-voorbeeld)
+    description: 'Sub-schakelaar van YAML-configuratiebewerking, standaard AAN (aanbevolen).
+      De eerste ha_config_set_yaml aanroep retourneert een uniforme diff van precies
+      wat er op schijf zou veranderen, plus een bevestigingstoken, en schrijft niets;
+      de bewerking wordt pas uitgevoerd wanneer de aanroep wordt herhaald met dat
+      token. Bestaat zodat onbedoelde wijzigingen buiten de gevraagde bewerking worden
+      opgevangen voordat ze de schijf bereiken (issue #1720). Schakel alleen uit om
+      één round-trip per bewerking te besparen.'
   enable_code_mode:
-    name: Enable custom tool sandbox (beta)
-    description: Beta feature. Enables the ha_manage_custom_tool tool, which lets
-      AI assistants create, run, save, and delete custom Python code in a secure sandbox
-      when no built-in tool can handle the request. Code runs in an isolated interpreter
-      with no filesystem or arbitrary network access. Sandbox code can hit the HA
-      REST API (api_get/api_post), send WebSocket commands (ws_send), call existing
-      MCP tools (call_tool), or remove a saved tool (delete_saved_tool). Saved tools
-      persist to /data/saved_tools.json by default so they survive add-on restarts,
-      and are visible to any client that can connect. See docs/beta.md for known limitations.
-      Requires restart to take effect. REQUIRES the master "Enable beta features"
-      toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored
-      at runtime regardless of its value here.
+    name: Aangepaste tool-sandbox inschakelen (bèta)
+    description: Bètafunctie. Schakelt de ha_manage_custom_tool tool in, waarmee AI-assistenten
+      aangepaste Python-code kunnen maken, uitvoeren, opslaan en verwijderen in een
+      veilige sandbox wanneer geen ingebouwde tool de aanvraag kan afhandelen. Code
+      wordt uitgevoerd in een geïsoleerde interpreter zonder bestandssysteem of willekeurige
+      netwerktoegang. Sandbox-code kan de HA REST API aanroepen (api_get/api_post),
+      WebSocket-commando's verzenden (ws_send), bestaande MCP-tools aanroepen (call_tool),
+      of een opgeslagen tool verwijderen (delete_saved_tool). Opgeslagen tools blijven
+      standaard behouden in /data/saved_tools.json, zodat ze add-on-herstarts overleven
+      en zichtbaar zijn voor elke client die verbinding kan maken. Zie docs/beta.md
+      voor bekende beperkingen. Vereist een herstart om van kracht te worden. VEREIST
+      dat de hoofdschakelaar "Bètafuncties inschakelen" hierboven (en in de web-UI)
+      is ingeschakeld — anders wordt deze sub-vlag tijdens runtime genegeerd, ongeacht
+      de waarde hier.
   enable_lite_docstrings:
-    name: Enable lite tool docstrings (beta)
-    description: 'Beta feature. Replaces the docstrings on a handful of heavy ha-mcp
+    name: Lite tool-docstrings inschakelen (bèta)
+    description: 'Bètafunctie. Vervangt de docstrings van een handvol zware ha-mcp
       tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml)
-      with shorter variants that defer schema and example detail to the ha_get_skill_guide
-      tool (or its skill:// resource). WARNING: this reduces idle token usage, but
-      may degrade LLM performance — the trimmed descriptions rely on the LLM actually
-      calling the skill tool or reading the skill resource for detail, which is not
-      guaranteed (some models will skip the extra tool call and end up with less guidance
-      than they had before). Best paired with a client that supports MCP resources
-      or with enable_tool_search. Requires restart to take effect. REQUIRES the master
-      "Enable beta features" toggle above (and in the web UI) to be on — otherwise
-      this sub-flag is ignored at runtime regardless of its value here.'
+      door kortere varianten die schema- en voorbeeldgegevens uitstellen naar de ha_get_skill_guide
+      tool (of de skill:// resource ervan). WAARSCHUWING: dit vermindert het tokengebruik
+      in rust, maar kan de LLM-prestaties verslechteren — de ingekorte beschrijvingen
+      zijn afhankelijk van het feit dat de LLM daadwerkelijk de skill tool aanroept
+      of de skill resource leest voor details, wat niet gegarandeerd is (sommige modellen
+      zullen de extra tool-aanroep overslaan en uiteindelijk minder begeleiding hebben
+      dan voorheen). Het beste te combineren met een client die MCP-resources ondersteunt
+      of met enable_tool_search. Vereist een herstart om van kracht te worden. VEREIST
+      dat de hoofdschakelaar "Bètafuncties inschakelen" hierboven (en in de web-UI)
+      is ingeschakeld — anders wordt deze sub-vlag tijdens runtime genegeerd, ongeacht
+      de waarde hier.'
   enable_mandatory_bps:
-    name: Attach best-practice skills on writes
-    description: 'Master switch for the write-tool skill content delivery feature
-      (issue #1182). When enabled (default), the six config write tools (automations,
-      scripts, scenes, helpers, dashboards, raw YAML) attach the canonical Home Assistant
-      best-practice reference files under `skill_content` on every successful write,
-      plus auto-embed any reference sections cited by best-practice warnings. Each
-      tool also exposes a per-call `MandatoryBPS` parameter the agent can set to false
-      on subsequent calls once it has the content. When this master switch is off,
-      NO skill_content goes out regardless of the per-call parameter or BP warnings.
-      Recommended ON as the first choice; disable only for models with very small
-      context windows. Turning this off may degrade write accuracy. Requires restart
-      to take effect.'
+    name: Koppel best-practice vaardigheden aan schrijfbewerkingen
+    description: 'Hoofdschakelaar voor de functie voor het leveren van vaardigheidsinhoud
+      voor schrijftools (issue #1182). Wanneer ingeschakeld (standaard), koppelen
+      de zes configuratie-schrijftools (automatiseringen, scripts, scènes, helpers,
+      dashboards, ruwe YAML) de canonieke Home Assistant best-practice referentiebestanden
+      onder `skill_content` bij elke succesvolle schrijfbewerking, plus automatisch
+      ingebedde referentiesecties die worden genoemd in best-practice waarschuwingen.
+      Elke tool exposeert ook een per-aanroep `MandatoryBPS`-parameter die de agent
+      op ''false'' kan zetten bij volgende aanroepen zodra deze de inhoud heeft. Wanneer
+      deze hoofdschakelaar uit staat, wordt GEEN `skill_content` verzonden, ongeacht
+      de per-aanroep parameter of BP-waarschuwingen. Aanbevolen AAN als eerste keuze;
+      alleen uitschakelen voor modellen met zeer kleine contextvensters. Het uitschakelen
+      hiervan kan de schijfnauwkeurigheid verminderen. Vereist een herstart om van
+      kracht te worden.'
   enable_strict_mandatory_bps:
-    name: Strict best-practices mode
-    description: 'Strict mode: prevents the client from using the tool until it can
-      prove that it read the best practices. While on, the six best-practice write
-      tools (automations, scripts, scenes, helpers, dashboards, raw YAML) are blocked
-      and return an error directing the client to read the best-practices skill via
-      ha_get_skill_guide and pass back the acknowledgment key it obtains there. While
-      on, the ha_get_skill_guide tool is locked enabled — it is the only publisher
-      of the acknowledgment key. Child of the "Attach best-practice skills on writes"
-      option above and inert while that parent is off. Requires restart to take effect.'
+    name: Strikte best-practices modus
+    description: 'Strikte modus: voorkomt dat de client de tool gebruikt totdat deze
+      kan bewijzen dat het de best practices heeft gelezen. Wanneer ingeschakeld,
+      worden de zes best-practice schrijftools (automatiseringen, scripts, scènes,
+      helpers, dashboards, ruwe YAML) geblokkeerd en retourneren ze een fout die de
+      client instrueert om de best-practice vaardigheid te lezen via ha_get_skill_guide
+      en de daar verkregen bevestigingssleutel terug te sturen. Wanneer ingeschakeld,
+      is de ha_get_skill_guide tool vergrendeld ingeschakeld — het is de enige uitgever
+      van de bevestigingssleutel. Onderdeel van de optie "Koppel best-practice vaardigheden
+      aan schrijfbewerkingen" hierboven en inactief zolang die ouder uitgeschakeld
+      is. Vereist een herstart om van kracht te worden.'
   enable_filesystem_tools:
-    name: Enable filesystem tools (beta)
-    description: 'Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write
-      access to your Home Assistant filesystem. WARNING: This gives the MCP server
-      sensitive direct file access to your system. Only enable if you trust the AI
-      assistant with file operations. Requires restart to take effect. REQUIRES the
-      master "Enable beta features" toggle above (and in the web UI) to be on — otherwise
-      this sub-flag is ignored at runtime regardless of its value here.'
+    name: Bestandssysteemtools inschakelen (bèta)
+    description: 'Stelt HAMCP_ENABLE_FILESYSTEM_TOOLS=true in. Schakelt directe lees-/schrijftoegang
+      tot je Home Assistant-bestandssysteem in. WAARSCHUWING: Dit geeft de MCP-server
+      gevoelige directe bestandstoegang tot je systeem. Schakel alleen in als je de
+      AI-assistent vertrouwt met bestandsbewerkingen. Vereist een herstart om van
+      kracht te worden. VEREIST dat de hoofdschakelaar "Bètafuncties inschakelen"
+      hierboven (en in de web-UI) is ingeschakeld — anders wordt deze sub-vlag tijdens
+      runtime genegeerd, ongeacht de waarde hier.'
   enable_dashboard_screenshot:
-    name: Enable dashboard screenshot mode (beta)
-    description: Beta feature — disabled by default. Adds the ha_get_dashboard_screenshot
-      tool plus include_screenshot / return_screenshot options on the dashboard get/set
-      tools, so AI assistants can inspect one or more responsive Lovelace images (e.g.
-      to verify a dashboard they just created). Supports stable named views, mobile/tablet/desktop
-      batches, and PNG/JPEG/WebP/BMP output. Rendering runs in a separate, opt-in
-      engine — balloob's "Puppet" add-on (headless Chromium) — which you install once
-      (add balloob's add-on repository, then install "Puppet") and give a long-lived
-      access token; on Docker/Container deployments you run that engine as a sidecar
-      and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is installed unless
-      you both enable this and install the engine. Requires restart to take effect.
-      REQUIRES the master "Enable beta features" toggle above (and in the web UI)
-      to be on — otherwise this sub-flag is ignored at runtime regardless of its value
-      here.
+    name: Dashboard-screenshotmodus inschakelen (bèta)
+    description: Bètafunctie — standaard uitgeschakeld. Voegt de ha_get_dashboard_screenshot
+      tool toe, plus de include_screenshot / return_screenshot opties voor de dashboard
+      get/set tools, zodat AI-assistenten een of meer responsieve Lovelace-afbeeldingen
+      kunnen inspecteren (bijv. om een dashboard te verifiëren dat ze zojuist hebben
+      gemaakt). Ondersteunt stabiele benoemde weergaven, mobiele/tablet/desktop batches
+      en PNG/JPEG/WebP/BMP uitvoer. Rendering draait in een aparte, opt-in engine
+      — balloob's "Puppet" add-on (headless Chromium) — die je eenmalig installeert
+      (voeg balloob's add-on repository toe, installeer vervolgens "Puppet") en een
+      langdurige toegangstoken geeft; bij Docker/Container implementaties draai je
+      die engine als een sidecar en stel je HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL
+      in. Er wordt niets zwaars geïnstalleerd, tenzij je dit inschakelt én de engine
+      installeert. Vereist een herstart om van kracht te worden. VEREIST dat de hoofdinstelling
+      "Enable beta features" hierboven (en in de web-UI) is ingeschakeld — anders
+      wordt deze sub-vlag tijdens runtime genegeerd, ongeacht de waarde hier.
   enable_auto_backup:
-    name: Enable auto-backup of edits
-    description: Captures a per-entity snapshot before every wrapped write/destructive
-      MCP tool call (automation, script, scene, helper, dashboard, label, category,
-      group, zone, area, calendar, todo, entity, integration, and sibling remove/delete
-      tools). Snapshots are saved as YAML files under /data/ha_mcp_backups/ (override
-      via HAMCP_BACKUP_DIR) and listed, restored, or deleted via the Backups tab in
-      the web settings UI or via ha_manage_backup(scope='edits', ...). Best-effort
-      — failures log a WARNING but never block the underlying write. On by default;
-      uncheck to opt out. Requires restart to take effect.
+    name: Automatische back-up van bewerkingen inschakelen
+    description: Maakt een snapshot per entiteit vóór elke omwikkelde schrijf-/destructieve
+      MCP-toolaanroep (automatisering, script, scène, helper, dashboard, label, categorie,
+      groep, zone, gebied, kalender, todo, entiteit, integratie en gerelateerde verwijder-/delete-tools).
+      Snapshots worden opgeslagen als YAML-bestanden onder /data/ha_mcp_backups/ (overschrijven
+      via HAMCP_BACKUP_DIR) en kunnen worden weergegeven, hersteld of verwijderd via
+      het tabblad 'Back-ups' in de webinstellingen-UI of via ha_manage_backup(scope='edits',
+      ...). Best-effort — fouten loggen een WAARSCHUWING maar blokkeren nooit de onderliggende
+      schrijfbewerking. Standaard ingeschakeld; deselecteer om af te melden. Vereist
+      herstart om van kracht te worden.
   auto_backup_throttle_minutes:
-    name: Auto-backup throttle (minutes)
-    description: Per-entity throttle window. 0 (default) captures a snapshot on every
-      wrapped write. N>0 captures at most one snapshot per N minutes per entity. Range
-      0–1440.
+    name: Automatische back-up vertraging (minuten)
+    description: Vertragingsvenster per entiteit. 0 (standaard) maakt een snapshot
+      bij elke omwikkelde schrijfbewerking. N>0 maakt maximaal één snapshot per N
+      minuten per entiteit. Bereik 0–1440.
   auto_backup_retain_per_entity:
-    name: Auto-backup retention (per entity)
-    description: Maximum number of snapshots kept per entity. Older snapshots beyond
-      this cap are rotated out on each successful capture. Default 100, range 1–10000.
+    name: Automatische back-up retentie (per entiteit)
+    description: Maximaal aantal snapshots per entiteit. Oudere snapshots die deze
+      limiet overschrijden, worden verwijderd bij elke succesvolle opname. Standaard
+      100, bereik 1–10000.
   enable_snapshot_delete:
-    name: Allow snapshot deletion
-    description: Lets ha_manage_backup delete full HA snapshot tarballs (scope='snapshot',
-      action='delete'). Off by default — a snapshot may be the last recovery point
-      after a mistaken change, so a human must opt in here. Even when on, scheduled
-      backups, the newest remaining snapshot, and anything younger than the age floor
-      below stay protected.
+    name: Snapshotverwijdering toestaan
+    description: Laat ha_manage_backup volledige HA snapshot tarballs verwijderen
+      (scope='snapshot', action='delete'). Standaard uitgeschakeld — een snapshot
+      kan het laatste herstelpunt zijn na een foutieve wijziging, dus een mens moet
+      hier expliciet toestemming geven. Zelfs wanneer ingeschakeld, blijven geplande
+      back-ups, de nieuwste resterende snapshot en alles wat jonger is dan de onderstaande
+      leeftijdsgrens beschermd.
   snapshot_delete_min_age_days:
-    name: Minimum snapshot age to delete (days)
-    description: A snapshot must be at least this old before it can be deleted. Range
-      0–365; 0 disables the floor (the newest-snapshot and scheduled-backup protections
-      still apply). Default 7.
+    name: Minimale snapshotleeftijd om te verwijderen (dagen)
+    description: Een snapshot moet minstens zo oud zijn voordat het kan worden verwijderd.
+      Bereik 0–365; 0 schakelt de ondergrens uit (de nieuwste-snapshot en geplande-back-up
+      beschermingen blijven van toepassing). Standaard 7.
   tool_search_max_results:
-    name: Tool search max results
-    description: 'Maximum number of tools returned by ha_search_tools when tool search
-      is enabled. Lower values (2-3) save context tokens but may miss relevant tools.
-      Range: 2-10. Requires restart.'
+    name: Max. resultaten tool-zoekfunctie
+    description: 'Maximaal aantal tools geretourneerd door ha_search_tools wanneer
+      de tool-zoekfunctie is ingeschakeld. Lagere waarden (2-3) besparen context-tokens,
+      maar kunnen relevante tools missen. Bereik: 2-10. Vereist een herstart.'
   disabled_tools:
-    name: Disabled tools (comma-separated)
-    description: Tools listed here are forced off and locked in the web Settings UI
-      (Tools tab) — they cannot be re-enabled there without unsetting this option
-      first. A small set of mandatory tools (ha_search, ha_get_overview, ha_get_state,
-      ha_report_issue, ha_manage_backup) cannot be disabled and keep running even
-      if listed here. ha_get_skill_guide can be disabled only while strict best-practices
-      mode (enable_strict_mandatory_bps) is off. Comma-separated tool names (e.g.
-      ha_call_event,ha_eval_template).
+    name: Uitgeschakelde tools (komma-gescheiden)
+    description: Tools die hier worden vermeld, zijn geforceerd uitgeschakeld en vergrendeld
+      in de webinstellingen-UI (tabblad 'Tools') — ze kunnen daar niet opnieuw worden
+      ingeschakeld zonder eerst deze optie ongedaan te maken. Een kleine set verplichte
+      tools (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      kan niet worden uitgeschakeld en blijft actief, zelfs als ze hier worden vermeld.
+      ha_get_skill_guide kan alleen worden uitgeschakeld als de strikte best-practices-modus
+      (enable_strict_mandatory_bps) is uitgeschakeld. Door komma's gescheiden toolnamen
+      (bijv. ha_call_event,ha_eval_template).
   pinned_tools:
-    name: Pinned tools (comma-separated)
-    description: Tools listed here are locked pinned — they appear at the top of the
-      Tools tab and cannot be unpinned from the web Settings UI without unsetting
-      this option first. Useful in combination with Tool Search. Comma-separated tool
-      names.
+    name: Vastgezette tools (komma-gescheiden)
+    description: Tools die hier worden vermeld, zijn vastgezet — ze verschijnen bovenaan
+      het tabblad 'Tools' en kunnen niet worden losgemaakt vanuit de webinstellingen-UI
+      zonder eerst deze optie ongedaan te maken. Handig in combinatie met Tool Search.
+      Door komma's gescheiden toolnamen.
   verify_ssl:
-    name: Verify TLS certificate
-    description: Verify the Home Assistant server's TLS certificate. The add-on connects
-      via the Supervisor proxy, so this normally has no effect and should stay enabled.
-      Disable only if you've reconfigured the add-on to talk to HA over a public HTTPS
-      hostname with a self-signed certificate or hostname mismatch. Disabling weakens
-      transport security — leave on unless you know you need it. Requires restart
-      to take effect.
+    name: TLS-certificaat verifiëren
+    description: Verifieer het TLS-certificaat van de Home Assistant-server. De add-on
+      maakt verbinding via de Supervisor-proxy, dus dit heeft normaal gesproken geen
+      effect en moet ingeschakeld blijven. Schakel alleen uit als je de add-on opnieuw
+      hebt geconfigureerd om met HA te communiceren via een openbare HTTPS-hostnaam
+      met een zelfondertekend certificaat of een hostnaam-mismatch. Uitschakelen verzwakt
+      de transportbeveiliging — laat ingeschakeld, tenzij je weet dat je het nodig
+      hebt. Vereist herstart om van kracht te worden.
