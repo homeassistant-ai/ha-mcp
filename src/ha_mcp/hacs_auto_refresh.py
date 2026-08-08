@@ -226,6 +226,17 @@ async def maybe_refresh_hacs_after_update() -> None:
         if not _nudge_due(current, info, marker):
             return
 
+        # The one unconditional line a due pass emits BEFORE any WebSocket
+        # work: it proves the launcher scheduled the nudge even where HACS
+        # is absent and the pass ends silently — the observable the HAOS
+        # add-on lane greps for, and the line whose absence exposed the
+        # launcher gap this module's lifespan wiring closed.
+        logger.info(
+            "HACS auto-refresh: startup pass due (server %s); "
+            "asking HACS for repository state",
+            current,
+        )
+
         result = await _refresh_with_retries()
         if result is None:
             logger.debug(

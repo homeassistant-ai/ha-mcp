@@ -238,6 +238,9 @@ class TestMaybeRefreshHacsAfterUpdate:
         with caplog.at_level(logging.INFO), _server(ws, info=_info()) as mocks:
             await hacs_auto_refresh.maybe_refresh_hacs_after_update()
 
+        # The due-pass line logs BEFORE any WS work — the observable the
+        # HAOS add-on lane greps for, so it is contract, not decoration.
+        assert "HACS auto-refresh: startup pass due" in caplog.text
         # Both entries the component can be tracked under, and nothing else.
         assert _refreshed_ids(mocks) == ["123", "456"]
         assert _written_marker(data_dir) == {
@@ -355,19 +358,20 @@ class TestMaybeRefreshHacsAfterUpdate:
         mocks.refresh.assert_not_awaited()
         assert _written_marker(data_dir) is None
 
-    async def test_matching_marker_skips_the_websocket(self, data_dir):
+    async def test_matching_marker_skips_the_websocket(self, data_dir, caplog):
         # The stdio hot path: a per-conversation spawn on an unchanged version
-        # costs one file read and no WebSocket traffic.
+        # costs one file read, no WebSocket traffic, and no log noise.
         hacs_auto_refresh._marker_path(HA_URL).write_text(
             json.dumps(_marker(latest="1.1.0", hacs="present"))
         )
         ws = _ws([_repo(123, MIRROR)])
 
-        with _server(ws, info=_info()) as mocks:
+        with caplog.at_level(logging.INFO), _server(ws, info=_info()) as mocks:
             await hacs_auto_refresh.maybe_refresh_hacs_after_update()
 
         mocks.get_websocket_client.assert_not_awaited()
         mocks.refresh.assert_not_awaited()
+        assert "startup pass due" not in caplog.text
 
 
 class TestLifespanWiring:
