@@ -755,7 +755,7 @@ identity holds by construction.
 
 A language ships on all four surfaces or not at all —
 `tests/src/unit/test_locale_parity.py` enforces it. One Home Assistant language
-code (`de`, `es`, `fr`, `it`, `nl`, `pl`, `ru`, `zh-Hans`) names every file:
+code (`de`, `es`, `fr`, `it`, `nl`, `pl`, `ru`, `sv`, `zh-Hans`) names every file:
 `src/ha_mcp/settings_ui/locales/<code>.json`,
 `custom_components/ha_mcp_tools/translations/<code>.json`, and
 `homeassistant-addon{,-dev}/translations/<code>.yaml`.

@@ -1,0 +1,22 @@
+{
+  "meta": {
+    "native_name": "Svenska",
+    "dir": "ltr"
+  },
+  "messages": {
+    "accessibility.storage_blocked": "Din webbläsare blockerar lagring för den här webbplatsen; dina val gäller bara den här sessionen.",
+    "policies.operators.exists": "finns",
+    "policies.operators.exists_long": "finns (valfritt värde)",
+    "policies.operators.eq": "är lika med",
+    "policies.operators.neq": "är INTE lika med",
+    "policies.operators.in": "är en av",
+    "policies.operators.not_in": "är INTE en av",
+    "policies.operators.contains": "innehåller",
+    "policies.operators.regex": "matchar reguljärt uttryck",
+    "policies.operators.gt": "är större än",
+    "policies.operators.lt": "är mindre än",
+    "policies.pending.already_decided": "Det här godkännandet är redan {decision}, möjligen i en annan flik eller session.",
+    "policies.pending.decision.approved": "godkänt",
+    "policies.pending.decision.denied": "nekat"
+  }
+}
