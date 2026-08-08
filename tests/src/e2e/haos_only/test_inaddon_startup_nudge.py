@@ -46,13 +46,15 @@ NUDGE_LOG_SIGNATURE = "HACS auto-refresh:"
 _TRANSIENT = (*_POLLING_TRANSIENT_ERRORS, httpx.HTTPError)
 _RESTORE_TRANSIENT = (*_TRANSIENT, AssertionError)
 
-# Budgets sized to fit inside pytest-timeout's 300 s per-test cap even on
-# the all-loops-exhausted path: probe 120 + restore 60 + warm 60 (+ restarts
-# at 5-25 s each) stays under it. The probe's happy path is a few seconds.
-_PROBE_TIMEOUT = 120.0
-_RESTORE_TIMEOUT = 60.0
-_WARM_TIMEOUT = 60.0
+# Real-world HAOS budgets (a 60 s warm-up starved in CI: two back-to-back
+# container restarts, and DEBUG-level logging makes every log fetch heavy).
+# The per-test pytest.mark.timeout below is sized to the phase sum plus
+# restart margin, following the other HAOS long-runners' precedent.
+_PROBE_TIMEOUT = 180.0
+_RESTORE_TIMEOUT = 120.0
+_WARM_TIMEOUT = 180.0
 _POLL_INTERVAL = 3.0
+_TEST_TIMEOUT_S = 600
 
 
 async def _call_tool_fresh(addon_url: str, tool: str, args: dict[str, Any]) -> Any:
@@ -127,6 +129,7 @@ async def _warm_shared_client(mcp_client: Any) -> None:
 
 @pytest.mark.inaddon_only
 @pytest.mark.addon_disruptive
+@pytest.mark.timeout(_TEST_TIMEOUT_S)
 async def test_addon_launcher_schedules_the_startup_nudge(
     mcp_client: Any,
     ha_container_with_fresh_config: dict[str, Any],
