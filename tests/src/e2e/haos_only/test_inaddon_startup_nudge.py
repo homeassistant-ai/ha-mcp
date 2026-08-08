@@ -12,10 +12,10 @@ prove scheduling; which one fires depends on marker state, which this test
 must NOT assume: the add-on's ``/data`` persists across restarts, and once
 an early boot lives ~8.5 minutes its HACS-absent pass completes and writes
 the marker, making every later boot legitimately not due (observed live in
-CI — 50 boots, one due-line). So the test drives the add-on to DEBUG via
-the settings API (the ``test_addon_debug_log_level`` flow), restarts it,
-and searches the fresh boot's log for the shared ``"HACS auto-refresh:"``
-prefix, restoring INFO afterwards.
+CI — 50 boots, one due-line). So the test drives the add-on to DEBUG via the
+settings API (the ``test_addon_debug_log_level`` flow), records the current
+process identity, restarts it, and requires the replacement process's own
+startup diagnostics to contain a per-boot line, restoring INFO afterwards.
 """
 
 from __future__ import annotations
@@ -30,22 +30,19 @@ import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-from ..utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
+from ..utilities.assertions import parse_mcp_result, safe_call_tool
 from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
 
 LOG = logging.getLogger(__name__)
 
-DEV_ADDON_NAME = "Home Assistant MCP Server (Dev)"
-
 # Matches BOTH the due (INFO) and not-due (DEBUG) per-boot lines — either
 # proves the launcher scheduled the nudge. Keep in lockstep with
 # src/ha_mcp/hacs_auto_refresh.py.
-NUDGE_LOG_SIGNATURE = "HACS auto-refresh:"
+NUDGE_LOGGER = "ha_mcp.hacs_auto_refresh"
 NUDGE_BOOT_LOG_PHRASES = (
     "HACS auto-refresh: startup pass due",
     "HACS auto-refresh: pass not due",
 )
-_NUDGE_LOG_LIMIT = 500
 
 # Same transient sets as test_addon_debug_log_level (see its comments).
 _TRANSIENT = (*_POLLING_TRANSIENT_ERRORS, httpx.HTTPError)
@@ -83,27 +80,35 @@ async def _call_tool_fresh(addon_url: str, tool: str, args: dict[str, Any]) -> A
     return parse_mcp_result(raw)
 
 
-def _nudge_log_args(slug: str) -> dict[str, Any]:
-    """Build the widest bounded search for the nudge log signature."""
-    return {
-        "source": "supervisor",
-        "slug": slug,
-        "search": NUDGE_LOG_SIGNATURE,
-        "limit": _NUDGE_LOG_LIMIT,
-    }
-
-
-async def _fetch_nudge_logs(addon_url: str, slug: str) -> dict[str, Any]:
-    """Fetch nudge logs over a restart-safe fresh connection."""
-    return await _call_tool_fresh(addon_url, "ha_get_logs", _nudge_log_args(slug))
-
-
-def _nudge_boot_line_count(log_text: str) -> int:
-    """Count real per-boot nudge lines, excluding search-argument echoes."""
-    return sum(
-        any(phrase in line for phrase in NUDGE_BOOT_LOG_PHRASES)
-        for line in log_text.splitlines()
+async def _get_instance_id(settings_info_url: str) -> str:
+    """Read the settings endpoint's per-process identity."""
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        resp = await http.get(settings_info_url)
+    assert resp.status_code == 200, (
+        f"GET {settings_info_url} returned {resp.status_code}: {resp.text[:500]}"
     )
+    data = resp.json()
+    assert isinstance(data, dict), (
+        f"GET {settings_info_url} returned non-object JSON: {data!r}"
+    )
+    instance_id = data.get("instance_id")
+    assert isinstance(instance_id, str) and instance_id, (
+        f"GET {settings_info_url} returned no process instance_id: {data!r}"
+    )
+    return instance_id
+
+
+def _find_nudge_startup_record(startup_logs: object) -> dict[str, Any] | None:
+    """Find a real per-boot nudge record in process-local startup logs."""
+    if not isinstance(startup_logs, list):
+        return None
+    for entry in startup_logs:
+        if not isinstance(entry, dict) or entry.get("logger") != NUDGE_LOGGER:
+            continue
+        message = entry.get("message")
+        if isinstance(message, str) and message.startswith(NUDGE_BOOT_LOG_PHRASES):
+            return entry
+    return None
 
 
 async def _post_log_level(settings_advanced_url: str, level: str) -> None:
@@ -185,34 +190,15 @@ async def test_addon_launcher_schedules_the_startup_nudge(
     addon_url = ha_container_with_fresh_config.get("addon_mcp_url")
     assert addon_url, "inaddon container_info has no addon_mcp_url"
     base = addon_url.split("/mcp", 1)[0]
+    settings_info = f"{base}{HA_MCP_TEST_SECRET_PATH}/api/settings/info"
     settings_advanced = f"{base}{HA_MCP_TEST_SECRET_PATH}/api/settings/advanced"
     settings_restart = f"{base}{HA_MCP_TEST_SECRET_PATH}/api/settings/restart"
 
-    # Resolve the dev addon's Supervisor slug while the shared client is
-    # still live (pre-restart). call_tool_success per the test conventions:
-    # a failed listing reports itself instead of reading as a missing addon.
-    async with MCPAssertions(mcp_client) as mcp:
-        data = await mcp.call_tool_success("ha_get_addon", {})
-    addons = data.get("addons") or []
-    dev_addon = next((a for a in addons if a.get("name") == DEV_ADDON_NAME), None)
-    assert dev_addon is not None, (
-        f"Dev addon {DEV_ADDON_NAME!r} not in ha_get_addon listing: "
-        f"{[a.get('name') for a in addons]}"
-    )
-    slug = dev_addon["slug"]
-
-    # Supervisor logs survive add-on restarts. Record the exact per-boot phrase
-    # count on the already-proven shared client so an older boot cannot satisfy
-    # this restart; fresh connections are reserved for the post-restart retry.
-    async with MCPAssertions(mcp_client) as mcp:
-        baseline_payload = await mcp.call_tool_success(
-            "ha_get_logs", _nudge_log_args(slug)
-        )
-    baseline_count = _nudge_boot_line_count(baseline_payload.get("log", ""))
-    LOG.info(
-        "Recorded %d nudge per-boot lines before the restart",
-        baseline_count,
-    )
+    # The settings identity changes only when the add-on process does. Binding
+    # this baseline to ha_report_issue's process-local startup records avoids
+    # stale matches and rollover races in Supervisor's bounded log window.
+    baseline_instance_id = await _get_instance_id(settings_info)
+    LOG.info("Recorded pre-restart process %s", baseline_instance_id)
 
     LOG.info("Flipping the dev add-on to DEBUG for a fresh, provable boot...")
     await _post_log_level(settings_advanced, "DEBUG")
@@ -225,36 +211,65 @@ async def test_addon_launcher_schedules_the_startup_nudge(
         while time.monotonic() < deadline:
             try:
                 url = wait_for_addon_mcp_ready(timeout=30.0)
-                payload = await _fetch_nudge_logs(url, slug)
-                log_text = payload.get("log", "")
-                # Post-filter for the two REAL per-boot phrases: at DEBUG the
-                # addon logs this probe's own tool calls, whose search
-                # argument contains the bare signature — matching only the
-                # signature would let the probe confirm itself.
-                current_count = _nudge_boot_line_count(log_text)
-                if payload.get("success") and current_count > baseline_count:
-                    found = True
-                    LOG.info(
-                        "Nudge per-boot line count grew from %d to %d after "
-                        "restart: %s",
-                        baseline_count,
-                        current_count,
-                        log_text[:200],
-                    )
-                    break
-                last = (
-                    f"per-boot line count {current_count} has not grown beyond "
-                    f"the pre-restart baseline {baseline_count} in "
-                    f"{payload.get('total_lines', 0)} matching lines"
+                payload = await _call_tool_fresh(
+                    url,
+                    "ha_report_issue",
+                    {
+                        "tool_call_count": 1,
+                        "fields": ["diagnostic_info", "startup_logs"],
+                    },
                 )
+                if not isinstance(payload, dict) or not payload.get("success"):
+                    last = f"unexpected ha_report_issue payload: {payload!r}"
+                else:
+                    diagnostic_info = payload.get("diagnostic_info")
+                    instance = (
+                        diagnostic_info.get("instance")
+                        if isinstance(diagnostic_info, dict)
+                        else None
+                    )
+                    current_instance_id = (
+                        instance.get("instance_id")
+                        if isinstance(instance, dict)
+                        else None
+                    )
+                    if current_instance_id == baseline_instance_id:
+                        last = (
+                            f"still reached pre-restart process {baseline_instance_id}"
+                        )
+                    elif not isinstance(current_instance_id, str) or not (
+                        current_instance_id
+                    ):
+                        last = f"ha_report_issue omitted process identity: {instance!r}"
+                    else:
+                        startup_logs = payload.get("startup_logs")
+                        record = _find_nudge_startup_record(startup_logs)
+                        if record is not None:
+                            found = True
+                            LOG.info(
+                                "Replacement process %s captured nudge startup "
+                                "record: %s",
+                                current_instance_id,
+                                record,
+                            )
+                            break
+                        startup_log_count = (
+                            len(startup_logs)
+                            if isinstance(startup_logs, list)
+                            else f"invalid {type(startup_logs).__name__}"
+                        )
+                        last = (
+                            f"replacement process {current_instance_id} has no "
+                            f"nudge record among {startup_log_count} startup logs"
+                        )
             except _TRANSIENT as err:
                 last = err
             await asyncio.sleep(_POLL_INTERVAL)
 
         assert found, (
-            "A DEBUG-level fresh boot did not add a new "
-            f"{NUDGE_LOG_SIGNATURE!r} per-boot line within {_PROBE_TIMEOUT}s "
-            f"of the self-restart (last={last!r}) — "
+            "A DEBUG-level replacement process did not capture a per-boot "
+            f"nudge startup record within {_PROBE_TIMEOUT}s of the self-restart "
+            f"(pre-restart instance={baseline_instance_id}, last={last!r}) — "
             "the add-on launcher did not schedule the startup nudge (neither "
             "the due INFO line nor the not-due DEBUG line appeared). This is "
             "the exact regression the lifespan wiring exists to prevent: "
