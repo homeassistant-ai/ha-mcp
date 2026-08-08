@@ -8,7 +8,7 @@ import logging
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ..utilities.assertions import assert_mcp_success, safe_call_tool
+from ..utilities.assertions import MCPAssertions, assert_mcp_success, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -552,6 +552,52 @@ async def test_logs_error_log_with_level_filter(mcp_client):
         assert filters.get("level") == "WARNING"
 
     logger.info(f"Retrieved {data['returned_lines']} WARNING-level lines")
+
+
+@pytest.mark.asyncio
+async def test_logs_error_log_structured_parses_real_log(mcp_client):
+    """structured=True must actually parse a REAL log, not just return a shape.
+
+    The unit fixtures imitate the plain ``home-assistant.log`` file, which only
+    container/pip installs read. This test runs the parser over whatever the
+    live instance actually serves, so a format the regex cannot match fails
+    loudly here instead of returning ``success: true, top_issues: []`` — a
+    false all-clear — on an instance whose log is full of errors.
+    """
+    logger.info("Testing error_log structured summary against a live log")
+
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success(
+            "ha_get_logs",
+            {"source": "error_log", "structured": True},
+        )
+    data = get_logbook_data(raw_data)
+
+    assert data["success"] is True
+    assert data.get("source") == "error_log"
+    assert data.get("structured") is True
+    assert "top_issues" in data, "Structured mode must return top_issues"
+    assert "by_component" in data, "Structured mode must return by_component"
+    assert "log" not in data, "Structured mode replaces the raw text"
+
+    summary = data["summary"]
+    if summary["total_raw_lines"] == 0:
+        pytest.skip("Live instance served an empty error log — nothing to parse")
+
+    # The load-bearing assertion: lines arrived AND the parser understood them.
+    assert summary["parsed_entries"] > 0, (
+        "Parsed nothing from a non-empty live log "
+        f"({summary['unparseable_lines']} of {summary['total_raw_lines']} "
+        f"unparseable) — the log format drifted: {data.get('warnings')}"
+    )
+    # Bounded output is the whole premise of this mode.
+    assert len(data["top_issues"]) <= summary["showing_top_n"]
+
+    logger.info(
+        f"Parsed {summary['parsed_entries']} of {summary['total_raw_lines']} "
+        f"lines into {summary['unique_issues']} unique issues across "
+        f"{summary['components_affected']} components"
+    )
 
 
 @pytest.mark.asyncio

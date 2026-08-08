@@ -40,6 +40,10 @@ logger = logging.getLogger(__name__)
 # so the request did not execute and retrying is safe even for writes.
 _RETRYABLE_STATUS = frozenset({502, 503, 504})
 _MAX_REQUEST_ATTEMPTS = 3
+# Journald window requested for the Core error log on Supervisor-backed
+# installs. Kept as one constant so the add-on and supervised branches of
+# get_error_log() cannot drift apart again.
+_ERROR_LOG_LINES = 20000
 
 
 class HomeAssistantError(Exception):
@@ -586,7 +590,12 @@ class HomeAssistantClient:
         """
         if is_running_in_addon():
             logger.debug("Fetching error log via Supervisor direct (core service)")
-            return await self._supervisor_logs_get("core")
+            # Match the supervised branch's window below. Without an explicit
+            # `lines`, Supervisor returns its 100-line default, so the add-on
+            # saw a ~100-line log where the in-process server saw ~18k on the
+            # same instance — and any "what keeps repeating?" analysis over that
+            # slice is meaningless. See #1721 for the same fix on _get_supervisor_log.
+            return await self._supervisor_logs_get("core", lines=_ERROR_LOG_LINES)
 
         if await self._is_supervised_install():
             logger.debug(
