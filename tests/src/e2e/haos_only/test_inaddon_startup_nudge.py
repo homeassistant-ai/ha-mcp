@@ -30,7 +30,7 @@ import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-from ..utilities.assertions import MCPAssertions, parse_mcp_result
+from ..utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
 from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
 
 LOG = logging.getLogger(__name__)
@@ -84,6 +84,43 @@ async def _restart_self(settings_restart_url: str) -> None:
     assert resp.status_code == 200, (
         f"self-restart POST returned {resp.status_code}: {resp.text[:300]}"
     )
+
+
+async def _restore_info_level(settings_advanced: str, settings_restart: str) -> None:
+    """Restore log_level=INFO and bounce, retried as a set (leaked DEBUG
+    would flood every later test's addon log)."""
+    deadline = time.monotonic() + _RESTORE_TIMEOUT
+    while True:
+        try:
+            await _post_log_level(settings_advanced, "INFO")
+            await _restart_self(settings_restart)
+            return
+        except _RESTORE_TRANSIENT:
+            if time.monotonic() >= deadline:
+                raise
+            await asyncio.sleep(_POLL_INTERVAL)
+
+
+async def _warm_shared_client(mcp_client: Any) -> None:
+    """Warm the SHARED session client back up after the self-restarts.
+
+    safe_call_tool: a ToolError raised mid-bounce is not in the transient
+    set and would escape the loop; break only on a successful payload.
+    """
+    deadline = time.monotonic() + _WARM_TIMEOUT
+    while True:
+        try:
+            payload = await safe_call_tool(mcp_client, "ha_get_overview", {})
+            if payload.get("success", True) and "error" not in payload:
+                return
+        except _RESTORE_TRANSIENT:
+            pass
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                "Shared mcp_client never warmed back up after the restore "
+                f"restart within {_WARM_TIMEOUT}s"
+            )
+        await asyncio.sleep(_POLL_INTERVAL)
 
 
 @pytest.mark.inaddon_only
@@ -156,30 +193,7 @@ async def test_addon_launcher_schedules_the_startup_nudge(
             "lifespan reaches the add-on."
         )
     finally:
-        # Restore INFO for the rest of the session — retried as a set, like
-        # the debug-log-level test (a leaked DEBUG level would flood every
-        # later test's addon log).
-        restore_deadline = time.monotonic() + _RESTORE_TIMEOUT
-        while True:
-            try:
-                await _post_log_level(settings_advanced, "INFO")
-                await _restart_self(settings_restart)
-                break
-            except _RESTORE_TRANSIENT:
-                if time.monotonic() >= restore_deadline:
-                    raise
-                await asyncio.sleep(_POLL_INTERVAL)
-        # The self-restarts dropped the SHARED session mcp_client's
-        # connection. Warm it back up so later tests on this worker get a
-        # live session.
-        warm_deadline = time.monotonic() + _WARM_TIMEOUT
-        while True:
-            try:
-                await mcp_client.call_tool("ha_get_overview", {})
-                break
-            except _RESTORE_TRANSIENT:
-                if time.monotonic() >= warm_deadline:
-                    raise
-                await asyncio.sleep(_POLL_INTERVAL)
+        await _restore_info_level(settings_advanced, settings_restart)
+        await _warm_shared_client(mcp_client)
 
     LOG.info("Add-on launcher scheduled the startup nudge")
