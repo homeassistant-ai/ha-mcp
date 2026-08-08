@@ -708,6 +708,10 @@
       "title": "导入蓝图",
       "description": "从 URL 导入蓝图。"
     },
+    "ha_intent_process": {
+      "title": "处理 Assist 意图",
+      "description": "通过 Home Assistant 的 Assist 意图系统执行自然语言语句。"
+    },
     "ha_list_files": {
       "title": "列出文件",
       "description": "列出 Home Assistant 配置目录中某个目录下的文件。"
