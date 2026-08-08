@@ -83,18 +83,19 @@ async def _call_tool_fresh(addon_url: str, tool: str, args: dict[str, Any]) -> A
     return parse_mcp_result(raw)
 
 
+def _nudge_log_args(slug: str) -> dict[str, Any]:
+    """Build the widest bounded search for the nudge log signature."""
+    return {
+        "source": "supervisor",
+        "slug": slug,
+        "search": NUDGE_LOG_SIGNATURE,
+        "limit": _NUDGE_LOG_LIMIT,
+    }
+
+
 async def _fetch_nudge_logs(addon_url: str, slug: str) -> dict[str, Any]:
-    """Fetch the widest bounded search result for the nudge log signature."""
-    return await _call_tool_fresh(
-        addon_url,
-        "ha_get_logs",
-        {
-            "source": "supervisor",
-            "slug": slug,
-            "search": NUDGE_LOG_SIGNATURE,
-            "limit": _NUDGE_LOG_LIMIT,
-        },
-    )
+    """Fetch nudge logs over a restart-safe fresh connection."""
+    return await _call_tool_fresh(addon_url, "ha_get_logs", _nudge_log_args(slug))
 
 
 def _nudge_boot_line_count(log_text: str) -> int:
@@ -200,21 +201,22 @@ async def test_addon_launcher_schedules_the_startup_nudge(
     )
     slug = dev_addon["slug"]
 
+    # Supervisor logs survive add-on restarts. Record the exact per-boot phrase
+    # count on the already-proven shared client so an older boot cannot satisfy
+    # this restart; fresh connections are reserved for the post-restart retry.
+    async with MCPAssertions(mcp_client) as mcp:
+        baseline_payload = await mcp.call_tool_success(
+            "ha_get_logs", _nudge_log_args(slug)
+        )
+    baseline_count = _nudge_boot_line_count(baseline_payload.get("log", ""))
+    LOG.info(
+        "Recorded %d nudge per-boot lines before the restart",
+        baseline_count,
+    )
+
     LOG.info("Flipping the dev add-on to DEBUG for a fresh, provable boot...")
     await _post_log_level(settings_advanced, "DEBUG")
     try:
-        # Supervisor logs survive add-on restarts. Record the exact per-boot
-        # phrase count first so an older boot cannot satisfy this restart.
-        baseline_payload = await _fetch_nudge_logs(addon_url, slug)
-        assert baseline_payload.get("success"), (
-            f"Could not record the pre-restart nudge-log baseline: {baseline_payload}"
-        )
-        baseline_count = _nudge_boot_line_count(baseline_payload.get("log", ""))
-        LOG.info(
-            "Recorded %d nudge per-boot lines before the restart",
-            baseline_count,
-        )
-
         await _restart_self(settings_restart)
 
         deadline = time.monotonic() + _PROBE_TIMEOUT
