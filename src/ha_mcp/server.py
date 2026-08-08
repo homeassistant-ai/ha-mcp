@@ -820,6 +820,50 @@ class HomeAssistantSmartMCPServer:
             "complete.\n\n"
             "For parameters, schema, and examples, see ha_get_skill_guide."
         ),
+        # ha_manage_backup: 4.6 KB, the largest remaining full docstring
+        # outside this map. The routing matrix STAYS — the `action`
+        # parameter's own Field description says "Valid (scope, action)
+        # combinations are listed in the tool description", so trimming it
+        # away would leave that pointer aimed at nothing. What defers to
+        # the skill guide is the eleven worked examples, the enumerated
+        # snapshot-delete guards, and the enable_auto_backup prose.
+        #
+        # destructiveHint is set on this tool, so the lite text keeps every
+        # irreversibility marker: the restart, the confirm, and the fact
+        # that (snapshot, delete) is off until a human enables it.
+        "ha_manage_backup": (
+            "Manage Home Assistant backups: full HA snapshots "
+            "(`scope='snapshot'`) and per-entity auto-backups of agent edits "
+            "(`scope='edits'`). Pick the scope first — the wrong one routes "
+            "through the wrong code path.\n\n"
+            "`scope='snapshot'` actions: `create`, `list`, `restore` "
+            "(**restarts HA**), `delete` (needs `confirm=True`, and is "
+            "disabled until a human sets `enable_snapshot_delete` — an agent "
+            "cannot enable it, and guards still refuse deleting scheduled, "
+            "recent, or last-remaining snapshots).\n\n"
+            "`scope='edits'` actions: `create`, `list`, `view`, `diff`, "
+            "`restore` (no HA restart), `delete`.\n\n"
+            "Use `edits` to undo a recent agent edit to an "
+            "automation/script/scene/dashboard/helper; use `snapshot` only "
+            "for system-wide recovery.\n\n"
+            "For parameters, examples, and the full guard rules, see "
+            "ha_get_skill_guide."
+        ),
+        # ha_report_issue: 2.4 KB of template-selection guidance and the
+        # report bodies themselves. The choice the agent has to make is one
+        # sentence; the templates are what the tool RETURNS, so describing
+        # them up front pays for content the caller is about to receive.
+        "ha_report_issue": (
+            "Get diagnostic information plus a ready-to-file report "
+            "template. Covers two kinds of report: a runtime bug (ha-mcp "
+            "errored or behaved unexpectedly) and agent-behaviour feedback "
+            "(the AI used the wrong tool or worked inefficiently). Pick "
+            "based on whether the fault was in ha-mcp or in the agent's own "
+            "choices; the returned template carries the fields to fill "
+            "in.\n\n"
+            "For the selection rules and template details, see "
+            "ha_get_skill_guide."
+        ),
     }
 
     # Description overrides that REPLACE the original description for BM25.
