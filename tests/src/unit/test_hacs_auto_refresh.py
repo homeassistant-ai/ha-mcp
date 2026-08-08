@@ -379,7 +379,13 @@ class TestMaybeRefreshHacsAfterUpdate:
         assert "startup pass due" not in caplog.text
         # The not-due DEBUG line is contract too: it is what the HAOS add-on
         # lane greps for once an earlier completed pass makes boots not due.
-        assert "pass not due" in caplog.text
+        not_due_records = [
+            record
+            for record in caplog.records
+            if "HACS auto-refresh: pass not due" in record.getMessage()
+        ]
+        assert len(not_due_records) == 1
+        assert not_due_records[0].levelno == logging.DEBUG
 
 
 class TestLifespanWiring:

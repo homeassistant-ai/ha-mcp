@@ -34,9 +34,10 @@ in ``tests/src/e2e/workflows/embedded/test_embedded_server.py`` (the
 credentials at startup and exits without them (``_validate_standard_credentials``
 in ``__main__``), so it has no sentinel state to prove, and its run path is the
 same ``_run_with_shutdown(mcp.run_async(**_http_run_kwargs(...)))`` call the web
-lane already drives. The HAOS add-on lane is covered structurally rather than by
-a marker of its own — the unit suite pins the lifespan wiring, and the add-on's
-``start.py`` calls ``mcp.run()`` on this same server instance.
+lane already drives. The HAOS add-on lane is covered directly in
+``tests/src/e2e/haos_only/test_inaddon_startup_nudge.py``, which restarts the
+real add-on and requires a per-boot nudge line from that restart; the unit suite
+separately pins the shared lifespan wiring.
 """
 
 import asyncio

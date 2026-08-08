@@ -41,6 +41,11 @@ DEV_ADDON_NAME = "Home Assistant MCP Server (Dev)"
 # proves the launcher scheduled the nudge. Keep in lockstep with
 # src/ha_mcp/hacs_auto_refresh.py.
 NUDGE_LOG_SIGNATURE = "HACS auto-refresh:"
+NUDGE_BOOT_LOG_PHRASES = (
+    "HACS auto-refresh: startup pass due",
+    "HACS auto-refresh: pass not due",
+)
+_NUDGE_LOG_LIMIT = 500
 
 # Same transient sets as test_addon_debug_log_level (see its comments).
 _TRANSIENT = (*_POLLING_TRANSIENT_ERRORS, httpx.HTTPError)
@@ -76,6 +81,28 @@ async def _call_tool_fresh(addon_url: str, tool: str, args: dict[str, Any]) -> A
 
     raw = await asyncio.wait_for(_exchange(), timeout=30)
     return parse_mcp_result(raw)
+
+
+async def _fetch_nudge_logs(addon_url: str, slug: str) -> dict[str, Any]:
+    """Fetch the widest bounded search result for the nudge log signature."""
+    return await _call_tool_fresh(
+        addon_url,
+        "ha_get_logs",
+        {
+            "source": "supervisor",
+            "slug": slug,
+            "search": NUDGE_LOG_SIGNATURE,
+            "limit": _NUDGE_LOG_LIMIT,
+        },
+    )
+
+
+def _nudge_boot_line_count(log_text: str) -> int:
+    """Count real per-boot nudge lines, excluding search-argument echoes."""
+    return sum(
+        any(phrase in line for phrase in NUDGE_BOOT_LOG_PHRASES)
+        for line in log_text.splitlines()
+    )
 
 
 async def _post_log_level(settings_advanced_url: str, level: str) -> None:
@@ -176,6 +203,18 @@ async def test_addon_launcher_schedules_the_startup_nudge(
     LOG.info("Flipping the dev add-on to DEBUG for a fresh, provable boot...")
     await _post_log_level(settings_advanced, "DEBUG")
     try:
+        # Supervisor logs survive add-on restarts. Record the exact per-boot
+        # phrase count first so an older boot cannot satisfy this restart.
+        baseline_payload = await _fetch_nudge_logs(addon_url, slug)
+        assert baseline_payload.get("success"), (
+            f"Could not record the pre-restart nudge-log baseline: {baseline_payload}"
+        )
+        baseline_count = _nudge_boot_line_count(baseline_payload.get("log", ""))
+        LOG.info(
+            "Recorded %d nudge per-boot lines before the restart",
+            baseline_count,
+        )
+
         await _restart_self(settings_restart)
 
         deadline = time.monotonic() + _PROBE_TIMEOUT
@@ -184,37 +223,36 @@ async def test_addon_launcher_schedules_the_startup_nudge(
         while time.monotonic() < deadline:
             try:
                 url = wait_for_addon_mcp_ready(timeout=30.0)
-                payload = await _call_tool_fresh(
-                    url,
-                    "ha_get_logs",
-                    {
-                        "source": "supervisor",
-                        "slug": slug,
-                        "search": NUDGE_LOG_SIGNATURE,
-                    },
-                )
+                payload = await _fetch_nudge_logs(url, slug)
                 log_text = payload.get("log", "")
                 # Post-filter for the two REAL per-boot phrases: at DEBUG the
                 # addon logs this probe's own tool calls, whose search
                 # argument contains the bare signature — matching only the
                 # signature would let the probe confirm itself.
-                if payload.get("success") and (
-                    "startup pass due" in log_text or "pass not due" in log_text
-                ):
+                current_count = _nudge_boot_line_count(log_text)
+                if payload.get("success") and current_count > baseline_count:
                     found = True
                     LOG.info(
-                        "Nudge per-boot line found after restart: %s",
+                        "Nudge per-boot line count grew from %d to %d after "
+                        "restart: %s",
+                        baseline_count,
+                        current_count,
                         log_text[:200],
                     )
                     break
-                last = f"no match yet in {payload.get('total_lines', 0)} lines"
+                last = (
+                    f"per-boot line count {current_count} has not grown beyond "
+                    f"the pre-restart baseline {baseline_count} in "
+                    f"{payload.get('total_lines', 0)} matching lines"
+                )
             except _TRANSIENT as err:
                 last = err
             await asyncio.sleep(_POLL_INTERVAL)
 
         assert found, (
-            f"A DEBUG-level fresh boot never logged {NUDGE_LOG_SIGNATURE!r} "
-            f"within {_PROBE_TIMEOUT}s of the self-restart (last={last!r}) — "
+            "A DEBUG-level fresh boot did not add a new "
+            f"{NUDGE_LOG_SIGNATURE!r} per-boot line within {_PROBE_TIMEOUT}s "
+            f"of the self-restart (last={last!r}) — "
             "the add-on launcher did not schedule the startup nudge (neither "
             "the due INFO line nor the not-due DEBUG line appeared). This is "
             "the exact regression the lifespan wiring exists to prevent: "
