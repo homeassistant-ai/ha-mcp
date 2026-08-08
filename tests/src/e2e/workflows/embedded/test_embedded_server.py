@@ -593,9 +593,13 @@ class TestEmbeddedServerEndToEnd:
         def marker_files() -> list[Path]:
             return list(data_dir.glob(f"{MARKER_FILENAME_PREFIX}_*.json"))
 
+        # 10 s: the container ships a loaded HACS, so a regressed
+        # is_embedded gate completes its pass (and writes the marker) on the
+        # immediate first attempt — this window is over the completion time,
+        # not the retry schedule, which only starts when that attempt fails.
         appeared = await wait_for_condition(
             marker_files,
-            timeout=5,
+            timeout=10,
             condition_name=(
                 "(not expected) HACS refresh marker in the in-process server's data dir"
             ),

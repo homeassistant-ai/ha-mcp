@@ -85,7 +85,7 @@ _SKIP_CEILING_PER_LANE = {
     # Entries below are CI-observed item counts, bumped only for intentional
     # marker-gated additions rather than runtime skips.
     "container": 73,  # was 72; +1 inaddon startup-nudge e2e (haos_only + inaddon_only)
-    "haos": 48,  # was 47; +1 embedded HACS-nudge skip e2e (container_only), +1 inaddon startup-nudge e2e (inaddon_only)
+    "haos": 48,  # was 46; +1 embedded HACS-nudge skip e2e (container_only), +1 inaddon startup-nudge e2e (inaddon_only)
     "haos_inaddon": 76,  # was 75; +1 embedded HACS-nudge skip e2e (container_only)
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
     # lane's marker-skips PLUS two embedded-specific additions:

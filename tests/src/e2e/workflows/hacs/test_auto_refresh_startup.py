@@ -363,9 +363,13 @@ async def test_oauth_launcher_skips_the_startup_nudge(
             "startup within 30s, so the assertions below would prove nothing "
             f"about the gate. Launcher output:\n{launcher.output()}"
         )
+        # 10 s window as belt-and-braces only: a regressed gate with sentinel
+        # credentials fails auth and never writes a marker at ANY timeout,
+        # which is why the log assertion below — not marker absence — is the
+        # deterministic proof for this lane.
         appeared = await wait_for_condition(
             marker_files,
-            timeout=5,
+            timeout=10,
             condition_name="(not expected) HACS refresh marker from the oauth launcher",
         )
         markers = marker_files()

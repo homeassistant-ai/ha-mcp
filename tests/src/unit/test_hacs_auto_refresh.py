@@ -324,13 +324,14 @@ class TestMaybeRefreshHacsAfterUpdate:
         assert mocks.refresh.await_count == 2
         assert _written_marker(data_dir) is None
 
-    async def test_unreachable_hacs_leaves_the_marker_unwritten(self, data_dir):
+    async def test_unreachable_hacs_leaves_the_marker_unwritten(self, data_dir, caplog):
         # Nothing was determined, so the next startup must retry — which is
         # exactly what an absent marker does. RETRY_DELAYS is emptied so the
         # test cannot sleep through the real ~8 minute schedule.
         ws = _ws(error=HomeAssistantConnectionError("websocket down"))
 
         with (
+            caplog.at_level(logging.INFO),
             _server(ws, info=_info()) as mocks,
             patch.object(hacs_auto_refresh, "RETRY_DELAYS", ()),
         ):
@@ -339,6 +340,10 @@ class TestMaybeRefreshHacsAfterUpdate:
         assert ws.send_command.await_count == 1
         mocks.refresh.assert_not_awaited()
         assert _written_marker(data_dir) is None
+        # The due-pass line still logged although every WS attempt failed —
+        # the strongest form of "before any WebSocket work", and the property
+        # the HAOS add-on lane depends on (its VM has no HACS to answer).
+        assert "HACS auto-refresh: startup pass due" in caplog.text
 
     async def test_websocket_closure_is_retried(self, data_dir):
         # send_command re-raises raw websocket exceptions on a mid-send

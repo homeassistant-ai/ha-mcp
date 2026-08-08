@@ -105,6 +105,16 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "lifespan exits).",
     ),
     (
+        "py/ineffectual-statement",
+        "tests/src/e2e/workflows/hacs/test_auto_refresh_startup.py",
+        "This statement has no effect",
+        "await task",
+        "False positive on the bare 'await task' inside contextlib.suppress "
+        "in _HttpLauncher.wait_for_lifespan_started: awaiting the cancelled "
+        "racer IS the effect (it drives the loser of the started-vs-exited "
+        "race to completion before returning).",
+    ),
+    (
         "py/unused-global-variable",
         "src/ha_mcp/__main__.py",
         "_shutdown_in_progress",
