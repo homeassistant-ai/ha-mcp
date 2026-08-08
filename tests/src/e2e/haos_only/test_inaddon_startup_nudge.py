@@ -63,10 +63,19 @@ async def _call_tool_fresh(addon_url: str, tool: str, args: dict[str, Any]) -> A
 
     The server is stateless, so a new client per call is cheap and — unlike a
     long-lived session — immune to the addon restarting between calls.
+    asyncio.wait_for bounds the whole exchange: a half-open connection to a
+    bouncing addon otherwise parks the await indefinitely — the event loop
+    sat idle at selector.select past the 600 s pytest-timeout with none of
+    this test's own deadlines ever re-evaluated (round-4 CI failure).
+    TimeoutError is in the polling transient set, so a bound trip is retried.
     """
-    client = Client(StreamableHttpTransport(url=addon_url))
-    async with client:
-        raw = await client.call_tool(tool, args)
+
+    async def _exchange() -> Any:
+        client = Client(StreamableHttpTransport(url=addon_url))
+        async with client:
+            return await client.call_tool(tool, args)
+
+    raw = await asyncio.wait_for(_exchange(), timeout=30)
     return parse_mcp_result(raw)
 
 
@@ -114,7 +123,9 @@ async def _warm_shared_client(mcp_client: Any) -> None:
     last: object = None
     while True:
         try:
-            await mcp_client.call_tool("ha_get_overview", {})
+            # Bounded like the fresh calls: an unbounded read on the shared
+            # session mid-bounce parks the loop past every deadline.
+            await asyncio.wait_for(mcp_client.call_tool("ha_get_overview", {}), 30)
             return
         except ToolError:
             # Warm-up only cares that the shared session round-trips again;
