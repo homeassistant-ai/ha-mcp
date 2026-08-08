@@ -586,7 +586,7 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 
 ### HACS
 - `ha_get_hacs_info` — Get HACS (Home Assistant Community Store) data — search the store or fetch repository details.
-- `ha_manage_hacs` — Manage HACS (Home Assistant Community Store) — install/update, remove, or add custom repositories.
+- `ha_manage_hacs` — Manage HACS (Home Assistant Community Store) — install/update, remove, add custom repositories, or refresh repository information.
 
 ### Helper Entities
 - `ha_config_list_helpers` — List Home Assistant helpers of a specific type with their configurations.
