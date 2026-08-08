@@ -18,10 +18,11 @@ jobs:
         id: metadata
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3
         with:
-          github-token: "${{ secrets.GITHUB_TOKEN }}"
+          github-token: "${{ secrets.DEPENDABOT_APPROVAL_TOKEN }}"
+          alert-lookup: true
 
       - name: Approve eligible Dependabot PR
-        if: ${{ steps.metadata.outputs.update-type == 'security-update' || contains(fromJson('["version-update:semver-minor","version-update:semver-patch"]'), steps.metadata.outputs.update-type) }}
+        if: ${{ steps.metadata.outputs.alert-state == 'OPEN' || contains(fromJson('["version-update:semver-minor","version-update:semver-patch"]'), steps.metadata.outputs.update-type) }}
         run: |
           gh api --method POST \
             "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
@@ -35,7 +36,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
 
       - name: Enable auto-merge for Dependabot PRs
-        if: ${{ steps.metadata.outputs.update-type == 'security-update' || contains(fromJson('["version-update:semver-minor","version-update:semver-patch"]'), steps.metadata.outputs.update-type) }}
+        if: ${{ steps.metadata.outputs.alert-state == 'OPEN' || contains(fromJson('["version-update:semver-minor","version-update:semver-patch"]'), steps.metadata.outputs.update-type) }}
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
