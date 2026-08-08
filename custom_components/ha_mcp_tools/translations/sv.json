@@ -1,0 +1,5 @@
+{
+  "common": {
+    "oauth_not_serving": "Legacy OAuth tillhandahåller dem inte ännu — starta om Home Assistant när du blir ombedd, så aktiveras de."
+  }
+}
