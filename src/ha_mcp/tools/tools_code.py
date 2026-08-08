@@ -21,6 +21,7 @@ MCP" — a personal library of one-off tools that survives restarts.
 See: https://github.com/homeassistant-ai/ha-mcp/issues/726
 """
 
+import base64
 import json
 import logging
 import re
@@ -711,6 +712,50 @@ def _normalize_endpoint(endpoint: Any) -> str:
     return ep
 
 
+def _decode_sandbox_response(response: Any, binary: bool) -> Any:
+    """Decode an ``httpx`` response body for return into sandbox code.
+
+    HA REST responses are normally JSON (or plain text for a handful of
+    endpoints), which the default path below already handles. Some
+    integrations, though, expose authenticated file-download views over
+    ``/api/`` — for example Home Keeper (a HACS asset/maintenance
+    tracker) streams uploaded manuals/receipts back as raw
+    ``application/pdf``/image bytes through its own ``HomeAssistantView``.
+    Monty (the sandbox interpreter) has no filesystem or raw-socket
+    access, so ``api_get``/``api_post`` are the only way sandbox code can
+    reach such a view — but forcing ``response.text`` on a non-text body
+    raises ``UnicodeDecodeError``, which the caller previously surfaced
+    as an opaque generic error with no way to recover the bytes.
+
+    ``binary=True`` skips JSON/text parsing entirely and returns the raw
+    body as base64 so sandbox code (and, downstream, the calling LLM) can
+    decode it outside the sandbox. ``binary=False`` keeps the original
+    JSON-first-then-text behavior, now with a clear error instead of a
+    crash when the body turns out to be non-text after all.
+    """
+    if binary:
+        return {
+            "content_type": response.headers.get("content-type"),
+            "size": len(response.content),
+            "base64": base64.b64encode(response.content).decode("ascii"),
+        }
+    try:
+        return response.json()
+    except json.JSONDecodeError:
+        try:
+            return response.text
+        except UnicodeDecodeError:
+            return {
+                "error": (
+                    "Response body is not UTF-8 text (likely binary, e.g. "
+                    "a PDF or image). Retry the call with binary=True to "
+                    "receive it as base64."
+                ),
+                "content_type": response.headers.get("content-type"),
+                "size": len(response.content),
+            }
+
+
 class _SandboxBridge:
     """Bridges sandboxed Monty code to HA REST/WebSocket/MCP-tool calls.
 
@@ -745,8 +790,15 @@ class _SandboxBridge:
         self.call_count += 1
         return bool(self.call_count > self.settings.code_mode_max_invocations)
 
-    async def api_get(self, endpoint: str) -> Any:
-        """GET request to Home Assistant REST API."""
+    async def api_get(self, endpoint: str, binary: bool = False) -> Any:
+        """GET request to Home Assistant REST API.
+
+        Set ``binary=True`` to receive the response body as base64
+        (``{"content_type", "size", "base64"}``) instead of the default
+        JSON/text decoding — required for endpoints that serve non-text
+        bytes, e.g. a custom integration's authenticated file-download
+        view. See ``_decode_sandbox_response`` for the full rationale.
+        """
         if self._over_invocation_limit():
             return {
                 "error": f"API call limit exceeded ({self.settings.code_mode_max_invocations})"
@@ -758,16 +810,22 @@ class _SandboxBridge:
             return {"error": str(exc)}
         try:
             response = await self.client.httpx_client.request("GET", normalized)
-            try:
-                return response.json()
-            except json.JSONDecodeError:
-                return response.text
+            return _decode_sandbox_response(response, binary)
         except Exception as exc:
             logger.warning("api_get(%r) failed", endpoint, exc_info=True)
             return {"error": str(exc)[:200]}
 
-    async def api_post(self, endpoint: str, data: dict[str, Any] | None = None) -> Any:
-        """POST request to Home Assistant REST API."""
+    async def api_post(
+        self,
+        endpoint: str,
+        data: dict[str, Any] | None = None,
+        binary: bool = False,
+    ) -> Any:
+        """POST request to Home Assistant REST API.
+
+        Set ``binary=True`` to receive the response body as base64
+        instead of the default JSON/text decoding (see ``api_get``).
+        """
         if self._over_invocation_limit():
             return {
                 "error": f"API call limit exceeded ({self.settings.code_mode_max_invocations})"
@@ -807,10 +865,7 @@ class _SandboxBridge:
             response = await self.client.httpx_client.request(
                 "POST", normalized, **post_kwargs
             )
-            try:
-                return response.json()
-            except json.JSONDecodeError:
-                return response.text
+            return _decode_sandbox_response(response, binary)
         except Exception as exc:
             logger.warning("api_post(%r) failed", endpoint, exc_info=True)
             return {"error": str(exc)[:200]}
@@ -949,8 +1004,8 @@ async def _run_sandboxed_code(
     """Execute code in the pydantic-monty sandbox.
 
     External functions available to sandbox code:
-    - api_get(endpoint) — GET request to HA REST API
-    - api_post(endpoint, data) — POST request to HA REST API
+    - api_get(endpoint, binary=False) — GET request to HA REST API
+    - api_post(endpoint, data, binary=False) — POST request to HA REST API
     - ws_send(message) — send a HA WebSocket command and return its result
     - call_tool(name, args) — call a registered MCP tool (for existing tools)
 
@@ -1327,8 +1382,12 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Set ``list_saved=True`` to list all saved tools
 
         **Available functions in sandbox:**
-        - ``api_get(endpoint)`` — GET request to HA REST API
-        - ``api_post(endpoint, data)`` — POST request to HA REST API
+        - ``api_get(endpoint, binary=False)`` — GET request to HA REST API.
+          Pass ``binary=True`` to get ``{"content_type", "size", "base64"}``
+          instead of JSON/text decoding — needed for endpoints that stream
+          non-text bytes, e.g. a custom integration's file-download view.
+        - ``api_post(endpoint, data, binary=False)`` — POST request to HA
+          REST API; same ``binary`` behavior as ``api_get`` for the response.
         - ``ws_send(message)`` — send a HA WebSocket command (e.g. registry
           lookups, ``render_template``, dashboard ops). ``message`` must include
           a ``"type"`` field; the MCP server adds ``id`` and handles auth.
@@ -1352,6 +1411,17 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ```python
         repairs = await api_get("/repairs/issues")
         repairs
+        ```
+
+        Example — download a binary file exposed by a custom integration's
+        authenticated HTTP view (JSON/text decoding would raise on the
+        raw bytes; ``binary=True`` returns base64 instead):
+        ```python
+        doc = await api_get(
+            "/some_integration/document/<asset_id>/<document_id>",
+            binary=True,
+        )
+        {"content_type": doc["content_type"], "size": doc["size"]}
         ```
 
         Example — list areas via WebSocket:
