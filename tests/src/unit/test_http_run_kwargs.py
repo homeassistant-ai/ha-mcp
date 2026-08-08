@@ -7,25 +7,10 @@ alongside it, since the kwargs it builds are what that server task starts from.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from ha_mcp.__main__ import _http_run_kwargs, _run_with_shutdown
-
-
-@pytest.fixture(autouse=True)
-def _no_startup_hacs_nudge():
-    """Keep the startup HACS nudge out of these tests.
-
-    ``_run_with_shutdown`` fires it as a background task; left real it would
-    reach PyPI and the Home Assistant WebSocket from a unit test.
-    """
-    with patch(
-        "ha_mcp.hacs_auto_refresh.maybe_refresh_hacs_after_update",
-        new=AsyncMock(return_value=None),
-    ):
-        yield
 
 
 def test_kwargs_request_stateless_streamable_http():

@@ -25,6 +25,8 @@ import asyncio
 import hashlib
 import json
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -222,7 +224,27 @@ async def maybe_refresh_hacs_after_update() -> None:
         info = await asyncio.to_thread(get_update_info)
         marker = await asyncio.to_thread(_read_marker, ha_url)
         if not _nudge_due(current, info, marker):
+            # DEBUG, not INFO: the not-due return is the per-conversation
+            # stdio hot path and must stay quiet at default levels. The line
+            # exists so a DEBUG-level launcher (the HAOS add-on lane) can
+            # prove scheduling even when a completed earlier pass makes every
+            # later boot legitimately not due.
+            logger.debug(
+                "HACS auto-refresh: pass not due (marker current for server %s)",
+                current,
+            )
             return
+
+        # The one unconditional line a due pass emits BEFORE any WebSocket
+        # work: it proves the launcher scheduled the nudge even where HACS
+        # is absent and the pass ends silently — the observable the HAOS
+        # add-on lane greps for, and the line whose absence exposed the
+        # launcher gap this module's lifespan wiring closed.
+        logger.info(
+            "HACS auto-refresh: startup pass due (server %s); "
+            "asking HACS for repository state",
+            current,
+        )
 
         result = await _refresh_with_retries()
         if result is None:
@@ -250,3 +272,26 @@ async def maybe_refresh_hacs_after_update() -> None:
         raise
     except Exception:
         logger.debug("HACS auto-refresh nudge skipped", exc_info=True)
+
+
+@asynccontextmanager
+async def hacs_refresh_lifespan(_server: Any) -> AsyncIterator[dict[str, Any]]:
+    """Schedule the startup nudge for the lifetime of any server run.
+
+    Attached as the FastMCP ``lifespan`` so it runs on EVERY launcher —
+    stdio, the HTTP CLI entry points, and the add-on's ``start.py``, which
+    calls ``mcp.run()`` directly and never passes through ``__main__``'s
+    ``_run_with_shutdown`` (the wiring this replaces; the add-on gap was
+    found live, not by CI, because the e2e suites launch via the CLI
+    entry points).
+    """
+    task = asyncio.create_task(maybe_refresh_hacs_after_update())
+    try:
+        yield {}
+    finally:
+        # The nudge may be mid-retry-sleep; a cancelled task must not
+        # stall shutdown. maybe_refresh_hacs_after_update re-raises
+        # CancelledError by design, so this await returns promptly.
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task

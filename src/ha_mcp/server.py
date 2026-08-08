@@ -20,6 +20,7 @@ from pydantic import Field
 
 from .config import _PACKAGE_VERSION, get_global_settings
 from .errors import ErrorCode, create_error_response
+from .hacs_auto_refresh import hacs_refresh_lifespan
 from .tools.helpers import raise_tool_error
 from .transforms import DEFAULT_PINNED_TOOLS
 
@@ -142,6 +143,7 @@ class HomeAssistantSmartMCPServer:
             version=server_version,
             icons=SERVER_ICONS,
             instructions=instructions,
+            lifespan=hacs_refresh_lifespan,
         )
 
         # Register all tools and expert prompts

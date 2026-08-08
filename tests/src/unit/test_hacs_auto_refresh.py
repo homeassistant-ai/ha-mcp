@@ -12,6 +12,7 @@ schedule empties it first.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from contextlib import contextmanager
@@ -21,7 +22,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ha_mcp import hacs_auto_refresh
-from ha_mcp.__main__ import _run_with_shutdown
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
@@ -238,6 +238,9 @@ class TestMaybeRefreshHacsAfterUpdate:
         with caplog.at_level(logging.INFO), _server(ws, info=_info()) as mocks:
             await hacs_auto_refresh.maybe_refresh_hacs_after_update()
 
+        # The due-pass line logs BEFORE any WS work — the observable the
+        # HAOS add-on lane greps for, so it is contract, not decoration.
+        assert "HACS auto-refresh: startup pass due" in caplog.text
         # Both entries the component can be tracked under, and nothing else.
         assert _refreshed_ids(mocks) == ["123", "456"]
         assert _written_marker(data_dir) == {
@@ -321,13 +324,14 @@ class TestMaybeRefreshHacsAfterUpdate:
         assert mocks.refresh.await_count == 2
         assert _written_marker(data_dir) is None
 
-    async def test_unreachable_hacs_leaves_the_marker_unwritten(self, data_dir):
+    async def test_unreachable_hacs_leaves_the_marker_unwritten(self, data_dir, caplog):
         # Nothing was determined, so the next startup must retry — which is
         # exactly what an absent marker does. RETRY_DELAYS is emptied so the
         # test cannot sleep through the real ~8 minute schedule.
         ws = _ws(error=HomeAssistantConnectionError("websocket down"))
 
         with (
+            caplog.at_level(logging.INFO),
             _server(ws, info=_info()) as mocks,
             patch.object(hacs_auto_refresh, "RETRY_DELAYS", ()),
         ):
@@ -336,6 +340,10 @@ class TestMaybeRefreshHacsAfterUpdate:
         assert ws.send_command.await_count == 1
         mocks.refresh.assert_not_awaited()
         assert _written_marker(data_dir) is None
+        # The due-pass line still logged although every WS attempt failed —
+        # the strongest form of "before any WebSocket work", and the property
+        # the HAOS add-on lane depends on (its VM has no HACS to answer).
+        assert "HACS auto-refresh: startup pass due" in caplog.text
 
     async def test_websocket_closure_is_retried(self, data_dir):
         # send_command re-raises raw websocket exceptions on a mid-send
@@ -355,36 +363,76 @@ class TestMaybeRefreshHacsAfterUpdate:
         mocks.refresh.assert_not_awaited()
         assert _written_marker(data_dir) is None
 
-    async def test_matching_marker_skips_the_websocket(self, data_dir):
+    async def test_matching_marker_skips_the_websocket(self, data_dir, caplog):
         # The stdio hot path: a per-conversation spawn on an unchanged version
-        # costs one file read and no WebSocket traffic.
+        # costs one file read, no WebSocket traffic, and no log noise.
         hacs_auto_refresh._marker_path(HA_URL).write_text(
             json.dumps(_marker(latest="1.1.0", hacs="present"))
         )
         ws = _ws([_repo(123, MIRROR)])
 
-        with _server(ws, info=_info()) as mocks:
+        with caplog.at_level(logging.DEBUG), _server(ws, info=_info()) as mocks:
             await hacs_auto_refresh.maybe_refresh_hacs_after_update()
 
         mocks.get_websocket_client.assert_not_awaited()
         mocks.refresh.assert_not_awaited()
+        assert "startup pass due" not in caplog.text
+        # The not-due DEBUG line is contract too: it is what the HAOS add-on
+        # lane greps for once an earlier completed pass makes boots not due.
+        not_due_records = [
+            record
+            for record in caplog.records
+            if "HACS auto-refresh: pass not due" in record.getMessage()
+        ]
+        assert len(not_due_records) == 1
+        assert not_due_records[0].levelno == logging.DEBUG
 
 
-class TestStartupWiring:
-    async def test_run_with_shutdown_fires_the_nudge(self):
-        # The task is created but deliberately kept out of the wait set, so
-        # the server's own exit is what ends _run_with_shutdown.
-        nudge = AsyncMock(return_value=None)
+class TestLifespanWiring:
+    async def test_lifespan_schedules_and_cancels_the_nudge(self):
+        # Entering the lifespan starts the task; exiting cancels it, so a
+        # nudge parked in a retry sleep cannot stall shutdown.
+        started = asyncio.Event()
+        cancelled = False
 
-        async def clean_server():
-            return None
+        async def never_finishes():
+            nonlocal cancelled
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
+
+        with patch(
+            "ha_mcp.hacs_auto_refresh.maybe_refresh_hacs_after_update",
+            new=never_finishes,
+        ):
+            async with hacs_auto_refresh.hacs_refresh_lifespan(object()):
+                # The lifespan hands the task to the loop; wait on the flag
+                # the fake sets rather than sleeping.
+                await started.wait()
+
+        assert cancelled, "exiting the lifespan must cancel the pending nudge"
+
+    async def test_server_attaches_the_lifespan(self):
+        # The built server's FastMCP instance carries the lifespan — the pin
+        # that catches a future constructor change dropping it, which is the
+        # sibling of the add-on gap this wiring replaced.
+        from ha_mcp.server import HomeAssistantSmartMCPServer
 
         with (
+            patch("ha_mcp.server.get_global_settings") as get_settings,
+            patch("ha_mcp.server.HomeAssistantSmartMCPServer._initialize_server"),
             patch(
-                "ha_mcp.hacs_auto_refresh.maybe_refresh_hacs_after_update", new=nudge
+                "ha_mcp.server.HomeAssistantSmartMCPServer._build_skills_instructions",
+                return_value=None,
             ),
-            patch("ha_mcp.__main__._cleanup_resources", new=AsyncMock()),
         ):
-            await _run_with_shutdown(clean_server())
+            settings = get_settings.return_value
+            settings.mcp_server_name = "test"
+            settings.mcp_server_version = "0.0.1"
+            settings.read_only_mode = False
+            server = HomeAssistantSmartMCPServer()
 
-        nudge.assert_awaited_once()
+        assert server.mcp._lifespan is hacs_auto_refresh.hacs_refresh_lifespan
