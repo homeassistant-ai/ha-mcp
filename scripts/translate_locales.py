@@ -419,7 +419,10 @@ def build_plan(module: Any) -> Plan:
 
 _CONFIG_FLOW_PATH = REPO_ROOT / "custom_components" / "ha_mcp_tools" / "config_flow.py"
 _SELECTOR_LABEL_RE = re.compile(r'label="([^"]+)"')
-_QUOTED_RE = re.compile(r'"([^"]+)"')
+# English sources quote with straight or typographic marks — both already occur
+# in the shipped catalogs — and the label check has to see the quoted text
+# either way, or the spelling of a quote silently decides whether it applies.
+_QUOTED_RE = re.compile(r'["“”«»„]([^"“”«»„]+)["“”«»„]')
 
 
 @lru_cache(maxsize=1)

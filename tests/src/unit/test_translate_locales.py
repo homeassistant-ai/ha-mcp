@@ -139,6 +139,13 @@ class TestHardcodedOptionLabels:
         assert _validate(_item(section="component", english=english), localised)
         assert _validate(_item(section="component", english=english), kept) is None
 
+    def test_reads_the_label_through_typographic_quotes(self) -> None:
+        # Shipped English already quotes both ways, so which mark an author
+        # reached for must not decide whether the label is protected.
+        english = "Local/LAN (when Network access is “Local network”): {url}"
+        localised = 'Lokaal/LAN (wanneer Netwerktoegang "Lokaal netwerk" is): {url}'
+        assert _validate(_item(section="component", english=english), localised)
+
     def test_leaves_other_quoted_text_translatable(self) -> None:
         # "Add entry" is Home Assistant's own button: HA translates it, so
         # every shipped catalog translates the quote too. Only labels the
