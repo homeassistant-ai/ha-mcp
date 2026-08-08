@@ -436,12 +436,14 @@ def _hardcoded_option_labels() -> tuple[str, ...]:
     strand a stale copy; ``test_connect_local_lan_quotes_the_bind_host_option``
     guards the rename against the catalogs.
     """
-    return tuple(_SELECTOR_LABEL_RE.findall(_CONFIG_FLOW_PATH.read_text("utf-8")))
+    labels: list[str] = _SELECTOR_LABEL_RE.findall(_CONFIG_FLOW_PATH.read_text("utf-8"))
+    return tuple(labels)
 
 
 def _untranslatable_label_dropped(english: str, translated: str) -> str | None:
     """The hardcoded label this translation localised away, if any."""
-    for quoted in _QUOTED_RE.findall(english):
+    quoted_texts: list[str] = _QUOTED_RE.findall(english)
+    for quoted in quoted_texts:
         for label in _hardcoded_option_labels():
             if (
                 label == quoted or label.startswith(f"{quoted} ")
