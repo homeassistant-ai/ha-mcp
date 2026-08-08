@@ -172,6 +172,29 @@ class TestHardcodedOptionLabels:
         assert _validate(_item(section="component", english=english), localised)
         assert _validate(_item(section="component", english=english), kept) is None
 
+    def test_rejects_a_localised_name_in_single_quotes(self) -> None:
+        # Shipped English at options.step.init.data_description.enable_llm_api
+        # spells this one with apostrophes rather than double quotes. Single
+        # quotes are matched against the known names instead of being paired
+        # like the other marks: the apostrophe in "integration's" is the same
+        # character, so pairing on it shifts every quote in such a sentence —
+        # measured on the shipped catalogs, pairing loses a live violation.
+        english = "agents can select 'HA-MCP Server' under Control Home Assistant"
+        localised = "agenten kunnen 'HA-MCP Servidor' kiezen onder Bediening"
+        kept = "agenten kunnen 'HA-MCP Server' kiezen onder Bediening"
+        assert _validate(_item(section="component", english=english), localised)
+        assert _validate(_item(section="component", english=english), kept) is None
+
+    def test_apostrophes_do_not_hide_a_double_quoted_name(self) -> None:
+        # The regression the obvious repair would have caused: this English
+        # carries an apostrophe before the quoted title.
+        english = (
+            'press "Add entry" on this integration\'s page and choose '
+            '"HA-MCP File & YAML Tools" to add it'
+        )
+        localised = 'druk op "Item toevoegen" en kies "HA-MCP Bestands-tools"'
+        assert _validate(_item(section="component", english=english), localised)
+
     def test_leaves_other_quoted_text_translatable(self) -> None:
         # "Add entry" is Home Assistant's own button: HA translates it, so
         # every shipped catalog translates the quote too. Only labels the

@@ -452,7 +452,18 @@ def _hardcoded_ui_names() -> tuple[str, ...]:
 
 
 def _untranslatable_name_dropped(english: str, translated: str) -> str | None:
-    """The hardcoded on-screen name this translation localised away, if any."""
+    """The hardcoded on-screen name this translation localised away, if any.
+
+    Single quotes are matched against the known names rather than paired like
+    the other marks: English prose spells the apostrophe with the same
+    character, so pairing on it shifts every quote in a sentence containing one
+    and loses the real candidate. Measured on the shipped catalogs, adding `'`
+    to the paired class drops one of the two live violations.
+    """
+    for name in _hardcoded_ui_names():
+        if any(f"{q}{name}{q2}" in english for q, q2 in (("'", "'"), ("‘", "’"))):
+            if name not in translated:
+                return name
     quoted_texts: list[str] = _QUOTED_RE.findall(english)
     for quoted in quoted_texts:
         for name in _hardcoded_ui_names():
