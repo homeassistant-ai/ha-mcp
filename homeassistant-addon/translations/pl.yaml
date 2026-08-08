@@ -4,157 +4,172 @@
 # addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
   backup_hint:
-    name: Full-HA snapshot suggestion level (LLM-facing)
-    description: 'Tunes the wording of the hint the LLM sees in the
-
-      `ha_manage_backup(scope=''snapshot'')` tool description for when to
-
-      suggest a full Home Assistant tarball backup before risky operations
-
-      (e.g. mass device deletes). Affects ONLY this one LLM-facing prompt
-
-      sentence.
+    name: Poziom sugestii pełnej migawki HA (dla LLM)
+    description: 'Dostosowuje sformułowanie podpowiedzi, którą LLM widzi w opisie
+      narzędzia `ha_manage_backup(scope=''snapshot'')`, dotyczącej tego, kiedy sugerować
+      pełną kopię zapasową Home Assistant w formacie tarball przed ryzykownymi operacjami
+      (np. masowe usuwanie urządzeń). Wpływa TYLKO na to jedno zdanie podpowiedzi
+      skierowane do LLM.
 
 
-      For per-edit automatic snapshots of automations / scripts / helpers /
-
-      etc., use the separate **Enable auto-backup of edits** toggle below.'
+      W przypadku automatycznych migawek automatyzacji / skryptów / pomocników / itp.
+      dla każdej edycji, użyj oddzielnego przełącznika **Włącz automatyczne tworzenie
+      kopii zapasowych edycji** poniżej.'
   secret_path:
-    name: Secret path override
-    description: 'Optional custom HTTP path for the MCP server. Leave empty to use
-      the auto-generated secure path.
+    name: Nadpisanie tajnej ścieżki
+    description: 'Opcjonalna niestandardowa ścieżka HTTP dla serwera MCP. Pozostaw
+      puste, aby użyć automatycznie generowanej bezpiecznej ścieżki.
 
       '
   enable_tool_search:
-    name: Enable tool search
-    description: 'Replace the full tool catalog with search-based discovery. Reduces
-      idle context by roughly 90%, to about 5K tokens. ⚠️ Do NOT enable this in clients
-      with their own built-in tool search / deferred tools (claude.ai, Claude Desktop,
-      Claude Code) — the two search layers conflict, and the client''s built-in tool
-      search is the better choice there; leave this off. Whether tools are deferred
-      depends on your client and model combination: use this when your setup loads
-      the full catalog up front — models without native deferred tools (e.g. Gemini,
-      OpenAI-compatible local models, Claude Haiku), clients that inline all tool
-      schemas regardless of model (e.g. GitHub Copilot CLI), or smaller context windows.
-      Some Codex models and ChatGPT include deferred tools too — check your client/model
-      directly to confirm its features so you don''t leave this enabled unnecessarily.
-      Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete).
-      Requires an add-on restart to take effect — then reconnect or refresh the MCP
-      server in your AI client so it reloads the tool list. Restarting the add-on
-      alone does NOT refresh a client''s cached tool list; this applies after changing
-      any setting here.'
+    name: Włącz wyszukiwanie narzędzi
+    description: 'Zastąp pełny katalog narzędzi odkrywaniem opartym na wyszukiwaniu.
+      Zmniejsza bezczynny kontekst o około 90%, do około 5 tys. tokenów. ⚠️ NIE włączaj
+      tej opcji w klientach z własnym wbudowanym wyszukiwaniem narzędzi / odroczonymi
+      narzędziami (claude.ai, Claude Desktop, Claude Code) — dwie warstwy wyszukiwania
+      kolidują ze sobą, a wbudowane wyszukiwanie narzędzi klienta jest tam lepszym
+      wyborem; pozostaw tę opcję wyłączoną. To, czy narzędzia są odroczone, zależy
+      od kombinacji klienta i modelu: użyj tej opcji, gdy Twoja konfiguracja ładuje
+      cały katalog z góry — modele bez natywnych odroczonych narzędzi (np. Gemini,
+      lokalne modele kompatybilne z OpenAI, Claude Haiku), klienci, którzy włączają
+      wszystkie schematy narzędzi niezależnie od modelu (np. GitHub Copilot CLI),
+      lub mniejsze okna kontekstowe. Niektóre modele Codex i ChatGPT również zawierają
+      odroczone narzędzia — sprawdź bezpośrednio swojego klienta/model, aby potwierdzić
+      jego funkcje, aby nie pozostawiać tej opcji włączonej niepotrzebnie. Narzędzia
+      są znajdowane za pomocą ha_search_tools i wykonywane za pośrednictwem skategoryzowanych
+      proxy (odczyt/zapis/usuwanie). Wymaga ponownego uruchomienia dodatku, aby zmiany
+      weszły w życie — następnie ponownie połącz się lub odśwież serwer MCP w swoim
+      kliencie AI, aby ponownie załadował listę narzędzi. Samo ponowne uruchomienie
+      dodatku NIE odświeża buforowanej listy narzędzi klienta; dotyczy to każdej zmiany
+      ustawienia tutaj.'
   tool_search_max_results:
-    name: Tool search max results
-    description: 'Maximum number of tools returned by ha_search_tools when tool search
-      is enabled. Lower values (2-3) save context tokens but may miss relevant tools.
-      Range: 2-10. Requires restart.'
+    name: Maksymalna liczba wyników wyszukiwania narzędzi
+    description: 'Maksymalna liczba narzędzi zwracanych przez ha_search_tools, gdy
+      wyszukiwanie narzędzi jest włączone. Niższe wartości (2-3) oszczędzają tokeny
+      kontekstu, ale mogą pominąć istotne narzędzia. Zakres: 2-10. Wymaga ponownego
+      uruchomienia.'
   enable_tool_security_policies:
-    name: Enable Tool Security Policies (advanced)
-    description: Gate high-stakes tool calls (lock/alarm control, automation writes,
-      etc.) behind user approval. When a guarded tool is called, the agent tells the
-      user to open the Tool Security Policies tab in the web UI and click Approve
-      before the call proceeds. Per-tool rules with optional argument conditions are
-      configured in the Tool Security Policies tab. Off by default. Requires restart
-      to take effect.
+    name: Włącz zasady bezpieczeństwa narzędzi (zaawansowane)
+    description: Zabezpiecz wywołania narzędzi wysokiego ryzyka (kontrola zamków/alarmów,
+      zapisy automatyzacji itp.) za zgodą użytkownika. Gdy wywoływane jest zabezpieczone
+      narzędzie, agent informuje użytkownika, aby otworzył zakładkę „Zasady bezpieczeństwa
+      narzędzi” w interfejsie sieciowym i kliknął „Zatwierdź”, zanim wywołanie zostanie
+      wykonane. Reguły dla poszczególnych narzędzi z opcjonalnymi warunkami argumentów
+      są konfigurowane w zakładce „Zasady bezpieczeństwa narzędzi”. Domyślnie wyłączone.
+      Wymaga ponownego uruchomienia, aby zmiany weszły w życie.
   enable_security_policy_tool:
-    name: Let AI agents edit tool security policies
-    description: 'Registers the ha_manage_security_policy tool, which lets connected
-      AI agents read and rewrite the tool security policies — including removing approval
-      gates. Off by default. Independent of the Tool Security Policies option above:
-      this controls who can edit the rules, not whether they are enforced. The tool
-      cannot see or decide pending approvals. To keep a human in the loop, gate the
-      tool before enabling it: switch on "security gated" for Manage Security Policy
-      in the Tools tab of the web UI. Requires restart to take effect.'
+    name: Zezwól agentom AI na edycję zasad bezpieczeństwa narzędzi
+    description: 'Rejestruje narzędzie ha_manage_security_policy, które pozwala połączonym
+      agentom AI czytać i przepisywać polityki bezpieczeństwa narzędzi — w tym usuwanie
+      bramek zatwierdzeń. Domyślnie wyłączone. Niezależnie od opcji Polityki bezpieczeństwa
+      narzędzi powyżej: to kontroluje, kto może edytować zasady, a nie to, czy są
+      one egzekwowane. Narzędzie nie może widzieć ani decydować o oczekujących zatwierdzeniach.
+      Aby utrzymać człowieka w pętli, ustaw bramkę dla narzędzia przed jego włączeniem:
+      włącz „security gated” dla Manage Security Policy w zakładce Narzędzia interfejsu
+      webowego. Wymaga ponownego uruchomienia, aby zmiany weszły w życie.'
   read_only_mode:
-    name: Read Only Mode
-    description: Toggles all write tools off, and removes ability for tools to make
-      any write or destructive calls. Mixed read/write tools (backups, add-ons, energy
-      preferences, voice pipelines, and code mode when enabled) stay available with
-      their write operations blocked. Same toggle as the web UI Tools tab. Off by
-      default. Requires restart to take effect.
+    name: Tryb tylko do odczytu
+    description: Wyłącza wszystkie narzędzia do zapisu i usuwa możliwość wykonywania
+      przez narzędzia jakichkolwiek operacji zapisu lub destrukcyjnych wywołań. Narzędzia
+      mieszane do odczytu/zapisu (kopie zapasowe, dodatki, preferencje energetyczne,
+      potoki głosowe i tryb kodu, gdy jest włączony) pozostają dostępne, ale ich operacje
+      zapisu są zablokowane. Ten sam przełącznik co w zakładce „Narzędzia” interfejsu
+      sieciowego. Domyślnie wyłączone. Wymaga ponownego uruchomienia, aby zmiany weszły
+      w życie.
   redact_secrets:
-    name: Redact Secrets
-    description: Redacts secrets from tool responses before they reach the AI assistant.
-      Add-on options and integration fields marked as passwords are replaced with
-      a set/empty marker (so "is this credential configured?" stays answerable), and
-      other tool responses are scrubbed of secret values the server has already seen
-      (values shorter than 6 characters are skipped, since replacing tiny fragments
-      would corrupt unrelated output). Fields not marked as passwords by their schema
-      cannot be detected. Off by default.
+    name: Redaguj sekrety
+    description: Redaguje sekrety z odpowiedzi narzędzi, zanim dotrą one do asystenta
+      AI. Opcje dodatków i pola integracji oznaczone jako hasła są zastępowane znacznikiem
+      „ustawione/puste” (aby pytanie „czy te dane uwierzytelniające są skonfigurowane?”
+      pozostało możliwe do odpowiedzi), a inne odpowiedzi narzędzi są oczyszczane
+      z wartości tajnych, które serwer już widział (wartości krótsze niż 6 znaków
+      są pomijane, ponieważ zastąpienie małych fragmentów mogłoby uszkodzić niezwiązane
+      z nimi dane wyjściowe). Pola nieoznaczone jako hasła w ich schemacie nie mogą
+      zostać wykryte. Domyślnie wyłączone.
   enable_mandatory_bps:
-    name: Attach best-practice skills on writes
-    description: 'Master switch for the write-tool skill content delivery feature
-      (issue #1182). When enabled (default), the six config write tools (automations,
-      scripts, scenes, helpers, dashboards, raw YAML) attach the canonical Home Assistant
-      best-practice reference files under `skill_content` on every successful write,
-      plus auto-embed any reference sections cited by best-practice warnings. Each
-      tool also exposes a per-call `MandatoryBPS` parameter the agent can set to false
-      on subsequent calls once it has the content. When this master switch is off,
-      NO skill_content goes out regardless of the per-call parameter or BP warnings.
-      Recommended ON as the first choice; disable only for models with very small
-      context windows. Turning this off may degrade write accuracy. Requires restart
-      to take effect.'
+    name: Dołącz umiejętności najlepszych praktyk przy zapisach
+    description: 'Główny przełącznik funkcji dostarczania treści umiejętności narzędzi
+      do zapisu (problem #1182). Gdy włączone (domyślnie), sześć narzędzi do zapisu
+      konfiguracji (automatyzacje, skrypty, sceny, pomocnicy, panele, surowy YAML)
+      dołącza kanoniczne pliki referencyjne najlepszych praktyk Home Assistant w sekcji
+      `skill_content` przy każdym udanym zapisie, plus automatycznie osadza wszelkie
+      sekcje referencyjne cytowane w ostrzeżeniach dotyczących najlepszych praktyk.
+      Każde narzędzie udostępnia również parametr `MandatoryBPS` dla każdego wywołania,
+      który agent może ustawić na „fałsz” w kolejnych wywołaniach, gdy już posiada
+      treść. Gdy ten główny przełącznik jest wyłączony, ŻADNA treść `skill_content`
+      nie jest wysyłana, niezależnie od parametru dla każdego wywołania lub ostrzeżeń
+      BP. Zalecane WŁĄCZONE jako pierwszy wybór; wyłącz tylko dla modeli z bardzo
+      małymi oknami kontekstowymi. Wyłączenie tej opcji może obniżyć dokładność zapisu.
+      Wymaga ponownego uruchomienia, aby zmiany weszły w życie.'
   enable_strict_mandatory_bps:
-    name: Strict best-practices mode
-    description: 'Strict mode: prevents the client from using the tool until it can
-      prove that it read the best practices. While on, the six best-practice write
-      tools (automations, scripts, scenes, helpers, dashboards, raw YAML) are blocked
-      and return an error directing the client to read the best-practices skill via
-      ha_get_skill_guide and pass back the acknowledgment key it obtains there. While
-      on, the ha_get_skill_guide tool is locked enabled — it is the only publisher
-      of the acknowledgment key. Child of the "Attach best-practice skills on writes"
-      option above and inert while that parent is off. Requires restart to take effect.'
+    name: Tryb ścisłych najlepszych praktyk
+    description: 'Tryb ścisły: uniemożliwia klientowi korzystanie z narzędzia, dopóki
+      nie udowodni, że zapoznał się z najlepszymi praktykami. Gdy włączony, sześć
+      narzędzi do zapisu najlepszych praktyk (automatyzacje, skrypty, sceny, pomocnicy,
+      panele, surowy YAML) jest blokowanych i zwraca błąd, nakazując klientowi zapoznanie
+      się z umiejętnościami najlepszych praktyk za pomocą ha_get_skill_guide i przekazanie
+      z powrotem klucza potwierdzenia, który tam uzyska. Gdy włączony, narzędzie ha_get_skill_guide
+      jest zablokowane i włączone — jest jedynym wydawcą klucza potwierdzenia. Opcja
+      podrzędna opcji „Dołącz umiejętności najlepszych praktyk przy zapisach” powyżej
+      i nieaktywna, gdy opcja nadrzędna jest wyłączona. Wymaga ponownego uruchomienia,
+      aby zmiany weszły w życie.'
   disabled_tools:
-    name: Disabled tools (comma-separated)
-    description: Tools listed here are forced off and locked in the web Settings UI
-      (Tools tab) — they cannot be re-enabled there without unsetting this option
-      first. A small set of mandatory tools (ha_search, ha_get_overview, ha_get_state,
-      ha_report_issue, ha_manage_backup) cannot be disabled and keep running even
-      if listed here. ha_get_skill_guide can be disabled only while strict best-practices
-      mode (enable_strict_mandatory_bps) is off. Comma-separated tool names (e.g.
-      ha_call_event,ha_eval_template).
+    name: Wyłączone narzędzia (oddzielone przecinkami)
+    description: Narzędzia wymienione tutaj są wymuszone na wyłączone i zablokowane
+      w interfejsie użytkownika Ustawień (zakładka Tools) — nie można ich ponownie
+      włączyć bez wcześniejszego wyłączenia tej opcji. Niewielki zestaw obowiązkowych
+      narzędzi (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      nie może zostać wyłączony i działa nadal, nawet jeśli jest tutaj wymieniony.
+      ha_get_skill_guide może zostać wyłączony tylko wtedy, gdy tryb ścisłych najlepszych
+      praktyk (enable_strict_mandatory_bps) jest wyłączony. Nazwy narzędzi oddzielone
+      przecinkami (np. ha_call_event,ha_eval_template).
   pinned_tools:
-    name: Pinned tools (comma-separated)
-    description: Tools listed here are locked pinned — they appear at the top of the
-      Tools tab and cannot be unpinned from the web Settings UI without unsetting
-      this option first. Useful in combination with Tool Search. Comma-separated tool
-      names.
+    name: Przypięte narzędzia (oddzielone przecinkami)
+    description: Narzędzia wymienione tutaj są zablokowane jako przypięte — pojawiają
+      się na górze zakładki „Narzędzia” i nie można ich odpiąć z interfejsu ustawień
+      sieciowych bez wcześniejszego usunięcia tej opcji. Przydatne w połączeniu z
+      wyszukiwaniem narzędzi. Nazwy narzędzi oddzielone przecinkami.
   enable_auto_backup:
-    name: Enable auto-backup of edits
-    description: Captures a per-entity snapshot before every wrapped write/destructive
-      MCP tool call (automation, script, scene, helper, dashboard, label, category,
-      group, zone, area, calendar, todo, entity, integration, and sibling remove/delete
-      tools). Snapshots are saved as YAML files under /data/ha_mcp_backups/ (override
-      via HAMCP_BACKUP_DIR) and listed, restored, or deleted via the Backups tab in
-      the web settings UI or via ha_manage_backup(scope='edits', ...). Best-effort
-      — failures log a WARNING but never block the underlying write. On by default;
-      uncheck to opt out. Requires restart to take effect.
+    name: Włącz automatyczne tworzenie kopii zapasowych zmian
+    description: Tworzy migawkę dla każdej encji przed każdym wywołaniem narzędzia
+      MCP do zapisu/destrukcyjnego (automatyzacja, skrypt, scena, pomocnik, pulpit
+      nawigacyjny, etykieta, kategoria, grupa, strefa, obszar, kalendarz, zadanie,
+      encja, integracja oraz narzędzia do usuwania/kasowania powiązanych elementów).
+      Migawki są zapisywane jako pliki YAML w /data/ha_mcp_backups/ (można zmienić
+      za pomocą HAMCP_BACKUP_DIR) i mogą być wyświetlane, przywracane lub usuwane
+      za pośrednictwem zakładki „Kopie zapasowe” w interfejsie użytkownika ustawień
+      sieciowych lub za pomocą ha_manage_backup(scope='edits', ...). Najlepsze starania
+      — błędy logują OSTRZEŻENIE, ale nigdy nie blokują podstawowego zapisu. Domyślnie
+      włączone; odznacz, aby zrezygnować. Wymaga ponownego uruchomienia, aby zmiany
+      weszły w życie.
   auto_backup_throttle_minutes:
-    name: Auto-backup throttle (minutes)
-    description: Per-entity throttle window. 0 (default) captures a snapshot on every
-      wrapped write. N>0 captures at most one snapshot per N minutes per entity. Range
-      0–1440.
+    name: Ograniczenie automatycznej kopii zapasowej (minuty)
+    description: Okno ograniczenia dla każdej encji. 0 (domyślnie) tworzy migawkę
+      przy każdym opakowanym zapisie. N>0 tworzy co najwyżej jedną migawkę na N minut
+      dla każdej encji. Zakres 0–1440.
   auto_backup_retain_per_entity:
-    name: Auto-backup retention (per entity)
-    description: Maximum number of snapshots kept per entity. Older snapshots beyond
-      this cap are rotated out on each successful capture. Default 100, range 1–10000.
+    name: Przechowywanie automatycznych kopii zapasowych (na encję)
+    description: Maksymalna liczba migawek przechowywanych dla każdej encji. Starsze
+      migawki przekraczające ten limit są usuwane przy każdym udanym przechwyceniu.
+      Domyślnie 100, zakres 1–10000.
   enable_snapshot_delete:
-    name: Allow snapshot deletion
-    description: Lets ha_manage_backup delete full HA snapshot tarballs (scope='snapshot',
-      action='delete'). Off by default — a snapshot may be the last recovery point
-      after a mistaken change, so a human must opt in here. Even when on, scheduled
-      backups, the newest remaining snapshot, and anything younger than the age floor
-      below stay protected.
+    name: Zezwól na usuwanie migawek
+    description: Pozwala ha_manage_backup usuwać pełne archiwa migawek HA (scope='snapshot',
+      action='delete'). Domyślnie wyłączone — migawka może być ostatnim punktem odzyskiwania
+      po błędnej zmianie, dlatego człowiek musi wyrazić na to zgodę. Nawet gdy jest
+      włączone, zaplanowane kopie zapasowe, najnowsza pozostała migawka i wszystko
+      młodsze niż dolna granica wieku poniżej pozostają chronione.
   snapshot_delete_min_age_days:
-    name: Minimum snapshot age to delete (days)
-    description: A snapshot must be at least this old before it can be deleted. Range
-      0–365; 0 disables the floor (the newest-snapshot and scheduled-backup protections
-      still apply). Default 7.
+    name: Minimalny wiek migawki do usunięcia (dni)
+    description: Migawka musi być co najmniej tak stara, zanim będzie mogła zostać
+      usunięta. Zakres 0–365; 0 wyłącza limit (ochrona najnowszej migawki i zaplanowanych
+      kopii zapasowych nadal obowiązuje). Domyślnie 7.
   verify_ssl:
-    name: Verify TLS certificate
-    description: Verify the Home Assistant server's TLS certificate. The add-on connects
-      via the Supervisor proxy, so this normally has no effect and should stay enabled.
-      Disable only if you've reconfigured the add-on to talk to HA over a public HTTPS
-      hostname with a self-signed certificate or hostname mismatch. Disabling weakens
-      transport security — leave on unless you know you need it. Requires restart
-      to take effect.
+    name: Weryfikuj certyfikat TLS
+    description: Weryfikuje certyfikat TLS serwera Home Assistant. Dodatek łączy się
+      przez proxy Supervisor, więc normalnie nie ma to wpływu i powinno pozostać włączone.
+      Wyłącz tylko, jeśli ponownie skonfigurowałeś dodatek, aby komunikował się z
+      HA przez publiczną nazwę hosta HTTPS z certyfikatem z podpisem własnym lub niezgodnością
+      nazwy hosta. Wyłączenie osłabia bezpieczeństwo transportu — pozostaw włączone,
+      chyba że wiesz, że tego potrzebujesz. Wymaga ponownego uruchomienia, aby zmiany
+      weszły w życie.
