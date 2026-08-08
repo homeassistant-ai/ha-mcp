@@ -18,8 +18,9 @@ name: Locale Sync
 # which is what tells the bot the changed English is already covered).
 #
 # Verification is three layers. (1) Every returned string is validated
-# before it is written (placeholder, markup and panel-link parity, in the
-# script). (2) After a clean run, the content-completeness checks that PR CI
+# before it is written (placeholder, markup and panel-link parity, plus the
+# config flow's hardcoded option labels, in the script). (2) After a clean
+# run, the content-completeness checks that PR CI
 # skips run here under LOCALE_COMPLETENESS_CHECKS=1; a failure means the
 # output may be corrupt (the engine pasted English back, parity broke) and
 # BLOCKS the push — machine translations are recomputable, so dropping them
