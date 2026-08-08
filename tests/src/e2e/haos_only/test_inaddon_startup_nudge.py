@@ -32,7 +32,7 @@ import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-from ..utilities.assertions import parse_mcp_result
+from ..utilities.assertions import MCPAssertions, parse_mcp_result
 from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
 
 LOG = logging.getLogger(__name__)
@@ -96,8 +96,10 @@ async def test_addon_launcher_schedules_the_startup_nudge(
     settings_restart = f"{base}{HA_MCP_TEST_SECRET_PATH}/api/settings/restart"
 
     # Resolve the dev addon's Supervisor slug while the shared client is
-    # still live (pre-restart).
-    data = parse_mcp_result(await mcp_client.call_tool("ha_get_addon", {}))
+    # still live (pre-restart). call_tool_success per the test conventions:
+    # a failed listing reports itself instead of reading as a missing addon.
+    async with MCPAssertions(mcp_client) as mcp:
+        data = await mcp.call_tool_success("ha_get_addon", {})
     addons = data.get("addons") or []
     dev_addon = next((a for a in addons if a.get("name") == DEV_ADDON_NAME), None)
     assert dev_addon is not None, (
