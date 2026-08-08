@@ -119,18 +119,25 @@ class TestValidate:
 
 
 class TestHardcodedOptionLabels:
-    """The config flow hardcodes a couple of selector labels in Python, so
-    Home Assistant shows them in English whatever the reader's language is.
-    A catalog that localises one sends the reader looking for an option that
-    is not on the form — the failure that stopped a whole sync run, since the
-    engine only had a prose rule telling it not to."""
+    """Python hardcodes a handful of on-screen names — selector labels and the
+    titles of the config entries themselves — so Home Assistant shows them in
+    English whatever the reader's language is. A catalog that localises one
+    sends the reader looking for something that is not on the screen: the
+    failure that stopped a whole sync run, since the engine only had a prose
+    rule telling it not to."""
 
-    def test_the_label_set_is_read_from_the_config_flow(self) -> None:
-        # Without this the check degrades silently: an empty label set accepts
-        # every translation and still reports a clean run.
-        labels = translate_locales._hardcoded_option_labels()
-        assert labels, "no selector labels found — the config flow was restructured"
-        assert any(label.startswith("Local network") for label in labels)
+    def test_the_name_set_is_read_from_the_source(self) -> None:
+        # Without this the check degrades silently: an empty name set accepts
+        # every translation and still reports a clean run. Both kinds are
+        # asserted because either regex can stop matching on its own.
+        names = translate_locales._hardcoded_ui_names()
+        assert names, "no on-screen names found — the sources were restructured"
+        assert any(name.startswith("Local network") for name in names), (
+            "no selector label found — check the config flow's selector syntax"
+        )
+        assert "HA-MCP File & YAML Tools" in names, (
+            "no config-entry title found — check the *_ENTRY_TITLE constants"
+        )
 
     def test_rejects_a_localised_hardcoded_label(self) -> None:
         english = 'Local/LAN (when Network access is "Local network"): {url}'
@@ -145,6 +152,25 @@ class TestHardcodedOptionLabels:
         english = "Local/LAN (when Network access is “Local network”): {url}"
         localised = 'Lokaal/LAN (wanneer Netwerktoegang "Lokaal netwerk" is): {url}'
         assert _validate(_item(section="component", english=english), localised)
+
+    def test_rejects_a_localised_entry_title(self) -> None:
+        # The exact string the 2026-08-08 nl fill shipped: the reader is sent
+        # to an entry whose title the integration hardcodes, under a name that
+        # entry never has.
+        english = (
+            'Not installed — press "Add entry" on this integration\'s page and '
+            'choose "HA-MCP File & YAML Tools" to add it'
+        )
+        localised = (
+            'Niet geïnstalleerd — druk op "Item toevoegen" op de pagina van deze '
+            'integratie en kies "HA-MCP Bestands- & YAML-tools" om deze toe te voegen'
+        )
+        kept = (
+            'Niet geïnstalleerd — druk op "Item toevoegen" op de pagina van deze '
+            'integratie en kies "HA-MCP File & YAML Tools" om deze toe te voegen'
+        )
+        assert _validate(_item(section="component", english=english), localised)
+        assert _validate(_item(section="component", english=english), kept) is None
 
     def test_leaves_other_quoted_text_translatable(self) -> None:
         # "Add entry" is Home Assistant's own button: HA translates it, so

@@ -152,8 +152,8 @@
     "oauth_select_legacy_mode": "Stel de authenticatiemodus hierboven in op legacy OAuth en sla op om een Client ID en Client Secret te genereren.",
     "panel_hint": "Open het [HA-MCP instellingenpaneel](/ha-mcp) voor toolbeheer en serverinstellingen.",
     "tools_module_installed": "Bèta/geavanceerde bestands- & YAML-tools module (optioneel): Geïnstalleerd",
-    "tools_module_not_installed": "Bèta/geavanceerde bestands- & YAML-tools module (optioneel): Niet geïnstalleerd — druk op \"Entiteit toevoegen\" op de pagina van deze integratie en kies \"HA-MCP Bestands- & YAML-tools\" om deze toe te voegen",
-    "tools_module_not_loaded": "Bèta/geavanceerde bestands- & YAML-tools module (optioneel): Geïnstalleerd maar niet geladen — schakel de \"HA-MCP Bestands- & YAML-tools\" entiteit op de pagina van deze integratie in of herlaad deze",
+    "tools_module_not_installed": "Bèta/geavanceerde bestands- & YAML-tools module (optioneel): Niet geïnstalleerd — druk op \"Item toevoegen\" op de pagina van deze integratie en kies \"HA-MCP File & YAML Tools\" om deze toe te voegen",
+    "tools_module_not_loaded": "Bèta/geavanceerde bestands- & YAML-tools module (optioneel): Geïnstalleerd maar niet geladen — schakel het \"HA-MCP File & YAML Tools\" item op de pagina van deze integratie in of herlaad het",
     "version_line": "Component {component_version} - Server ha-mcp {server_version} ({channel} kanaal)",
     "version_not_installed": "nog niet geïnstalleerd",
     "version_unknown": "onbekend"
