@@ -1,5 +1,6 @@
 {
   "common": {
+    "connect_local_lan": "Lokaal/LAN (wanneer Netwerktoegang \"Local network\" is): {url}",
     "oauth_not_serving": "Legacy OAuth levert deze nog niet — start Home Assistant opnieuw op wanneer je daarom wordt gevraagd, om ze te activeren."
   }
 }

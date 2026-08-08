@@ -26,9 +26,10 @@ down is a HUMAN: hand-edit the translations, run
 run sees nothing stale and no-ops. Hand-edits always win; the machine only
 touches strings whose English changed.
 Every returned string is validated (placeholder parity, the settings UI markup
-allowlist, formatting-tag parity, panel-link parity) before it is written; a
-failure leaves that string unwritten and the run red rather than shipping a
-broken translation.
+allowlist, formatting-tag parity, panel-link parity, and the config flow's
+hardcoded option labels staying untranslated) before it is written; a failure
+leaves that string unwritten and the run red rather than shipping a broken
+translation.
 
 Rate limits and outages: requests are paced under the free-tier rate and
 retry transient errors with backoff; a persistently failing batch marks its
@@ -56,6 +57,7 @@ import time
 from collections import Counter
 from collections.abc import Container
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
@@ -415,10 +417,54 @@ def build_plan(module: Any) -> Plan:
     return plan
 
 
+_CONFIG_FLOW_PATH = REPO_ROOT / "custom_components" / "ha_mcp_tools" / "config_flow.py"
+_SELECTOR_LABEL_RE = re.compile(r'label="([^"]+)"')
+# English sources quote with straight or typographic marks — both already occur
+# in the shipped catalogs — and the label check has to see the quoted text
+# either way, or the spelling of a quote silently decides whether it applies.
+_QUOTED_RE = re.compile(r'["“”«»„]([^"“”«»„]+)["“”«»„]')
+
+
+@lru_cache(maxsize=1)
+def _hardcoded_option_labels() -> tuple[str, ...]:
+    """Config-flow selector labels, which read English on every reader's form.
+
+    Quoting alone does not say whether a string may be translated: catalogs
+    correctly translate quoted cross-references to their own option labels,
+    and Home Assistant translates its own buttons ("Add entry"). What must
+    survive verbatim is the narrower class this returns — labels our config
+    flow hardcodes in Python, so no catalog can localise them and a reader
+    told to pick a translated one goes looking for an option that is not on
+    the form. Read from the source instead of listed here so a rename cannot
+    strand a stale copy; ``test_connect_local_lan_quotes_the_bind_host_option``
+    guards the rename against the catalogs.
+    """
+    labels: list[str] = _SELECTOR_LABEL_RE.findall(_CONFIG_FLOW_PATH.read_text("utf-8"))
+    return tuple(labels)
+
+
+def _untranslatable_label_dropped(english: str, translated: str) -> str | None:
+    """The hardcoded label this translation localised away, if any."""
+    quoted_texts: list[str] = _QUOTED_RE.findall(english)
+    for quoted in quoted_texts:
+        for label in _hardcoded_option_labels():
+            if (
+                label == quoted or label.startswith(f"{quoted} ")
+            ) and quoted not in translated:
+                return quoted
+    return None
+
+
 def _validate(item: WorkItem, translated: Any) -> str | None:
     """The reason a translation is unusable for this item, or None."""
     if not isinstance(translated, str) or not translated.strip():
         return "empty or non-string translation"
+    dropped = _untranslatable_label_dropped(item.english, translated)
+    if dropped is not None:
+        return (
+            f"the on-screen option {dropped!r} is hardcoded in the config flow "
+            "and has to stay untranslated"
+        )
     if set(_PLACEHOLDER_RE.findall(item.english)) != set(
         _PLACEHOLDER_RE.findall(translated)
     ):
