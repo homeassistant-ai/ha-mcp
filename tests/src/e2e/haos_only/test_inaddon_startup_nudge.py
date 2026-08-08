@@ -29,8 +29,9 @@ import httpx
 import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
+from fastmcp.exceptions import ToolError
 
-from ..utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
+from ..utilities.assertions import MCPAssertions, parse_mcp_result
 from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
 
 LOG = logging.getLogger(__name__)
@@ -106,23 +107,29 @@ async def _restore_info_level(settings_advanced: str, settings_restart: str) -> 
 async def _warm_shared_client(mcp_client: Any) -> None:
     """Warm the SHARED session client back up after the self-restarts.
 
-    safe_call_tool: a ToolError raised mid-bounce is not in the transient
-    set and would escape the loop; break only on a successful payload.
+    Any completed round-trip — success or ToolError — proves the session
+    is usable again; only transport-level transients keep the loop going.
     """
     deadline = time.monotonic() + _WARM_TIMEOUT
+    last: object = None
     while True:
         try:
-            payload = await safe_call_tool(mcp_client, "ha_get_overview", {})
-            if payload.get("success", True) and "error" not in payload:
-                return
-        except _RESTORE_TRANSIENT:
+            await mcp_client.call_tool("ha_get_overview", {})
+            return
+        except ToolError:
+            # Warm-up only cares that the shared session round-trips again;
+            # a tool-level failure IS a completed round-trip. (Payload
+            # inspection here proved harmful: it kept the loop spinning on a
+            # healthy session — the two prior CI failures.)
+            return
+        except _RESTORE_TRANSIENT as err:
             # Transient while the addon bounces underneath us; the deadline
             # check below bounds the retries.
-            pass
+            last = err
         if time.monotonic() >= deadline:
             raise AssertionError(
                 "Shared mcp_client never warmed back up after the restore "
-                f"restart within {_WARM_TIMEOUT}s"
+                f"restart within {_WARM_TIMEOUT}s (last={last!r})"
             )
         await asyncio.sleep(_POLL_INTERVAL)
 
@@ -176,11 +183,18 @@ async def test_addon_launcher_schedules_the_startup_nudge(
                         "search": NUDGE_LOG_SIGNATURE,
                     },
                 )
-                if payload.get("success") and payload.get("returned_lines", 0) > 0:
+                log_text = payload.get("log", "")
+                # Post-filter for the two REAL per-boot phrases: at DEBUG the
+                # addon logs this probe's own tool calls, whose search
+                # argument contains the bare signature — matching only the
+                # signature would let the probe confirm itself.
+                if payload.get("success") and (
+                    "startup pass due" in log_text or "pass not due" in log_text
+                ):
                     found = True
                     LOG.info(
                         "Nudge per-boot line found after restart: %s",
-                        payload.get("log", "")[:200],
+                        log_text[:200],
                     )
                     break
                 last = f"no match yet in {payload.get('total_lines', 0)} lines"
