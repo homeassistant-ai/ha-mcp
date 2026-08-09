@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 # Shared group for every workflow that pushes to master (semver-release,
-# addon-publish-dev): a doc-sync push landing while
+# addon-publish-dev, locale-sync): a doc-sync push landing while
 # semantic-release is mid-run aborts the release un-retryably ("Upstream
 # branch ... has changed"), so master writers must not overlap. This also
 # keeps sync runs from overlapping each other. cancel-in-progress must be
