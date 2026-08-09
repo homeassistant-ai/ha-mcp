@@ -234,6 +234,20 @@ class TestDashboardLifecycle:
                 f"'default' should not be rejected by hyphen validation, got: {error_msg}"
             )
 
+        # The seeded Map dashboard is a real storage dashboard whose url_path
+        # predates the creation-only hyphen rule. Exact-path updates must work
+        # without being reported as identifier canonicalization.
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_dashboard",
+            {"url_path": "map", "title": "Map"},
+        )
+        assert data["success"] is True
+        assert data["action"] == "update"
+        assert data["url_path"] == "map"
+        assert data["metadata_updated"] is True
+        assert "resolved_from" not in data
+
         # "nodash" (non-existent, no hyphen) SHOULD still be rejected
         data = await safe_call_tool(
             mcp_client,

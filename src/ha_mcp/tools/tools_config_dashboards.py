@@ -8,7 +8,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, replace
-from typing import Annotated, Any, Literal, cast, overload
+from typing import Annotated, Any, Literal, NoReturn, cast, overload
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -1260,6 +1260,22 @@ async def fetch_dashboards_list(
         type(result).__name__,
     )
     return None
+
+
+def _raise_dashboard_registry_read_error(*, action: str, url_path: str) -> NoReturn:
+    """Raise the shared user-facing error for an unreadable dashboard registry."""
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            "Failed to read the Home Assistant dashboard registry",
+            suggestions=[
+                "Retry the operation",
+                "Check the Home Assistant connection and logs",
+                "Use ha_config_get_dashboard(list_only=True) to verify registry access",
+            ],
+            context={"action": action, "url_path": url_path},
+        )
+    )
 
 
 async def _resolve_dashboard(
@@ -2972,7 +2988,12 @@ class DashboardConfigTools:
     async def _resolve_set_dashboard_url_path(
         self, url_path: str
     ) -> tuple[str, str | None, list[dict[str, Any]] | None]:
-        """Validate + canonicalize ``url_path`` for ``ha_config_set_dashboard``.
+        """Validate the set target and canonicalize supported dashboard identifiers.
+
+        Hyphenless input is allowed only when it exactly matches an existing
+        dashboard's ``url_path`` (plus the built-in ``lovelace`` alias case).
+        New dashboard paths must contain a hyphen. An internal-ID-only match may
+        still canonicalize to a different, hyphenated existing ``url_path``.
 
         Returns ``(url_path, pre_resolved_from, pre_fetched_dashboards)``:
         ``url_path`` is canonicalized (``"default"`` -> ``"lovelace"``, and an
@@ -3005,13 +3026,16 @@ class DashboardConfigTools:
             url_path = "lovelace"
 
         # Pre-resolve a hyphenless dashboard identifier before enforcing the
-        # creation-only hyphen rule below, so existing internal-id support is
-        # preserved. Only an exact url_path match establishes that the caller
-        # addressed an existing dashboard for purposes of that rule. An
-        # internal-id-only match may still canonicalize to a hyphenated path,
-        # but cannot exempt a different hyphenless path from validation.
+        # exact-url-path exception below. Internal-ID support is preserved when
+        # it canonicalizes to a hyphenated existing path, but an ID-only match
+        # cannot exempt a different hyphenless path from validation.
+        #
+        # This is still a create-or-update API: a caller intending to create a
+        # dashboard can target an existing one, either by exact url_path or by a
+        # supported internal-ID rewrite. ``action`` reports create vs update;
+        # ``resolved_from`` additionally reports only the latter rewrite.
         pre_resolved_from: str | None = None
-        existing_dashboard_resolved = False
+        exact_url_path_exists = False
         # When the pre-resolver fires and finds a match, ``_resolve_dashboard``
         # has already fetched ``lovelace/dashboards/list``. Capture that list
         # so the existence-check site below can reuse it instead of paying
@@ -3019,10 +3043,12 @@ class DashboardConfigTools:
         pre_fetched_dashboards: list[dict[str, Any]] | None = None
         if "-" not in url_path and url_path != "lovelace":
             resolved, dashboards = await _resolve_dashboard(self._client, url_path)
+            if dashboards is None:
+                _raise_dashboard_registry_read_error(action="set", url_path=url_path)
             if resolved is not None and resolved["url_path"]:
-                existing_dashboard_resolved = resolved["url_path"] == url_path
+                exact_url_path_exists = resolved["url_path"] == url_path
                 pre_fetched_dashboards = dashboards
-                if resolved["url_path"] != url_path:
+                if not exact_url_path_exists and "-" in resolved["url_path"]:
                     original_url_path = url_path
                     url_path = resolved["url_path"]
                     pre_resolved_from = original_url_path
@@ -3032,24 +3058,22 @@ class DashboardConfigTools:
                         url_path,
                     )
 
-        # Validate url_path contains a hyphen only when no existing dashboard
-        # was resolved. Existing dashboard paths predate this creation rule and
-        # must remain valid update targets unchanged.
+        # Existing exact url_path values may predate HA's creation rule and must
+        # remain valid update targets unchanged.
         # The built-in "lovelace" dashboard is exempt since it already exists
-        if (
-            not existing_dashboard_resolved
-            and "-" not in url_path
-            and url_path != "lovelace"
-        ):
+        if not exact_url_path_exists and "-" not in url_path and url_path != "lovelace":
+            suggestions = [
+                "Use format like 'my-dashboard' or 'mobile-view'",
+                "Use 'lovelace' or 'default' to edit the default dashboard",
+            ]
+            hyphenated_url_path = url_path.replace("_", "-")
+            if hyphenated_url_path != url_path:
+                suggestions.insert(0, f"Try '{hyphenated_url_path}' instead")
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     "url_path must contain a hyphen (-)",
-                    suggestions=[
-                        f"Try '{url_path.replace('_', '-')}' instead",
-                        "Use format like 'my-dashboard' or 'mobile-view'",
-                        "Use 'lovelace' or 'default' to edit the default dashboard",
-                    ],
+                    suggestions=suggestions,
                     context={"action": "set", "url_path": url_path},
                 )
             )
@@ -3102,6 +3126,7 @@ class DashboardConfigTools:
         url_path: str, python_transform: str, current_config: dict[str, Any]
     ) -> dict[str, Any]:
         """Run ``python_transform`` against ``current_config`` in the sandbox."""
+        was_strategy_dashboard = "strategy" in current_config
         try:
             transformed_config = safe_execute(python_transform, current_config)
         except PythonSandboxError as e:
@@ -3127,6 +3152,12 @@ class DashboardConfigTools:
                     context={"action": "python_transform", "url_path": url_path},
                 )
             )
+        DashboardConfigTools._validate_strategy_dashboard_replacement(
+            url_path,
+            was_strategy_dashboard=was_strategy_dashboard,
+            replacement_config=transformed_config,
+            action="python_transform",
+        )
         return transformed_config
 
     async def _save_dashboard_python_transform(
@@ -3255,7 +3286,10 @@ class DashboardConfigTools:
         if pre_fetched_dashboards is not None:
             existing_dashboards = pre_fetched_dashboards
         else:
-            existing_dashboards = await fetch_dashboards_list(self._client) or []
+            fetched_dashboards = await fetch_dashboards_list(self._client)
+            if fetched_dashboards is None:
+                _raise_dashboard_registry_read_error(action="set", url_path=url_path)
+            existing_dashboards = fetched_dashboards
         dashboard_exists = any(
             d.get("url_path") == url_path for d in existing_dashboards
         )
@@ -3344,7 +3378,7 @@ class DashboardConfigTools:
     ) -> tuple[str | None, bool, str | None]:
         """Update metadata for an existing dashboard if any metadata params were provided.
 
-        Returns ``(dashboard_id, metadata_updated, hint)``.
+        Returns ``(dashboard_id, metadata_updated, warning)``.
         """
         dashboard_id = None
         for dashboard in existing_dashboards:
@@ -3370,13 +3404,13 @@ class DashboardConfigTools:
         if metadata_update_fields and dashboard_id is None:
             # Dashboard ID not found in storage list (e.g. default lovelace on
             # fresh installs). Metadata update via lovelace/dashboards/update
-            # is not possible without a storage ID — config update still proceeds.
-            hint = (
+            # is not possible without a storage ID. The caller either proceeds
+            # with a requested config write or rejects the resulting no-op.
+            warning = (
                 "Metadata fields were provided but could not be applied: "
-                "dashboard has no storage ID (likely the built-in default dashboard). "
-                "Config changes were still saved."
+                "dashboard has no storage ID (likely the built-in default dashboard)."
             )
-            return dashboard_id, False, hint
+            return dashboard_id, False, warning
         return dashboard_id, False, None
 
     async def _ensure_dashboard_exists(
@@ -3391,7 +3425,7 @@ class DashboardConfigTools:
     ) -> tuple[bool, str | None, bool, str | None]:
         """Create the dashboard if missing, else update its metadata if requested.
 
-        Returns ``(dashboard_exists, dashboard_id, metadata_updated, hint)`` —
+        Returns ``(dashboard_exists, dashboard_id, metadata_updated, warning)`` —
         ``dashboard_exists`` reflects state *before* this call, so the caller
         can distinguish create vs update for the response's
         ``action``/``dashboard_created`` fields.
@@ -3409,7 +3443,7 @@ class DashboardConfigTools:
             )
             return dashboard_exists, dashboard_id, False, None
 
-        dashboard_id, metadata_updated, hint = await self._update_dashboard_metadata(
+        dashboard_id, metadata_updated, warning = await self._update_dashboard_metadata(
             url_path,
             existing_dashboards,
             title=title,
@@ -3417,12 +3451,15 @@ class DashboardConfigTools:
             require_admin=require_admin,
             show_in_sidebar=show_in_sidebar,
         )
-        return dashboard_exists, dashboard_id, metadata_updated, hint
+        return dashboard_exists, dashboard_id, metadata_updated, warning
 
     async def _check_dashboard_replace_hash(
-        self, url_path: str, config_hash: str | None
+        self,
+        url_path: str,
+        config_hash: str | None,
+        replacement_config: dict[str, Any],
     ) -> str | None:
-        """Optionally validate config_hash and warn on large full-config replacement.
+        """Validate replacement safety/hash and warn on large full-config replacement.
 
         Tolerates fetch failures — full replacement still proceeds even if the
         pre-read can't load the current state (force-replace path).
@@ -3454,12 +3491,42 @@ class DashboardConfigTools:
                 )
             )
 
+        self._validate_strategy_dashboard_replacement(
+            url_path,
+            was_strategy_dashboard="strategy" in existing_config,
+            replacement_config=replacement_config,
+            action="config",
+        )
+
         if existing_config_size >= 10000:
             return (
                 f"Replaced large config ({existing_config_size:,} bytes). "
                 "Consider python_transform for targeted edits."
             )
         return None
+
+    @staticmethod
+    def _validate_strategy_dashboard_replacement(
+        url_path: str,
+        *,
+        was_strategy_dashboard: bool,
+        replacement_config: dict[str, Any],
+        action: str,
+    ) -> None:
+        """Prevent this tool from taking control of a strategy dashboard."""
+        if not was_strategy_dashboard or "strategy" in replacement_config:
+            return
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_FAILED,
+                "Strategy dashboards cannot be converted to custom dashboards via this tool",
+                suggestions=[
+                    "Use 'Take Control' in the Home Assistant interface to convert it",
+                    "Keep a strategy configuration when updating this dashboard",
+                ],
+                context={"action": action, "url_path": url_path},
+            )
+        )
 
     async def _save_dashboard_config(
         self, url_path: str, config_dict: dict[str, Any]
@@ -3499,7 +3566,7 @@ class DashboardConfigTools:
     ) -> tuple[bool, str | None, dict[str, Any]]:
         """Parse + validate ``config`` and save it as a full replacement.
 
-        Returns ``(config_updated, hint, saved_config)``.
+        Returns ``(config_updated, warning, saved_config)``.
         """
         parsed_config = parse_json_param(config, "config")
         if parsed_config is None or not isinstance(parsed_config, dict):
@@ -3515,12 +3582,14 @@ class DashboardConfigTools:
             )
         config_dict = cast(dict[str, Any], parsed_config)
 
-        hint: str | None = None
+        warning: str | None = None
         if dashboard_exists:
-            hint = await self._check_dashboard_replace_hash(url_path, config_hash)
+            warning = await self._check_dashboard_replace_hash(
+                url_path, config_hash, config_dict
+            )
 
         await self._save_dashboard_config(url_path, config_dict)
-        return True, hint, config_dict
+        return True, warning, config_dict
 
     async def _run_dashboard_config_update(
         self,
@@ -3543,7 +3612,7 @@ class DashboardConfigTools:
             dashboard_exists,
             dashboard_id,
             metadata_updated,
-            hint,
+            metadata_warning,
         ) = await self._ensure_dashboard_exists(
             url_path,
             title=title,
@@ -3555,16 +3624,49 @@ class DashboardConfigTools:
 
         config_updated = False
         render_config: dict[str, Any] | None = None
+        warnings: list[str] = []
         if config is not None:
             (
                 config_updated,
-                config_hint,
+                config_warning,
                 render_config,
             ) = await self._apply_dashboard_config(
                 url_path, config, config_hash, dashboard_exists
             )
-            if config_hint:
-                hint = config_hint
+            if config_warning:
+                warnings.append(config_warning)
+
+        if dashboard_exists and not config_updated and not metadata_updated:
+            if metadata_warning is not None:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "No dashboard changes were applied",
+                        details=metadata_warning,
+                        suggestions=[
+                            "Use a storage-mode dashboard when changing metadata",
+                            "Provide config to replace the dashboard configuration",
+                        ],
+                        context={"action": "set", "url_path": url_path},
+                    )
+                )
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "No dashboard changes were requested",
+                    suggestions=[
+                        "Provide config or python_transform to change dashboard content",
+                        "Provide a metadata field such as title or icon",
+                        "Use ha_config_get_dashboard to read a dashboard without changing it",
+                    ],
+                    context={"action": "set", "url_path": url_path},
+                )
+            )
+
+        if metadata_warning:
+            if config_updated:
+                metadata_warning = f"{metadata_warning} Dashboard config was saved."
+            warnings.insert(0, metadata_warning)
 
         result_dict: dict[str, Any] = {
             "success": True,
@@ -3577,13 +3679,12 @@ class DashboardConfigTools:
             "message": f"Dashboard {url_path} {'created' if not dashboard_exists else 'updated'} successfully",
         }
 
-        if hint:
-            result_dict["hint"] = hint
+        if warnings:
+            result_dict["warnings"] = warnings
         if pre_resolved_from is not None:
-            # Caller passed an internal id; pre-resolver mapped it to
-            # the canonical url_path. Surface the original so a caller
-            # who *intended* to create a new dashboard can detect that
-            # an existing dashboard was updated instead.
+            # This marks identifier canonicalization only. Exact url_path
+            # matches deliberately omit it; callers use ``action`` to tell
+            # whether the create-or-update operation updated an existing target.
             result_dict["resolved_from"] = pre_resolved_from
 
         render_config = await _attach_dashboard_render_paths_after_write(
@@ -3651,6 +3752,8 @@ class DashboardConfigTools:
                 context={"action": "delete"},
             )
             resolved, dashboards = await _resolve_dashboard(self._client, url_path)
+            if dashboards is None:
+                _raise_dashboard_registry_read_error(action="delete", url_path=url_path)
             if resolved is None:
                 available_ids = [
                     d.get("url_path")

@@ -7,6 +7,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
+from ha_mcp.utils.config_hash import compute_config_hash
 
 
 class TestSetDashboardMetadataUpdate:
@@ -51,26 +52,21 @@ class TestSetDashboardMetadataUpdate:
         assert meta_call["title"] == "New Title"
 
     @pytest.mark.asyncio
-    async def test_metadata_updated_false_when_no_metadata_params(
+    async def test_existing_dashboard_with_no_changes_is_rejected(
         self, set_tool, mock_client
     ):
-        """metadata_updated=False when no metadata params given for existing dashboard."""
-        mock_client.send_websocket_message.side_effect = [
-            self._make_dashboard_list("my-dashboard"),  # lovelace/dashboards/list
-            {"result": {"views": []}},  # post-write canonical render paths
-        ]
+        """An existing dashboard cannot report a successful update with no write."""
+        mock_client.send_websocket_message.return_value = self._make_dashboard_list(
+            "my-dashboard"
+        )
 
-        result = await set_tool(url_path="my-dashboard")
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(url_path="my-dashboard")
 
-        assert result["success"] is True
-        assert result["metadata_updated"] is False
-        # No metadata update; the second call fetches canonical render paths.
-        assert mock_client.send_websocket_message.call_count == 2
-        assert mock_client.send_websocket_message.call_args_list[1].args[0] == {
-            "type": "lovelace/config",
-            "force": True,
-            "url_path": "my-dashboard",
-        }
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert body["error"]["message"] == "No dashboard changes were requested"
+        assert mock_client.send_websocket_message.call_count == 1
 
     @pytest.mark.asyncio
     async def test_metadata_update_multiple_fields(self, set_tool, mock_client):
@@ -133,19 +129,47 @@ class TestSetDashboardMetadataUpdate:
         mock_client.send_websocket_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_metadata_update_skipped_when_dashboard_id_none(
+    async def test_metadata_only_update_without_dashboard_id_is_rejected(
         self, set_tool, mock_client
     ):
-        """When dashboard_id cannot be resolved, metadata update is skipped with a hint."""
+        """A skipped metadata write cannot report a successful dashboard update."""
         # Lovelace dashboard not in the list (fresh install scenario)
         mock_client.send_websocket_message.return_value = {"result": []}
 
-        result = await set_tool(url_path="lovelace", title="My Home")
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(url_path="lovelace", title="My Home")
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert body["error"]["message"] == "No dashboard changes were applied"
+        assert "no storage ID" in body["error"]["details"]
+        assert mock_client.send_websocket_message.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_config_write_with_unavailable_metadata_uses_warning(
+        self, set_tool, mock_client
+    ):
+        """A committed config write reports skipped metadata as a top-level warning."""
+        replacement = {"views": [{"title": "Home"}]}
+        mock_client.send_websocket_message.side_effect = [
+            {"result": []},  # default dashboard is absent from the registry
+            {"result": {"views": []}},  # replacement safety/hash pre-read
+            {"success": True},  # config save
+            {"result": replacement},  # authoritative post-write config
+        ]
+
+        result = await set_tool(
+            url_path="lovelace", title="My Home", config=replacement
+        )
 
         assert result["success"] is True
+        assert result["config_updated"] is True
         assert result["metadata_updated"] is False
-        assert "hint" in result
-        assert "no storage ID" in result["hint"]
+        assert "hint" not in result
+        metadata_warning = next(
+            warning for warning in result["warnings"] if "no storage ID" in warning
+        )
+        assert "Dashboard config was saved" in metadata_warning
 
     @pytest.mark.asyncio
     async def test_false_booleans_are_not_filtered_out(self, set_tool, mock_client):
@@ -288,27 +312,27 @@ class TestSetDashboardListCallDedup:
         assert self._list_call_count(mock_client) == 1
 
     @pytest.mark.asyncio
-    async def test_canonical_url_path_branch_warns_on_unexpected_shape(
+    async def test_canonical_url_path_branch_rejects_unreadable_registry(
         self, set_tool, mock_client, caplog
     ):
-        """Existence-check fallback fetch logs a warning on unexpected
-        response shapes, mirroring ``_resolve_dashboard``'s same-arm
-        behaviour. Without this parity, an HA-side shape change would go
-        silent on the canonical-url_path branch — the bug reports would
-        be wedged on ``dashboard_exists = False`` with no operator
-        signal."""
+        """An unexpected registry shape is not treated as an empty registry."""
         import logging
 
-        mock_client.send_websocket_message.side_effect = [
-            "unexpected string",  # response shape failure
-            {"success": True},  # create-dashboard call (still proceeds)
-        ]
+        mock_client.send_websocket_message.return_value = "unexpected string"
 
-        with caplog.at_level(
-            logging.WARNING, logger="ha_mcp.tools.tools_config_dashboards"
+        with (
+            caplog.at_level(
+                logging.WARNING, logger="ha_mcp.tools.tools_config_dashboards"
+            ),
+            pytest.raises(ToolError) as exc_info,
         ):
             await set_tool(url_path="my-dash", title="New")
 
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "dashboard registry" in body["error"]["message"]
+        assert body["url_path"] == "my-dash"
+        assert mock_client.send_websocket_message.call_count == 1
         assert any(
             "unexpected shape" in rec.message and "type=str" in rec.message
             for rec in caplog.records
@@ -319,7 +343,7 @@ class TestSetDashboardListCallDedup:
 
 
 class TestSetDashboardUrlPathCreationContract:
-    """The hyphen requirement applies only when creating a dashboard."""
+    """Hyphenless input is exempt only for an exact existing url_path."""
 
     @pytest.fixture
     def mock_client(self):
@@ -381,6 +405,10 @@ class TestSetDashboardUrlPathCreationContract:
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "url_path must contain a hyphen" in body["error"]["message"]
+        assert all(
+            "Try 'newmap'" not in suggestion
+            for suggestion in body["error"]["suggestions"]
+        )
         assert mock_client.send_websocket_message.call_count == 1
 
     @pytest.mark.asyncio
@@ -397,7 +425,25 @@ class TestSetDashboardUrlPathCreationContract:
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "url_path must contain a hyphen" in body["error"]["message"]
+        assert body["url_path"] == "map_internal"
+        assert body["error"]["suggestion"] == "Try 'map-internal' instead"
+        assert "Try 'map' instead" not in body["error"]["suggestions"]
         assert mock_client.send_websocket_message.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_unreadable_registry_is_not_reported_as_bad_hyphenless_input(
+        self, set_tool, mock_client
+    ):
+        mock_client.send_websocket_message.return_value = "unexpected string"
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(url_path="map", title="Updated Map")
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "dashboard registry" in body["error"]["message"]
+        assert "hyphen" not in body["error"]["message"]
+        assert body["url_path"] == "map"
 
     @pytest.mark.asyncio
     async def test_new_hyphenated_dashboard_is_allowed(self, set_tool, mock_client):
@@ -415,3 +461,92 @@ class TestSetDashboardUrlPathCreationContract:
         assert mock_client.send_websocket_message.call_args_list[1].args[0]["type"] == (
             "lovelace/dashboards/create"
         )
+
+    @pytest.mark.asyncio
+    async def test_existing_hyphenless_dashboard_full_config_update_is_allowed(
+        self, set_tool, mock_client
+    ):
+        replacement = {"views": [{"title": "Updated"}]}
+        mock_client.send_websocket_message.side_effect = [
+            {"result": [{"url_path": "panel", "id": "panel"}]},
+            {"result": {"views": []}},
+            {"success": True},
+            {"result": replacement},
+        ]
+
+        result = await set_tool(url_path="panel", config=replacement)
+
+        assert result["success"] is True
+        assert result["action"] == "update"
+        assert result["config_updated"] is True
+        assert "resolved_from" not in result
+        save_call = mock_client.send_websocket_message.call_args_list[2].args[0]
+        assert save_call["type"] == "lovelace/config/save"
+        assert save_call["config"] == replacement
+
+    @pytest.mark.asyncio
+    async def test_existing_hyphenless_dashboard_python_transform_is_allowed(
+        self, set_tool, mock_client
+    ):
+        current = {"views": []}
+        transformed = {"views": [{"title": "Added"}]}
+        mock_client.send_websocket_message.side_effect = [
+            {"result": [{"url_path": "panel", "id": "panel"}]},
+            {"result": current},
+            {"success": True},
+            {"result": transformed},
+        ]
+
+        result = await set_tool(
+            url_path="panel",
+            python_transform='config["views"].append({"title": "Added"})',
+            config_hash=compute_config_hash(current),
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "python_transform"
+        assert "resolved_from" not in result
+        save_call = mock_client.send_websocket_message.call_args_list[2].args[0]
+        assert save_call["type"] == "lovelace/config/save"
+        assert save_call["config"] == transformed
+
+    @pytest.mark.asyncio
+    async def test_full_config_cannot_take_control_of_strategy_dashboard(
+        self, set_tool, mock_client
+    ):
+        mock_client.send_websocket_message.side_effect = [
+            {"result": [{"url_path": "map", "id": "map"}]},
+            {"result": {"strategy": {"type": "map"}}},
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(url_path="map", config={"views": []})
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_FAILED"
+        assert "cannot be converted" in body["error"]["message"]
+        assert "Take Control" in body["error"]["suggestion"]
+        assert mock_client.send_websocket_message.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_python_transform_cannot_take_control_of_strategy_dashboard(
+        self, set_tool, mock_client
+    ):
+        current = {"strategy": {"type": "map"}}
+        mock_client.send_websocket_message.side_effect = [
+            {"result": [{"url_path": "map", "id": "map"}]},
+            {"result": current},
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(
+                url_path="map",
+                python_transform='config = {"views": []}',
+                config_hash=compute_config_hash(current),
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_FAILED"
+        assert "cannot be converted" in body["error"]["message"]
+        assert body["action"] == "python_transform"
+        assert mock_client.send_websocket_message.call_count == 2

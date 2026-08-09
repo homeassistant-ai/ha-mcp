@@ -461,15 +461,10 @@ class TestDeleteDashboardNotFoundSurfacesAvailableIds:
             for s in _all_suggestions(error_data["error"])
         )
 
-    async def test_resolver_unexpected_shape_yields_empty_available_ids(
+    async def test_resolver_unexpected_shape_reports_registry_read_failure(
         self, delete_tool, mock_client
     ):
-        """When ``_resolve_dashboard`` returns ``(None, None)`` because the
-        WS response shape was unexpected, the structured raise still fires
-        with ``available_dashboard_ids: []`` — the ``(dashboards or [])[:10]``
-        guard at the raise site prevents a NoneType subscript while still
-        surfacing the canonical error shape.
-        """
+        """An unreadable registry is not misclassified as a missing dashboard."""
         # String response triggers the "unexpected shape" branch in
         # _fetch_dashboards_list, which causes _resolve_dashboard to return
         # (None, None).
@@ -479,8 +474,11 @@ class TestDeleteDashboardNotFoundSurfacesAvailableIds:
             await delete_tool(url_path="ghost-dash")
 
         error_data = json.loads(str(exc_info.value))
-        assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert error_data.get("available_dashboard_ids") == []
+        assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "dashboard registry" in error_data["error"]["message"]
+        assert "available_dashboard_ids" not in error_data
+        assert error_data["action"] == "delete"
+        assert error_data["url_path"] == "ghost-dash"
 
 
 class TestGetAutomationMissingSurfacesAvailableIds:
