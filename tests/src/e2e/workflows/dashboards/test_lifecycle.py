@@ -207,6 +207,7 @@ class TestDashboardLifecycle:
     async def test_url_path_validation(self, mcp_client):
         """Test that 'lovelace' and 'default' are not rejected by hyphen validation (#591)."""
         logger.info("Starting default dashboard hyphen validation test")
+        mcp = MCPAssertions(mcp_client)
 
         # "lovelace" should NOT be rejected by the hyphen validation
         # (it may fail for other reasons on fresh HA, but not the hyphen check)
@@ -237,8 +238,7 @@ class TestDashboardLifecycle:
         # The seeded Map dashboard is a real storage dashboard whose url_path
         # predates the creation-only hyphen rule. Exact-path updates must work
         # without being reported as identifier canonicalization.
-        data = await safe_call_tool(
-            mcp_client,
+        data = await mcp.call_tool_success(
             "ha_config_set_dashboard",
             {"url_path": "map", "title": "Map"},
         )

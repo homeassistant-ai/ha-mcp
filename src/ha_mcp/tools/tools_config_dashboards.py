@@ -3461,21 +3461,27 @@ class DashboardConfigTools:
     ) -> str | None:
         """Validate replacement safety/hash and warn on large full-config replacement.
 
-        Tolerates fetch failures — full replacement still proceeds even if the
-        pre-read can't load the current state (force-replace path).
+        Omitting ``config_hash`` remains the force-replace path, but the current
+        config must still be readable so strategy-dashboard protection can be
+        evaluated before any replacement write.
         """
         try:
             existing_config, existing_hash = await _get_dashboard_config_internal(
                 self._client, url_path
             )
-        except ToolError:
-            # Pre-read failure is non-fatal on the force-replace path: skip
-            # the optimistic-lock check and large-config warning and proceed
-            # with the replacement.
-            return None
-
-        if not isinstance(existing_config, dict):
-            return None
+        except ToolError as exc:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Cannot verify the current dashboard config before full replacement",
+                    details=extract_tool_error_message(exc),
+                    suggestions=[
+                        "Retry the operation",
+                        "Read the dashboard with ha_config_get_dashboard first",
+                    ],
+                    context={"action": "set", "url_path": url_path},
+                )
+            )
 
         existing_config_size = len(json.dumps(existing_config))
         if config_hash is not None and existing_hash != config_hash:
@@ -3756,9 +3762,7 @@ class DashboardConfigTools:
                 _raise_dashboard_registry_read_error(action="delete", url_path=url_path)
             if resolved is None:
                 available_ids = [
-                    d.get("url_path")
-                    for d in (dashboards or [])[:10]
-                    if d.get("url_path")
+                    d.get("url_path") for d in dashboards[:10] if d.get("url_path")
                 ]
                 raise_tool_error(
                     create_error_response(

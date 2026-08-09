@@ -444,6 +444,7 @@ class TestSetDashboardUrlPathCreationContract:
         assert "dashboard registry" in body["error"]["message"]
         assert "hyphen" not in body["error"]["message"]
         assert body["url_path"] == "map"
+        assert mock_client.send_websocket_message.call_count == 1
 
     @pytest.mark.asyncio
     async def test_new_hyphenated_dashboard_is_allowed(self, set_tool, mock_client):
@@ -526,6 +527,25 @@ class TestSetDashboardUrlPathCreationContract:
         assert body["error"]["code"] == "VALIDATION_FAILED"
         assert "cannot be converted" in body["error"]["message"]
         assert "Take Control" in body["error"]["suggestion"]
+        assert mock_client.send_websocket_message.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_full_config_pre_read_failure_blocks_unverified_replacement(
+        self, set_tool, mock_client
+    ):
+        mock_client.send_websocket_message.side_effect = [
+            {"result": [{"url_path": "map", "id": "map"}]},
+            {"success": False, "error": {"message": "temporary read failure"}},
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(url_path="map", config={"views": []})
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "Cannot verify" in body["error"]["message"]
+        assert "temporary read failure" in body["error"]["details"]
+        assert body["url_path"] == "map"
         assert mock_client.send_websocket_message.call_count == 2
 
     @pytest.mark.asyncio
