@@ -1168,6 +1168,12 @@ _MAGNITUDE_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)([KMGT])(?![A-Za-z])")
 # A percentage is a unit every catalog keeps, spaced or not: four write
 # "90 %" and four "90%", so the sign is required but the space is free.
 _PERCENT_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)\s?%")
+# A storage unit is part of the claim too: "1-256 MB" and "1-256 GB" differ by
+# three orders of magnitude while the digits match.
+_COMPOUND_UNIT_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)\s*([A-Za-z]{2})(?![A-Za-z])")
+_KNOWN_UNITS = frozenset({"KB", "MB", "GB", "TB"})
+# "N > 0" and "N < 0" are opposite conditions with identical numbers.
+_COMPARISON_RE = re.compile(r"([A-Za-z_]\w*)\s*([<>]=?)\s*(\d+)")
 _GROUP_SEPARATOR_RE = re.compile(r"[.,   ]")
 
 # Tokens a reader has to type, search for, or find on disk. Prose slashes
@@ -1185,10 +1191,19 @@ _LITERAL_RE = re.compile(
       | [a-z][a-z0-9+.-]*://\S*                 # any scheme, bare one included
       | (?<![\w.])[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+(?![\w])  # group.set
       | (?<!\w)[A-Za-z][A-Za-z_]*\d+(?!\w)      # Jinja2, alert2
+        # A repository slug, both halves hyphenated. That shape is what keeps
+        # "read/write", "enable/disable" and "re-add/refresh" out -- prose
+        # pairs a slash without hyphenating both sides. A slug that hyphenates
+        # neither would slip through; none ships today.
+      | (?<![\w/])[a-z0-9]+(?:-[a-z0-9]+)+/[a-z0-9]+(?:-[a-z0-9]+)+(?![\w/])
       | (?<!\w)[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+(?!\w)  # WebSocket, Z2M
     )""",
     re.X,
 )
+
+# An exact value a caller has to pass: yaml_path='automation'. The word alone
+# is ordinary prose a locale should translate, so only the quoted form counts.
+_QUOTED_VALUE_RE = re.compile(r"(?<![\w])[a-z_]+\s*=\s*'([^']+)'")
 
 # Latin abbreviations the dotted-identifier arm would otherwise claim. Prose,
 # not names: no reader types "e.g" into anything.
@@ -1200,13 +1215,28 @@ _PROSE_ABBREVIATIONS = frozenset({"e.g", "i.e"})
 # The tolerated loss is named, not the pair: everything else about the key --
 # any other number, every literal -- is still checked, so a later hand edit
 # cannot hide behind the exception.
-LITERAL_PARITY_EXCEPTIONS: dict[tuple[str, str, str], tuple[frozenset[Any], str]] = {
+LITERAL_PARITY_EXCEPTIONS: dict[
+    tuple[str, str, str], tuple[frozenset[Any], frozenset[Any], str]
+] = {
+    (
+        "zh-Hans",
+        TOOL_SOURCES_SURFACE,
+        "ha_config_set_helper.description",
+    ): (
+        frozenset(),
+        frozenset({("28",)}),
+        "The Chinese catalog translates the tool's full summary, including the "
+        '"(28 types, unified interface)" clause that sits on the second line '
+        "of the docstring. The rendering the engine sends is the first line "
+        "alone, so the catalog states more than its source, not something else.",
+    ),
     (
         "ru",
         "src/ha_mcp/settings_ui/locales",
         "messages.features.enable_beta_features.help",
     ): (
         frozenset({("5",)}),
+        frozenset(),
         'Russian spells the count out: "для пяти экспериментальных '
         'подпараметров" for "the 5 experimental sub-flags". The digit is '
         "missing because the sentence is right, not because a number was lost.",
@@ -1244,7 +1274,8 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
     A unit is part of the claim, and the value comparison cannot see it: "5K"
     and "5M" carry the same digits, and so do "90%" and a bare "90". The
     percent sign is required outright because every catalog keeps it -- four
-    write "90 %" and four "90%", so only the space is free. Requiring the suffix outright is wrong too: Polish writes
+    write "90 %" and four "90%", so only the space is free. Requiring a
+    magnitude suffix outright would be wrong, though: Polish writes
     "5 tys." and Russian "5 тыс." for it, and both are correct. So the suffix
     is only compared when the translation itself puts a Latin letter straight
     onto those digits -- six of the nine catalogs do, Polish and Russian spell
@@ -1252,6 +1283,22 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
     rewrite.
     """
     contradicted = set()
+    for digits, unit in _COMPOUND_UNIT_RE.findall(english):
+        if unit not in _KNOWN_UNITS:
+            continue
+        carried = re.search(
+            rf"(?<![A-Za-z0-9]){re.escape(digits)}\s*([A-Za-z]{{2}})(?![A-Za-z])",
+            translated,
+        )
+        # French writes "Mo" and Russian "МБ"; only a unit from the same
+        # vocabulary is comparable, anything else is a localised spelling.
+        if carried and carried.group(1) in _KNOWN_UNITS and carried.group(1) != unit:
+            contradicted.add(f"{digits} {unit}")
+    for name, operator, digits in _COMPARISON_RE.findall(english):
+        if not re.search(
+            rf"{re.escape(name)}\s*{re.escape(operator)}\s*{digits}", translated
+        ):
+            contradicted.add(f"{name} {operator} {digits}")
     for digits in _PERCENT_RE.findall(english):
         if not re.search(rf"(?<![A-Za-z0-9]){re.escape(digits)}\s?%", translated):
             contradicted.add(f"{digits}%")
@@ -1305,8 +1352,8 @@ def _carries(literal: str, translated: str) -> bool:
     another identifier character, so "enable_tool_search_old" no longer counts
     as carrying `enable_tool_search`, nor "configuration.yaml.bak" as carrying
     `configuration.yaml`. A hyphen or a case change is a different matter --
-    German writes "/data-Volume" and Swedish "packages/*.yaml-filer", and both
-    carry the original intact. A dotted extension does not count either, so
+    German writes "/data-Volume" and Swedish "/data-volymen", and both carry
+    the original intact. A dotted extension does not count either, so
     "configuration.yaml.bak" is a different file -- and so is
     "other.configuration.yaml", so a dot is excluded on the left as well --
     while a sentence-ending period after the name is not part of the token and
@@ -1327,10 +1374,10 @@ def _lost_literals(english: str, translated: str) -> list[str]:
     """English literals absent from the translation, as substrings.
 
     Substring rather than token equality on purpose: German writes
-    "/data-Volume" and Swedish "packages/*.yaml-filer", which tokenise as
-    different literals while carrying the original intact. Re-extracting from
-    the translation reports fifteen such compounds; asking whether the English
-    literal is still findable reports none of them.
+    "/data-Volume" and Swedish "/data-volymen" and "skill://-resurs", which
+    tokenise as different literals while carrying the original intact.
+    Re-extracting from the translation reports every one of them as a loss;
+    asking whether the English literal is still findable reports none.
     """
     protected = _untranslatable_names()
     return sorted(
@@ -1342,33 +1389,28 @@ def _lost_literals(english: str, translated: str) -> list[str]:
             and stripped not in _PROSE_ABBREVIATIONS
             and not _carries(stripped, translated)
         }
+        | {
+            value
+            for value in _QUOTED_VALUE_RE.findall(english)
+            if value not in translated
+        }
     )
 
 
 @cache
-def _english_tool_variants() -> dict[str, frozenset[str]]:
-    """Every English rendering a tool string could have been translated from.
+def _english_tool_sent_to_translators() -> dict[str, str]:
+    """The English a tool translation is written against, as the sync sends it.
 
-    A title or description exists in up to three shapes: the text the row
-    displays (first physical line, cut at 120 characters), the parsed
-    docstring, and the summary paragraph the baseline pins. They diverge for a
-    handful of tools — ``ha_config_set_helper``'s summary carries "(28 types,
-    unified interface)" past the cut, and a feature-gated tool has a stub
-    rendering beside its parsed one. A translation is faithful if it carries
-    the literals of *any* of them, so all three are offered: pinning the
-    baseline's arm alone reports eight locales for translating exactly what
-    the UI showed them.
+    A tool title or description exists in more than one rendering -- the row's
+    first physical line cut at 120 characters, the parsed docstring, and the
+    summary paragraph the baseline hashes -- and accepting whichever one
+    matches lets a fault present in the real source hide behind another. It
+    does not have to be guessed: ``_plan_settings`` feeds the engine
+    ``_english_tool_texts()`` and nothing else (``scripts/translate_locales.py``,
+    where ``tool_texts`` is built), so that rendering is what a catalog was
+    translated from.
     """
-    variants: dict[str, set[str]] = {}
-    for rendering in (
-        _english_tool_texts(),
-        _english_tool_texts(as_rendered=False),
-        _english_tool_sources(),
-    ):
-        for key, text in rendering.items():
-            base = key[: -len(" (parsed)")] if key.endswith(" (parsed)") else key
-            variants.setdefault(base, set()).add(text)
-    return {key: frozenset(texts) for key, texts in variants.items()}
+    return dict(_english_tool_texts())
 
 
 @cache
@@ -1396,13 +1438,13 @@ def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, frozenset[st
         for key, text in catalog.items()
         if key in english[surface] and key not in _pending_keys(surface)
     ]
-    tool_variants = _english_tool_variants()
+    sent = _english_tool_sent_to_translators()
     pending_tools = _pending_keys(TOOL_SOURCES_SURFACE)
     catalog = _settings_catalog(locale)
     pairs += [
-        (TOOL_SOURCES_SURFACE, key, text, tool_variants[key])
+        (TOOL_SOURCES_SURFACE, key, text, frozenset({sent[key]}))
         for key, text in _flatten(catalog.get("tools", {})).items()
-        if key in tool_variants and key not in pending_tools
+        if key in sent and key not in pending_tools
     ]
     # A group key *is* its own English text, so the heading needs no baseline
     # and cannot go stale under a translation. Today no group name carries a
@@ -1438,15 +1480,22 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
     UI label that every locale is right to translate, and nothing in either
     string tells the two apart. A standalone acronym is the other -- ``ZHA``
     is a product name a translation owes, but the all-uppercase tokens locales
-    do not carry through are ``UI`` (97 pairs) and ``AI`` (95), both correctly
+    do not carry through are ``UI`` (107 pairs) and ``AI`` (98), both correctly
     translated, and emphasis like ``REQUIRES``, ``NOT`` and ``WARNING``.
     Telling those apart needs a maintained do-not-translate glossary, which is
     a maintainer decision rather than something to infer here.
+
+    A tool string has more than one English rendering, and the check compares
+    against the one the sync sends rather than whichever one matches: eleven of
+    the 176 tool keys differ between renderings, and accepting any of them
+    would let a fault in the real source hide behind another. Which one that is
+    needs no guessing -- ``_plan_settings`` builds its ``tool_texts`` from
+    ``_english_tool_texts()`` and feeds the engine that alone.
     """
     divergent: dict[str, str] = {}
     for surface, key, text, variants in _literal_parity_pairs(locale):
-        tolerated, _ = LITERAL_PARITY_EXCEPTIONS.get(
-            (locale, surface, key), (frozenset(), "")
+        tolerated_losses, tolerated_additions, _ = LITERAL_PARITY_EXCEPTIONS.get(
+            (locale, surface, key), (frozenset(), frozenset(), "")
         )
         faults: list[str] = []
         for english in variants:
@@ -1454,10 +1503,16 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
                 {
                     number: count
                     for number, count in (_numbers(english) - _numbers(text)).items()
-                    if number not in tolerated
+                    if number not in tolerated_losses
                 }
             )
-            gained_numbers = _numbers(text) - _numbers(english)
+            gained_numbers = Counter(
+                {
+                    number: count
+                    for number, count in (_numbers(text) - _numbers(english)).items()
+                    if number not in tolerated_additions
+                }
+            )
             lost = _lost_literals(english, text) + _lost_magnitudes(english, text)
             if not (lost_numbers or gained_numbers or lost):
                 faults = []
@@ -1531,7 +1586,8 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
         ),
         # ... while a sentence-final period and a hyphenated compound are not.
         ("edit configuration.yaml", "bearbeite configuration.yaml.", []),
-        ("see packages/*.yaml", "siehe packages/*.yaml-filer", []),
+        ("mounted at /data", "eingehängt unter /data-Volume", []),
+        ("its skill:// resource", "seine skill://-Ressource", []),
         # A filename whose stem is snake_case is one literal, not two.
         ("read tool_policy.json", "lies tool_policy.json", []),
         ("read tool_policy.json", "lies die Richtliniendatei", ["tool_policy.json"]),
@@ -1542,6 +1598,20 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
         ("templates use Jinja2", "Vorlagen nutzen Jinja3", ["Jinja2"]),
         # "e.g" is prose, not a name a reader types.
         ("e.g. a light", "z. B. eine Lampe", []),
+        # A repository slug is a literal; a prose pair sharing a slash is not.
+        (
+            "add homeassistant-ai/ha-mcp-integration",
+            "füge homeassistant-ai/ha-mcp-wrong hinzu",
+            ["homeassistant-ai/ha-mcp-integration"],
+        ),
+        ("grants read/write access", "gewährt Lese-/Schreibzugriff", []),
+        # A quoted argument value is exact; the same word unquoted is prose.
+        (
+            "pass scope='snapshot'",
+            "übergib scope='archive'",
+            ["snapshot"],
+        ),
+        ("pass scope='snapshot'", "übergib scope='snapshot'", []),
     ],
 )
 def test_literal_extraction_ignores_sentence_punctuation(
@@ -1554,6 +1624,41 @@ def test_literal_extraction_ignores_sentence_punctuation(
     reports as having dropped the literal.
     """
     assert _lost_literals(english, translated) == expected
+
+
+@pytest.mark.parametrize(
+    ("english", "translated", "expected"),
+    [
+        # A unit carries as much of the claim as the digits do.
+        ("limit is 1-256 MB", "Grenze ist 1-256 MB", []),
+        ("limit is 1-256 MB", "Grenze ist 1-256 GB", ["256 MB"]),
+        # ... but only a unit from the same vocabulary is comparable: French
+        # writes "Mo" and Russian "МБ", and neither contradicts "MB".
+        ("limit is 1-256 MB", "limite de 1-256 Mo", []),
+        ("limit is 1-256 MB", "предел 1-256 МБ", []),
+        # A comparison is reversible without touching a single digit.
+        ("only when N > 0", "nur wenn N > 0", []),
+        ("only when N > 0", "nur wenn N < 0", ["N > 0"]),
+        ("only when N > 0", "nur wenn N>0", []),
+        # A magnitude suffix is compared only against a Latin one.
+        ("about 5K tokens", "etwa 5M Token", ["5K"]),
+        ("about 5K tokens", "около 5 тыс. токенов", []),
+        # A percentage keeps its sign, spaced or not.
+        ("roughly 90% less", "rund 90 % weniger", []),
+        ("roughly 90% less", "rund 90 weniger", ["90%"]),
+    ],
+)
+def test_units_and_comparisons_are_compared_where_they_are_comparable(
+    english: str, translated: str, expected: list[str]
+) -> None:
+    """Digits alone do not carry the claim.
+
+    "1-256 MB" and "1-256 GB" differ by three orders of magnitude, "N > 0" and
+    "N < 0" are opposite conditions, and "90%" and a bare "90" say different
+    things -- none of which the value comparison can see, because the numbers
+    are identical in every pair.
+    """
+    assert _lost_magnitudes(english, translated) == expected
 
 
 def _agents_md_section(title: str) -> str:
