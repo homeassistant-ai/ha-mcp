@@ -566,8 +566,7 @@
       "description": "Supprime une catégorie Home Assistant."
     },
     "ha_config_remove_group": {
-      "title": "Supprimer le groupe",
-      "description": "Supprime un groupe d'entités Home Assistant."
+      "title": "Supprimer le groupe"
     },
     "ha_config_remove_label": {
       "title": "Supprimer l'étiquette",
@@ -602,8 +601,7 @@
       "description": "Crée ou met à jour une ressource de tableau de bord à partir de code ou d'une URL externe."
     },
     "ha_config_set_group": {
-      "title": "Créer/mettre à jour le groupe",
-      "description": "Crée ou met à jour un groupe d'entités Home Assistant."
+      "title": "Créer/mettre à jour le groupe"
     },
     "ha_config_set_helper": {
       "title": "Créer/mettre à jour l'assistant",

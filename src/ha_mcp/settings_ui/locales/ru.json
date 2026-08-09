@@ -566,8 +566,7 @@
       "description": "Удалить категорию Home Assistant."
     },
     "ha_config_remove_group": {
-      "title": "Удалить группу",
-      "description": "Удалить группу сущностей Home Assistant."
+      "title": "Удалить группу"
     },
     "ha_config_remove_label": {
       "title": "Удалить метку",
@@ -602,8 +601,7 @@
       "description": "Создать или обновить ресурс панели из кода или внешнего URL."
     },
     "ha_config_set_group": {
-      "title": "Создать или изменить группу",
-      "description": "Создать или обновить группу сущностей Home Assistant."
+      "title": "Создать или изменить группу"
     },
     "ha_config_set_helper": {
       "title": "Создать или изменить помощник",

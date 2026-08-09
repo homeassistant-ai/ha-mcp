@@ -566,8 +566,7 @@
       "description": "Entfernt eine Home-Assistant-Kategorie."
     },
     "ha_config_remove_group": {
-      "title": "Gruppe entfernen",
-      "description": "Entfernt eine Home-Assistant-Entitätsgruppe."
+      "title": "Gruppe entfernen"
     },
     "ha_config_remove_label": {
       "title": "Label entfernen",
@@ -602,8 +601,7 @@
       "description": "Erstellt oder aktualisiert eine Dashboard-Ressource aus Code oder externer URL."
     },
     "ha_config_set_group": {
-      "title": "Gruppe erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert eine Home-Assistant-Entitätsgruppe."
+      "title": "Gruppe erstellen/aktualisieren"
     },
     "ha_config_set_helper": {
       "title": "Helfer erstellen/aktualisieren",

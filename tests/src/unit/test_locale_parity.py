@@ -1165,6 +1165,9 @@ def test_component_catalog_is_not_a_copy_of_english(locale: str) -> None:
 _NUMBER_RE = re.compile(r"(?<![A-Za-z0-9])\d+(?:[.,   ]\d+)*")
 # A magnitude suffix is part of the claim: "5K" and "5M" share their digits.
 _MAGNITUDE_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)([KMGT])(?![A-Za-z])")
+# A percentage is a unit every catalog keeps, spaced or not: four write
+# "90 %" and four "90%", so the sign is required but the space is free.
+_PERCENT_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)\s?%")
 _GROUP_SEPARATOR_RE = re.compile(r"[.,   ]")
 
 # Tokens a reader has to type, search for, or find on disk. Prose slashes
@@ -1172,15 +1175,24 @@ _GROUP_SEPARATOR_RE = re.compile(r"[.,   ]")
 # separator; a bare word is not an identifier, hence the required underscore.
 _LITERAL_RE = re.compile(
     r"""(?:
-        [a-z][a-z0-9]*(?:_[a-z0-9]+)+           # snake_case: enable_tool_search
+        # Files come FIRST: with snake_case ahead of them, "tool_policy.json"
+        # tokenised as "tool_policy" plus ".json", and neither half is the name
+        # a reader has to find. "*" belongs in the stem for "packages/*.yaml".
+        [\w.~*/-]*\.(?:yaml|yml|json|py|md|txt)  # files: configuration.yaml
+      | [a-z][a-z0-9]*(?:_[a-z0-9]+)+           # snake_case: enable_tool_search
       | [A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+           # ALL_CAPS: DISABLED_TOOLS
-      | [\w.~/-]*\.(?:yaml|yml|json|py|md|txt)  # files: configuration.yaml
       | (?<![\w/<])~?/[\w.*-]+(?:/[\w.*-]+)*    # paths: /api/settings/features
       | [a-z][a-z0-9+.-]*://\S*                 # any scheme, bare one included
+      | (?<![\w.])[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+(?![\w])  # group.set
+      | (?<!\w)[A-Za-z][A-Za-z_]*\d+(?!\w)      # Jinja2, alert2
       | (?<!\w)[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+(?!\w)  # WebSocket, Z2M
     )""",
     re.X,
 )
+
+# Latin abbreviations the dotted-identifier arm would otherwise claim. Prose,
+# not names: no reader types "e.g" into anything.
+_PROSE_ABBREVIATIONS = frozenset({"e.g", "i.e"})
 
 # (locale, surface, key) -> why this pair cannot satisfy the rule. Keep the
 # reason specific enough that a later reader can re-decide it; an exception
@@ -1229,8 +1241,10 @@ def _numbers(text: str) -> Counter[tuple[str, ...]]:
 def _lost_magnitudes(english: str, translated: str) -> list[str]:
     """Magnitude suffixes the translation contradicts rather than drops.
 
-    "5K" and "5M" carry the same digits, so the value comparison cannot see
-    the difference. Requiring the suffix outright is wrong too: Polish writes
+    A unit is part of the claim, and the value comparison cannot see it: "5K"
+    and "5M" carry the same digits, and so do "90%" and a bare "90". The
+    percent sign is required outright because every catalog keeps it -- four
+    write "90 %" and four "90%", so only the space is free. Requiring the suffix outright is wrong too: Polish writes
     "5 tys." and Russian "5 тыс." for it, and both are correct. So the suffix
     is only compared when the translation itself puts a Latin letter straight
     onto those digits -- six of the nine catalogs do, Polish and Russian spell
@@ -1238,6 +1252,9 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
     rewrite.
     """
     contradicted = set()
+    for digits in _PERCENT_RE.findall(english):
+        if not re.search(rf"(?<![A-Za-z0-9]){re.escape(digits)}\s?%", translated):
+            contradicted.add(f"{digits}%")
     for digits, suffix in _MAGNITUDE_RE.findall(english):
         carried = re.search(
             rf"(?<![A-Za-z0-9]){re.escape(digits)}([A-Za-z])", translated
@@ -1289,10 +1306,19 @@ def _carries(literal: str, translated: str) -> bool:
     as carrying `enable_tool_search`, nor "configuration.yaml.bak" as carrying
     `configuration.yaml`. A hyphen or a case change is a different matter --
     German writes "/data-Volume" and Swedish "packages/*.yaml-filer", and both
-    carry the original intact. Measured across the corpus, this boundary costs
-    nothing: no pair that passes as a substring fails as a token.
+    carry the original intact. A dotted extension does not count either, so
+    "configuration.yaml.bak" is a different file, while a sentence-ending
+    period after the name is not part of the token and still matches.
     """
-    return re.search(re.escape(literal) + r"(?![A-Za-z0-9_])", translated) is not None
+    return (
+        re.search(
+            r"(?<![A-Za-z0-9_])"
+            + re.escape(literal)
+            + r"(?![A-Za-z0-9_]|\.[A-Za-z0-9])",
+            translated,
+        )
+        is not None
+    )
 
 
 def _lost_literals(english: str, translated: str) -> list[str]:
@@ -1311,6 +1337,7 @@ def _lost_literals(english: str, translated: str) -> list[str]:
             for literal in _LITERAL_RE.findall(english)
             if (stripped := _without_sentence_punctuation(literal))
             and stripped not in protected
+            and stripped not in _PROSE_ABBREVIATIONS
             and not _carries(stripped, translated)
         }
     )
@@ -1482,6 +1509,32 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
         # stripping and a translation that truncates it is reported.
         ("POST to /api/webhook/...", "POST an /api/webhook/...", []),
         ("POST to /api/webhook/...", "POST an /api/webhook/", ["/api/webhook/..."]),
+        # A neighbouring token is a different name, on either side, and a
+        # dotted extension makes a different file.
+        (
+            "edit configuration.yaml",
+            "bearbeite configuration.yaml.bak",
+            ["configuration.yaml"],
+        ),
+        ("set enable_tool_search", "setze xenable_tool_search", ["enable_tool_search"]),
+        (
+            "set enable_tool_search",
+            "setze enable_tool_search_old",
+            ["enable_tool_search"],
+        ),
+        # ... while a sentence-final period and a hyphenated compound are not.
+        ("edit configuration.yaml", "bearbeite configuration.yaml.", []),
+        ("see packages/*.yaml", "siehe packages/*.yaml-filer", []),
+        # A filename whose stem is snake_case is one literal, not two.
+        ("read tool_policy.json", "lies tool_policy.json", []),
+        ("read tool_policy.json", "lies die Richtliniendatei", ["tool_policy.json"]),
+        # Service paths and letter-digit product names are literals too.
+        ("via the group.set service", "über den Dienst group.set", []),
+        ("via the group.set service", "über den Gruppendienst", ["group.set"]),
+        ("templates use Jinja2", "Vorlagen nutzen Jinja2", []),
+        ("templates use Jinja2", "Vorlagen nutzen Jinja3", ["Jinja2"]),
+        # "e.g" is prose, not a name a reader types.
+        ("e.g. a light", "z. B. eine Lampe", []),
     ],
 )
 def test_literal_extraction_ignores_sentence_punctuation(
