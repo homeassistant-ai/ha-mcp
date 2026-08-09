@@ -1174,6 +1174,15 @@ _COMPOUND_UNIT_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)\s*([A-Za-z]{2})(?![A-Za-z
 _KNOWN_UNITS = frozenset({"KB", "MB", "GB", "TB"})
 # "N > 0" and "N < 0" are opposite conditions with identical numbers.
 _COMPARISON_RE = re.compile(r"([A-Za-z_]\w*)\s*([<>]=?)\s*(\d+)")
+# A range is an ordered claim, and reversing it leaves the digits untouched:
+# "Range 1-600" and "Range 600-1" hold the same multiset while the second
+# names a lower bound above its upper one. The endpoints are spelled by
+# reference to the number pattern rather than repeated, so a grouped bound
+# ("1 024") keeps reading as one endpoint here too, and every dash a catalog
+# might set counts -- hyphen through em dash.
+_RANGE_RE = re.compile(
+    rf"({_NUMBER_RE.pattern})\s*[-‐-―]\s*({_NUMBER_RE.pattern})(?![A-Za-z0-9])"
+)
 _GROUP_SEPARATOR_RE = re.compile(r"[.,   ]")
 
 # Tokens a reader has to type, search for, or find on disk. Prose slashes
@@ -1201,9 +1210,13 @@ _LITERAL_RE = re.compile(
     re.X,
 )
 
-# An exact value a caller has to pass: yaml_path='automation'. The word alone
-# is ordinary prose a locale should translate, so only the quoted form counts.
-_QUOTED_VALUE_RE = re.compile(r"(?<![\w])[a-z_]+\s*=\s*'([^']+)'")
+# An exact argument a caller has to pass: yaml_path='automation'. The word
+# alone is ordinary prose a locale should translate, so only the quoted form
+# counts -- and the parameter name is captured with it, because the value on
+# its own says nothing about which argument it belongs to: "scope='snapshot',
+# action='delete'" and "scope='delete', action='snapshot'" share both values
+# and describe opposite calls.
+_QUOTED_ASSIGNMENT_RE = re.compile(r"(?<![\w])([a-z_]+\s*=\s*'[^']+')")
 
 # Latin abbreviations the dotted-identifier arm would otherwise claim. Prose,
 # not names: no reader types "e.g" into anything.
@@ -1311,6 +1324,35 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
     return sorted(contradicted)
 
 
+def _reversed_ranges(english: str, translated: str) -> list[str]:
+    """Ranges the translation states back to front.
+
+    A range is an ordered claim that the value comparison is blind to: both
+    endpoints of "Range 1-600" are still present in "Range 600-1", so the
+    number multiset balances while the text now names a floor above its
+    ceiling.
+
+    Only an actual inversion reports. A catalog is free to write "von 1 bis
+    600" instead of setting a dash, and its numbers stay guarded by the value
+    comparison either way; demanding the dash form back would fail a correct
+    rendering rather than a wrong one.
+    """
+    translated_bounds = {
+        (_canonical_number(low), _canonical_number(high))
+        for low, high in _RANGE_RE.findall(translated)
+    }
+    return sorted(
+        {
+            f"{low}-{high}"
+            for low, high in _RANGE_RE.findall(english)
+            if (bounds := (_canonical_number(low), _canonical_number(high)))
+            and bounds[0] != bounds[1]
+            and bounds[::-1] in translated_bounds
+            and bounds not in translated_bounds
+        }
+    )
+
+
 def _show_numbers(counted: Counter[tuple[str, ...]]) -> list[str]:
     return sorted(".".join(groups) for groups in counted.elements())
 
@@ -1378,6 +1420,17 @@ def _lost_literals(english: str, translated: str) -> list[str]:
     tokenise as different literals while carrying the original intact.
     Re-extracting from the translation reports every one of them as a loss;
     asking whether the English literal is still findable reports none.
+
+    Both arms go through ``_carries``, so an argument is held to the same
+    boundary rule as an identifier: with plain containment, "scope='snapshots'"
+    satisfies "scope='snapshot'" while naming a different value.
+
+    Hardcoded on-screen names are left to ``_localised_hardcoded_name``, which
+    applies the pipeline's own rule to them. Excluding them here is structural
+    rather than load-bearing: every name it lists is several words long and
+    none tokenises as a literal, so the filter removes nothing today. It is
+    what keeps a name that later gains an extractable shape from reporting
+    twice under two different descriptions.
     """
     protected = _untranslatable_names()
     return sorted(
@@ -1390,11 +1443,29 @@ def _lost_literals(english: str, translated: str) -> list[str]:
             and not _carries(stripped, translated)
         }
         | {
-            value
-            for value in _QUOTED_VALUE_RE.findall(english)
-            if value not in translated
+            assignment
+            for assignment in _QUOTED_ASSIGNMENT_RE.findall(english)
+            if not _carries(assignment, translated)
         }
     )
+
+
+def _localised_hardcoded_name(english: str, translated: str) -> list[str]:
+    """The on-screen name this translation localised away, if any.
+
+    The pipeline already refuses engine output that translates one of these,
+    but that gate only ever runs while *accepting* new output. A catalog edited
+    by hand, or one pinned before the name existed, is never re-read by it:
+    the baseline still matches, so the sync plans no rewrite, and a reader is
+    left hunting for an entry title the integration does not display. Asking
+    the same question of the pinned pairs costs one call and needs no second
+    rule -- ``translate_locales`` owns it, and it is called rather than copied
+    so the two cannot drift apart.
+    """
+    import translate_locales
+
+    dropped = translate_locales._untranslatable_name_dropped(english, translated)
+    return [dropped] if dropped is not None else []
 
 
 @cache
@@ -1513,7 +1584,12 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
                     if number not in tolerated_additions
                 }
             )
-            lost = _lost_literals(english, text) + _lost_magnitudes(english, text)
+            lost = (
+                _lost_literals(english, text)
+                + _lost_magnitudes(english, text)
+                + _reversed_ranges(english, text)
+                + _localised_hardcoded_name(english, text)
+            )
             if not (lost_numbers or gained_numbers or lost):
                 faults = []
                 break
@@ -1609,9 +1685,30 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
         (
             "pass scope='snapshot'",
             "übergib scope='archive'",
-            ["snapshot"],
+            ["scope='snapshot'"],
         ),
         ("pass scope='snapshot'", "übergib scope='snapshot'", []),
+        # A near-miss value is a different value, so the argument is held to
+        # the same boundary rule as an identifier.
+        (
+            "pass scope='snapshot'",
+            "übergib scope='snapshots'",
+            ["scope='snapshot'"],
+        ),
+        # Two arguments that swap their values keep every value in the string
+        # while describing the opposite call, so the name is compared with it.
+        (
+            "pass scope='snapshot', action='delete'",
+            "übergib scope='delete', action='snapshot'",
+            ["action='delete'", "scope='snapshot'"],
+        ),
+        # A value that survives without its parameter no longer tells a reader
+        # which argument to put it in.
+        (
+            "pass scope='snapshot'",
+            "übergib 'snapshot'",
+            ["scope='snapshot'"],
+        ),
     ],
 )
 def test_literal_extraction_ignores_sentence_punctuation(
@@ -1659,6 +1756,54 @@ def test_units_and_comparisons_are_compared_where_they_are_comparable(
     are identical in every pair.
     """
     assert _lost_magnitudes(english, translated) == expected
+
+
+@pytest.mark.parametrize(
+    ("english", "translated", "expected"),
+    [
+        # Reversing a range touches no digit, so nothing else can see it.
+        ("Range 1–600.", "Bereich 1–600.", []),
+        ("Range 1–600.", "Bereich 600–1.", ["1-600"]),
+        # Any dash a catalog might set reads as the same range ...
+        ("Range 1–600.", "Bereich 1-600.", []),
+        ("Range 1–600.", "Bereich 1—600.", []),
+        # ... and a grouped endpoint stays one endpoint, not two numbers.
+        ("Range 1–10 000.", "Bereich 10 000–1.", ["1-10 000"]),
+        # Spelling the bounds out is a translation's own business: the value
+        # comparison still holds both numbers, so nothing goes unguarded.
+        ("Range 1–600.", "von 1 bis 600 Sekunden.", []),
+        # A range that simply vanishes is a lost number, not a reversed one.
+        ("Range 1–600.", "Zeitlimit pro Anfrage.", []),
+    ],
+)
+def test_a_reversed_range_is_reported(
+    english: str, translated: str, expected: list[str]
+) -> None:
+    """An ordered claim needs an ordered comparison.
+
+    "Range 1-600" and "Range 600-1" are the same two numbers in the same two
+    positions of the value comparison, and the second one documents a bound no
+    setting will accept.
+    """
+    assert _reversed_ranges(english, translated) == expected
+
+
+def test_a_localised_on_screen_name_is_reported() -> None:
+    """A name Python fixes in English is not the translation's to change.
+
+    The name is taken from the source rather than written here, so a rename
+    cannot leave this test guarding a string nobody displays any more.
+    """
+    names = sorted(_untranslatable_names())
+    assert names, "the pipeline reports no hardcoded on-screen names"
+    name = names[0]
+    english = f"open the '{name}' entry"
+    assert _localised_hardcoded_name(english, f"öffne den Eintrag '{name}'") == []
+    localised = name.replace(" ", "-")
+    assert localised != name, f"{name!r} has no space to mangle"
+    assert _localised_hardcoded_name(english, f"öffne den Eintrag '{localised}'") == [
+        name
+    ]
 
 
 def _agents_md_section(title: str) -> str:
