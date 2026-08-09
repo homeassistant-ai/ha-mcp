@@ -1179,9 +1179,13 @@ _COMPARISON_RE = re.compile(r"([A-Za-z_]\w*)\s*([<>]=?)\s*(\d+)")
 # names a lower bound above its upper one. The endpoints are spelled by
 # reference to the number pattern rather than repeated, so a grouped bound
 # ("1 024") keeps reading as one endpoint here too, and every dash a catalog
-# might set counts -- hyphen through em dash.
-_RANGE_RE = re.compile(
-    rf"({_NUMBER_RE.pattern})\s*[-‐-―]\s*({_NUMBER_RE.pattern})(?![A-Za-z0-9])"
+# might set counts -- hyphen through em dash. A ratio is the same ordered
+# claim behind a different separator, and the corpus ships one: the "4.5:1"
+# contrast ratio every catalog carries. Reversing it to "1:4,5" leaves the
+# digits untouched exactly as a reversed range does, so a colon counts here
+# too -- both the ASCII one and the fullwidth colon a CJK catalog may set.
+_ORDERED_PAIR_RE = re.compile(
+    rf"({_NUMBER_RE.pattern})\s*([-‐-―:：])\s*({_NUMBER_RE.pattern})(?![A-Za-z0-9])"
 )
 _GROUP_SEPARATOR_RE = re.compile(r"[.,   ]")
 
@@ -1324,8 +1328,8 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
     return sorted(contradicted)
 
 
-def _reversed_ranges(english: str, translated: str) -> list[str]:
-    """Ranges the translation states back to front.
+def _reversed_ordered_pairs(english: str, translated: str) -> list[str]:
+    """Ordered number pairs the translation states back to front.
 
     A range is an ordered claim that the value comparison is blind to: both
     endpoints of "Range 1-600" are still present in "Range 600-1", so the
@@ -1336,15 +1340,20 @@ def _reversed_ranges(english: str, translated: str) -> list[str]:
     600" instead of setting a dash, and its numbers stay guarded by the value
     comparison either way; demanding the dash form back would fail a correct
     rendering rather than a wrong one.
+
+    A ratio is the same claim with a colon for a dash: "4.5:1" and "1:4,5"
+    hold the same two numbers, and the second states a contrast threshold no
+    checker would ever set. The separator the English used is carried into
+    the report so a ratio is not named as a range.
     """
     translated_bounds = {
         (_canonical_number(low), _canonical_number(high))
-        for low, high in _RANGE_RE.findall(translated)
+        for low, _, high in _ORDERED_PAIR_RE.findall(translated)
     }
     return sorted(
         {
-            f"{low}-{high}"
-            for low, high in _RANGE_RE.findall(english)
+            f"{low}{':' if separator in ':：' else '-'}{high}"
+            for low, separator, high in _ORDERED_PAIR_RE.findall(english)
             if (bounds := (_canonical_number(low), _canonical_number(high)))
             and bounds[0] != bounds[1]
             and bounds[::-1] in translated_bounds
@@ -1587,7 +1596,7 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
             lost = (
                 _lost_literals(english, text)
                 + _lost_magnitudes(english, text)
-                + _reversed_ranges(english, text)
+                + _reversed_ordered_pairs(english, text)
                 + _localised_hardcoded_name(english, text)
             )
             if not (lost_numbers or gained_numbers or lost):
@@ -1774,9 +1783,16 @@ def test_units_and_comparisons_are_compared_where_they_are_comparable(
         ("Range 1–600.", "von 1 bis 600 Sekunden.", []),
         # A range that simply vanishes is a lost number, not a reversed one.
         ("Range 1–600.", "Zeitlimit pro Anfrage.", []),
+        # A ratio reverses the same way, and the decimal comma five of the
+        # nine catalogs write is not the inversion.
+        ("below a 4.5:1 contrast ratio.", "unter 4,5:1 Kontrast.", []),
+        ("below a 4.5:1 contrast ratio.", "unter 1:4,5 Kontrast.", ["4.5:1"]),
+        # A fullwidth colon is the same separator, so an inversion cannot
+        # hide behind CJK punctuation.
+        ("below a 4.5:1 contrast ratio.", "对比度低于 1：4.5。", ["4.5:1"]),
     ],
 )
-def test_a_reversed_range_is_reported(
+def test_a_reversed_ordered_pair_is_reported(
     english: str, translated: str, expected: list[str]
 ) -> None:
     """An ordered claim needs an ordered comparison.
@@ -1785,7 +1801,7 @@ def test_a_reversed_range_is_reported(
     positions of the value comparison, and the second one documents a bound no
     setting will accept.
     """
-    assert _reversed_ranges(english, translated) == expected
+    assert _reversed_ordered_pairs(english, translated) == expected
 
 
 def test_a_localised_on_screen_name_is_reported() -> None:
