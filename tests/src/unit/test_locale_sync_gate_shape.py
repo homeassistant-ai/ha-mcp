@@ -11,8 +11,9 @@ skip-count assertion catches that at run time; these tests catch it before
 merge, the only coverage a workflow that cannot run pre-merge can have.
 
 Also pinned: the push job must not land a clean run whose CONTENT
-verification failed, must not be blocked by the non-blocking staleness
-signal, and must confine the patch to the locale allowlist.
+verification failed, must not land a partial run whose LITERAL parity
+failed, must not be blocked by the non-blocking staleness signal, and must
+confine the patch to the locale allowlist.
 """
 
 from __future__ import annotations
@@ -52,6 +53,15 @@ def _marker_env_names() -> set[str]:
     return names
 
 
+# The one verification step that must stay UNGATED. It runs on the partial
+# tree the completeness step cannot judge, and the arm it selects carries no
+# completeness marker. Setting the gate variable there would pull the gated
+# tests in alongside it, and those cannot pass on a half-finished tree, so the
+# step would fail every time and wedge the resumability the push job exists to
+# preserve.
+_UNGATED_STEP_ID = "verify_partial"
+
+
 def _verification_steps() -> list[dict[str, Any]]:
     """The translate-job steps that run the gated suites."""
     steps = _workflow()["jobs"]["translate"]["steps"]
@@ -72,20 +82,41 @@ def test_the_markers_agree_on_one_env_var() -> None:
 
 
 def test_every_verification_step_sets_the_gate_env_var() -> None:
-    """The env linkage is the one edit that fails open; pin both sides."""
+    """The env linkage is the one edit that fails open; pin both sides.
+
+    Both directions are asserted. A gated step that loses the variable
+    verifies nothing and exits 0; the partial-run step that gains it stops
+    verifying anything at all, because the gated tests it would drag in
+    cannot pass on a half-finished tree.
+    """
     steps = _verification_steps()
-    assert len(steps) >= 2, (
+    gated = [step for step in steps if step.get("id") != _UNGATED_STEP_ID]
+    ungated = [step for step in steps if step.get("id") == _UNGATED_STEP_ID]
+    assert len(gated) >= 2, (
         f"expected the content and staleness verification steps in "
-        f"{_WORKFLOW.name}, found {len(steps)} — the gated suites no longer "
+        f"{_WORKFLOW.name}, found {len(gated)} — the gated suites no longer "
         "run anywhere"
     )
+    assert len(ungated) == 1, (
+        f"expected exactly one ungated verification step (id "
+        f"{_UNGATED_STEP_ID!r}) in {_WORKFLOW.name}, found {len(ungated)} — "
+        "a partial run would land its patch unverified"
+    )
     (env_name,) = _marker_env_names()
-    for step in steps:
+    for step in gated:
         env = step.get("env") or {}
         assert str(env.get(env_name, "")) not in ("", "0"), (
             f"{_WORKFLOW.name} step {step.get('name')!r} runs a gated suite "
             f"without setting {env_name} — every gated test would skip and "
             "pytest would exit 0 having verified nothing"
+        )
+    for step in ungated:
+        env = step.get("env") or {}
+        assert env_name not in env, (
+            f"{_WORKFLOW.name} step {step.get('name')!r} must NOT set "
+            f"{env_name}: it runs against a partial tree, where the gated "
+            "tests cannot pass, so the step would fail on every partial run "
+            "and block the progress the push job exists to land"
         )
 
 
@@ -126,6 +157,12 @@ def test_push_blocks_on_content_failure_and_not_on_staleness() -> None:
         "the push job must refuse — negation included — a clean run whose "
         "content verification failed; that is the only gate between corrupt "
         "machine output and master"
+    )
+    assert "needs.translate.outputs.verify_partial_outcome != 'failure'" in condition, (
+        "the push job must refuse a partial run whose literal parity failed — "
+        "the completeness step is skipped on that path, and a backfilled key "
+        "is never re-queued once it exists, so landing a dropped identifier "
+        "freezes it"
     )
     assert "staleness" not in condition, (
         "the push job must NOT consult the staleness outcome — a held "

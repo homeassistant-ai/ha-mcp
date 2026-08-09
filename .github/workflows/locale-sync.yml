@@ -90,6 +90,7 @@ jobs:
       have_patch: ${{ steps.export.outputs.have_patch }}
       translate_outcome: ${{ steps.translate.outcome }}
       verify_outcome: ${{ steps.verify.outcome }}
+      verify_partial_outcome: ${{ steps.verify_partial.outcome }}
       staleness_outcome: ${{ steps.staleness.outcome }}
 
     steps:
@@ -228,6 +229,45 @@ jobs:
         assert_nothing_skipped "$RUNNER_TEMP/verify-i18n.xml"
         assert_nothing_skipped "$RUNNER_TEMP/verify-noop.xml"
 
+    - name: Verify literal parity after a partial run
+      id: verify_partial
+      # The completeness step above cannot run on a partial tree, and the push
+      # job lands that tree regardless. One class of value on it is checkable
+      # anyway: a key this run BACKFILLED carries a baseline hash that still
+      # matches, so the literal-parity arm covers it, while a CHANGED key is
+      # excluded there by construction (its English moved, its translation is
+      # owed a rewrite). That class is also the one worth blocking on — a
+      # backfilled key exists afterwards, so no later run re-queues it and no
+      # progress entry is written for it, which leaves a dropped identifier
+      # wrong until a human repairs it. Ungated on purpose: this arm never
+      # carried the completeness marker, so it says the same thing on a
+      # half-finished tree as on a complete one. Requiring the patch keeps a
+      # hard failure earlier in the job -- a dependency install, say -- from
+      # reddening this step over a tree nothing is going to push anyway.
+      if: >-
+        !cancelled() && steps.translate.outcome != 'success' &&
+        steps.export.outputs.have_patch == 'true'
+      continue-on-error: true
+      run: |
+        uv run pytest tests/src/unit/test_locale_parity.py -q --maxfail=0 \
+          -k "test_translations_keep_english_numbers_and_identifiers" \
+          --junitxml="$RUNNER_TEMP/verify-partial.xml"
+        attrs=$(grep -o -m1 '<testsuite [^>]*' "$RUNNER_TEMP/verify-partial.xml")
+        echo "partial parity: $attrs"
+        case "$attrs" in
+          *'tests="0"'*)
+            echo "::error::the literal-parity arm collected zero tests — the -k filter no longer matches, so the partial patch was verified against nothing."
+            exit 1
+            ;;
+        esac
+        case "$attrs" in
+          *'skipped="0"'*) ;;
+          *)
+            echo "::error::the literal-parity arm reports skipped tests — it is not supposed to sit behind LOCALE_COMPLETENESS_CHECKS."
+            exit 1
+            ;;
+        esac
+
     - name: Check for held English-source staleness
       id: staleness
       # Non-blocking by design: after a clean run the only failure mode is
@@ -258,6 +298,7 @@ jobs:
         !cancelled() &&
         (steps.translate.outcome != 'success' ||
          steps.verify.outcome == 'failure' ||
+         steps.verify_partial.outcome == 'failure' ||
          steps.staleness.outcome == 'failure')
       run: |
         if [ "${{ steps.translate.outcome }}" != "success" ]; then
@@ -265,6 +306,9 @@ jobs:
         fi
         if [ "${{ steps.verify.outcome }}" = "failure" ]; then
           echo "::error::content-completeness verification failed after a clean translate run, so nothing will be pushed — the output may be corrupt (English pasted back, parity broken). The pytest output above names exactly what is off."
+        fi
+        if [ "${{ steps.verify_partial.outcome }}" = "failure" ]; then
+          echo "::error::the partial patch drops a number or a code literal its English carries, so nothing will be pushed. A backfilled key is never re-queued once it exists, so landing it would freeze the fault; the pytest output above names the locale and the key."
         fi
         if [ "${{ steps.staleness.outcome }}" = "failure" ]; then
           echo "::error::the English-source baseline holds stale keys — after a clean run that means a feature-gated tool's parsed docstring changed. A human must confirm the stub still describes the tool and run scripts/update_locale_baseline.py; the push was NOT blocked for this."
@@ -277,7 +321,10 @@ jobs:
     # always(): partial progress from a failed translate run must still land
     # (that is the resumability story). The one state that must NOT land is a
     # completed run whose CONTENT verification failed — the translations are
-    # recomputable, so dropping them loses nothing. A staleness failure
+    # recomputable, so dropping them loses nothing. The same reasoning bars a
+    # PARTIAL run whose literal parity failed: that tree is recomputable too,
+    # and the backfilled key it would land is one no later run re-queues. A
+    # staleness failure
     # (held gated-stub keys) deliberately does not appear here: it reddens
     # the translate job without blocking the push.
     if: >-
@@ -286,7 +333,8 @@ jobs:
       needs.translate.result != 'cancelled' &&
       needs.translate.outputs.have_patch == 'true' &&
       !(needs.translate.outputs.translate_outcome == 'success' &&
-        needs.translate.outputs.verify_outcome == 'failure')
+        needs.translate.outputs.verify_outcome == 'failure') &&
+      needs.translate.outputs.verify_partial_outcome != 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Shared group for every workflow that pushes to master (semver-release,
