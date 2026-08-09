@@ -1307,12 +1307,14 @@ def _carries(literal: str, translated: str) -> bool:
     `configuration.yaml`. A hyphen or a case change is a different matter --
     German writes "/data-Volume" and Swedish "packages/*.yaml-filer", and both
     carry the original intact. A dotted extension does not count either, so
-    "configuration.yaml.bak" is a different file, while a sentence-ending
-    period after the name is not part of the token and still matches.
+    "configuration.yaml.bak" is a different file -- and so is
+    "other.configuration.yaml", so a dot is excluded on the left as well --
+    while a sentence-ending period after the name is not part of the token and
+    still matches.
     """
     return (
         re.search(
-            r"(?<![A-Za-z0-9_])"
+            r"(?<![A-Za-z0-9_.])"
             + re.escape(literal)
             + r"(?![A-Za-z0-9_]|\.[A-Za-z0-9])",
             translated,
@@ -1517,6 +1519,11 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
             ["configuration.yaml"],
         ),
         ("set enable_tool_search", "setze xenable_tool_search", ["enable_tool_search"]),
+        (
+            "edit configuration.yaml",
+            "bearbeite other.configuration.yaml",
+            ["configuration.yaml"],
+        ),
         (
             "set enable_tool_search",
             "setze enable_tool_search_old",
