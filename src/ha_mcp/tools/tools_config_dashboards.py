@@ -3005,21 +3005,11 @@ class DashboardConfigTools:
             url_path = "lovelace"
 
         # Pre-resolve a hyphenless dashboard identifier before enforcing the
-        # creation-only hyphen rule below, so callers may pass either an
-        # existing url_path or internal id. Only fires
-        # when the identifier looks like an internal id (no hyphen, not
-        # the built-in "lovelace") and matches a known dashboard.
-        #
-        # Caveat: if a caller passes a hyphenless identifier intending
-        # to *create* a new dashboard, but it happens to match an
-        # existing dashboard's id, the rewrite silently re-targets the
-        # operation onto that existing dashboard. Pre-PR they'd have
-        # hit the hyphen-validation error and known their input was
-        # invalid; now the create-vs-update distinction depends on
-        # whether the registry happens to contain a matching id.
-        # We log the rewrite and surface the original identifier as
-        # ``resolved_from`` on the success response so callers can
-        # detect this redirect.
+        # creation-only hyphen rule below, so existing internal-id support is
+        # preserved. Only an exact url_path match establishes that the caller
+        # addressed an existing dashboard for purposes of that rule. An
+        # internal-id-only match may still canonicalize to a hyphenated path,
+        # but cannot exempt a different hyphenless path from validation.
         pre_resolved_from: str | None = None
         existing_dashboard_resolved = False
         # When the pre-resolver fires and finds a match, ``_resolve_dashboard``
@@ -3030,7 +3020,7 @@ class DashboardConfigTools:
         if "-" not in url_path and url_path != "lovelace":
             resolved, dashboards = await _resolve_dashboard(self._client, url_path)
             if resolved is not None and resolved["url_path"]:
-                existing_dashboard_resolved = True
+                existing_dashboard_resolved = resolved["url_path"] == url_path
                 pre_fetched_dashboards = dashboards
                 if resolved["url_path"] != url_path:
                     original_url_path = url_path

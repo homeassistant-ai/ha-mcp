@@ -384,6 +384,22 @@ class TestSetDashboardUrlPathCreationContract:
         assert mock_client.send_websocket_message.call_count == 1
 
     @pytest.mark.asyncio
+    async def test_internal_id_match_cannot_exempt_other_hyphenless_path(
+        self, set_tool, mock_client
+    ):
+        mock_client.send_websocket_message.return_value = {
+            "result": [{"url_path": "map", "id": "map_internal"}]
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(url_path="map_internal", title="Updated Map")
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "url_path must contain a hyphen" in body["error"]["message"]
+        assert mock_client.send_websocket_message.call_count == 1
+
+    @pytest.mark.asyncio
     async def test_new_hyphenated_dashboard_is_allowed(self, set_tool, mock_client):
         mock_client.send_websocket_message.side_effect = [
             {"result": []},
