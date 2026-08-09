@@ -491,8 +491,7 @@
   },
   "tools": {
     "ha_bulk_control": {
-      "title": "Massensteuerung",
-      "description": "Steuert mehrere Geräte in einer einzigen Massenoperation."
+      "title": "Massensteuerung"
     },
     "ha_call_event": {
       "title": "Ereignis aufrufen",
@@ -661,10 +660,7 @@
       "title": "Dashboard-Screenshot abrufen",
       "description": "Ruft gerenderte Bilder einer Lovelace-Ansicht ab."
     },
-    "ha_get_device": {
-      "title": "Gerät abrufen",
-      "description": "Ruft Geräteinformationen ab, einschließlich Zigbee, Z-Wave und Matter."
-    },
+    "ha_get_device": {},
     "ha_get_entity": {
       "title": "Entität abrufen",
       "description": "Ruft Registerinformationen über eine oder mehrere Entitäten ab."
@@ -690,8 +686,7 @@
       "description": "Ruft Home-Assistant-Protokolle aus verschiedenen Quellen ab."
     },
     "ha_get_operation_status": {
-      "title": "Operationsstatus",
-      "description": "Prüft den Status einer oder mehrerer Geräteoperationen."
+      "title": "Operationsstatus"
     },
     "ha_get_overview": {
       "title": "System-Übersicht",

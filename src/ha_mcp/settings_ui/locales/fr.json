@@ -491,8 +491,7 @@
   },
   "tools": {
     "ha_bulk_control": {
-      "title": "Contrôle groupé",
-      "description": "Contrôle plusieurs appareils en une seule opération groupée."
+      "title": "Contrôle groupé"
     },
     "ha_call_event": {
       "title": "Déclencher un événement",
@@ -661,10 +660,7 @@
       "title": "Obtenir une capture d'écran du tableau de bord",
       "description": "Récupère les images rendues d'une vue Lovelace."
     },
-    "ha_get_device": {
-      "title": "Obtenir l'appareil",
-      "description": "Récupère les informations sur l'appareil, y compris Zigbee, Z-Wave et Matter."
-    },
+    "ha_get_device": {},
     "ha_get_entity": {
       "title": "Obtenir l'entité",
       "description": "Récupère les informations du registre sur une ou plusieurs entités."
@@ -690,8 +686,7 @@
       "description": "Récupère les journaux Home Assistant à partir de diverses sources."
     },
     "ha_get_operation_status": {
-      "title": "Statut de l'opération",
-      "description": "Vérifie le statut d'une ou plusieurs opérations sur les appareils."
+      "title": "Statut de l'opération"
     },
     "ha_get_overview": {
       "title": "Aperçu du système",

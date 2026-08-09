@@ -1170,6 +1170,7 @@ _LITERAL_RE = re.compile(
       | [\w.~/-]*\.(?:yaml|yml|json|py|md|txt)  # files: configuration.yaml
       | (?<![\w/<])~?/[\w.*-]+(?:/[\w.*-]+)*    # paths: /api/settings/features
       | https?://\S+
+      | (?<!\w)[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+(?!\w)  # WebSocket, Z2M
     )""",
     re.X,
 )
@@ -1313,14 +1314,11 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
     owed a machine rewrite, and until the sync runs the old translation
     legitimately carries the old literals.
 
-    Two literal shapes stay out of scope because a mechanical rule cannot
-    separate them from prose. A bare code word is one: English "set to true"
-    is a value a reader types, but ``common.none`` is the word "none" as a UI
-    label and every locale is right to translate it, and nothing in the string
-    distinguishes the two. Product and protocol names in CamelCase are the
-    other -- requiring "WebSocket" or "Z2M" verbatim reports four tool
-    descriptions in three locales whose translations are shortened rather than
-    wrong, which is a different question from the one this test answers.
+    One literal shape stays out of scope, because a mechanical rule cannot
+    separate it from prose: a bare code word. English "set to true" is a value
+    a reader types, while ``common.none`` is the word "none" as a UI label
+    that every locale is right to translate, and nothing in either string
+    tells the two apart.
     """
     divergent: dict[str, str] = {}
     for surface, key, text, variants in _literal_parity_pairs(locale):
