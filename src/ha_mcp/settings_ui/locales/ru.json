@@ -623,8 +623,7 @@
       "description": "Создать новый или обновить скрипт Home Assistant."
     },
     "ha_config_set_yaml": {
-      "title": "Изменить исходный YAML",
-      "description": "Изменить YAML-конфигурацию Home Assistant; использовать только как крайнее средство."
+      "title": "Изменить исходный YAML"
     },
     "ha_delete_file": {
       "title": "Удалить файл",

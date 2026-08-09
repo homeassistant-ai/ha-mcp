@@ -40,6 +40,7 @@ import os
 import re
 import subprocess
 import sys
+from collections import Counter
 from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -222,6 +223,11 @@ def _translated_component_locales() -> list[str]:
 
 BASELINE_PATH = Path(__file__).with_name("locale_source_baseline.json")
 
+# The tool titles and descriptions have no catalog of their own on the
+# English side: they are parsed from the tool definitions, so the baseline
+# files them under a surface name rather than a path.
+TOOL_SOURCES_SURFACE = "settings UI tool titles and descriptions"
+
 
 def _catalogs_by_surface(locale: str) -> dict[str, dict[str, str]]:
     """One locale's *authored* catalogs, flattened, keyed by directory.
@@ -304,7 +310,7 @@ def english_sources() -> dict[str, dict[str, str]]:
     check that reads it can never disagree about what is hashed.
     """
     sources = _catalogs_by_surface("en")
-    sources["settings UI tool titles and descriptions"] = _english_tool_sources()
+    sources[TOOL_SOURCES_SURFACE] = _english_tool_sources()
     return {
         surface: {
             key: hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
@@ -446,20 +452,9 @@ def test_component_catalog_matches_english_keys(locale: str) -> None:
     )
 
 
-@cache
 def _pending_component_keys() -> frozenset[str]:
-    """Component keys whose English moved since the baseline was pinned.
-
-    Locale-independent, and ``english_sources`` re-parses the tool sources
-    each call — computed once for the parametrized check below.
-    """
-    surface = "custom_components/ha_mcp_tools/translations"
-    recorded = json.loads(BASELINE_PATH.read_text("utf-8")).get(surface, {})
-    return frozenset(
-        key
-        for key, digest in english_sources()[surface].items()
-        if recorded.get(key) != digest
-    )
+    """Component keys whose English moved since the baseline was pinned."""
+    return _pending_keys("custom_components/ha_mcp_tools/translations")
 
 
 @pytest.mark.parametrize("locale", _translated_component_locales())
@@ -1153,6 +1148,206 @@ def test_component_catalog_is_not_a_copy_of_english(locale: str) -> None:
         _component_catalog("en"),
         _component_catalog(locale),
         _MAX_COMPONENT_IDENTICAL_SHARE,
+    )
+
+
+# A digit run preceded by a letter or another digit belongs to an identifier
+# ("Z2M", "MQTT5"), not to a claim about quantity, so it is not a number a
+# translation owes. A trailing unit is deliberately left out of the token:
+# a locale that writes "5 тыс." for "5K" still matches on the digits, while
+# "46K" where the English says 90% and 5K still reports as changed.
+_DIGIT_RUN_RE = re.compile(r"(?<![A-Za-z0-9])\d+")
+# 4.5 / 4,5 / 5 000 are one number punctuated three ways.
+_DIGIT_SEPARATOR_RE = re.compile(r"(?<=\d)[.,   ](?=\d)")
+
+# Tokens a reader has to type, search for, or find on disk. Prose slashes
+# ("read/write") are not paths, hence the requirement that a path start at a
+# separator; a bare word is not an identifier, hence the required underscore.
+_LITERAL_RE = re.compile(
+    r"""(?:
+        [a-z][a-z0-9]*(?:_[a-z0-9]+)+           # snake_case: enable_tool_search
+      | [A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+           # ALL_CAPS: DISABLED_TOOLS
+      | [\w.~/-]*\.(?:yaml|yml|json|py|md|txt)  # files: configuration.yaml
+      | (?<![\w/<])~?/[\w.*-]+(?:/[\w.*-]+)*    # paths: /api/settings/features
+      | https?://\S+
+    )""",
+    re.X,
+)
+
+# (locale, surface, key) -> why this pair cannot satisfy the rule. Keep the
+# reason specific enough that a later reader can re-decide it; an exception
+# whose justification is "the check is noisy" belongs in the check instead.
+LITERAL_PARITY_EXCEPTIONS = {
+    (
+        "ru",
+        "src/ha_mcp/settings_ui/locales",
+        "messages.features.enable_beta_features.help",
+    ): (
+        'Russian spells the count out: "для пяти экспериментальных '
+        'подпараметров" for "the 5 experimental sub-flags". The digit is '
+        "missing because the sentence is right, not because a number was lost."
+    ),
+}
+
+
+def _numbers(text: str) -> Counter[str]:
+    return Counter(_DIGIT_RUN_RE.findall(_DIGIT_SEPARATOR_RE.sub("", text)))
+
+
+@cache
+def _untranslatable_names() -> frozenset[str]:
+    """On-screen names our own Python hardcodes, which must stay English.
+
+    Read from the pipeline at runtime instead of copied, so this check cannot
+    drift away from ``translate_locales._untranslatable_name_dropped``, the
+    guard that rejects engine output localising one.
+    """
+    import translate_locales
+
+    return frozenset(translate_locales._hardcoded_ui_names())
+
+
+def _lost_literals(english: str, translated: str) -> list[str]:
+    """English literals absent from the translation, as substrings.
+
+    Substring rather than token equality on purpose: German writes
+    "/data-Volume" and Swedish "packages/*.yaml-filer", which tokenise as
+    different literals while carrying the original intact. Re-extracting from
+    the translation reports fifteen such compounds; asking whether the English
+    literal is still findable reports none of them.
+    """
+    protected = _untranslatable_names()
+    return sorted(
+        {
+            literal
+            for literal in _LITERAL_RE.findall(english)
+            if literal not in protected and literal not in translated
+        }
+    )
+
+
+@cache
+def _english_tool_variants() -> dict[str, frozenset[str]]:
+    """Every English rendering a tool string could have been translated from.
+
+    A title or description exists in up to three shapes: the text the row
+    displays (first physical line, cut at 120 characters), the parsed
+    docstring, and the summary paragraph the baseline pins. They diverge for a
+    handful of tools — ``ha_config_set_helper``'s summary carries "(28 types,
+    unified interface)" past the cut, and a feature-gated tool has a stub
+    rendering beside its parsed one. A translation is faithful if it carries
+    the literals of *any* of them, so all three are offered: pinning the
+    baseline's arm alone reports eight locales for translating exactly what
+    the UI showed them.
+    """
+    variants: dict[str, set[str]] = {}
+    for rendering in (
+        _english_tool_texts(),
+        _english_tool_texts(as_rendered=False),
+        _english_tool_sources(),
+    ):
+        for key, text in rendering.items():
+            base = key[: -len(" (parsed)")] if key.endswith(" (parsed)") else key
+            variants.setdefault(base, set()).add(text)
+    return {key: frozenset(texts) for key, texts in variants.items()}
+
+
+@cache
+def _pending_keys(surface: str) -> frozenset[str]:
+    """Keys of one surface whose English moved since the baseline was pinned."""
+    recorded = json.loads(BASELINE_PATH.read_text("utf-8")).get(surface, {})
+    return frozenset(
+        key
+        for key, digest in english_sources()[surface].items()
+        if recorded.get(key) != digest
+    )
+
+
+def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, frozenset[str]]]:
+    """(surface, key, translated, english variants) for one locale.
+
+    Both authored catalogs plus the tool titles and descriptions, which live
+    in the settings catalog but take their English from the tool definitions.
+    """
+    english = _catalogs_by_surface("en")
+    translated = _catalogs_by_surface(locale)
+    pairs = [
+        (surface, key, text, frozenset({english[surface][key]}))
+        for surface, catalog in translated.items()
+        for key, text in catalog.items()
+        if key in english[surface] and key not in _pending_keys(surface)
+    ]
+    tool_variants = _english_tool_variants()
+    pending_tools = _pending_keys(TOOL_SOURCES_SURFACE)
+    pairs += [
+        (TOOL_SOURCES_SURFACE, key, text, tool_variants[key])
+        for key, text in _flatten(_settings_catalog(locale).get("tools", {})).items()
+        if key in tool_variants and key not in pending_tools
+    ]
+    return pairs
+
+
+@pytest.mark.parametrize("locale", _non_english_settings_locales())
+def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
+    """A renamed identifier or a changed number breaks the reader's next step.
+
+    Deliberately NOT gated behind ``completeness``, for the reason placeholder
+    parity is not: the sync cannot repair this. Once the baseline pins an
+    English string, a key whose hash still matches is never planned again, so
+    a translation that dropped ``docs/beta.md``, localised
+    ``enable_tool_search`` into prose, or states "46K" where the English says
+    90% keeps saying it indefinitely — one of each shipped, and #2180 repaired
+    them by hand because nothing was going to.
+
+    Keys whose English has moved since the baseline are excluded: those are
+    owed a machine rewrite, and until the sync runs the old translation
+    legitimately carries the old literals.
+
+    Two literal shapes stay out of scope because a mechanical rule cannot
+    separate them from prose. A bare code word is one: English "set to true"
+    is a value a reader types, but ``common.none`` is the word "none" as a UI
+    label and every locale is right to translate it, and nothing in the string
+    distinguishes the two. Product and protocol names in CamelCase are the
+    other -- requiring "WebSocket" or "Z2M" verbatim reports four tool
+    descriptions in three locales whose translations are shortened rather than
+    wrong, which is a different question from the one this test answers.
+    """
+    divergent: dict[str, str] = {}
+    for surface, key, text, variants in _literal_parity_pairs(locale):
+        if (locale, surface, key) in LITERAL_PARITY_EXCEPTIONS:
+            continue
+        faults: list[str] = []
+        for english in variants:
+            lost_numbers = _numbers(english) - _numbers(text)
+            gained_numbers = _numbers(text) - _numbers(english)
+            lost = _lost_literals(english, text)
+            if not (lost_numbers or gained_numbers or lost):
+                faults = []
+                break
+            faults.append(
+                ", ".join(
+                    part
+                    for part in (
+                        f"numbers lost {sorted(lost_numbers.elements())}"
+                        if lost_numbers
+                        else "",
+                        f"numbers added {sorted(gained_numbers.elements())}"
+                        if gained_numbers
+                        else "",
+                        f"identifiers dropped {lost}" if lost else "",
+                    )
+                    if part
+                )
+            )
+        if faults:
+            divergent[f"{surface}: {key}"] = min(faults, key=len)
+
+    assert not divergent, (
+        f"the {locale} translation no longer carries what its English states "
+        f"verbatim. A number or a code literal that a reader has to type, "
+        f"search for, or find on disk changed or vanished; the sync will not "
+        f"revisit these keys, so fix the catalog by hand or delete the value "
+        f"to queue it for the next run. {divergent}"
     )
 
 

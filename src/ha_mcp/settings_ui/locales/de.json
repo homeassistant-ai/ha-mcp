@@ -623,8 +623,7 @@
       "description": "Erstellt oder aktualisiert ein Home-Assistant-Skript."
     },
     "ha_config_set_yaml": {
-      "title": "Rohes YAML bearbeiten",
-      "description": "Bearbeitet die Home-Assistant-YAML-Konfiguration; nur als letztes Mittel verwenden."
+      "title": "Rohes YAML bearbeiten"
     },
     "ha_delete_file": {
       "title": "Datei löschen",

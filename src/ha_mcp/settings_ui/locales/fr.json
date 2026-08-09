@@ -623,8 +623,7 @@
       "description": "Crée ou met à jour un script Home Assistant."
     },
     "ha_config_set_yaml": {
-      "title": "Modifier le YAML brut",
-      "description": "Modifie la configuration YAML de Home Assistant ; à utiliser uniquement en dernier recours."
+      "title": "Modifier le YAML brut"
     },
     "ha_delete_file": {
       "title": "Supprimer le fichier",
