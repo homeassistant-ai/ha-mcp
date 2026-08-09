@@ -827,6 +827,17 @@ string from ALL-match to ANY-match and left the Chinese text asserting the
 opposite. `python scripts/update_locale_baseline.py` repins it manually after
 a hand-translation pass.
 
+**A catalog that lands after a reword is never queued for the keys it missed.**
+The pin moves when the English does, so a language whose PR was open across
+that reword merges with the older wording already translated, and the sync sees
+a hash that matches: no plan, no correction, indefinitely. Nothing else catches
+it either — key parity sees a value and the share ceiling sees a translated
+one. When a locale PR spans an English change, diff the affected keys against
+the current `en.json` before merging; numbers and code-ish literals are the
+cheap tell, since a reword usually moves one. Repinning is not the repair — it
+writes the same hash and queues nothing. Deleting the stale value is: the
+planner treats a missing key as work for that locale alone.
+
 **A tool docstring is one of those English strings.** `en.json` ships `tools`
 empty, so the English a `tools` entry translates is read from the tool
 definition in `src/ha_mcp/tools/` — the `title=` kwarg and the summary
