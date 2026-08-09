@@ -313,27 +313,19 @@ class TestEmbeddedSelfRestartOnHaos:
     ) -> None:
         """The settings-UI Restart button must not strand its own entry.
 
-        Regression: the restart dispatched the reload over the in-process
-        server's own HTTP client, and the reload destroys that client when it
-        stops the worker thread. Home Assistant does not shield the
-        ``/config/config_entries/entry/{id}/reload`` handler and runs aiohttp
-        with ``handler_cancellation=True``, so the disconnect cancelled
-        ``async_reload`` after the state became ``UNLOAD_IN_PROGRESS`` but
-        before the unload finished. HA treats that state as non-recoverable —
-        reload, unload and disable all raise ``OperationNotAllowed`` — so the
-        server stayed dead until Home Assistant itself restarted.
-
-        Needs no developer mode: ``/api/settings/restart`` is the ordinary
-        Restart button any user can press.
+        Regression: the restart dispatched the reload over the client the
+        reload then destroys, and HA cancels that unshielded handler on the
+        disconnect — stranding the entry in ``UNLOAD_IN_PROGRESS``, which
+        nothing but a Home Assistant restart clears. Needs no developer mode;
+        ``/api/settings/restart`` is the ordinary Restart button.
         """
         base_url, _session_id, info = embedded_server
         token = info["token"]
 
         assert _entry_state(base_url, token, HA_MCP_SERVER_ENTRY_ID) == "loaded"
 
-        # Press Restart from inside the VM: the settings routes are mounted
-        # under the secret path on the server's own port, not behind the
-        # webhook (which only carries MCP traffic).
+        # From inside the VM: settings routes live under the secret path on the
+        # server's own port, not behind the webhook (MCP traffic only).
         restart_url = (
             f"http://127.0.0.1:{HA_MCP_SERVER_PORT}"
             f"{HA_MCP_SERVER_SECRET_PATH}/api/settings/restart"
@@ -374,6 +366,19 @@ class TestEmbeddedSelfRestartOnHaos:
             f"and only a Home Assistant restart can recover the server"
         )
 
-        # ...and the server is actually serving again, not merely re-registered.
-        ready, _ = _initialize(base_url)
-        assert ready, "in-process server did not answer MCP after its self-restart"
+        # `loaded` precedes the listener binding, so poll. Own budget: the
+        # deadline above can be spent by the time the entry flips.
+        ready_deadline = time.monotonic() + _RESTART_RECOVER_TIMEOUT_S
+        ready = False
+        while time.monotonic() < ready_deadline:
+            try:
+                ready, _ = _initialize(base_url)
+            except requests.exceptions.RequestException:
+                ready = False
+            if ready:
+                break
+            time.sleep(_RESTART_POLL_S)
+        assert ready, (
+            "the entry is loaded but the in-process server never answered MCP "
+            f"within {_RESTART_RECOVER_TIMEOUT_S}s of the self-restart"
+        )
