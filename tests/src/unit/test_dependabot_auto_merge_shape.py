@@ -37,7 +37,9 @@ def test_metadata_fetches_security_alert_state_with_approval_token() -> None:
 
 def test_approval_is_bound_to_the_current_head_and_dedicated_token() -> None:
     steps = _workflow()["jobs"]["dependabot"]["steps"]
-    approval = next(step for step in steps if step["name"].startswith("Approve"))
+    approval = next(
+        step for step in steps if step["name"] == "Approve eligible Dependabot PR"
+    )
 
     assert '-f commit_id="$HEAD_SHA"' in approval["run"]
     assert approval["env"]["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
@@ -46,13 +48,22 @@ def test_approval_is_bound_to_the_current_head_and_dedicated_token() -> None:
 
 def test_approval_and_auto_merge_share_security_aware_eligibility() -> None:
     steps = _workflow()["jobs"]["dependabot"]["steps"]
-    gated = [step for step in steps if step["name"].startswith(("Approve", "Enable"))]
+    metadata = next(step for step in steps if step.get("id") == "metadata")
+    approval = next(
+        step for step in steps if step["name"] == "Approve eligible Dependabot PR"
+    )
+    auto_merge = next(
+        step for step in steps if step["name"] == "Enable auto-merge for Dependabot PRs"
+    )
 
-    assert len(gated) == 2
+    assert steps.index(metadata) < steps.index(approval)
+    assert steps.index(metadata) < steps.index(auto_merge)
     expected = (
         "${{ steps.metadata.outputs.alert-state == 'OPEN' || "
         'contains(fromJson(\'["version-update:semver-minor",'
         '"version-update:semver-patch"]\'), '
         "steps.metadata.outputs.update-type) }}"
     )
-    assert {_normalize(step["if"]) for step in gated} == {_normalize(expected)}
+    assert {_normalize(approval["if"]), _normalize(auto_merge["if"])} == {
+        _normalize(expected)
+    }
