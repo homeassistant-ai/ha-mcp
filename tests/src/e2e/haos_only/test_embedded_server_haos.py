@@ -47,9 +47,12 @@ import pytest
 import requests
 from haos_runtime import (
     HA_MCP_SERVER_ENTRY_ID,
+    HA_MCP_SERVER_PORT,
+    HA_MCP_SERVER_SECRET_PATH,
     HA_MCP_SERVER_WEBHOOK_ID,
     enable_config_entry,
     read_embedded_staging_status,
+    ssh_exec,
 )
 
 from ..utilities.streamable_http import parse_mcp_response
@@ -71,7 +74,7 @@ _READY_POLL_S = 5
 pytestmark = [
     pytest.mark.slow,
     pytest.mark.haos_only,
-    # These 3 tests enable the baked entry and drive the webhook per-test. On the
+    # These tests enable the baked entry and drive the webhook per-test. On the
     # haos_embedded lane the session backend already enables the entry ONCE and
     # runs the whole suite through the in-process server, so running them there
     # would double-enable the entry and race that backend — skip. They stay the
@@ -281,3 +284,96 @@ class TestEmbeddedServerOnHaos:
                 f"external haos lane should have no add-on running, but "
                 f"addon_mcp_url={info.get('addon_mcp_url')!r}"
             )
+
+
+# A self-restart reinstalls nothing (warm start) but does tear the worker down
+# and set the entry back up; on a loaded QEMU guest that is seconds, not the
+# multi-minute first bring-up.
+_RESTART_RECOVER_TIMEOUT_S = 180
+_RESTART_POLL_S = 3
+
+
+def _entry_state(base_url: str, token: str, entry_id: str) -> str | None:
+    """Current config-entry state, or None if the entry is absent."""
+    resp = requests.get(
+        f"{base_url}/api/config/config_entries/entry",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    for entry in resp.json():
+        if entry.get("entry_id") == entry_id:
+            return entry.get("state")
+    return None
+
+
+class TestEmbeddedSelfRestartOnHaos:
+    def test_self_restart_leaves_the_entry_loaded(
+        self, embedded_server: tuple[str, str | None, dict[str, Any]]
+    ) -> None:
+        """The settings-UI Restart button must not strand its own entry.
+
+        Regression: the restart dispatched the reload over the in-process
+        server's own HTTP client, and the reload destroys that client when it
+        stops the worker thread. Home Assistant does not shield the
+        ``/config/config_entries/entry/{id}/reload`` handler and runs aiohttp
+        with ``handler_cancellation=True``, so the disconnect cancelled
+        ``async_reload`` after the state became ``UNLOAD_IN_PROGRESS`` but
+        before the unload finished. HA treats that state as non-recoverable —
+        reload, unload and disable all raise ``OperationNotAllowed`` — so the
+        server stayed dead until Home Assistant itself restarted.
+
+        Needs no developer mode: ``/api/settings/restart`` is the ordinary
+        Restart button any user can press.
+        """
+        base_url, _session_id, info = embedded_server
+        token = info["token"]
+
+        assert _entry_state(base_url, token, HA_MCP_SERVER_ENTRY_ID) == "loaded"
+
+        # Press Restart from inside the VM: the settings routes are mounted
+        # under the secret path on the server's own port, not behind the
+        # webhook (which only carries MCP traffic).
+        restart_url = (
+            f"http://127.0.0.1:{HA_MCP_SERVER_PORT}"
+            f"{HA_MCP_SERVER_SECRET_PATH}/api/settings/restart"
+        )
+        result = ssh_exec(
+            [
+                "curl",
+                "-s",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "-X",
+                "POST",
+                restart_url,
+            ],
+            timeout=60,
+        )
+        assert result.stdout.strip().endswith("200"), (
+            f"settings restart endpoint returned {result.stdout!r} "
+            f"(stderr={result.stderr!r})"
+        )
+
+        # The regression parks the entry in unload_in_progress forever, so the
+        # poll simply never reaches loaded. Report the last state seen — that
+        # distinguishes the wedge from a slow-but-healthy recovery.
+        deadline = time.monotonic() + _RESTART_RECOVER_TIMEOUT_S
+        state: str | None = None
+        while time.monotonic() < deadline:
+            state = _entry_state(base_url, token, HA_MCP_SERVER_ENTRY_ID)
+            if state == "loaded":
+                break
+            time.sleep(_RESTART_POLL_S)
+        assert state == "loaded", (
+            f"{HA_MCP_SERVER_ENTRY_ID} is {state!r} "
+            f"{_RESTART_RECOVER_TIMEOUT_S}s after a self-restart; "
+            f"'unload_in_progress' means the reload cancelled itself mid-unload "
+            f"and only a Home Assistant restart can recover the server"
+        )
+
+        # ...and the server is actually serving again, not merely re-registered.
+        ready, _ = _initialize(base_url)
+        assert ready, "in-process server did not answer MCP after its self-restart"
