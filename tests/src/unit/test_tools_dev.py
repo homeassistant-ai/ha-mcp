@@ -244,6 +244,7 @@ def _mock_client(entries=None, flows=None):
     client.abort_options_flow = AsyncMock(return_value={})
     client.submit_options_flow_step = AsyncMock(return_value={"type": "create_entry"})
     client._request = AsyncMock(return_value={})
+    client.call_service = AsyncMock(return_value=[])
     return client
 
 
@@ -574,9 +575,47 @@ class TestManageServer:
             "note": result["data"]["note"],
         }
         await _drain_background_tasks()
-        client._request.assert_awaited_once_with(
-            "POST", "/config/config_entries/entry/server-e/reload"
+        client.call_service.assert_awaited_once_with(
+            "homeassistant", "reload_config_entry", {"entry_id": "server-e"}
         )
+
+    async def test_restart_embedded_reload_is_cancellation_safe(self, monkeypatch):
+        """The self-reload must go through the SHIELDED services endpoint.
+
+        Regression (embedded deployment wedges the entry permanently):
+        the reload used to be POSTed to
+        ``/config/config_entries/entry/{id}/reload``. Home Assistant does
+        NOT shield that handler, and the request is issued by the embedded
+        server's own HTTP client — the very client the reload tears down.
+
+        Sequence: the unload stops the server thread, the client socket
+        dies mid-request, and aiohttp (started with
+        ``handler_cancellation=True``) cancels the request handler. That
+        kills ``async_reload`` AFTER the entry state is set to
+        ``UNLOAD_IN_PROGRESS`` but BEFORE the unload finishes, orphaning
+        the entry in a state HA treats as non-recoverable — reload,
+        unload and disable all refuse, so only a full Home Assistant
+        restart brings the server back.
+
+        ``homeassistant.reload_config_entry`` goes through the services
+        endpoint, which wraps the call in ``asyncio.shield`` precisely so
+        a dropped connection cannot cancel it.
+        """
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setattr(tools_dev, "_SELF_ACTION_FLUSH_DELAY_S", 0)
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        await DevTools(client).ha_dev_manage_server(action="restart")
+        await _drain_background_tasks()
+
+        client.call_service.assert_awaited_once_with(
+            "homeassistant", "reload_config_entry", {"entry_id": "server-e"}
+        )
+        # The unshielded config-entries endpoint must never be used for a
+        # self-reload, whatever else the tool touched.
+        for call in client._request.await_args_list:
+            assert "/config/config_entries/entry/" not in str(call)
 
     async def test_restart_addon_schedules_supervisor_restart(self, monkeypatch):
         monkeypatch.setenv("SUPERVISOR_TOKEN", "t")

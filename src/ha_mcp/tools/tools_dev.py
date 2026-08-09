@@ -479,13 +479,27 @@ def schedule_deferred_entry_reload(client: Any, entry_id: str) -> None:
     very worker answering the current request, so it must not run until the
     response has flushed. Failures can only be logged — there is no caller
     left to answer.
+
+    Routed through the ``homeassistant.reload_config_entry`` SERVICE rather
+    than ``POST /config/config_entries/entry/{id}/reload`` because only the
+    services endpoint is cancellation-safe. Home Assistant runs aiohttp with
+    ``handler_cancellation=True``, so a dropped connection cancels the
+    request handler — and this request is issued by the embedded server's
+    own HTTP client, which the reload destroys when it stops the worker
+    thread. On the config-entries route that cancels ``async_reload``
+    mid-flight, after the entry state is set to ``UNLOAD_IN_PROGRESS`` but
+    before the unload completes, stranding the entry in a state Home
+    Assistant treats as non-recoverable (reload, unload and disable all
+    raise ``OperationNotAllowed``) until Home Assistant itself is restarted.
+    The services handler wraps the call in ``asyncio.shield`` for exactly
+    this reason, so the reload survives losing its caller.
     """
 
     async def _reload() -> None:
         await asyncio.sleep(_SELF_ACTION_FLUSH_DELAY_S)
         try:
-            await client._request(
-                "POST", f"/config/config_entries/entry/{entry_id}/reload"
+            await client.call_service(
+                "homeassistant", "reload_config_entry", {"entry_id": entry_id}
             )
             logger.info("Deferred reload of entry %s requested", entry_id)
         except Exception:
