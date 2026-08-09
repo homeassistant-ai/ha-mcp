@@ -160,6 +160,9 @@ jobs:
         # Use GitHub App token with bypass permissions
         github_token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         verbosity: "2"
+        # A manual forced release is an urgent patch, even without a
+        # conventional commit that semantic-release would normally select.
+        force: ${{ inputs.force && 'patch' || '' }}
         # Don't create GitHub release here - we'll create a draft below
         vcs_release: "false"
 

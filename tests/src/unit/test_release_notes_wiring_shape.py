@@ -52,6 +52,16 @@ def _release_step_run(workflow: str) -> str:
     return _RUNS_OF_BLANKS.sub(" ", active)
 
 
+def test_manual_force_requests_a_patch_release() -> None:
+    data: Any = yaml.safe_load(
+        (_WORKFLOW_DIR / "semver-release.yml").read_text(encoding="utf-8")
+    )
+    semantic_steps = data["jobs"]["semantic-release"]["steps"]
+    semantic = next(step for step in semantic_steps if step.get("id") == "semantic")
+
+    assert semantic["with"]["force"] == "${{ inputs.force && 'patch' || '' }}"
+
+
 def test_the_extractor_the_workflows_call_exists() -> None:
     assert (_REPO_ROOT / _SCRIPT).is_file(), (
         f"{_SCRIPT} is gone, but the release workflows still invoke it"
