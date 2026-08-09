@@ -59,7 +59,8 @@ def test_approval_and_auto_merge_share_security_aware_eligibility() -> None:
     assert steps.index(metadata) < steps.index(approval)
     assert steps.index(metadata) < steps.index(auto_merge)
     expected = (
-        "${{ steps.metadata.outputs.alert-state == 'OPEN' || "
+        "${{ (steps.metadata.outputs.alert-state == 'OPEN' && "
+        "!contains(steps.metadata.outputs.dependency-names, ',')) || "
         'contains(fromJson(\'["version-update:semver-minor",'
         '"version-update:semver-patch"]\'), '
         "steps.metadata.outputs.update-type) }}"
