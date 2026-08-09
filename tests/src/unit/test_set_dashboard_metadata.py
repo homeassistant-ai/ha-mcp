@@ -316,3 +316,86 @@ class TestSetDashboardListCallDedup:
             f"expected an 'unexpected shape' warning naming the response "
             f"type; got {[rec.message for rec in caplog.records]}"
         )
+
+
+class TestSetDashboardUrlPathCreationContract:
+    """The hyphen requirement applies only when creating a dashboard."""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def set_tool(self, mock_client):
+        return DashboardConfigTools(mock_client).ha_config_set_dashboard
+
+    @pytest.mark.asyncio
+    async def test_existing_hyphenless_dashboard_update_is_allowed(
+        self, set_tool, mock_client
+    ):
+        mock_client.send_websocket_message.side_effect = [
+            {"result": [{"url_path": "map", "id": "map"}]},
+            {"success": True},
+            {"result": {"views": []}},
+        ]
+
+        result = await set_tool(url_path="map", title="Updated Map")
+
+        assert result["success"] is True
+        assert result["action"] == "update"
+        assert result["url_path"] == "map"
+        assert result["dashboard_created"] is False
+        assert "resolved_from" not in result
+        assert mock_client.send_websocket_message.call_args_list[1].args[0]["type"] == (
+            "lovelace/dashboards/update"
+        )
+
+    @pytest.mark.asyncio
+    async def test_existing_hyphenated_dashboard_update_is_allowed(
+        self, set_tool, mock_client
+    ):
+        mock_client.send_websocket_message.side_effect = [
+            {"result": [{"url_path": "floor-map", "id": "floor_map"}]},
+            {"success": True},
+            {"result": {"views": []}},
+        ]
+
+        result = await set_tool(url_path="floor-map", title="Updated Floor Map")
+
+        assert result["success"] is True
+        assert result["action"] == "update"
+        assert result["dashboard_created"] is False
+        assert mock_client.send_websocket_message.call_args_list[1].args[0]["type"] == (
+            "lovelace/dashboards/update"
+        )
+
+    @pytest.mark.asyncio
+    async def test_new_hyphenless_dashboard_is_rejected(self, set_tool, mock_client):
+        mock_client.send_websocket_message.return_value = {"result": []}
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(url_path="newmap", title="New Map")
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "url_path must contain a hyphen" in body["error"]["message"]
+        assert mock_client.send_websocket_message.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_new_hyphenated_dashboard_is_allowed(self, set_tool, mock_client):
+        mock_client.send_websocket_message.side_effect = [
+            {"result": []},
+            {"success": True, "result": {"id": "new_map"}},
+            {"result": {"views": []}},
+        ]
+
+        result = await set_tool(url_path="new-map", title="New Map")
+
+        assert result["success"] is True
+        assert result["action"] == "create"
+        assert result["dashboard_created"] is True
+        assert mock_client.send_websocket_message.call_args_list[1].args[0]["type"] == (
+            "lovelace/dashboards/create"
+        )

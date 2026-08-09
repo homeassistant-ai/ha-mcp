@@ -3004,8 +3004,9 @@ class DashboardConfigTools:
         if url_path == "default":
             url_path = "lovelace"
 
-        # Pre-resolve internal dashboard ID to url_path form before the
-        # hyphen check below, so callers may pass either form. Only fires
+        # Pre-resolve a hyphenless dashboard identifier before enforcing the
+        # creation-only hyphen rule below, so callers may pass either an
+        # existing url_path or internal id. Only fires
         # when the identifier looks like an internal id (no hyphen, not
         # the built-in "lovelace") and matches a known dashboard.
         #
@@ -3020,6 +3021,7 @@ class DashboardConfigTools:
         # ``resolved_from`` on the success response so callers can
         # detect this redirect.
         pre_resolved_from: str | None = None
+        existing_dashboard_resolved = False
         # When the pre-resolver fires and finds a match, ``_resolve_dashboard``
         # has already fetched ``lovelace/dashboards/list``. Capture that list
         # so the existence-check site below can reuse it instead of paying
@@ -3028,19 +3030,27 @@ class DashboardConfigTools:
         if "-" not in url_path and url_path != "lovelace":
             resolved, dashboards = await _resolve_dashboard(self._client, url_path)
             if resolved is not None and resolved["url_path"]:
-                original_url_path = url_path
-                url_path = resolved["url_path"]
-                pre_resolved_from = original_url_path
+                existing_dashboard_resolved = True
                 pre_fetched_dashboards = dashboards
-                logger.info(
-                    "ha_config_set_dashboard pre-resolver mapped %r -> %r",
-                    original_url_path,
-                    url_path,
-                )
+                if resolved["url_path"] != url_path:
+                    original_url_path = url_path
+                    url_path = resolved["url_path"]
+                    pre_resolved_from = original_url_path
+                    logger.info(
+                        "ha_config_set_dashboard pre-resolver mapped %r -> %r",
+                        original_url_path,
+                        url_path,
+                    )
 
-        # Validate url_path contains hyphen for new dashboards
+        # Validate url_path contains a hyphen only when no existing dashboard
+        # was resolved. Existing dashboard paths predate this creation rule and
+        # must remain valid update targets unchanged.
         # The built-in "lovelace" dashboard is exempt since it already exists
-        if "-" not in url_path and url_path != "lovelace":
+        if (
+            not existing_dashboard_resolved
+            and "-" not in url_path
+            and url_path != "lovelace"
+        ):
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
