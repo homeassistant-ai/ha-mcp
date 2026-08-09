@@ -100,7 +100,7 @@ _SKIP_CEILING_PER_LANE = {
     # 1) + not_on_embedded 2 = 101. Initially set to 115 as a buffer for
     # parametrize item-inflation; round 6 (run 28709196071) observed the exact
     # item count and the entry below is pinned to it.
-    "embedded": 132,  # was 130; +1 embedded HACS-nudge skip e2e (not_on_embedded), +1 inaddon startup-nudge e2e (haos_only + inaddon_only)
+    "embedded": 133,  # was 132; +1 embedded self-restart e2e (haos_only)
     # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it
     # skips the SAME set as the external HAOS lane (container_only + inaddon_only)
     # PLUS two haos_embedded-specific additions:
@@ -108,17 +108,17 @@ _SKIP_CEILING_PER_LANE = {
     #     HAOS core container, unreachable by test-process env/monkeypatch — same
     #     reason as inaddon/container-embedded; alternative coverage on the external
     #     HAOS lane, where the in-process FastMCP server IS in the test process), and
-    #   - the 3 haos_only embedded smoke tests skip (not_on_haos_embedded) because
+    #   - the haos_only embedded smoke tests skip (not_on_haos_embedded) because
     #     the session backend already enables the entry + drives the server.
     # Static def-level derivation (Docker/HAOS-less locally, so parametrize
     # item-inflation isn't visible): container_only 16 + inaddon_only 20 +
-    # external_only 40 + smoke 3 = 79 (no overlaps: no external_only test is also
+    # external_only 40 + smoke 4 = 80 (no overlaps: no external_only test is also
     # container_only/inaddon_only, and the 2 not_on_embedded tests are already
     # container_only). Applying the ~1.16x parametrize inflation the other HAOS
     # lanes show (haos def 30 → ~35 observed; haos_inaddon def 50 → ~58) gives
     # ~84; initially set to 90 with a small buffer, and round 8 observed
     # exactly 90 — the entry below is pinned to the observed count.
-    "haos_embedded": 106,  # was 104; +1 embedded HACS-nudge skip e2e (container_only), +1 inaddon startup-nudge e2e (inaddon_only)
+    "haos_embedded": 107,  # was 106; +1 embedded self-restart e2e (not_on_haos_embedded)
 }
 
 
