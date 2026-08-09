@@ -1163,6 +1163,8 @@ def test_component_catalog_is_not_a_copy_of_english(locale: str) -> None:
 # version "1.2.4" and "12.4" -- both live English strings. Comparing the tuple
 # of groups keeps "4.5" and "4,5" equal while "45" stays a different number.
 _NUMBER_RE = re.compile(r"(?<![A-Za-z0-9])\d+(?:[.,   ]\d+)*")
+# A magnitude suffix is part of the claim: "5K" and "5M" share their digits.
+_MAGNITUDE_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)([KMGT])(?![A-Za-z])")
 _GROUP_SEPARATOR_RE = re.compile(r"[.,   ]")
 
 # Tokens a reader has to type, search for, or find on disk. Prose slashes
@@ -1183,23 +1185,66 @@ _LITERAL_RE = re.compile(
 # (locale, surface, key) -> why this pair cannot satisfy the rule. Keep the
 # reason specific enough that a later reader can re-decide it; an exception
 # whose justification is "the check is noisy" belongs in the check instead.
-LITERAL_PARITY_EXCEPTIONS = {
+# The tolerated loss is named, not the pair: everything else about the key --
+# any other number, every literal -- is still checked, so a later hand edit
+# cannot hide behind the exception.
+LITERAL_PARITY_EXCEPTIONS: dict[tuple[str, str, str], tuple[frozenset[Any], str]] = {
     (
         "ru",
         "src/ha_mcp/settings_ui/locales",
         "messages.features.enable_beta_features.help",
     ): (
+        frozenset({("5",)}),
         'Russian spells the count out: "для пяти экспериментальных '
         'подпараметров" for "the 5 experimental sub-flags". The digit is '
-        "missing because the sentence is right, not because a number was lost."
+        "missing because the sentence is right, not because a number was lost.",
     ),
 }
 
 
+def _canonical_number(token: str) -> tuple[str, ...]:
+    """One number as its groups, with thousands grouping folded away.
+
+    A separator followed by groups of exactly three digits is grouping, not a
+    boundary: English ships `10000`, `1440` and `65535`, and a locale writing
+    `10.000` states the same number. Anything else keeps its groups, so the
+    "4.5:1" ratio and the version "1.2.4" stay distinct from "45" and "12.4".
+    A decimal written to exactly three places is the ambiguous case and folds
+    with the thousands; no English string has one.
+    """
+    groups = _GROUP_SEPARATOR_RE.split(token)
+    if (
+        len(groups) > 1
+        and len(groups[0]) <= 3
+        and all(len(group) == 3 for group in groups[1:])
+    ):
+        return ("".join(groups),)
+    return tuple(groups)
+
+
 def _numbers(text: str) -> Counter[tuple[str, ...]]:
-    return Counter(
-        tuple(_GROUP_SEPARATOR_RE.split(token)) for token in _NUMBER_RE.findall(text)
-    )
+    return Counter(_canonical_number(token) for token in _NUMBER_RE.findall(text))
+
+
+def _lost_magnitudes(english: str, translated: str) -> list[str]:
+    """Magnitude suffixes the translation contradicts rather than drops.
+
+    "5K" and "5M" carry the same digits, so the value comparison cannot see
+    the difference. Requiring the suffix outright is wrong too: Polish writes
+    "5 tys." and Russian "5 тыс." for it, and both are correct. So the suffix
+    is only compared when the translation itself puts a Latin letter straight
+    onto those digits -- six of the nine catalogs do, Polish and Russian spell
+    it out, and the Italian value is one this branch deletes for the sync to
+    rewrite.
+    """
+    contradicted = set()
+    for digits, suffix in _MAGNITUDE_RE.findall(english):
+        carried = re.search(
+            rf"(?<![A-Za-z0-9]){re.escape(digits)}([A-Za-z])", translated
+        )
+        if carried and carried.group(1).upper() != suffix.upper():
+            contradicted.add(f"{digits}{suffix}")
+    return sorted(contradicted)
 
 
 def _show_numbers(counted: Counter[tuple[str, ...]]) -> list[str]:
@@ -1219,6 +1264,37 @@ def _untranslatable_names() -> frozenset[str]:
     return frozenset(translate_locales._hardcoded_ui_names())
 
 
+def _without_sentence_punctuation(literal: str) -> str:
+    """A literal with the prose punctuation it swallowed removed.
+
+    A path and a URI both run to the next space, so "see /api/x." and
+    "at skill://y)" carry the sentence's period or bracket into the token, and
+    requiring it verbatim fails a translation that keeps the literal but ends
+    its sentence differently.
+
+    An ellipsis is left alone: ``/api/webhook/...`` is the one live English
+    literal ending in punctuation, and there the dots are part of what the
+    reader is shown, not the end of a sentence.
+    """
+    if literal.endswith("..."):
+        return literal
+    return literal.rstrip(".,;:!?)]}\"'»”")
+
+
+def _carries(literal: str, translated: str) -> bool:
+    """Whether the translation still contains this literal as a whole token.
+
+    Substring, but not *any* substring: the match may not continue into
+    another identifier character, so "enable_tool_search_old" no longer counts
+    as carrying `enable_tool_search`, nor "configuration.yaml.bak" as carrying
+    `configuration.yaml`. A hyphen or a case change is a different matter --
+    German writes "/data-Volume" and Swedish "packages/*.yaml-filer", and both
+    carry the original intact. Measured across the corpus, this boundary costs
+    nothing: no pair that passes as a substring fails as a token.
+    """
+    return re.search(re.escape(literal) + r"(?![A-Za-z0-9_])", translated) is not None
+
+
 def _lost_literals(english: str, translated: str) -> list[str]:
     """English literals absent from the translation, as substrings.
 
@@ -1231,9 +1307,11 @@ def _lost_literals(english: str, translated: str) -> list[str]:
     protected = _untranslatable_names()
     return sorted(
         {
-            literal
+            stripped
             for literal in _LITERAL_RE.findall(english)
-            if literal not in protected and literal not in translated
+            if (stripped := _without_sentence_punctuation(literal))
+            and stripped not in protected
+            and not _carries(stripped, translated)
         }
     )
 
@@ -1325,21 +1403,33 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
     owed a machine rewrite, and until the sync runs the old translation
     legitimately carries the old literals.
 
-    One literal shape stays out of scope, because a mechanical rule cannot
-    separate it from prose: a bare code word. English "set to true" is a value
-    a reader types, while ``common.none`` is the word "none" as a UI label
-    that every locale is right to translate, and nothing in either string
-    tells the two apart.
+    Two literal shapes stay out of scope, because a mechanical rule cannot
+    separate either from prose. A bare code word is one: English "set to true"
+    is a value a reader types, while ``common.none`` is the word "none" as a
+    UI label that every locale is right to translate, and nothing in either
+    string tells the two apart. A standalone acronym is the other -- ``ZHA``
+    is a product name a translation owes, but the all-uppercase tokens locales
+    do not carry through are ``UI`` (97 pairs) and ``AI`` (95), both correctly
+    translated, and emphasis like ``REQUIRES``, ``NOT`` and ``WARNING``.
+    Telling those apart needs a maintained do-not-translate glossary, which is
+    a maintainer decision rather than something to infer here.
     """
     divergent: dict[str, str] = {}
     for surface, key, text, variants in _literal_parity_pairs(locale):
-        if (locale, surface, key) in LITERAL_PARITY_EXCEPTIONS:
-            continue
+        tolerated, _ = LITERAL_PARITY_EXCEPTIONS.get(
+            (locale, surface, key), (frozenset(), "")
+        )
         faults: list[str] = []
         for english in variants:
-            lost_numbers = _numbers(english) - _numbers(text)
+            lost_numbers = Counter(
+                {
+                    number: count
+                    for number, count in (_numbers(english) - _numbers(text)).items()
+                    if number not in tolerated
+                }
+            )
             gained_numbers = _numbers(text) - _numbers(english)
-            lost = _lost_literals(english, text)
+            lost = _lost_literals(english, text) + _lost_magnitudes(english, text)
             if not (lost_numbers or gained_numbers or lost):
                 faults = []
                 break
@@ -1368,6 +1458,42 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
         f"revisit these keys, so fix the catalog by hand or delete the value "
         f"to queue it for the next run. {divergent}"
     )
+
+
+@pytest.mark.parametrize(
+    ("english", "translated", "expected"),
+    [
+        # A URI or path runs to the next space, so the sentence's own period
+        # rides along; a translation that keeps the literal and ends its
+        # sentence differently is still faithful.
+        ("read https://example.org/docs.", "siehe https://example.org/docs", []),
+        ("look under /api/settings/features.", "unter /api/settings/features", []),
+        ("see /api/x)", "siehe /api/x", []),
+        # Dropping the literal itself still reports, punctuation or not.
+        (
+            "read https://example.org/docs.",
+            "siehe die Dokumentation",
+            ["https://example.org/docs"],
+        ),
+        # A scheme with nothing after it is a literal in its own right.
+        ("its skill:// resource", "seine skill://-Ressource", []),
+        ("its skill:// resource", "seine Ressource", ["skill://"]),
+        # The ellipsis belongs to what the reader is shown, so it survives
+        # stripping and a translation that truncates it is reported.
+        ("POST to /api/webhook/...", "POST an /api/webhook/...", []),
+        ("POST to /api/webhook/...", "POST an /api/webhook/", ["/api/webhook/..."]),
+    ],
+)
+def test_literal_extraction_ignores_sentence_punctuation(
+    english: str, translated: str, expected: list[str]
+) -> None:
+    """Prose punctuation must not become part of what a translation owes.
+
+    The parity check above is only as good as the token it demands: swallow the
+    period at the end of a sentence and every locale that punctuates differently
+    reports as having dropped the literal.
+    """
+    assert _lost_literals(english, translated) == expected
 
 
 def _agents_md_section(title: str) -> str:
