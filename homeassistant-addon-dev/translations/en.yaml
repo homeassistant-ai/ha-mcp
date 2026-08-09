@@ -80,7 +80,7 @@ configuration:
       components, run arbitrary sandboxed Python, and edit tool docstrings the AI
       sees. There is no warranty and no support guarantee — you enable them at your
       OWN RISK. Take a Home Assistant backup before turning this on, and never enable
-      in production without one. Master gate for the 5 experimental sub-flags below;
+      in production without one. Master gate for the experimental sub-flags below;
       sub-flags are ignored at runtime while this master is off, even when explicitly
       set to true. The same toggle is also surfaced in the web settings UI under "Beta
       features (dangerous)" — either surface reflects the other on restart.
@@ -199,14 +199,19 @@ configuration:
       here.
   enable_auto_backup:
     name: Enable auto-backup of edits
-    description: Captures a per-entity snapshot before every wrapped write/destructive
-      MCP tool call (automation, script, scene, helper, dashboard, label, category,
-      group, zone, area, calendar, todo, entity, integration, and sibling remove/delete
-      tools). Snapshots are saved as YAML files under /data/ha_mcp_backups/ (override
-      via HAMCP_BACKUP_DIR) and listed, restored, or deleted via the Backups tab in
-      the web settings UI or via ha_manage_backup(scope='edits', ...). Best-effort
-      — failures log a WARNING but never block the underlying write. On by default;
-      uncheck to opt out. Requires restart to take effect.
+    description: 'Captures a per-entity snapshot before every wrapped write/destructive
+      MCP tool call (automation, script, scene, helper, dashboard, dashboard resource,
+      label, category, group, zone, area, calendar, todo, entity, device, integration,
+      and sibling remove/delete tools). Snapshots are saved as YAML files under /data/ha_mcp_backups/
+      (override via HAMCP_BACKUP_DIR) and listed, restored, or deleted via the Backups
+      tab in the web settings UI or via ha_manage_backup(scope=''edits'', ...). For
+      those domains the capture is best-effort — a failure logs a WARNING and the
+      write proceeds. The file and raw-YAML tools are the exception: ha_write_file,
+      ha_delete_file and ha_config_set_yaml treat the snapshot as a precondition,
+      so a write through them is refused while this is off, and a failed capture blocks
+      it. On by default; unchecking opts out of the best-effort captures and takes
+      the file and raw-YAML tools out of service with them. Requires restart to take
+      effect.'
   auto_backup_throttle_minutes:
     name: Auto-backup throttle (minutes)
     description: Per-entity throttle window. 0 (default) captures a snapshot on every
