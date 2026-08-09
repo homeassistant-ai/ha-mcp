@@ -41,9 +41,7 @@ def test_approval_is_bound_to_the_current_head_and_dedicated_token() -> None:
 
     assert '-f commit_id="$HEAD_SHA"' in approval["run"]
     assert approval["env"]["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
-    assert approval["env"]["GH_TOKEN"] == (
-        "${{ secrets.DEPENDABOT_APPROVAL_TOKEN }}"
-    )
+    assert approval["env"]["GH_TOKEN"] == ("${{ secrets.DEPENDABOT_APPROVAL_TOKEN }}")
 
 
 def test_approval_and_auto_merge_share_security_aware_eligibility() -> None:
@@ -53,8 +51,8 @@ def test_approval_and_auto_merge_share_security_aware_eligibility() -> None:
     assert len(gated) == 2
     expected = (
         "${{ steps.metadata.outputs.alert-state == 'OPEN' || "
-        "contains(fromJson('[\"version-update:semver-minor\","
-        "\"version-update:semver-patch\"]'), "
+        'contains(fromJson(\'["version-update:semver-minor",'
+        '"version-update:semver-patch"]\'), '
         "steps.metadata.outputs.update-type) }}"
     )
     assert {_normalize(step["if"]) for step in gated} == {_normalize(expected)}
