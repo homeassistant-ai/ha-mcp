@@ -481,19 +481,12 @@ def schedule_deferred_entry_reload(client: Any, entry_id: str) -> None:
     response has flushed. Failures can only be logged — there is no caller
     left to answer.
 
-    Routed through the ``homeassistant.reload_config_entry`` SERVICE rather
-    than ``POST /config/config_entries/entry/{id}/reload`` because only the
-    services endpoint is cancellation-safe. Home Assistant runs aiohttp with
-    ``handler_cancellation=True``, so a dropped connection cancels the
-    request handler — and this request is issued by the embedded server's
-    own HTTP client, which the reload destroys when it stops the worker
-    thread. On the config-entries route that cancels ``async_reload``
-    mid-flight, after the entry state is set to ``UNLOAD_IN_PROGRESS`` but
-    before the unload completes, stranding the entry in a state Home
-    Assistant treats as non-recoverable (reload, unload and disable all
-    raise ``OperationNotAllowed``) until Home Assistant itself is restarted.
-    The services handler wraps the call in ``asyncio.shield`` for exactly
-    this reason, so the reload survives losing its caller.
+    Uses the ``homeassistant.reload_config_entry`` service, NOT
+    ``POST /config/config_entries/entry/{id}/reload``: only the services
+    handler shields the call. HA runs aiohttp with
+    ``handler_cancellation=True``, and the reload kills the client sending
+    this request, so on the unshielded route it cancelled itself mid-unload
+    and stranded the entry in ``UNLOAD_IN_PROGRESS`` until HA restarted.
     """
 
     async def _reload() -> None:
@@ -504,16 +497,13 @@ def schedule_deferred_entry_reload(client: Any, entry_id: str) -> None:
             )
             logger.info("Deferred reload of entry %s requested", entry_id)
         except Exception as exc:
-            # Losing the reply mid-flight is the EXPECTED outcome of a
-            # successful embedded self-restart: the reload stops the worker
-            # thread that owns this HTTP client, and the shielded service call
-            # runs to completion without us. Reporting that as a failure sends
-            # users hunting a reload that actually worked. Only a read/protocol
-            # error qualifies — the request reached Home Assistant and just the
-            # reply was lost. A connect error or timeout means the reload may
-            # never have been dispatched, so those still surface as errors.
+            # A lost reply means the request reached HA and the shielded reload
+            # then killed this client — the expected end of a self-restart, not
+            # a failure. A connect error or timeout may never have dispatched,
+            # so those stay loud. WARNING, not INFO: HA surfaces this package
+            # at WARNING and above, so INFO here would log nothing at all.
             if isinstance(exc.__cause__, httpx.ReadError | httpx.RemoteProtocolError):
-                logger.info(
+                logger.warning(
                     "Deferred reload of entry %s dispatched; it tore down this "
                     "connection before the reply arrived (expected)",
                     entry_id,

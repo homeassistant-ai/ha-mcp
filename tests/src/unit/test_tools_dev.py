@@ -584,24 +584,12 @@ class TestManageServer:
     async def test_restart_embedded_reload_is_cancellation_safe(self, monkeypatch):
         """The self-reload must go through the SHIELDED services endpoint.
 
-        Regression (embedded deployment wedges the entry permanently):
-        the reload used to be POSTed to
-        ``/config/config_entries/entry/{id}/reload``. Home Assistant does
-        NOT shield that handler, and the request is issued by the embedded
-        server's own HTTP client — the very client the reload tears down.
-
-        Sequence: the unload stops the server thread, the client socket
-        dies mid-request, and aiohttp (started with
-        ``handler_cancellation=True``) cancels the request handler. That
-        kills ``async_reload`` AFTER the entry state is set to
-        ``UNLOAD_IN_PROGRESS`` but BEFORE the unload finishes, orphaning
-        the entry in a state HA treats as non-recoverable — reload,
-        unload and disable all refuse, so only a full Home Assistant
-        restart brings the server back.
-
-        ``homeassistant.reload_config_entry`` goes through the services
-        endpoint, which wraps the call in ``asyncio.shield`` precisely so
-        a dropped connection cannot cancel it.
+        Regression: POSTing to ``/config/config_entries/entry/{id}/reload``
+        wedged the entry permanently. That handler is unshielded and aiohttp
+        runs with ``handler_cancellation=True``, so when the unload killed
+        the client sending the request, ``async_reload`` was cancelled after
+        the state became ``UNLOAD_IN_PROGRESS`` but before the unload
+        finished — non-recoverable short of restarting Home Assistant.
         """
         monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
         monkeypatch.setattr(tools_dev, "_SELF_ACTION_FLUSH_DELAY_S", 0)
@@ -643,7 +631,10 @@ class TestManageServer:
             await _drain_background_tasks()
 
         assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
-        assert "expected" in caplog.text
+        # WARNING specifically: HA surfaces this package at WARNING and above,
+        # so an INFO line would make a successful restart look like silence.
+        dispatched = [r for r in caplog.records if "tore down this" in r.message]
+        assert [r.levelno for r in dispatched] == [logging.WARNING]
 
     async def test_self_reload_connect_failure_still_logs_an_error(
         self, monkeypatch, caplog
