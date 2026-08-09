@@ -1279,10 +1279,20 @@ def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, frozenset[st
     ]
     tool_variants = _english_tool_variants()
     pending_tools = _pending_keys(TOOL_SOURCES_SURFACE)
+    catalog = _settings_catalog(locale)
     pairs += [
         (TOOL_SOURCES_SURFACE, key, text, tool_variants[key])
-        for key, text in _flatten(_settings_catalog(locale).get("tools", {})).items()
+        for key, text in _flatten(catalog.get("tools", {})).items()
         if key in tool_variants and key not in pending_tools
+    ]
+    # A group key *is* its own English text, so the heading needs no baseline
+    # and cannot go stale under a translation. Today no group name carries a
+    # literal or a number at all, which makes this arm structurally empty
+    # rather than verified — it is here so the surface stops being an
+    # exception the day a heading gains one.
+    pairs += [
+        ("settings UI tool group headings", key, text, frozenset({key}))
+        for key, text in _flatten(catalog.get("tool_groups", {})).items()
     ]
     return pairs
 
