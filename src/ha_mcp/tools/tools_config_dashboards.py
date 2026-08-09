@@ -40,7 +40,7 @@ from ..dashboard_screenshot.paths import (
     match_dashboard_view,
     resolve_dashboard_view,
 )
-from ..errors import ErrorCode, create_error_response
+from ..errors import ErrorCode, create_error_response, get_error_code, get_error_message
 from ..strict_bps import BestPracticeKeyParam
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
@@ -134,8 +134,9 @@ async def _get_dashboard_config_internal(
     ``tools_config_scenes.py``).
 
     Raises ``ToolError`` with ``ErrorCode.SERVICE_CALL_FAILED`` if the
-    WebSocket call reports failure or the response is not a dict; callers
-    can rely on the returned tuple being populated.
+    WebSocket call reports failure or the response is not a dict. HA's
+    upstream error code is preserved as ``ha_error_code`` when present, so
+    callers can distinguish confirmed absence from an unverifiable read.
     """
     get_data: dict[str, Any] = {"type": "lovelace/config", "force": True}
     if url_path:
@@ -144,14 +145,20 @@ async def _get_dashboard_config_internal(
     response = await client.send_websocket_message(get_data)
 
     if isinstance(response, dict) and not response.get("success", True):
-        error_msg = response.get("error", {})
-        if isinstance(error_msg, dict):
-            error_msg = error_msg.get("message", str(error_msg))
+        error_msg = get_error_message(response)
+        if error_msg is None:
+            error_msg = str(response.get("error", {}))
+        ha_error_code = response.get("error_code") or get_error_code(response)
+        error_context: dict[str, Any] = {"url_path": url_path}
+        if ha_error_code is not None:
+            # Preserve HA's code so downstream safety decisions do not have to
+            # infer an absent config from a multiply-prefixed message alone.
+            error_context["ha_error_code"] = str(ha_error_code)
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
                 f"Dashboard fetch failed: {error_msg}",
-                context={"url_path": url_path},
+                context=error_context,
             )
         )
 
@@ -772,10 +779,37 @@ def _card_matches(
 # regresses silently to never firing — re-verify with major HA upgrades.
 _LAZY_RESOLVE_TRIGGER = "Unknown config specified"
 
+# Exact ``lovelace/config`` messages meaning that a storage dashboard exists
+# but has not been given a config yet. Mirrors smart_search/_deep.py and stays
+# deliberately narrower than ``_LAZY_RESOLVE_TRIGGER``: an unknown path or any
+# other pre-read failure must remain fail-closed before a full replacement.
+_NO_STORED_CONFIG_MESSAGES = frozenset(
+    {"No config found.", "Command failed: No config found."}
+)
+_DASHBOARD_FETCH_FAILED_PREFIX = "Dashboard fetch failed: "
+_HA_CONFIG_NOT_FOUND_CODE = "config_not_found"
+
 
 def _should_lazy_resolve(error_msg: str) -> bool:
     """Return True if a WS error message indicates the identifier needs resolving."""
     return _LAZY_RESOLVE_TRIGGER in error_msg
+
+
+def _is_no_stored_dashboard_config_error(exc: ToolError) -> bool:
+    """Return whether HA confirms that an existing dashboard has no config."""
+    try:
+        error_data = json.loads(str(exc))
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if (
+        not isinstance(error_data, dict)
+        or error_data.get("ha_error_code") != _HA_CONFIG_NOT_FOUND_CODE
+    ):
+        return False
+    message = extract_tool_error_message(exc).removeprefix(
+        _DASHBOARD_FETCH_FAILED_PREFIX
+    )
+    return message in _NO_STORED_CONFIG_MESSAGES
 
 
 # The ha_mcp_tools/dashboards WS command: list / get / search over the live
@@ -3463,13 +3497,20 @@ class DashboardConfigTools:
 
         Omitting ``config_hash`` remains the force-replace path, but the current
         config must still be readable so strategy-dashboard protection can be
-        evaluated before any replacement write.
+        evaluated before any replacement write. The one exception is an existing
+        storage dashboard with no config yet and no supplied ``config_hash``:
+        there is no strategy state to protect, so its first full config may be
+        written. A supplied hash still conflicts with the now-absent config.
         """
         try:
             existing_config, existing_hash = await _get_dashboard_config_internal(
                 self._client, url_path
             )
         except ToolError as exc:
+            if _is_no_stored_dashboard_config_error(exc):
+                if config_hash is None:
+                    return None
+                self._raise_dashboard_hash_conflict(url_path)
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
@@ -3485,17 +3526,7 @@ class DashboardConfigTools:
 
         existing_config_size = len(json.dumps(existing_config))
         if config_hash is not None and existing_hash != config_hash:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Dashboard modified since last read (conflict)",
-                    suggestions=[
-                        "Call ha_config_get_dashboard() again",
-                        "Use the fresh config_hash, or omit config_hash to force replace",
-                    ],
-                    context={"action": "set", "url_path": url_path},
-                )
-            )
+            self._raise_dashboard_hash_conflict(url_path)
 
         self._validate_strategy_dashboard_replacement(
             url_path,
@@ -3510,6 +3541,21 @@ class DashboardConfigTools:
                 "Consider python_transform for targeted edits."
             )
         return None
+
+    @staticmethod
+    def _raise_dashboard_hash_conflict(url_path: str) -> NoReturn:
+        """Raise the shared optimistic-lock conflict for a full replacement."""
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Dashboard modified since last read (conflict)",
+                suggestions=[
+                    "Call ha_config_get_dashboard() again",
+                    "Use the fresh config_hash, or omit config_hash to force replace",
+                ],
+                context={"action": "set", "url_path": url_path},
+            )
+        )
 
     @staticmethod
     def _validate_strategy_dashboard_replacement(

@@ -486,6 +486,71 @@ class TestSetDashboardUrlPathCreationContract:
         assert save_call["config"] == replacement
 
     @pytest.mark.asyncio
+    async def test_create_then_write_config_to_dashboard_without_stored_config(
+        self, set_tool, mock_client
+    ):
+        replacement = {"views": [{"title": "Populated"}]}
+        no_config = {
+            "success": False,
+            "error": "Command failed: No config found.",
+            "error_code": "config_not_found",
+        }
+        mock_client.send_websocket_message.side_effect = [
+            {"result": []},
+            {"success": True, "result": {"id": "no_config"}},
+            no_config,
+            {"result": [{"url_path": "no-config", "id": "no_config"}]},
+            no_config,
+            {"success": True},
+            {"result": replacement},
+        ]
+
+        create_result = await set_tool(url_path="no-config", title="No Config")
+        assert create_result["success"] is True
+        assert create_result["action"] == "create"
+        assert any(
+            "No config found" in warning
+            for warning in create_result.get("warnings", [])
+        )
+
+        update_result = await set_tool(url_path="no-config", config=replacement)
+
+        assert update_result["success"] is True
+        assert update_result["action"] == "update"
+        assert update_result["config_updated"] is True
+        save_call = mock_client.send_websocket_message.call_args_list[5].args[0]
+        assert save_call["type"] == "lovelace/config/save"
+        assert save_call["config"] == replacement
+        assert mock_client.send_websocket_message.call_count == 7
+
+    @pytest.mark.asyncio
+    async def test_dashboard_without_stored_config_rejects_supplied_hash(
+        self, set_tool, mock_client
+    ):
+        no_config = {
+            "success": False,
+            "error": "Command failed: No config found.",
+            "error_code": "config_not_found",
+        }
+        mock_client.send_websocket_message.side_effect = [
+            {"result": [{"url_path": "no-config", "id": "no_config"}]},
+            no_config,
+        ]
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_tool(
+                url_path="no-config",
+                config={"views": [{"title": "Populated"}]},
+                config_hash="stale-hash",
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "conflict" in body["error"]["message"]
+        assert body["url_path"] == "no-config"
+        assert mock_client.send_websocket_message.call_count == 2
+
+    @pytest.mark.asyncio
     async def test_existing_hyphenless_dashboard_python_transform_is_allowed(
         self, set_tool, mock_client
     ):
@@ -529,13 +594,36 @@ class TestSetDashboardUrlPathCreationContract:
         assert "Take Control" in body["error"]["suggestion"]
         assert mock_client.send_websocket_message.call_count == 2
 
+    @pytest.mark.parametrize(
+        ("read_response", "read_error"),
+        [
+            (
+                {"success": False, "error": {"message": "temporary read failure"}},
+                "temporary read failure",
+            ),
+            (
+                {
+                    "success": False,
+                    "error": {
+                        "code": "config_not_found",
+                        "message": "Command failed: Unknown config specified: map",
+                    },
+                },
+                "Command failed: Unknown config specified: map",
+            ),
+            (
+                {"success": False, "error": "Command failed: No config found."},
+                "Command failed: No config found.",
+            ),
+        ],
+    )
     @pytest.mark.asyncio
     async def test_full_config_pre_read_failure_blocks_unverified_replacement(
-        self, set_tool, mock_client
+        self, set_tool, mock_client, read_response, read_error
     ):
         mock_client.send_websocket_message.side_effect = [
             {"result": [{"url_path": "map", "id": "map"}]},
-            {"success": False, "error": {"message": "temporary read failure"}},
+            read_response,
         ]
 
         with pytest.raises(ToolError) as exc_info:
@@ -544,7 +632,7 @@ class TestSetDashboardUrlPathCreationContract:
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "Cannot verify" in body["error"]["message"]
-        assert "temporary read failure" in body["error"]["details"]
+        assert read_error in body["error"]["details"]
         assert body["url_path"] == "map"
         assert mock_client.send_websocket_message.call_count == 2
 
