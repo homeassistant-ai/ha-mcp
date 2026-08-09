@@ -16,6 +16,7 @@ import logging
 import sys
 from typing import Annotated, Any, Literal
 
+import httpx
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
@@ -502,8 +503,23 @@ def schedule_deferred_entry_reload(client: Any, entry_id: str) -> None:
                 "homeassistant", "reload_config_entry", {"entry_id": entry_id}
             )
             logger.info("Deferred reload of entry %s requested", entry_id)
-        except Exception:
-            logger.exception("Deferred config-entry reload failed")
+        except Exception as exc:
+            # Losing the reply mid-flight is the EXPECTED outcome of a
+            # successful embedded self-restart: the reload stops the worker
+            # thread that owns this HTTP client, and the shielded service call
+            # runs to completion without us. Reporting that as a failure sends
+            # users hunting a reload that actually worked. Only a read/protocol
+            # error qualifies — the request reached Home Assistant and just the
+            # reply was lost. A connect error or timeout means the reload may
+            # never have been dispatched, so those still surface as errors.
+            if isinstance(exc.__cause__, httpx.ReadError | httpx.RemoteProtocolError):
+                logger.info(
+                    "Deferred reload of entry %s dispatched; it tore down this "
+                    "connection before the reply arrived (expected)",
+                    entry_id,
+                )
+            else:
+                logger.exception("Deferred config-entry reload failed")
 
     _spawn_background(_reload())
 

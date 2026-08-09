@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastmcp.exceptions import ToolError
 
@@ -616,6 +618,56 @@ class TestManageServer:
         # self-reload, whatever else the tool touched.
         for call in client._request.await_args_list:
             assert "/config/config_entries/entry/" not in str(call)
+
+    async def test_self_reload_disconnect_is_not_logged_as_a_failure(
+        self, monkeypatch, caplog
+    ):
+        """Losing the reply is how a SUCCESSFUL self-restart ends.
+
+        The reload stops the worker thread owning this HTTP client, so the
+        shielded service call finishes without us and the response never
+        arrives. Logging that at ERROR ("Deferred config-entry reload
+        failed") describes a reload that actually worked as broken.
+        """
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setattr(tools_dev, "_SELF_ACTION_FLUSH_DELAY_S", 0)
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        lost_reply = RuntimeError("HTTP error")
+        lost_reply.__cause__ = httpx.ReadError("peer went away")
+        client.call_service = AsyncMock(side_effect=lost_reply)
+
+        await DevTools(client).ha_dev_manage_server(action="restart")
+        with caplog.at_level(logging.INFO, logger="ha_mcp.tools.tools_dev"):
+            await _drain_background_tasks()
+
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert "expected" in caplog.text
+
+    async def test_self_reload_connect_failure_still_logs_an_error(
+        self, monkeypatch, caplog
+    ):
+        """A reload that never reached HA must stay loud.
+
+        Guards the fix above from swallowing real failures: on a connect
+        error the service call may never have been dispatched, so the
+        server can be left un-reloaded with nobody informed.
+        """
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setattr(tools_dev, "_SELF_ACTION_FLUSH_DELAY_S", 0)
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        never_sent = RuntimeError("Failed to connect to Home Assistant")
+        never_sent.__cause__ = httpx.ConnectError("refused")
+        client.call_service = AsyncMock(side_effect=never_sent)
+
+        await DevTools(client).ha_dev_manage_server(action="restart")
+        with caplog.at_level(logging.INFO, logger="ha_mcp.tools.tools_dev"):
+            await _drain_background_tasks()
+
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR]
 
     async def test_restart_addon_schedules_supervisor_restart(self, monkeypatch):
         monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
