@@ -1,0 +1,5 @@
+{
+  "common": {
+    "oauth_not_serving": "Legacy OAuth ankoraŭ ne liveras ilin — rekomencu Home Assistant, kiam oni petas vin pri tio, por aktivigi ilin."
+  }
+}
