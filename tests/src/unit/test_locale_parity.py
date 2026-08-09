@@ -1156,9 +1156,14 @@ def test_component_catalog_is_not_a_copy_of_english(locale: str) -> None:
 # translation owes. A trailing unit is deliberately left out of the token:
 # a locale that writes "5 тыс." for "5K" still matches on the digits, while
 # "46K" where the English says 90% and 5K still reports as changed.
-_DIGIT_RUN_RE = re.compile(r"(?<![A-Za-z0-9])\d+")
-# 4.5 / 4,5 / 5 000 are one number punctuated three ways.
-_DIGIT_SEPARATOR_RE = re.compile(r"(?<=\d)[.,   ](?=\d)")
+#
+# Separators inside a number are kept as GROUP BOUNDARIES rather than deleted.
+# Deleting them tolerates locale punctuation but also erases the difference
+# between the "4.5:1" contrast ratio and "45:1", and between the component
+# version "1.2.4" and "12.4" -- both live English strings. Comparing the tuple
+# of groups keeps "4.5" and "4,5" equal while "45" stays a different number.
+_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9])\d+(?:[.,   ]\d+)*")
+_GROUP_SEPARATOR_RE = re.compile(r"[.,   ]")
 
 # Tokens a reader has to type, search for, or find on disk. Prose slashes
 # ("read/write") are not paths, hence the requirement that a path start at a
@@ -1169,7 +1174,7 @@ _LITERAL_RE = re.compile(
       | [A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+           # ALL_CAPS: DISABLED_TOOLS
       | [\w.~/-]*\.(?:yaml|yml|json|py|md|txt)  # files: configuration.yaml
       | (?<![\w/<])~?/[\w.*-]+(?:/[\w.*-]+)*    # paths: /api/settings/features
-      | https?://\S+
+      | [a-z][a-z0-9+.-]*://\S*                 # any scheme, bare one included
       | (?<!\w)[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+(?!\w)  # WebSocket, Z2M
     )""",
     re.X,
@@ -1191,8 +1196,14 @@ LITERAL_PARITY_EXCEPTIONS = {
 }
 
 
-def _numbers(text: str) -> Counter[str]:
-    return Counter(_DIGIT_RUN_RE.findall(_DIGIT_SEPARATOR_RE.sub("", text)))
+def _numbers(text: str) -> Counter[tuple[str, ...]]:
+    return Counter(
+        tuple(_GROUP_SEPARATOR_RE.split(token)) for token in _NUMBER_RE.findall(text)
+    )
+
+
+def _show_numbers(counted: Counter[tuple[str, ...]]) -> list[str]:
+    return sorted(".".join(groups) for groups in counted.elements())
 
 
 @cache
@@ -1336,10 +1347,10 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
                 ", ".join(
                     part
                     for part in (
-                        f"numbers lost {sorted(lost_numbers.elements())}"
+                        f"numbers lost {_show_numbers(lost_numbers)}"
                         if lost_numbers
                         else "",
-                        f"numbers added {sorted(gained_numbers.elements())}"
+                        f"numbers added {_show_numbers(gained_numbers)}"
                         if gained_numbers
                         else "",
                         f"identifiers dropped {lost}" if lost else "",
