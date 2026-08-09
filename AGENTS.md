@@ -317,21 +317,12 @@ The following phrases are red flags that you're making a scope decision unilater
 
 **Code-review bot suggestions** (Codex, CodeRabbit, Copilot non-blocking nits): apply inline or dismiss. Never spawn a follow-up issue from a bot suggestion unless the user explicitly confirms it's a large, out-of-scope change. See `.gemini/styleguide.md` § *Non-Blocking Suggestions and Scope* for the bot-side rule.
 
-### Hotfix Process (Critical Bugs Only)
+### Urgent Release Process
 
-Hotfix = critical production bug in current stable release. Regular fix = bug after latest stable, or non-critical.
-
-**Hotfix branches MUST be based on `stable` tag.** Always verify the buggy code exists in stable first — if not, use `git checkout -b fix/description master` instead.
-
-```bash
-git fetch --tags --force
-git show stable:path/to/file.py | grep "buggy_code"  # verify code exists in stable
-git checkout -b hotfix/description stable
-# fix, commit, then:
-gh pr create --draft --base master
-```
-
-On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, syncs CHANGELOG to addon, updates `stable` tag (after changelog sync), and builds binaries.
+Critical fixes follow the normal development flow: branch from `master`, merge
+the fix to `master`, then manually dispatch `semver-release.yml` from `master`.
+Use its `force` input only when a release is required without a conventional
+`fix`, `feat`, or `perf` commit since the previous stable tag.
 
 ### Test Coverage Requirements
 
@@ -359,7 +350,6 @@ On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, sy
 | `notify-dev-channel.yml` | Push to master (src/) | Comment on PRs/issues with dev testing instructions |
 | `semver-release.yml` | Biweekly Wed 10:00 UTC | Stable release (cuts version tag + GitHub release) |
 | `release-publish.yml` | After SemVer Release (`workflow_run`) or manual dispatch | Publish stable Docker image (`:latest` + `:stable` + semver) + MCP registry |
-| `hotfix-release.yml` | Hotfix PR merged | Immediate patch release |
 | `build-binary.yml` | Release | Linux/macOS/Windows binaries |
 | `addon-publish.yml` | Release | HA add-on update |
 | `sync-tool-docs.yml` | Push to master (`src/ha_mcp/tools/`, `scripts/extract_tools.py`) | Regenerate `tools.json`, README, DOCS.md |

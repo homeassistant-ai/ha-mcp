@@ -1,6 +1,6 @@
 name: SemVer Release
 
-# Biweekly stable releases + manual trigger + hotfix branches
+# Biweekly stable releases + manual urgent releases from master
 # Normal commits to master only create dev releases (via publish-dev.yml)
 on:
   schedule:
@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 # Serialize with every other workflow that pushes to master (sync-tool-docs,
-# addon-publish-dev, hotfix-release). semantic-release's internal push aborts
+# addon-publish-dev). semantic-release's internal push aborts
 # hard when origin/master moves mid-run ("Upstream branch ... has changed") and
 # that abort is not retryable from inside the action, so the only safe fix is
 # to keep master writers from overlapping. cancel-in-progress stays false: a

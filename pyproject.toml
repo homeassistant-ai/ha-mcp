@@ -211,7 +211,7 @@ ignore = [
 "tests/**/*" = ["E501", "B011"]
 # Temporary: the equivalent PLC0207/PLR5501 fixes landed in
 # homeassistant-addon-webhook-proxy-dev/ only, per the dev-first/promote-only
-# flow (allow-stable-edit is for stable-only hotfixes, not routine sweeps —
+# flow (allow-stable-edit is for exceptional stable-only repairs, not routine sweeps —
 # see homeassistant-addon-webhook-proxy/AGENTS.md "Dev-first, promote-only").
 # The -dev entries name where a reset-dev-from-stable run puts those same two
 # stable files (start.py stays put, mcp_proxy/ is renamed to mcp_proxy_dev/),

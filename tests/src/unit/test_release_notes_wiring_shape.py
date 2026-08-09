@@ -1,7 +1,7 @@
 """Pin the release workflows to the release-note extractor they call.
 
-``semver-release.yml`` and ``hotfix-release.yml`` cannot run in PR CI, so
-nothing else checks that the filenames in each release step still agree: the
+``semver-release.yml`` cannot run in PR CI, so nothing else checks that the
+filenames in its release step still agree: the
 script's ``--out``, the ``[ ! -s ... ]`` emptiness guard, the fallback write,
 and ``gh release create --notes-file``. A missing script is loud (the step runs
 under ``bash -e``), but a drifting ``--out`` name is silent — the guard finds no
@@ -27,7 +27,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 _SCRIPT = "scripts/extract_release_notes.py"
 _STEP = "Create draft GitHub release"
-_WORKFLOWS = ["semver-release.yml", "hotfix-release.yml"]
+_WORKFLOWS = ["semver-release.yml"]
 _OUT_RE = re.compile(r"extract_release_notes\.py[^\n]*--out\s+(\S+)")
 _RUNS_OF_BLANKS = re.compile(r"[ \t]+")
 
