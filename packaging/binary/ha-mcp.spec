@@ -56,6 +56,7 @@ packages_to_collect = [
     'ha_mcp',
     'fastmcp',
     'griffe',  # Module provided by the griffelib distribution.
+    'yaml',
     'httpx',
     'httpcore',
     'h11',

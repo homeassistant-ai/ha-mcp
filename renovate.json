@@ -7,6 +7,10 @@
   "schedule": [
     "after 3pm on tuesday"
   ],
+  "minimumReleaseAge": "7 days",
+  "vulnerabilityAlerts": {
+    "minimumReleaseAge": null
+  },
   "enabledManagers": [
     "custom.regex",
     "dockerfile",
