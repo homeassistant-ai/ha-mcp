@@ -72,7 +72,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check for feat/fix commits since last tag
+      - name: Check for releasable commits since last tag
         id: check
         run: |
           # Get latest non-dev tag
@@ -87,7 +87,10 @@ jobs:
           echo "Latest stable tag: $LATEST_TAG"
 
           # Match every commit form that Python Semantic Release can bump.
-          CHANGES=$(git log $LATEST_TAG..HEAD --oneline --grep="^feat" --grep="^fix" --grep="^perf" --grep="^BREAKING CHANGE:" | head -5)
+          CHANGES=$(git log $LATEST_TAG..HEAD --oneline -E \
+            --grep="^(feat|fix|perf|refactor)(\(.+\))?!?:" \
+            --grep="^[a-z]+(\(.+\))?!:" \
+            --grep="^BREAKING[ -]CHANGE:" | head -5)
 
           if [ -n "$CHANGES" ] && [ "${{ inputs.force }}" = "true" ]; then
             echo "::error::Force pins the next version to patch, but releasable commits exist:"

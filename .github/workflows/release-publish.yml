@@ -85,9 +85,10 @@ jobs:
           # but the release IS current. Mirror semver-release.yml's check-changes
           # logic: block only if there are releasable commits
           # on master since the tag that would have produced a new version.
-          RELEASABLE=$(git log "$LATEST_TAG..HEAD" --oneline \
-            --grep='^feat' --grep='^fix' --grep='^perf' \
-            --grep='^BREAKING CHANGE:' || true)
+          RELEASABLE=$(git log "$LATEST_TAG..HEAD" --oneline -E \
+            --grep='^(feat|fix|perf|refactor)(\(.+\))?!?:' \
+            --grep='^[a-z]+(\(.+\))?!:' \
+            --grep='^BREAKING[ -]CHANGE:' || true)
 
           if [ -n "$RELEASABLE" ]; then
             if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then

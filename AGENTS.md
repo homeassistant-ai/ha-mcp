@@ -321,8 +321,9 @@ The following phrases are red flags that you're making a scope decision unilater
 
 Critical fixes follow the normal development flow: branch from `master`, merge
 the fix to `master`, then manually dispatch `semver-release.yml` from `master`.
-Use its `force` input only when a release is required without a conventional
-`fix`, `feat`, or `perf` commit since the previous stable tag.
+Use its `force` input only when a release is required without a releasable
+`feat`, `fix`, `perf`, `refactor`, breaking `!`, or `BREAKING CHANGE` commit
+since the previous stable tag.
 
 ### Test Coverage Requirements
 

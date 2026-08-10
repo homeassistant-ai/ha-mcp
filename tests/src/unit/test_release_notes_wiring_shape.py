@@ -74,7 +74,12 @@ def test_manual_force_requests_a_patch_release() -> None:
     assert "Force a patch" in force_input["description"]
     assert '[ "${{ inputs.force }}" = "true" ]' in check_run
     assert '[ -n "$CHANGES" ] && [ "${{ inputs.force }}" = "true" ]' in check_run
-    assert '--grep="^BREAKING CHANGE:"' in check_run
+    for pattern in (
+        "^(feat|fix|perf|refactor)(\\(.+\\))?!?:",
+        "^[a-z]+(\\(.+\\))?!:",
+        "^BREAKING[ -]CHANGE:",
+    ):
+        assert f'--grep="{pattern}"' in check_run
     assert semantic["with"]["force"] == "${{ inputs.force && 'patch' || '' }}"
 
 
@@ -89,7 +94,11 @@ def test_release_publish_uses_the_same_releasable_commit_matcher() -> None:
     )
 
     run = matches[0]["run"]
-    for pattern in ("^feat", "^fix", "^perf", "^BREAKING CHANGE:"):
+    for pattern in (
+        "^(feat|fix|perf|refactor)(\\(.+\\))?!?:",
+        "^[a-z]+(\\(.+\\))?!:",
+        "^BREAKING[ -]CHANGE:",
+    ):
         assert f"--grep='{pattern}'" in run
 
 
