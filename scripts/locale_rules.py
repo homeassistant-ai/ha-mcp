@@ -297,11 +297,18 @@ def _magnitude_suffixes_carried(digits: str, translated: str) -> set[str]:
     5K Token" is a correct translation whose *first* run of these digits
     carries an unrelated letter, and reading only that one turned it red --
     post-merge that blocks the push for the whole run.
+
+    The whole attached letter run is the suffix, not its first letter. "5KB"
+    is five kilobytes where "5K" is five thousand, and reading only the "K"
+    accepted the one for the other; a run that is not the expected suffix is
+    a different claim, so it reports. Truncating the run instead of comparing
+    it is worse than the gap it closes -- the arm then also stops seeing "5M"
+    stated as "5KB", which it catches today.
     """
     return {
         match.group(1).upper()
         for match in re.finditer(
-            rf"(?<![A-Za-z0-9]){re.escape(digits)}([A-Za-z])", translated
+            rf"(?<![A-Za-z0-9]){re.escape(digits)}([A-Za-z]+)", translated
         )
     }
 

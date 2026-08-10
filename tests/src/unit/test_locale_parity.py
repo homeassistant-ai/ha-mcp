@@ -2188,6 +2188,13 @@ def test_a_file_the_english_never_named_is_reported(
         # A magnitude suffix is compared only against a Latin one.
         ("about 5K tokens", "etwa 5M Token", ["5K"]),
         ("about 5K tokens", "около 5 тыс. токенов", []),
+        # The whole letter run is the suffix. "5KB" is five kilobytes where
+        # "5K" is five thousand, and comparing only the first letter accepted
+        # the one for the other. The second row is why the run is compared
+        # rather than cut short at one letter: truncating it loses this
+        # report as well, so the narrower arm would find neither.
+        ("about 5K tokens", "etwa 5KB Token", ["5K"]),
+        ("about 5M tokens", "etwa 5KB Token", ["5M"]),
         # ... and here too the first run of the digits is not necessarily the
         # one carrying the suffix. This translation is faithful.
         ("about 5K tokens", "bis zu 5x schneller, etwa 5K Token", []),
