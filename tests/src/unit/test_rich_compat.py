@@ -129,6 +129,18 @@ def test_old_rich_drops_unsupported_kwargs(patched_rich):
         assert not hasattr(handler, kwarg)
 
 
+def test_dropped_kwargs_are_logged(patched_rich, caplog):
+    """Dropping is visible at debug level rather than silent."""
+    stub = patched_rich(_OldRichHandler)
+    ensure_rich_handler_compat()
+
+    with caplog.at_level(logging.DEBUG, logger="ha_mcp._rich_compat"):
+        stub(rich_tracebacks=True, tracebacks_max_frames=3, tracebacks_suppress=[])
+
+    for kwarg in _MODERN_ONLY_KWARGS:
+        assert kwarg in caplog.text
+
+
 def test_modern_rich_is_left_alone(patched_rich):
     """On rich>=13.9.4 the shim must not touch ``RichHandler``."""
     stub = patched_rich(_ModernRichHandler)
@@ -188,6 +200,10 @@ def test_importing_ha_mcp_survives_old_rich():
         text=True,
         timeout=120,
         check=False,
+    )
+    assert result.returncode == 0, (
+        f"import ha_mcp exited with {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
     assert "IMPORT_OK" in result.stdout, (
         f"import ha_mcp failed under an old rich\n"

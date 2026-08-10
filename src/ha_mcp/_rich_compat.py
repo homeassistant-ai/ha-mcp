@@ -82,6 +82,12 @@ def ensure_rich_handler_compat() -> bool:
 
     @functools.wraps(original_init)
     def _init(self: Any, *args: Any, **kwargs: Any) -> Any:
+        dropped = kwargs.keys() - supported
+        if dropped:
+            logger.debug(
+                "Dropping RichHandler kwargs this rich does not accept: %s",
+                ", ".join(sorted(dropped)),
+            )
         return original_init(
             self, *args, **{k: v for k, v in kwargs.items() if k in supported}
         )
