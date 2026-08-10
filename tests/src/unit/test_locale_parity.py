@@ -1454,6 +1454,16 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
             ["~/.ha-mcp/settings"],
         ),
         ("allow packages/*.yaml", "erlaube packages/*.yaml", []),
+        # ... which needs the negative to discriminate: were the file split
+        # into "packages/" plus ".yaml", both halves would still be present
+        # in the faithful rendering above and it would pass either way.
+        ("allow packages/*.yaml", "erlaube packages/*.json", ["packages/*.yaml"]),
+        # A dotted continuation belongs to the hidden name. Split off, ".env"
+        # is not findable inside a translation that kept ".env.local" whole,
+        # because the boundary rule refuses a further dotted segment — the
+        # faithful rendering would report.
+        ("edit .env.local now", "bearbeite .env.local", []),
+        ("edit .env.local now", "bearbeite die Datei", [".env.local"]),
         # An English string is free to name the same literal twice, and four
         # shipped ones do. Presence alone accepts a translation that corrupts
         # one of the two occurrences; the count does not.
@@ -1666,10 +1676,6 @@ def test_a_file_the_english_never_named_is_reported(
         ("only when N > 0", "nur wenn N > 0", []),
         ("only when N > 0", "nur wenn N < 0", ["N > 0"]),
         ("only when N > 0", "nur wenn N>0", []),
-        # The threshold ends where its digits do: a translation that appends
-        # to them states a different bound, not the same one.
-        ("only when N > 5", "nur wenn N > 50", ["N > 5"]),
-        ("only when N > 5", "nur wenn N > 5.", []),
         # A magnitude suffix is compared only against a Latin one.
         ("about 5K tokens", "etwa 5M Token", ["5K"]),
         ("about 5K tokens", "около 5 тыс. токенов", []),
@@ -1679,6 +1685,15 @@ def test_a_file_the_english_never_named_is_reported(
         # A percentage keeps its sign, spaced or not.
         ("roughly 90% less", "rund 90 % weniger", []),
         ("roughly 90% less", "rund 90 weniger", ["90%"]),
+        # A threshold is bounded on both sides. Appending digits states a
+        # different bound, and so does appending a grouping separator and
+        # more digits — "5.000" and "5 000" are the likelier artefact than
+        # "50". Renaming what is compared is a different claim too.
+        ("only when N > 5", "nur wenn N > 50", ["N > 5"]),
+        ("only when N > 5", "nur wenn N > 5.000", ["N > 5"]),
+        ("only when N > 5", "nur wenn N > 5 000", ["N > 5"]),
+        ("only when N > 5", "nur wenn MIN > 5", ["N > 5"]),
+        ("only when N > 5", "nur wenn N > 5.", []),
     ],
 )
 def test_units_and_comparisons_are_compared_where_they_are_comparable(
@@ -1755,6 +1770,13 @@ def test_a_reversed_ordered_pair_is_reported(
         # is the translation's to keep.
         ("Range 1–600.", "Zeit-600 Sekunden.", []),
         ("offset by -5", "Versatz um -5", []),
+        # A unit or a percent sign between the endpoint and the dash still
+        # leaves a range: a locale is free to repeat it on both bounds.
+        ("limit is 1-256 MB", "Grenze ist 1 MB -256 MB", []),
+        ("between 50% and 100%", "entre 50 % -100 %", []),
+        # Regrouping a signed number is not inventing one.
+        ("offset by -1 000", "Versatz um -1.000", []),
+        ("offset by 1 000", "Versatz um -1.000", ["unsigned 1.000 written as -1.000"]),
         # A grouped endpoint is one number here too. The separators are the
         # ones a locale actually groups with, non-breaking space included, so
         # the pattern is referenced rather than copied — a hand-copied class
@@ -1776,6 +1798,28 @@ def test_a_sign_the_english_never_wrote_is_reported(
     pair both pass while the text documents a minimum the setting rejects.
     """
     assert _invented_signs(english, translated) == expected
+
+
+def test_the_engine_is_not_asked_how_often_a_name_survives() -> None:
+    """Counting a repeated name needs a tolerance the engine cannot hold.
+
+    A faithful translation may name a repeated identifier once and
+    pronominalise the second mention, which no per-string rule separates from
+    a corrupted duplicate. At acceptance time there is nowhere to record that
+    per key, and refusing it costs the run: retried once, then re-planned
+    tomorrow, every day. The merge-time check keeps the count because a human
+    reads its failure; the engine is asked only whether the name survives.
+    """
+    english = "Call ha_get_skill_guide first; ha_get_skill_guide returns the schema."
+    pronominalised = "Rufe zuerst ha_get_skill_guide auf; es liefert das Schema."
+
+    assert "kept 1 of 2" in _parity_fault(english, pronominalised)
+    assert _parity_fault(english, pronominalised, compare_numbers=False) == ""
+    # ... while a name that goes missing entirely is still the engine's to
+    # refuse, or the switch would have turned the arm off rather than down.
+    assert "ha_get_skill_guide" in _parity_fault(
+        "Call ha_get_skill_guide.", "Rufe es auf.", compare_numbers=False
+    )
 
 
 def test_a_localised_on_screen_name_is_reported() -> None:

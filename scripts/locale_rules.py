@@ -53,11 +53,14 @@ _KNOWN_UNITS = frozenset({"KB", "MB", "GB", "TB"})
 # class lost the two non-breaking spaces a locale groups with, so "-1 000"
 # was read as "-1" while the copy still looked right.
 _SIGNED_NUMBER_RE = re.compile(rf"(?<![\w.,])([-+])({_NUMBER_RE.pattern})")
-# ... and the dash between two range endpoints is not a sign, however the
-# catalog spaced it out. `\s` already covers the non-breaking spaces these
-# catalogs group with -- both are Unicode whitespace -- so the class is not
-# written out by hand, which is how the copy above lost them once already.
-_RANGE_LEFT_CONTEXT_RE = re.compile(r"\d\s*\Z")
+# ... and the dash between two range endpoints is not a sign, whatever the
+# catalog put between the left endpoint and the dash. `\s` covers the
+# non-breaking spaces these catalogs group with -- both are Unicode whitespace
+# -- so no class is written out by hand, which is how the copy above lost them
+# once already; a newline is excluded, because two endpoints do not straddle
+# one. The optional unit or percent sign is there because a locale may repeat
+# it on both bounds: "1 MB -256 MB", "50 % -100 %".
+_RANGE_LEFT_CONTEXT_RE = re.compile(r"\d[^\S\n]*(?:%|[A-Za-zА-Яа-я]{1,3})?[^\S\n]*\Z")
 # The same four units as every catalog spells them. Without this the filter
 # that stops a localised spelling false-positiving also stops a *wrong*
 # localised spelling reporting: "предел 1-256 ГБ" and "limite de 1-256 Go"
@@ -123,8 +126,11 @@ _LITERAL_RE = re.compile(
         # describes blocks ".storage", and a translation dropping it left no
         # trace. It sits after both so a name inside a path ("~/.ha-mcp/x") or
         # an extension ("packages/*.yaml") is still read whole -- those two
-        # start earlier in the string and match there.
-      | (?<![\w./-])\.[a-z][a-z0-9_-]*(?!\w)    # hidden names: .storage
+        # start earlier in the string and match there. A dotted continuation
+        # belongs to the name: split off ".env" and a translation that keeps
+        # ".env.local" intact reports the half as lost, because the boundary
+        # rule refuses a name followed by another dotted segment.
+      | (?<![\w./-])\.[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)*(?!\w)  # .storage
       | [a-z][a-z0-9+.-]*://\S*                 # any scheme, bare one included
       | (?<![\w.])[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+(?![\w])  # group.set
       | (?<!\w)[A-Za-z][A-Za-z_]*\d+(?!\w)      # Jinja2, alert2
@@ -225,12 +231,16 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
         if carried and unit.upper() not in carried:
             contradicted.add(f"{digits} {unit}")
     for name, operator, digits in _COMPARISON_RE.findall(english):
-        # The threshold ends where the digits do: without a boundary on the
-        # right, "N > 5" is satisfied by a translation writing "N > 50" and
-        # the changed threshold reports nothing.
+        # The threshold ends where its number ends, and it starts where its
+        # name starts: unbounded, "N > 5" is satisfied by "N > 50" and by
+        # "MIN > 5". The right-hand boundary refuses a grouping separator
+        # followed by more digits too, since "5.000" and "5 000" are the
+        # likelier translation artefact than "50" -- those separators are the
+        # ones the number pattern already knows, referenced rather than
+        # respelled.
         if not re.search(
-            rf"{re.escape(name)}\s*{re.escape(operator)}\s*{re.escape(digits)}"
-            r"(?![0-9])",
+            rf"(?<!\w){re.escape(name)}\s*{re.escape(operator)}\s*"
+            rf"{re.escape(digits)}(?!\d|{_GROUP_SEPARATOR_RE.pattern}\d)",
             translated,
         ):
             contradicted.add(f"{name} {operator} {digits}")
@@ -282,18 +292,25 @@ def _invented_signs(english: str, translated: str) -> list[str]:
     the pipeline sends.
 
     What must not count as a sign is the dash between two range endpoints,
-    which is why a digit to the left disqualifies it, however the catalog
-    spaced the range out: "1-600", "1 -600", "1  -600" and the non-breaking
-    space these catalogs group numbers with all stay ranges. The left context
-    is read in code rather than in a lookbehind, because a lookbehind here has
-    to be fixed width and the separator is not.
+    whatever the catalog put between the left endpoint and the dash: spaces,
+    the non-breaking ones these catalogs group numbers with, and the unit or
+    percent sign a locale may repeat on both bounds ("1 MB -256 MB",
+    "50 % -100 %"). The left context is read in code rather than in a look
+    behind, because a look behind here has to be fixed width and none of that
+    is.
+
+    The comparison is on canonical numbers, not on their text, so a locale
+    regrouping "-1 000" as "-1.000" is the same signed number rather than an
+    invented one.
     """
-    signed_in_english = {f"{sign}{digits}" for sign, digits in _signed_numbers(english)}
+    signed_in_english = {
+        (sign, _canonical_number(digits)) for sign, digits in _signed_numbers(english)
+    }
     return sorted(
         {
             f"unsigned {digits} written as {sign}{digits}"
             for sign, digits in _signed_numbers(translated)
-            if f"{sign}{digits}" not in signed_in_english
+            if (sign, _canonical_number(digits)) not in signed_in_english
         }
     )
 
@@ -368,6 +385,12 @@ def _parity_fault(
     hold a per-key tolerance. Every fault #2180 repaired by hand -- a dropped
     ``docs/beta.md``, a localised ``enable_tool_search``, "46K" where the
     English says 90% -- is found by the arms that do run here.
+
+    The same switch turns off literal COUNTING, and for the same reason: a
+    faithful translation may name a repeated identifier once and pronominalise
+    the second mention, which no per-string rule can tell from a corrupted
+    duplicate. Whether a name survives at all is still asked of the engine;
+    how often it survives is asked only where a tolerance can absorb it.
     """
     losses = tolerated_losses if tolerated_losses is not None else Counter()
     additions = tolerated_additions if tolerated_additions is not None else Counter()
@@ -377,7 +400,7 @@ def _parity_fault(
     else:
         lost_numbers = gained_numbers = Counter()
     lost = (
-        _lost_literals(english, translated)
+        _lost_literals(english, translated, count_occurrences=compare_numbers)
         + _lost_magnitudes(english, translated)
         + _invented_signs(english, translated)
         + _reversed_ordered_pairs(english, translated)
@@ -457,7 +480,9 @@ def _carries(literal: str, translated: str) -> bool:
     return _occurrences(literal, translated) > 0
 
 
-def _lost_literals(english: str, translated: str) -> list[str]:
+def _lost_literals(
+    english: str, translated: str, *, count_occurrences: bool = True
+) -> list[str]:
     """English literals absent from the translation, as substrings.
 
     Substring rather than token equality on purpose: German writes
@@ -477,15 +502,22 @@ def _lost_literals(english: str, translated: str) -> list[str]:
     what keeps a name that later gains an extractable shape from reporting
     twice under two different descriptions.
 
-    Occurrences are compared, not mere presence, the same way the number arm
-    compares multisets. Four shipped English strings name an identifier twice
-    -- ``ha_get_skill_guide`` in the strict-best-practices help, ``skill_content``
-    in the one beside it, ``ChatGPT`` in two notices -- and asking only whether
-    the name survives *somewhere* accepts a translation that corrupts one of
-    the two. Both sides are counted with the same instrument, so a locale that
-    keeps both keeps them under the same boundary rule the presence test used;
-    measured across the 6751 shipped pairs, counting reports nothing that
-    presence did not.
+    ``count_occurrences`` compares how OFTEN the name survives, the same way
+    the number arm compares multisets. Four shipped English strings name an
+    identifier twice -- ``ha_get_skill_guide`` in the strict-best-practices
+    help, ``skill_content`` in the one beside it, ``ChatGPT`` in two notices --
+    and asking only whether the name survives *somewhere* accepts a translation
+    that corrupts one of the two. Both sides are counted with the same
+    instrument; measured across the 6751 shipped pairs, counting reports
+    nothing that presence did not.
+
+    It is off for the engine, and for the same reason the number multisets are:
+    a faithful translation may state a repeated name once and pronominalise the
+    second mention, and there is nowhere to record a per-key tolerance at
+    acceptance time. Refusing that costs a retry and leaves the key to be
+    planned again tomorrow, which is the daily stall the engine-side call
+    exists to prevent. The merge-time check, which can carry a tolerance and is
+    read by a human when it fails, keeps the count.
     """
     protected = _untranslatable_names()
     candidates = {
@@ -497,7 +529,13 @@ def _lost_literals(english: str, translated: str) -> list[str]:
     } | set(_QUOTED_ASSIGNMENT_RE.findall(english))
     lost = []
     for literal in candidates:
-        expected = _occurrences(literal, english)
+        # The extraction and the boundary rule can disagree -- ".env" is
+        # extracted out of ".env.local", which the boundary rule then refuses
+        # to find in its own English. A zero there would make every comparison
+        # against it vacuously true and the literal unreportable for good, so
+        # it falls back to demanding the name once, which is what the presence
+        # test demanded before counting existed.
+        expected = (_occurrences(literal, english) if count_occurrences else 1) or 1
         kept = _occurrences(literal, translated)
         if kept >= expected:
             continue
