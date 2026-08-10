@@ -41,6 +41,7 @@ jobs:
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
+        persist-credentials: false
         submodules: true
         # Check out the release tag so uv sync installs the bumped pyproject.toml.
         # Without this, GITHUB_SHA points to the pre-semantic-release merge commit

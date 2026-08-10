@@ -59,6 +59,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           # Required for the skills bundle submodule at
           # src/ha_mcp/resources/skills-vendor (test_skills_resources.py).
           submodules: true
