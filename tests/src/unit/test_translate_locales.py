@@ -105,6 +105,45 @@ class TestValidate:
             is None
         )
 
+    def test_rejects_output_the_merge_gate_would_refuse(self) -> None:
+        """The engine must not produce what the parity gate later refuses.
+
+        A dropped identifier that is accepted here lands as a backfilled key,
+        and no later run re-queues it: from then on the merge-time arm goes
+        red every day, the push is held back whole, and the run re-spends its
+        quota planning work it cannot land. One rejection and one retry costs
+        a single string instead. All three faults #2180 repaired by hand are
+        of this class.
+        """
+        for english, bad in (
+            ("See docs/beta.md for limits.", "Siehe die Beta-Dokumentation."),
+            ("Set enable_tool_search to true.", "Aktiviere die Werkzeugsuche."),
+            ("roughly 90% less", "etwa 46K weniger"),
+            ("limit is 1-256 MB", "Grenze ist 1-256 GB"),
+        ):
+            assert _validate(_item(english=english), bad) is not None, (
+                f"the engine accepted {bad!r} for {english!r}, which the "
+                "merge-time literal-parity check refuses"
+            )
+
+    def test_accepts_a_number_the_translation_spells_out(self) -> None:
+        """The one arm the engine deliberately does not run.
+
+        Both tolerances the merge-time check carries are number-count
+        tolerances: Russian writes "the 5 experimental sub-flags" in words,
+        Chinese keeps a clause the English rendering cuts. Comparing number
+        multisets here would refuse correct output on every run, retry once,
+        and leave the key to be planned again tomorrow — the stall the call
+        above exists to prevent, moved one step upstream.
+        """
+        assert (
+            _validate(
+                _item(english="the 5 experimental sub-flags"),
+                "die fuenf experimentellen Unterschalter",
+            )
+            is None
+        )
+
     def test_markup_rules_apply_only_to_messages(self) -> None:
         # Tool and component strings render through escapeHtml / HA core, so
         # the settings-UI markup allowlist deliberately does not gate them.

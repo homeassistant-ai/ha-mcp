@@ -35,7 +35,9 @@ name: Locale Sync
 # (daily quota, engine outage, network) still pushes whatever finished plus
 # a progress file (tests/src/unit/locale_sync_progress.json) the next run
 # resumes from — spent quota is never wasted — and the translate job fails
-# so the gap stays visible. Re-running this workflow (or just waiting for
+# so the gap stays visible. One exception, added with the verify_partial
+# step below: a partial tree whose literal parity went red is held back
+# whole, because the key it would land is one no later run re-queues. Re-running this workflow (or just waiting for
 # tomorrow's cron) is the recovery procedure. The fallback when the engine
 # is down is a human: hand-translate, run generate_locales.py +
 # update_locale_baseline.py, and open an ordinary PR — hand-edits always win.
