@@ -274,13 +274,19 @@ class TestMainOidcLogging:
         import ha_mcp.__main__ as main_module
 
         fastmcp_logger = logging.getLogger("fastmcp")
+        streamable_http_logger = logging.getLogger("mcp.server.streamable_http")
+        fastmcp_server_logger = logging.getLogger("fastmcp.server.server")
         original_level = fastmcp_logger.level
+        original_streamable_http_filters = streamable_http_logger.filters[:]
+        original_fastmcp_server_filters = fastmcp_server_logger.filters[:]
         try:
             fastmcp_logger.setLevel(logging.INFO)
             main_module._setup_logging("DEBUG", force=False)
             assert fastmcp_logger.getEffectiveLevel() == logging.DEBUG
         finally:
             fastmcp_logger.setLevel(original_level)
+            streamable_http_logger.filters[:] = original_streamable_http_filters
+            fastmcp_server_logger.filters[:] = original_fastmcp_server_filters
 
 
 class TestRunOidcServer:
