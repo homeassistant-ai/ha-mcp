@@ -16,6 +16,7 @@ import logging
 import sys
 from typing import Annotated, Any, Literal
 
+import httpx
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
@@ -479,17 +480,36 @@ def schedule_deferred_entry_reload(client: Any, entry_id: str) -> None:
     very worker answering the current request, so it must not run until the
     response has flushed. Failures can only be logged — there is no caller
     left to answer.
+
+    Uses the ``homeassistant.reload_config_entry`` service, NOT
+    ``POST /config/config_entries/entry/{id}/reload``: only the services
+    handler shields the call. HA runs aiohttp with
+    ``handler_cancellation=True``, and the reload kills the client sending
+    this request, so on the unshielded route it cancelled itself mid-unload
+    and stranded the entry in ``UNLOAD_IN_PROGRESS`` until HA restarted.
     """
 
     async def _reload() -> None:
         await asyncio.sleep(_SELF_ACTION_FLUSH_DELAY_S)
         try:
-            await client._request(
-                "POST", f"/config/config_entries/entry/{entry_id}/reload"
+            await client.call_service(
+                "homeassistant", "reload_config_entry", {"entry_id": entry_id}
             )
             logger.info("Deferred reload of entry %s requested", entry_id)
-        except Exception:
-            logger.exception("Deferred config-entry reload failed")
+        except Exception as exc:
+            # A lost reply means the request reached HA and the shielded reload
+            # then killed this client — the expected end of a self-restart, not
+            # a failure. A connect error or timeout may never have dispatched,
+            # so those stay loud. WARNING, not INFO: HA surfaces this package
+            # at WARNING and above, so INFO here would log nothing at all.
+            if isinstance(exc.__cause__, httpx.ReadError | httpx.RemoteProtocolError):
+                logger.warning(
+                    "Deferred reload of entry %s dispatched; it tore down this "
+                    "connection before the reply arrived (expected)",
+                    entry_id,
+                )
+            else:
+                logger.exception("Deferred config-entry reload failed")
 
     _spawn_background(_reload())
 
