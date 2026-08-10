@@ -273,7 +273,9 @@ jobs:
         cache-dependency-path: site/package-lock.json
 
     - name: Install dependencies
-      run: npm ci
+      run: |
+        npm install --global npm@12.0.2
+        npm ci
 
     - name: Astro type & diagnostics check
       run: npm run check
@@ -387,21 +389,13 @@ jobs:
 
     steps:
     - name: Restore apt download cache
-      # Cache /var/cache/apt/archives so the nodejs .deb (~30 MB) and its
-      # deps don't re-download on every PR — the bulk of "Install git and
-      # Node.js" was the network download, not the extract. apt-get
-      # install still runs (unpack is fast); we're just skipping the
-      # download leg on cache hit.
+      # Cache apt downloads used by this containerized job.
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /var/cache/apt/archives
-        key: apt-trixie-git-nodejs-npm-v1
+        key: apt-trixie-git-v1
 
-    - name: Install git and Node.js
-      # Node + npm power the JS behaviour tests under tests/src/unit/
-      # (harness in tests/js/) — they spawn `node tests/js/harness.mjs`
-      # to drive rendered <script> bodies through JSDOM. Without node
-      # the tests skip; install here so coverage actually runs.
+    - name: Install git
       run: |
         # Keep cached .debs after install so the cache stays warm for
         # future runs (default Debian behaviour deletes them).
@@ -409,11 +403,18 @@ jobs:
         echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
           > /etc/apt/apt.conf.d/keep-downloaded
         apt-get update -qq
-        apt-get install -y -qq git nodejs npm >/dev/null 2>&1
+        apt-get install -y -qq git >/dev/null 2>&1
 
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         submodules: true
+
+    - name: Set up Node.js
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      with:
+        node-version: "24"
+        cache: npm
+        cache-dependency-path: tests/js/package-lock.json
 
     - name: Install Python dependencies
       run: uv sync --all-extras --dev
@@ -431,7 +432,9 @@ jobs:
       # `npm ci` enforces package-lock.json — same reproducibility
       # discipline as uv.lock on the Python side. No-op on cache hit
       # if node_modules matches the lockfile.
-      run: npm ci --prefix tests/js
+      run: |
+        npm install --global npm@12.0.2
+        npm ci --prefix tests/js
 
     - name: Run unit tests
       run: uv run pytest tests/src/unit/ -n auto --tb=short -v
