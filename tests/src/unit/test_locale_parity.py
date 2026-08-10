@@ -1686,16 +1686,27 @@ def test_an_exception_that_over_records_is_refused() -> None:
     intersection that entry reads as live while excusing occurrences that do
     not exist, which is the blind spot the table's header rules out in prose.
     """
-    (locale, surface, key), (losses, _, _) = next(
+    recording = [
         (entry, value) for entry, value in LITERAL_PARITY_EXCEPTIONS.items() if value[0]
+    ]
+    assert recording, (
+        "no exception entry records a loss, so this test has nothing to "
+        "inflate — the table changed shape and the containment rule is "
+        "unguarded"
     )
-    text, english = next(
+    (locale, surface, key), (losses, _, _) = recording[0]
+    pair = [
         (pair_text, pair_english)
         for pair_surface, pair_key, pair_text, pair_english in _literal_parity_pairs(
             locale
         )
         if (pair_surface, pair_key) == (surface, key)
+    ]
+    assert pair, (
+        f"the {locale} exception names {surface}: {key}, which no longer "
+        "resolves to a checked pair"
     )
+    text, english = pair[0]
     lost = _numbers(english) - _numbers(text)
 
     assert _exception_still_fits(losses, lost), (
