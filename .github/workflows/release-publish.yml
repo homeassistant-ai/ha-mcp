@@ -231,10 +231,9 @@ jobs:
           echo "Docker publish conclusion: ${{ needs.publish_docker.result }}"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
         if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
         with:
+          persist-credentials: false
           ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
 
