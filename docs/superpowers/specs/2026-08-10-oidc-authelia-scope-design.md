@@ -173,6 +173,12 @@ Follow red-green TDD with entrypoint coverage in
    restore any safe temporary regression mutations, and rerun the focused tests
    successfully.
 
+Run both focused OIDC unit files with the repository test runner:
+
+```bash
+cd tests && UV_LINK_MODE=copy uv run pytest src/unit/test_oidc_compat.py src/unit/test_oidc_entrypoint.py -q
+```
+
 No live Authelia instance or Home Assistant state is required: the defect is
 the deterministic proxy, persisted-state, and logging behavior around FastMCP.
 
