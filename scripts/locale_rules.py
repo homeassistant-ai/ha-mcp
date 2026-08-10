@@ -34,7 +34,10 @@ from typing import Any
 # whom first.
 _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPTS_DIR)
+    # Appended, not prepended: the failure this fixes is *not found*, never
+    # *wrong module found*, so there is no reason to let a future
+    # scripts/<stdlib-name>.py shadow the standard library process-wide.
+    sys.path.append(_SCRIPTS_DIR)
 
 
 @cache
@@ -56,9 +59,8 @@ def _pipeline() -> Any:
 # between the "4.5:1" contrast ratio and "45:1", and between the minimum
 # version floor "1.2.4" and "12.4" -- both live English strings. That 1.2.4
 # is a number a help string states, not MIN_COMPONENT_VERSION, which is a
-# different value and not pinned here.
-# Comparing the tuple
-# of groups keeps "4.5" and "4,5" equal while "45" stays a different number.
+# different value and not pinned here. Comparing the tuple of groups keeps
+# "4.5" and "4,5" equal while "45" stays a different number.
 _NUMBER_RE = re.compile(r"(?<![A-Za-z0-9])\d+(?:[.,   ]\d+)*")
 # A magnitude suffix is part of the claim: "5K" and "5M" share their digits.
 _MAGNITUDE_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)([KMGT])(?![A-Za-z])")
@@ -126,12 +128,15 @@ _GROUP_SEPARATOR_RE = re.compile(r"[.,   ]")
 # half is the name a reader has to find. "*" belongs in the stem for
 # "packages/*.yaml". Spelled here rather than inline so the reverse check can
 # ask for this shape alone without a second copy of it to keep in step.
-# The stem is ASCII on purpose. `\w` matches CJK ideographs, and a catalog
-# that sets no space around the name -- which zh-Hans and ru both do -- then
-# hands the reverse arm "在configuration.yaml" as a file the English never
-# mentioned. The file it does mention is inside that token, so the reverse
-# arm reported a file that exists, on the engine path, where the rejection
-# holds back the day's run.
+# The stem is ASCII on purpose, and non-empty. `\w` matches ideographs and
+# Cyrillic, so a string that sets no space around the name hands the reverse
+# arm "在configuration.yaml" -- a file nobody wrote, built around one the
+# English does mention -- and an empty stem makes a bare "（.yaml 文件）" a
+# file name. No shipped catalog writes either shape today (measured: zero
+# adjacent CJK-or-Cyrillic-to-Latin runs, zero bare extensions), so this is
+# hardening for what the engine can propose, not a repair of the corpus.
+# The cost is one direction of coverage: a filename with a non-ASCII stem,
+# "конфигурация.yaml", is no longer seen as invented either.
 _FILE_PATTERN = r"[A-Za-z0-9_.~*/-]+\.(?:yaml|yml|json|py|md|txt)"
 _FILE_RE = re.compile(_FILE_PATTERN)
 
@@ -141,6 +146,16 @@ _LITERAL_RE = re.compile(
       | [a-z][a-z0-9]*(?:_[a-z0-9]+)+           # snake_case: enable_tool_search
       | [A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+           # ALL_CAPS: DISABLED_TOOLS
       | (?<![\w/<])~?/[\w.*-]+(?:/[\w.*-]+)*    # paths: /api/settings/features
+        # A hidden name has no extension and no leading separator, so neither
+        # the file arm nor the path arm sees it, and the dotted-identifier arm
+        # below is blocked by the leading dot. The live case is ".storage",
+        # which the component tells readers the deny floor blocks: without
+        # this alternative a translation dropping that name reports nothing,
+        # from any arm. It sits after the file and path arms so a name inside
+        # a path ("~/.ha-mcp/x") or in front of an extension stays whole, and
+        # it takes its own dotted continuation, so ".env" is not split out of
+        # ".env.local" and then reported against a translation that kept it.
+      | (?<![\w./-])\.[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)*(?!\w)  # .storage
       | [a-z][a-z0-9+.-]*://\S*                 # any scheme, bare one included
       | (?<![\w.])[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+(?![\w])  # group.set
       | (?<!\w)[A-Za-z][A-Za-z_]*\d+(?!\w)      # Jinja2, alert2
@@ -174,8 +189,7 @@ def _canonical_number(token: str) -> tuple[str, ...]:
     boundary: English ships `10000`, `1440` and `65535`, and a locale writing
     `10.000` states the same number. Anything else keeps its groups, so the
     "4.5:1" ratio and the version floor "1.2.4" a help string states stay
-    distinct
-    from "45" and "12.4".
+    distinct from "45" and "12.4".
     A decimal written to exactly three places is the ambiguous case and folds
     with the thousands; no English string has one.
     """

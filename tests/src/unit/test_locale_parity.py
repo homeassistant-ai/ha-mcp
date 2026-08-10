@@ -1317,7 +1317,10 @@ def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, str]]:
         f"{sorted(_GUARDED_SURFACES)} — a surface stopped resolving against "
         "the baseline, and its catalogs are no longer checked at all"
     )
-    thin = {surface: count for surface, count in compared.items() if count < 20}
+    # Ten, not a rounder number: the smallest live surface is the 29 tool
+    # group headings, and a floor above that would redden on a legitimate
+    # consolidation of tool groups while pointing nowhere near the cause.
+    thin = {surface: count for surface, count in compared.items() if count < 10}
     assert not thin, (
         f"literal parity compared {thin} for {locale} — that surface resolves "
         "but has almost nothing left to compare, so a green run says nothing "
@@ -1529,6 +1532,16 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
             "übergib 'snapshot'",
             ["scope='snapshot'"],
         ),
+        # A hidden name is extracted by no other arm: no extension for the
+        # file arm, no leading separator for the path arm, and the dotted
+        # identifier arm is blocked by the leading dot. `.storage` is live —
+        # the component names it as a path the deny floor blocks.
+        ("blocks .storage paths", "blockiert .storage-Pfade", []),
+        ("blocks .storage paths", "blockiert sensible Pfade", [".storage"]),
+        # ... and it takes its own dotted continuation, so a translation that
+        # keeps ".env.local" whole is not reported for a ".env" nobody split.
+        ("edit .env.local now", "bearbeite .env.local", []),
+        ("edit .env.local now", "bearbeite die Datei", [".env.local"]),
         # A path and a file are each read whole, by their own arm.
         ("write ~/.ha-mcp/settings", "schreibe ~/.ha-mcp/settings", []),
         (
@@ -1721,8 +1734,7 @@ def test_a_number_keeps_its_groups_unless_they_are_thousands(
     Every reversal case routes through here and passes under the obvious
     wrong implementation -- join the groups and compare the digits -- which
     makes 4.5 equal to 45 and the version floor 1.2.4 a help string states
-    equal to
-    12.4.
+    equal to 12.4.
     Nothing exercised it directly, so that mutation left every shipped pair
     and all three reversal cases green.
     """

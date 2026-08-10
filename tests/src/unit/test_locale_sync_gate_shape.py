@@ -275,7 +275,7 @@ def test_no_step_excludes_the_literal_parity_test() -> None:
 
 
 def test_push_blocks_on_content_failure_and_not_on_staleness() -> None:
-    """The push predicate is the whole safety story; pin its three clauses.
+    """The push predicate is the whole safety story; pin its four clauses.
 
     The blocking clause is asserted as the full NEGATED expression, not its
     fragments: dropping the ``!`` inverts the safety property — pushing only
