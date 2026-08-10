@@ -196,6 +196,20 @@ class TestExemptionRules:
     @pytest.mark.parametrize(
         ("args", "allowed"),
         [
+            ({"action": "get"}, True),
+            ({"action": "set", "policy": {"rules": []}}, False),
+            # ``action`` has no schema default, so an absent key is a
+            # malformed call and must fail closed, not read.
+            ({}, False),
+        ],
+    )
+    def test_manage_security_policy(self, args, allowed):
+        rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_security_policy"].blocked_write
+        assert (rule(args) is None) is allowed
+
+    @pytest.mark.parametrize(
+        ("args", "allowed"),
+        [
             ({"list_saved": True}, True),
             ({"code": "print(1)", "justification": "x"}, False),
             ({"run_saved": "my_tool"}, False),
@@ -552,6 +566,7 @@ class TestExemptTableContract:
             "ha_manage_custom_tool",
             "ha_manage_radio",
             "ha_manage_updates",
+            "ha_manage_security_policy",
         }
 
     def test_every_exemption_describes_whats_allowed(self):
@@ -574,6 +589,7 @@ _EXEMPT_TOOL_MODULES = {
     "ha_manage_custom_tool": "tools_code.py",
     "ha_manage_radio": "tools_radio.py",
     "ha_manage_updates": "tools_updates.py",
+    "ha_manage_security_policy": "tools_security_policy.py",
 }
 
 # INDEPENDENT, hardcoded manifests of the argument names each exempt
@@ -602,6 +618,7 @@ _EXEMPT_INSPECTED_ARGS = {
     "ha_manage_custom_tool": {"list_saved", "code", "run_saved"},
     "ha_manage_radio": {"action"},
     "ha_manage_updates": {"action"},
+    "ha_manage_security_policy": {"action"},
 }
 
 # The subset of the addon manifest that ``_addon_write`` iterates as
@@ -727,6 +744,12 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         # Read-path modifiers of the allowed list/get actions.
         "include_skipped",
         "include_release_notes",
+    },
+    "ha_manage_security_policy": {
+        # Both carry the write payload for action='set', which the
+        # inspected ``action`` dispatch blocks before either is read.
+        "policy",
+        "expected_version",
     },
 }
 

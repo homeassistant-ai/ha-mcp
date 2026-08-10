@@ -207,6 +207,7 @@ class TestDashboardLifecycle:
     async def test_url_path_validation(self, mcp_client):
         """Test that 'lovelace' and 'default' are not rejected by hyphen validation (#591)."""
         logger.info("Starting default dashboard hyphen validation test")
+        mcp = MCPAssertions(mcp_client)
 
         # "lovelace" should NOT be rejected by the hyphen validation
         # (it may fail for other reasons on fresh HA, but not the hyphen check)
@@ -233,6 +234,19 @@ class TestDashboardLifecycle:
             assert "hyphen" not in error_msg.lower(), (
                 f"'default' should not be rejected by hyphen validation, got: {error_msg}"
             )
+
+        # The seeded Map dashboard is a real storage dashboard whose url_path
+        # predates the creation-only hyphen rule. Exact-path updates must work
+        # without being reported as identifier canonicalization.
+        data = await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {"url_path": "map", "title": "Map"},
+        )
+        assert data["success"] is True
+        assert data["action"] == "update"
+        assert data["url_path"] == "map"
+        assert data["metadata_updated"] is True
+        assert "resolved_from" not in data
 
         # "nodash" (non-existent, no hyphen) SHOULD still be rejected
         data = await safe_call_tool(
@@ -274,10 +288,18 @@ class TestDashboardLifecycle:
 
         logger.info("Partial metadata update test completed successfully")
 
-    async def test_dashboard_without_initial_config(self, mcp_client):
-        """Test creating dashboard without initial configuration."""
+    async def test_dashboard_without_initial_config_can_be_populated(self, mcp_client):
+        """A dashboard created without config accepts its first full config later."""
         logger.info("Starting dashboard without config test")
         mcp = MCPAssertions(mcp_client)
+        replacement = {
+            "views": [
+                {
+                    "title": "Populated",
+                    "cards": [{"type": "markdown", "content": "First config"}],
+                }
+            ]
+        }
 
         # Create dashboard without config
         create_data = await mcp.call_tool_success(
@@ -288,19 +310,31 @@ class TestDashboardLifecycle:
         dashboard_id = create_data.get("dashboard_id")
         assert dashboard_id is not None
 
-        # Verify it exists
-        list_data = await mcp.call_tool_success(
-            "ha_config_get_dashboard", {"list_only": True}
-        )
-        assert any(
-            d.get("url_path") == "test-no-config"
-            for d in list_data.get("dashboards", [])
-        )
+        try:
+            # Verify the metadata-only dashboard exists before its config does.
+            list_data = await mcp.call_tool_success(
+                "ha_config_get_dashboard", {"list_only": True}
+            )
+            assert any(
+                d.get("url_path") == "test-no-config"
+                for d in list_data.get("dashboards", [])
+            )
 
-        # Cleanup
-        await mcp.call_tool_success(
-            "ha_config_delete_dashboard", {"url_path": dashboard_id}
-        )
+            update_data = await mcp.call_tool_success(
+                "ha_config_set_dashboard",
+                {"url_path": "test-no-config", "config": replacement},
+            )
+            assert update_data["action"] == "update"
+            assert update_data["config_updated"] is True
+
+            get_data = await mcp.call_tool_success(
+                "ha_config_get_dashboard", {"url_path": "test-no-config"}
+            )
+            assert get_data["config"] == replacement
+        finally:
+            await mcp.call_tool_success(
+                "ha_config_delete_dashboard", {"url_path": dashboard_id}
+            )
 
         logger.info("Dashboard without config test completed successfully")
 

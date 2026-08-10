@@ -1,7 +1,7 @@
 name: Build Binaries and Attach to Release
 
 # Reusable workflow for building and releasing binaries
-# Can be called from any release workflow (semver, dev, hotfix, manual)
+# Called from semver-release.yml and publish-dev.yml.
 on:
   workflow_call:
     inputs:

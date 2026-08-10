@@ -20,7 +20,12 @@ from ..llm_exposure import LLM_API_CONFIG_KEY
 from ..transforms import DEFAULT_PINNED_TOOLS
 from ..utils.config_write_lock import config_write_guard
 from . import _persistence
-from ._tools_meta import _VALID_STATES, BPS_MANDATORY_TOOLS, _get_tool_metadata
+from ._tools_meta import (
+    _VALID_STATES,
+    BPS_MANDATORY_TOOLS,
+    _get_tool_metadata,
+    gate_is_beta,
+)
 
 if TYPE_CHECKING:
     from ..server import HomeAssistantSmartMCPServer
@@ -91,6 +96,24 @@ def _bps_locked_tools() -> list[str]:
     return sorted(BPS_MANDATORY_TOOLS)
 
 
+def _stub_gate_is_beta(tool: dict[str, Any]) -> bool:
+    """Whether a tools-payload row is a stub gated by a BETA feature flag.
+
+    ``_render_stub`` stamps ``disabled_by_beta``, but the sidecar serves
+    rows from ``tool_metadata.json``, which an older build may have written
+    without the field. Fall back to the flag registry rather than treating
+    a missing field as "not beta" — that would silently flip a beta stub's
+    LLM-API exposure from hidden to exposed on a stale cache.
+    """
+    gate = tool.get("disabled_by")
+    if not gate:
+        return False
+    declared = tool.get("disabled_by_beta")
+    if declared is None:
+        return gate_is_beta(str(gate))
+    return bool(declared)
+
+
 def _env_pinned_conflicts(
     states: dict[str, str], env_pinned: dict[str, str]
 ) -> list[str]:
@@ -145,15 +168,17 @@ async def _get_tools(
     # Feature-gated stub rows carry their primary tag but NOT the "beta"
     # tag the registered tool declares (_render_stub renders from
     # FEATURE_GATED_TOOLS metadata, whose tags are never empty) — append
-    # it whenever disabled_by is set so the toggle renders
-    # hidden-by-default, matching what the stamp will say once the flag
-    # turns the real tool on. Every feature-gated tool is beta by
-    # definition. (Review finding: a previous `or`-fallback here was dead
-    # code, so beta stubs rendered as exposed.)
+    # it for BETA-gated stubs so the toggle renders hidden-by-default,
+    # matching what the stamp will say once the flag turns the real tool
+    # on. (Review finding: a previous `or`-fallback here was dead code, so
+    # beta stubs rendered as exposed.) Gated no longer implies beta —
+    # ha_manage_security_policy (#2148) is gated by a non-beta safety
+    # toggle and declares no "beta" tag, so its stub must not gain one
+    # either or the two renderings would disagree.
     llm_effective = {
         t["name"]: effective_llm_api_exposed(
             t["name"],
-            [*(t.get("tags") or []), *(["beta"] if t.get("disabled_by") else [])],
+            [*(t.get("tags") or []), *(["beta"] if _stub_gate_is_beta(t) else [])],
             llm_overrides,
         )
         for t in tools

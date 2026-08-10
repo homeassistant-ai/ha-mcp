@@ -18,9 +18,7 @@ name: CodeQL Code Quality
 #   - javascript  scans the JS/TS family (.js/.mjs/.cjs/.ts/.tsx/.jsx) across the
 #                 whole tree — first-party src/, the Astro site's .mjs config,
 #                 and test JS; the same PATHS_IGNORE drops the vendored fixture
-#                 tree. (CodeQL does not extract .astro component scripts, but
-#                 .astro is in the path triggers below so site/ edits still run
-#                 the gate.)
+#                 tree. (CodeQL does not extract .astro component scripts.)
 #
 # Why a custom workflow instead of GitHub's Code Quality page:
 #   - GitHub Code Quality (Preview) is gated to Team/Enterprise Cloud org plans;
@@ -37,17 +35,6 @@ permissions:
 on:
   pull_request:
     branches: [ master ]
-    paths:
-      - '**.py'
-      - '**.js'
-      - '**.mjs'
-      - '**.cjs'
-      - '**.jsx'
-      - '**.ts'
-      - '**.tsx'
-      - '**.astro'
-      - '.github/workflows/codeql-quality.yml'
-      - 'scripts/codeql_quality_gate.py'
   push:
     branches: [ master ]
     paths:
@@ -128,3 +115,12 @@ jobs:
 
       - name: Gate on findings
         run: python scripts/codeql_quality_gate.py quality.sarif
+
+  code-quality-gate:
+    name: CodeQL Gate
+    if: ${{ always() }}
+    needs: code-quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every CodeQL analysis to pass
+        run: test "${{ needs.code-quality.result }}" = "success"

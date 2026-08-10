@@ -52,8 +52,12 @@
     "policies.title": "工具安全策略",
     "policies.intro": "针对高风险调用的逐工具审批门控。先在<strong>工具</strong>选项卡中启用某工具的门控，再在此处细化匹配条件和审批有效期。条件运算符：等于、属于其中之一、正则、包含、存在、大于、小于。",
     "policies.global.title": "全局设置",
+    "policies.global.unknown": "无法读取服务器设置。下面的两个开关显示为未知，并且在页面成功重新加载之前无法更改；此视图可能无法反映服务器强制执行的策略。",
     "policies.global.enabled.label": "启用工具安全策略",
     "policies.global.enabled.help": "主开关。与服务器设置中的开关一致。默认关闭。打开并重启应用（插件）即可激活门控中间件。关闭时，以下规则会保留但不生效。",
+    "policies.global.manage_tool.label": "允许 AI 代理编辑这些策略 (ha_manage_security_policy)",
+    "policies.global.manage_tool.help": "注册 ha_manage_security_policy 工具，该工具可读取和替换此标签页编辑的策略文档。默认关闭。独立于上面的主开关：这控制的是谁可以编辑规则，而不是规则是否被强制执行。该工具不公开待批准队列操作，但受策略限制的设置操作仍可能需要批准。",
+    "policies.global.manage_tool.warning": "启用此选项将允许连接的 AI 代理重写此标签页上的安全策略，包括移除批准门。为了保持人工参与，请在启用该工具之前对其进行门控：在“工具”标签页上，为“Manage Security Policy”打开“security gated”选项。该规则可以在工具仍处于关闭状态时编写，并在上面的主开关打开且服务器重启后生效。在切换任一开关后，请重启应用程序（附加组件）。",
     "policies.global.wait.label": "等待秒数（5–600）",
     "policies.global.wait.help": "中间件等待审批的超时时间。",
     "policies.global.ttl.label": "审批有效期（分钟，1–60）",
@@ -63,7 +67,7 @@
     "policies.pending.empty": "暂无待审批项。",
     "policies.rules.title": "已门控工具",
     "policies.rules.empty": "当前没有工具被安全门控。请从<a href=\"#\" data-panel-link=\"tools\">工具</a>选项卡启用逐工具门控。",
-    "accessibility.intro": "这些设置立即生效，并保存在此浏览器和服务器上，因此在各种模式（包括 stdio 模式，该模式下设置页每次会话都会转移到新端口）重启后依然保留。文档站点在导航栏中提供相同的控件；它没有服务器，按浏览器保存。",
+    "accessibility.intro": "这些设置立即生效，并保存在此浏览器和服务器上，因此它们在所有模式下（包括 stdio，在 stdio 模式下，设置页面有时可能会移动到新的端口）重启后仍然有效。文档站点在其导航栏中提供相同的控件；它没有服务器，并且按浏览器保存。",
     "accessibility.storage_blocked": "您的浏览器正在阻止站点存储；选择仅对本次会话生效。",
     "accessibility.theme.title": "主题",
     "accessibility.theme.help": "一键配色方案。默认为自动，跟随您的系统偏好并在其变化时实时切换。",
@@ -117,6 +121,8 @@
     "features.enable_tool_security_policies.help": "将高风险工具调用（锁具/报警控制、自动化写入等）置于用户审批之后。当调用受保护工具时，智能体会提示用户打开 Web UI 中的工具安全策略选项卡并点击批准，调用才会继续。逐工具规则及可选的参数条件在工具安全策略选项卡中配置。默认关闭。需要重启才能生效。",
     "features.read_only_mode.label": "只读模式",
     "features.read_only_mode.help": "关闭所有写入工具，并移除工具进行任何写入或破坏性调用的能力。读写混合工具（备份、插件、能源偏好、语音流水线和启用时的代码模式）仍可用，其写入操作被阻止。与 Web UI 工具选项卡中的开关相同。默认关闭。需要重启才能生效。",
+    "features.redact_secrets.label": "遮盖密文",
+    "features.redact_secrets.help": "在工具响应到达 AI 助手之前，从中遮盖密文。附加组件选项和标记为密码的集成字段将替换为已设置/空标记（因此“此凭据是否已配置？”仍可回答），其他工具响应中会清除服务器已见过的密文值（长度小于 6 个字符的值将被跳过，因为替换微小片段会破坏不相关的输出）。未被其架构标记为密码的字段无法被检测到。默认关闭。",
     "features.enable_mandatory_bps.label": "写入时附加最佳实践技能",
     "features.enable_mandatory_bps.help": "写入工具技能内容投递功能（issue #1182）的主开关。启用时（默认），六个配置写入工具（自动化、脚本、场景、辅助元素、仪表盘、原始 YAML）会在每次成功写入时于 `skill_content` 下附加规范的 Home Assistant 最佳实践参考文件，并自动嵌入最佳实践警告引用的任何参考章节。每个工具还暴露一个逐调用 `MandatoryBPS` 参数，智能体在获得内容后的后续调用中可将其设为 false。当此主开关关闭时，无论逐调用参数或 BP 警告如何，都不会输出 skill_content。建议默认开启；仅在上下文窗口极小的模型上才禁用。关闭可能降低写入准确性。需要重启才能生效。",
     "features.enable_strict_mandatory_bps.label": "严格最佳实践模式",
@@ -205,6 +211,7 @@
     "tools.badges.read_only": "只读",
     "tools.badges.writes": "可写",
     "tools.badges.deletes": "可删",
+    "tools.notes.gated_disabled": "已禁用。打开 {setting} — 策略编辑工具的开关位于“工具安全策略”标签页上 — 然后重启应用程序（附加组件）。",
     "tools.notes.beta_disabled": "测试版。在开发版应用（插件）配置中设置 {setting}，或设置匹配的环境变量（见 docs/beta.md）。",
     "tools.notes.env_pinned": "由 {variable} 固定。取消该环境变量才能在此编辑。",
     "tools.notes.bps_locked": "在严格最佳实践模式开启时被锁定。请先关闭该设置以禁用此工具。",
@@ -289,6 +296,7 @@
     "advanced.errors.json": "高级设置响应不是有效的 JSON。",
     "advanced.sidecar.stdio_only": "仅在 stdio 模式下可用。此 HTTP 服务器没有可固定的设置界面旁路服务。",
     "advanced.enable_dev_mode.confirm": "⚠ 启用开发者模式？\n\n重启后，隐藏的开发者工具将暴露给已连接的 AI 智能体。仅用于开发和测试。",
+    "advanced.dev_tools_security_policy_access.confirm": "⚠ 允许开发者工具更改安全策略吗？\n\n在开发者模式开启时，连接的 AI 代理将能够重写工具安全策略、添加或移除每个工具的审批门，以及批准或拒绝待处理的审批——包括它们自己的受门控调用。仅在测试策略时启用。",
     "advanced.code_mode_saved_tools_path.addon_locked": "在应用（插件）模式下硬编码为 <code>/data/saved_tools.json</code>，以便已保存工具在更新后保留。",
     "advanced.code_mode_saved_tools_path.blank_warning": "如果留空，自定义工具仅保留在内存中，重启后丢失。",
     "policies.errors.conflict": "{operation}失败：策略已在另一个标签页或会话中被修改。请重新加载并重新应用您的更改。",
@@ -299,6 +307,7 @@
     "policies.errors.update_tool": "更新工具安全策略失败：{message}",
     "policies.errors.remove_rule": "删除规则失败：{message}",
     "policies.errors.master_save": "工具安全策略更改未保存。服务器仍保留之前的值。",
+    "policies.errors.manage_tool_save": "策略编辑工具的更改未保存。服务器仍保留之前的值。",
     "policies.operations.sync_gated": "同步门控开关",
     "policies.operations.save_rule": "保存规则",
     "policies.operations.save_global": "保存全局设置",
@@ -420,13 +429,17 @@
     "advanced.extra_yaml_write_keys.label": "额外的 YAML 可写键",
     "advanced.extra_yaml_write_keys.help": "以逗号分隔的顶层键：除内置键外，ha_config_set_yaml 还可写入这些键，适用于本安装中以 YAML 为主的集成（例如 alert2）。重新定义 Home Assistant 自身信任边界的键始终无法添加，会被忽略。需要自定义组件 1.2.4 或更高版本。",
     "advanced.sidecar_pin_port.label": "设置界面旁路服务端口",
-    "advanced.sidecar_pin_port.help": "0 表示每次重启选择空闲端口；1024–65535 固定首选端口。需重启。",
+    "advanced.sidecar_pin_port.help": "0 会在首次启动时选择一个空闲端口，并在后续重启中保留该端口；1024–65535 会固定一个首选端口（如果被占用，则回退到空闲端口）。需要重启。",
     "advanced.enable_dev_mode.label": "开发者模式",
     "advanced.enable_dev_mode.help": "⚠ 注册可更改设置并替换运行中服务器的隐藏工具。仅用于开发和测试。需重启。",
+    "advanced.dev_tools_security_policy_access.label": "开发者工具安全策略访问",
+    "advanced.dev_tools_security_policy_access.help": "⚠ 在开发者模式开启时，允许开发者工具重写工具安全策略、添加或移除每个工具的审批门，并代表您批准或拒绝待处理的审批——AI 代理可以接受其自己的受门控调用。仅用于策略测试。无需重启即可生效。",
     "addon.backup_hint.name": "完整 HA 快照建议级别（面向 LLM）",
     "addon.backup_hint.description": "调整 LLM 在 `ha_manage_backup(scope='snapshot')` 工具描述中看到的提示措辞，即在执行高风险操作（例如批量删除设备）之前何时建议创建完整的 Home Assistant tarball 备份。仅影响这一句面向 LLM 的提示文本。\n\n如需在每次编辑自动化 / 脚本 / 辅助元素等之前自动创建快照，请使用下方单独的 **启用编辑自动备份** 开关。",
     "addon.secret_path.name": "密钥路径覆盖",
     "addon.secret_path.description": "MCP 服务器的可选自定义 HTTP 路径。留空则使用自动生成的安全路径。\n",
+    "addon.enable_security_policy_tool.name": "允许 AI 代理编辑工具安全策略",
+    "addon.enable_security_policy_tool.description": "注册 ha_manage_security_policy 工具，该工具允许连接的 AI 代理读取和重写工具安全策略 — 包括移除批准门。默认关闭。独立于上面的“工具安全策略”选项：这控制的是谁可以编辑规则，而不是规则是否被强制执行。该工具无法查看或决定待批准项。为了保持人工参与，请在启用该工具之前对其进行门控：在 Web UI 的“工具”标签页中，为“Manage Security Policy”打开“security gated”选项。需要重启才能生效。",
     "addon.enable_auto_backup.name": "启用编辑自动备份",
     "addon.enable_auto_backup.description": "在每次被封装的写入/破坏性 MCP 工具调用（自动化、脚本、场景、辅助元素、仪表盘、标签、类别、分组、地理区域、区域、日历、待办、实体、集成，以及对应的移除/删除工具）之前，按实体捕获快照。快照以 YAML 文件形式保存在 /data/ha_mcp_backups/ 下（可通过 HAMCP_BACKUP_DIR 覆盖），并可在网页设置界面的“备份”选项卡中或通过 ha_manage_backup(scope='edits', ...) 列出、恢复或删除。尽力而为——失败会记录 WARNING，但绝不会阻断底层写入。默认开启；取消勾选即可退出。需重启才能生效。",
     "addon.auto_backup_throttle_minutes.name": "自动备份节流（分钟）",
@@ -735,7 +748,7 @@
     },
     "ha_manage_hacs": {
       "title": "管理 HACS",
-      "description": "管理 HACS (Home Assistant 社区商店) — 安装/更新、移除或添加自定义存储库。"
+      "description": "管理 HACS (Home Assistant Community Store) — 安装/更新、移除、添加自定义存储库，或刷新存储库"
     },
     "ha_manage_pipeline": {
       "title": "管理 Assist 管线",
@@ -744,6 +757,10 @@
     "ha_manage_radio": {
       "title": "管理无线电（Z-Wave / Zigbee / Matter / Thread）",
       "description": "管理 Home Assistant 的无线电——Z-Wave、Zigbee、Matter 与 Thread。"
+    },
+    "ha_manage_security_policy": {
+      "title": "管理安全策略",
+      "description": "读取和重写工具安全策略，该策略将高风险工具调用置于用户批准之后。"
     },
     "ha_manage_theme": {
       "title": "管理前端主题",

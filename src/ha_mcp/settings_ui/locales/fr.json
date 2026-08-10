@@ -52,8 +52,12 @@
     "policies.title": "Politiques de sécurité des outils",
     "policies.intro": "Contrôle d'approbation par outil pour les appels à enjeux élevés. Utilisez l'onglet <strong>Outils</strong> pour activer le contrôle pour un outil, puis affinez les conditions de correspondance et la durée de validité de l'approbation ici. Opérateurs de condition : égal à, fait partie de, regex, contient, est présent, supérieur à, inférieur à.",
     "policies.global.title": "Paramètres globaux",
+    "policies.global.unknown": "Impossible de lire les paramètres du serveur. Les deux interrupteurs ci-dessous sont affichés comme inconnus et ne peuvent pas être modifiés tant que la page n'est pas rechargée avec succès ; cette vue peut ne pas refléter ce que le serveur applique.",
     "policies.global.enabled.label": "Activer les politiques de sécurité des outils",
     "policies.global.enabled.help": "Interrupteur principal. Reflète le bouton dans les paramètres du serveur. Désactivé par défaut. Activez-le et redémarrez l'App (add-on) pour activer le middleware de contrôle. Lorsqu'il est désactivé, les règles ci-dessous persistent mais ne sont pas appliquées.",
+    "policies.global.manage_tool.label": "Permettre aux agents IA de modifier ces politiques (ha_manage_security_policy)",
+    "policies.global.manage_tool.help": "Enregistre l'outil ha_manage_security_policy, qui lit et remplace le document de politique que cet onglet modifie. Désactivé par défaut. Indépendant de l'interrupteur principal ci-dessus : ceci contrôle qui peut modifier les règles, et non si elles sont appliquées. L'outil n'expose pas les opérations de file d'attente d'approbation en attente, mais une action de définition soumise à une politique peut toujours nécessiter une approbation.",
+    "policies.global.manage_tool.warning": "⚠ L'activation de cette option permet aux agents IA connectés de réécrire les politiques de sécurité de cet onglet, y compris la suppression des portes d'approbation. Pour garder un humain dans la boucle, soumettez l'outil à une approbation AVANT de l'activer : dans l'onglet Outils, activez « soumis à la sécurité » pour Gérer la politique de sécurité. Cette règle peut être rédigée tant que l'outil est désactivé, et elle s'applique une fois que l'interrupteur principal ci-dessus est activé et que le serveur a redémarré. Redémarrez l'application (add-on) après avoir basculé l'un ou l'autre interrupteur.",
     "policies.global.wait.label": "Secondes d'attente (5-600)",
     "policies.global.wait.help": "Durée pendant laquelle le middleware attend une approbation avant d'expirer.",
     "policies.global.ttl.label": "Durée de vie de l'approbation en minutes (1-60)",
@@ -63,7 +67,7 @@
     "policies.pending.empty": "Aucune approbation en attente.",
     "policies.rules.title": "Outils contrôlés",
     "policies.rules.empty": "Aucun outil actuellement soumis à un contrôle de sécurité. Activez le contrôle par outil depuis l'onglet <a href=\"#\" data-panel-link=\"tools\">Outils</a>.",
-    "accessibility.intro": "Ces paramètres s'appliquent immédiatement et sont enregistrés dans ce navigateur et sur le serveur, ils survivent donc aux redémarrages dans tous les modes (y compris stdio, où la page des paramètres change de port à chaque session). Le site de documentation offre les mêmes contrôles dans sa barre de navigation ; il n'a pas de serveur et enregistre par navigateur.",
+    "accessibility.intro": "Ces paramètres s'appliquent immédiatement et sont enregistrés dans ce navigateur et sur le serveur, afin qu'ils survivent aux redémarrages dans tous les modes (y compris stdio, où la page des paramètres peut occasionnellement se déplacer vers un nouveau port). Le site de documentation offre les mêmes contrôles dans sa barre de navigation ; il n'a pas de serveur et enregistre par navigateur.",
     "accessibility.storage_blocked": "Votre navigateur bloque le stockage du site ; les choix s'appliquent uniquement pour cette session.",
     "accessibility.theme.title": "Thème",
     "accessibility.theme.help": "Schémas de couleurs en un clic. Auto, le réglage par défaut, suit les préférences de votre OS et bascule en direct lorsqu'elles changent.",
@@ -117,6 +121,8 @@
     "features.enable_tool_security_policies.help": "Contrôle les appels d'outils à enjeux élevés (contrôle des serrures/alarmes, écritures d'automatisations, etc.) derrière une approbation utilisateur. Lorsqu'un outil protégé est appelé, l'agent dit à l'utilisateur d'ouvrir l'onglet Politiques de sécurité des outils dans l'interface Web et de cliquer sur Approuver avant que l'appel ne continue. Les règles par outil avec conditions d'argument optionnelles sont configurées dans l'onglet Politiques de sécurité des outils. Désactivé par défaut. Nécessite un redémarrage pour prendre effet.",
     "features.read_only_mode.label": "Mode lecture seule",
     "features.read_only_mode.help": "Désactive tous les outils d'écriture et supprime la capacité des outils à effectuer des appels d'écriture ou destructeurs. Les outils mixtes lecture/écriture (sauvegardes, add-ons, préférences énergétiques, pipelines vocaux et mode code lorsqu'il est activé) restent disponibles avec leurs opérations d'écriture bloquées. Même bouton que l'onglet Outils de l'interface Web. Désactivé par défaut. Nécessite un redémarrage pour prendre effet.",
+    "features.redact_secrets.label": "Masquer les secrets",
+    "features.redact_secrets.help": "Masque les secrets des réponses des outils avant qu'ils n'atteignent l'assistant IA. Les options d'add-on et les champs d'intégration marqués comme mots de passe sont remplacés par un marqueur défini/vide (afin que la question « cette information d'identification est-elle configurée ? » reste répondable), et les autres réponses des outils sont nettoyées des valeurs secrètes que le serveur a déjà vues (les valeurs de moins de 6 caractères sont ignorées, car le remplacement de petits fragments corromprait la sortie non liée). Les champs non marqués comme mots de passe par leur schéma ne peuvent pas être détectés. Désactivé par défaut.",
     "features.enable_mandatory_bps.label": "Attacher les compétences de bonnes pratiques aux écritures",
     "features.enable_mandatory_bps.help": "Interrupteur principal pour la fonction de livraison de contenu de compétences d'outils d'écriture (problème #1182). Lorsqu'il est activé (par défaut), les six outils d'écriture de configuration (automatisations, scripts, scènes, assistants, tableaux de bord, YAML brut) attachent les fichiers de référence canoniques des bonnes pratiques Home Assistant sous `skill_content` à chaque écriture réussie, plus l'intégration automatique de toutes les sections de référence citées par les avertissements de bonnes pratiques. Chaque outil expose également un paramètre `MandatoryBPS` par appel que l'agent peut définir sur false lors des appels suivants une fois qu'il a le contenu. Lorsque cet interrupteur principal est désactivé, AUCUN skill_content n'est émis, indépendamment du paramètre par appel ou des avertissements BP. Recommandé ACTIVÉ comme premier choix ; désactivez uniquement pour les modèles avec de très petites fenêtres de contexte. Désactiver ceci peut dégrader la précision des écritures. Nécessite un redémarrage pour prendre effet.",
     "features.enable_strict_mandatory_bps.label": "Mode strict de bonnes pratiques",
@@ -205,6 +211,7 @@
     "tools.badges.read_only": "lecture seule",
     "tools.badges.writes": "écrit",
     "tools.badges.deletes": "supprime",
+    "tools.notes.gated_disabled": "Désactivé. Activez {setting} — l'interrupteur de l'outil d'édition de politiques se trouve dans l'onglet Politiques de sécurité des outils — puis redémarrez l'application (add-on).",
     "tools.notes.beta_disabled": "Bêta. Définissez {setting} dans la configuration de l'App (add-on) de développement ou la variable d'environnement correspondante (voir docs/beta.md).",
     "tools.notes.env_pinned": "Épinglé par {variable}. Désactivez la variable d'environnement pour modifier ici.",
     "tools.notes.bps_locked": "Verrouillé pendant que le mode strict de bonnes pratiques est activé. Désactivez d'abord ce paramètre pour désactiver cet outil.",
@@ -289,6 +296,7 @@
     "advanced.errors.json": "La réponse des paramètres avancés n'était pas un JSON valide.",
     "advanced.sidecar.stdio_only": "Disponible uniquement en mode stdio. Ce serveur HTTP n'a pas de sidecar d'interface de paramètres à épingler.",
     "advanced.enable_dev_mode.confirm": "⚠ Activer le mode développeur ?\n\nAprès le redémarrage, les outils de développement cachés seront exposés aux agents IA connectés. Activez uniquement pour le développement et les tests.",
+    "advanced.dev_tools_security_policy_access.confirm": "⚠ Autoriser les outils de développement à modifier les politiques de sécurité ?\n\nTant que le mode développeur est activé, les agents IA connectés pourront réécrire les politiques de sécurité des outils, ajouter ou supprimer des portes d'approbation par outil, et approuver ou refuser les approbations en attente — y compris leurs propres appels contrôlés. Activez uniquement lors du test des politiques.",
     "advanced.code_mode_saved_tools_path.addon_locked": "Codé en dur à <code>/data/saved_tools.json</code> en mode App (add-on) pour que les outils enregistrés survivent aux mises à jour.",
     "advanced.code_mode_saved_tools_path.blank_warning": "Si vide, les outils personnalisés sont conservés uniquement en mémoire et perdus au redémarrage.",
     "policies.errors.conflict": "{operation} a échoué : la politique a été modifiée dans un autre onglet ou une autre session. Rechargez et réappliquez vos modifications.",
@@ -299,6 +307,7 @@
     "policies.errors.update_tool": "Échec de la mise à jour de la politique de sécurité de l'outil : {message}",
     "policies.errors.remove_rule": "Échec de la suppression de la règle : {message}",
     "policies.errors.master_save": "Le changement des politiques de sécurité des outils n'a pas été enregistré. Le serveur a toujours la valeur précédente.",
+    "policies.errors.manage_tool_save": "La modification de l'outil d'édition de politiques n'a pas été enregistrée. Le serveur conserve toujours la valeur précédente.",
     "policies.operations.sync_gated": "Synchroniser le bouton de contrôle",
     "policies.operations.save_rule": "Enregistrer la règle",
     "policies.operations.save_global": "Enregistrer les paramètres globaux",
@@ -420,13 +429,17 @@
     "advanced.extra_yaml_write_keys.label": "Clés d'écriture YAML supplémentaires",
     "advanced.extra_yaml_write_keys.help": "Clés de premier niveau séparées par des virgules que ha_config_set_yaml peut écrire en plus des clés intégrées, pour les intégrations YAML-first sur cette installation (p. ex. alert2). Les clés qui redéfinissent la propre frontière de confiance de Home Assistant ne peuvent jamais être ajoutées et sont ignorées. Nécessite le composant personnalisé 1.2.4 ou plus récent.",
     "advanced.sidecar_pin_port.label": "Port du sidecar de l'interface des paramètres",
-    "advanced.sidecar_pin_port.help": "0 choisit un port libre à chaque redémarrage ; 1024–65535 épingle un port préféré. Redémarrage requis.",
+    "advanced.sidecar_pin_port.help": "0 choisit un port libre au premier démarrage et le conserve pour les redémarrages ultérieurs ; 1024–65535 fixe un port préféré (revient à un port libre s'il est déjà pris). Redémarrage requis.",
     "advanced.enable_dev_mode.label": "Mode développeur",
     "advanced.enable_dev_mode.help": "⚠ Enregistre des outils cachés qui peuvent modifier les paramètres et remplacer le serveur en cours d'exécution. Développement et tests uniquement. Redémarrage requis.",
+    "advanced.dev_tools_security_policy_access.label": "Accès aux politiques de sécurité des outils de développement",
+    "advanced.dev_tools_security_policy_access.help": "⚠ Tant que le mode développeur est activé, permet aux outils de développement de réécrire les politiques de sécurité des outils, d'ajouter ou de supprimer des portes d'approbation par outil, et d'approuver ou de refuser les approbations en attente en votre nom — un agent IA peut accepter ses propres appels contrôlés. Test des politiques uniquement. Prend effet sans redémarrage.",
     "addon.backup_hint.name": "Niveau d'indication d'instantané HA complet (côté LLM)",
     "addon.backup_hint.description": "Ajuste le libellé de l'invite que le LLM voit dans la description de\nl'outil `ha_manage_backup(scope='snapshot')` pour suggérer une sauvegarde\ncomplète de Home Assistant avant les opérations risquées (p. ex.\nsuppressions groupées d'appareils). Concerne UNIQUEMENT cet ensemble\nd'invites côté LLM.\n\nPour les instantanés automatiques par modification d'automatisations /\nscripts / assistants / etc., utilisez le bouton **Activer la sauvegarde\nautomatique des modifications** séparé ci-dessous.",
     "addon.secret_path.name": "Remplacement du chemin secret",
     "addon.secret_path.description": "Chemin HTTP personnalisé optionnel pour le serveur MCP. Laissez vide pour utiliser le chemin sécurisé généré automatiquement.\n",
+    "addon.enable_security_policy_tool.name": "Permettre aux agents IA de modifier les politiques de sécurité des outils",
+    "addon.enable_security_policy_tool.description": "Enregistre l'outil ha_manage_security_policy, qui permet aux agents IA connectés de lire et de réécrire les politiques de sécurité des outils — y compris la suppression des portes d'approbation. Désactivé par défaut. Indépendant de l'option Politiques de sécurité des outils ci-dessus : ceci contrôle qui peut modifier les règles, et non si elles sont appliquées. L'outil ne peut pas voir ou décider des approbations en attente. Pour garder un humain dans la boucle, soumettez l'outil à une approbation avant de l'activer : activez « soumis à la sécurité » pour Gérer la politique de sécurité dans l'onglet Outils de l'interface web. Nécessite un redémarrage pour prendre effet.",
     "addon.enable_auto_backup.name": "Activer la sauvegarde automatique des modifications",
     "addon.enable_auto_backup.description": "Capture un instantané par entité avant chaque appel d'outil MCP d'écriture/destructeur encapsulé (automatisation, script, scène, assistant, tableau de bord, étiquette, catégorie, groupe, zone, zone géographique, calendrier, todo, entité, intégration et outils de suppression/suppression associés). Les instantanés sont stockés sous forme de fichiers YAML dans /data/ha_mcp_backups/ (remplacement via HAMCP_BACKUP_DIR) et listés, restaurés ou supprimés via l'onglet Sauvegardes dans l'interface Web des paramètres ou via ha_manage_backup(scope='edits', ...). Au mieux — les erreurs enregistrent un WARNING mais ne bloquent jamais l'écriture sous-jacente. Activé par défaut ; décochez pour désactiver. Nécessite un redémarrage pour prendre effet.",
     "addon.auto_backup_throttle_minutes.name": "Limitation de la sauvegarde automatique (minutes)",
@@ -735,7 +748,7 @@
     },
     "ha_manage_hacs": {
       "title": "Gérer HACS",
-      "description": "Gérer HACS (Home Assistant Community Store) — installer/mettre à jour, supprimer ou ajouter des dépôts personnalisés."
+      "description": "Gérer HACS (Home Assistant Community Store) — installer/mettre à jour, supprimer, ajouter des dépôts personnalisés, ou actualiser un dépôt dans"
     },
     "ha_manage_pipeline": {
       "title": "Gérer le pipeline Assist",
@@ -744,6 +757,10 @@
     "ha_manage_radio": {
       "title": "Gérer les réseaux radio",
       "description": "Gère les réseaux Z-Wave, Zigbee, Matter et Thread dans Home Assistant."
+    },
+    "ha_manage_security_policy": {
+      "title": "Gérer la politique de sécurité",
+      "description": "Lire et réécrire la politique de sécurité des outils qui soumet les appels d'outils à enjeux élevés à l'approbation de l'utilisateur."
     },
     "ha_manage_theme": {
       "title": "Gérer les thèmes",

@@ -24,10 +24,24 @@ Home Assistant language code names every file:
 - `homeassistant-addon/translations/<code>.yaml` (generated)
 - `homeassistant-addon-dev/translations/<code>.yaml` (generated)
 
-Add the two authored catalogs — this one may start as a `meta`-only stub
-(`native_name`, `dir`) — then run `python scripts/generate_locales.py` and
-merge: the post-merge `locale-sync.yml` workflow machine-fills every string
-over its next daily runs. To fill them in your own PR instead, run
+Add the two authored catalogs, then run `python scripts/generate_locales.py`
+and merge: the post-merge `locale-sync.yml` workflow machine-fills every string
+over its next daily runs. The component catalog may start as an empty object;
+this one needs `meta` (`native_name`, `dir`) plus the handful of `messages`
+keys the ungated checks below demand — a `meta`-only catalog is red in PR CI.
+Two things that list will not lead you to: `policies.operators.exists_long` is
+the condition editor's own dropdown label rather than a `PredicateOp` member,
+so no check asks for it and a catalog without it reads English there until the
+sync fills it; and because each surface samples its own catalog for the address
+register the engine imitates, a component catalog left at a key or two rests
+entirely on whichever of them addresses the reader —
+`test_every_shipped_component_catalog_gets_reader_addressing_samples` pins that
+one. Leaving that catalog empty is fine, but the moment you author anything in
+it, at least one key must be one whose English addresses the reader in the
+second person, and it must carry a non-empty translation — a key left blank is
+skipped like a missing one rather than sampled empty. Most component strings do
+not address the reader, so starting at the top of the file leaves the catalog
+anchorless and that check red until you add one that does. To fill them in your own PR instead, run
 `scripts/translate_locales.py` yourself and review its output like any
 other diff. Also add the new code to the locale list in the repository-root
 `AGENTS.md`
@@ -47,13 +61,19 @@ or constructed — needs no pipeline change.
   rejected when the catalog loads.
 - `messages`: interface labels, help text, notices, and runtime messages. Keys
   may be omitted — English is the per-key fallback at runtime — but see the
-  share limit below before leaving a catalog half-finished.
+  share limit below before leaving a catalog half-finished. Omitting is the
+  only way to say "not translated yet": a key that is present but blank is
+  rejected when the catalog loads, because the runtime resolves by key
+  presence, so an empty value would win over English and render as nothing.
 - `tool_groups`: one entry per renderable MCP tool tag, keyed by the English
-  tag. Not optional, and exact: no key more and none fewer.
+  tag. Not optional, and exact: no key more and none fewer. Blank is rejected
+  here too, but dropping the key is not the escape hatch it is for `messages` —
+  the exact key set forbids that. A heading you have not translated yet keeps
+  the English tag as its value.
 - `tools`: `title` and `description` per tool, keyed by the stable MCP tool
   name. The key set is not optional and exact in the same way; either field on
   its own may be left out, but a missing one counts as untranslated against the
-  share limit below.
+  share limit below. Blank is rejected here too, for the same reason.
 
 Keep the keys and `{placeholders}` unchanged in every section.
 
@@ -71,9 +91,36 @@ import, so the failure names the file but arrives as a broken test module:
 
 ## What CI checks
 
-In PR CI (`tests/src/unit/test_locale_parity.py`, ungated):
+In PR CI (ungated — `tests/src/unit/test_locale_parity.py` unless another file
+is named):
 
 - Every surface carries the same set of language codes.
+- Every decided `Decision` outcome (all but `pending`) and every
+  `PredicateOp` operator has a word in every catalog, non-blank — and in every
+  catalog but `en.json` not still spelled the way the backend does
+  (`test_every_decided_outcome_has_a_catalog_word`,
+  `test_every_predicate_operator_has_a_catalog_word` in
+  `tests/src/unit/test_settings_ui_i18n.py`). These words render inside
+  otherwise translated sentences, and the page payload merges English
+  underneath, so a missing key shows English's own word rather than reading as
+  a gap — and the bare enum literal where English lacks the key too. That is
+  why they are owed at once rather than left to the sync.
+- `policies.pending.already_decided`, the sentence one of those `Decision`
+  words is interpolated into. `TestAlreadyDecidedCopy` in
+  `tests/src/unit/test_settings_ui_js_behavior.py` drives the real 409 handler
+  under every non-English catalog and compares the whole rendered alert, so
+  carrying the word without its host sentence fails on the missing key. Whole
+  sentence rather than containment is deliberate: a host that falls back to
+  English still reads as an English clause around a translated word.
+  **These JS behaviour tests skip unless `tests/js/` has its npm dependencies
+  installed** (`npm install` there) — locally they are silent, in CI they are
+  not.
+- At least one translated key whose English addresses the reader in the
+  second person, so `scripts/translate_locales.py` can show the engine
+  how this catalog addresses its reader
+  (`test_every_shipped_catalog_gets_reader_addressing_samples` in
+  `tests/src/unit/test_translate_locales.py`). Without one the pipeline
+  translates the rest of the catalog with no register to imitate.
 - The generated files (both add-on YAMLs, `FEATURE_META`) are byte-exact
   generator output (`test_derived_catalogs_match_the_canonical_store`); run
   `python scripts/generate_locales.py` after touching any `addon.*`,
@@ -82,9 +129,9 @@ In PR CI (`tests/src/unit/test_locale_parity.py`, ungated):
   matches the baseline — a hand edit that drops a placeholder fails the PR
   that makes it; a translation awaiting a machine rewrite is excluded.
 
-In the post-merge `locale-sync.yml` workflow only (the same test file, gated
-behind `LOCALE_COMPLETENESS_CHECKS=1` — a PR that changes English merges
-without these, and the daily sync owes them afterwards):
+In the post-merge `locale-sync.yml` workflow only (the same files, gated behind
+`LOCALE_COMPLETENESS_CHECKS=1` — a PR that changes English merges without
+these, and the daily sync owes them afterwards):
 
 - `tool_groups` and `tools` name exactly the renderable groups and tools.
 - At most 5% of this catalog's `messages`, and 5% of its `tools` texts, may be

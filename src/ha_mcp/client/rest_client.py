@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from typing import Any, NoReturn
 
 import httpx
-from websockets.exceptions import WebSocketException
 
+from .._vendor.websockets.exceptions import WebSocketException
 from .._version import get_supervisor_base_url, is_running_in_addon
 from ..config import get_global_settings
 from .supervisor_client import make_supervisor_httpx_client

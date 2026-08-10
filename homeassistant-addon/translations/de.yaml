@@ -62,6 +62,17 @@ configuration:
       wird. Tool-bezogene Regeln mit optionalen Argumentbedingungen werden im Tab
       Tool-Sicherheitsrichtlinien konfiguriert. Standardmäßig ausgeschaltet. Erfordert
       Neustart, um wirksam zu werden.
+  enable_security_policy_tool:
+    name: KI-Agenten erlauben, Tool-Sicherheitsrichtlinien zu bearbeiten
+    description: 'Registriert das Tool ha_manage_security_policy, das verbundenen
+      KI-Agenten erlaubt, die Tool-Sicherheitsrichtlinien zu lesen und neu zu schreiben
+      — einschließlich des Entfernens von Genehmigungsschranken. Standardmäßig deaktiviert.
+      Unabhängig von der Option „Tool-Sicherheitsrichtlinien“ oben: Dies steuert,
+      wer die Regeln bearbeiten kann, nicht ob sie erzwungen werden. Das Tool kann
+      ausstehende Genehmigungen nicht sehen oder entscheiden. Um einen Menschen in
+      der Schleife zu halten, schütze das Tool, bevor du es aktivierst: Aktiviere
+      „security gated“ für „Manage Security Policy“ auf dem Tab „Tools“ der Web-UI.
+      Erfordert einen Neustart, um wirksam zu werden.'
   read_only_mode:
     name: Nur-Lese-Modus
     description: Schaltet alle Schreibtools aus und nimmt Tools die Möglichkeit, Schreib-
@@ -70,6 +81,17 @@ configuration:
       bleiben verfügbar, wobei ihre Schreiboperationen blockiert sind. Derselbe Schalter
       wie im Web-UI-Tab Tools. Standardmäßig ausgeschaltet. Erfordert Neustart, um
       wirksam zu werden.
+  redact_secrets:
+    name: Geheimnisse schwärzen
+    description: Schwärzt Geheimnisse aus Tool-Antworten, bevor sie den KI-Assistenten
+      erreichen. Add-on-Optionen und Integrationsfelder, die als Passwörter markiert
+      sind, werden durch einen gesetzt/leer-Marker ersetzt (damit „ist dieses Anmeldeinformationen
+      konfiguriert?“ weiterhin beantwortbar bleibt), und andere Tool-Antworten werden
+      von geheimen Werten bereinigt, die der Server bereits gesehen hat (Werte, die
+      kürzer als 6 Zeichen sind, werden übersprungen, da das Ersetzen kleiner Fragmente
+      zu einer Beschädigung der nicht zusammenhängenden Ausgabe führen würde). Felder,
+      die nicht durch ihr Schema als Passwörter markiert sind, können nicht erkannt
+      werden. Standardmäßig deaktiviert.
   enable_mandatory_bps:
     name: Best-Practice-Skills bei Schreibvorgängen anhängen
     description: 'Hauptschalter für die Funktion zur Bereitstellung von Schreib-Tool-Skill-Inhalten

@@ -20,6 +20,7 @@ from pydantic import Field
 
 from .config import _PACKAGE_VERSION, get_global_settings
 from .errors import ErrorCode, create_error_response
+from .hacs_auto_refresh import hacs_refresh_lifespan
 from .tools.helpers import raise_tool_error
 from .transforms import DEFAULT_PINNED_TOOLS
 
@@ -142,6 +143,7 @@ class HomeAssistantSmartMCPServer:
             version=server_version,
             icons=SERVER_ICONS,
             instructions=instructions,
+            lifespan=hacs_refresh_lifespan,
         )
 
         # Register all tools and expert prompts
@@ -279,6 +281,17 @@ class HomeAssistantSmartMCPServer:
         # ENABLE_TOOL_SECURITY_POLICIES. Must come last so the middleware
         # wraps the final tool surface (including the search proxies).
         self._apply_tool_security_policies()
+
+        # Known-secret-value scrub (#2157) — registered just before the
+        # visibility outbound half so that half stays innermost (its scan
+        # must see truly raw output; a secret value could embed a hidden
+        # entity id). Since the visibility scan only refuses or passes
+        # through — never rewrites — this scrubber still sees the unmodified
+        # tool output on the way back out. Consults the live redact_secrets
+        # flag per call and is a passthrough while the flag is off.
+        from .redaction import RedactSecretsMiddleware
+
+        self.mcp.add_middleware(RedactSecretsMiddleware())
 
         # Entity visibility enforce mode, OUTBOUND half (#2015) — added LAST
         # so it is innermost: its result scan sees the raw tool output before

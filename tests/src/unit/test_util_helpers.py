@@ -1261,7 +1261,13 @@ class TestApplyEntityCategoryWriter:
     @pytest.mark.asyncio
     async def test_success_does_not_create_warnings_key(self):
         client = MagicMock()
-        client.send_websocket_message = AsyncMock(return_value={"success": True})
+        client.send_websocket_message = AsyncMock(
+            side_effect=[
+                # Pre-write recheck (issue #2159): category still exists.
+                {"success": True, "result": [{"category_id": "cat_test"}]},
+                {"success": True},
+            ]
+        )
         result: dict[str, object] = {}
 
         await apply_entity_category(
@@ -1276,6 +1282,55 @@ class TestApplyEntityCategoryWriter:
         assert result.get("category") == "cat_test"
         assert "warnings" not in result
         assert "category_warning" not in result
+
+    @pytest.mark.asyncio
+    async def test_category_deleted_before_write_skips_with_warning(self):
+        """A category deleted after tool-entry validation must not be written."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=[
+                {"success": True, "result": [{"category_id": "other"}]},
+            ]
+        )
+        result: dict[str, object] = {}
+
+        await apply_entity_category(
+            client,
+            entity_id="light.kitchen",
+            category="cat_test",
+            scope="light",
+            result_dict=result,
+            entity_type="light",
+        )
+
+        assert "category" not in result
+        assert any("no longer exists" in w for w in result["warnings"])
+        # Only the recheck lookup ran — no entity_registry/update.
+        assert client.send_websocket_message.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_recheck_lookup_failure_still_writes(self):
+        """A failed recheck lookup degrades to the previous write-through."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            side_effect=[
+                RuntimeError("recheck lookup failed"),
+                {"success": True},
+            ]
+        )
+        result: dict[str, object] = {}
+
+        await apply_entity_category(
+            client,
+            entity_id="light.kitchen",
+            category="cat_test",
+            scope="light",
+            result_dict=result,
+            entity_type="light",
+        )
+
+        assert result.get("category") == "cat_test"
+        assert client.send_websocket_message.call_count == 2
 
     @pytest.mark.asyncio
     async def test_failure_preserves_existing_warnings_entries(self):

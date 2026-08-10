@@ -31,6 +31,17 @@
       "datasourceTemplate": "{{{datasource}}}"
     },
     {
+      "description": "Vendored library pins. src/ha_mcp/_vendor/ holds third-party code copied verbatim from the pinned sdist, so no package manager sees it: enabledManagers excludes pip_requirements and dependabot's uv ecosystem reads only pyproject.toml/uv.lock. Without this manager a CVE fix would never open a PR. A bump alone does not regenerate the tree — tests/src/unit/test_vendored_websockets.py fails the renovate PR until scripts/vendor_websockets.py is re-run and the result committed, which is the intended handoff.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^src/ha_mcp/_vendor/requirements\\.txt$/"
+      ],
+      "matchStrings": [
+        "(?<depName>[A-Za-z0-9._-]+)==(?<currentValue>[^\\s#]+)"
+      ],
+      "datasourceTemplate": "pypi"
+    },
+    {
       "description": "Python-assignment version pins (e.g. HAOS_VERSION = \"17.3\" in build_image.py)",
       "customType": "regex",
       "managerFilePatterns": [
@@ -75,9 +86,9 @@
           "sed -i \"s/python3\\.[0-9]\\+\\(-[a-z]\\+-slim\\)/python${PYTHON_VERSION}\\1/\" Dockerfile homeassistant-addon/Dockerfile homeassistant-addon-dev/Dockerfile .github/workflows/pr.yml",
           "sed -i \"s/python:3\\.[0-9]\\+-slim/python:${PYTHON_VERSION}-slim/\" Dockerfile homeassistant-addon/Dockerfile homeassistant-addon-dev/Dockerfile",
           "sed -i \"s/Python 3\\.[0-9]\\+ - Security/Python ${PYTHON_VERSION} - Security/\" Dockerfile homeassistant-addon/Dockerfile homeassistant-addon-dev/Dockerfile",
-          "sed -i \"s/PYTHON_VERSION: \\\"3\\.[0-9]\\+\\\"/PYTHON_VERSION: \\\"${PYTHON_VERSION}\\\"/\" .github/workflows/pr.yml .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml .github/workflows/hotfix-release.yml .github/workflows/performance-tests.yml",
+          "sed -i \"s/PYTHON_VERSION: \\\"3\\.[0-9]\\+\\\"/PYTHON_VERSION: \\\"${PYTHON_VERSION}\\\"/\" .github/workflows/pr.yml .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml .github/workflows/performance-tests.yml",
           "sed -i \"s/python-version: '3\\.[0-9]\\+'/python-version: '${PYTHON_VERSION}'/\" .github/workflows/_build-and-release.yml .github/workflows/build-binary.yml",
-          "git add .python-version pyproject.toml Dockerfile homeassistant-addon/Dockerfile homeassistant-addon-dev/Dockerfile .github/workflows/pr.yml .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml .github/workflows/hotfix-release.yml .github/workflows/performance-tests.yml .github/workflows/_build-and-release.yml .github/workflows/build-binary.yml"
+          "git add .python-version pyproject.toml Dockerfile homeassistant-addon/Dockerfile homeassistant-addon-dev/Dockerfile .github/workflows/pr.yml .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml .github/workflows/performance-tests.yml .github/workflows/_build-and-release.yml .github/workflows/build-binary.yml"
         ],
         "fileFilters": [
           ".python-version",
@@ -89,7 +100,6 @@
           ".github/workflows/test.yml",
           ".github/workflows/e2e-tests.yml",
           ".github/workflows/semver-release.yml",
-          ".github/workflows/hotfix-release.yml",
           ".github/workflows/performance-tests.yml",
           ".github/workflows/_build-and-release.yml",
           ".github/workflows/build-binary.yml"

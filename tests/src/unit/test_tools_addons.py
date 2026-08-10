@@ -5,9 +5,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-import websockets.exceptions
 from fastmcp.exceptions import ToolError
 
+# The vendored classes — the same ones tools_addons raises/catches; the
+# shared site-packages websockets is a DIFFERENT set of classes that
+# except/isinstance would silently not match.
+from ha_mcp._vendor.websockets.exceptions import (
+    ConnectionClosed,
+    InvalidHandshake,
+    InvalidStatus,
+)
 from ha_mcp.tools.tools_addons import (
     _apply_response_transform,
     _call_addon_api,
@@ -1257,9 +1264,7 @@ class TestCallAddonWsErrors:
         ):
             # Simulate a quick connection that closes immediately
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -1309,8 +1314,8 @@ class TestCallAddonWsErrors:
         self, mock_ingress_session, status, must_mention
     ):
         """401/403 from the WS handshake should suggest token/scope, not path."""
-        from websockets.datastructures import Headers
-        from websockets.http11 import Response
+        from ha_mcp._vendor.websockets.datastructures import Headers
+        from ha_mcp._vendor.websockets.http11 import Response
 
         client = _make_mock_client()
 
@@ -1326,7 +1331,7 @@ class TestCallAddonWsErrors:
         ):
             response = Response(status, "Unauthorized", Headers())
             mock_ws_connect.return_value.__aenter__ = AsyncMock(
-                side_effect=websockets.exceptions.InvalidStatus(response),
+                side_effect=InvalidStatus(response),
             )
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -1345,8 +1350,8 @@ class TestCallAddonWsErrors:
     @pytest.mark.asyncio
     async def test_ws_handshake_404_keeps_path_hint(self, mock_ingress_session):
         """404 from the WS handshake should still surface the path-shape hint."""
-        from websockets.datastructures import Headers
-        from websockets.http11 import Response
+        from ha_mcp._vendor.websockets.datastructures import Headers
+        from ha_mcp._vendor.websockets.http11 import Response
 
         client = _make_mock_client()
 
@@ -1362,7 +1367,7 @@ class TestCallAddonWsErrors:
         ):
             response = Response(404, "Not Found", Headers())
             mock_ws_connect.return_value.__aenter__ = AsyncMock(
-                side_effect=websockets.exceptions.InvalidStatus(response),
+                side_effect=InvalidStatus(response),
             )
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -1391,7 +1396,7 @@ class TestCallAddonWsErrors:
             ) as mock_ws_connect,
         ):
             mock_ws_connect.return_value.__aenter__ = AsyncMock(
-                side_effect=websockets.exceptions.InvalidHandshake("403 Forbidden"),
+                side_effect=InvalidHandshake("403 Forbidden"),
             )
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -1414,9 +1419,7 @@ class TestCallAddonWsErrors:
             captured["kwargs"] = kwargs
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -1454,9 +1457,7 @@ class TestCallAddonWsErrors:
             captured["headers"] = dict(kwargs.get("additional_headers", {}))
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -1493,9 +1494,7 @@ class TestCallAddonWsErrors:
             captured["url"] = url
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -1530,9 +1529,7 @@ class TestCallAddonWsErrors:
             captured["url"] = url
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -1691,9 +1688,7 @@ class TestCallAddonWsErrors:
             ) as mock_ws_connect,
         ):
             mock_ws = AsyncMock()
-            mock_ws.send.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.send.side_effect = ConnectionClosed(None, None)
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -1760,7 +1755,7 @@ class TestCallAddonWsErrors:
                 '{"event": "line", "data": "Compiling..."}',
                 '{"event": "line", "data": "Done."}',
                 '{"event": "exit", "code": 0}',
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -1792,7 +1787,7 @@ class TestCallAddonWsErrors:
             mock_ws = AsyncMock()
             mock_ws.recv.side_effect = [
                 "\x1b[32mSUCCESS\x1b[0m Build complete",
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -1821,7 +1816,7 @@ class TestCallAddonWsErrors:
             mock_ws.recv.side_effect = [
                 b"\x00\x01\x02",  # binary frame, should be skipped
                 "text message",
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -1914,9 +1909,7 @@ class TestCallAddonWsErrors:
             captured["headers"] = dict(kwargs.get("additional_headers", {}))
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -1961,9 +1954,7 @@ class TestCallAddonWsErrors:
             captured["url"] = url
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -2276,9 +2267,7 @@ class TestCallAddonWsNewParams:
             ) as mock_ws_connect,
         ):
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = messages_to_send + [
-                websockets.exceptions.ConnectionClosed(None, None)
-            ]
+            mock_ws.recv.side_effect = messages_to_send + [ConnectionClosed(None, None)]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -2320,9 +2309,7 @@ class TestCallAddonWsNewParams:
             ) as mock_ws_connect,
         ):
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = messages_to_send + [
-                websockets.exceptions.ConnectionClosed(None, None)
-            ]
+            mock_ws.recv.side_effect = messages_to_send + [ConnectionClosed(None, None)]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -2358,7 +2345,7 @@ class TestCallAddonWsNewParams:
                 "msg 1",
                 "msg 2",
                 "msg 3",
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -2399,7 +2386,7 @@ class TestCallAddonWsNewParams:
                 + yaml_lines
                 + [
                     "INFO Configuration is valid!",
-                    websockets.exceptions.ConnectionClosed(None, None),
+                    ConnectionClosed(None, None),
                 ]
             )
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
@@ -2434,9 +2421,7 @@ class TestCallAddonWsNewParams:
             ) as mock_ws_connect,
         ):
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = yaml_lines + [
-                websockets.exceptions.ConnectionClosed(None, None)
-            ]
+            mock_ws.recv.side_effect = yaml_lines + [ConnectionClosed(None, None)]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -2468,7 +2453,7 @@ class TestCallAddonWsNewParams:
                 '{"level": "INFO", "msg": "start"}',
                 '{"level": "ERROR", "msg": "boom"}',
                 '{"level": "INFO", "msg": "done"}',
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -2507,7 +2492,7 @@ class TestCallAddonWsNewParams:
             mock_ws = AsyncMock()
             mock_ws.recv.side_effect = [
                 "msg",
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -2546,9 +2531,7 @@ class TestCallAddonWsNewParams:
             ) as mock_ws_connect,
         ):
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = [big_msg] * 10 + [
-                websockets.exceptions.ConnectionClosed(None, None)
-            ]
+            mock_ws.recv.side_effect = [big_msg] * 10 + [ConnectionClosed(None, None)]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -2652,7 +2635,7 @@ class TestCallAddonWsNewParams:
             mock_ws = AsyncMock()
             mock_ws.recv.side_effect = [
                 "some message",
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -4448,3 +4431,329 @@ class TestManageAddonRepositoryAction:
             )
         payload = _parse_tool_error(exc_info)
         assert payload["success"] is False
+
+
+# ---------------------------------------------------------------------------
+# redact_secrets (issue 2157)
+# ---------------------------------------------------------------------------
+
+_REDACTION_ADDON_PAYLOAD = {
+    "success": True,
+    "result": {
+        "name": "Secretful",
+        "slug": "secretful",
+        "options": {
+            "github_pat": "github_pat_LIVESECRETVALUE",
+            "log_level": "info",
+            "empty_pw": "",
+            "unlisted": "no schema entry",
+        },
+        "schema": [
+            {
+                "name": "github_pat",
+                "required": True,
+                "type": "string",
+                "format": "password",
+            },
+            {"name": "log_level", "type": "list", "options": ["info", "debug"]},
+            {"name": "empty_pw", "type": "string", "format": "password"},
+        ],
+    },
+}
+
+
+@pytest.fixture
+def _redaction_registry_clean():
+    from ha_mcp.redaction import _clear_known_secret_values
+
+    _clear_known_secret_values()
+    yield
+    _clear_known_secret_values()
+
+
+@pytest.fixture
+def redact_on(monkeypatch, _redaction_registry_clean):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "ha_mcp.redaction.get_global_settings",
+        lambda: SimpleNamespace(redact_secrets=True),
+    )
+
+
+@pytest.fixture
+def redact_off(monkeypatch, _redaction_registry_clean):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "ha_mcp.redaction.get_global_settings",
+        lambda: SimpleNamespace(redact_secrets=False),
+    )
+
+
+class TestGetAddonInfoRedaction:
+    """get_addon_info under the redact_secrets toggle (issue 2157)."""
+
+    async def _fetch(self):
+        import copy
+
+        client = _make_mock_client()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value=copy.deepcopy(_REDACTION_ADDON_PAYLOAD),
+        ):
+            return await get_addon_info(client, "secretful")
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_redacts_password_options(self, redact_on):
+        from ha_mcp.redaction import REDACTED_EMPTY, REDACTED_SET
+
+        result = await self._fetch()
+        options = result["addon"]["options"]
+        assert options["github_pat"] == REDACTED_SET
+        assert options["empty_pw"] == REDACTED_EMPTY
+        assert options["log_level"] == "info"
+        assert options["unlisted"] == "no schema entry"
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_leaves_schema_intact(self, redact_on):
+        result = await self._fetch()
+        assert result["addon"]["schema"] == _REDACTION_ADDON_PAYLOAD["result"]["schema"]
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_registers_known_secret_values(self, redact_on):
+        from ha_mcp.redaction import known_secret_values
+
+        await self._fetch()
+        assert "github_pat_LIVESECRETVALUE" in known_secret_values()
+
+    @pytest.mark.asyncio
+    async def test_toggle_off_is_byte_identical_legacy_output(self, redact_off):
+        result = await self._fetch()
+        assert result["addon"] == _REDACTION_ADDON_PAYLOAD["result"]
+
+
+class TestConfigModeSentinelRejection:
+    """ha_manage_addon config mode must reject redaction sentinels (issue 2157)."""
+
+    def _tools(self):
+        from ha_mcp.tools.tools_addons import AddOnTools
+
+        return AddOnTools(_make_mock_client())
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_rejects_sentinel_value(self, redact_on):
+        from ha_mcp.redaction import REDACTED_SET
+
+        with pytest.raises(ToolError) as exc_info:
+            await self._tools()._execute_config_mode(
+                "secretful", {"options": {"github_pat": REDACTED_SET}}
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        assert "github_pat" in payload["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_clean_write_proceeds_and_harvests(self, redact_on):
+        import copy
+
+        from ha_mcp.redaction import known_secret_values
+
+        responses = [
+            copy.deepcopy(_REDACTION_ADDON_PAYLOAD),
+            {"success": True, "result": {}},
+        ]
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=responses,
+        ) as mock_call:
+            result = await self._tools()._execute_config_mode(
+                "secretful", {"options": {"log_level": "debug"}}
+            )
+        assert result["status"] == "pending_restart"
+        # The write merged the REAL current password value, not a sentinel.
+        posted = mock_call.call_args.kwargs["data"]["options"]
+        assert posted["github_pat"] == "github_pat_LIVESECRETVALUE"
+        assert posted["log_level"] == "debug"
+        # Current live values were remembered for the known-value scrub.
+        assert "github_pat_LIVESECRETVALUE" in known_secret_values()
+
+    @pytest.mark.asyncio
+    async def test_newly_written_password_is_registered_for_the_scrub(self, redact_on):
+        # A password submitted through this path is live from the moment it
+        # is written; registering only the pre-write current options would
+        # leave it unscrubbed in logs and diagnostics until some later read
+        # happened to harvest it.
+        import copy
+
+        from ha_mcp.redaction import known_secret_values
+
+        responses = [
+            copy.deepcopy(_REDACTION_ADDON_PAYLOAD),
+            {"success": True, "result": {}},
+        ]
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=responses,
+        ):
+            await self._tools()._execute_config_mode(
+                "secretful", {"options": {"github_pat": "github_pat_BRANDNEWVALUE"}}
+            )
+        assert "github_pat_BRANDNEWVALUE" in known_secret_values()
+        # The replaced value stays registered too — it can still appear in
+        # already-captured logs.
+        assert "github_pat_LIVESECRETVALUE" in known_secret_values()
+
+    @pytest.mark.asyncio
+    async def test_toggle_off_still_rejects_sentinels(self, redact_off):
+        # Deliberately NOT gated on the toggle: a sentinel captured while
+        # redaction was on must not overwrite a credential after the
+        # operator turns it off.
+        from ha_mcp.redaction import REDACTED_SET
+
+        with pytest.raises(ToolError) as exc_info:
+            await self._tools()._execute_config_mode(
+                "secretful", {"options": {"github_pat": REDACTED_SET}}
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+
+class TestGetAddonInfoPasswordLogLevel:
+    """A schema that marks log_level as a password must not leak it (issue 2157)."""
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_surfaces_sentinel_not_value(self, redact_on):
+        from ha_mcp.redaction import REDACTED_SET
+
+        client = _make_mock_client()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={
+                "success": True,
+                "result": {
+                    "name": "Odd",
+                    "slug": "odd",
+                    "options": {"log_level": "secret-log-pw"},
+                    "schema": [
+                        {"name": "log_level", "type": "string", "format": "password"}
+                    ],
+                },
+            },
+        ):
+            result = await get_addon_info(client, "odd")
+
+        assert result["log_level"] == REDACTED_SET
+        assert result["addon"]["options"]["log_level"] == REDACTED_SET
+
+
+class TestProxy403HintRedaction:
+    """The 403 addon_config hint must carry redacted options (issue 2157) —
+    exercised through the REAL get_addon_info, not a pre-baked addon dict."""
+
+    @pytest.mark.asyncio
+    async def test_403_addon_config_options_redacted(
+        self, mock_ingress_session, redact_on
+    ):
+        from ha_mcp.redaction import REDACTED_SET
+
+        client = _make_mock_client()
+        addon_payload = {
+            "success": True,
+            "result": {
+                "name": "Secretful",
+                "slug": "secretful",
+                "state": "started",
+                "ingress": True,
+                "ingress_entry": "/api/hassio_ingress/abc123",
+                "ip_address": "172.30.33.99",
+                "ingress_port": 5000,
+                "options": {"github_pat": "github_pat_LIVESECRETVALUE"},
+                "schema": [
+                    {
+                        "name": "github_pat",
+                        "type": "string",
+                        "format": "password",
+                    }
+                ],
+            },
+        }
+
+        async def fake_request(*, method, url, headers, content):
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = 403
+            response.json.return_value = {}
+            response.text = "{}"
+            return response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value=addon_payload,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = fake_request
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "secretful", "/api/test")
+
+        assert result["status_code"] == 403
+        assert result["addon_config"]["options"] == {"github_pat": REDACTED_SET}
+
+
+class TestGetAddonInfoUnreadableSchema:
+    """Missing/malformed/empty schemas fail closed on the read path (2157)."""
+
+    async def _fetch_with(self, result_payload, redacted=True):
+        import copy
+
+        client = _make_mock_client()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": copy.deepcopy(result_payload)},
+        ):
+            return await get_addon_info(client, "secretful")
+
+    @pytest.mark.asyncio
+    async def test_missing_schema_fails_closed(self, redact_on):
+        from ha_mcp.redaction import REDACTED_SET
+
+        result = await self._fetch_with(
+            {"slug": "s", "options": {"maybe_pw": "hunter2secret"}}
+        )
+        assert result["addon"]["options"] == {"maybe_pw": REDACTED_SET}
+        assert len(result["warnings"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_legacy_dict_schema_fails_closed(self, redact_on):
+        from ha_mcp.redaction import REDACTED_SET
+
+        result = await self._fetch_with(
+            {
+                "slug": "s",
+                "options": {"maybe_pw": "hunter2secret"},
+                "schema": {"maybe_pw": "password"},
+            }
+        )
+        assert result["addon"]["options"] == {"maybe_pw": REDACTED_SET}
+        assert len(result["warnings"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_options_untouched_without_schema(self, redact_on):
+        result = await self._fetch_with({"slug": "s", "options": {}})
+        assert result["addon"]["options"] == {}
+        assert "warnings" not in result

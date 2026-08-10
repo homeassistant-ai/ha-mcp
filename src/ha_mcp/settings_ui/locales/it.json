@@ -52,8 +52,12 @@
     "policies.title": "Criteri di sicurezza degli strumenti",
     "policies.intro": "Controllo delle approvazioni per singolo strumento sulle chiamate ad alto rischio. Usa la scheda <strong>Strumenti</strong> per attivare il controllo su uno strumento, poi affina qui le condizioni di corrispondenza e la durata dell'approvazione. Operatori di condizione: è uguale a, è uno di, regex, contiene, è presente, maggiore di, minore di.",
     "policies.global.title": "Impostazioni globali",
+    "policies.global.unknown": "Impossibile leggere le impostazioni del server. I due interruttori sottostanti sono mostrati come sconosciuti e non possono essere modificati finché la pagina non si ricarica correttamente; questa vista potrebbe non riflettere ciò che il server impone.",
     "policies.global.enabled.label": "Attiva i criteri di sicurezza degli strumenti",
     "policies.global.enabled.help": "Interruttore principale. Rispecchia l'opzione in Impostazioni del server. Disattivato per impostazione predefinita. Attivalo e riavvia l'app (componente aggiuntivo) per abilitare il middleware di controllo. Mentre è disattivo, le regole qui sotto restano salvate ma non vengono applicate.",
+    "policies.global.manage_tool.label": "Consenti agli agenti IA di modificare queste policy (ha_manage_security_policy)",
+    "policies.global.manage_tool.help": "Registra lo strumento ha_manage_security_policy, che legge e sostituisce il documento di policy modificato da questa scheda. Disattivato per impostazione predefinita. Indipendente dall'interruttore principale sopra: questo controlla chi può modificare le regole, non se vengono applicate. Lo strumento non espone operazioni di coda di approvazione in sospeso, ma un'azione di impostazione protetta da policy può comunque richiedere approvazione.",
+    "policies.global.manage_tool.warning": "L'attivazione di questa opzione consente agli agenti IA connessi di riscrivere le policy di sicurezza in questa scheda, inclusa la rimozione dei gate di approvazione. Per mantenere un essere umano nel ciclo, proteggi lo strumento PRIMA di abilitarlo: nella scheda Strumenti, attiva \"protetto da sicurezza\" per Gestisci Policy di Sicurezza. Questa regola può essere creata mentre lo strumento è ancora disattivato, e viene applicata una volta che l'interruttore principale sopra è attivo e il server è stato riavviato. Riavvia l'App (add-on) dopo aver attivato o disattivato uno dei due interruttori.",
     "policies.global.wait.label": "Secondi di attesa (5-600)",
     "policies.global.wait.help": "Quanto il middleware attende un'approvazione prima di andare in timeout.",
     "policies.global.ttl.label": "TTL dell'approvazione in minuti (1-60)",
@@ -63,7 +67,7 @@
     "policies.pending.empty": "Nessuna approvazione in sospeso.",
     "policies.rules.title": "Strumenti controllati",
     "policies.rules.empty": "Al momento nessuno strumento è sottoposto a controllo di sicurezza. Attiva il controllo per singolo strumento dalla scheda <a href=\"#\" data-panel-link=\"tools\">Strumenti</a>.",
-    "accessibility.intro": "Queste impostazioni si applicano subito e vengono salvate in questo browser e sul server, quindi sopravvivono ai riavvii in tutte le modalità (compresa stdio, dove la pagina delle impostazioni cambia porta a ogni sessione). Il sito della documentazione offre gli stessi controlli nella barra di navigazione; non ha un server e salva per singolo browser.",
+    "accessibility.intro": "Queste impostazioni si applicano immediatamente e vengono salvate in questo browser e sul server, in modo che sopravvivano ai riavvii in ogni modalità (inclusa stdio, dove la pagina delle impostazioni può occasionalmente spostarsi su una nuova porta). Il sito della documentazione offre gli stessi controlli nella sua barra di navigazione; non ha un server e salva per browser.",
     "accessibility.storage_blocked": "Il tuo browser sta bloccando l'archiviazione del sito; le scelte valgono solo per questa sessione.",
     "accessibility.theme.title": "Tema",
     "accessibility.theme.help": "Combinazioni di colori con un clic. Automatico, l'impostazione predefinita, segue la preferenza del sistema operativo e cambia in tempo reale quando questa cambia.",
@@ -117,6 +121,8 @@
     "features.enable_tool_security_policies.help": "Subordina all'approvazione dell'utente le chiamate agli strumenti ad alto rischio (controllo di serrature e allarmi, scrittura di automazioni, ecc.). Quando viene chiamato uno strumento controllato, l'agente chiede all'utente di aprire la scheda Criteri di sicurezza degli strumenti nell'interfaccia web e di fare clic su Approva prima che la chiamata prosegua. Le regole per singolo strumento, con condizioni facoltative sugli argomenti, si configurano nella scheda Criteri di sicurezza degli strumenti. Disattivato per impostazione predefinita. Richiede il riavvio per avere effetto.",
     "features.read_only_mode.label": "Modalità di sola lettura",
     "features.read_only_mode.help": "Disattiva tutti gli strumenti di scrittura e impedisce a qualunque strumento di eseguire chiamate di scrittura o distruttive. Gli strumenti misti di lettura/scrittura (backup, componenti aggiuntivi, preferenze energetiche, pipeline vocali e la modalità codice quando è attiva) restano disponibili, ma con le operazioni di scrittura bloccate. È la stessa opzione della scheda Strumenti nell'interfaccia web. Disattivata per impostazione predefinita. Richiede il riavvio per avere effetto.",
+    "features.redact_secrets.label": "Rimuovi Segreti",
+    "features.redact_secrets.help": "Rimuove i segreti dalle risposte degli strumenti prima che raggiungano l'assistente IA. Le opzioni dell'add-on e i campi di integrazione contrassegnati come password vengono sostituiti con un marcatore impostato/vuoto (così \"questa credenziale è configurata?\" rimane una domanda a cui si può rispondere), e altre risposte degli strumenti vengono ripulite dai valori segreti che il server ha già visto (i valori più corti di 6 caratteri vengono saltati, poiché la sostituzione di frammenti minuscoli corromperebbe l'output non correlato). I campi non contrassegnati come password dal loro schema non possono essere rilevati. Disattivato per impostazione predefinita.",
     "features.enable_mandatory_bps.label": "Allega le skill di buone pratiche alle scritture",
     "features.enable_mandatory_bps.help": "Interruttore principale della funzione che consegna il contenuto delle skill agli strumenti di scrittura (issue #1182). Quando è attivo (impostazione predefinita), i sei strumenti di scrittura della configurazione (automazioni, script, scene, helper, dashboard, YAML grezzo) allegano i file di riferimento canonici sulle buone pratiche di Home Assistant sotto `skill_content` a ogni scrittura riuscita e incorporano automaticamente le sezioni di riferimento citate dagli avvisi sulle buone pratiche. Ogni strumento espone inoltre un parametro `MandatoryBPS` per singola chiamata, che l'agente può impostare su false nelle chiamate successive una volta ottenuti i contenuti. Quando questo interruttore principale è disattivo NON viene inviato alcun skill_content, a prescindere dal parametro per singola chiamata o dagli avvisi sulle buone pratiche. Si consiglia di lasciarlo attivo come prima scelta; disattivalo solo per modelli con finestre di contesto molto piccole. Disattivarlo può peggiorare l'accuratezza delle scritture. Richiede il riavvio per avere effetto.",
     "features.enable_strict_mandatory_bps.label": "Modalità rigorosa per le buone pratiche",
@@ -205,6 +211,7 @@
     "tools.badges.read_only": "sola lettura",
     "tools.badges.writes": "scrive",
     "tools.badges.deletes": "elimina",
+    "tools.notes.gated_disabled": "Disabilitato. Attiva {setting} — l'interruttore dello strumento di modifica delle policy si trova nella scheda Policy di Sicurezza degli Strumenti — poi riavvia l'App (add-on).",
     "tools.notes.beta_disabled": "Beta. Imposta {setting} nella configurazione dell'app (componente aggiuntivo) di sviluppo o la variabile d'ambiente corrispondente (vedi docs/beta.md).",
     "tools.notes.env_pinned": "Fissato da {variable}. Togli la variabile d'ambiente per modificarlo qui.",
     "tools.notes.bps_locked": "Bloccato mentre la modalità rigorosa per le buone pratiche è attiva. Disattiva prima quell'impostazione per disabilitare questo strumento.",
@@ -289,6 +296,7 @@
     "advanced.errors.json": "La risposta con le impostazioni avanzate non era JSON valido.",
     "advanced.sidecar.stdio_only": "Disponibile solo in modalità stdio. Questo server HTTP non ha un sidecar dell'interfaccia delle impostazioni da fissare.",
     "advanced.enable_dev_mode.confirm": "⚠ Attivare la modalità sviluppatore?\n\nDopo il riavvio gli strumenti nascosti per gli sviluppatori saranno esposti agli agenti di IA collegati. Attivala solo per lo sviluppo e il collaudo.",
+    "advanced.dev_tools_security_policy_access.confirm": "⚠ Consentire agli strumenti per sviluppatori di modificare le politiche di sicurezza?\n\nMentre la modalità sviluppatore è attiva, gli agenti IA connessi potranno riscrivere le politiche di sicurezza degli strumenti, aggiungere o rimuovere gate di approvazione per strumento e approvare o negare approvazioni in sospeso — incluse le proprie chiamate con gate. Abilitare solo durante il test delle politiche.",
     "advanced.code_mode_saved_tools_path.addon_locked": "Fissato a <code>/data/saved_tools.json</code> in modalità app (componente aggiuntivo), così gli strumenti salvati sopravvivono agli aggiornamenti.",
     "advanced.code_mode_saved_tools_path.blank_warning": "Se il campo è vuoto, gli strumenti personalizzati restano solo in memoria e vanno persi al riavvio.",
     "policies.errors.conflict": "{operation} non è riuscito: il criterio è stato modificato in un'altra scheda o sessione. Ricarica la pagina e riapplica le tue modifiche.",
@@ -299,6 +307,7 @@
     "policies.errors.update_tool": "Aggiornamento del criterio di sicurezza dello strumento non riuscito: {message}",
     "policies.errors.remove_rule": "Rimozione della regola non riuscita: {message}",
     "policies.errors.master_save": "La modifica dei criteri di sicurezza degli strumenti non è stata salvata. Il server ha ancora il valore precedente.",
+    "policies.errors.manage_tool_save": "La modifica dello strumento di modifica delle policy non è stata salvata. Il server ha ancora il valore precedente.",
     "policies.operations.sync_gated": "Sincronizzare l'opzione di controllo",
     "policies.operations.save_rule": "Salvare la regola",
     "policies.operations.save_global": "Salvare le impostazioni globali",
@@ -420,13 +429,17 @@
     "advanced.extra_yaml_write_keys.label": "Chiavi YAML scrivibili aggiuntive",
     "advanced.extra_yaml_write_keys.help": "Chiavi di primo livello separate da virgole che ha_config_set_yaml può scrivere oltre a quelle integrate, per le integrazioni di questa installazione che si configurano soprattutto in YAML (per esempio alert2). Le chiavi che ridefiniscono il confine di fiducia di Home Assistant non possono mai essere aggiunte e vengono ignorate. Richiede il componente personalizzato 1.2.4 o successivo.",
     "advanced.sidecar_pin_port.label": "Porta del sidecar dell'interfaccia delle impostazioni",
-    "advanced.sidecar_pin_port.help": "0 sceglie una porta libera a ogni riavvio; 1024–65535 fissa la porta preferita. È necessario il riavvio.",
+    "advanced.sidecar_pin_port.help": "0 seleziona una porta libera al primo avvio e la mantiene per i riavvii successivi; 1024–65535 blocca una porta preferita (ricade su una libera se occupata). Riavvio richiesto.",
     "advanced.enable_dev_mode.label": "Modalità sviluppatore",
     "advanced.enable_dev_mode.help": "⚠ Registra strumenti nascosti in grado di modificare le impostazioni e di sostituire il server in esecuzione. Solo per sviluppo e collaudo. È necessario il riavvio.",
+    "advanced.dev_tools_security_policy_access.label": "Accesso alle politiche di sicurezza degli strumenti per sviluppatori",
+    "advanced.dev_tools_security_policy_access.help": "⚠ Mentre la modalità sviluppatore è attiva, consente agli strumenti per sviluppatori di riscrivere le politiche di sicurezza degli strumenti, aggiungere o rimuovere gate di approvazione per strumento e approvare o negare approvazioni in sospeso per tuo conto — un agente IA può accettare le proprie chiamate con gate. Solo per il test delle politiche. Ha effetto senza riavvio.",
     "addon.backup_hint.name": "Livello del suggerimento di snapshot completo di HA (rivolto all'LLM)",
     "addon.backup_hint.description": "Regola il tono del suggerimento che l'LLM vede nella descrizione dello\nstrumento `ha_manage_backup(scope='snapshot')` su quando proporre un\nbackup completo di Home Assistant prima di operazioni rischiose (per\nesempio eliminazioni massive di dispositivi). Riguarda SOLTANTO quella\nfrase rivolta all'LLM.\n\nPer gli snapshot automatici a ogni modifica di automazioni / script /\nhelper / ecc., usa l'opzione separata **Attiva il backup automatico\ndelle modifiche** qui sotto.",
     "addon.secret_path.name": "Percorso segreto personalizzato",
     "addon.secret_path.description": "Percorso HTTP personalizzato facoltativo per il server MCP. Lascialo vuoto per usare il percorso sicuro generato automaticamente.\n",
+    "addon.enable_security_policy_tool.name": "Consenti agli agenti IA di modificare le policy di sicurezza degli strumenti",
+    "addon.enable_security_policy_tool.description": "Registra lo strumento ha_manage_security_policy, che consente agli agenti IA connessi di leggere e riscrivere le policy di sicurezza degli strumenti — inclusa la rimozione dei gate di approvazione. Disattivato per impostazione predefinita. Indipendente dall'opzione Policy di Sicurezza degli Strumenti sopra: questo controlla chi può modificare le regole, non se vengono applicate. Lo strumento non può vedere o decidere le approvazioni in sospeso. Per mantenere un essere umano nel ciclo, proteggi lo strumento prima di abilitarlo: attiva \"protetto da sicurezza\" per Gestisci Policy di Sicurezza nella scheda Strumenti dell'interfaccia web. Richiede un riavvio per avere effetto.",
     "addon.enable_auto_backup.name": "Attiva il backup automatico delle modifiche",
     "addon.enable_auto_backup.description": "Cattura uno snapshot per entità prima di ogni chiamata coperta a uno strumento MCP di scrittura o distruttivo (automazione, script, scena, helper, dashboard, etichetta, categoria, gruppo, zona, area, calendario, cose da fare, entità, integrazione e i relativi strumenti di rimozione). Gli snapshot vengono salvati come file YAML in /data/ha_mcp_backups/ (modificabile con HAMCP_BACKUP_DIR) e si elencano, ripristinano o eliminano dalla scheda Backup dell'interfaccia web delle impostazioni oppure con ha_manage_backup(scope='edits', ...). Funziona secondo il criterio del massimo impegno: gli errori registrano un WARNING ma non bloccano mai la scrittura sottostante. Attivo per impostazione predefinita; togli la spunta per rinunciarvi. Richiede il riavvio per avere effetto.",
     "addon.auto_backup_throttle_minutes.name": "Limitazione del backup automatico (minuti)",
@@ -735,7 +748,7 @@
     },
     "ha_manage_hacs": {
       "title": "Gestisci HACS",
-      "description": "Gestisci HACS (Home Assistant Community Store) — installare/aggiornare, rimuovere o aggiungere repository personalizzati."
+      "description": "Gestisci HACS (Home Assistant Community Store) — installa/aggiorna, rimuovi, aggiungi repository personalizzati o aggiorna repository in"
     },
     "ha_manage_pipeline": {
       "title": "Gestisci le pipeline di Assist",
@@ -744,6 +757,10 @@
     "ha_manage_radio": {
       "title": "Gestisci le radio (Z-Wave / Zigbee / Matter / Thread)",
       "description": "Gestisce le radio di Home Assistant: Z-Wave, Zigbee, Matter e Thread."
+    },
+    "ha_manage_security_policy": {
+      "title": "Gestisci Policy di Sicurezza",
+      "description": "Leggi e riscrivi la policy di sicurezza degli strumenti che protegge le chiamate a strumenti ad alto rischio dietro l'approvazione dell'utente."
     },
     "ha_manage_theme": {
       "title": "Gestisci i temi dell'interfaccia",

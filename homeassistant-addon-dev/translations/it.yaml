@@ -51,6 +51,17 @@ configuration:
       strumento, con condizioni facoltative sugli argomenti, si configurano nella
       scheda Criteri di sicurezza degli strumenti. Disattivato per impostazione predefinita.
       Richiede il riavvio per avere effetto.
+  enable_security_policy_tool:
+    name: Consenti agli agenti IA di modificare le policy di sicurezza degli strumenti
+    description: 'Registra lo strumento ha_manage_security_policy, che consente agli
+      agenti IA connessi di leggere e riscrivere le policy di sicurezza degli strumenti
+      — inclusa la rimozione dei gate di approvazione. Disattivato per impostazione
+      predefinita. Indipendente dall''opzione Policy di Sicurezza degli Strumenti
+      sopra: questo controlla chi può modificare le regole, non se vengono applicate.
+      Lo strumento non può vedere o decidere le approvazioni in sospeso. Per mantenere
+      un essere umano nel ciclo, proteggi lo strumento prima di abilitarlo: attiva
+      "protetto da sicurezza" per Gestisci Policy di Sicurezza nella scheda Strumenti
+      dell''interfaccia web. Richiede un riavvio per avere effetto.'
   read_only_mode:
     name: Modalità di sola lettura
     description: Disattiva tutti gli strumenti di scrittura e impedisce a qualunque
@@ -60,6 +71,17 @@ configuration:
       con le operazioni di scrittura bloccate. È la stessa opzione della scheda Strumenti
       nell'interfaccia web. Disattivata per impostazione predefinita. Richiede il
       riavvio per avere effetto.
+  redact_secrets:
+    name: Rimuovi Segreti
+    description: Rimuove i segreti dalle risposte degli strumenti prima che raggiungano
+      l'assistente IA. Le opzioni dell'add-on e i campi di integrazione contrassegnati
+      come password vengono sostituiti con un marcatore impostato/vuoto (così "questa
+      credenziale è configurata?" rimane una domanda a cui si può rispondere), e altre
+      risposte degli strumenti vengono ripulite dai valori segreti che il server ha
+      già visto (i valori più corti di 6 caratteri vengono saltati, poiché la sostituzione
+      di frammenti minuscoli corromperebbe l'output non correlato). I campi non contrassegnati
+      come password dal loro schema non possono essere rilevati. Disattivato per impostazione
+      predefinita.
   enable_beta_features:
     name: Attiva le funzioni beta (principale)
     description: '⚠ PERICOLO — questi strumenti possono DANNEGGIARE IN MODO PERMANENTE

@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastmcp.exceptions import ToolError
 
@@ -16,6 +18,8 @@ from ha_mcp.tools.tools_dev import (
     register_dev_tools,
 )
 from ha_mcp.utils.data_paths import get_data_dir
+
+POLICY_ACCESS_FLAG = "HAMCP_DEV_SECURITY_POLICY_ACCESS"
 
 
 @pytest.fixture(autouse=True)
@@ -30,12 +34,27 @@ def _isolated_env(tmp_path, monkeypatch):
     """
     monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv(FEATURE_FLAG, raising=False)
+    monkeypatch.delenv(POLICY_ACCESS_FLAG, raising=False)
     monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     get_data_dir.cache_clear()
     reset_global_settings()
     yield
     get_data_dir.cache_clear()
+    reset_global_settings()
+
+
+@pytest.fixture
+def _policy_access_on(monkeypatch):
+    """Grant the dev tools security-policy access for a whole class (#2141).
+
+    ``dev_tools_security_policy_access`` defaults to OFF, so every test
+    that calls set_policy / set_tool(gated=) / approve / deny has to turn
+    it on first. Ordered after the autouse ``_isolated_env`` (which
+    deletes the var and resets the singleton), so this reset is the one
+    the settings object is built from.
+    """
+    monkeypatch.setenv(POLICY_ACCESS_FLAG, "true")
     reset_global_settings()
 
 
@@ -227,6 +246,7 @@ def _mock_client(entries=None, flows=None):
     client.abort_options_flow = AsyncMock(return_value={})
     client.submit_options_flow_step = AsyncMock(return_value={"type": "create_entry"})
     client._request = AsyncMock(return_value={})
+    client.call_service = AsyncMock(return_value=[])
     return client
 
 
@@ -557,9 +577,88 @@ class TestManageServer:
             "note": result["data"]["note"],
         }
         await _drain_background_tasks()
-        client._request.assert_awaited_once_with(
-            "POST", "/config/config_entries/entry/server-e/reload"
+        client.call_service.assert_awaited_once_with(
+            "homeassistant", "reload_config_entry", {"entry_id": "server-e"}
         )
+
+    async def test_restart_embedded_reload_is_cancellation_safe(self, monkeypatch):
+        """The self-reload must go through the SHIELDED services endpoint.
+
+        Regression: POSTing to ``/config/config_entries/entry/{id}/reload``
+        wedged the entry permanently. That handler is unshielded and aiohttp
+        runs with ``handler_cancellation=True``, so when the unload killed
+        the client sending the request, ``async_reload`` was cancelled after
+        the state became ``UNLOAD_IN_PROGRESS`` but before the unload
+        finished — non-recoverable short of restarting Home Assistant.
+        """
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setattr(tools_dev, "_SELF_ACTION_FLUSH_DELAY_S", 0)
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        await DevTools(client).ha_dev_manage_server(action="restart")
+        await _drain_background_tasks()
+
+        client.call_service.assert_awaited_once_with(
+            "homeassistant", "reload_config_entry", {"entry_id": "server-e"}
+        )
+        # The unshielded config-entries endpoint must never be used for a
+        # self-reload, whatever else the tool touched.
+        for call in client._request.await_args_list:
+            assert "/config/config_entries/entry/" not in str(call)
+
+    async def test_self_reload_disconnect_is_not_logged_as_a_failure(
+        self, monkeypatch, caplog
+    ):
+        """Losing the reply is how a SUCCESSFUL self-restart ends.
+
+        The reload stops the worker thread owning this HTTP client, so the
+        shielded service call finishes without us and the response never
+        arrives. Logging that at ERROR ("Deferred config-entry reload
+        failed") describes a reload that actually worked as broken.
+        """
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setattr(tools_dev, "_SELF_ACTION_FLUSH_DELAY_S", 0)
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        lost_reply = RuntimeError("HTTP error")
+        lost_reply.__cause__ = httpx.ReadError("peer went away")
+        client.call_service = AsyncMock(side_effect=lost_reply)
+
+        await DevTools(client).ha_dev_manage_server(action="restart")
+        with caplog.at_level(logging.INFO, logger="ha_mcp.tools.tools_dev"):
+            await _drain_background_tasks()
+
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+        # WARNING specifically: HA surfaces this package at WARNING and above,
+        # so an INFO line would make a successful restart look like silence.
+        dispatched = [r for r in caplog.records if "tore down this" in r.message]
+        assert [r.levelno for r in dispatched] == [logging.WARNING]
+
+    async def test_self_reload_connect_failure_still_logs_an_error(
+        self, monkeypatch, caplog
+    ):
+        """A reload that never reached HA must stay loud.
+
+        Guards the fix above from swallowing real failures: on a connect
+        error the service call may never have been dispatched, so the
+        server can be left un-reloaded with nobody informed.
+        """
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setattr(tools_dev, "_SELF_ACTION_FLUSH_DELAY_S", 0)
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        never_sent = RuntimeError("Failed to connect to Home Assistant")
+        never_sent.__cause__ = httpx.ConnectError("refused")
+        client.call_service = AsyncMock(side_effect=never_sent)
+
+        await DevTools(client).ha_dev_manage_server(action="restart")
+        with caplog.at_level(logging.INFO, logger="ha_mcp.tools.tools_dev"):
+            await _drain_background_tasks()
+
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR]
 
     async def test_restart_addon_schedules_supervisor_restart(self, monkeypatch):
         monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
@@ -840,6 +939,7 @@ class TestManageToolsState:
             await dev_tools.ha_dev_manage_settings(action="set_tool", tool="ha_search")
 
 
+@pytest.mark.usefixtures("_policy_access_on")
 class TestManageToolsGate:
     """The per-tool security gate adds/removes an unconditional policy rule."""
 
@@ -947,6 +1047,7 @@ class TestManageToolsGate:
 
 
 class TestListToolStates:
+    @pytest.mark.usefixtures("_policy_access_on")
     async def test_list_reflects_state_llm_and_gate(self):
         _seed_metadata(
             [
@@ -990,6 +1091,7 @@ class TestListToolStates:
         assert any("tool_policy.json is invalid" in w for w in result["warnings"])
 
 
+@pytest.mark.usefixtures("_policy_access_on")
 class TestManagePolicy:
     @pytest.fixture
     def dev_tools(self):
@@ -1032,12 +1134,42 @@ class TestManagePolicy:
             )
 
     async def test_set_policy_invalid_schema_rejected(self, dev_tools):
-        # wait_seconds must be < approval_ttl_minutes * 60.
+        # wait_seconds must be < approval_ttl_minutes * 60. ``rules`` is
+        # required (see test_set_policy_without_rules_rejected) so the
+        # payload must carry it to reach schema validation at all.
         with pytest.raises(ToolError, match="schema validation"):
             await dev_tools.ha_dev_manage_settings(
                 action="set_policy",
-                policy={"wait_seconds": 599, "approval_ttl_minutes": 1},
+                policy={"wait_seconds": 599, "approval_ttl_minutes": 1, "rules": []},
             )
+
+    async def test_set_policy_without_rules_rejected(self, dev_tools):
+        """set_policy replaces the WHOLE document, so an omitted 'rules'
+        would silently delete every approval gate — both surfaces refuse
+        it (#2148 review)."""
+        await dev_tools.ha_dev_manage_settings(
+            action="set_policy",
+            policy={"rules": [{"tool_name": "ha_call_service"}], "version": 0},
+        )
+        with pytest.raises(ToolError, match="'rules' is missing") as exc:
+            await dev_tools.ha_dev_manage_settings(
+                action="set_policy", policy={"wait_seconds": 45}
+            )
+        assert "ha_dev_manage_settings('get_policy')" in str(exc.value)
+        got = await dev_tools.ha_dev_manage_settings(action="get_policy")
+        assert got["data"]["policy"]["rules"][0]["tool_name"] == "ha_call_service"
+
+    async def test_set_policy_warns_about_removed_rules(self, dev_tools):
+        await dev_tools.ha_dev_manage_settings(
+            action="set_policy",
+            policy={"rules": [{"tool_name": "ha_call_service"}], "version": 0},
+        )
+        result = await dev_tools.ha_dev_manage_settings(
+            action="set_policy", policy={"rules": [], "version": 1}
+        )
+        removed = [w for w in result["warnings"] if "removed 1 existing rule" in w]
+        assert removed, result["warnings"]
+        assert "ha_call_service" in removed[0]
 
     async def test_set_policy_requires_object(self, dev_tools):
         with pytest.raises(ToolError, match="'policy'"):
@@ -1115,6 +1247,7 @@ def _queue_with_entry(**args):
     return SimpleNamespace(approval_queue=queue), entry.token, queue
 
 
+@pytest.mark.usefixtures("_policy_access_on")
 class TestManageServerApprovals:
     async def test_list_pending_reports_entries(self):
         server, token, _queue = _queue_with_entry(domain="light")
@@ -1253,6 +1386,7 @@ class TestListToolsLiveRegistry:
         assert res_off["data"]["policies_live"] is False
 
 
+@pytest.mark.usefixtures("_policy_access_on")
 class TestRememberCacheCleared:
     """clear_remember_cache must actually fire on a rule change (security)."""
 
@@ -1282,6 +1416,7 @@ class TestRememberCacheCleared:
         assert not queue.is_remembered("ha_call_service", "argshash")
 
 
+@pytest.mark.usefixtures("_policy_access_on")
 class TestSetToolPartialCommit:
     async def test_partial_commit_surfaced_when_gate_write_fails(self, monkeypatch):
         # tool_config saves first; force the policy save to fail and assert the
@@ -1336,6 +1471,7 @@ class TestCoerceBoolBranch:
             DevTools._coerce_bool_or_raise("not-a-bool", "llm_api")
 
 
+@pytest.mark.usefixtures("_policy_access_on")
 class TestSetToolNameValidation:
     """set_tool rejects unknown tool names before persisting any guard.
 
@@ -1373,3 +1509,310 @@ class TestSetToolNameValidation:
             action="set_tool", tool="ha_anything", state="pinned"
         )
         assert result["data"]["state"] == "pinned"
+
+
+class TestSecurityPolicyAccessGuard:
+    """Dev tools may not touch security-policy state unless allowed (#2141).
+
+    ``dev_tools_security_policy_access`` is OFF here (the default) unless a
+    test asks for ``_policy_access_on``: dev mode alone must not let an
+    agent rewrite the policies gating it or decide its own approvals.
+    """
+
+    def _rules(self):
+        from ha_mcp.policy.persistence import load_policy
+
+        return load_policy(get_data_dir()).rules
+
+    async def test_set_policy_refused_by_default(self):
+        with pytest.raises(ToolError, match="AUTH_INSUFFICIENT_PERMISSIONS"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set_policy", policy={"rules": [{"tool_name": "ha_search"}]}
+            )
+        assert not (get_data_dir() / "tool_policy.json").exists()
+
+    async def test_gate_refused_while_state_only_set_tool_still_works(self):
+        dev = DevTools(MagicMock())
+        with pytest.raises(ToolError, match="dev_tools_security_policy_access"):
+            await dev.ha_dev_manage_settings(
+                action="set_tool", tool="ha_call_service", gated=True
+            )
+        assert self._rules() == []
+        # The non-policy half of set_tool stays usable with access off.
+        result = await dev.ha_dev_manage_settings(
+            action="set_tool", tool="ha_call_service", state="disabled"
+        )
+        assert result["data"]["state"] == "disabled"
+        assert _tool_config()["tools"]["ha_call_service"] == "disabled"
+
+    async def test_combined_state_and_gate_refused_before_the_state_write(self):
+        with pytest.raises(ToolError, match="security-policy access is disabled"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set_tool", tool="ha_get_history", state="pinned", gated=True
+            )
+        assert _tool_config() == {}
+        assert self._rules() == []
+
+    @pytest.mark.parametrize("decision", ["approve", "deny"])
+    async def test_approval_decisions_refused(self, decision):
+        server, token, queue = _queue_with_entry(domain="light")
+        with pytest.raises(ToolError, match="AUTH_INSUFFICIENT_PERMISSIONS"):
+            await DevTools(MagicMock(), server=server).ha_dev_manage_server(
+                action=decision, token=token
+            )
+        assert queue.get(token).decision == "pending"
+
+    async def test_policy_engine_toggle_refused(self):
+        # Turning the engine off is the widest bypass of all — one setting
+        # write would drop every gate.
+        with pytest.raises(ToolError, match="AUTH_INSUFFICIENT_PERMISSIONS"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set", setting="enable_tool_security_policies", value=False
+            )
+
+    async def test_policy_tool_flag_refused_without_access(self):
+        # Enabling the flag registers ha_manage_security_policy after the
+        # next restart — a shorter route to dropping gates than set_policy.
+        with pytest.raises(ToolError, match="enable_security_policy_tool"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set", setting="enable_security_policy_tool", value=True
+            )
+
+    @pytest.mark.usefixtures("_policy_access_on")
+    async def test_policy_tool_flag_refused_even_with_access(self):
+        # Unconditional, like the access toggle itself: exposing the
+        # policy-rewriting tool is a human decision made on the Tool
+        # Security Policies tab, never a dev-tools write.
+        with pytest.raises(ToolError, match="enable_security_policy_tool"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set", setting="enable_security_policy_tool", value=True
+            )
+
+    @pytest.mark.usefixtures("_policy_access_on")
+    async def test_policy_engine_toggle_allowed_with_access(self):
+        result = await DevTools(MagicMock()).ha_dev_manage_settings(
+            action="set", setting="enable_tool_security_policies", value=True
+        )
+        assert result["data"]["value"] is True
+
+    @pytest.mark.parametrize("action", ["set", "reset"])
+    async def test_access_toggle_is_never_writable_by_dev_tools(self, action):
+        # Refused even WITH access on: the AI must not be able to flip its
+        # own leash in either direction. Access is granted through the
+        # override file rather than the env var, so the field is editable by
+        # origin and only the #2141 guard can be what refuses the write.
+        _override_file_path().write_text(
+            json.dumps({"dev_tools_security_policy_access": True})
+        )
+        reset_global_settings()
+        with pytest.raises(ToolError, match="cannot be changed by dev tools"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action=action,
+                setting="dev_tools_security_policy_access",
+                value=False,
+            )
+        assert get_global_settings().dev_tools_security_policy_access is True
+
+    async def test_reads_stay_available_without_access(self):
+        policy = await DevTools(MagicMock()).ha_dev_manage_settings(action="get_policy")
+        assert policy["data"]["policy"]["rules"] == []
+        server, _token, _queue = _queue_with_entry(domain="light")
+        pending = await DevTools(MagicMock(), server=server).ha_dev_manage_server(
+            action="list_pending"
+        )
+        assert pending["data"]["count"] == 1
+
+    @pytest.mark.usefixtures("_policy_access_on")
+    async def test_every_guarded_surface_works_with_access_on(self):
+        server, token, queue = _queue_with_entry(domain="light")
+        dev = DevTools(MagicMock(), server=server)
+        written = await dev.ha_dev_manage_settings(
+            action="set_policy", policy={"rules": [], "version": 0}
+        )
+        assert written["data"]["version"] == 1
+        gate = await dev.ha_dev_manage_settings(
+            action="set_tool", tool="ha_call_service", gated=True
+        )
+        assert gate["data"]["gated"] is True
+        decided = await dev.ha_dev_manage_server(action="approve", token=token)
+        assert decided["data"]["decision"] == "approved"
+        assert queue.get(token).decision == "approved"
+
+    async def test_access_applies_live_without_a_restart(self, monkeypatch):
+        # The guard reads the env var / override file fresh per call — no
+        # settings-singleton rebuild, no server restart.
+        dev = DevTools(MagicMock())
+        with pytest.raises(ToolError, match="AUTH_INSUFFICIENT_PERMISSIONS"):
+            await dev.ha_dev_manage_settings(action="set_policy", policy={"rules": []})
+        monkeypatch.setenv(POLICY_ACCESS_FLAG, "true")
+        result = await dev.ha_dev_manage_settings(
+            action="set_policy", policy={"rules": []}
+        )
+        assert result["success"] is True
+
+    async def test_access_granted_via_the_override_file(self):
+        """The web-UI toggle path: value in feature_flags.json, no env var.
+
+        Deliberately NO ``reset_global_settings()`` after the file write,
+        and the singleton is built (stale) beforehand: in stdio mode the
+        settings UI sidecar is a separate process, so its POST resets only
+        its own cached settings. The guard must see the file value anyway.
+        """
+        assert get_global_settings().dev_tools_security_policy_access is False
+        _override_file_path().write_text(
+            json.dumps({"dev_tools_security_policy_access": True})
+        )
+        result = await DevTools(MagicMock()).ha_dev_manage_settings(
+            action="set_policy", policy={"rules": []}
+        )
+        assert result["success"] is True
+
+    async def test_access_revoked_via_the_override_file_applies_live(self):
+        """Flipping the toggle OFF in a sidecar process must also bite."""
+        _override_file_path().write_text(
+            json.dumps({"dev_tools_security_policy_access": True})
+        )
+        reset_global_settings()
+        assert get_global_settings().dev_tools_security_policy_access is True
+        _override_file_path().write_text(
+            json.dumps({"dev_tools_security_policy_access": False})
+        )
+        with pytest.raises(ToolError, match="AUTH_INSUFFICIENT_PERMISSIONS"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set_policy", policy={"rules": []}
+            )
+
+    async def test_list_locks_guarded_rows_without_access(self):
+        result = await DevTools(MagicMock()).ha_dev_manage_settings(action="list")
+        rows = {r["setting"]: r for r in result["data"]["settings"]}
+        engine = rows["enable_tool_security_policies"]
+        assert engine["editable"] is False
+        assert engine["locked_reason"] == "policy_access_required"
+        toggle = rows["dev_tools_security_policy_access"]
+        assert toggle["editable"] is False
+        assert toggle["locked_reason"] == "web_ui_or_env_only"
+        assert toggle["value"] is False
+        tool_flag = rows["enable_security_policy_tool"]
+        assert tool_flag["editable"] is False
+        assert tool_flag["locked_reason"] == "web_ui_or_env_only"
+
+    async def test_list_unlocks_engine_row_with_access(self):
+        # Access granted via the override file (the web-UI path): the
+        # toggle row keeps origin=file, so the dev-tools lock is what
+        # renders — an env grant would env-pin the row and the plain env
+        # story would win instead (see the env-pinned test above).
+        _override_file_path().write_text(
+            json.dumps({"dev_tools_security_policy_access": True})
+        )
+        result = await DevTools(MagicMock()).ha_dev_manage_settings(action="list")
+        rows = {r["setting"]: r for r in result["data"]["settings"]}
+        engine = rows["enable_tool_security_policies"]
+        assert engine["editable"] is True
+        assert "locked_reason" not in engine
+        # The access toggle itself stays locked to dev tools forever, and
+        # its displayed value is the fresh read, not the cached singleton.
+        toggle = rows["dev_tools_security_policy_access"]
+        assert toggle["editable"] is False
+        assert toggle["locked_reason"] == "web_ui_or_env_only"
+        assert toggle["value"] is True
+        # The policy-tool flag stays locked even with access granted.
+        tool_flag = rows["enable_security_policy_tool"]
+        assert tool_flag["editable"] is False
+        assert tool_flag["locked_reason"] == "web_ui_or_env_only"
+
+    async def test_env_pinned_engine_row_keeps_env_story(self, monkeypatch):
+        # An env-pinned row is refused by the pin before the guard would
+        # fire; stamping policy_access_required there would misdirect the
+        # operator toward the wrong lock.
+        monkeypatch.setenv("ENABLE_TOOL_SECURITY_POLICIES", "true")
+        reset_global_settings()
+        result = await DevTools(MagicMock()).ha_dev_manage_settings(action="list")
+        rows = {r["setting"]: r for r in result["data"]["settings"]}
+        engine = rows["enable_tool_security_policies"]
+        assert engine["origin"] == "env"
+        assert engine["editable"] is False
+        assert "locked_reason" not in engine
+
+    async def test_gate_removal_refused_without_access(self, monkeypatch):
+        # gated=False REMOVES an operator-installed approval gate — the
+        # exact escalation #2141 blocks. Pins the `gated is not None`
+        # check against a "simplification" to bare truthiness. Seeded
+        # with a real gate first, so a refusal raised AFTER a write
+        # would be caught by the survives-assertion.
+        monkeypatch.setenv(POLICY_ACCESS_FLAG, "true")
+        dev = DevTools(MagicMock())
+        await dev.ha_dev_manage_settings(
+            action="set_tool", tool="ha_call_service", gated=True
+        )
+        monkeypatch.delenv(POLICY_ACCESS_FLAG)
+        with pytest.raises(ToolError, match="AUTH_INSUFFICIENT_PERMISSIONS"):
+            await dev.ha_dev_manage_settings(
+                action="set_tool", tool="ha_call_service", gated=False
+            )
+        assert [r.tool_name for r in self._rules()] == ["ha_call_service"]
+
+    async def test_policy_engine_reset_refused(self):
+        # reset returns the flag to its default (False) — same blast
+        # radius as set value=False; the guard must sit ahead of the
+        # set/reset split. Seeded with an override so a reset that wrote
+        # before raising would be caught.
+        _override_file_path().write_text(
+            json.dumps({"enable_tool_security_policies": True})
+        )
+        with pytest.raises(ToolError, match="AUTH_INSUFFICIENT_PERMISSIONS"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="reset", setting="enable_tool_security_policies"
+            )
+        assert (
+            json.loads(_override_file_path().read_text())[
+                "enable_tool_security_policies"
+            ]
+            is True
+        )
+
+    @pytest.mark.parametrize("env_val", ["1", "yes", "on", "T", "Y", "TRUE"])
+    async def test_env_truthy_strings_grant_access(self, monkeypatch, env_val):
+        monkeypatch.setenv(POLICY_ACCESS_FLAG, env_val)
+        assert tools_dev._security_policy_access_enabled() is True
+
+    @pytest.mark.parametrize("env_val", ["false", "0", "off", "no", "", "banana"])
+    async def test_env_other_strings_deny_access(self, monkeypatch, env_val):
+        monkeypatch.setenv(POLICY_ACCESS_FLAG, env_val)
+        assert tools_dev._security_policy_access_enabled() is False
+
+    async def test_env_false_beats_file_true(self, monkeypatch):
+        # Same env-over-file precedence as _apply_one_advanced_override.
+        _override_file_path().write_text(
+            json.dumps({"dev_tools_security_policy_access": True})
+        )
+        monkeypatch.setenv(POLICY_ACCESS_FLAG, "false")
+        assert tools_dev._security_policy_access_enabled() is False
+
+    async def test_file_string_value_fails_closed(self):
+        # A hand-edited JSON string is rejected by the settings loader
+        # (_coerce_advanced_override_value takes bool|int only), so the
+        # web UI renders the toggle OFF. The guard must agree — reading
+        # "true" as truthy here would grant access no surface displays.
+        _override_file_path().write_text(
+            json.dumps({"dev_tools_security_policy_access": "true"})
+        )
+        assert tools_dev._security_policy_access_enabled() is False
+        with pytest.raises(ToolError, match="AUTH_INSUFFICIENT_PERMISSIONS"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set_policy", policy={"rules": []}
+            )
+
+    async def test_file_int_value_matches_the_loader(self):
+        # The loader accepts bool|int for a bool field, so 1 renders the
+        # web UI toggle ON — the guard must agree, not refuse with a
+        # message claiming the setting is false.
+        _override_file_path().write_text(
+            json.dumps({"dev_tools_security_policy_access": 1})
+        )
+        assert tools_dev._security_policy_access_enabled() is True
+
+    async def test_file_non_scalar_value_fails_closed(self):
+        _override_file_path().write_text(
+            json.dumps({"dev_tools_security_policy_access": ["true"]})
+        )
+        assert tools_dev._security_policy_access_enabled() is False

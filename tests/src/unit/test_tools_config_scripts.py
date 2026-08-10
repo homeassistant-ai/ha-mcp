@@ -8,7 +8,7 @@ especially for blueprint-based scripts (issue #466).
 import json
 import logging
 from typing import Any, ClassVar
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -429,3 +429,318 @@ class TestStripEmptyScriptFields:
 
         assert "sequence" not in result
         assert result == config
+
+
+class TestSetScriptCategoryValidation:
+    """A category that does not exist must not reach the script.
+
+    ``apply_entity_category`` runs after the upsert and HA accepts any category
+    ID, so an unvalidated typo used to leave the script created with a dangling
+    category reference (issue #2159). Validation happens at tool entry so
+    nothing is written when the category is wrong.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.upsert_script_config = AsyncMock(
+            return_value={"success": True, "script_id": "test_script"}
+        )
+        client.get_entity_state = AsyncMock(
+            return_value={"state": "off", "entity_id": "script.test_script"}
+        )
+        # Reference validator (#940) walks these during set_script.
+        client.get_services = AsyncMock(return_value=[])
+        client.get_states = AsyncMock(return_value=[])
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        return ConfigScriptTools(mock_client)
+
+    @staticmethod
+    def _ws_handler(*category_ids):
+        """Answer the category-registry preflight; ack everything else."""
+
+        async def handler(msg):
+            if msg.get("type") == "config/category_registry/list":
+                return {
+                    "success": True,
+                    "result": [{"category_id": cid} for cid in category_ids],
+                }
+            return {"success": True, "result": {"categories": {}}}
+
+        return handler
+
+    @pytest.fixture
+    def sequence_config(self):
+        return {"alias": "Test Script", "sequence": [{"delay": {"seconds": 1}}]}
+
+    async def test_unknown_category_param_rejected_before_upsert(
+        self, tools, mock_client, sequence_config
+    ):
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._ws_handler("lighting")
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_script(
+                script_id="test_script",
+                config=sequence_config,
+                category="ghost_category",
+                wait=False,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert error_data["category"] == "ghost_category"
+        assert error_data["scope"] == "script"
+        mock_client.upsert_script_config.assert_not_called()
+
+    async def test_unknown_category_in_config_rejected_before_upsert(
+        self, tools, mock_client, sequence_config
+    ):
+        """The config dict is the second category source — it needs the same gate."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._ws_handler("lighting")
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_script(
+                script_id="test_script",
+                config={**sequence_config, "category": "ghost_category"},
+                wait=False,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        mock_client.upsert_script_config.assert_not_called()
+
+    async def test_category_registry_lookup_failure_fails_closed(
+        self, tools, mock_client, sequence_config
+    ):
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": {"message": "unavailable"}}
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_script(
+                script_id="test_script",
+                config=sequence_config,
+                category="lighting",
+                wait=False,
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "CONNECTION_FAILED"
+        mock_client.upsert_script_config.assert_not_called()
+
+    async def test_existing_category_proceeds(
+        self, tools, mock_client, sequence_config
+    ):
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._ws_handler("lighting")
+        )
+
+        result = await tools.ha_config_set_script(
+            script_id="test_script",
+            config=sequence_config,
+            category="lighting",
+            wait=False,
+        )
+
+        assert result["success"] is True
+        mock_client.upsert_script_config.assert_called_once()
+
+    @pytest.fixture
+    def transform_tools(self, tools, sequence_config):
+        """Bypass hash arithmetic for python_transform tests (mirrors the
+        automations transform fixture)."""
+        tools._fetch_and_verify_hash = AsyncMock(
+            return_value=(dict(sequence_config), "test_script")
+        )
+        tools._get_script_config_internal = AsyncMock(
+            return_value=({}, "newhash", None)
+        )
+        return tools
+
+    async def test_unknown_category_rejected_on_python_transform(
+        self, transform_tools, mock_client
+    ):
+        """The transform path applies a category too — and must gate it too."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._ws_handler("lighting")
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await transform_tools.ha_config_set_script(
+                script_id="test_script",
+                python_transform="config['mode'] = 'single'",
+                config_hash="prior_hash",
+                category="ghost_category",
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        mock_client.upsert_script_config.assert_not_called()
+
+    async def test_transform_category_param_applied(self, transform_tools, mock_client):
+        """The category param is honored on the transform path (was ignored)."""
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._ws_handler("lighting")
+        )
+
+        result = await transform_tools.ha_config_set_script(
+            script_id="test_script",
+            python_transform="config['mode'] = 'single'",
+            config_hash="prior_hash",
+            category="lighting",
+        )
+
+        assert result["success"] is True
+        assert result["category"] == "lighting"
+        category_updates = [
+            c[0][0]
+            for c in mock_client.send_websocket_message.call_args_list
+            if c[0][0].get("type") == "config/entity_registry/update"
+        ]
+        assert category_updates
+        assert category_updates[0]["categories"] == {"script": "lighting"}
+
+    async def test_transform_category_targets_renamed_entity(
+        self, transform_tools, mock_client
+    ):
+        """A registry-renamed script gets its category on the CURRENT entity.
+
+        The storage key stays the registry unique_id after a rename, so the
+        resolver must be asked for the entity_id instead of constructing
+        ``script.<storage_key>``.
+        """
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=self._ws_handler("lighting")
+        )
+
+        with patch(
+            "ha_mcp.tools.tools_config_scripts.fetch_entity_lookup_via_component",
+            new_callable=AsyncMock,
+            return_value=[{"entity_id": "script.renamed_target"}],
+        ):
+            result = await transform_tools.ha_config_set_script(
+                script_id="test_script",
+                python_transform="config['mode'] = 'single'",
+                config_hash="prior_hash",
+                category="lighting",
+            )
+
+        assert result["success"] is True
+        update_call = next(
+            c[0][0]
+            for c in mock_client.send_websocket_message.call_args_list
+            if c[0][0].get("type") == "config/entity_registry/update"
+        )
+        assert update_call["entity_id"] == "script.renamed_target"
+
+
+class TestScriptEntityResolutionFallbacks:
+    """The registry-scan branch carries the rename fix on installs without
+    the component; the resolver is also skipped entirely when its result
+    would go unused (wait=False, no category)."""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.upsert_script_config = AsyncMock(
+            return_value={"success": True, "script_id": "test_script"}
+        )
+        client.get_services = AsyncMock(return_value=[])
+        client.get_states = AsyncMock(return_value=[])
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        return ConfigScriptTools(mock_client)
+
+    @pytest.fixture
+    def transform_tools(self, tools):
+        tools._fetch_and_verify_hash = AsyncMock(
+            return_value=(
+                {"alias": "Test Script", "sequence": [{"delay": {"seconds": 1}}]},
+                "test_script",
+            )
+        )
+        tools._get_script_config_internal = AsyncMock(
+            return_value=({}, "newhash", None)
+        )
+        return tools
+
+    async def test_registry_scan_resolves_rename_without_component(
+        self, transform_tools, mock_client
+    ):
+        """Component unavailable (None): the registry-list unique_id scan
+        must find the renamed entity, not fall to the constructed id."""
+
+        async def handler(msg: dict) -> dict:
+            msg_type = msg.get("type")
+            if msg_type == "config/category_registry/list":
+                return {"success": True, "result": [{"category_id": "lighting"}]}
+            if msg_type == "config/entity_registry/get":
+                return {"success": False, "error": "not found"}
+            if msg_type == "config/entity_registry/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "platform": "script",
+                            "unique_id": "test_script",
+                            "entity_id": "script.renamed_target",
+                        }
+                    ],
+                }
+            return {"success": True, "result": {"categories": {}}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=handler)
+
+        with patch(
+            "ha_mcp.tools.tools_config_scripts.fetch_entity_lookup_via_component",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            result = await transform_tools.ha_config_set_script(
+                script_id="test_script",
+                python_transform="config['mode'] = 'single'",
+                config_hash="prior_hash",
+                category="lighting",
+            )
+
+        assert result["success"] is True
+        update_call = next(
+            c[0][0]
+            for c in mock_client.send_websocket_message.call_args_list
+            if c[0][0].get("type") == "config/entity_registry/update"
+        )
+        assert update_call["entity_id"] == "script.renamed_target"
+
+    async def test_no_resolution_when_result_unused(self, tools, mock_client):
+        """wait=False without a category skips the resolver round-trips."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {}}
+        )
+
+        with patch(
+            "ha_mcp.tools.tools_config_scripts.fetch_entity_lookup_via_component",
+            new_callable=AsyncMock,
+        ) as lookup:
+            result = await tools.ha_config_set_script(
+                script_id="test_script",
+                config={
+                    "alias": "Test Script",
+                    "sequence": [{"delay": {"seconds": 1}}],
+                },
+                wait=False,
+            )
+
+        assert result["success"] is True
+        lookup.assert_not_called()
+        # The gate must skip the raw registry fallbacks too, and this path
+        # has no other expected WebSocket request (no category validation).
+        mock_client.send_websocket_message.assert_not_called()

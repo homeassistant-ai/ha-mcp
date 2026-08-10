@@ -21,8 +21,10 @@ from ..errors import ErrorCode, create_error_response
 from .hacs_registration import (
     CATEGORY_MAP,
     HACS_ADD_REGISTRATION_TIMEOUT,
+    HACS_REFRESH_TIMEOUT,
     HACS_RESOLVE_REGISTRATION_TIMEOUT,
     _filter_and_score_repos,
+    send_hacs_repository_refresh,
     wait_for_repo_registration,
 )
 from .helpers import (
@@ -120,7 +122,7 @@ class HacsTools:
     read path keeps ``readOnlyHint`` and is never flagged ``destructive``:
 
     - ``ha_get_hacs_info`` (read): ``search`` the store / ``info`` for one repo.
-    - ``ha_manage_hacs`` (write): ``download`` install/update / ``remove`` / ``add_repository``.
+    - ``ha_manage_hacs`` (write): ``download`` install/update / ``remove`` / ``add_repository`` / ``update_information`` refresh.
     """
 
     def __init__(self, client: Any) -> None:
@@ -243,11 +245,13 @@ class HacsTools:
     async def ha_manage_hacs(
         self,
         action: Annotated[
-            Literal["download", "add_repository", "remove"],
+            Literal["download", "add_repository", "remove", "update_information"],
             Field(
                 description=(
                     "'download' to install/update, 'add_repository' to register "
-                    "a custom repo, or 'remove' to uninstall a downloaded repo"
+                    "a custom repo, 'remove' to uninstall a downloaded repo, or "
+                    "'update_information' to refresh a repository's release data "
+                    "from GitHub"
                 )
             ),
         ],
@@ -256,7 +260,7 @@ class HacsTools:
             Field(
                 description=(
                     "Numeric HACS ID or 'owner/repo' path "
-                    "(action='download' / action='remove')"
+                    "(action='download' / 'remove' / 'update_information')"
                 )
             ),
         ] = None,
@@ -276,26 +280,32 @@ class HacsTools:
             Field(description="Repository category (action='add_repository')"),
         ] = None,
     ) -> dict[str, Any]:
-        """Manage HACS (Home Assistant Community Store) — install/update, remove, or add custom repositories.
+        """Manage HACS (Home Assistant Community Store) — install/update, remove, add custom repositories, or refresh repository information.
 
         Use ``action="download"`` to install or update a repository,
         ``action="remove"`` to uninstall a downloaded repository, or
         ``action="add_repository"`` to register a custom GitHub repository with HACS. This
         tool performs writes; to search the store or read repository details use
-        ``ha_get_hacs_info``.
+        ``ha_get_hacs_info``. Use ``action="update_information"`` to run the HACS UI's
+        "Update information" action — a forced re-fetch of one repository's release data
+        from GitHub, so a pending update becomes visible to HACS and its update entity
+        immediately.
 
         **Examples:**
         - Install latest: ha_manage_hacs(action="download", repository_id="441028036")
         - Install a version: ha_manage_hacs(action="download", repository_id="piitaya/lovelace-mushroom", version="v4.0.0")
         - Remove: ha_manage_hacs(action="remove", repository_id="owner/repo")
         - Add a custom repo: ha_manage_hacs(action="add_repository", repository="owner/repo", category="lovelace")
+        - Refresh release data: ha_manage_hacs(action="update_information", repository_id="owner/repo")
 
         **Caveats:** Installing an integration usually needs a Home Assistant restart to
         activate; new Lovelace cards need a browser cache clear. ``repository_id`` accepts a
         numeric HACS ID or an ``owner/repo`` path; ``add_repository`` requires ``owner/repo``
         format plus a matching ``category``. Removing an integration deletes its files but
         the loaded module persists until the next Home Assistant restart — delete its config
-        entries first (``ha_remove_helpers_integrations``).
+        entries first (``ha_remove_helpers_integrations``). HACS refreshes custom
+        repositories on its own only about every 48 hours, so ``update_information`` is the
+        way to surface a just-published release.
         """
         try:
             # Reject parameters that don't belong to the chosen action rather
@@ -312,6 +322,11 @@ class HacsTools:
                     "category": category,
                 },
                 add_repository={"repository_id": repository_id, "version": version},
+                update_information={
+                    "version": version,
+                    "repository": repository,
+                    "category": category,
+                },
             )
 
             if action == "download":
@@ -319,6 +334,9 @@ class HacsTools:
 
             if action == "remove":
                 return await self._hacs_remove(repository_id)
+
+            if action == "update_information":
+                return await self._hacs_update_information(repository_id)
 
             # action == "add_repository"
             repository = validate_identifier_not_empty(
@@ -345,7 +363,7 @@ class HacsTools:
                 context={"tool": "ha_manage_hacs", "action": action},
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
-                    "For action='download' or action='remove', pass a valid repository_id (use ha_get_hacs_info(action='search') to find it)",
+                    "For action='download', 'remove', or 'update_information', pass a valid repository_id (use ha_get_hacs_info(action='search') to find it)",
                     "For action='add_repository', use 'owner/repo' format and a matching category",
                 ],
             )
@@ -447,10 +465,23 @@ class HacsTools:
         # If repository_id contains a slash, it's a GitHub path - look up numeric ID
         actual_id, _ = await _resolve_hacs_repo_id(ws_client, repository_id)
 
-        # Get repository info via WebSocket using numeric ID
-        response = await ws_client.send_command(
-            "hacs/repository/info", repository_id=actual_id
-        )
+        # Get repository info via WebSocket using numeric ID. The WS client
+        # RAISES on a failed result frame, so that — not the dict branch
+        # below, which serves stubbed clients — is where a real HACS failure
+        # lands; keep the command context attached (mirrors ``_hacs_remove``).
+        try:
+            response = await ws_client.send_command(
+                "hacs/repository/info", repository_id=actual_id
+            )
+        except HomeAssistantCommandError as cmd_err:
+            exception_to_structured_error(
+                cmd_err,
+                context={
+                    "command": "hacs/repository/info",
+                    "repository_id": repository_id,
+                },
+                raise_error=True,
+            )
 
         if not response.get("success"):
             exception_to_structured_error(
@@ -535,9 +566,41 @@ class HacsTools:
         # Download/install the repository. Same 60 s budget as remove: HACS
         # refreshes from GitHub before acting, and a slow GitHub past the
         # 30 s default reports a false failure for work that completes.
-        response = await ws_client.send_command(
-            "hacs/repository/download", _wait_timeout=60.0, **download_kwargs
-        )
+        try:
+            response = await ws_client.send_command(
+                "hacs/repository/download", _wait_timeout=60.0, **download_kwargs
+            )
+        except HomeAssistantCommandTimeout as timeout_err:
+            # Same false-failure shape remove documents: HACS finishes the
+            # download regardless, so name the real 60 s budget (the generic
+            # classifier would claim 30) and say the outcome is unknown
+            # instead of inviting a blind retry.
+            exception_to_structured_error(
+                timeout_err,
+                context={
+                    "command": "hacs/repository/download",
+                    "repository_id": repository_id,
+                    "version": version,
+                    "timeout_seconds": 60.0,
+                },
+                suggestions=[
+                    "The download may still have completed on the HACS side — "
+                    "verify with ha_get_hacs_info(action='info', "
+                    f"repository_id='{actual_id}') before retrying",
+                ],
+                raise_error=True,
+            )
+        except HomeAssistantCommandError as cmd_err:
+            exception_to_structured_error(
+                cmd_err,
+                context={
+                    "command": "hacs/repository/download",
+                    "repository_id": repository_id,
+                    "version": version,
+                    "timeout_seconds": 60.0,
+                },
+                raise_error=True,
+            )
 
         if not response.get("success"):
             exception_to_structured_error(
@@ -645,6 +708,7 @@ class HacsTools:
                 context={
                     "command": "hacs/repository/remove",
                     "repository_id": repository_id,
+                    "timeout_seconds": 60.0,
                 },
                 suggestions=[
                     "The removal may still have completed on the HACS side — "
@@ -663,6 +727,7 @@ class HacsTools:
                 context={
                     "command": "hacs/repository/remove",
                     "repository_id": repository_id,
+                    "timeout_seconds": 60.0,
                 },
                 raise_error=True,
             )
@@ -686,6 +751,89 @@ class HacsTools:
                 "note": (
                     "Files are deleted, but an already-loaded integration "
                     "module persists until the next Home Assistant restart."
+                ),
+                "data": response.get("result", {}),
+            },
+        )
+        return {"success": True, **wrapped}
+
+    async def _hacs_update_information(
+        self, repository_id: str | None
+    ) -> dict[str, Any]:
+        # Same up-front guard as ``_hacs_download``: an empty identifier must
+        # fail before any backend call.
+        repository_id = validate_identifier_not_empty(
+            repository_id,
+            "repository_id",
+            suggestions=[
+                "Use ha_get_hacs_info(action='search') to find valid repository IDs",
+                "Or pass a GitHub path like 'owner/repo' to refresh by name",
+            ],
+        )
+        await _assert_hacs_available()
+
+        from ..client.websocket_client import get_websocket_client
+
+        ws_client = await get_websocket_client()
+
+        actual_id, repo_name = await _resolve_hacs_repo_id(ws_client, repository_id)
+
+        # Without the explicit timeout context, the generic classifier reports
+        # its 30 s default — a false claim against this call's 60 s budget.
+        # The refresh is idempotent, so unlike remove no unknown-outcome
+        # warning is needed: retrying a completed refresh is harmless.
+        try:
+            response = await send_hacs_repository_refresh(ws_client, actual_id)
+        except HomeAssistantCommandTimeout as timeout_err:
+            exception_to_structured_error(
+                timeout_err,
+                context={
+                    "command": "hacs/repository/refresh",
+                    "repository_id": repository_id,
+                    "timeout_seconds": HACS_REFRESH_TIMEOUT,
+                },
+                suggestions=[
+                    "GitHub may be slow; the refresh is safe to retry",
+                ],
+                raise_error=True,
+            )
+        except HomeAssistantCommandError as cmd_err:
+            # The WS client RAISES on a failed result frame (it never returns
+            # success=False), so this — not the dict branch below, which
+            # serves stubbed clients — is where a real HACS refresh failure
+            # lands. ``timeout_seconds`` rides along because a HACS-side
+            # message containing "timeout" routes to the by-message timeout
+            # branch, which would otherwise claim 30 s against this budget.
+            exception_to_structured_error(
+                cmd_err,
+                context={
+                    "command": "hacs/repository/refresh",
+                    "repository_id": repository_id,
+                    "timeout_seconds": HACS_REFRESH_TIMEOUT,
+                },
+                raise_error=True,
+            )
+
+        if not response.get("success"):
+            exception_to_structured_error(
+                Exception(f"HACS refresh request failed: {response}"),
+                context={
+                    "command": "hacs/repository/refresh",
+                    "repository_id": repository_id,
+                },
+                raise_error=True,
+            )
+
+        wrapped = await add_timezone_metadata(
+            self._client,
+            {
+                "repository_id": actual_id,
+                "repository": repo_name,
+                "message": f"Refreshed repository information for {repo_name}",
+                "note": (
+                    "HACS re-fetched this repository's release data from GitHub. "
+                    "If a newer release exists, HACS now shows it (and, for "
+                    "downloaded repositories, so does the update entity)."
                 ),
                 "data": response.get("result", {}),
             },

@@ -47,6 +47,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
+from .tools_config_helpers import validate_registry_ids
 from .util_helpers import (
     JSON_STRING_COERCION,
     apply_entity_category,
@@ -852,6 +853,17 @@ class AutomationConfigTools:
                 self._client, config_dict
             )
 
+            # Issue #2159: the category is applied post-upsert via
+            # ``apply_entity_category``, which HA accepts unchecked. Reject an
+            # unknown one here so no automation is created under it.
+            await validate_registry_ids(
+                self._client,
+                None,
+                None,
+                {"automation": effective_category},
+                fail_closed=True,
+            )
+
             return await self._run_config_update(
                 config_dict,
                 identifier,
@@ -1016,6 +1028,16 @@ class AutomationConfigTools:
         transformed_config = _normalize_automation_config(transformed_config)
         self._validate_required_fields(transformed_config, identifier)
         bp_warnings = _check_best_practices(transformed_config)
+
+        # Issue #2159: reject an unknown category before the write, so a
+        # transform never lands under a category that does not exist.
+        await validate_registry_ids(
+            self._client,
+            None,
+            None,
+            {"automation": effective_category},
+            fail_closed=True,
+        )
 
         # ``_fetch_and_verify_hash`` already resolved ``identifier`` to the
         # storage key; thread it so the upsert skips the redundant re-resolve

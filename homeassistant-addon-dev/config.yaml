@@ -1,6 +1,6 @@
 name: "Home Assistant MCP Server (Dev)"
 description: "Development channel - AI assistant integration via MCP (unstable)"
-version: "8.0.0.dev2235"
+version: "8.1.1.dev2296"
 slug: "ha_mcp_dev"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 stage: experimental
@@ -25,7 +25,13 @@ options:
   backup_hint: "normal"
   enable_tool_search: false
   enable_tool_security_policies: false
+  # Registers ha_manage_security_policy, which can rewrite the policies the
+  # option above enforces. Declared here (not beta) because the web UI's
+  # Policies-tab toggle routes its save through Supervisor in add-on mode,
+  # which rejects any option the schema does not declare.
+  enable_security_policy_tool: false
   read_only_mode: false
+  redact_secrets: false
   # Master beta gate — also dev-only (stable's schema does not declare
   # this key; the stable web UI master remains the gate there). Default
   # ON in dev so the master is pre-unlocked; the user only has to
@@ -72,7 +78,9 @@ schema:
   secret_path: str?
   enable_tool_search: bool?
   enable_tool_security_policies: bool?
+  enable_security_policy_tool: bool?
   read_only_mode: bool?
+  redact_secrets: bool?
   enable_beta_features: bool?
   enable_yaml_config_editing: bool?
   enable_yaml_packages_automation: bool?

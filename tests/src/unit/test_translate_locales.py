@@ -36,14 +36,27 @@ from translate_locales import (  # noqa: E402
 )
 
 _SETTINGS_LOCALES = _REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
-# Catalogs that carry translated text. A new language may ship as a meta-only
-# stub for the pipeline to fill (AGENTS.md § Translations), and a stub has no
-# wording to sample yet — requiring samples of it would forbid the documented
-# way to add a language.
+# Catalogs that carry translated text. A catalog with no `messages` yet has no
+# wording to sample, so sampling it would fail on emptiness rather than on the
+# property this checks. Such a catalog cannot ship anyway — the `Decision` and
+# `PredicateOp` word checks in test_settings_ui_i18n.py apply to every catalog
+# (AGENTS.md § Translations) — so the exclusion narrows this check rather than
+# opening a way past it.
 _TRANSLATED_LOCALES = sorted(
     path.stem
     for path in _SETTINGS_LOCALES.glob("*.json")
     if path.stem != "en" and json.loads(path.read_text("utf-8")).get("messages")
+)
+# The other authored surface samples its own catalog, never the settings one
+# (`_surface_catalogs`), so it needs its own list. Read the production constant
+# rather than rebuilding the path: a catalog this list misses is a catalog the
+# check below silently never runs on. An empty catalog is excluded for the same
+# reason as above — AGENTS.md § Translations lets a component catalog start
+# empty, and there is no wording in one to sample.
+_COMPONENT_LOCALES = sorted(
+    path.stem
+    for path in translate_locales.COMPONENT_DIR.glob("*.json")
+    if path.stem != "en" and _flatten(json.loads(path.read_text("utf-8")))
 )
 
 
@@ -105,6 +118,97 @@ class TestValidate:
         assert _validate(_item(english=english), wrong) is not None
 
 
+class TestHardcodedOptionLabels:
+    """Python hardcodes a handful of on-screen names — selector labels and the
+    titles of the config entries themselves — so Home Assistant shows them in
+    English whatever the reader's language is. A catalog that localises one
+    sends the reader looking for something that is not on the screen: the
+    failure that stopped a whole sync run, since the engine only had a prose
+    rule telling it not to."""
+
+    def test_the_name_set_is_read_from_the_source(self) -> None:
+        # Without this the check degrades silently: an empty name set accepts
+        # every translation and still reports a clean run. Both kinds are
+        # asserted because either regex can stop matching on its own.
+        names = translate_locales._hardcoded_ui_names()
+        assert names, "no on-screen names found — the sources were restructured"
+        assert any(name.startswith("Local network") for name in names), (
+            "no selector label found — check the config flow's selector syntax"
+        )
+        assert "HA-MCP File & YAML Tools" in names, (
+            "no config-entry title found — check the *_ENTRY_TITLE constants"
+        )
+
+    def test_rejects_a_localised_hardcoded_label(self) -> None:
+        english = 'Local/LAN (when Network access is "Local network"): {url}'
+        localised = 'Lokaal/LAN (wanneer Netwerktoegang "Lokaal netwerk" is): {url}'
+        kept = 'Lokaal/LAN (wanneer Netwerktoegang "Local network" is): {url}'
+        assert _validate(_item(section="component", english=english), localised)
+        assert _validate(_item(section="component", english=english), kept) is None
+
+    def test_reads_the_label_through_typographic_quotes(self) -> None:
+        # Shipped English already quotes both ways, so which mark an author
+        # reached for must not decide whether the label is protected.
+        english = "Local/LAN (when Network access is “Local network”): {url}"
+        localised = 'Lokaal/LAN (wanneer Netwerktoegang "Lokaal netwerk" is): {url}'
+        assert _validate(_item(section="component", english=english), localised)
+
+    def test_rejects_a_localised_entry_title(self) -> None:
+        # The exact string the 2026-08-08 nl fill shipped: the reader is sent
+        # to an entry whose title the integration hardcodes, under a name that
+        # entry never has.
+        english = (
+            'Not installed — press "Add entry" on this integration\'s page and '
+            'choose "HA-MCP File & YAML Tools" to add it'
+        )
+        localised = (
+            'Niet geïnstalleerd — druk op "Item toevoegen" op de pagina van deze '
+            'integratie en kies "HA-MCP Bestands- & YAML-tools" om deze toe te voegen'
+        )
+        kept = (
+            'Niet geïnstalleerd — druk op "Item toevoegen" op de pagina van deze '
+            'integratie en kies "HA-MCP File & YAML Tools" om deze toe te voegen'
+        )
+        assert _validate(_item(section="component", english=english), localised)
+        assert _validate(_item(section="component", english=english), kept) is None
+
+    def test_rejects_a_localised_name_in_single_quotes(self) -> None:
+        # Shipped English at options.step.init.data_description.enable_llm_api
+        # spells this one with apostrophes rather than double quotes. Single
+        # quotes are matched against the known names instead of being paired
+        # like the other marks: the apostrophe in "integration's" is the same
+        # character, so pairing on it shifts every quote in such a sentence —
+        # measured on the shipped catalogs, pairing loses a live violation.
+        english = "agents can select 'HA-MCP Server' under Control Home Assistant"
+        localised = "agenten kunnen 'HA-MCP Servidor' kiezen onder Bediening"
+        kept = "agenten kunnen 'HA-MCP Server' kiezen onder Bediening"
+        assert _validate(_item(section="component", english=english), localised)
+        assert _validate(_item(section="component", english=english), kept) is None
+
+    def test_apostrophes_do_not_hide_a_double_quoted_name(self) -> None:
+        # The regression the obvious repair would have caused: this English
+        # carries an apostrophe before the quoted title.
+        english = (
+            'press "Add entry" on this integration\'s page and choose '
+            '"HA-MCP File & YAML Tools" to add it'
+        )
+        localised = 'druk op "Item toevoegen" en kies "HA-MCP Bestands-tools"'
+        assert _validate(_item(section="component", english=english), localised)
+
+    def test_leaves_other_quoted_text_translatable(self) -> None:
+        # "Add entry" is Home Assistant's own button: HA translates it, so
+        # every shipped catalog translates the quote too. Only labels the
+        # config flow hardcodes are pinned to English.
+        english = 'Not installed — press "Add entry" on this integration\'s page'
+        assert (
+            _validate(
+                _item(section="component", english=english),
+                'Nicht installiert — klicke auf "Eintrag hinzufügen"',
+            )
+            is None
+        )
+
+
 class TestChunk:
     def test_splits_on_the_character_budget(self) -> None:
         big = "x" * (translate_locales._MAX_CHARS_PER_REQUEST - 10)
@@ -145,6 +249,23 @@ class TestStyleSamples:
         translated = {"long": "…", "neutral": "…"}
         assert translate_locales._style_sample_keys(_SAMPLE_ENGLISH, translated) == [
             "long"
+        ]
+
+    @pytest.mark.parametrize("blank", ["", " ", "\n\t "])
+    def test_skips_keys_whose_translation_is_blank(self, blank: str) -> None:
+        """A blank value is a present key with nothing in it, and this sampler
+        is where one still turns up: `_validate_string_map` rejects it at load,
+        but this script reads the catalogs with `json.loads` instead, and the
+        parity ceilings count a key untranslated only when it equals the English
+        or is missing, so `""` reads there as translated. Sampled, it spends one
+        of three slots on a pair whose target side is empty — and a catalog
+        whose register rests on one key would hand the engine that and nothing
+        else. Whitespace counts as blank: it renders the same.
+        """
+        translated = dict.fromkeys(_SAMPLE_ENGLISH, "…") | {"short": blank}
+        assert translate_locales._style_sample_keys(_SAMPLE_ENGLISH, translated) == [
+            "middle",
+            "long",
         ]
 
     def test_no_addressing_source_yields_no_samples(self) -> None:
@@ -206,6 +327,38 @@ class TestStyleSamples:
         assert all(
             translate_locales._SECOND_PERSON_RE.search(english[key]) for key in keys
         ), f"{locale}.json samples {keys} do not address the reader"
+
+    def test_the_component_catalogs_are_discovered(self) -> None:
+        """Same glob guard as above, for the other authored surface."""
+        assert _COMPONENT_LOCALES, "no component catalogs found to check samples for"
+
+    @pytest.mark.parametrize("locale", _COMPONENT_LOCALES)
+    def test_every_shipped_component_catalog_gets_reader_addressing_samples(
+        self, locale: str
+    ) -> None:
+        """The component surface carries the same guarantee and less margin.
+
+        A settings catalog samples from hundreds of keys, so one English string
+        losing its second person costs it one candidate. A component catalog
+        starts empty and is filled a key at a time, so early on the whole
+        surface can rest on a single shared key — today `nl` is exactly that,
+        one key. Lose the addressing there and the engine is told nothing about
+        how this language addresses its reader and falls back to its own
+        register for every later string, and the only trace is a line on
+        stderr inside an unattended workflow run. Goes through
+        ``_surface_catalogs`` on purpose: that it reads the component catalog
+        rather than the settings one is the property at issue.
+        """
+        english, translated = translate_locales._surface_catalogs(locale, "component")
+        keys = translate_locales._style_sample_keys(english, translated)
+
+        assert keys, (
+            f"component {locale}.json yields no style sample, so the engine "
+            "gets no signal about how this catalog addresses its reader"
+        )
+        assert all(
+            translate_locales._SECOND_PERSON_RE.search(english[key]) for key in keys
+        ), f"component {locale}.json samples {keys} do not address the reader"
 
 
 class TestPromptRegisterRule:
@@ -790,9 +943,12 @@ class TestMetaOnlyStub:
     def test_documented_stub_language_flow_does_not_crash(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AGENTS.md says a new language may start as a meta-only stub catalog
-        and the pipeline fills every string — so a catalog with no messages/
-        tools/tool_groups sections must plan cleanly and be writable."""
+        """A new language starts as a near-empty catalog the pipeline fills, and
+        the sections it does not carry yet are absent rather than empty — so a
+        catalog with no messages/tools/tool_groups sections must plan cleanly
+        and be writable. What a shipped catalog owes beyond that is checked
+        against the real files (see the address-register check above), not
+        here."""
         locales = tmp_path / "locales"
         locales.mkdir()
         (locales / "en.json").write_text(

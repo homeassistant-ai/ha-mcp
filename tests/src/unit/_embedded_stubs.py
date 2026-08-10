@@ -572,6 +572,9 @@ def install() -> None:
     setmod(
         "homeassistant.util.package",
         install_package=MagicMock(name="install_package", return_value=True),
+        # True → _force_install_package's uv --user workaround branch is
+        # skipped, keeping invocation-shape tests deterministic.
+        is_virtual_env=MagicMock(name="is_virtual_env", return_value=True),
     )
     setmod("homeassistant.components.http", HomeAssistantView=HomeAssistantView)
     setmod(

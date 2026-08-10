@@ -3,7 +3,7 @@ name: Webhook Proxy — Stable Guard
 # Stable is promote-only: a PR may not edit the stable webhook-proxy add-on
 # directly. The only exceptions are the promote workflow's own branches
 # (promote-webhook-proxy/*), PRs explicitly tagged `allow-stable-edit`
-# (e.g. a stable-only hotfix), and AGENTS.md/CLAUDE.md — the contributor doc
+# (for exceptional stable-only repairs), and AGENTS.md/CLAUDE.md — the contributor doc
 # for both flavors (the dev tree carries only a pointer stub), never touched
 # by the promote transform. The exemption is pinned to exactly those two
 # paths in their doc shape (regular file + symlink to it); anything else at
@@ -91,5 +91,5 @@ jobs:
           done <<< "$CHANGED"
           echo "::error::Stable is promote-only. Run the 'Webhook Proxy — Promote Dev to"
           echo "::error::Stable' workflow to sync dev -> stable, or add the 'allow-stable-edit'"
-          echo "::error::label if this stable-only edit is intentional (e.g. a hotfix)."
+          echo "::error::label if this exceptional stable-only edit is intentional."
           exit 1

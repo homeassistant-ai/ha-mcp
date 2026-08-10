@@ -1,6 +1,6 @@
 name: SemVer Release
 
-# Biweekly stable releases + manual trigger + hotfix branches
+# Biweekly stable releases + manual urgent releases from master
 # Normal commits to master only create dev releases (via publish-dev.yml)
 on:
   schedule:
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: 'Force release even without changes'
+        description: 'Force a patch when no fix, feat, or perf commit exists'
         required: false
         default: 'false'
         type: boolean
@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 # Serialize with every other workflow that pushes to master (sync-tool-docs,
-# addon-publish-dev, hotfix-release). semantic-release's internal push aborts
+# addon-publish-dev, locale-sync). semantic-release's internal push aborts
 # hard when origin/master moves mid-run ("Upstream branch ... has changed") and
 # that abort is not retryable from inside the action, so the only safe fix is
 # to keep master writers from overlapping. cancel-in-progress stays false: a
@@ -72,7 +72,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check for feat/fix commits since last tag
+      - name: Check for releasable commits since last tag
         id: check
         run: |
           # Get latest non-dev tag
@@ -86,8 +86,18 @@ jobs:
 
           echo "Latest stable tag: $LATEST_TAG"
 
-          # Check for feat/fix commits since last tag
-          CHANGES=$(git log $LATEST_TAG..HEAD --oneline --grep="^feat" --grep="^fix" --grep="^perf" | head -5)
+          # Match every commit form that Python Semantic Release can bump.
+          CHANGES=$(git log $LATEST_TAG..HEAD --oneline -E \
+            --grep="^(feat|fix|perf|refactor)(\(.+\))?!?:" \
+            --grep="^[a-z]+(\(.+\))?!:" \
+            --grep="^BREAKING[ -]CHANGE:" | head -5)
+
+          if [ -n "$CHANGES" ] && [ "${{ inputs.force }}" = "true" ]; then
+            echo "::error::Force pins the next version to patch, but releasable commits exist:"
+            echo "$CHANGES"
+            echo "Dispatch again without force so semantic-release selects the correct level."
+            exit 1
+          fi
 
           if [ -n "$CHANGES" ] || [ "${{ inputs.force }}" = "true" ]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
@@ -160,6 +170,9 @@ jobs:
         # Use GitHub App token with bypass permissions
         github_token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         verbosity: "2"
+        # Force pins the bump to patch and is rejected above when releasable
+        # commits exist, so it cannot override a required minor/major bump.
+        force: ${{ inputs.force && 'patch' || '' }}
         # Don't create GitHub release here - we'll create a draft below
         vcs_release: "false"
 
@@ -171,9 +184,14 @@ jobs:
         VERSION="${{ steps.semantic.outputs.version }}"
         TAG="v${VERSION}"
 
-        # Extract changelog for this version (content between version headers)
-        awk -v ver="## v${VERSION}" '$0 ~ "^"ver {found=1; next} found && /^## v[0-9]/ {exit} found' CHANGELOG.md > release_notes.md
+        # Extract changelog for this version, capped at GitHub's release-body limit
+        # (an over-long body is a 422 that strands the already-pushed tag).
+        python3 scripts/extract_release_notes.py --version "$VERSION" --out release_notes.md
         if [ ! -s release_notes.md ]; then
+          # An empty extract means either no "## v${VERSION}" heading or an
+          # empty section, and the file cannot tell those apart — so warn
+          # instead of letting a one-line release body pass for a normal run.
+          echo "::warning::no changelog section extracted for v${VERSION} — releasing with fallback notes"
           echo "Release v${VERSION}" > release_notes.md
         fi
 

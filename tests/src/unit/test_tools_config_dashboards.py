@@ -324,6 +324,24 @@ class TestDeleteDashboardNotFoundShape:
         assert "identifier" not in body
 
     @pytest.mark.asyncio
+    async def test_unreadable_registry_raises_service_failure(
+        self, delete_tool, mock_client
+    ):
+        """A failed registry read is not reported as a missing dashboard."""
+        mock_client.send_websocket_message.return_value = "unexpected string"
+
+        with pytest.raises(ToolError) as exc_info:
+            await delete_tool(url_path="existing-dash")
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "dashboard registry" in body["error"]["message"]
+        assert "not found" not in body["error"]["message"].lower()
+        assert body["action"] == "delete"
+        assert body["url_path"] == "existing-dash"
+        assert mock_client.send_websocket_message.call_count == 1
+
+    @pytest.mark.asyncio
     async def test_already_deleted_returns_idempotent_success_shape(
         self, delete_tool, mock_client
     ):

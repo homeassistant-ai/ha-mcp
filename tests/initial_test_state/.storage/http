@@ -1,19 +1,33 @@
 {
-  "version": 1,
-  "minor_version": 1,
+  "version": 2,
+  "minor_version": 2,
   "key": "http",
   "data": {
-    "server_port": 8123,
-    "ip_ban_enabled": true,
-    "ssl_profile": "modern",
-    "cors_allowed_origins": [
-      "https://cast.home-assistant.io"
-    ],
-    "use_x_frame_options": true,
-    "login_attempts_threshold": -1,
-    "server_host": [
-      "0.0.0.0",
-      "::"
-    ]
+    "stable": {
+      "server_host": [
+        "0.0.0.0",
+        "::"
+      ],
+      "server_port": 8123,
+      "cors_allowed_origins": [
+        "https://cast.home-assistant.io"
+      ],
+      "use_x_forwarded_for": true,
+      "trusted_proxies": [
+        "127.0.0.0/8",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16"
+      ],
+      "login_attempts_threshold": -1,
+      "ip_ban_enabled": true,
+      "ssl_profile": "modern",
+      "use_x_frame_options": true,
+      "created_at": "2026-08-05T00:00:00+00:00",
+      "error": null,
+      "error_message": null
+    },
+    "pending": null,
+    "yaml_migration_done": true
   }
 }

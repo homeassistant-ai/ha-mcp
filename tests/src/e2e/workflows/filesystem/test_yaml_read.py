@@ -115,16 +115,18 @@ class TestYamlReadSingleFile:
     async def test_reads_key_from_configuration_yaml(self, mcp_client):
         async with MCPAssertions(mcp_client) as mcp:
             data = await mcp.call_tool_success(
-                TOOL_NAME, {"yaml_path": "http", "file": "configuration.yaml"}
+                TOOL_NAME, {"yaml_path": "input_number", "file": "configuration.yaml"}
             )
 
         assert data["count"] == 1
         assert data["files_searched"] == 1
         match = data["matches"][0]
         assert match["file"] == "configuration.yaml"
-        assert match["yaml_path"] == "http"
-        # The http block of initial_test_state/configuration.yaml.
-        assert "use_x_forwarded_for" in match["content"]
+        assert match["yaml_path"] == "input_number"
+        # The input_number block of initial_test_state/configuration.yaml.
+        # (Was `http:` until HA 2026.8 made an http YAML block restart Core
+        # mid-suite — see the note in that file.)
+        assert "e2e_pagination_seed" in match["content"]
 
     async def test_absent_key_is_an_empty_result_not_an_error(self, mcp_client):
         async with MCPAssertions(mcp_client) as mcp:
@@ -145,7 +147,7 @@ class TestYamlReadSingleFile:
             data = await mcp.call_tool_success(
                 TOOL_NAME,
                 {
-                    "yaml_path": "http",
+                    "yaml_path": "input_number",
                     "file": "configuration.yaml",
                     "include_content": False,
                 },
@@ -159,7 +161,7 @@ class TestYamlReadSingleFile:
             data = await mcp.call_tool_success(
                 TOOL_NAME,
                 {
-                    "yaml_path": "http",
+                    "yaml_path": "input_number",
                     "file": "configuration.yaml",
                     "include_parsed": True,
                 },
@@ -167,7 +169,7 @@ class TestYamlReadSingleFile:
 
         parsed = data["matches"][0]["parsed"]
         assert isinstance(parsed, dict)
-        assert parsed["use_x_forwarded_for"] is True
+        assert parsed["e2e_pagination_seed"]["mode"] == "box"
 
 
 @pytest.mark.filesystem
@@ -203,29 +205,34 @@ class TestReadFileYamlPath:
     async def test_yaml_path_returns_subtree(self, mcp_client):
         async with MCPAssertions(mcp_client) as mcp:
             data = await mcp.call_tool_success(
-                READ_TOOL, {"path": "configuration.yaml", "yaml_path": "http"}
+                READ_TOOL, {"path": "configuration.yaml", "yaml_path": "input_number"}
             )
 
-        assert "use_x_forwarded_for" in data["subtree"]
+        assert "e2e_pagination_seed" in data["subtree"]
 
     async def test_yaml_path_extracts_from_the_untailed_file(self, mcp_client):
         """tail_lines must not truncate the text the key is extracted from.
 
-        `http:` sits near the top of configuration.yaml, so a tail of a few
-        lines excludes it entirely, and the retained tail is not valid YAML on
-        its own. Extracting from the tailed text would report the key as
-        absent; the subtree must still come back, while `content` stays tailed.
+        `input_number:` sits well above the last lines of configuration.yaml,
+        so a tail of a few lines excludes it entirely, and the retained tail is
+        not valid YAML on its own. Extracting from the tailed text would report
+        the key as absent; the subtree must still come back, while `content`
+        stays tailed.
         """
         async with MCPAssertions(mcp_client) as mcp:
             data = await mcp.call_tool_success(
                 READ_TOOL,
-                {"path": "configuration.yaml", "tail_lines": 3, "yaml_path": "http"},
+                {
+                    "path": "configuration.yaml",
+                    "tail_lines": 3,
+                    "yaml_path": "input_number",
+                },
             )
 
         assert data["subtree"] is not None, (
             "yaml_path must extract from the full file, not the tailed text"
         )
-        assert "use_x_forwarded_for" in data["subtree"]
+        assert "e2e_pagination_seed" in data["subtree"]
         # content stays truncated: tailing is a display concern only.
         assert len(data["content"].split("\n")) <= 3
 

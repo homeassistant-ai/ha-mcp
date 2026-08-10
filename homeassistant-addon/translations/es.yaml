@@ -65,6 +65,17 @@ configuration:
       con condiciones opcionales sobre los argumentos, se configuran en esa misma
       pestaña. Desactivado de forma predeterminada. Requiere reiniciar para que surta
       efecto.
+  enable_security_policy_tool:
+    name: Permitir que los agentes de IA editen las políticas de seguridad de la herramienta
+    description: 'Registra la herramienta ha_manage_security_policy, que permite a
+      los agentes de IA conectados leer y reescribir las políticas de seguridad de
+      la herramienta — incluyendo la eliminación de las puertas de aprobación. Desactivado
+      por defecto. Independiente de la opción Políticas de seguridad de la herramienta
+      de arriba: esto controla quién puede editar las reglas, no si se aplican. La
+      herramienta no puede ver ni decidir aprobaciones pendientes. Para mantener a
+      un humano en el bucle, protege la herramienta antes de habilitarla: activa "security
+      gated" para Manage Security Policy en la pestaña Herramientas de la interfaz
+      de usuario web. Requiere un reinicio para que surta efecto.'
   read_only_mode:
     name: Modo de solo lectura
     description: Desactiva todas las herramientas de escritura y les retira la capacidad
@@ -74,6 +85,16 @@ configuration:
       sus operaciones de escritura bloqueadas. Es la misma opción que la de la pestaña
       Herramientas de la interfaz web. Desactivado de forma predeterminada. Requiere
       reiniciar para que surta efecto.
+  redact_secrets:
+    name: Redactar secretos
+    description: Redacta secretos de las respuestas de las herramientas antes de que
+      lleguen al asistente de IA. Las opciones del complemento y los campos de integración
+      marcados como contraseñas se reemplazan con un marcador de establecido/vacío
+      (para que "¿está configurada esta credencial?" siga siendo respondible), y otras
+      respuestas de herramientas se limpian de valores secretos que el servidor ya
+      ha visto (los valores de menos de 6 caracteres se omiten, ya que reemplazar
+      fragmentos pequeños corrompería la salida no relacionada). Los campos no marcados
+      como contraseñas por su esquema no pueden ser detectados. Desactivado por defecto.
   enable_mandatory_bps:
     name: Adjuntar skills de buenas prácticas en las escrituras
     description: 'Interruptor principal de la entrega de contenido de skills en las

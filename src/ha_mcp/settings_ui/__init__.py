@@ -235,18 +235,25 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
         except (ValidationError, ValueError) as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         # Mirror main-server optimistic concurrency: reject if on-disk
-        # version moved between this caller's GET and PUT.
-        current = load_policy(data_dir)
-        if new_policy.version != current.version:
-            return JSONResponse(
-                {
-                    "error": "Policy version mismatch. Reload before saving.",
-                    "current_version": current.version,
-                    "current_policy": current.model_dump(mode="json"),
-                },
-                status_code=409,
-            )
-        save_policy(data_dir, new_policy)
+        # version moved between this caller's GET and PUT. The guard is
+        # what makes that check a real compare-and-swap: this handler runs
+        # in the SIDECAR process, so without the cross-process file lock it
+        # could read version N, lose the race to the main server's policy
+        # tools, and overwrite their commit with no version bump visible.
+        from ..utils.config_write_lock import config_write_guard
+
+        async with config_write_guard():
+            current = load_policy(data_dir)
+            if new_policy.version != current.version:
+                return JSONResponse(
+                    {
+                        "error": "Policy version mismatch. Reload before saving.",
+                        "current_version": current.version,
+                        "current_policy": current.model_dump(mode="json"),
+                    },
+                    status_code=409,
+                )
+            save_policy(data_dir, new_policy)
         return JSONResponse({"saved": True, "version": new_policy.version + 1})
 
     async def unavailable(_: Request) -> JSONResponse:

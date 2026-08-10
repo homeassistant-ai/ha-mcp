@@ -1607,6 +1607,32 @@ async def apply_entity_category(
         result_dict: Tool result dict to update with category status
         entity_type: Human-readable type for warning messages
     """
+    # Best-effort recheck immediately before the write (issue #2159): the
+    # caller validated the category at tool entry, but the config upsert and
+    # registration wait sit between that check and this write — a category
+    # deleted in that window would otherwise be stored dangling (HA does not
+    # validate it). A failed recheck lookup falls through to the write: entry
+    # validation already screened typos, and the config is saved either way.
+    try:
+        check = await client.send_websocket_message(
+            {"type": "config/category_registry/list", "scope": scope}
+        )
+        if isinstance(check, dict) and check.get("success"):
+            valid_ids = {
+                c.get("category_id")
+                for c in check.get("result") or []
+                if isinstance(c, dict)
+            }
+            if category not in valid_ids:
+                result_dict.setdefault("warnings", []).append(
+                    f"{entity_type.capitalize()} saved but category "
+                    f"{category!r} no longer exists in the {scope} registry — "
+                    "not applied."
+                )
+                return
+    except Exception as e:
+        logger.debug(f"Category recheck failed for {entity_id}: {e}")
+
     try:
         ws_result = await client.send_websocket_message(
             {

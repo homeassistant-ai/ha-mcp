@@ -11,7 +11,7 @@ env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
   # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.7.4"
+  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.8.0"
   # Disable Testcontainers' Ryuk reaper: it has been reported to leave
   # zombie containers on GHA runners (see #366, Ilya0527 2026-05-18).
   # The E2E fixture in tests/src/e2e/conftest.py relies instead on the
@@ -191,13 +191,50 @@ jobs:
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
       image: ghcr.io/astral-sh/uv:0.11.33-python3.13-trixie-slim
-    timeout-minutes: 2
+    # 5 (was 2): this job now also fetches HA's constraints file over the
+    # network. The fetch is budgeted to fail fast (3 x 10s + short backoff)
+    # so its own distinct exit code is always reachable, and the headroom
+    # here keeps a slow network from turning that clean failure into an
+    # opaque runner kill.
+    timeout-minutes: 5
 
     steps:
     - uses: actions/checkout@v7
 
     - name: Verify uv.lock is in sync with pyproject.toml
       run: uv lock --check
+
+    - name: Check dependency alignment with HA core constraints
+      # Mechanical link to HA's own package_constraints.txt (#2135/#2146):
+      # where HA pins a shared dependency exactly, ha-mcp must admit the pin;
+      # where HA is loose, ha-mcp must not pin exactly (an exact pin forces
+      # pip to replace the image-shipped copy in place — the torn-install
+      # window). Checked against the same HA version the e2e lanes run
+      # (HA_IMAGE_GHCR, renovate-managed), so drift on either side fails the
+      # PR that introduces it. Rules unit-tested offline in
+      # tests/src/unit/test_ha_constraint_alignment.py.
+      #
+      # Exit codes are load-bearing: 1 is a real drift violation and fails
+      # the job; 78 means HA's constraints file was UNREACHABLE, which is an
+      # outage on someone else's server and must not red-light every open PR
+      # — it warns and passes, the same fail-open the component-version gate
+      # above uses when the mirror API is unreadable. Every other code
+      # (including argparse's 2 for a usage error, uv's own 2, and a 4xx
+      # meaning the constraints file moved) fails the job: those are our
+      # problems, and failing open on them would leave this gate green
+      # forever while it checked nothing.
+      run: |
+        set +e
+        uv run --no-project --with packaging python \
+          scripts/check_ha_constraint_alignment.py \
+          --ha-version "${HA_IMAGE_GHCR##*:}"
+        status=$?
+        set -e
+        if [ "$status" -eq 78 ]; then
+          echo "::warning::could not reach HA's package_constraints.txt - skipping the alignment check (the e2e no-stomp guard still covers the real install)"
+          exit 0
+        fi
+        exit "$status"
 
   docs-size:
     name: Docs Size Check

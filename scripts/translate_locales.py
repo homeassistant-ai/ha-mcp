@@ -26,9 +26,10 @@ down is a HUMAN: hand-edit the translations, run
 run sees nothing stale and no-ops. Hand-edits always win; the machine only
 touches strings whose English changed.
 Every returned string is validated (placeholder parity, the settings UI markup
-allowlist, formatting-tag parity, panel-link parity) before it is written; a
-failure leaves that string unwritten and the run red rather than shipping a
-broken translation.
+allowlist, formatting-tag parity, panel-link parity, and the on-screen names
+Python hardcodes staying untranslated) before it is written; a failure
+leaves that string unwritten and the run red rather than shipping a broken
+translation.
 
 Rate limits and outages: requests are paced under the free-tier rate and
 retry transient errors with backoff; a persistently failing batch marks its
@@ -56,6 +57,7 @@ import time
 from collections import Counter
 from collections.abc import Container
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
@@ -415,10 +417,73 @@ def build_plan(module: Any) -> Plan:
     return plan
 
 
+_CONFIG_FLOW_PATH = REPO_ROOT / "custom_components" / "ha_mcp_tools" / "config_flow.py"
+_CONST_PATH = REPO_ROOT / "custom_components" / "ha_mcp_tools" / "const.py"
+_SELECTOR_LABEL_RE = re.compile(r'label="([^"]+)"')
+_ENTRY_TITLE_RE = re.compile(r'^_?[A-Z][A-Z_]*TITLE\s*=\s*"([^"]+)"', re.M)
+# English sources quote with straight or typographic marks — both already occur
+# in the shipped catalogs — and the check has to see the quoted text either
+# way, or the spelling of a quote silently decides whether it applies.
+_QUOTED_RE = re.compile(r'["“”«»„]([^"“”«»„]+)["“”«»„]')
+
+
+@lru_cache(maxsize=1)
+def _hardcoded_ui_names() -> tuple[str, ...]:
+    """On-screen names Python hardcodes, which read English to every reader.
+
+    Quoting alone does not say whether a string may be translated: catalogs
+    correctly translate quoted cross-references to their own option labels,
+    and Home Assistant translates its own buttons ("Add entry"). What must
+    survive verbatim is the narrower class this returns — names our own code
+    fixes in Python, so no catalog can localise them and a reader told to pick
+    a translated one goes looking for something that is not on the screen.
+
+    Two kinds, one rule. Config-flow selector labels name a dropdown option;
+    entry titles name the config entry a reader is told to click. Both are
+    read from the source rather than listed here, so renaming one cannot
+    strand a stale copy; ``test_connect_local_lan_quotes_the_bind_host_option``
+    guards the selector rename against the catalogs.
+    """
+    flow = _CONFIG_FLOW_PATH.read_text("utf-8")
+    const = _CONST_PATH.read_text("utf-8")
+    labels: list[str] = _SELECTOR_LABEL_RE.findall(flow)
+    titles: list[str] = _ENTRY_TITLE_RE.findall(flow) + _ENTRY_TITLE_RE.findall(const)
+    return tuple(labels + titles)
+
+
+def _untranslatable_name_dropped(english: str, translated: str) -> str | None:
+    """The hardcoded on-screen name this translation localised away, if any.
+
+    Single quotes are matched against the known names rather than paired like
+    the other marks: English prose spells the apostrophe with the same
+    character, so pairing on it shifts every quote in a sentence containing one
+    and loses the real candidate. Measured on the shipped catalogs, adding `'`
+    to the paired class drops one of the two live violations.
+    """
+    for name in _hardcoded_ui_names():
+        if any(f"{q}{name}{q2}" in english for q, q2 in (("'", "'"), ("‘", "’"))):
+            if name not in translated:
+                return name
+    quoted_texts: list[str] = _QUOTED_RE.findall(english)
+    for quoted in quoted_texts:
+        for name in _hardcoded_ui_names():
+            if (
+                name == quoted or name.startswith(f"{quoted} ")
+            ) and quoted not in translated:
+                return quoted
+    return None
+
+
 def _validate(item: WorkItem, translated: Any) -> str | None:
     """The reason a translation is unusable for this item, or None."""
     if not isinstance(translated, str) or not translated.strip():
         return "empty or non-string translation"
+    dropped = _untranslatable_name_dropped(item.english, translated)
+    if dropped is not None:
+        return (
+            f"the on-screen name {dropped!r} is hardcoded in Python "
+            "and has to stay untranslated"
+        )
     if set(_PLACEHOLDER_RE.findall(item.english)) != set(
         _PLACEHOLDER_RE.findall(translated)
     ):
@@ -460,12 +525,25 @@ def _style_sample_keys(
     to imitate, and when the key is itself in the batch the model answers with
     the stale text it was just shown — which validates, gets written, and
     repins the baseline as if it were current.
+
+    A blank translation is skipped like a missing one. It renders as an empty
+    right-hand side into the prompt, so the pair it contributes shows the model
+    nothing to imitate while still counting against the sample budget — and on
+    a catalog whose register rests on a single key, that is the whole signal.
+    An engine answer this shape is rejected (`_validate`), and a hand-committed
+    one no longer survives a catalog load (`_validate_string_map`) — but this
+    script reads the catalogs with `json.loads` rather than through
+    `load_catalogs`, so one still reaches here out of a working tree the app has
+    not loaded. The parity ceilings would not object either: they count a key
+    untranslated only when it equals the English or is absent, so `""` reads
+    there as translated.
     """
     return sorted(
         (
             key
             for key, text in english.items()
             if key in translated
+            and translated[key].strip()
             and key not in exclude
             and _SECOND_PERSON_RE.search(text)
         ),

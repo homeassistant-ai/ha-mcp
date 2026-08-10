@@ -160,6 +160,11 @@ HACS_ADD_REGISTRATION_TIMEOUT = 10.0
 # lookup ~3x faster.
 HACS_RESOLVE_REGISTRATION_TIMEOUT = 10.0
 
+# hacs/repository/refresh re-fetches release data from GitHub before
+# returning, so it gets the same 60 s budget as download/remove (#1623):
+# a slow GitHub past the 30 s default would report a false failure.
+HACS_REFRESH_TIMEOUT = 60.0
+
 
 async def _find_repo_in_list_by_full_name(
     ws_client: Any, full_name_lower: str
@@ -391,3 +396,19 @@ async def wait_for_repo_registration(
             # unsubscribe has already been dispatched; allow the
             # cancellation to propagate.
             raise
+
+
+async def send_hacs_repository_refresh(
+    ws_client: Any, repository_id: str
+) -> dict[str, Any]:
+    """Send HACS's "Update information" force-refresh for one repository.
+
+    NOTE: HACS's WS API is asymmetric — refresh takes ``repository`` (like
+    remove), not ``repository_id`` (like info).
+    """
+    response: dict[str, Any] = await ws_client.send_command(
+        "hacs/repository/refresh",
+        repository=repository_id,
+        _wait_timeout=HACS_REFRESH_TIMEOUT,
+    )
+    return response
