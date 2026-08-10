@@ -178,26 +178,99 @@ def test_the_push_gate_reads_outcomes_the_job_actually_publishes() -> None:
         "expression resolves to the empty string, and every comparison "
         "against 'failure' passes"
     )
+    tolerant = {
+        str(step["id"]) for step in translate["steps"] if step.get("continue-on-error")
+    }
     for name in sorted(consumed):
-        referenced = re.findall(r"steps\.(\w+)\.", str(outputs[name]))
-        assert all(ref in step_ids for ref in referenced), (
-            f"the translate job's {name!r} output reads {referenced}, which "
-            f"names no step in the job — it would publish the empty string"
+        referenced = re.findall(r"steps\.(\w+)\.(\w+)", str(outputs[name]))
+        assert all(ref in step_ids for ref, _ in referenced), (
+            f"the translate job's {name!r} output reads "
+            f"{[ref for ref, _ in referenced]}, which names no step in the "
+            f"job — it would publish the empty string"
         )
+        # The field carries as much as the step id. Under continue-on-error a
+        # step's `conclusion` is permanently 'success', so reading that
+        # instead of `outcome` satisfies every `!= 'failure'` clause in the
+        # push predicate — the red tree pushes, and an id-only assertion sees
+        # nothing, because the id resolves either way.
+        for ref, field in referenced:
+            assert ref not in tolerant or field == "outcome", (
+                f"the translate job's {name!r} output reads {ref}.{field}, "
+                f"but {ref} runs under continue-on-error, where conclusion is "
+                f"always 'success' — the push gate would never see a failure"
+            )
+
+
+def _selected_test_names(run: str) -> set[str]:
+    """Every test name a ``-k`` expression in this step names.
+
+    Reading only ``-k "name"`` misses every compound filter, and a compound
+    filter is how a test gets excluded from a run: matching the quoted
+    expression as a whole and pulling the identifiers out of it is what keeps
+    ``-k "not a and not b"`` from selecting nothing to check.
+    """
+    names: set[str] = set()
+    for expression in re.findall(r'-k "([^"]+)"', run):
+        names.update(
+            token
+            for token in re.findall(r"[A-Za-z_]\w*", expression)
+            if token not in {"and", "or", "not"}
+        )
+    return names
 
 
 def test_the_k_filters_name_real_tests() -> None:
     """A renamed test turns a ``-k`` filter into an empty selection."""
     for step in _verification_steps():
-        run = str(step.get("run", ""))
-        for match in re.finditer(r'-k "(?:not )?(\w+)"', run):
-            name = match.group(1)
+        for name in sorted(_selected_test_names(str(step.get("run", "")))):
             assert any(
                 name in path.read_text(encoding="utf-8") for path in _GATED_TEST_FILES
             ), (
                 f"{_WORKFLOW.name} step {step.get('name')!r} selects "
                 f"{name!r}, which no gated test file defines — the filter "
                 "selects or excludes nothing"
+            )
+
+
+def test_the_partial_step_selects_the_literal_parity_test() -> None:
+    """The step that guards a partial push must select the check by name.
+
+    Nothing else pins which test the partial path runs. Repointed at any
+    other test in the file the step still collects, still skips nothing, and
+    still passes — and the tree pushes with no catalog compared.
+    """
+    partial = next(
+        step
+        for step in _verification_steps()
+        if "partial" in str(step.get("name", "")).lower()
+    )
+    assert "test_translations_keep_english_numbers_and_identifiers" in (
+        _selected_test_names(str(partial.get("run", "")))
+    ), (
+        f"{_WORKFLOW.name} step {partial.get('name')!r} no longer selects the "
+        "literal-parity check — the partial path would verify nothing and the "
+        "push gate would read a green skip"
+    )
+
+
+def test_no_step_excludes_the_literal_parity_test() -> None:
+    """Excluding the check is how it stops running without anything failing.
+
+    The clean path's filter is a ``not`` expression, and appending one more
+    term to it removes literal parity from the successful run while every
+    other assertion in this file — the step ids, the gate env, the push
+    clause, even the name check above — stays green.
+    """
+    for step in _verification_steps():
+        run = " ".join(str(step.get("run", "")).split())
+        for expression in re.findall(r'-k "([^"]+)"', run):
+            assert not re.search(
+                r"\bnot\s+test_translations_keep_english_numbers_and_identifiers\b",
+                expression,
+            ), (
+                f"{_WORKFLOW.name} step {step.get('name')!r} excludes the "
+                f"literal-parity check in {expression!r} — that run would "
+                "verify everything except the catalogs"
             )
 
 

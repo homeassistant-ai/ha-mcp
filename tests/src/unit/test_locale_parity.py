@@ -34,6 +34,7 @@ below) and run in that workflow, not in PR CI.
 
 from __future__ import annotations
 
+import collections
 import hashlib
 import json
 import os
@@ -240,6 +241,18 @@ BASELINE_PATH = Path(__file__).with_name("locale_source_baseline.json")
 # English side: they are parsed from the tool definitions, so the baseline
 # files them under a surface name rather than a path.
 TOOL_SOURCES_SURFACE = "settings UI tool titles and descriptions"
+
+# Every surface literal parity is supposed to compare. Asserted as a set on
+# each build rather than inferred from a pair count: one surface can stop
+# resolving while the total stays comfortably above any threshold.
+_GUARDED_SURFACES = frozenset(
+    {
+        "src/ha_mcp/settings_ui/locales",
+        "custom_components/ha_mcp_tools/translations",
+        TOOL_SOURCES_SURFACE,
+        "settings UI tool group headings",
+    }
+)
 
 # A feature-gated tool has two English renderings, and the baseline pins the
 # one the UI hides under this suffix. Spelled once rather than at each site:
@@ -1289,16 +1302,26 @@ def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, str]]:
     ]
     # A surface whose baseline key no longer resolves makes every key look
     # like one whose English moved, and the whole check passes having compared
-    # nothing: substituting an empty baseline drops this list from 746 pairs
-    # to the 29 group headings, which are the arm that carries no literal at
-    # all. Renaming TOOL_SOURCES_SURFACE or a path key in _catalogs_by_surface
-    # is enough to trigger it, and the only test that sees surface drift is
-    # completeness-gated, so PR CI never runs it. A floor is what makes the
-    # difference between "nothing to check" and "checked and clean" visible.
-    assert len(pairs) > 100, (
-        f"only {len(pairs)} literal-parity pairs for {locale} — the surfaces "
-        "no longer resolve against the baseline, so a green run here compared "
-        "almost nothing"
+    # nothing. A total floor does not see that: measured for `de`, dropping
+    # the tool surface leaves 577 pairs, the settings catalogs 291, the
+    # component catalogs 653 — every one of them over any single threshold
+    # worth setting, and only an empty baseline, at 29, trips it. Renaming
+    # TOOL_SOURCES_SURFACE or a path key in _catalogs_by_surface takes exactly
+    # one surface, and the only other test that sees surface drift is
+    # completeness-gated, so PR CI never runs it. Each surface therefore
+    # carries its own floor, and the set of surfaces is asserted rather than
+    # inferred from a count.
+    compared = collections.Counter(surface for surface, _, _, _ in pairs)
+    assert set(compared) == _GUARDED_SURFACES, (
+        f"literal parity compared {sorted(compared)} for {locale}, not "
+        f"{sorted(_GUARDED_SURFACES)} — a surface stopped resolving against "
+        "the baseline, and its catalogs are no longer checked at all"
+    )
+    thin = {surface: count for surface, count in compared.items() if count < 20}
+    assert not thin, (
+        f"literal parity compared {thin} for {locale} — that surface resolves "
+        "but has almost nothing left to compare, so a green run says nothing "
+        "about it"
     )
     return pairs
 
@@ -1579,6 +1602,21 @@ def test_the_comparison_runs_every_arm(
     )
 
 
+def _exception_still_fits(
+    recorded: Counter[tuple[str, ...]], observed: Counter[tuple[str, ...]]
+) -> bool:
+    """Whether a tolerance entry describes no more than the pair really does.
+
+    Containment rather than intersection, and the difference is the whole
+    point: an entry recording 99 losses of a number the pair loses once
+    overlaps it, so intersection reads it as live while it goes on excusing
+    98 occurrences that do not exist. The table's header promises the
+    opposite — an entry excuses what it records, and a second instance of the
+    same number still reports.
+    """
+    return recorded <= observed
+
+
 def test_every_literal_parity_exception_is_load_bearing() -> None:
     """A tolerance the catalog outgrew is a blind spot, not a no-op.
 
@@ -1603,14 +1641,60 @@ def test_every_literal_parity_exception_is_load_bearing() -> None:
             "English moved past the baseline"
         )
         text, english = pair[0]
-        assert (_numbers(english) - _numbers(text)) & losses or (
-            _numbers(text) - _numbers(english)
-        ) & additions, (
+        lost = _numbers(english) - _numbers(text)
+        gained = _numbers(text) - _numbers(english)
+        assert lost & losses or gained & additions, (
             f"the {locale} exception on {surface}: {key} no longer excuses "
             f"anything — the pair satisfies the rule on its own now, so drop "
             f"the entry. It was recorded because: {reason}"
         )
+        # Intersection only asks whether the entry overlaps the pair, so
+        # ``Counter({("5",): 99})`` reads as live while quietly excusing 98
+        # occurrences that do not exist. The table's own header promises the
+        # opposite — an entry excuses what it records, and a second instance
+        # of the same number still reports — and containment is what pins it.
+        assert _exception_still_fits(losses, lost) and _exception_still_fits(
+            additions, gained
+        ), (
+            f"the {locale} exception on {surface}: {key} records more than the "
+            f"pair loses or gains ({dict(losses)} / {dict(additions)} against "
+            f"{dict(lost)} / {dict(gained)}), so it would go on excusing "
+            "occurrences that are not there"
+        )
         assert reason, f"the {locale} exception on {surface}: {key} states no reason"
+
+
+def test_an_exception_that_over_records_is_refused() -> None:
+    """The liveness rule has to be containment, and the table cannot show it.
+
+    Every shipped entry records exactly what its pair loses, so the assertion
+    above cannot go red on the corpus — removing it changes no result today.
+    What it exists for is the entry that records more than it needs: under
+    intersection that entry reads as live while excusing occurrences that do
+    not exist, which is the blind spot the table's header rules out in prose.
+    """
+    (locale, surface, key), (losses, _, _) = next(
+        (entry, value) for entry, value in LITERAL_PARITY_EXCEPTIONS.items() if value[0]
+    )
+    text, english = next(
+        (pair_text, pair_english)
+        for pair_surface, pair_key, pair_text, pair_english in _literal_parity_pairs(
+            locale
+        )
+        if (pair_surface, pair_key) == (surface, key)
+    )
+    lost = _numbers(english) - _numbers(text)
+
+    assert _exception_still_fits(losses, lost), (
+        "the shipped entry should record no more than the pair loses"
+    )
+    inflated = Counter({token: count + 98 for token, count in losses.items()})
+    assert inflated & lost, "intersection cannot tell the inflated entry apart"
+    assert not _exception_still_fits(inflated, lost), (
+        "containment must refuse an entry that records 98 more occurrences "
+        "than the pair has — otherwise the tolerance keeps excusing numbers "
+        "nobody lost"
+    )
 
 
 @pytest.mark.parametrize(
