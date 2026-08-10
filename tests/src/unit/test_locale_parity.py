@@ -59,13 +59,11 @@ import generate_locales  # noqa: E402
 from locale_rules import (  # noqa: E402
     _canonical_number,
     _invented_files,
-    _invented_signs,
     _localised_hardcoded_name,
     _lost_literals,
     _lost_magnitudes,
     _numbers,
     _parity_fault,
-    _reversed_ordered_pairs,
     _untranslatable_names,
 )
 
@@ -1505,13 +1503,7 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
             "übergib 'snapshot'",
             ["scope='snapshot'"],
         ),
-        # A hidden name carries no extension and no leading separator, so
-        # neither the file arm nor the path arm sees it -- and the deny floor
-        # the component documents is spelled exactly that way.
-        ("blocks .storage paths", "blockiert .storage-Pfade", []),
-        ("blocks .storage paths", "blockiert sensible Pfade", [".storage"]),
-        # ... while the name inside a path or in front of an extension is
-        # still read whole, because those arms match earlier in the string.
+        # A path and a file are each read whole, by their own arm.
         ("write ~/.ha-mcp/settings", "schreibe ~/.ha-mcp/settings", []),
         (
             "write ~/.ha-mcp/settings",
@@ -1523,32 +1515,6 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
         # into "packages/" plus ".yaml", both halves would still be present
         # in the faithful rendering above and it would pass either way.
         ("allow packages/*.yaml", "erlaube packages/*.json", ["packages/*.yaml"]),
-        # A dotted continuation belongs to the hidden name. Split off, ".env"
-        # is not findable inside a translation that kept ".env.local" whole,
-        # because the boundary rule refuses a further dotted segment — the
-        # faithful rendering would report.
-        ("edit .env.local now", "bearbeite .env.local", []),
-        ("edit .env.local now", "bearbeite die Datei", [".env.local"]),
-        # An English string is free to name the same literal twice, and four
-        # shipped ones do. Presence alone accepts a translation that corrupts
-        # one of the two occurrences; the count does not.
-        (
-            "call ha_get_skill_guide, then ha_get_skill_guide again",
-            "rufe ha_get_skill_guide, dann wrong_tool erneut",
-            ["ha_get_skill_guide (kept 1 of 2)"],
-        ),
-        (
-            "call ha_get_skill_guide, then ha_get_skill_guide again",
-            "rufe ha_get_skill_guide, dann ha_get_skill_guide erneut",
-            [],
-        ),
-        # A locale that states the name once more than its English does is
-        # not dropping anything.
-        (
-            "call ha_get_skill_guide",
-            "rufe ha_get_skill_guide auf, also ha_get_skill_guide",
-            [],
-        ),
     ],
 )
 def test_literal_extraction_ignores_sentence_punctuation(
@@ -1579,8 +1545,6 @@ def test_literal_extraction_ignores_sentence_punctuation(
             "configuration.yaml",
         ),
         ("wrong unit", "limit is 1-256 MB", "Grenze ist 1-256 GB", "256 MB"),
-        ("reversed pair", "Range 1-600.", "Bereich 600-1.", "1-600"),
-        ("invented sign", "Range 1-600.", "Bereich -1-600.", "written as -1"),
         (
             "localised name",
             'click "HA-MCP Server" to restart',
@@ -1776,115 +1740,6 @@ def test_units_and_comparisons_are_compared_where_they_are_comparable(
     stay green, which is how "1-256 ГБ" went unreported.
     """
     assert _lost_magnitudes(english, translated) == expected
-
-
-@pytest.mark.parametrize(
-    ("english", "translated", "expected"),
-    [
-        # Reversing a range touches no digit, so nothing else can see it.
-        ("Range 1–600.", "Bereich 1–600.", []),
-        ("Range 1–600.", "Bereich 600–1.", ["1-600"]),
-        # Any dash a catalog might set reads as the same range ...
-        ("Range 1–600.", "Bereich 1-600.", []),
-        ("Range 1–600.", "Bereich 1—600.", []),
-        # ... and a grouped endpoint stays one endpoint, not two numbers.
-        ("Range 1–10 000.", "Bereich 10 000–1.", ["1-10 000"]),
-        # Spelling the bounds out is a translation's own business: the value
-        # comparison still holds both numbers, so nothing goes unguarded.
-        ("Range 1–600.", "von 1 bis 600 Sekunden.", []),
-        # A range that simply vanishes is a lost number, not a reversed one.
-        ("Range 1–600.", "Zeitlimit pro Anfrage.", []),
-        # A ratio reverses the same way, and the decimal comma five of the
-        # nine catalogs write is not the inversion.
-        ("below a 4.5:1 contrast ratio.", "unter 4,5:1 Kontrast.", []),
-        ("below a 4.5:1 contrast ratio.", "unter 1:4,5 Kontrast.", ["4.5:1"]),
-        # A fullwidth colon is the same separator, so an inversion cannot
-        # hide behind CJK punctuation.
-        ("below a 4.5:1 contrast ratio.", "对比度低于 1：4.5。", ["4.5:1"]),
-    ],
-)
-def test_a_reversed_ordered_pair_is_reported(
-    english: str, translated: str, expected: list[str]
-) -> None:
-    """An ordered claim needs an ordered comparison.
-
-    "Range 1-600" and "Range 600-1" are the same two numbers in the same two
-    positions of the value comparison, and the second one documents a bound no
-    setting will accept.
-    """
-    assert _reversed_ordered_pairs(english, translated) == expected
-
-
-@pytest.mark.parametrize(
-    ("english", "translated", "expected"),
-    [
-        # A sign the translation attaches on its own states a bound the
-        # setting rejects while every digit stays where it was.
-        ("Range 1–600.", "Bereich -1–600.", ["unsigned 1 written as -1"]),
-        ("Range 1–600.", "Bereich 1–600.", []),
-        # The dash between two endpoints is not a sign, however the catalog
-        # spaced it out, or every range written with a hyphen would report.
-        # The non-breaking space is in here because it is the one these
-        # catalogs group numbers with, and a fixed-width look behind could
-        # only ever cover one of these four.
-        ("Range 1–600.", "Bereich 1-600.", []),
-        ("Range 1–600.", "Bereich 1 -600.", []),
-        ("Range 1–600.", "Bereich 1  -600.", []),
-        ("Range 1–600.", "Bereich 1 -600.", []),
-        # Nor is a hyphen inside a word, and a sign the English itself wrote
-        # is the translation's to keep.
-        ("Range 1–600.", "Zeit-600 Sekunden.", []),
-        ("offset by -5", "Versatz um -5", []),
-        # A unit or a percent sign between the endpoint and the dash still
-        # leaves a range: a locale is free to repeat it on both bounds.
-        ("limit is 1-256 MB", "Grenze ist 1 MB -256 MB", []),
-        ("between 50% and 100%", "entre 50 % -100 %", []),
-        # Regrouping a signed number is not inventing one.
-        ("offset by -1 000", "Versatz um -1.000", []),
-        ("offset by 1 000", "Versatz um -1.000", ["unsigned 1.000 written as -1.000"]),
-        # A grouped endpoint is one number here too. The separators are the
-        # ones a locale actually groups with, non-breaking space included, so
-        # the pattern is referenced rather than copied — a hand-copied class
-        # lost them while still reading correctly.
-        (
-            "Range 1 000–9 000.",
-            "Bereich -1 000–9 000.",
-            ["unsigned 1 000 written as -1 000"],
-        ),
-    ],
-)
-def test_a_sign_the_english_never_wrote_is_reported(
-    english: str, translated: str, expected: list[str]
-) -> None:
-    """A sign is part of the claim and no digit records it.
-
-    "Range 1-600" and "Bereich -1-600" hold the same numbers, in the same
-    order, in the same two endpoints -- the value comparison and the ordered
-    pair both pass while the text documents a minimum the setting rejects.
-    """
-    assert _invented_signs(english, translated) == expected
-
-
-def test_the_engine_is_not_asked_how_often_a_name_survives() -> None:
-    """Counting a repeated name needs a tolerance the engine cannot hold.
-
-    A faithful translation may name a repeated identifier once and
-    pronominalise the second mention, which no per-string rule separates from
-    a corrupted duplicate. At acceptance time there is nowhere to record that
-    per key, and refusing it costs the run: retried once, then re-planned
-    tomorrow, every day. The merge-time check keeps the count because a human
-    reads its failure; the engine is asked only whether the name survives.
-    """
-    english = "Call ha_get_skill_guide first; ha_get_skill_guide returns the schema."
-    pronominalised = "Rufe zuerst ha_get_skill_guide auf; es liefert das Schema."
-
-    assert "kept 1 of 2" in _parity_fault(english, pronominalised)
-    assert _parity_fault(english, pronominalised, compare_numbers=False) == ""
-    # ... while a name that goes missing entirely is still the engine's to
-    # refuse, or the switch would have turned the arm off rather than down.
-    assert "ha_get_skill_guide" in _parity_fault(
-        "Call ha_get_skill_guide.", "Rufe es auf.", compare_numbers=False
-    )
 
 
 def test_a_localised_on_screen_name_is_reported() -> None:

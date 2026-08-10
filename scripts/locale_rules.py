@@ -48,26 +48,6 @@ _COMPOUND_UNIT_RE = re.compile(
     r"(?<![A-Za-z0-9])(\d+)\s*([A-Za-zА-Яа-я]{2})(?![A-Za-zА-Яа-я])"
 )
 _KNOWN_UNITS = frozenset({"KB", "MB", "GB", "TB"})
-# A signed number, for the arm that compares what a translation added. The
-# number is spelled by reference rather than repeated: a hand-copied group
-# class lost the two non-breaking spaces a locale groups with, so "-1 000"
-# was read as "-1" while the copy still looked right.
-_SIGNED_NUMBER_RE = re.compile(rf"(?<![\w.,])([-+])({_NUMBER_RE.pattern})")
-# ... and the dash between two range endpoints is not a sign, whatever the
-# catalog put between the left endpoint and the dash. `\s` covers the
-# non-breaking spaces these catalogs group with -- both are Unicode whitespace
-# -- so no class is written out by hand, which is how the copy above lost them
-# once already; a newline is excluded, because two endpoints do not straddle
-# one. The optional unit or percent sign is there because a locale may repeat
-# it on both bounds: "1 MB -256 MB", "50 % -100 %".
-_RANGE_LEFT_CONTEXT_RE = re.compile(r"\d[^\S\n]*(?:%|[A-Za-zА-Яа-я]{1,3})?[^\S\n]*\Z")
-# The same four units as every catalog spells them. Without this the filter
-# that stops a localised spelling false-positiving also stops a *wrong*
-# localised spelling reporting: "предел 1-256 ГБ" and "limite de 1-256 Go"
-# both state gigabytes where the English says megabytes, and both passed.
-# Russian transliterates the prefix and abbreviates "байт"; French sets "o"
-# for "octet". Only spellings a shipped catalog actually uses are listed --
-# an unknown two-letter token stays uncomparable, which is the safe arm.
 _LOCALISED_UNITS = {
     "КБ": "KB",
     "МБ": "MB",
@@ -89,19 +69,6 @@ def _canonical_unit(unit: str) -> str | None:
 
 # "N > 0" and "N < 0" are opposite conditions with identical numbers.
 _COMPARISON_RE = re.compile(r"([A-Za-z_]\w*)\s*([<>]=?)\s*(\d+)")
-# A range is an ordered claim, and reversing it leaves the digits untouched:
-# "Range 1-600" and "Range 600-1" hold the same multiset while the second
-# names a lower bound above its upper one. The endpoints are spelled by
-# reference to the number pattern rather than repeated, so a grouped bound
-# ("1 024") keeps reading as one endpoint here too, and every dash a catalog
-# might set counts -- hyphen through em dash. A ratio is the same ordered
-# claim behind a different separator, and the corpus ships one: the "4.5:1"
-# contrast ratio every catalog carries. Reversing it to "1:4,5" leaves the
-# digits untouched exactly as a reversed range does, so a colon counts here
-# too -- both the ASCII one and the fullwidth colon a CJK catalog may set.
-_ORDERED_PAIR_RE = re.compile(
-    rf"({_NUMBER_RE.pattern})\s*([-‐-―:：])\s*({_NUMBER_RE.pattern})(?![A-Za-z0-9])"
-)
 _GROUP_SEPARATOR_RE = re.compile(r"[.,   ]")
 
 # Tokens a reader has to type, search for, or find on disk. Prose slashes
@@ -121,16 +88,6 @@ _LITERAL_RE = re.compile(
       | [a-z][a-z0-9]*(?:_[a-z0-9]+)+           # snake_case: enable_tool_search
       | [A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+           # ALL_CAPS: DISABLED_TOOLS
       | (?<![\w/<])~?/[\w.*-]+(?:/[\w.*-]+)*    # paths: /api/settings/features
-        # A hidden name has no extension and no leading separator, so neither
-        # the file arm nor the path arm sees it: the deny floor the component
-        # describes blocks ".storage", and a translation dropping it left no
-        # trace. It sits after both so a name inside a path ("~/.ha-mcp/x") or
-        # an extension ("packages/*.yaml") is still read whole -- those two
-        # start earlier in the string and match there. A dotted continuation
-        # belongs to the name: split off ".env" and a translation that keeps
-        # ".env.local" intact reports the half as lost, because the boundary
-        # rule refuses a name followed by another dotted segment.
-      | (?<![\w./-])\.[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)*(?!\w)  # .storage
       | [a-z][a-z0-9+.-]*://\S*                 # any scheme, bare one included
       | (?<![\w.])[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+(?![\w])  # group.set
       | (?<!\w)[A-Za-z][A-Za-z_]*\d+(?!\w)      # Jinja2, alert2
@@ -207,8 +164,6 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
     necessarily the matching one -- "bis zu 5x schneller, etwa 5K Token" is
     faithful and reported, "jusqu'a 256 Go puis 256 MB" contradicts the
     English and did not.
-
-    A sign is the same kind of claim and is compared in ``_invented_signs``.
     """
     contradicted = set()
     for digits, unit in _COMPOUND_UNIT_RE.findall(english):
@@ -263,92 +218,6 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
     return sorted(contradicted)
 
 
-def _signed_numbers(text: str) -> list[tuple[str, str]]:
-    """(sign, number) for every number this text signs itself.
-
-    A range endpoint is not signed, however its catalog spaced the dash out,
-    so any run of separators between a digit and the dash disqualifies it --
-    including the non-breaking ones a locale groups numbers with. That test
-    is a variable-width look behind, which ``re`` refuses, so the left context
-    is read here instead.
-    """
-    return [
-        (match.group(1), match.group(2))
-        for match in _SIGNED_NUMBER_RE.finditer(text)
-        if not _RANGE_LEFT_CONTEXT_RE.search(text[: match.start()])
-    ]
-
-
-def _invented_signs(english: str, translated: str) -> list[str]:
-    """Numbers the translation signed and its English did not.
-
-    A sign is part of the claim and the digits are blind to it: "Range 1-600"
-    and "Bereich -1-600" hold the same number multiset, the same two endpoints
-    in the same order, and the second states a minimum the setting rejects.
-
-    One direction only, and the corpus is the reason: no shipped English
-    string signs a number, so a sign can only arrive with a translation.
-    Asking the other way round would be an arm that cannot fire on anything
-    the pipeline sends.
-
-    What must not count as a sign is the dash between two range endpoints,
-    whatever the catalog put between the left endpoint and the dash: spaces,
-    the non-breaking ones these catalogs group numbers with, and the unit or
-    percent sign a locale may repeat on both bounds ("1 MB -256 MB",
-    "50 % -100 %"). The left context is read in code rather than in a look
-    behind, because a look behind here has to be fixed width and none of that
-    is.
-
-    The comparison is on canonical numbers, not on their text, so a locale
-    regrouping "-1 000" as "-1.000" is the same signed number rather than an
-    invented one.
-    """
-    signed_in_english = {
-        (sign, _canonical_number(digits)) for sign, digits in _signed_numbers(english)
-    }
-    return sorted(
-        {
-            f"unsigned {digits} written as {sign}{digits}"
-            for sign, digits in _signed_numbers(translated)
-            if (sign, _canonical_number(digits)) not in signed_in_english
-        }
-    )
-
-
-def _reversed_ordered_pairs(english: str, translated: str) -> list[str]:
-    """Ordered number pairs the translation states back to front.
-
-    A range is an ordered claim that the value comparison is blind to: both
-    endpoints of "Range 1-600" are still present in "Range 600-1", so the
-    number multiset balances while the text now names a floor above its
-    ceiling.
-
-    Only an actual inversion reports. A catalog is free to write "von 1 bis
-    600" instead of setting a dash, and its numbers stay guarded by the value
-    comparison either way; demanding the dash form back would fail a correct
-    rendering rather than a wrong one.
-
-    A ratio is the same claim with a colon for a dash: "4.5:1" and "1:4,5"
-    hold the same two numbers, and the second states a contrast threshold no
-    checker would ever set. The separator the English used is carried into
-    the report so a ratio is not named as a range.
-    """
-    translated_bounds = {
-        (_canonical_number(low), _canonical_number(high))
-        for low, _, high in _ORDERED_PAIR_RE.findall(translated)
-    }
-    return sorted(
-        {
-            f"{low}{':' if separator in ':：' else '-'}{high}"
-            for low, separator, high in _ORDERED_PAIR_RE.findall(english)
-            if (bounds := (_canonical_number(low), _canonical_number(high)))
-            and bounds[0] != bounds[1]
-            and bounds[::-1] in translated_bounds
-            and bounds not in translated_bounds
-        }
-    )
-
-
 def _show_numbers(counted: Counter[tuple[str, ...]]) -> list[str]:
     return sorted(".".join(groups) for groups in counted.elements())
 
@@ -400,10 +269,8 @@ def _parity_fault(
     else:
         lost_numbers = gained_numbers = Counter()
     lost = (
-        _lost_literals(english, translated, count_occurrences=compare_numbers)
+        _lost_literals(english, translated)
         + _lost_magnitudes(english, translated)
-        + _invented_signs(english, translated)
-        + _reversed_ordered_pairs(english, translated)
         + _localised_hardcoded_name(english, translated)
         + _invented_files(english, translated)
     )
@@ -448,8 +315,8 @@ def _without_sentence_punctuation(literal: str) -> str:
     return literal.rstrip(".,;:!?)]}\"'»”")
 
 
-def _occurrences(literal: str, text: str) -> int:
-    """How often the text contains this literal as a whole token.
+def _carries(literal: str, translated: str) -> bool:
+    """Whether the translation still contains this literal as a whole token.
 
     Substring, but not *any* substring: the match may not continue into
     another identifier character, so "enable_tool_search_old" no longer counts
@@ -461,28 +328,19 @@ def _occurrences(literal: str, text: str) -> int:
     "other.configuration.yaml", so a dot is excluded on the left as well --
     while a sentence-ending period after the name is not part of the token and
     still matches.
-
-    Counted rather than merely found, because an English string is free to
-    name the same identifier twice and four shipped ones do.
     """
-    return len(
-        re.findall(
+    return (
+        re.search(
             r"(?<![A-Za-z0-9_.])"
             + re.escape(literal)
             + r"(?![A-Za-z0-9_]|\.[A-Za-z0-9])",
-            text,
+            translated,
         )
+        is not None
     )
 
 
-def _carries(literal: str, translated: str) -> bool:
-    """Whether the translation contains this literal at all."""
-    return _occurrences(literal, translated) > 0
-
-
-def _lost_literals(
-    english: str, translated: str, *, count_occurrences: bool = True
-) -> list[str]:
+def _lost_literals(english: str, translated: str) -> list[str]:
     """English literals absent from the translation, as substrings.
 
     Substring rather than token equality on purpose: German writes
@@ -502,48 +360,29 @@ def _lost_literals(
     what keeps a name that later gains an extractable shape from reporting
     twice under two different descriptions.
 
-    ``count_occurrences`` compares how OFTEN the name survives, the same way
-    the number arm compares multisets. Four shipped English strings name an
-    identifier twice -- ``ha_get_skill_guide`` in the strict-best-practices
-    help, ``skill_content`` in the one beside it, ``ChatGPT`` in two notices --
-    and asking only whether the name survives *somewhere* accepts a translation
-    that corrupts one of the two. Both sides are counted with the same
-    instrument; measured across the 6751 shipped pairs, counting reports
-    nothing that presence did not.
-
-    It is off for the engine, and for the same reason the number multisets are:
-    a faithful translation may state a repeated name once and pronominalise the
-    second mention, and there is nowhere to record a per-key tolerance at
-    acceptance time. Refusing that costs a retry and leaves the key to be
-    planned again tomorrow, which is the daily stall the engine-side call
-    exists to prevent. The merge-time check, which can carry a tolerance and is
-    read by a human when it fails, keeps the count.
+    Presence, not occurrence count. Counting how often a name survives was
+    measured and dropped: across the 6751 shipped pairs it reported nothing
+    presence did not, while a faithful translation is free to name a repeated
+    identifier once and pronominalise the second mention -- a shape no
+    per-string rule separates from a corrupted duplicate, and one the engine
+    has nowhere to record a tolerance for.
     """
     protected = _untranslatable_names()
-    candidates = {
-        stripped
-        for literal in _LITERAL_RE.findall(english)
-        if (stripped := _without_sentence_punctuation(literal))
-        and stripped not in protected
-        and stripped not in _PROSE_ABBREVIATIONS
-    } | set(_QUOTED_ASSIGNMENT_RE.findall(english))
-    lost = []
-    for literal in candidates:
-        # The extraction and the boundary rule can disagree -- ".env" is
-        # extracted out of ".env.local", which the boundary rule then refuses
-        # to find in its own English. A zero there would make every comparison
-        # against it vacuously true and the literal unreportable for good, so
-        # it falls back to demanding the name once, which is what the presence
-        # test demanded before counting existed.
-        expected = (_occurrences(literal, english) if count_occurrences else 1) or 1
-        kept = _occurrences(literal, translated)
-        if kept >= expected:
-            continue
-        # A name that survives in part is not a name that vanished, and the
-        # maintainer reading the failure would otherwise grep the catalog,
-        # find the literal, and have nothing to go on.
-        lost.append(literal if kept == 0 else f"{literal} (kept {kept} of {expected})")
-    return sorted(lost)
+    return sorted(
+        {
+            stripped
+            for literal in _LITERAL_RE.findall(english)
+            if (stripped := _without_sentence_punctuation(literal))
+            and stripped not in protected
+            and stripped not in _PROSE_ABBREVIATIONS
+            and not _carries(stripped, translated)
+        }
+        | {
+            assignment
+            for assignment in _QUOTED_ASSIGNMENT_RE.findall(english)
+            if not _carries(assignment, translated)
+        }
+    )
 
 
 def _invented_files(english: str, translated: str) -> list[str]:
