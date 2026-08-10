@@ -79,7 +79,8 @@ as [OAuth mode](OAUTH.md#1-expose-with-https)).
 | `OIDC_ALLOWED_CLIENT_REDIRECT_URIS` | Optional but **strongly recommended for internet-facing deployments**. Comma-separated list of redirect URI patterns accepted from dynamically-registered clients. Open dynamic client registration (DCR) lets an attacker register their own client with their own redirect URI; setting this constrains what any dynamically-registered client may register in the first place. | no allow-list — each dynamically-registered client's own redirect URIs are accepted |
 | `OIDC_VERIFY_ID_TOKEN` | Optional. Set `true` for OIDC providers that issue opaque access tokens the default JWT verifier cannot validate (e.g. Authelia, or Auth0 without an API audience configured). ha-mcp always requests `openid`, so these providers return the ID token FastMCP verifies instead. | `false` |
 | `OIDC_AUDIENCE` | Optional. Expected `aud` claim for IdP-issued access tokens. Without it (and with `OIDC_VERIFY_ID_TOKEN` off), FastMCP's JWT verifier checks issuer, signature, and expiry but not audience — fine on a dedicated IdP, weaker on a shared one where other clients' tokens would also pass. With `OIDC_VERIFY_ID_TOKEN=true`, verification instead pins `aud` to `OIDC_CLIENT_ID` and this value is not used for verification — it is still forwarded to the IdP's authorize/token endpoints, which is exactly what makes Auth0 issue JWT rather than opaque access tokens (see the `OIDC_VERIFY_ID_TOKEN` row). | Unset (no audience check) |
-| `LOG_LEVEL` | Logging level for ha-mcp and FastMCP, including OIDC token-validation diagnostics | `INFO` |
+| `LOG_LEVEL` | Logging level for ha-mcp and, when FastMCP logging is enabled, FastMCP's OIDC token-validation diagnostics | `INFO` |
+| `FASTMCP_LOG_ENABLED` | Set `false` to disable FastMCP framework logging entirely. ha-mcp preserves this opt-out instead of routing FastMCP records through its root logger. | `true` |
 
 ## IdP Client Registration
 
@@ -100,6 +101,27 @@ Example discovery URLs:
 - Authentik: `https://auth.example.com/application/o/<app-slug>/.well-known/openid-configuration`
 - Keycloak: `https://keycloak.example.com/realms/<realm>/.well-known/openid-configuration`
 - Auth0: `https://<tenant>.auth0.com/.well-known/openid-configuration`
+
+## Client Scopes and Upgrades
+
+ha-mcp keeps `openid` as the required, default, and advertised scope. A client
+that omits `scope` during dynamic client registration (DCR) therefore receives
+`openid`, and MCP clients discover only `openid` in protected-resource
+metadata. If a client explicitly requests optional provider scopes such as
+`profile`, `email`, or `offline_access`, ha-mcp retains them and adds `openid`
+when the client omitted it. The compatibility layer also adds `openid` to every
+upstream authorization request, including requests from clients that supplied
+only optional scopes. ha-mcp does not advertise or request optional scopes on
+the client's behalf; the upstream identity provider's client and user policy
+decides whether to grant the optional scopes the client requested.
+
+After upgrading from a version that did not require `openid`, ha-mcp retains
+persisted DCR registrations and adds `openid` to a registration the first time
+it is loaded. A refresh token issued before the fix without `openid` is rejected
+so the client starts authorization once and obtains a compliant token. The DCR
+registration remains intact during this reauthorization. Most clients restart
+authorization automatically; manually clearing the client's connector or
+authorization cache is only a fallback for a client that does not.
 
 ## Provider Compatibility
 

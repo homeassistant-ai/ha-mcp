@@ -505,6 +505,8 @@ def _setup_logging(log_level_str: str, force: bool = True) -> None:
     """
     log_level = getattr(logging, log_level_str)
 
+    import fastmcp
+
     from ha_mcp.utils.usage_logger import preserve_startup_collector
 
     with preserve_startup_collector():
@@ -515,10 +517,16 @@ def _setup_logging(log_level_str: str, force: bool = True) -> None:
             force=force,
         )
 
-    # FastMCP configures its own handler and disables propagation, so the root
-    # level above does not control its OIDC diagnostics. Preserve that handler
-    # and formatting while honoring ha-mcp's LOG_LEVEL setting.
-    logging.getLogger("fastmcp").setLevel(log_level)
+    fastmcp_logger = logging.getLogger("fastmcp")
+    if fastmcp.settings.log_enabled:
+        # FastMCP configures its own handler and disables propagation, so the root
+        # level above does not control its OIDC diagnostics. Preserve that handler
+        # and formatting while honoring ha-mcp's LOG_LEVEL setting.
+        fastmcp_logger.setLevel(log_level)
+    else:
+        # FastMCP deliberately leaves its logger unconfigured when logging is
+        # disabled. Prevent that NOTSET namespace from inheriting our root handler.
+        fastmcp_logger.setLevel(logging.CRITICAL + 1)
 
     logging.getLogger("mcp.server.streamable_http").addFilter(
         StatelessSessionLogFilter()
@@ -1646,6 +1654,8 @@ def main_oidc() -> None:
     - HA_MCP_DISABLE_SETTINGS_UI (optional): set truthy to not serve the
       settings UI at all
     - LOG_LEVEL (optional, default: INFO)
+    - FASTMCP_LOG_ENABLED (optional, default: true): Set false to suppress
+      FastMCP framework logs while leaving ha-mcp logs at LOG_LEVEL.
     """
     # Configure logging for OIDC mode (force=True needed since logging may already be configured)
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -1731,8 +1741,7 @@ async def _run_oidc_server(
         port: Port to listen on
         path: MCP endpoint path
     """
-    from fastmcp.server.auth.oidc_proxy import OIDCProxy
-
+    from ha_mcp.auth.oidc_compat import HaMcpOIDCProxy
     from ha_mcp.server import HomeAssistantSmartMCPServer
     from ha_mcp.transport_security import ensure_host_origin_guard_default_off
 
@@ -1778,7 +1787,8 @@ async def _run_oidc_server(
         proxy_kwargs["audience"] = audience
 
     # Create OIDC auth provider — auto-discovers endpoints from config_url
-    auth = OIDCProxy(**proxy_kwargs)
+    auth = HaMcpOIDCProxy(**proxy_kwargs)
+    auth.setup_scope_compatibility()
 
     # Standard server with shared credentials (no proxy client needed)
     global _server
