@@ -48,6 +48,10 @@ _COMPOUND_UNIT_RE = re.compile(
     r"(?<![A-Za-z0-9])(\d+)\s*([A-Za-zА-Яа-я]{2})(?![A-Za-zА-Яа-я])"
 )
 _KNOWN_UNITS = frozenset({"KB", "MB", "GB", "TB"})
+# A signed number, for the arm that compares what a translation added. The
+# dash between two range endpoints must not read as a sign, which is what the
+# digit-on-the-left lookbehinds rule out; see _invented_signs.
+_SIGNED_NUMBER_RE = re.compile(r"(?<![\w.,])(?<!\d )([-+])(\d+(?:[.,   ]\d+)*)")
 # The same four units as every catalog spells them. Without this the filter
 # that stops a localised spelling false-positiving also stops a *wrong*
 # localised spelling reporting: "предел 1-256 ГБ" and "limite de 1-256 Go"
@@ -108,6 +112,13 @@ _LITERAL_RE = re.compile(
       | [a-z][a-z0-9]*(?:_[a-z0-9]+)+           # snake_case: enable_tool_search
       | [A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+           # ALL_CAPS: DISABLED_TOOLS
       | (?<![\w/<])~?/[\w.*-]+(?:/[\w.*-]+)*    # paths: /api/settings/features
+        # A hidden name has no extension and no leading separator, so neither
+        # the file arm nor the path arm sees it: the deny floor the component
+        # describes blocks ".storage", and a translation dropping it left no
+        # trace. It sits after both so a name inside a path ("~/.ha-mcp/x") or
+        # an extension ("packages/*.yaml") is still read whole -- those two
+        # start earlier in the string and match there.
+      | (?<![\w./-])\.[a-z][a-z0-9_-]*(?!\w)    # hidden names: .storage
       | [a-z][a-z0-9+.-]*://\S*                 # any scheme, bare one included
       | (?<![\w.])[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+(?![\w])  # group.set
       | (?<!\w)[A-Za-z][A-Za-z_]*\d+(?!\w)      # Jinja2, alert2
@@ -184,6 +195,8 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
     necessarily the matching one -- "bis zu 5x schneller, etwa 5K Token" is
     faithful and reported, "jusqu'a 256 Go puis 256 MB" contradicts the
     English and did not.
+
+    A sign is the same kind of claim and is compared in ``_invented_signs``.
     """
     contradicted = set()
     for digits, unit in _COMPOUND_UNIT_RE.findall(english):
@@ -227,6 +240,35 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
         if carried and suffix.upper() not in carried:
             contradicted.add(f"{digits}{suffix}")
     return sorted(contradicted)
+
+
+def _invented_signs(english: str, translated: str) -> list[str]:
+    """Numbers the translation signed and its English did not.
+
+    A sign is part of the claim and the digits are blind to it: "Range 1-600"
+    and "Bereich -1-600" hold the same number multiset, the same two endpoints
+    in the same order, and the second states a minimum the setting rejects.
+
+    One direction only, and the corpus is the reason: no shipped English
+    string signs a number, so a sign can only arrive with a translation.
+    Asking the other way round would be an arm that cannot fire on anything
+    the pipeline sends.
+
+    What must not count as a sign is the dash between two range endpoints,
+    which is why a digit to the left disqualifies it -- with or without a
+    space, so both "1-600" and the "1 -600" a catalog may space out stay
+    ranges.
+    """
+    signed_in_english = {
+        f"{sign}{digits}" for sign, digits in _SIGNED_NUMBER_RE.findall(english)
+    }
+    return sorted(
+        {
+            f"unsigned {digits} written as {sign}{digits}"
+            for sign, digits in _SIGNED_NUMBER_RE.findall(translated)
+            if f"{sign}{digits}" not in signed_in_english
+        }
+    )
 
 
 def _reversed_ordered_pairs(english: str, translated: str) -> list[str]:
@@ -310,6 +352,7 @@ def _parity_fault(
     lost = (
         _lost_literals(english, translated)
         + _lost_magnitudes(english, translated)
+        + _invented_signs(english, translated)
         + _reversed_ordered_pairs(english, translated)
         + _localised_hardcoded_name(english, translated)
         + _invented_files(english, translated)
@@ -355,8 +398,8 @@ def _without_sentence_punctuation(literal: str) -> str:
     return literal.rstrip(".,;:!?)]}\"'»”")
 
 
-def _carries(literal: str, translated: str) -> bool:
-    """Whether the translation still contains this literal as a whole token.
+def _occurrences(literal: str, text: str) -> int:
+    """How often the text contains this literal as a whole token.
 
     Substring, but not *any* substring: the match may not continue into
     another identifier character, so "enable_tool_search_old" no longer counts
@@ -368,16 +411,23 @@ def _carries(literal: str, translated: str) -> bool:
     "other.configuration.yaml", so a dot is excluded on the left as well --
     while a sentence-ending period after the name is not part of the token and
     still matches.
+
+    Counted rather than merely found, because an English string is free to
+    name the same identifier twice and four shipped ones do.
     """
-    return (
-        re.search(
+    return len(
+        re.findall(
             r"(?<![A-Za-z0-9_.])"
             + re.escape(literal)
             + r"(?![A-Za-z0-9_]|\.[A-Za-z0-9])",
-            translated,
+            text,
         )
-        is not None
     )
+
+
+def _carries(literal: str, translated: str) -> bool:
+    """Whether the translation contains this literal at all."""
+    return _occurrences(literal, translated) > 0
 
 
 def _lost_literals(english: str, translated: str) -> list[str]:
@@ -399,23 +449,36 @@ def _lost_literals(english: str, translated: str) -> list[str]:
     none tokenises as a literal, so the filter removes nothing today. It is
     what keeps a name that later gains an extractable shape from reporting
     twice under two different descriptions.
+
+    Occurrences are compared, not mere presence, the same way the number arm
+    compares multisets. Four shipped English strings name an identifier twice
+    -- ``ha_get_skill_guide`` in the strict-best-practices help, ``skill_content``
+    in the one beside it, ``ChatGPT`` in two notices -- and asking only whether
+    the name survives *somewhere* accepts a translation that corrupts one of
+    the two. Both sides are counted with the same instrument, so a locale that
+    keeps both keeps them under the same boundary rule the presence test used;
+    measured across the 6751 shipped pairs, counting reports nothing that
+    presence did not.
     """
     protected = _untranslatable_names()
-    return sorted(
-        {
-            stripped
-            for literal in _LITERAL_RE.findall(english)
-            if (stripped := _without_sentence_punctuation(literal))
-            and stripped not in protected
-            and stripped not in _PROSE_ABBREVIATIONS
-            and not _carries(stripped, translated)
-        }
-        | {
-            assignment
-            for assignment in _QUOTED_ASSIGNMENT_RE.findall(english)
-            if not _carries(assignment, translated)
-        }
-    )
+    candidates = {
+        stripped
+        for literal in _LITERAL_RE.findall(english)
+        if (stripped := _without_sentence_punctuation(literal))
+        and stripped not in protected
+        and stripped not in _PROSE_ABBREVIATIONS
+    } | set(_QUOTED_ASSIGNMENT_RE.findall(english))
+    lost = []
+    for literal in candidates:
+        expected = _occurrences(literal, english)
+        kept = _occurrences(literal, translated)
+        if kept >= expected:
+            continue
+        # A name that survives in part is not a name that vanished, and the
+        # maintainer reading the failure would otherwise grep the catalog,
+        # find the literal, and have nothing to go on.
+        lost.append(literal if kept == 0 else f"{literal} (kept {kept} of {expected})")
+    return sorted(lost)
 
 
 def _invented_files(english: str, translated: str) -> list[str]:

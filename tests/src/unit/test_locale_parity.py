@@ -59,6 +59,7 @@ import generate_locales  # noqa: E402
 from locale_rules import (  # noqa: E402
     _canonical_number,
     _invented_files,
+    _invented_signs,
     _localised_hardcoded_name,
     _lost_literals,
     _lost_magnitudes,
@@ -1439,6 +1440,40 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
             "übergib 'snapshot'",
             ["scope='snapshot'"],
         ),
+        # A hidden name carries no extension and no leading separator, so
+        # neither the file arm nor the path arm sees it -- and the deny floor
+        # the component documents is spelled exactly that way.
+        ("blocks .storage paths", "blockiert .storage-Pfade", []),
+        ("blocks .storage paths", "blockiert sensible Pfade", [".storage"]),
+        # ... while the name inside a path or in front of an extension is
+        # still read whole, because those arms match earlier in the string.
+        ("write ~/.ha-mcp/settings", "schreibe ~/.ha-mcp/settings", []),
+        (
+            "write ~/.ha-mcp/settings",
+            "schreibe ~/.ha-mcp/anderes",
+            ["~/.ha-mcp/settings"],
+        ),
+        ("allow packages/*.yaml", "erlaube packages/*.yaml", []),
+        # An English string is free to name the same literal twice, and four
+        # shipped ones do. Presence alone accepts a translation that corrupts
+        # one of the two occurrences; the count does not.
+        (
+            "call ha_get_skill_guide, then ha_get_skill_guide again",
+            "rufe ha_get_skill_guide, dann wrong_tool erneut",
+            ["ha_get_skill_guide (kept 1 of 2)"],
+        ),
+        (
+            "call ha_get_skill_guide, then ha_get_skill_guide again",
+            "rufe ha_get_skill_guide, dann ha_get_skill_guide erneut",
+            [],
+        ),
+        # A locale that states the name once more than its English does is
+        # not dropping anything.
+        (
+            "call ha_get_skill_guide",
+            "rufe ha_get_skill_guide auf, also ha_get_skill_guide",
+            [],
+        ),
     ],
 )
 def test_literal_extraction_ignores_sentence_punctuation(
@@ -1470,6 +1505,7 @@ def test_literal_extraction_ignores_sentence_punctuation(
         ),
         ("wrong unit", "limit is 1-256 MB", "Grenze ist 1-256 GB", "256 MB"),
         ("reversed pair", "Range 1-600.", "Bereich 600-1.", "1-600"),
+        ("invented sign", "Range 1-600.", "Bereich -1-600.", "written as -1"),
         (
             "localised name",
             'click "HA-MCP Server" to restart',
@@ -1693,6 +1729,35 @@ def test_a_reversed_ordered_pair_is_reported(
     setting will accept.
     """
     assert _reversed_ordered_pairs(english, translated) == expected
+
+
+@pytest.mark.parametrize(
+    ("english", "translated", "expected"),
+    [
+        # A sign the translation attaches on its own states a bound the
+        # setting rejects while every digit stays where it was.
+        ("Range 1–600.", "Bereich -1–600.", ["unsigned 1 written as -1"]),
+        ("Range 1–600.", "Bereich 1–600.", []),
+        # The dash between two endpoints is not a sign, spaced out or not,
+        # or every range a catalog writes with a hyphen would report.
+        ("Range 1–600.", "Bereich 1-600.", []),
+        ("Range 1–600.", "Bereich 1 -600.", []),
+        # Nor is a hyphen inside a word, and a sign the English itself wrote
+        # is the translation's to keep.
+        ("Range 1–600.", "Zeit-600 Sekunden.", []),
+        ("offset by -5", "Versatz um -5", []),
+    ],
+)
+def test_a_sign_the_english_never_wrote_is_reported(
+    english: str, translated: str, expected: list[str]
+) -> None:
+    """A sign is part of the claim and no digit records it.
+
+    "Range 1-600" and "Bereich -1-600" hold the same numbers, in the same
+    order, in the same two endpoints -- the value comparison and the ordered
+    pair both pass while the text documents a minimum the setting rejects.
+    """
+    assert _invented_signs(english, translated) == expected
 
 
 def test_a_localised_on_screen_name_is_reported() -> None:
