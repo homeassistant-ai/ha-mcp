@@ -74,7 +74,23 @@ def test_manual_force_requests_a_patch_release() -> None:
     assert "Force a patch" in force_input["description"]
     assert '[ "${{ inputs.force }}" = "true" ]' in check_run
     assert '[ -n "$CHANGES" ] && [ "${{ inputs.force }}" = "true" ]' in check_run
+    assert '--grep="^BREAKING CHANGE:"' in check_run
     assert semantic["with"]["force"] == "${{ inputs.force && 'patch' || '' }}"
+
+
+def test_release_publish_uses_the_same_releasable_commit_matcher() -> None:
+    publish = yaml.safe_load(
+        (_WORKFLOW_DIR / "release-publish.yml").read_text(encoding="utf-8")
+    )
+    steps = publish["jobs"]["prepare"]["steps"]
+    matches = [step for step in steps if step.get("id") == "version"]
+    assert len(matches) == 1, (
+        "release-publish.yml must have exactly one 'version' step in job 'prepare'"
+    )
+
+    run = matches[0]["run"]
+    for pattern in ("^feat", "^fix", "^perf", "^BREAKING CHANGE:"):
+        assert f"--grep='{pattern}'" in run
 
 
 def test_the_extractor_the_workflow_calls_exists() -> None:
