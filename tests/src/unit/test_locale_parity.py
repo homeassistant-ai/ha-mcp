@@ -1666,6 +1666,10 @@ def test_a_file_the_english_never_named_is_reported(
         ("only when N > 0", "nur wenn N > 0", []),
         ("only when N > 0", "nur wenn N < 0", ["N > 0"]),
         ("only when N > 0", "nur wenn N>0", []),
+        # The threshold ends where its digits do: a translation that appends
+        # to them states a different bound, not the same one.
+        ("only when N > 5", "nur wenn N > 50", ["N > 5"]),
+        ("only when N > 5", "nur wenn N > 5.", []),
         # A magnitude suffix is compared only against a Latin one.
         ("about 5K tokens", "etwa 5M Token", ["5K"]),
         ("about 5K tokens", "около 5 тыс. токенов", []),

@@ -219,8 +219,13 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
         if carried and unit.upper() not in carried:
             contradicted.add(f"{digits} {unit}")
     for name, operator, digits in _COMPARISON_RE.findall(english):
+        # The threshold ends where the digits do: without a boundary on the
+        # right, "N > 5" is satisfied by a translation writing "N > 50" and
+        # the changed threshold reports nothing.
         if not re.search(
-            rf"{re.escape(name)}\s*{re.escape(operator)}\s*{digits}", translated
+            rf"{re.escape(name)}\s*{re.escape(operator)}\s*{re.escape(digits)}"
+            r"(?![0-9])",
+            translated,
         ):
             contradicted.add(f"{name} {operator} {digits}")
     for digits in _PERCENT_RE.findall(english):
