@@ -240,6 +240,12 @@ BASELINE_PATH = Path(__file__).with_name("locale_source_baseline.json")
 # files them under a surface name rather than a path.
 TOOL_SOURCES_SURFACE = "settings UI tool titles and descriptions"
 
+# A feature-gated tool has two English renderings, and the baseline pins the
+# one the UI hides under this suffix. Spelled once rather than at each site:
+# the producer and the consumer disagreeing about it is silent, and it costs a
+# key its exclusion — see `_literal_parity_pairs`.
+PARSED_RENDERING_SUFFIX = " (parsed)"
+
 
 def _catalogs_by_surface(locale: str) -> dict[str, dict[str, str]]:
     """One locale's *authored* catalogs, flattened, keyed by directory.
@@ -305,11 +311,11 @@ def _english_tool_sources() -> dict[str, str]:
         # load-bearing: tightening it to ``summaries[key]`` drops every title
         # key out of the baseline.
         pinned = summaries.get(key, text)
-        # A key whose rendered text differs is showing a stub. "(parsed)" is the
-        # other rendering, whatever produced it — a docstring for a description,
-        # the ``title=`` kwarg for ``ha_config_set_yaml.title``.
+        # A key whose rendered text differs is showing a stub. The suffix marks
+        # the other rendering, whatever produced it — a docstring for a
+        # description, the ``title=`` kwarg for ``ha_config_set_yaml.title``.
         if text != rendered.get(key):
-            sources[f"{key} (parsed)"] = pinned
+            sources[f"{key}{PARSED_RENDERING_SUFFIX}"] = pinned
         else:
             sources[key] = pinned
     return sources
@@ -1256,11 +1262,19 @@ def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, str]]:
         if key in english[surface] and key not in _pending_keys(surface)
     ]
     sent = _english_tool_sent_to_translators()
+    # Matched raw, and deliberately so. A suffixed key pins the rendering the
+    # catalogs do NOT translate, so its moving is stub-review work rather than
+    # a rewrite the sync owes: `_plan_settings` filters those keys out of its
+    # work list, `_repin_baseline` holds them stale until a human confirms the
+    # stub, and AGENTS.md names the exception. Stripping the suffix to match
+    # the catalog's bare key would drop that tool out of this check while its
+    # translation is still current and nothing is coming to replace it —
+    # silently, and for exactly as long as the human review takes.
     pending_tools = _pending_keys(TOOL_SOURCES_SURFACE)
-    catalog = _settings_catalog(locale)
+    settings_catalog = _settings_catalog(locale)
     pairs += [
         (TOOL_SOURCES_SURFACE, key, text, sent[key])
-        for key, text in _flatten(catalog.get("tools", {})).items()
+        for key, text in _flatten(settings_catalog.get("tools", {})).items()
         if key in sent and key not in pending_tools
     ]
     # A group key *is* its own English text, so the heading needs no baseline
@@ -1270,7 +1284,7 @@ def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, str]]:
     # exception the day a heading gains one.
     pairs += [
         ("settings UI tool group headings", key, text, key)
-        for key, text in _flatten(catalog.get("tool_groups", {})).items()
+        for key, text in _flatten(settings_catalog.get("tool_groups", {})).items()
     ]
     # A surface whose baseline key no longer resolves makes every key look
     # like one whose English moved, and the whole check passes having compared
@@ -1286,6 +1300,57 @@ def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, str]]:
         "almost nothing"
     )
     return pairs
+
+
+def test_a_pending_hidden_rendering_keeps_its_base_key_checked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rendering the catalogs never translate does not excuse them.
+
+    A feature-gated tool's hidden rendering is pinned under its own suffixed
+    key, and its moving is stub-review work rather than a rewrite: the planner
+    filters those keys out of its work list, and the manual repin holds them
+    stale on purpose until someone confirms the stub. The catalogs translate
+    the stub, whose digest sits on the bare key and has not moved — so the
+    translation is current and stays under this check.
+
+    Matching the pending set against the catalog's bare key by stripping the
+    suffix reads the opposite way and switches the check off for that tool,
+    silently, for as long as the human confirmation takes. Seven keys ship
+    with a hidden rendering, so the shape is live; a pending one is not, which
+    is why the pending set is substituted here rather than waited for.
+    """
+    base = "ha_config_get_yaml.description"
+    sources = english_sources()[TOOL_SOURCES_SURFACE]
+    assert f"{base}{PARSED_RENDERING_SUFFIX}" in sources, (
+        f"{base} no longer pins a hidden rendering — this test needs a key "
+        f"that does, or the case it guards no longer exists"
+    )
+
+    def only_the_hidden_rendering(surface: str) -> frozenset[str]:
+        if surface != TOOL_SOURCES_SURFACE:
+            return frozenset()
+        return frozenset({f"{base}{PARSED_RENDERING_SUFFIX}"})
+
+    baseline = {
+        key
+        for surface, key, _, _ in _literal_parity_pairs("de")
+        if surface == TOOL_SOURCES_SURFACE
+    }
+    monkeypatch.setattr(
+        sys.modules[__name__], "_pending_keys", only_the_hidden_rendering
+    )
+    keys = {
+        key
+        for surface, key, _, _ in _literal_parity_pairs("de")
+        if surface == TOOL_SOURCES_SURFACE
+    }
+    assert keys == baseline, (
+        "a pending hidden rendering changed which tools are compared: "
+        f"{sorted(baseline - keys)} dropped out. The catalogs translate the "
+        f"stub, which has not moved, so nothing is owed a rewrite here"
+    )
+    assert base in keys, f"{base} is no longer compared at all"
 
 
 @pytest.mark.parametrize("locale", _non_english_settings_locales())
