@@ -291,6 +291,7 @@ class TestEmbeddedServerOnHaos:
 # multi-minute first bring-up.
 _RESTART_RECOVER_TIMEOUT_S = 180
 _RESTART_POLL_S = 3
+_WS_RECV_TIMEOUT_S = 30
 
 
 def _entry_states_while(
@@ -331,24 +332,36 @@ def _subscribe_to_config_entries(base_url: str, token: str) -> Any:
         + "/api/websocket"
     )
     ws = websockets.sync.client.connect(ws_url, max_size=None, open_timeout=30)
-    first = json.loads(ws.recv())
-    if first.get("type") != "auth_required":
-        raise RuntimeError(f"WS handshake: expected auth_required, got {first!r}")
-    ws.send(json.dumps({"type": "auth", "access_token": token}))
-    auth = json.loads(ws.recv())
-    if auth.get("type") != "auth_ok":
-        raise RuntimeError(f"WS auth rejected: {auth}")
+    # Every recv is bounded: the sync client blocks forever by default, so a HA
+    # that accepts the socket and then goes quiet would hang the run until the
+    # module timeout killed it with nothing useful to show.
+    try:
+        first = json.loads(ws.recv(timeout=_WS_RECV_TIMEOUT_S))
+        if first.get("type") != "auth_required":
+            raise RuntimeError(f"WS handshake: expected auth_required, got {first!r}")
+        ws.send(json.dumps({"type": "auth", "access_token": token}))
+        auth = json.loads(ws.recv(timeout=_WS_RECV_TIMEOUT_S))
+        if auth.get("type") != "auth_ok":
+            raise RuntimeError(f"WS auth rejected: {auth}")
 
-    ws.send(json.dumps({"id": 1, "type": "config_entries/subscribe"}))
-    # The command result, then a snapshot of every current entry (each carrying
-    # type=null), both land before any change event — drain them so the caller
-    # only sees transitions its trigger caused.
-    while True:
-        msg = json.loads(ws.recv(timeout=30))
-        if msg.get("type") == "event" and any(
-            item.get("type") is None for item in msg.get("event", [])
-        ):
-            return ws
+        ws.send(json.dumps({"id": 1, "type": "config_entries/subscribe"}))
+        # The command result, then a snapshot of every current entry (each
+        # carrying type=null), both land before any change event — drain them so
+        # the caller only sees transitions its trigger caused.
+        deadline = time.monotonic() + _WS_RECV_TIMEOUT_S
+        while time.monotonic() < deadline:
+            msg = json.loads(ws.recv(timeout=deadline - time.monotonic()))
+            if msg.get("type") == "event" and any(
+                item.get("type") is None for item in msg.get("event", [])
+            ):
+                return ws
+        raise AssertionError(
+            "config_entries/subscribe never sent its entry snapshot within "
+            f"{_WS_RECV_TIMEOUT_S}s"
+        )
+    except BaseException:
+        ws.close()
+        raise
 
 
 def _collect_entry_states(ws: Any, entry_id: str, deadline: float) -> list[str]:
