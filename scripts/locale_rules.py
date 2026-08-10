@@ -50,8 +50,11 @@ _COMPOUND_UNIT_RE = re.compile(
 _KNOWN_UNITS = frozenset({"KB", "MB", "GB", "TB"})
 # A signed number, for the arm that compares what a translation added. The
 # dash between two range endpoints must not read as a sign, which is what the
-# digit-on-the-left lookbehinds rule out; see _invented_signs.
-_SIGNED_NUMBER_RE = re.compile(r"(?<![\w.,])(?<!\d )([-+])(\d+(?:[.,   ]\d+)*)")
+# digit-on-the-left lookbehinds rule out; see _invented_signs. The number is
+# spelled by reference rather than repeated: a hand-copied group class lost the
+# two non-breaking spaces a locale groups with, so "-1 000" stopped being one
+# token while the copy still looked right.
+_SIGNED_NUMBER_RE = re.compile(rf"(?<![\w.,])(?<!\d )([-+])({_NUMBER_RE.pattern})")
 # The same four units as every catalog spells them. Without this the filter
 # that stops a localised spelling false-positiving also stops a *wrong*
 # localised spelling reporting: "предел 1-256 ГБ" and "limite de 1-256 Go"

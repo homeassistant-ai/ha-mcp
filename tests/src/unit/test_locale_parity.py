@@ -1750,6 +1750,15 @@ def test_a_reversed_ordered_pair_is_reported(
         # is the translation's to keep.
         ("Range 1–600.", "Zeit-600 Sekunden.", []),
         ("offset by -5", "Versatz um -5", []),
+        # A grouped endpoint is one number here too. The separators are the
+        # ones a locale actually groups with, non-breaking space included, so
+        # the pattern is referenced rather than copied — a hand-copied class
+        # lost them while still reading correctly.
+        (
+            "Range 1 000–9 000.",
+            "Bereich -1 000–9 000.",
+            ["unsigned 1 000 written as -1 000"],
+        ),
     ],
 )
 def test_a_sign_the_english_never_wrote_is_reported(
