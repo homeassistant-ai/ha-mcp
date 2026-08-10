@@ -76,6 +76,25 @@ class TestValidate:
     def test_accepts_a_plain_translation(self) -> None:
         assert _validate(_item(english="Hello"), "Hallo") is None
 
+    def test_refuses_a_swapped_number_and_accepts_a_spelled_out_one(self) -> None:
+        """The engine asks the narrow question, and the corpus says which.
+
+        Across the 6751 shipped pairs every number difference is one-sided —
+        Russian writes "the 5 experimental sub-flags" in words, Chinese keeps
+        a clause the English rendering cuts — and none is a swap. Comparing
+        full multisets here would refuse those two correct strings on every
+        run and leave their keys to be planned again tomorrow; comparing
+        nothing let a swapped number land as a backfilled key, where the
+        merge gate reports it and holds the whole tree back. A swap is wrong
+        in every language, so that is what this refuses.
+        """
+        assert _validate(_item(english="Range 1-600."), "Bereich 1-900.") is not None
+        assert (
+            _validate(_item(english="keeps 30 entries"), "behaelt 50 Eintraege")
+            is not None
+        )
+        assert _validate(_item(english="Range 1-600."), "Bereich 1-600.") is None
+
     def test_rejects_empty_and_non_string(self) -> None:
         assert _validate(_item(), "") is not None
         assert _validate(_item(), "   ") is not None

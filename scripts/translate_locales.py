@@ -510,7 +510,16 @@ def _validate(item: WorkItem, translated: Any) -> str | None:
     # push is held back whole, the progress file is discarded, and the run
     # re-spends its quota planning the same work again. Rejecting the one
     # string instead costs one retry and leaves the key for tomorrow.
-    fault = locale_rules._parity_fault(item.english, translated, compare_numbers=False)
+    #
+    # Numbers included, with the merge gate's own tolerance table. Leaving
+    # them out was the narrower reading of the same argument: the two
+    # recorded tolerances are number entries, so comparing without them
+    # would refuse two correct strings on every run. But a key with no entry
+    # -- every freshly written one -- then had its numbers unchecked here and
+    # checked there, which lands the fault and holds the whole tree back,
+    # reaching the same stall by the other route. Both failures cost a human
+    # one tolerance entry; only this one keeps the cost to a single key.
+    fault = locale_rules._parity_fault(item.english, translated, numbers="replaced")
     if fault:
         return f"contradicts the English source: {fault}"
     return None

@@ -25,7 +25,7 @@ import sys
 from collections import Counter
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 # Both calls into the pipeline below name a sibling script, and importing this
 # module does not put `scripts/` on the path -- `translate_locales` does that
@@ -324,7 +324,7 @@ def _parity_fault(
     *,
     tolerated_losses: Counter[tuple[str, ...]] | None = None,
     tolerated_additions: Counter[tuple[str, ...]] | None = None,
-    compare_numbers: bool = True,
+    numbers: Literal["multiset", "replaced"] = "multiset",
 ) -> str:
     """Everything one English/translated pair contradicts, or "" if nothing.
 
@@ -336,33 +336,36 @@ def _parity_fault(
     ``test_the_comparison_runs_every_arm`` holds each one to a case it must
     report, which only works if there is a single place they are summed.
 
-    Numbers are compared as multisets in both directions; a tolerance is
-    subtracted by occurrence rather than by value.
+    ``numbers`` decides how much of the number comparison runs, and the two
+    callers ask for different amounts.
 
-    ``compare_numbers=False`` is what the engine asks for, and the reason is
-    the tolerance table the merge-time check carries: both of its entries are
-    number-count entries. Russian spells "the 5 experimental sub-flags" out in
-    words and Chinese translates a clause the English rendering cuts -- each
-    correct, each a number the multiset says went missing or appeared. A
-    correct translation the engine refuses is retried once and then left for
-    the next run to plan again, which is the daily stall this call exists to
-    prevent, so the arm that produces those two is left to the check that can
-    hold a per-key tolerance. Every fault #2180 repaired by hand -- a dropped
-    ``docs/beta.md``, a localised ``enable_tool_search``, "46K" where the
-    English says 90% -- is found by the arms that do run here.
+    ``"multiset"`` compares both directions and subtracts a tolerance by
+    occurrence. That is the merge-time check, which can carry a per-key
+    tolerance and is read by a human when it fails.
 
-    The same switch turns off literal COUNTING, and for the same reason: a
-    faithful translation may name a repeated identifier once and pronominalise
-    the second mention, which no per-string rule can tell from a corrupted
-    duplicate. Whether a name survives at all is still asked of the engine;
-    how often it survives is asked only where a tolerance can absorb it.
+    ``"replaced"`` reports only when a number was swapped for another -- when
+    the pair loses a number AND gains one. That is the engine, and the corpus
+    is the reason for the narrower question: across the 6751 shipped pairs,
+    every number difference is one-sided (Russian spells "the 5 experimental
+    sub-flags" out in words; Chinese keeps a clause the English rendering
+    cuts) and NONE is a swap. Asking the full multiset at acceptance time
+    would refuse those two correct strings on every run, retry once, and
+    leave their keys to be planned again tomorrow -- the daily stall this
+    call exists to prevent. Asking nothing let a swapped number through to
+    land as a backfilled key, where the merge gate reports it and holds the
+    whole tree back instead. The swap is the shape that is wrong in every
+    language, so it is the shape the engine refuses.
+
+    Literal COUNTING is the merge check's alone for the same kind of reason:
+    a faithful translation may name a repeated identifier once and
+    pronominalise the second mention, which no per-string rule separates from
+    a corrupted duplicate.
     """
     losses = tolerated_losses if tolerated_losses is not None else Counter()
     additions = tolerated_additions if tolerated_additions is not None else Counter()
-    if compare_numbers:
-        lost_numbers = (_numbers(english) - _numbers(translated)) - losses
-        gained_numbers = (_numbers(translated) - _numbers(english)) - additions
-    else:
+    lost_numbers = (_numbers(english) - _numbers(translated)) - losses
+    gained_numbers = (_numbers(translated) - _numbers(english)) - additions
+    if numbers == "replaced" and not (lost_numbers and gained_numbers):
         lost_numbers = gained_numbers = Counter()
     lost = (
         _lost_literals(english, translated)

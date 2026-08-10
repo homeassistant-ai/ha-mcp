@@ -1246,12 +1246,26 @@ def _english_tool_sent_to_translators() -> dict[str, str]:
 
 @cache
 def _pending_keys(surface: str) -> frozenset[str]:
-    """Keys of one surface whose English moved since the baseline was pinned."""
+    """Keys of one surface whose English moved since the baseline was pinned.
+
+    Spelled exactly as ``translate_locales._changed_keys`` spells it, because
+    the exclusion below rests on that function's behaviour: a key it plans is
+    owed a machine rewrite, and until the sync runs the old translation
+    legitimately carries the old literals. A key ABSENT from the baseline is
+    not planned — the planner asks ``not in (None, digest)`` — so excluding it
+    here would exempt a value nothing is coming to replace.
+
+    That gap is reachable: the partial path lands backfilled-new keys without
+    repinning, the next clean run does not plan them and then repins, and from
+    that moment the merge gate compares a value no run can fix. Nothing is
+    absent from the baseline today, so this changes no current result; it
+    closes the one route into a red arm that no run can clear.
+    """
     recorded = json.loads(BASELINE_PATH.read_text("utf-8")).get(surface, {})
     return frozenset(
         key
         for key, digest in english_sources()[surface].items()
-        if recorded.get(key) != digest
+        if recorded.get(key) not in (None, digest)
     )
 
 
@@ -1327,6 +1341,52 @@ def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, str]]:
         "about it"
     )
     return pairs
+
+
+def test_the_exclusion_and_the_planner_agree_on_what_moved(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The check may only excuse a key the sync is actually going to rewrite.
+
+    The exclusion's whole warrant is that a pending key is owed a machine
+    rewrite, and that warrant is the planner's. The two read the baseline the
+    same way now; they did not before: a key ABSENT from the baseline counted
+    as pending here while ``_changed_keys`` does not queue it, so the check
+    excused a value nothing was coming to replace.
+
+    The route in is the partial path, which lands backfilled-new keys without
+    repinning. The next clean run does not plan them, repins, and from then on
+    the merge arm compares a value no run can fix. Asserted against the
+    planner's own function rather than against a copy of its rule.
+    """
+    import translate_locales
+
+    surface = "src/ha_mcp/settings_ui/locales"
+    recorded = json.loads(BASELINE_PATH.read_text("utf-8"))
+    key = next(iter(english_sources()[surface]))
+    del recorded[surface][key]
+    doctored = tmp_path / "baseline.json"
+    doctored.write_text(json.dumps(recorded), encoding="utf-8")
+
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "BASELINE_PATH", doctored)
+    _pending_keys.cache_clear()
+    try:
+        pending = _pending_keys(surface)
+        planned = translate_locales._changed_keys(module)[surface]
+    finally:
+        _pending_keys.cache_clear()
+
+    assert key not in pending, (
+        f"{key} is absent from the baseline and counted as pending, so the "
+        "check skips it — while the planner does not queue it, which leaves "
+        "the value unchecked and unrewritten for good"
+    )
+    assert key not in planned, "the planner's own rule changed; re-read both"
+    assert pending == planned, (
+        "the exclusion and the planner disagree about which keys moved: "
+        f"{sorted(pending ^ planned)}"
+    )
 
 
 def test_a_pending_hidden_rendering_keeps_its_base_key_checked(
