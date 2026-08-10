@@ -21,7 +21,7 @@ on:
         type: string
         default: 'homeassistant-addon/config.yaml'
       commit_message_prefix:
-        description: 'Prefix for commit message (e.g., "publish version")'
+        description: 'Prefix for commit message (e.g., "publish dev addon version")'
         required: false
         type: string
         default: 'publish version'

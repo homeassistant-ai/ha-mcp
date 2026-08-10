@@ -73,7 +73,7 @@ permissions:
 # Self-overlap only (a dispatch during the cron run): the shared
 # master-write group lives on the push job, not here — holding it through
 # dependency install and up to 40 minutes of translation would make a
-# manually dispatched release queue behind work that never touches master.
+# stable release queue behind work that never touches master.
 concurrency:
   group: locale-sync
   cancel-in-progress: false

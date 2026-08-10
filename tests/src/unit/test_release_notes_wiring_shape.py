@@ -1,4 +1,4 @@
-"""Pin the release workflows to the release-note extractor they call.
+"""Pin the stable release workflow's force and release-note wiring.
 
 ``semver-release.yml`` cannot run in PR CI, so nothing else checks that the
 filenames in its release step still agree: the
@@ -20,30 +20,42 @@ import re
 from pathlib import Path
 from typing import Any
 
-import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 _SCRIPT = "scripts/extract_release_notes.py"
 _STEP = "Create draft GitHub release"
-_WORKFLOWS = ["semver-release.yml"]
+_WORKFLOW = "semver-release.yml"
 _OUT_RE = re.compile(r"extract_release_notes\.py[^\n]*--out\s+(\S+)")
 _RUNS_OF_BLANKS = re.compile(r"[ \t]+")
 
 
-def _release_step_run(workflow: str) -> str:
+def _workflow() -> dict[str, Any]:
+    return yaml.safe_load((_WORKFLOW_DIR / _WORKFLOW).read_text(encoding="utf-8"))
+
+
+def _step(job: str, step_id: str) -> dict[str, Any]:
+    steps = _workflow()["jobs"][job]["steps"]
+    matches = [step for step in steps if step.get("id") == step_id]
+    assert len(matches) == 1, (
+        f"{_WORKFLOW} must have exactly one {step_id!r} step in job {job!r}"
+    )
+    return matches[0]
+
+
+def _release_step_run() -> str:
     """The `run` body of the single step that writes and publishes the notes."""
-    data: Any = yaml.safe_load((_WORKFLOW_DIR / workflow).read_text(encoding="utf-8"))
+    data = _workflow()
     steps = [
         step
         for job in data["jobs"].values()
         for step in job.get("steps", [])
         if step.get("name") == _STEP
     ]
-    assert len(steps) == 1, f"{workflow} must have exactly one {_STEP!r} step"
+    assert len(steps) == 1, f"{_WORKFLOW} must have exactly one {_STEP!r} step"
     run = steps[0].get("run")
-    assert run, f"{workflow}'s {_STEP!r} step has no run body"
+    assert run, f"{_WORKFLOW}'s {_STEP!r} step has no run body"
     # Comment lines are dropped first: the step is commented, and a commented-out
     # command must not be able to satisfy an assertion about what it does.
     active = "\n".join(
@@ -53,27 +65,29 @@ def _release_step_run(workflow: str) -> str:
 
 
 def test_manual_force_requests_a_patch_release() -> None:
-    data: Any = yaml.safe_load(
-        (_WORKFLOW_DIR / "semver-release.yml").read_text(encoding="utf-8")
-    )
-    semantic_steps = data["jobs"]["semantic-release"]["steps"]
-    semantic = next(step for step in semantic_steps if step.get("id") == "semantic")
+    data = _workflow()
+    force_input = data[True]["workflow_dispatch"]["inputs"]["force"]
+    check_run = _step("check-changes", "check")["run"]
+    semantic = _step("semantic-release", "semantic")
 
+    assert force_input["type"] == "boolean"
+    assert "Force a patch" in force_input["description"]
+    assert '[ "${{ inputs.force }}" = "true" ]' in check_run
+    assert '[ -n "$CHANGES" ] && [ "${{ inputs.force }}" = "true" ]' in check_run
     assert semantic["with"]["force"] == "${{ inputs.force && 'patch' || '' }}"
 
 
-def test_the_extractor_the_workflows_call_exists() -> None:
+def test_the_extractor_the_workflow_calls_exists() -> None:
     assert (_REPO_ROOT / _SCRIPT).is_file(), (
-        f"{_SCRIPT} is gone, but the release workflows still invoke it"
+        f"{_SCRIPT} is gone, but the release workflow still invokes it"
     )
 
 
-@pytest.mark.parametrize("workflow", _WORKFLOWS)
-def test_the_release_step_wires_one_filename_end_to_end(workflow: str) -> None:
-    run = _release_step_run(workflow)
+def test_the_release_step_wires_one_filename_end_to_end() -> None:
+    run = _release_step_run()
 
     out = _OUT_RE.search(run)
-    assert out, f"{workflow}'s {_STEP!r} step does not call {_SCRIPT} with --out"
+    assert out, f"{_WORKFLOW}'s {_STEP!r} step does not call {_SCRIPT} with --out"
     notes = out.group(1)
 
     stages = [
@@ -84,10 +98,10 @@ def test_the_release_step_wires_one_filename_end_to_end(workflow: str) -> None:
         (f"--notes-file {notes}", f"publish {notes}"),
     ]
     for needle, what in stages:
-        assert needle in run, f"{workflow}'s {_STEP!r} step does not {what}"
+        assert needle in run, f"{_WORKFLOW}'s {_STEP!r} step does not {what}"
 
     positions = [run.index(needle) for needle, _ in stages]
     assert positions == sorted(positions), (
-        f"{workflow}'s {_STEP!r} step must extract, guard the empty file, warn, "
+        f"{_WORKFLOW}'s {_STEP!r} step must extract, guard the empty file, warn, "
         "write the fallback, then publish that same file — in that order"
     )

@@ -92,8 +92,8 @@ jobs:
             echo "proceed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # A wholesale-skipped run performed no release, so no stable tag is
-          # due. Short-circuit it before querying asynchronously-created jobs.
+          # The retired Hotfix Release was the only known source of wholesale-
+          # skipped runs. Keep this defensive guard before querying jobs.
           if [ "${{ github.event.workflow_run.conclusion }}" = "skipped" ]; then
             echo "Triggering run was skipped in its entirety - skipping the mirror sync."
             echo "proceed=false" >> "$GITHUB_OUTPUT"
