@@ -34,7 +34,6 @@ below) and run in that workflow, not in PR CI.
 
 from __future__ import annotations
 
-import collections
 import hashlib
 import json
 import os
@@ -1325,7 +1324,7 @@ def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, str]]:
     # completeness-gated, so PR CI never runs it. Each surface therefore
     # carries its own floor, and the set of surfaces is asserted rather than
     # inferred from a count.
-    compared = collections.Counter(surface for surface, _, _, _ in pairs)
+    compared = Counter(surface for surface, _, _, _ in pairs)
     assert set(compared) == _GUARDED_SURFACES, (
         f"literal parity compared {sorted(compared)} for {locale}, not "
         f"{sorted(_GUARDED_SURFACES)} — a surface stopped resolving against "
@@ -2020,6 +2019,54 @@ def test_the_rules_module_asks_the_pipeline_beside_it(tmp_path: Path) -> None:
         f"the rules resolved translate_locales to {completed.stdout.strip()!r} "
         f"with a shadow on the path — the untranslatable names and the "
         f"localised-name rule would come from that module"
+    )
+
+
+def test_a_preloaded_stranger_does_not_answer_for_the_pipeline(
+    tmp_path: Path,
+) -> None:
+    """Reusing the registered module is only safe if it IS the sibling.
+
+    The rules reuse an already-imported ``translate_locales`` so the engine
+    and the check cannot end up with two copies carrying separate state. Read
+    unchecked, that reuse put the shadowing hole back one level up: a module
+    someone else registered under that name first answered instead, and the
+    two arms that delegate would take their rules from it.
+
+    The stranger keeps its slot here — evicting a module another importer
+    holds is not this module's call — and the sibling is loaded beside it.
+    """
+    stranger = tmp_path / "stranger.py"
+    stranger.write_text("_hardcoded_ui_names = lambda: ('SHADOW',)\n", encoding="utf-8")
+    probe = (
+        "import importlib.util, sys;"
+        f"spec = importlib.util.spec_from_file_location('translate_locales', {str(stranger)!r});"
+        "m = importlib.util.module_from_spec(spec);"
+        "spec.loader.exec_module(m);"
+        "sys.modules['translate_locales'] = m;"
+        f"spec2 = importlib.util.spec_from_file_location('lr', {str(_RULES_PATH)!r});"
+        "lr = importlib.util.module_from_spec(spec2);"
+        "spec2.loader.exec_module(lr);"
+        "print(lr._pipeline().__file__);"
+        "print(sys.modules['translate_locales'].__file__)"
+    )
+    environment = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tempfile.gettempdir(),
+        env=environment,
+    )
+    assert completed.returncode == 0, completed.stderr.strip()
+    answered, still_registered = completed.stdout.split()
+    assert answered == str(_RULES_PATH.with_name("translate_locales.py")), (
+        f"a module registered as translate_locales before the rules loaded "
+        f"answered for the pipeline: {answered}"
+    )
+    assert still_registered == str(stranger), (
+        "the rules evicted a module another importer had registered"
     )
 
 

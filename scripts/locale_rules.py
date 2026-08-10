@@ -47,22 +47,34 @@ def _pipeline() -> Any:
     against the whole search path, so a ``translate_locales.py`` in the
     caller's working directory or anywhere earlier on it wins -- and the two
     arms below would then be asking a stranger what the untranslatable names
-    are. An already-imported module is reused, because the engine imports this
-    one and re-executing it would give the process two copies with separate
-    state.
+    are.
+
+    A module already registered under that name is reused only when it IS the
+    sibling: the engine imports this one, and re-executing it would give the
+    process two copies with separate state. Reusing the entry unchecked put
+    the hole back one level up -- a stranger loaded first still answered --
+    so the origin is compared before the entry is trusted. A stranger keeps
+    its slot; the sibling is loaded under a private name beside it, because
+    evicting a module another importer is holding is not this module's call.
     """
-    existing = sys.modules.get("translate_locales")
-    if existing is not None:
-        return existing
-    spec = importlib.util.spec_from_file_location(
-        "translate_locales", _SCRIPTS_DIR / "translate_locales.py"
-    )
+    sibling = _SCRIPTS_DIR / "translate_locales.py"
+    registered = sys.modules.get("translate_locales")
+    if (
+        registered is not None
+        and Path(getattr(registered, "__file__", "") or "").resolve()
+        == sibling.resolve()
+    ):
+        return registered
+    name = "translate_locales" if registered is None else "_locale_rules_pipeline"
+    if (loaded := sys.modules.get(name)) is not None:
+        return loaded
+    spec = importlib.util.spec_from_file_location(name, sibling)
     if spec is None or spec.loader is None:  # pragma: no cover - unreachable
         raise ImportError(f"cannot load translate_locales from {_SCRIPTS_DIR}")
     module = importlib.util.module_from_spec(spec)
     # Registered before execution: the engine's own module-level imports run
     # during exec_module, and one of them can reach back here.
-    sys.modules["translate_locales"] = module
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
