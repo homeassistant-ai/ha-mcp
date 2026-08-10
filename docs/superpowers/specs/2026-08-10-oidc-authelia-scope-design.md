@@ -108,6 +108,11 @@ otherwise unconfigured, propagating child loggers cannot inherit ha-mcp's root
 handler. This preserves the upstream opt-out and avoids requiring operators to
 duplicate `LOG_LEVEL` as `FASTMCP_LOG_LEVEL`.
 
+This logging bridge is intentionally common behavior: every ha-mcp entrypoint
+that calls `_setup_logging` receives the FastMCP level synchronization and
+disabled-logging protection. It is not part of the OIDC-only authentication
+boundary and does not change any entrypoint's authentication model.
+
 ### Documentation
 
 Update `docs/oidc.md` to:
@@ -124,9 +129,11 @@ Update `docs/oidc.md` to:
 - state that `LOG_LEVEL` covers enabled FastMCP/OIDC diagnostics while
   `FASTMCP_LOG_ENABLED=false` still disables FastMCP logging entirely.
 
-The guidance applies to the Docker/standalone `ha-mcp-oidc` entrypoint only.
-It does not alter the Home Assistant add-on, custom component, or OAuth mode's
-authentication design.
+The OIDC scope, persisted-state, and operator-configuration guidance applies
+to the Docker/standalone `ha-mcp-oidc` entrypoint only. It does not alter the
+Home Assistant add-on, custom component, or OAuth mode's authentication design.
+The common logging bridge described above separately applies to every
+entrypoint that uses `_setup_logging`.
 
 ## Testing
 
@@ -157,11 +164,14 @@ Follow red-green TDD with entrypoint coverage in
 8. Implement the compatibility subclass, entrypoint integration, and logging
    changes, then rerun both focused OIDC unit modules.
 9. Run `uv run ruff format --check` and `uv run ruff check` on all touched
-   Python files, `uv run mypy src/`, and both OIDC unit files. There is no OIDC
-   E2E test or live-IdP fixture in `tests/src/e2e/`; the pull request's ordinary
-   CI still runs the repository-wide E2E lanes. Before publishing, retain the
-   recorded red evidence, restore any safe temporary regression mutations, and
-   rerun the tests successfully.
+   Python files, `uv run mypy src/`, and both OIDC unit files. There is no live
+   OIDC/IdP fixture in `tests/src/e2e/`, so do not invent a local OIDC E2E
+   command. Require terminal success from the pull request's full `E2E Tests`
+   workflow and every applicable `HAOS E2E Tests` lane, including the embedded
+   and in-addon lanes when scheduled. Do not report verification complete until
+   those CI lanes pass. Before publishing, retain the recorded red evidence,
+   restore any safe temporary regression mutations, and rerun the focused tests
+   successfully.
 
 No live Authelia instance or Home Assistant state is required: the defect is
 the deterministic proxy, persisted-state, and logging behavior around FastMCP.

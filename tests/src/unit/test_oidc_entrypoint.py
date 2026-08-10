@@ -60,6 +60,7 @@ def _make_mock_oidc_proxy(capture: dict) -> type:
                 capture["audience"] = audience
 
         def setup_scope_compatibility(self):
+            """Record that the entrypoint activated OIDC scope compatibility."""
             capture["setup_scope_compatibility_calls"] = (
                 capture.get("setup_scope_compatibility_calls", 0) + 1
             )

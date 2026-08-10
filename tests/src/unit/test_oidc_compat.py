@@ -59,6 +59,7 @@ def oidc_proxy(monkeypatch: pytest.MonkeyPatch) -> HaMcpOIDCProxy:
 
 
 def _registration_request(scope: str | None) -> Request:
+    """Build an MCP dynamic-client-registration request with an optional scope."""
     body = {
         "redirect_uris": ["http://127.0.0.1:8765/callback"],
         "grant_types": ["authorization_code", "refresh_token"],
@@ -71,6 +72,7 @@ def _registration_request(scope: str | None) -> Request:
     sent = False
 
     async def receive() -> dict[str, object]:
+        """Yield the encoded registration body once to Starlette."""
         nonlocal sent
         if sent:
             return {"type": "http.disconnect"}
@@ -92,6 +94,7 @@ def _registration_request(scope: str | None) -> Request:
 async def _registered_payload(
     proxy: HaMcpOIDCProxy, scope: str | None
 ) -> dict[str, object]:
+    """Register a client through the MCP handler and return its response payload."""
     assert proxy.client_registration_options is not None
     response = await RegistrationHandler(
         provider=proxy,
@@ -262,6 +265,7 @@ async def _store_refresh_token(
     client_id: str,
     scopes: list[str],
 ) -> None:
+    """Store refresh-token metadata for compatibility-guard tests."""
     await proxy._refresh_token_store.put(
         key=hashlib.sha256(token.encode()).hexdigest(),
         value=RefreshTokenMetadata(

@@ -11,7 +11,8 @@
 ## Global Constraints
 
 - Work only in `/data/data/com.termux/files/home/ha-mcp/worktree/fix-oidc-authelia` on branch `agent/fix-oidc-authelia`; never modify or commit from `master` or the user's dirty main checkout.
-- The behavior change applies only to the standalone/container `ha-mcp-oidc` entrypoint; do not alter the Home Assistant add-on, custom component, OAuth mode, audience/resource forwarding, redirect URI policy, or token endpoint authentication.
+- The OIDC scope and persisted-state compatibility behavior applies only to the standalone/container `ha-mcp-oidc` entrypoint; do not alter the Home Assistant add-on, custom component, OAuth mode, audience/resource forwarding, redirect URI policy, or token endpoint authentication.
+- The FastMCP logger-level bridge and `FASTMCP_LOG_ENABLED=false` protection are intentionally common behavior for every ha-mcp entrypoint that calls `_setup_logging`; they do not change those entrypoints' authentication models.
 - Always pass exactly `required_scopes=["openid"]`; do not make OIDC scopes configurable because `openid` is mandatory for this OIDC entrypoint.
 - Keep `openid` as the only required, default, and protected-resource-advertised scope. Do not copy every provider discovery scope into DCR metadata.
 - Permit DCR clients to explicitly request optional OIDC scopes, retain those scopes while adding missing `openid`, union `openid` into every authorization request, and leave final optional-scope authorization to the upstream IdP.
@@ -457,9 +458,30 @@ git diff --check origin/master...HEAD
 ```
 
 Expected: every command exits zero. These focused local checks cover the OIDC
-change; the pull request's ordinary CI supplies broad unit and E2E validation.
+change but are not complete E2E evidence.
 
-- [ ] **Step 3: Temporarily remove the entrypoint and logging fixes with `apply_patch`**
+- [ ] **Step 3: Require terminal E2E evidence from the pull request workflows**
+
+There is no live OIDC/IdP fixture in `tests/src/e2e/`, so do not invent or run a
+local OIDC E2E command. The required broad evidence comes from the pull request's
+full `E2E Tests` workflow and every applicable `HAOS E2E Tests` lane, including
+`HAOS E2E Tests (embedded)` and `HAOS E2E Tests (inaddon)` when scheduled.
+
+Use only read-only GitHub inspection commands:
+
+```bash
+gh pr checks 2194 --repo homeassistant-ai/ha-mcp --watch
+gh pr checks 2194 --repo homeassistant-ai/ha-mcp --json name,state,bucket,link,workflow
+gh run list --repo homeassistant-ai/ha-mcp --branch agent/fix-oidc-authelia --limit 100 --json databaseId,workflowName,status,conclusion,headSha,url
+gh run view <run-id> --repo homeassistant-ai/ha-mcp --log-failed
+```
+
+Expected: the full `E2E Tests` workflow and all applicable `HAOS E2E Tests`
+lanes reach terminal success on the current head. If a lane fails, use its run
+ID with the final command to inspect the failed log. Do not claim verification
+complete while any required E2E lane is queued, in progress, failed, or missing.
+
+- [ ] **Step 4: Temporarily remove the entrypoint and logging fixes with `apply_patch`**
 
 Use `apply_patch` to remove only:
 
@@ -483,7 +505,7 @@ captured in Task 1; do not replace `valid_scopes=None` with all provider scopes
 for a mutation test because that would recreate the over-broad advertised-scope
 behavior the design rejects.
 
-- [ ] **Step 4: Run three regression tests and require failure**
+- [ ] **Step 5: Run three regression tests and require failure**
 
 Run:
 
@@ -495,7 +517,7 @@ Expected: all three tests fail for their intended reasons: missing
 `required_scopes`, enabled FastMCP remaining at INFO, and disabled FastMCP
 records inheriting the root handler.
 
-- [ ] **Step 5: Restore both fixes with `apply_patch` and rerun the regressions**
+- [ ] **Step 6: Restore both fixes with `apply_patch` and rerun the regressions**
 
 Restore the exact Task 1 scope line/comment and Task 2 logger-level line/comment. Then run:
 
@@ -507,7 +529,7 @@ git status --short --branch
 
 Expected: `3 passed` and a clean tracked working tree. If restoration changes a committed line, compare it with `git diff HEAD -- src/ha_mcp/__main__.py` and correct it before proceeding.
 
-- [ ] **Step 6: Obtain approval, then request the read-only code review**
+- [ ] **Step 7: Obtain approval, then request the read-only code review**
 
 Resolve the literal base and head SHAs with:
 
