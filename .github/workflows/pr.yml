@@ -44,7 +44,7 @@ jobs:
     timeout-minutes: 5
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Fail component changes riding an already-released version
         env:
           BASE_REF: ${{ github.base_ref }}
@@ -96,7 +96,7 @@ jobs:
     outputs:
       run: ${{ steps.filter.outputs.run }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Classify changed files
         id: filter
         env:
@@ -199,7 +199,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Verify uv.lock is in sync with pyproject.toml
       run: uv lock --check
@@ -242,7 +242,7 @@ jobs:
     timeout-minutes: 1
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Check AGENTS.md size
       run: |
@@ -263,10 +263,10 @@ jobs:
       run:
         working-directory: site
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Setup Node
-      uses: actions/setup-node@v7
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
       with:
         node-version: "22"
         cache: npm
@@ -301,7 +301,7 @@ jobs:
     - name: Install git for changed-files diff
       run: apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
 
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Install dependencies
       run: uv sync --dev
@@ -311,7 +311,7 @@ jobs:
 
     - name: Run ruff format check on changed Python files
       run: |
-        # actions/checkout@v7 sets safe.directory in a temp HOME that this
+        # actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 sets safe.directory in a temp HOME that this
         # step doesn't inherit; re-add it here so git operations succeed
         # when the checkout dir is owned by a different UID than the
         # container's root.
@@ -345,7 +345,7 @@ jobs:
     timeout-minutes: 2
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Install dependencies
       run: uv sync --dev
@@ -362,7 +362,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Install dependencies
       run: uv sync --dev
@@ -392,7 +392,7 @@ jobs:
       # Node.js" was the network download, not the extract. apt-get
       # install still runs (unpack is fast); we're just skipping the
       # download leg on cache hit.
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /var/cache/apt/archives
         key: apt-trixie-git-nodejs-npm-v1
@@ -411,7 +411,7 @@ jobs:
         apt-get update -qq
         apt-get install -y -qq git nodejs npm >/dev/null 2>&1
 
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         submodules: true
 
@@ -422,7 +422,7 @@ jobs:
       # Lockfile-keyed so a dependency bump invalidates cleanly. `npm ci`
       # is still safe to run on cache hit (it short-circuits when the
       # tree already matches the lockfile).
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: tests/js/node_modules
         key: tests-js-node-modules-${{ hashFiles('tests/js/package-lock.json') }}
@@ -475,7 +475,7 @@ jobs:
             pytest_workers: 4
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         submodules: true
 
@@ -497,7 +497,7 @@ jobs:
 
     - name: Cache HA Docker image
       id: cache-ha-image
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /tmp/ha-image.tar
         key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
@@ -576,7 +576,7 @@ jobs:
             pytest_workers: 3
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         submodules: true
 
@@ -598,7 +598,7 @@ jobs:
 
     - name: Cache HA Docker image
       id: cache-ha-image
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /tmp/ha-image.tar
         key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
@@ -673,7 +673,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         submodules: true
         # fetch-depth 0: the update-path scenario checks the custom component
@@ -706,7 +706,7 @@ jobs:
 
     - name: Cache HA Docker image
       id: cache-ha-image
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /tmp/ha-image.tar
         key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
@@ -761,7 +761,7 @@ jobs:
     timeout-minutes: 15
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         submodules: true
 

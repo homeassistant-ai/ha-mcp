@@ -24,7 +24,7 @@ jobs:
       release_tag: ${{ steps.version.outputs.release_tag }}
       should_publish: ${{ steps.version.outputs.should_publish }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: master
           fetch-depth: 0
@@ -127,7 +127,7 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
@@ -162,7 +162,7 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
@@ -227,7 +227,7 @@ jobs:
           echo "PyPI publish conclusion: ${{ needs.publish_pypi.result }}"
           echo "Docker publish conclusion: ${{ needs.publish_docker.result }}"
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
         with:
           ref: ${{ needs.prepare.outputs.release_tag }}
@@ -270,8 +270,7 @@ jobs:
         if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
         run: |
           set -euo pipefail
-          python -m pip install --quiet jsonschema
-          python scripts/validate_server_manifest.py server.json
+          uv run --frozen python scripts/validate_server_manifest.py server.json
 
       - name: Login to MCP Registry
         if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
