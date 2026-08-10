@@ -234,14 +234,15 @@ jobs:
     - name: Verify literal parity after a partial run
       id: verify_partial
       # The completeness step above cannot run on a partial tree, and the push
-      # job lands that tree regardless. One class of value on it is checkable
-      # anyway: a key this run BACKFILLED carries a baseline hash that still
-      # matches, so the literal-parity arm covers it, while a CHANGED key is
-      # excluded there by construction (its English moved, its translation is
-      # owed a rewrite). That class is also the one worth blocking on — a
-      # backfilled key exists afterwards, so no later run re-queues it and no
-      # progress entry is written for it, which leaves a dropped identifier
-      # wrong until a human repairs it. Ungated on purpose: this arm never
+      # job lands that tree regardless. What this run WROTE is checkable
+      # anyway, and it is exactly the class worth blocking on, because no
+      # later run revisits it: a BACKFILLED key exists afterwards so nothing
+      # re-queues it, and a CHANGED key this run finished is named in the
+      # progress sidecar, which the next run reads and skips. The parity arm
+      # covers the first through its unmoved baseline hash and the second
+      # through that sidecar; only a key still owed a rewrite stays excluded.
+      # A dropped identifier in either class stays wrong until a human repairs
+      # it by hand. Ungated on purpose: this arm never
       # carried the completeness marker, so it says the same thing on a
       # half-finished tree as on a complete one. Requiring the patch keeps a
       # hard failure earlier in the job -- a dependency install, say -- from

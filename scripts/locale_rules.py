@@ -13,8 +13,10 @@ held back whole and re-planned the next day. Two copies of these rules would
 mean the engine accepting exactly what the gate later refuses -- red every
 morning, no forward progress, until someone hand-edits a catalog.
 
-The two calls differ in one deliberate respect, spelled out on
-``_parity_fault``: the engine does not compare number multisets.
+The two calls differ in three deliberate respects, all selected by one
+``gate`` argument and spelled out on ``_parity_fault``: the engine does not
+compare number multisets, does not count literal occurrences, and does not
+report a dropped unit.
 """
 
 from __future__ import annotations
@@ -149,6 +151,19 @@ def _canonical_unit(unit: str) -> str | None:
 
 # "N > 0" and "N < 0" are opposite conditions with identical numbers.
 _COMPARISON_RE = re.compile(r"([A-Za-z_]\w*)\s*([<>]=?)\s*(\d+)")
+# A range is an ordered claim, and reversing it leaves the digits untouched:
+# "Range 1-600" and "Range 600-1" hold the same multiset while the second
+# names a lower bound above its upper one. The endpoints are spelled by
+# reference to the number pattern rather than repeated, so a grouped bound
+# ("1 024") keeps reading as one endpoint here too, and every dash a catalog
+# might set counts -- hyphen through em dash. A ratio is the same ordered
+# claim behind a different separator, and the corpus ships one: the "4.5:1"
+# contrast ratio every catalog carries. Reversing it to "1:4,5" leaves the
+# digits untouched exactly as a reversed range does, so a colon counts here
+# too -- both the ASCII one and the fullwidth colon a CJK catalog may set.
+_ORDERED_PAIR_RE = re.compile(
+    rf"({_NUMBER_RE.pattern})\s*([-‐-―:：])\s*({_NUMBER_RE.pattern})(?![A-Za-z0-9])"
+)
 _GROUP_SEPARATOR_RE = re.compile(r"[.,   ]")
 
 # Tokens a reader has to type, search for, or find on disk. Prose slashes
@@ -238,8 +253,27 @@ def _numbers(text: str) -> Counter[tuple[str, ...]]:
     return Counter(_canonical_number(token) for token in _NUMBER_RE.findall(text))
 
 
-def _lost_magnitudes(english: str, translated: str) -> list[str]:
-    """Magnitude suffixes the translation contradicts rather than drops.
+def _attaches_a_word(digits: str, translated: str) -> bool:
+    """Whether the translation writes a word onto these digits.
+
+    The discriminator between a unit spelled out and a unit dropped. Only
+    horizontal whitespace may separate the two -- a newline or any punctuation
+    means the word belongs to the next sentence, not to this number -- and the
+    word is any letter run, in any script, because the spellings that have to
+    pass here are "гигабайт", "megabajtów" and "tys." rather than a list this
+    module could keep current.
+    """
+    return (
+        re.search(rf"(?<![A-Za-z0-9]){re.escape(digits)}[^\S\n]*[^\W\d_]", translated)
+        is not None
+    )
+
+
+def _lost_magnitudes(
+    english: str, translated: str, *, require_unit: bool = True
+) -> list[str]:
+    """Magnitude suffixes the translation contradicts, and at the merge gate
+    the ones it drops.
 
     A unit is part of the claim, and the value comparison cannot see it: "5K"
     and "5M" carry the same digits, and so do "90%" and a bare "90". The
@@ -264,14 +298,20 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
     faithful and reported, "jusqu'a 256 Go puis 256 MB" contradicts the
     English and did not.
 
-    Both also stay silent when the translation attaches no letters to the
-    digits at all -- "Grenze ist 1-256" and "предел 1-256 гигабайт" are alike
-    unreported. That is a known limit, not an oversight: a dropped unit and a
-    spelled-out one look identical from here, separating them needs a
-    per-language word list, and failing the spelled-out form would redden a
-    correct translation on the engine path. The percent arm takes the opposite
-    decision because every catalog does keep that sign, so requiring it costs
-    nothing.
+    A translation that attaches nothing at all to the digits -- "Grenze ist
+    1-256" for "limit is 1-256 MB" -- states a bound without its unit, and
+    ``require_unit`` decides whether that reports. It is the same asymmetry
+    ``gate`` encodes for the numbers: at the merge gate a human reads the
+    failure and the key can carry a tolerance, so the drop is worth naming; on
+    the engine path a refusal holds a whole partial run back, and the cheapest
+    correct rendering of a unit is not always an abbreviation.
+    A spelled-out unit is not a dropped one and is silent under either mode:
+    "предел 1-256 гигабайт" attaches a word to the digits, which is what
+    separates it from the bare bound. Only horizontal space may sit between,
+    so "256. Die Grenze" is still a drop -- that word starts a sentence rather
+    than naming a unit. A word that is neither ("1-256 pro Datei") passes, and
+    that is the tolerance this rule keeps: it reports the shape nothing else
+    can carry, not every wrong one.
     """
     contradicted = set()
     for digits, unit in _COMPOUND_UNIT_RE.findall(english):
@@ -293,6 +333,8 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
         }
         if carried and unit.upper() not in carried:
             contradicted.add(f"{digits} {unit}")
+        elif not carried and require_unit and not _attaches_a_word(digits, translated):
+            contradicted.add(f"{digits} {unit} dropped")
     for name, operator, digits in _COMPARISON_RE.findall(english):
         # The threshold ends where its number ends, and it starts where its
         # name starts: unbounded, "N > 5" is satisfied by "N > 50" and by
@@ -323,7 +365,58 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
         }
         if carried and suffix.upper() not in carried:
             contradicted.add(f"{digits}{suffix}")
+        elif not carried and require_unit and not _attaches_a_word(digits, translated):
+            contradicted.add(f"{digits}{suffix} dropped")
     return sorted(contradicted)
+
+
+def _reversed_ordered_pairs(english: str, translated: str) -> list[str]:
+    """Ordered number pairs the translation states back to front.
+
+    A range is an ordered claim that the value comparison is blind to: both
+    endpoints of "Range 1-600" are still present in "Range 600-1", so the
+    number multiset balances while the text now names a floor above its
+    ceiling.
+
+    Only an actual inversion reports. A catalog is free to write "von 1 bis
+    600" instead of setting a dash, and its numbers stay guarded by the value
+    comparison either way; demanding the dash form back would fail a correct
+    rendering rather than a wrong one.
+
+    A ratio is the same claim with a colon for a dash: "4.5:1" and "1:4,5"
+    hold the same two numbers, and the second states a contrast threshold no
+    checker would ever set. The separator the English used is carried into
+    the report so a ratio is not named as a range.
+
+    Zero yield is not zero exposure, which is why this arm outlived a pass
+    that cut the arms nothing had fired on: 22 shipped English strings carry
+    an ordered pair -- every timeout, retry and size bound in the advanced
+    settings, plus the contrast ratio -- and each one is a bound a reader
+    acts on. Nothing else can see an inversion: the digits are identical in
+    both directions, so neither multiset, magnitudes nor literals report it.
+
+    Equal endpoints need no exclusion of their own, and an explicit one stood
+    here until a mutation showed it could not change a result: "5-5" reversed
+    is itself, so "the reversal is present" and "the original is not" cannot
+    both hold for it.
+    """
+    translated_bounds = {
+        (_canonical_number(low), _canonical_number(high))
+        for low, _, high in _ORDERED_PAIR_RE.findall(translated)
+    }
+    return sorted(
+        {
+            f"{low}{':' if separator in ':：' else '-'}{high}"
+            for low, separator, high in _ORDERED_PAIR_RE.findall(english)
+            if (bounds := (_canonical_number(low), _canonical_number(high)))
+            # A pair the translation also states the right way round is not
+            # inverted -- "1-600 (nicht 600-1)" carries both, and demanding
+            # the wrong one be absent would report a rendering that spells the
+            # mistake out to warn against it.
+            and bounds[::-1] in translated_bounds
+            and bounds not in translated_bounds
+        }
+    )
 
 
 def _show_numbers(counted: Counter[tuple[str, ...]]) -> list[str]:
@@ -336,7 +429,7 @@ def _parity_fault(
     *,
     tolerated_losses: Counter[tuple[str, ...]] | None = None,
     tolerated_additions: Counter[tuple[str, ...]] | None = None,
-    numbers: Literal["multiset", "replaced"] = "multiset",
+    gate: Literal["merge", "engine"] = "merge",
 ) -> str:
     """Everything one English/translated pair contradicts, or "" if nothing.
 
@@ -348,40 +441,52 @@ def _parity_fault(
     ``test_the_comparison_runs_every_arm`` holds each one to a case it must
     report, which only works if there is a single place they are summed.
 
-    ``numbers`` decides how much of the number comparison runs, and the two
-    callers ask for different amounts.
+    ``gate`` names which of the two callers is asking, because three of the
+    arms can be asked a stricter question by one of them than by the other.
+    One dial rather than three: every one of the three splits on the same
+    property -- whether a human reads the failure and the key can carry a
+    tolerance (merge) or a refusal holds a whole partial run back (engine) --
+    so three independent switches would only make it possible to set them
+    inconsistently.
 
-    ``"multiset"`` compares both directions and subtracts a tolerance by
-    occurrence. That is the merge-time check, which can carry a per-key
-    tolerance and is read by a human when it fails.
+    ``"merge"`` compares number multisets in both directions and subtracts a
+    tolerance by occurrence, counts how often each literal survives, and
+    reports a unit the translation dropped.
 
-    ``"replaced"`` reports only when a number was swapped for another -- when
-    the pair loses a number AND gains one. That is the engine, and the corpus
-    is the reason for the narrower question: across the 6751 shipped pairs,
-    every number difference is one-sided (Russian spells "the 5 experimental
-    sub-flags" out in words; Chinese keeps a clause the English rendering
-    cuts) and NONE is a swap. Asking the full multiset at acceptance time
-    would refuse those two correct strings on every run, retry once, and
-    leave their keys to be planned again tomorrow -- the daily stall this
-    call exists to prevent. Asking nothing let a swapped number through to
-    land as a backfilled key, where the merge gate reports it and holds the
-    whole tree back instead. The swap is the shape that is wrong in every
-    language, so it is the shape the engine refuses.
+    ``"engine"`` narrows all three. Numbers report only when one was swapped
+    for another -- when the pair loses a number AND gains one -- and the
+    corpus is the reason: across the 6751 shipped pairs, every number
+    difference is one-sided (Russian spells "the 5 experimental sub-flags"
+    out in words; Chinese keeps a clause the English rendering cuts) and NONE
+    is a swap. Asking the full multiset at acceptance time would refuse those
+    two correct strings on every run, retry once, and leave their keys to be
+    planned again tomorrow -- the daily stall this call exists to prevent.
+    Asking nothing let a swapped number through to land as a backfilled key,
+    where the merge gate reports it and holds the whole tree back instead. The
+    swap is the shape that is wrong in every language, so it is the shape the
+    engine refuses.
 
-    Literal COUNTING is the merge check's alone for the same kind of reason:
-    a faithful translation may name a repeated identifier once and
-    pronominalise the second mention, which no per-string rule separates from
-    a corrupted duplicate.
+    Literal counting narrows for the same reason: a faithful translation may
+    name a repeated identifier once and pronominalise the second mention, and
+    at acceptance time there is nowhere to record that per key. Four shipped
+    English strings name an identifier twice, so the merge side keeps the
+    count -- with only presence, a translation that corrupts one of the two
+    occurrences passes both gates.
+
+    The dropped-unit arm narrows on the same grounds; ``_lost_magnitudes``
+    spells out what separates a dropped unit from a spelled-out one.
     """
     losses = tolerated_losses if tolerated_losses is not None else Counter()
     additions = tolerated_additions if tolerated_additions is not None else Counter()
     lost_numbers = (_numbers(english) - _numbers(translated)) - losses
     gained_numbers = (_numbers(translated) - _numbers(english)) - additions
-    if numbers == "replaced" and not (lost_numbers and gained_numbers):
+    merge_gate = gate == "merge"
+    if not merge_gate and not (lost_numbers and gained_numbers):
         lost_numbers = gained_numbers = Counter()
     lost = (
-        _lost_literals(english, translated)
-        + _lost_magnitudes(english, translated)
+        _lost_literals(english, translated, count_occurrences=merge_gate)
+        + _lost_magnitudes(english, translated, require_unit=merge_gate)
+        + _reversed_ordered_pairs(english, translated)
         + _localised_hardcoded_name(english, translated)
         + _invented_files(english, translated)
     )
@@ -424,8 +529,8 @@ def _without_sentence_punctuation(literal: str) -> str:
     return literal.rstrip(".,;:!?)]}\"'»”")
 
 
-def _carries(literal: str, translated: str) -> bool:
-    """Whether the translation still contains this literal as a whole token.
+def _occurrences(literal: str, text: str) -> int:
+    """How often the text contains this literal as a whole token.
 
     Substring, but not *any* substring: the match may not continue into
     another identifier character, so "enable_tool_search_old" no longer counts
@@ -437,19 +542,28 @@ def _carries(literal: str, translated: str) -> bool:
     "other.configuration.yaml", so a dot is excluded on the left as well --
     while a sentence-ending period after the name is not part of the token and
     still matches.
+
+    Counted rather than merely found, because an English string is free to
+    name the same identifier twice and four shipped ones do.
     """
-    return (
-        re.search(
+    return len(
+        re.findall(
             r"(?<![A-Za-z0-9_.])"
             + re.escape(literal)
             + r"(?![A-Za-z0-9_]|\.[A-Za-z0-9])",
-            translated,
+            text,
         )
-        is not None
     )
 
 
-def _lost_literals(english: str, translated: str) -> list[str]:
+def _carries(literal: str, translated: str) -> bool:
+    """Whether the translation contains this literal at all."""
+    return _occurrences(literal, translated) > 0
+
+
+def _lost_literals(
+    english: str, translated: str, *, count_occurrences: bool = True
+) -> list[str]:
     """English literals absent from the translation, as substrings.
 
     Substring rather than token equality on purpose: German writes
@@ -458,7 +572,7 @@ def _lost_literals(english: str, translated: str) -> list[str]:
     Re-extracting from the translation reports every one of them as a loss;
     asking whether the English literal is still findable reports none.
 
-    Both arms go through ``_carries``, so an argument is held to the same
+    Both arms go through ``_occurrences``, so an argument is held to the same
     boundary rule as an identifier: with plain containment, "scope='snapshots'"
     satisfies "scope='snapshot'" while naming a different value.
 
@@ -469,29 +583,49 @@ def _lost_literals(english: str, translated: str) -> list[str]:
     what keeps a name that later gains an extractable shape from reporting
     twice under two different descriptions.
 
-    Presence, not occurrence count. Counting how often a name survives was
-    measured and dropped: across the 6751 shipped pairs it reported nothing
-    presence did not, while a faithful translation is free to name a repeated
-    identifier once and pronominalise the second mention -- a shape no
-    per-string rule separates from a corrupted duplicate, and one the engine
-    has nowhere to record a tolerance for.
+    ``count_occurrences`` compares how OFTEN the name survives, the same way
+    the number arm compares multisets. Four shipped English strings name an
+    identifier twice -- ``ha_get_skill_guide`` in the strict-best-practices
+    help, ``skill_content`` in the one beside it, ``ChatGPT`` in two notices --
+    and asking only whether the name survives *somewhere* accepts a translation
+    that corrupts one of the two. Both sides are counted with the same
+    instrument; measured across the 6751 shipped pairs, counting reports
+    nothing that presence did not, so it is exposure it covers rather than a
+    fault it found.
+
+    It is off for the engine, and for the same reason the number multisets are:
+    a faithful translation may state a repeated name once and pronominalise the
+    second mention, and there is nowhere to record a per-key tolerance at
+    acceptance time. Refusing that costs a retry and leaves the key to be
+    planned again tomorrow, which is the daily stall the engine-side call
+    exists to prevent. The merge-time check, which can carry a tolerance and is
+    read by a human when it fails, keeps the count.
     """
     protected = _untranslatable_names()
-    return sorted(
-        {
-            stripped
-            for literal in _LITERAL_RE.findall(english)
-            if (stripped := _without_sentence_punctuation(literal))
-            and stripped not in protected
-            and stripped not in _PROSE_ABBREVIATIONS
-            and not _carries(stripped, translated)
-        }
-        | {
-            assignment
-            for assignment in _QUOTED_ASSIGNMENT_RE.findall(english)
-            if not _carries(assignment, translated)
-        }
-    )
+    candidates = {
+        stripped
+        for literal in _LITERAL_RE.findall(english)
+        if (stripped := _without_sentence_punctuation(literal))
+        and stripped not in protected
+        and stripped not in _PROSE_ABBREVIATIONS
+    } | set(_QUOTED_ASSIGNMENT_RE.findall(english))
+    lost = []
+    for literal in candidates:
+        # The extraction and the boundary rule can disagree -- ".env" is
+        # extracted out of ".env.local", which the boundary rule then refuses
+        # to find in its own English. A zero there would make every comparison
+        # against it vacuously true and the literal unreportable for good, so
+        # it falls back to demanding the name once, which is what the presence
+        # test demanded before counting existed.
+        expected = (_occurrences(literal, english) if count_occurrences else 1) or 1
+        kept = _occurrences(literal, translated)
+        if kept >= expected:
+            continue
+        # A name that survives in part is not a name that vanished, and the
+        # maintainer reading the failure would otherwise grep the catalog,
+        # find the literal, and have nothing to go on.
+        lost.append(literal if kept == 0 else f"{literal} (kept {kept} of {expected})")
+    return sorted(lost)
 
 
 def _invented_files(english: str, translated: str) -> list[str]:

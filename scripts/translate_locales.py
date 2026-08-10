@@ -511,15 +511,15 @@ def _validate(item: WorkItem, translated: Any) -> str | None:
     # re-spends its quota planning the same work again. Rejecting the one
     # string instead costs one retry and leaves the key for tomorrow.
     #
-    # Numbers included, with the merge gate's own tolerance table. Leaving
-    # them out was the narrower reading of the same argument: the two
-    # recorded tolerances are number entries, so comparing without them
-    # would refuse two correct strings on every run. But a key with no entry
-    # -- every freshly written one -- then had its numbers unchecked here and
-    # checked there, which lands the fault and holds the whole tree back,
-    # reaching the same stall by the other route. Both failures cost a human
-    # one tolerance entry; only this one keeps the cost to a single key.
-    fault = locale_rules._parity_fault(item.english, translated, numbers="replaced")
+    # Asked at the engine's setting, which narrows three arms the merge gate
+    # runs in full (``locale_rules._parity_fault`` names each). Numbers are
+    # the reason the dial exists: the two recorded tolerances are number
+    # entries and the engine cannot read them, so a full multiset here would
+    # refuse two correct strings on every run -- while asking nothing left a
+    # freshly written key unchecked here and checked there, which lands the
+    # fault and holds the whole tree back. Both failures cost a human one
+    # tolerance entry; only this one keeps the cost to a single key.
+    fault = locale_rules._parity_fault(item.english, translated, gate="engine")
     if fault:
         return f"contradicts the English source: {fault}"
     return None

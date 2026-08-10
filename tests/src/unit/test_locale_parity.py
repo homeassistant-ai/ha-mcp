@@ -67,6 +67,7 @@ from locale_rules import (  # noqa: E402
     _lost_magnitudes,
     _numbers,
     _parity_fault,
+    _reversed_ordered_pairs,
     _untranslatable_names,
 )
 
@@ -235,6 +236,14 @@ def _translated_component_locales() -> list[str]:
 
 
 BASELINE_PATH = Path(__file__).with_name("locale_source_baseline.json")
+
+# The sidecar a partial sync run leaves behind, naming every changed key it
+# already translated and for which locales. It exists only between a partial
+# run and the run that finishes the work, and it ships in the same push --
+# ``test_the_progress_sidecar_is_the_file_the_sync_writes`` pins that this is
+# the path the pipeline writes, since a second spelling of it would read as
+# "no run wrote anything" rather than as a broken link.
+PROGRESS_PATH = Path(__file__).with_name("locale_sync_progress.json")
 
 # The tool titles and descriptions have no catalog of their own on the
 # English side: they are parsed from the tool definitions, so the baseline
@@ -1268,6 +1277,68 @@ def _pending_keys(surface: str) -> frozenset[str]:
     )
 
 
+@cache
+def _keys_a_partial_run_wrote(locale: str) -> dict[str, frozenset[str]]:
+    """Pending keys this locale already received, per surface.
+
+    A key excluded as pending is excluded on the promise that a rewrite is
+    coming. For one class that promise is already kept: a partial run that
+    translated a changed key wrote the value against TODAY's English and
+    recorded it, and the next run reads that record and does not re-queue the
+    key. Excluding it anyway leaves the one value no run will look at again
+    unchecked until the baseline repins -- and by then it is a landed fault
+    the merge arm reports forever, which is exactly what the exclusion was
+    never meant to cover. What a run wrote, that run checks.
+
+    Matched on the English the record names, not merely on the key: an entry
+    whose ``english_sha`` no longer matches describes a translation of older
+    English, which is the pending case again and stays excluded. The locale
+    list is honoured for the same reason -- a run that reached German and
+    stopped still owes French that key.
+    """
+    if not PROGRESS_PATH.exists():
+        return {}
+    recorded = json.loads(PROGRESS_PATH.read_text("utf-8"))
+    english_by_section = {
+        "messages": (
+            "src/ha_mcp/settings_ui/locales",
+            {
+                key.removeprefix("messages."): text
+                for key, text in _catalogs_by_surface("en")[
+                    "src/ha_mcp/settings_ui/locales"
+                ].items()
+                if key.startswith("messages.")
+            },
+            "messages.",
+        ),
+        "tools": (TOOL_SOURCES_SURFACE, _english_tool_sent_to_translators(), ""),
+        "component": (
+            "custom_components/ha_mcp_tools/translations",
+            _component_catalog("en"),
+            "",
+        ),
+    }
+    written: dict[str, set[str]] = {}
+    for entry_key, entry in recorded.items():
+        section, _, key = entry_key.partition("|")
+        if section not in english_by_section or not isinstance(entry, dict):
+            continue
+        surface, english, prefix = english_by_section[section]
+        if key not in english or locale not in entry.get("locales", []):
+            continue
+        digest = hashlib.sha256(english[key].encode("utf-8")).hexdigest()[:16]
+        if entry.get("english_sha") == digest:
+            written.setdefault(surface, set()).add(f"{prefix}{key}")
+    return {surface: frozenset(keys) for surface, keys in written.items()}
+
+
+def _is_owed_a_rewrite(surface: str, key: str, locale: str) -> bool:
+    """Whether the sync still owes this locale a rewrite of this key."""
+    return key in _pending_keys(surface) and key not in _keys_a_partial_run_wrote(
+        locale
+    ).get(surface, frozenset())
+
+
 def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, str]]:
     """(surface, key, translated, english) for one locale.
 
@@ -1286,7 +1357,7 @@ def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, str]]:
         (surface, key, text, english[surface][key])
         for surface, catalog in translated.items()
         for key, text in catalog.items()
-        if key in english[surface] and key not in _pending_keys(surface)
+        if key in english[surface] and not _is_owed_a_rewrite(surface, key, locale)
     ]
     sent = _english_tool_sent_to_translators()
     # Matched raw, and deliberately so. A suffixed key pins the rendering the
@@ -1297,12 +1368,11 @@ def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, str]]:
     # the catalog's bare key would drop that tool out of this check while its
     # translation is still current and nothing is coming to replace it —
     # silently, and for exactly as long as the human review takes.
-    pending_tools = _pending_keys(TOOL_SOURCES_SURFACE)
     settings_catalog = _settings_catalog(locale)
     pairs += [
         (TOOL_SOURCES_SURFACE, key, text, sent[key])
         for key, text in _flatten(settings_catalog.get("tools", {})).items()
-        if key in sent and key not in pending_tools
+        if key in sent and not _is_owed_a_rewrite(TOOL_SOURCES_SURFACE, key, locale)
     ]
     # A group key *is* its own English text, so the heading needs no baseline
     # and cannot go stale under a translation. Today no group name carries a
@@ -1388,6 +1458,119 @@ def test_the_exclusion_and_the_planner_agree_on_what_moved(
     )
 
 
+def test_the_progress_sidecar_is_the_file_the_sync_writes() -> None:
+    """Two spellings of that path would read as "no run wrote anything".
+
+    The exclusion carve-out below is driven by a file another program writes.
+    Spelled independently here, a rename on the pipeline side leaves this
+    check silently reading a path that never exists — every pending key stays
+    excluded, and the failure mode is a green run rather than a broken one.
+    """
+    import translate_locales
+
+    assert PROGRESS_PATH == translate_locales.PROGRESS_PATH, (
+        "the sync writes its progress sidecar somewhere else now; this check "
+        "would read an absent file and excuse every pending key"
+    )
+
+
+def test_a_key_a_partial_run_already_wrote_is_compared(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A value no run will revisit is checked now, whatever the baseline says.
+
+    A partial run translates a changed key against today's English, records
+    it, and the next run reads that record and skips the key. Excluded as
+    pending, that value would be compared by nobody until the baseline repins
+    — at which point it is a landed fault the merge arm reports every day and
+    no run can clear. Verified by breaking it: with the sidecar absent the key
+    stays out, which is what the second half asserts.
+    """
+    surface = "src/ha_mcp/settings_ui/locales"
+    key = next(
+        candidate
+        for candidate, text in _catalogs_by_surface("en")[surface].items()
+        if candidate.startswith("messages.") and text
+    )
+    english = _catalogs_by_surface("en")[surface][key]
+    sidecar = tmp_path / "locale_sync_progress.json"
+    sidecar.write_text(
+        json.dumps(
+            {
+                f"messages|{key.removeprefix('messages.')}": {
+                    "english_sha": hashlib.sha256(english.encode("utf-8")).hexdigest()[
+                        :16
+                    ],
+                    "locales": ["de"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "_pending_keys", lambda _surface: frozenset({key}))
+    monkeypatch.setattr(module, "PROGRESS_PATH", sidecar)
+    _keys_a_partial_run_wrote.cache_clear()
+    try:
+        with_record = {
+            pair_key
+            for pair_surface, pair_key, _, _ in _literal_parity_pairs("de")
+            if pair_surface == surface
+        }
+        other_locale = {
+            pair_key
+            for pair_surface, pair_key, _, _ in _literal_parity_pairs("fr")
+            if pair_surface == surface
+        }
+        stale = tmp_path / "stale.json"
+        stale.write_text(
+            json.dumps(
+                {
+                    f"messages|{key.removeprefix('messages.')}": {
+                        "english_sha": "0" * 16,
+                        "locales": ["de"],
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(module, "PROGRESS_PATH", stale)
+        _keys_a_partial_run_wrote.cache_clear()
+        stale_record = {
+            pair_key
+            for pair_surface, pair_key, _, _ in _literal_parity_pairs("de")
+            if pair_surface == surface
+        }
+        monkeypatch.setattr(module, "PROGRESS_PATH", tmp_path / "absent.json")
+        _keys_a_partial_run_wrote.cache_clear()
+        without_record = {
+            pair_key
+            for pair_surface, pair_key, _, _ in _literal_parity_pairs("de")
+            if pair_surface == surface
+        }
+    finally:
+        _keys_a_partial_run_wrote.cache_clear()
+
+    assert key in with_record, (
+        f"{key} was translated against the current English and recorded, so "
+        "nothing is coming to rewrite it — it has to be compared here"
+    )
+    assert key not in other_locale, (
+        f"{key} was recorded for de alone; fr is still owed the rewrite and "
+        "its old translation legitimately carries the old literals"
+    )
+    assert key not in stale_record, (
+        f"a record naming older English excused nothing about {key}'s current "
+        "value — that is the pending case again, and the rewrite really is "
+        "still coming"
+    )
+    assert key not in without_record, (
+        "the key is compared with no record of a run having written it, so "
+        "this test would pass with the carve-out deleted"
+    )
+
+
 def test_a_pending_hidden_rendering_keeps_its_base_key_checked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1453,7 +1636,12 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
 
     Keys whose English has moved since the baseline are excluded: those are
     owed a machine rewrite, and until the sync runs the old translation
-    legitimately carries the old literals.
+    legitimately carries the old literals. One class of them is not excluded
+    -- a key a partial run already translated against today's English, which
+    the progress sidecar names. Nothing is coming for that value: the next run
+    reads the same record and skips the key. It is checked here instead, which
+    is what makes this check the one the sync's own pre-push step can run on a
+    partial tree.
 
     Two literal shapes stay out of scope, because a mechanical rule cannot
     separate either from prose. A bare code word is one: English "set to true"
@@ -1613,6 +1801,26 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
         # into "packages/" plus ".yaml", both halves would still be present
         # in the faithful rendering above and it would pass either way.
         ("allow packages/*.yaml", "erlaube packages/*.json", ["packages/*.yaml"]),
+        # An English string is free to name the same literal twice, and four
+        # shipped ones do. Presence alone accepts a translation that corrupts
+        # one of the two occurrences; the count does not.
+        (
+            "call ha_get_skill_guide, then ha_get_skill_guide again",
+            "rufe ha_get_skill_guide, dann wrong_tool erneut",
+            ["ha_get_skill_guide (kept 1 of 2)"],
+        ),
+        (
+            "call ha_get_skill_guide, then ha_get_skill_guide again",
+            "rufe ha_get_skill_guide, dann ha_get_skill_guide erneut",
+            [],
+        ),
+        # A locale that states the name once more than its English does is
+        # not dropping anything.
+        (
+            "call ha_get_skill_guide",
+            "rufe ha_get_skill_guide auf, also ha_get_skill_guide",
+            [],
+        ),
     ],
 )
 def test_literal_extraction_ignores_sentence_punctuation(
@@ -1643,6 +1851,8 @@ def test_literal_extraction_ignores_sentence_punctuation(
             "configuration.yaml",
         ),
         ("wrong unit", "limit is 1-256 MB", "Grenze ist 1-256 GB", "256 MB"),
+        ("dropped unit", "limit is 1-256 MB", "Grenze ist 1-256", "256 MB dropped"),
+        ("reversed pair", "Range 1-600.", "Bereich 600-1.", "1-600"),
         (
             "localised name",
             'click "HA-MCP Server" to restart',
@@ -1671,6 +1881,89 @@ def test_the_comparison_runs_every_arm(
     assert expected_in_fault in fault, (
         f"the {arm} arm reported nothing for a pair it exists to catch: "
         f"{english!r} -> {translated!r} produced {fault!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("english", "translated", "expected"),
+    [
+        # Reversing a range touches no digit, so nothing else can see it.
+        ("Range 1–600.", "Bereich 1–600.", []),
+        ("Range 1–600.", "Bereich 600–1.", ["1-600"]),
+        # Any dash a catalog might set reads as the same range ...
+        ("Range 1–600.", "Bereich 1-600.", []),
+        ("Range 1–600.", "Bereich 1—600.", []),
+        # ... and a grouped endpoint stays one endpoint, not two numbers.
+        ("Range 1–10 000.", "Bereich 10 000–1.", ["1-10 000"]),
+        # Spelling the bounds out is a translation's own business: the value
+        # comparison still holds both numbers, so nothing goes unguarded.
+        ("Range 1–600.", "von 1 bis 600 Sekunden.", []),
+        # A range that simply vanishes is a lost number, not a reversed one.
+        ("Range 1–600.", "Zeitlimit pro Anfrage.", []),
+        # A ratio reverses the same way, and the decimal comma five of the
+        # nine catalogs write is not the inversion.
+        ("below a 4.5:1 contrast ratio.", "unter 4,5:1 Kontrast.", []),
+        ("below a 4.5:1 contrast ratio.", "unter 1:4,5 Kontrast.", ["4.5:1"]),
+        # A fullwidth colon is the same separator, so an inversion cannot
+        # hide behind CJK punctuation.
+        ("below a 4.5:1 contrast ratio.", "对比度低于 1：4.5。", ["4.5:1"]),
+        # A translation that also states the pair the right way round has not
+        # inverted it: a rendering may spell the mistake out to warn against
+        # it, and demanding the wrong order be absent would report that.
+        ("Range 1–600.", "Bereich 1–600, nicht 600–1.", []),
+    ],
+)
+def test_a_reversed_ordered_pair_is_reported(
+    english: str, translated: str, expected: list[str]
+) -> None:
+    """An ordered claim needs an ordered comparison.
+
+    "Range 1-600" and "Range 600-1" are the same two numbers in the same two
+    positions of the value comparison, and the second one documents a bound no
+    setting will accept. Twenty-two shipped English strings carry such a pair
+    -- every timeout and size bound in the advanced settings, plus the contrast
+    ratio -- so the arm's zero yield measures a corpus no catalog has inverted
+    yet, not a shape it cannot meet.
+    """
+    assert _reversed_ordered_pairs(english, translated) == expected
+
+
+@pytest.mark.parametrize(
+    ("english", "translated", "narrowed"),
+    [
+        # Each row is a fault the merge gate reports and the engine does not,
+        # one per narrowed arm. The engine's own case -- a swapped number --
+        # is covered by test_the_comparison_runs_every_arm above.
+        ("keeps 30 entries", "behaelt Eintraege", "numbers"),
+        (
+            "call ha_get_skill_guide, then ha_get_skill_guide again",
+            "rufe ha_get_skill_guide, dann wrong_tool erneut",
+            "literal occurrences",
+        ),
+        ("limit is 1-256 MB", "Grenze ist 1-256", "dropped unit"),
+    ],
+)
+def test_the_engine_gate_narrows_exactly_three_arms(
+    english: str, translated: str, narrowed: str
+) -> None:
+    """The engine's setting is narrower than the merge gate's, on purpose.
+
+    Each of these is a real fault the merge gate names and the engine waves
+    through, and the asymmetry is deliberate in all three: a merge failure is
+    read by a human on a key that can carry a tolerance, while an engine
+    refusal holds a whole partial run back over a rendering that may well be
+    correct. What keeps the waved-through value from landing unchecked is the
+    partial-run pre-push step, which runs this file's merge-gate check over
+    exactly the keys the run wrote.
+    """
+    assert _parity_fault(english, translated), (
+        f"the merge gate no longer reports {narrowed}, so this row compares "
+        "two settings that agree and pins nothing"
+    )
+    assert not _parity_fault(english, translated, gate="engine"), (
+        f"the engine gate now reports {narrowed} as well — either the narrowing "
+        "was dropped or the corpus argument for it changed; re-read "
+        "_parity_fault before deleting this row"
     )
 
 
@@ -1913,11 +2206,33 @@ def test_a_file_the_english_never_named_is_reported(
         ("limit is 1-256 MB", "limite de 1-256 go", ["256 MB"]),
         ("limit is 1-256 MB", "limite de 1-256 mo", []),
         ("keeps 9584 to 10000 rows", "behaelt 9584 to 10000 Zeilen", []),
-        # A unit the translation attaches to nothing stays uncomparable, by
-        # decision: dropped and spelled out look the same from here, and
-        # failing the spelled-out form reddens a correct value.
+        # A unit spelled out is a unit carried: the word attached to the
+        # digits is what separates it from a bound stated without one.
         ("limit is 1-256 MB", "предел 1-256 гигабайт", []),
-        ("limit is 1-256 MB", "Grenze ist 1-256", []),
+        ("about 5K tokens", "etwa 5 tys. tokenów", []),
+        # The magnitude arm cannot go further than that: "5 Token" attaches a
+        # word too, and no rule here separates a dropped suffix from a
+        # language that spells it. Only a bound with nothing at all after it
+        # reports.
+        ("about 5K tokens", "etwa 5 Token", []),
+        # A bound with nothing attached has lost its unit, and at the merge
+        # gate that reports -- three orders of magnitude are missing from the
+        # sentence and no other arm can see it.
+        ("limit is 1-256 MB", "Grenze ist 1-256", ["256 MB dropped"]),
+        ("keeps 5K entries", "behaelt 5", ["5K dropped"]),
+        # ... but only where the digits carry nothing at all. A word on the
+        # next line belongs to the next sentence, not to this number, and so
+        # does one after a full stop.
+        (
+            "limit is 1-256 MB",
+            "Grenze ist 1-256\nDanach bricht es ab",
+            ["256 MB dropped"],
+        ),
+        (
+            "limit is 1-256 MB",
+            "Grenze ist 1-256. Danach bricht es ab",
+            ["256 MB dropped"],
+        ),
         # A threshold is bounded on both sides. Appending digits states a
         # different bound, and so does appending a grouping separator and
         # more digits — "5.000" and "5 000" are the likelier artefact than
