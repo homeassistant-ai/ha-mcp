@@ -19,6 +19,7 @@ The two calls differ in one deliberate respect, spelled out on
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import sys
 from collections import Counter
@@ -26,26 +27,44 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-# Both calls into the pipeline below name a sibling script. Importing this
+# Both calls into the pipeline below name a sibling script, and importing this
 # module does not put `scripts/` on the path -- `translate_locales` does that
-# for its own siblings -- so a caller that imported this one by file path got
-# a clean import and a ModuleNotFoundError at the first comparison. The path
-# is inserted here instead, once, so the failure cannot depend on who imported
-# whom first.
-_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
-if _SCRIPTS_DIR not in sys.path:
-    # Appended, not prepended: the failure this fixes is *not found*, never
-    # *wrong module found*, so there is no reason to let a future
-    # scripts/<stdlib-name>.py shadow the standard library process-wide.
-    sys.path.append(_SCRIPTS_DIR)
+# for its own siblings. A caller that imported the rules by file path got a
+# clean import and a ModuleNotFoundError at the first comparison, so the
+# directory is added here. Appended rather than prepended: what is missing is
+# never on the path already, and prepending would let a future
+# `scripts/<stdlib-name>.py` shadow the standard library process-wide.
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.append(str(_SCRIPTS_DIR))
 
 
 @cache
 def _pipeline() -> Any:
-    """The translation engine's own module, whose rules these two arms reuse."""
-    import translate_locales  # type: ignore[import-not-found]
+    """The translation engine's own module, whose rules these two arms reuse.
 
-    return translate_locales
+    Loaded from the sibling path rather than by name. A plain import resolves
+    against the whole search path, so a ``translate_locales.py`` in the
+    caller's working directory or anywhere earlier on it wins -- and the two
+    arms below would then be asking a stranger what the untranslatable names
+    are. An already-imported module is reused, because the engine imports this
+    one and re-executing it would give the process two copies with separate
+    state.
+    """
+    existing = sys.modules.get("translate_locales")
+    if existing is not None:
+        return existing
+    spec = importlib.util.spec_from_file_location(
+        "translate_locales", _SCRIPTS_DIR / "translate_locales.py"
+    )
+    if spec is None or spec.loader is None:  # pragma: no cover - unreachable
+        raise ImportError(f"cannot load translate_locales from {_SCRIPTS_DIR}")
+    module = importlib.util.module_from_spec(spec)
+    # Registered before execution: the engine's own module-level imports run
+    # during exec_module, and one of them can reach back here.
+    sys.modules["translate_locales"] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 # A digit run preceded by a letter or another digit belongs to an identifier

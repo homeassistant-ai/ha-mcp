@@ -1911,6 +1911,47 @@ def test_the_rules_module_runs_without_a_caller_preparing_its_path() -> None:
     assert "configuration.yaml" in completed.stdout
 
 
+def test_the_rules_module_asks_the_pipeline_beside_it(tmp_path: Path) -> None:
+    """A stranger on the path must not answer for the pipeline.
+
+    Two arms delegate to ``translate_locales`` — which names must stay English,
+    and whether one was localised away. Resolved by name, that import takes
+    whatever the search path offers first, so a ``translate_locales.py`` in the
+    caller's working directory answers instead, and the comparison quietly
+    reports against a module nobody wrote for it. The rules load their sibling
+    by path for that reason; this puts a shadow ahead of it and checks which
+    one answers.
+    """
+    shadow = tmp_path / "translate_locales.py"
+    shadow.write_text("_hardcoded_ui_names = lambda: ['SHADOW']\n", encoding="utf-8")
+
+    probe = (
+        "import importlib.util, sys;"
+        f"sys.path.insert(0, {str(tmp_path)!r});"
+        f"spec = importlib.util.spec_from_file_location('lr', {str(_RULES_PATH)!r});"
+        "m = importlib.util.module_from_spec(spec);"
+        "spec.loader.exec_module(m);"
+        "print(m._pipeline().__file__)"
+    )
+    environment = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tempfile.gettempdir(),
+        env=environment,
+    )
+    assert completed.returncode == 0, completed.stderr.strip()
+    assert completed.stdout.strip() == str(
+        _RULES_PATH.with_name("translate_locales.py")
+    ), (
+        f"the rules resolved translate_locales to {completed.stdout.strip()!r} "
+        f"with a shadow on the path — the untranslatable names and the "
+        f"localised-name rule would come from that module"
+    )
+
+
 def test_a_localised_on_screen_name_is_reported() -> None:
     """A name Python fixes in English is not the translation's to change.
 

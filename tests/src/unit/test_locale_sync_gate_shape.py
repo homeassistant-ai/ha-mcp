@@ -183,6 +183,14 @@ def test_the_push_gate_reads_outcomes_the_job_actually_publishes() -> None:
     }
     for name in sorted(consumed):
         referenced = re.findall(r"steps\.(\w+)\.(\w+)", str(outputs[name]))
+        # An output that reads no step at all publishes a constant, and
+        # `all()` over an empty list is true — so `verify_partial_outcome:
+        # success` would satisfy every assertion here while the push gate
+        # reads success on a red verification.
+        assert referenced, (
+            f"the translate job's {name!r} output reads no step result, so it "
+            "publishes a constant the push predicate can never see fail"
+        )
         assert all(ref in step_ids for ref, _ in referenced), (
             f"the translate job's {name!r} output reads "
             f"{[ref for ref, _ in referenced]}, which names no step in the "
@@ -265,7 +273,8 @@ def test_no_step_excludes_the_literal_parity_test() -> None:
         run = " ".join(str(step.get("run", "")).split())
         for expression in re.findall(r'-k "([^"]+)"', run):
             assert not re.search(
-                r"\bnot\s+test_translations_keep_english_numbers_and_identifiers\b",
+                r"\bnot\s*\(*\s*test_translations_keep_english_numbers"
+                r"_and_identifiers\b",
                 expression,
             ), (
                 f"{_WORKFLOW.name} step {step.get('name')!r} excludes the "
