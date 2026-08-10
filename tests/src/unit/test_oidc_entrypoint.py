@@ -277,14 +277,31 @@ class TestMainOidcLogging:
         streamable_http_logger = logging.getLogger("mcp.server.streamable_http")
         fastmcp_server_logger = logging.getLogger("fastmcp.server.server")
         original_level = fastmcp_logger.level
+        original_handlers = fastmcp_logger.handlers[:]
+        original_propagate = fastmcp_logger.propagate
+        original_formatters = [handler.formatter for handler in original_handlers]
         original_streamable_http_filters = streamable_http_logger.filters[:]
         original_fastmcp_server_filters = fastmcp_server_logger.filters[:]
         try:
             fastmcp_logger.setLevel(logging.INFO)
             main_module._setup_logging("DEBUG", force=False)
             assert fastmcp_logger.getEffectiveLevel() == logging.DEBUG
+            assert fastmcp_logger.handlers == original_handlers
+            assert fastmcp_logger.propagate is original_propagate
+            assert all(
+                handler.formatter is formatter
+                for handler, formatter in zip(
+                    fastmcp_logger.handlers, original_formatters, strict=True
+                )
+            )
         finally:
             fastmcp_logger.setLevel(original_level)
+            fastmcp_logger.handlers[:] = original_handlers
+            fastmcp_logger.propagate = original_propagate
+            for handler, formatter in zip(
+                original_handlers, original_formatters, strict=True
+            ):
+                handler.setFormatter(formatter)
             streamable_http_logger.filters[:] = original_streamable_http_filters
             fastmcp_server_logger.filters[:] = original_fastmcp_server_filters
 

@@ -57,7 +57,7 @@ Expected: the path ends in `worktree/fix-oidc-authelia`, the branch is `agent/fi
 Run:
 
 ```bash
-proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-baseline uv run pytest src/unit/test_oidc_entrypoint.py -q'
+proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-baseline UV_LINK_MODE=copy uv run pytest src/unit/test_oidc_entrypoint.py -q'
 ```
 
 Expected: PASS. If it does not pass before test edits, stop and distinguish an environment/baseline failure from issue #2189 before changing production code.
@@ -133,7 +133,7 @@ Keep the existing setup and assertions, then add:
 Run:
 
 ```bash
-proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-red-scope uv run pytest src/unit/test_oidc_entrypoint.py::TestRunOidcServer::test_creates_oidc_proxy_with_required_openid_scope -q'
+proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-red-scope UV_LINK_MODE=copy uv run pytest src/unit/test_oidc_entrypoint.py::TestRunOidcServer::test_creates_oidc_proxy_with_required_openid_scope -q'
 ```
 
 Expected: FAIL with `TypeError` reporting that `MockOIDCProxy.__init__()` is missing the required keyword-only argument `required_scopes`. This proves current production never supplies the scope.
@@ -178,7 +178,7 @@ The complete surrounding contract must remain:
 Run:
 
 ```bash
-proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-green-scope uv run pytest src/unit/test_oidc_entrypoint.py::TestRunOidcServer::test_creates_oidc_proxy_with_required_openid_scope src/unit/test_oidc_entrypoint.py::TestOIDCProxySignatureSubset::test_run_oidc_server_kwargs_are_subset_of_oidc_proxy_params -q'
+proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-green-scope UV_LINK_MODE=copy uv run pytest src/unit/test_oidc_entrypoint.py::TestRunOidcServer::test_creates_oidc_proxy_with_required_openid_scope src/unit/test_oidc_entrypoint.py::TestOIDCProxySignatureSubset::test_run_oidc_server_kwargs_are_subset_of_oidc_proxy_params -q'
 ```
 
 Expected: `2 passed`.
@@ -226,13 +226,36 @@ Add this test to `TestMainOidcLogging`:
         import ha_mcp.__main__ as main_module
 
         fastmcp_logger = logging.getLogger("fastmcp")
+        streamable_http_logger = logging.getLogger("mcp.server.streamable_http")
+        fastmcp_server_logger = logging.getLogger("fastmcp.server.server")
         original_level = fastmcp_logger.level
+        original_handlers = fastmcp_logger.handlers[:]
+        original_propagate = fastmcp_logger.propagate
+        original_formatters = [handler.formatter for handler in original_handlers]
+        original_streamable_http_filters = streamable_http_logger.filters[:]
+        original_fastmcp_server_filters = fastmcp_server_logger.filters[:]
         try:
             fastmcp_logger.setLevel(logging.INFO)
             main_module._setup_logging("DEBUG", force=False)
             assert fastmcp_logger.getEffectiveLevel() == logging.DEBUG
+            assert fastmcp_logger.handlers == original_handlers
+            assert fastmcp_logger.propagate is original_propagate
+            assert all(
+                handler.formatter is formatter
+                for handler, formatter in zip(
+                    fastmcp_logger.handlers, original_formatters, strict=True
+                )
+            )
         finally:
             fastmcp_logger.setLevel(original_level)
+            fastmcp_logger.handlers[:] = original_handlers
+            fastmcp_logger.propagate = original_propagate
+            for handler, formatter in zip(
+                original_handlers, original_formatters, strict=True
+            ):
+                handler.setFormatter(formatter)
+            streamable_http_logger.filters[:] = original_streamable_http_filters
+            fastmcp_server_logger.filters[:] = original_fastmcp_server_filters
 ```
 
 Use `force=False` so the test does not replace pytest's root handlers; the behavior under test is the explicit FastMCP logger-level bridge.
@@ -242,7 +265,7 @@ Use `force=False` so the test does not replace pytest's root handlers; the behav
 Run:
 
 ```bash
-proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-red-logging uv run pytest src/unit/test_oidc_entrypoint.py::TestMainOidcLogging::test_setup_logging_configures_fastmcp_logger -q'
+proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-red-logging UV_LINK_MODE=copy uv run pytest src/unit/test_oidc_entrypoint.py::TestMainOidcLogging::test_setup_logging_configures_fastmcp_logger -q'
 ```
 
 Expected: FAIL because the FastMCP logger remains at `logging.INFO` (`20`) rather than `logging.DEBUG` (`10`).
@@ -277,7 +300,7 @@ Leave the existing `mcp.server.streamable_http` and `fastmcp.server.server` filt
 Run:
 
 ```bash
-proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-green-logging uv run pytest src/unit/test_oidc_entrypoint.py::TestMainOidcLogging::test_setup_logging_configures_fastmcp_logger -q'
+proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-green-logging UV_LINK_MODE=copy uv run pytest src/unit/test_oidc_entrypoint.py::TestMainOidcLogging::test_setup_logging_configures_fastmcp_logger -q'
 ```
 
 Expected: `1 passed`.
@@ -287,7 +310,7 @@ Expected: `1 passed`.
 Run:
 
 ```bash
-proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-green-focused uv run pytest src/unit/test_oidc_entrypoint.py::TestMainOidcLogging src/unit/test_oidc_entrypoint.py::TestRunOidcServer src/unit/test_oidc_entrypoint.py::TestOIDCProxySignatureSubset -q'
+proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-green-focused UV_LINK_MODE=copy uv run pytest src/unit/test_oidc_entrypoint.py::TestMainOidcLogging src/unit/test_oidc_entrypoint.py::TestRunOidcServer src/unit/test_oidc_entrypoint.py::TestOIDCProxySignatureSubset -q'
 ```
 
 Expected: all selected tests pass.
@@ -324,7 +347,7 @@ Replace the `OIDC_VERIFY_ID_TOKEN` description in `main_oidc`'s docstring with:
 
 ```python
     - OIDC_VERIFY_ID_TOKEN (optional, default: false): Set true for providers that issue
-      opaque access tokens (e.g. Authelia and Google, or Auth0 without an API audience).
+      opaque access tokens (e.g. Authelia, or Auth0 without an API audience).
 ```
 
 - [ ] **Step 2: Update the environment-variable table**
@@ -332,7 +355,7 @@ Replace the `OIDC_VERIFY_ID_TOKEN` description in `main_oidc`'s docstring with:
 Replace the two relevant rows with:
 
 ```markdown
-| `OIDC_VERIFY_ID_TOKEN` | Optional. Set `true` for OIDC providers that issue opaque access tokens the default JWT verifier cannot validate (e.g. Authelia and Google; Auth0 without an API audience configured). ha-mcp always requests `openid`, so these providers return the ID token FastMCP verifies instead. | `false` |
+| `OIDC_VERIFY_ID_TOKEN` | Optional. Set `true` for OIDC providers that issue opaque access tokens the default JWT verifier cannot validate (e.g. Authelia, or Auth0 without an API audience configured). ha-mcp always requests `openid`, so these providers return the ID token FastMCP verifies instead. | `false` |
 | `LOG_LEVEL` | Logging level for ha-mcp and FastMCP, including OIDC token-validation diagnostics | `INFO` |
 ```
 
@@ -365,7 +388,6 @@ token as a JWT:
   client's `scopes` and set `OIDC_VERIFY_ID_TOKEN=true` for ha-mcp. You do not
   need to change Authelia's `access_token_signed_response_alg` to enable JWT
   access tokens.
-- **Google** always issues opaque access tokens.
 - **Auth0** issues opaque access tokens unless the client requests a
   configured API audience.
 ```
@@ -413,7 +435,7 @@ Expected: an atomic documentation commit on `agent/fix-oidc-authelia`.
 Run:
 
 ```bash
-proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-final-unit uv run pytest src/unit/test_oidc_entrypoint.py -q'
+proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-final-unit UV_LINK_MODE=copy uv run pytest src/unit/test_oidc_entrypoint.py -q'
 ```
 
 Expected: all tests in `test_oidc_entrypoint.py` pass.
@@ -468,7 +490,7 @@ Retain the regression tests. Do not stage or commit this temporary mutation.
 Run:
 
 ```bash
-proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-mutation uv run pytest src/unit/test_oidc_entrypoint.py::TestRunOidcServer::test_creates_oidc_proxy_with_required_openid_scope src/unit/test_oidc_entrypoint.py::TestMainOidcLogging::test_setup_logging_configures_fastmcp_logger -q'
+proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-mutation UV_LINK_MODE=copy uv run pytest src/unit/test_oidc_entrypoint.py::TestRunOidcServer::test_creates_oidc_proxy_with_required_openid_scope src/unit/test_oidc_entrypoint.py::TestMainOidcLogging::test_setup_logging_configures_fastmcp_logger -q'
 ```
 
 Expected: both tests fail for their intended reasons: missing `required_scopes` and FastMCP remaining at INFO.
@@ -478,7 +500,7 @@ Expected: both tests fail for their intended reasons: missing `required_scopes` 
 Restore the exact Task 1 scope line/comment and Task 2 logger-level line/comment. Then run:
 
 ```bash
-proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-restored uv run pytest src/unit/test_oidc_entrypoint.py::TestRunOidcServer::test_creates_oidc_proxy_with_required_openid_scope src/unit/test_oidc_entrypoint.py::TestMainOidcLogging::test_setup_logging_configures_fastmcp_logger -q'
+proot-distro login ubuntu --bind /data/data/com.termux/files/home:/mnt/termux -- sh -lc 'cd /mnt/termux/ha-mcp/worktree/fix-oidc-authelia/tests && HA_MCP_CONFIG_DIR=/tmp/ha-mcp-2189-restored UV_LINK_MODE=copy uv run pytest src/unit/test_oidc_entrypoint.py::TestRunOidcServer::test_creates_oidc_proxy_with_required_openid_scope src/unit/test_oidc_entrypoint.py::TestMainOidcLogging::test_setup_logging_configures_fastmcp_logger -q'
 git diff --check
 git status --short --branch
 ```
@@ -549,10 +571,10 @@ Create a temporary PR body with `apply_patch` at `/tmp/ha-mcp-2189-pr-body.md` c
 
 ## Testing
 
-- `cd tests && uv run pytest src/unit/test_oidc_entrypoint.py -q`
-- `uv run ruff format --check src/ha_mcp/__main__.py tests/src/unit/test_oidc_entrypoint.py`
-- `uv run ruff check src/ha_mcp/__main__.py tests/src/unit/test_oidc_entrypoint.py`
-- `uv run mypy src/`
+- `cd tests && UV_LINK_MODE=copy uv run pytest src/unit/test_oidc_entrypoint.py -q`
+- `UV_LINK_MODE=copy uv run ruff format --check src/ha_mcp/__main__.py tests/src/unit/test_oidc_entrypoint.py`
+- `UV_LINK_MODE=copy uv run ruff check src/ha_mcp/__main__.py tests/src/unit/test_oidc_entrypoint.py`
+- `UV_LINK_MODE=copy uv run mypy src/`
 
 Fixes #2189
 ```

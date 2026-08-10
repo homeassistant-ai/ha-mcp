@@ -1,7 +1,7 @@
 # OIDC Authentication for ha-mcp
 
 OIDC mode gates access to the MCP server behind an external identity provider
-(Authentik, Keycloak, Auth0, Google, etc.). Unlike [OAuth mode](OAUTH.md),
+(Authentik, Keycloak, Auth0, etc.). Unlike [OAuth mode](OAUTH.md),
 which collects a per-user Home Assistant Long-Lived Access Token via a consent
 form, OIDC is purely an **access gate**: once a user authenticates through
 your OIDC provider, all requests share the same Home Assistant credentials
@@ -77,7 +77,7 @@ as [OAuth mode](OAUTH.md#1-expose-with-https)).
 | `HA_MCP_DISABLE_SETTINGS_UI` | Set truthy (`1`/`true`/`yes`/`on`) to not serve the web settings UI at all. | unset (UI served) |
 | `OIDC_JWT_SIGNING_KEY` | Optional. Secret key for signing FastMCP session JWTs. Sessions **persist across restarts by default** — when unset, FastMCP derives the signing key deterministically from `OIDC_CLIENT_SECRET`, so restarting the server does not log users out. Set this var to decouple the signing key from the client secret. To force a logout of all sessions, rotate whichever secret the key derives from (this var if set, otherwise `OIDC_CLIENT_SECRET`). Generate with: `python -c "import secrets; print(secrets.token_urlsafe(32))"` | Derived from `OIDC_CLIENT_SECRET` |
 | `OIDC_ALLOWED_CLIENT_REDIRECT_URIS` | Optional but **strongly recommended for internet-facing deployments**. Comma-separated list of redirect URI patterns accepted from dynamically-registered clients. Open dynamic client registration (DCR) lets an attacker register their own client with their own redirect URI; setting this constrains what any dynamically-registered client may register in the first place. | no allow-list — each dynamically-registered client's own redirect URIs are accepted |
-| `OIDC_VERIFY_ID_TOKEN` | Optional. Set `true` for OIDC providers that issue opaque access tokens the default JWT verifier cannot validate (e.g. Authelia and Google; Auth0 without an API audience configured). ha-mcp always requests `openid`, so these providers return the ID token FastMCP verifies instead. | `false` |
+| `OIDC_VERIFY_ID_TOKEN` | Optional. Set `true` for OIDC providers that issue opaque access tokens the default JWT verifier cannot validate (e.g. Authelia, or Auth0 without an API audience configured). ha-mcp always requests `openid`, so these providers return the ID token FastMCP verifies instead. | `false` |
 | `OIDC_AUDIENCE` | Optional. Expected `aud` claim for IdP-issued access tokens. Without it (and with `OIDC_VERIFY_ID_TOKEN` off), FastMCP's JWT verifier checks issuer, signature, and expiry but not audience — fine on a dedicated IdP, weaker on a shared one where other clients' tokens would also pass. With `OIDC_VERIFY_ID_TOKEN=true`, verification instead pins `aud` to `OIDC_CLIENT_ID` and this value is not used for verification — it is still forwarded to the IdP's authorize/token endpoints, which is exactly what makes Auth0 issue JWT rather than opaque access tokens (see the `OIDC_VERIFY_ID_TOKEN` row). | Unset (no audience check) |
 | `LOG_LEVEL` | Logging level for ha-mcp and FastMCP, including OIDC token-validation diagnostics | `INFO` |
 
@@ -100,7 +100,6 @@ Example discovery URLs:
 - Authentik: `https://auth.example.com/application/o/<app-slug>/.well-known/openid-configuration`
 - Keycloak: `https://keycloak.example.com/realms/<realm>/.well-known/openid-configuration`
 - Auth0: `https://<tenant>.auth0.com/.well-known/openid-configuration`
-- Google: `https://accounts.google.com/.well-known/openid-configuration`
 
 ## Provider Compatibility
 
@@ -117,7 +116,6 @@ token as a JWT:
   client's `scopes` and set `OIDC_VERIFY_ID_TOKEN=true` for ha-mcp. You do not
   need to change Authelia's `access_token_signed_response_alg` to enable JWT
   access tokens.
-- **Google** always issues opaque access tokens.
 - **Auth0** issues opaque access tokens unless the client requests a
   configured API audience.
 

@@ -1167,7 +1167,7 @@ def _oidc_verify_id_token_enabled() -> bool:
 
     Off by default: FastMCP's OIDCProxy verifies the access token as a JWT,
     which works for providers like Authentik and Keycloak. Providers that
-    issue opaque access tokens (Google always; Auth0 without an API
+    issue opaque access tokens (such as Authelia, or Auth0 without an API
     audience) need ``verify_id_token=True`` so FastMCP verifies the ID token
     instead.
     """
@@ -1607,7 +1607,7 @@ def main_oidc() -> None:
     """Run server with OIDC authentication over HTTP.
 
     This mode enables authentication via an external OIDC provider
-    (Authentik, Keycloak, Auth0, Google, etc.). All authenticated users
+    (Authentik, Keycloak, Auth0, etc.). All authenticated users
     share the same Home Assistant instance via the configured credentials.
 
     Unlike OAuth mode which collects per-user HA credentials via a consent form,
@@ -1629,7 +1629,7 @@ def main_oidc() -> None:
       patterns accepted from dynamically-registered clients. Strongly recommended for
       internet-facing deployments.
     - OIDC_VERIFY_ID_TOKEN (optional, default: false): Set true for providers that issue
-      opaque access tokens (e.g. Authelia and Google, or Auth0 without an API audience).
+      opaque access tokens (e.g. Authelia, or Auth0 without an API audience).
     - OIDC_AUDIENCE (optional): Expected `aud` claim for IdP-issued access tokens.
       Without it (and with OIDC_VERIFY_ID_TOKEN off), FastMCP's JWT verifier checks
       issuer, signature, and expiry but not audience. With OIDC_VERIFY_ID_TOKEN=true,
