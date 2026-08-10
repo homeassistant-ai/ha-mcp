@@ -434,19 +434,10 @@ jobs:
     - name: Install Python dependencies
       run: uv sync --all-extras --dev
 
-    - name: Restore JS test node_modules cache
-      # Lockfile-keyed so a dependency bump invalidates cleanly. `npm ci`
-      # is still safe to run on cache hit (it short-circuits when the
-      # tree already matches the lockfile).
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-      with:
-        path: tests/js/node_modules
-        key: tests-js-node-modules-${{ hashFiles('tests/js/package-lock.json') }}
-
     - name: Install JS test dependencies (jsdom, esbuild)
       # `npm ci` enforces package-lock.json — same reproducibility
-      # discipline as uv.lock on the Python side. No-op on cache hit
-      # if node_modules matches the lockfile.
+      # discipline as uv.lock on the Python side. setup-node caches npm's
+      # download cache; node_modules is intentionally recreated by npm ci.
       run: cd tests/js && corepack npm ci
 
     - name: Run unit tests
