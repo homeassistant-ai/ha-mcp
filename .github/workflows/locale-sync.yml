@@ -73,7 +73,7 @@ permissions:
 # Self-overlap only (a dispatch during the cron run): the shared
 # master-write group lives on the push job, not here — holding it through
 # dependency install and up to 40 minutes of translation would make a
-# merged hotfix release queue behind work that never touches master.
+# stable release queue behind work that never touches master.
 concurrency:
   group: locale-sync
   cancel-in-progress: false
@@ -289,8 +289,8 @@ jobs:
         needs.translate.outputs.verify_outcome == 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Shared group for every workflow that pushes to master (hotfix-release,
-    # semver-release, addon-publish-dev, sync-tool-docs): a bot push landing
+    # Shared group for every workflow that pushes to master (semver-release,
+    # addon-publish-dev, sync-tool-docs): a bot push landing
     # while semantic-release is mid-run aborts the release un-retryably
     # ("Upstream branch ... has changed"), so master writers must not
     # overlap. On this short job only — the translate leg never writes to

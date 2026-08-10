@@ -26,7 +26,7 @@ leaks into the dev tree.
 **A PR never edits the stable tree directly in regular operation.** The
 `webhook-proxy-stable-guard` workflow blocks any PR touching
 `homeassistant-addon-webhook-proxy/` unless it comes from a `promote-webhook-proxy/*`
-branch or carries the `allow-stable-edit` label (stable-only hotfixes). Every change
+branch or carries the `allow-stable-edit` label for an exceptional direct repair. Every change
 (code *and* docs) lands on the dev flavor first — with the version bump
 `webhook-proxy-dev-version-guard` enforces — gets tested on the dev channel, and
 reaches stable through the promote workflow (see Promotion below).
@@ -89,8 +89,8 @@ manual fallback):
    (next stable patch + `.dev1`, per the Versioning rule above — the transform's
    `rebase_dev_version` does this; only dev `config.yaml` + `manifest.json` change).
    Right after a promote the trees are code-identical, so no separate reset PR is
-   needed; `Reset Dev from Stable` remains a manual tool for the stable-hotfix
-   backport case.
+   needed; `Reset Dev from Stable` remains a manual tool after an exceptional
+   direct stable repair.
 
 ## Testing
 `tests/addon/test_webhook_proxy.py` is parametrized over BOTH flavors — an autouse
