@@ -40,7 +40,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
@@ -293,18 +293,82 @@ _RESTART_RECOVER_TIMEOUT_S = 180
 _RESTART_POLL_S = 3
 
 
-def _entry_state(base_url: str, token: str, entry_id: str) -> str | None:
-    """Current config-entry state, or None if the entry is absent."""
-    resp = requests.get(
-        f"{base_url}/api/config/config_entries/entry",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=30,
+def _entry_states_while(
+    base_url: str,
+    token: str,
+    entry_id: str,
+    trigger: Callable[[], None],
+    timeout: float,
+) -> list[str]:
+    """Record ``entry_id``'s state transitions while ``trigger`` runs.
+
+    Subscribes BEFORE triggering and reads the event stream rather than
+    polling: the restart endpoint answers ~1s before the reload is even
+    dispatched, so a poll started on that response reads the stale
+    pre-restart ``loaded`` and cannot tell a real reload from no reload at
+    all. HA dispatches ``SIGNAL_CONFIG_ENTRY_CHANGED`` on every state
+    assignment, so the stream catches transitions no sampling interval can
+    guarantee to see.
+
+    Returns the states observed, in order, stopping once the entry is back to
+    ``loaded`` or the timeout expires (the wedge never returns, so the caller
+    sees where it stopped).
+    """
+    ws = _subscribe_to_config_entries(base_url, token)
+    try:
+        trigger()
+        return _collect_entry_states(ws, entry_id, time.monotonic() + timeout)
+    finally:
+        ws.close()
+
+
+def _subscribe_to_config_entries(base_url: str, token: str) -> Any:
+    """Authenticated WS with ``config_entries/subscribe`` live and drained."""
+    import websockets.sync.client
+
+    ws_url = (
+        base_url.replace("http://", "ws://").replace("https://", "wss://")
+        + "/api/websocket"
     )
-    resp.raise_for_status()
-    for entry in resp.json():
-        if entry.get("entry_id") == entry_id:
-            return entry.get("state")
-    return None
+    ws = websockets.sync.client.connect(ws_url, max_size=None, open_timeout=30)
+    first = json.loads(ws.recv())
+    if first.get("type") != "auth_required":
+        raise RuntimeError(f"WS handshake: expected auth_required, got {first!r}")
+    ws.send(json.dumps({"type": "auth", "access_token": token}))
+    auth = json.loads(ws.recv())
+    if auth.get("type") != "auth_ok":
+        raise RuntimeError(f"WS auth rejected: {auth}")
+
+    ws.send(json.dumps({"id": 1, "type": "config_entries/subscribe"}))
+    # The command result, then a snapshot of every current entry (each carrying
+    # type=null), both land before any change event — drain them so the caller
+    # only sees transitions its trigger caused.
+    while True:
+        msg = json.loads(ws.recv(timeout=30))
+        if msg.get("type") == "event" and any(
+            item.get("type") is None for item in msg.get("event", [])
+        ):
+            return ws
+
+
+def _collect_entry_states(ws: Any, entry_id: str, deadline: float) -> list[str]:
+    """``entry_id``'s successive states until it is loaded or time runs out."""
+    observed: list[str] = []
+    while time.monotonic() < deadline:
+        try:
+            msg = json.loads(ws.recv(timeout=deadline - time.monotonic()))
+        except TimeoutError:
+            break
+        for item in msg.get("event", []) if msg.get("type") == "event" else []:
+            entry = item.get("entry") or {}
+            state = entry.get("state")
+            if entry.get("entry_id") != entry_id or not state:
+                continue
+            if not observed or observed[-1] != state:
+                observed.append(state)
+        if observed and observed[-1] == "loaded":
+            break
+    return observed
 
 
 class TestEmbeddedSelfRestartOnHaos:
@@ -322,52 +386,55 @@ class TestEmbeddedSelfRestartOnHaos:
         base_url, _session_id, info = embedded_server
         token = info["token"]
 
-        assert _entry_state(base_url, token, HA_MCP_SERVER_ENTRY_ID) == "loaded"
-
         # From inside the VM: settings routes live under the secret path on the
         # server's own port, not behind the webhook (MCP traffic only).
         restart_url = (
             f"http://127.0.0.1:{HA_MCP_SERVER_PORT}"
             f"{HA_MCP_SERVER_SECRET_PATH}/api/settings/restart"
         )
-        result = ssh_exec(
-            [
-                "curl",
-                "-s",
-                "-o",
-                "/dev/null",
-                "-w",
-                "%{http_code}",
-                "-X",
-                "POST",
-                restart_url,
-            ],
-            timeout=60,
-        )
-        assert result.stdout.strip().endswith("200"), (
-            f"settings restart endpoint returned {result.stdout!r} "
-            f"(stderr={result.stderr!r})"
+
+        def _press_restart() -> None:
+            result = ssh_exec(
+                [
+                    "curl",
+                    "-s",
+                    "-o",
+                    "/dev/null",
+                    "-w",
+                    "%{http_code}",
+                    "-X",
+                    "POST",
+                    restart_url,
+                ],
+                timeout=60,
+            )
+            assert result.stdout.strip().endswith("200"), (
+                f"settings restart endpoint returned {result.stdout!r} "
+                f"(stderr={result.stderr!r})"
+            )
+
+        states = _entry_states_while(
+            base_url,
+            token,
+            HA_MCP_SERVER_ENTRY_ID,
+            _press_restart,
+            _RESTART_RECOVER_TIMEOUT_S,
         )
 
-        # The regression parks the entry in unload_in_progress forever, so the
-        # poll simply never reaches loaded. Report the last state seen — that
-        # distinguishes the wedge from a slow-but-healthy recovery.
-        deadline = time.monotonic() + _RESTART_RECOVER_TIMEOUT_S
-        state: str | None = None
-        while time.monotonic() < deadline:
-            state = _entry_state(base_url, token, HA_MCP_SERVER_ENTRY_ID)
-            if state == "loaded":
-                break
-            time.sleep(_RESTART_POLL_S)
-        assert state == "loaded", (
-            f"{HA_MCP_SERVER_ENTRY_ID} is {state!r} "
-            f"{_RESTART_RECOVER_TIMEOUT_S}s after a self-restart; "
+        # Both halves matter: without the first, a test that never triggered a
+        # reload passes; without the second, the wedge passes.
+        assert states, (
+            "the Restart button produced no config-entry state change at all — "
+            "the reload was never dispatched, so this asserted nothing"
+        )
+        assert states[-1] == "loaded", (
+            f"{HA_MCP_SERVER_ENTRY_ID} went {states} and did not return to "
+            f"loaded within {_RESTART_RECOVER_TIMEOUT_S}s; ending in "
             f"'unload_in_progress' means the reload cancelled itself mid-unload "
             f"and only a Home Assistant restart can recover the server"
         )
 
-        # `loaded` precedes the listener binding, so poll. Own budget: the
-        # deadline above can be spent by the time the entry flips.
+        # `loaded` precedes the listener binding, so poll for MCP separately.
         ready_deadline = time.monotonic() + _RESTART_RECOVER_TIMEOUT_S
         ready = False
         while time.monotonic() < ready_deadline:
