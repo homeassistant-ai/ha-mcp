@@ -1,6 +1,6 @@
 {
   "name": "ha-mcp-js-test-harness",
-  "packageManager": "npm@12.0.2",
+  "packageManager": "npm@12.0.2+sha512.b885e890b9418fa1693544d05f53e64f9a73ec194837d4258b15fecdd692347b1dd2a517b1b0cbaf9d31cd8e92c3b70956bd2ecc72833a57b4b3098f5bfa7943",
   "version": "0.0.0",
   "private": true,
   "description": "JSDOM harness for behavioral testing of rendered <script> bodies (settings UI + Astro pages). Not shipped; only consumed by tests/src/unit/_js_harness.py.",

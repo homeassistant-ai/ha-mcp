@@ -70,6 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Check for releasable commits since last tag
@@ -115,6 +116,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           submodules: true
 
       - name: Set up Docker Buildx
@@ -154,11 +156,13 @@ jobs:
       with:
         app-id: ${{ secrets.RELEASE_APP_ID }}
         private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        permission-contents: write
       # Fallback to RELEASE_TOKEN (PAT) or GITHUB_TOKEN if app credentials not configured
       continue-on-error: true
 
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
+        persist-credentials: false
         fetch-depth: 0
         # Priority: GitHub App token > RELEASE_TOKEN (PAT) > GITHUB_TOKEN
         token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
