@@ -106,4 +106,4 @@ def ensure_rich_handler_compat() -> bool:
 # Applied as an import side effect: ``ha_mcp/__init__.py`` imports this module
 # ahead of anything that reaches fastmcp, and that is the only window in which
 # the shim can do any good.
-_SHIM_APPLIED = ensure_rich_handler_compat()
+ensure_rich_handler_compat()
