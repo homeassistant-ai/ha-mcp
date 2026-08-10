@@ -117,8 +117,9 @@ decides whether to grant the optional scopes the client requested.
 
 After upgrading from a version that did not require `openid`, ha-mcp retains
 persisted DCR registrations and adds `openid` to a registration the first time
-it is loaded. A refresh token issued before the fix without `openid` is rejected
-so the client starts authorization once and obtains a compliant token. The DCR
+it is loaded. A live access token issued before the fix without `openid` is
+rejected on its next MCP request, and its legacy refresh token is rejected too,
+so the client starts authorization once and obtains compliant tokens. The DCR
 registration remains intact during this reauthorization. Most clients restart
 authorization automatically; manually clearing the client's connector or
 authorization cache is only a fallback for a client that does not.

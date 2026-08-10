@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import override
 
 from fastmcp.server.auth.oauth_proxy.models import ProxyDCRClient
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from mcp.server.auth.provider import AuthorizationParams, RefreshToken
 from mcp.shared.auth import OAuthClientInformationFull
+
+logger = logging.getLogger(__name__)
 
 
 class HaMcpOIDCProxy(OIDCProxy):
@@ -91,6 +94,13 @@ class HaMcpOIDCProxy(OIDCProxy):
         loaded = await super().load_refresh_token(client, refresh_token)
         if loaded is None:
             return None
-        if not set(self.required_scopes).issubset(loaded.scopes):
+        missing_scopes = set(self.required_scopes) - set(loaded.scopes)
+        if missing_scopes:
+            logger.debug(
+                "Rejecting legacy refresh token for client_id=%s: "
+                "missing required scopes %s",
+                client.client_id,
+                sorted(missing_scopes),
+            )
             return None
         return loaded
