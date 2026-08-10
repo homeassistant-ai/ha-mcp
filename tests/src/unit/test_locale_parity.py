@@ -1742,10 +1742,15 @@ def test_a_reversed_ordered_pair_is_reported(
         # setting rejects while every digit stays where it was.
         ("Range 1–600.", "Bereich -1–600.", ["unsigned 1 written as -1"]),
         ("Range 1–600.", "Bereich 1–600.", []),
-        # The dash between two endpoints is not a sign, spaced out or not,
-        # or every range a catalog writes with a hyphen would report.
+        # The dash between two endpoints is not a sign, however the catalog
+        # spaced it out, or every range written with a hyphen would report.
+        # The non-breaking space is in here because it is the one these
+        # catalogs group numbers with, and a fixed-width look behind could
+        # only ever cover one of these four.
         ("Range 1–600.", "Bereich 1-600.", []),
         ("Range 1–600.", "Bereich 1 -600.", []),
+        ("Range 1–600.", "Bereich 1  -600.", []),
+        ("Range 1–600.", "Bereich 1 -600.", []),
         # Nor is a hyphen inside a word, and a sign the English itself wrote
         # is the translation's to keep.
         ("Range 1–600.", "Zeit-600 Sekunden.", []),

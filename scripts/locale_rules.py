@@ -49,12 +49,15 @@ _COMPOUND_UNIT_RE = re.compile(
 )
 _KNOWN_UNITS = frozenset({"KB", "MB", "GB", "TB"})
 # A signed number, for the arm that compares what a translation added. The
-# dash between two range endpoints must not read as a sign, which is what the
-# digit-on-the-left lookbehinds rule out; see _invented_signs. The number is
-# spelled by reference rather than repeated: a hand-copied group class lost the
-# two non-breaking spaces a locale groups with, so "-1 000" stopped being one
-# token while the copy still looked right.
-_SIGNED_NUMBER_RE = re.compile(rf"(?<![\w.,])(?<!\d )([-+])({_NUMBER_RE.pattern})")
+# number is spelled by reference rather than repeated: a hand-copied group
+# class lost the two non-breaking spaces a locale groups with, so "-1 000"
+# was read as "-1" while the copy still looked right.
+_SIGNED_NUMBER_RE = re.compile(rf"(?<![\w.,])([-+])({_NUMBER_RE.pattern})")
+# ... and the dash between two range endpoints is not a sign, however the
+# catalog spaced it out. `\s` already covers the non-breaking spaces these
+# catalogs group with -- both are Unicode whitespace -- so the class is not
+# written out by hand, which is how the copy above lost them once already.
+_RANGE_LEFT_CONTEXT_RE = re.compile(r"\d\s*\Z")
 # The same four units as every catalog spells them. Without this the filter
 # that stops a localised spelling false-positiving also stops a *wrong*
 # localised spelling reporting: "предел 1-256 ГБ" and "limite de 1-256 Go"
@@ -250,6 +253,22 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
     return sorted(contradicted)
 
 
+def _signed_numbers(text: str) -> list[tuple[str, str]]:
+    """(sign, number) for every number this text signs itself.
+
+    A range endpoint is not signed, however its catalog spaced the dash out,
+    so any run of separators between a digit and the dash disqualifies it --
+    including the non-breaking ones a locale groups numbers with. That test
+    is a variable-width look behind, which ``re`` refuses, so the left context
+    is read here instead.
+    """
+    return [
+        (match.group(1), match.group(2))
+        for match in _SIGNED_NUMBER_RE.finditer(text)
+        if not _RANGE_LEFT_CONTEXT_RE.search(text[: match.start()])
+    ]
+
+
 def _invented_signs(english: str, translated: str) -> list[str]:
     """Numbers the translation signed and its English did not.
 
@@ -263,17 +282,17 @@ def _invented_signs(english: str, translated: str) -> list[str]:
     the pipeline sends.
 
     What must not count as a sign is the dash between two range endpoints,
-    which is why a digit to the left disqualifies it -- with or without a
-    space, so both "1-600" and the "1 -600" a catalog may space out stay
-    ranges.
+    which is why a digit to the left disqualifies it, however the catalog
+    spaced the range out: "1-600", "1 -600", "1  -600" and the non-breaking
+    space these catalogs group numbers with all stay ranges. The left context
+    is read in code rather than in a lookbehind, because a lookbehind here has
+    to be fixed width and the separator is not.
     """
-    signed_in_english = {
-        f"{sign}{digits}" for sign, digits in _SIGNED_NUMBER_RE.findall(english)
-    }
+    signed_in_english = {f"{sign}{digits}" for sign, digits in _signed_numbers(english)}
     return sorted(
         {
             f"unsigned {digits} written as {sign}{digits}"
-            for sign, digits in _SIGNED_NUMBER_RE.findall(translated)
+            for sign, digits in _signed_numbers(translated)
             if f"{sign}{digits}" not in signed_in_english
         }
     )
