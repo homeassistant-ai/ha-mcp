@@ -23,9 +23,9 @@ def _make_mock_oidc_proxy(capture: dict) -> type:
     a kwarg not listed here, this raises TypeError instead of silently
     swallowing it — catching drift in *our own* call, not in FastMCP's
     constructor (see ``TestOIDCProxySignatureSubset`` for that check).
-    ``allowed_client_redirect_uris``, ``verify_id_token``, and ``audience``
-    are optional in production, so they default to the ``_UNSET`` sentinel
-    here and are only recorded in ``capture`` when actually passed.
+    ``required_scopes`` is mandatory in production. The remaining optional
+    constructor arguments default to the ``_UNSET`` sentinel and are only
+    recorded in ``capture`` when actually passed.
     """
 
     class MockOIDCProxy:
@@ -37,6 +37,7 @@ def _make_mock_oidc_proxy(capture: dict) -> type:
             client_secret,
             base_url,
             require_authorization_consent,
+            required_scopes,
             jwt_signing_key,
             allowed_client_redirect_uris=_UNSET,
             verify_id_token=_UNSET,
@@ -47,6 +48,7 @@ def _make_mock_oidc_proxy(capture: dict) -> type:
             capture["client_secret"] = client_secret
             capture["base_url"] = base_url
             capture["require_authorization_consent"] = require_authorization_consent
+            capture["required_scopes"] = required_scopes
             capture["jwt_signing_key"] = jwt_signing_key
             if allowed_client_redirect_uris is not _UNSET:
                 capture["allowed_client_redirect_uris"] = allowed_client_redirect_uris
@@ -271,8 +273,8 @@ class TestRunOidcServer:
     """Tests for _run_oidc_server async function."""
 
     @pytest.mark.asyncio
-    async def test_creates_oidc_proxy(self):
-        """_run_oidc_server should create an OIDCProxy with correct args."""
+    async def test_creates_oidc_proxy_with_required_openid_scope(self):
+        """OIDC mode should always require the protocol-level openid scope."""
         import ha_mcp.__main__ as main_module
 
         proxy_init_args: dict = {}
@@ -321,6 +323,7 @@ class TestRunOidcServer:
         assert proxy_init_args["client_secret"] == "test-secret"
         assert proxy_init_args["base_url"] == "https://mcp.example.com"
         assert proxy_init_args["require_authorization_consent"] == "external"
+        assert proxy_init_args["required_scopes"] == ["openid"]
 
     @pytest.mark.asyncio
     async def test_jwt_signing_key_passed_from_env(self):
@@ -1197,6 +1200,7 @@ class TestOIDCProxySignatureSubset:
             "client_secret",
             "base_url",
             "require_authorization_consent",
+            "required_scopes",
             "jwt_signing_key",
             "allowed_client_redirect_uris",
             "verify_id_token",

@@ -1742,6 +1742,11 @@ async def _run_oidc_server(
         # IdP (Authentik, Keycloak, etc.) -- unlike `False`, this does not
         # log a security warning at startup that consent is disabled.
         "require_authorization_consent": "external",
+        # This entrypoint provides OIDC, so request the protocol-level scope
+        # that makes upstream providers return an ID token. FastMCP also
+        # advertises this scope through protected resource metadata so MCP
+        # clients include it in the authorization flow.
+        "required_scopes": ["openid"],
         # Preserve `or None`: an empty-but-set env var must not bypass
         # FastMCP's derive-from-client-secret default for jwt_signing_key.
         "jwt_signing_key": os.getenv("OIDC_JWT_SIGNING_KEY") or None,
