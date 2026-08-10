@@ -333,7 +333,7 @@ def _untranslatable_names() -> frozenset[str]:
     drift away from ``translate_locales._untranslatable_name_dropped``, the
     guard that rejects engine output localising one.
     """
-    import translate_locales
+    import translate_locales  # type: ignore[import-not-found]
 
     return frozenset(translate_locales._hardcoded_ui_names())
 
