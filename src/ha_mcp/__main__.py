@@ -1629,7 +1629,7 @@ def main_oidc() -> None:
       patterns accepted from dynamically-registered clients. Strongly recommended for
       internet-facing deployments.
     - OIDC_VERIFY_ID_TOKEN (optional, default: false): Set true for providers that issue
-      opaque access tokens (e.g. Google, or Auth0 without an API audience).
+      opaque access tokens (e.g. Authelia and Google, or Auth0 without an API audience).
     - OIDC_AUDIENCE (optional): Expected `aud` claim for IdP-issued access tokens.
       Without it (and with OIDC_VERIFY_ID_TOKEN off), FastMCP's JWT verifier checks
       issuer, signature, and expiry but not audience. With OIDC_VERIFY_ID_TOKEN=true,
