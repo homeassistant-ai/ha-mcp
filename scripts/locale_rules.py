@@ -20,8 +20,30 @@ The two calls differ in one deliberate respect, spelled out on
 from __future__ import annotations
 
 import re
+import sys
 from collections import Counter
 from functools import cache
+from pathlib import Path
+from typing import Any
+
+# Both calls into the pipeline below name a sibling script. Importing this
+# module does not put `scripts/` on the path -- `translate_locales` does that
+# for its own siblings -- so a caller that imported this one by file path got
+# a clean import and a ModuleNotFoundError at the first comparison. The path
+# is inserted here instead, once, so the failure cannot depend on who imported
+# whom first.
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+
+@cache
+def _pipeline() -> Any:
+    """The translation engine's own module, whose rules these two arms reuse."""
+    import translate_locales  # type: ignore[import-not-found]
+
+    return translate_locales
+
 
 # A digit run preceded by a letter or another digit belongs to an identifier
 # ("Z2M", "MQTT5"), not to a claim about quantity, so it is not a number a
@@ -40,8 +62,10 @@ _NUMBER_RE = re.compile(r"(?<![A-Za-z0-9])\d+(?:[.,   ]\d+)*")
 # A magnitude suffix is part of the claim: "5K" and "5M" share their digits.
 _MAGNITUDE_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)([KMGT])(?![A-Za-z])")
 # A percentage is a unit every catalog keeps, spaced or not: four write
-# "90 %" and four "90%", so the sign is required but the space is free.
-_PERCENT_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)\s?%")
+# "90 %" and four "90%", so the sign is required but the space is free. The
+# fullwidth sign counts as the sign: a CJK catalog may set U+FF05, and
+# demanding the ASCII one would fail a correct rendering.
+_PERCENT_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)\s?[%％]")
 # A storage unit is part of the claim too: "1-256 MB" and "1-256 GB" differ by
 # three orders of magnitude while the digits match.
 _COMPOUND_UNIT_RE = re.compile(
@@ -60,11 +84,26 @@ _LOCALISED_UNITS = {
 }
 
 
+# A localised spelling is matched regardless of case -- "Гб" and "go" are
+# ordinary renderings of table entries -- with one exception the corpus
+# forces: "to" is an English word, and `custom_components/ha_mcp_tools/
+# translations/en.json` ships "9584 to", which case-folding would read as
+# terabytes. The Cyrillic entries have no such collision.
+_CASE_COLLIDING_UNITS = frozenset({"to"})
+_LOCALISED_UNITS_FOLDED = {
+    spelling.casefold(): canonical
+    for spelling, canonical in _LOCALISED_UNITS.items()
+    if spelling.casefold() not in _CASE_COLLIDING_UNITS
+}
+
+
 def _canonical_unit(unit: str) -> str | None:
     """One storage unit as its English spelling, or None if not comparable."""
     if unit.upper() in _KNOWN_UNITS:
         return unit.upper()
-    return _LOCALISED_UNITS.get(unit)
+    if unit in _LOCALISED_UNITS:
+        return _LOCALISED_UNITS[unit]
+    return _LOCALISED_UNITS_FOLDED.get(unit.casefold())
 
 
 # "N > 0" and "N < 0" are opposite conditions with identical numbers.
@@ -79,7 +118,13 @@ _GROUP_SEPARATOR_RE = re.compile(r"[.,   ]")
 # half is the name a reader has to find. "*" belongs in the stem for
 # "packages/*.yaml". Spelled here rather than inline so the reverse check can
 # ask for this shape alone without a second copy of it to keep in step.
-_FILE_PATTERN = r"[\w.~*/-]*\.(?:yaml|yml|json|py|md|txt)"
+# The stem is ASCII on purpose. `\w` matches CJK ideographs, and a catalog
+# that sets no space around the name -- which zh-Hans and ru both do -- then
+# hands the reverse arm "在configuration.yaml" as a file the English never
+# mentioned. The file it does mention is inside that token, so the reverse
+# arm reported a file that exists, on the engine path, where the rejection
+# holds back the day's run.
+_FILE_PATTERN = r"[A-Za-z0-9_.~*/-]+\.(?:yaml|yml|json|py|md|txt)"
 _FILE_RE = re.compile(_FILE_PATTERN)
 
 _LITERAL_RE = re.compile(
@@ -164,6 +209,15 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
     necessarily the matching one -- "bis zu 5x schneller, etwa 5K Token" is
     faithful and reported, "jusqu'a 256 Go puis 256 MB" contradicts the
     English and did not.
+
+    Both also stay silent when the translation attaches no letters to the
+    digits at all -- "Grenze ist 1-256" and "предел 1-256 гигабайт" are alike
+    unreported. That is a known limit, not an oversight: a dropped unit and a
+    spelled-out one look identical from here, separating them needs a
+    per-language word list, and failing the spelled-out form would redden a
+    correct translation on the engine path. The percent arm takes the opposite
+    decision because every catalog does keep that sign, so requiring it costs
+    nothing.
     """
     contradicted = set()
     for digits, unit in _COMPOUND_UNIT_RE.findall(english):
@@ -200,7 +254,7 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
         ):
             contradicted.add(f"{name} {operator} {digits}")
     for digits in _PERCENT_RE.findall(english):
-        if not re.search(rf"(?<![A-Za-z0-9]){re.escape(digits)}\s?%", translated):
+        if not re.search(rf"(?<![A-Za-z0-9]){re.escape(digits)}\s?[%％]", translated):
             contradicted.add(f"{digits}%")
     for digits, suffix in _MAGNITUDE_RE.findall(english):
         # Same every-occurrence rule as the storage arm. "bis zu 5x schneller,
@@ -293,9 +347,7 @@ def _untranslatable_names() -> frozenset[str]:
     drift away from ``translate_locales._untranslatable_name_dropped``, the
     guard that rejects engine output localising one.
     """
-    import translate_locales  # type: ignore[import-not-found]
-
-    return frozenset(translate_locales._hardcoded_ui_names())
+    return frozenset(_pipeline()._hardcoded_ui_names())
 
 
 def _without_sentence_punctuation(literal: str) -> str:
@@ -432,7 +484,5 @@ def _localised_hardcoded_name(english: str, translated: str) -> list[str]:
     rule -- ``translate_locales`` owns it, and it is called rather than copied
     so the two cannot drift apart.
     """
-    import translate_locales
-
-    dropped = translate_locales._untranslatable_name_dropped(english, translated)
+    dropped = _pipeline()._untranslatable_name_dropped(english, translated)
     return [dropped] if dropped is not None else []

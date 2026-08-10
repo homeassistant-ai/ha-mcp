@@ -40,6 +40,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from functools import cache
 from pathlib import Path, PurePosixPath
@@ -54,6 +55,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 # The tool set comes from the same static AST parse that generates the docs,
 # not from its committed output — see ``_renderable_groups_and_tools``.
 sys.path.insert(0, str(_REPO_ROOT / "scripts"))
+
+_RULES_PATH = _REPO_ROOT / "scripts" / "locale_rules.py"
 import extract_tools  # noqa: E402
 import generate_locales  # noqa: E402
 from locale_rules import (  # noqa: E402
@@ -1659,6 +1662,23 @@ def test_a_number_keeps_its_groups_unless_they_are_thousands(
         ),
         # A translation may punctuate its own sentence differently.
         ("See docs/beta.md.", "Siehe docs/beta.md!", []),
+        # A script that sets no space around the name still names the file the
+        # English named. The stem is ASCII for this: `\w` matches ideographs
+        # and Cyrillic, so the token grew leftwards into the sentence and the
+        # arm reported a file that exists.
+        (
+            "Add keys in configuration.yaml.",
+            "在configuration.yaml中添加、替换或删除顶级键。",
+            [],
+        ),
+        ("See docs/beta.md for limits.", "Подробнее см. вdocs/beta.md.", []),
+        # A bare extension is not a file name, and a catalog naming the file
+        # may still write one alongside.
+        (
+            "Edit configuration.yaml.",
+            "在 configuration.yaml 中添加键（.yaml 文件）。",
+            [],
+        ),
         # A compound the path arm reads as a literal is not an invented file:
         # this is the shape that made the general reverse check unusable.
         (
@@ -1714,6 +1734,23 @@ def test_a_file_the_english_never_named_is_reported(
         # A percentage keeps its sign, spaced or not.
         ("roughly 90% less", "rund 90 % weniger", []),
         ("roughly 90% less", "rund 90 weniger", ["90%"]),
+        # ... and the fullwidth sign is that sign: a CJK catalog may set it,
+        # and demanding the ASCII one would fail a correct rendering.
+        ("roughly 90% less", "大约减少 90％", []),
+        ("roughly 90％ less", "rund 90 % weniger", []),
+        ("roughly 90％ less", "rund 90 weniger", ["90%"]),
+        # A localised unit counts however the catalog capitalises it. "to" is
+        # the exception the corpus forces: the component English ships
+        # "9584 to", which case-folding would read as terabytes.
+        ("limit is 1-256 MB", "предел 1-256 Гб", ["256 MB"]),
+        ("limit is 1-256 MB", "limite de 1-256 go", ["256 MB"]),
+        ("limit is 1-256 MB", "limite de 1-256 mo", []),
+        ("keeps 9584 to 10000 rows", "behaelt 9584 to 10000 Zeilen", []),
+        # A unit the translation attaches to nothing stays uncomparable, by
+        # decision: dropped and spelled out look the same from here, and
+        # failing the spelled-out form reddens a correct value.
+        ("limit is 1-256 MB", "предел 1-256 гигабайт", []),
+        ("limit is 1-256 MB", "Grenze ist 1-256", []),
         # A threshold is bounded on both sides. Appending digits states a
         # different bound, and so does appending a grouping separator and
         # more digits — "5.000" and "5 000" are the likelier artefact than
@@ -1740,6 +1777,41 @@ def test_units_and_comparisons_are_compared_where_they_are_comparable(
     stay green, which is how "1-256 ГБ" went unreported.
     """
     assert _lost_magnitudes(english, translated) == expected
+
+
+def test_the_rules_module_runs_without_a_caller_preparing_its_path() -> None:
+    """Two arms call the pipeline, and the module must reach it on its own.
+
+    Both are deferred imports of a sibling script. Importing this module does
+    not put ``scripts/`` on the path — ``translate_locales`` does that for its
+    own siblings — so a caller that imported the rules by file path got a
+    clean import and a ``ModuleNotFoundError`` at the first comparison, from
+    inside a comparison rather than at import. Loaded in a subprocess here,
+    because the path insert is global and the test session already has it.
+    """
+    probe = (
+        "import importlib.util, sys;"
+        f"spec = importlib.util.spec_from_file_location('lr', {str(_RULES_PATH)!r});"
+        "m = importlib.util.module_from_spec(spec);"
+        "spec.loader.exec_module(m);"
+        "print(m._parity_fault('edit configuration.yaml', 'bearbeite die Datei'))"
+    )
+    # The harness puts `scripts/` on PYTHONPATH, and the child would inherit
+    # it — which is exactly the caller-prepared path this test must not have.
+    environment = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tempfile.gettempdir(),
+        env=environment,
+    )
+    assert completed.returncode == 0, (
+        "the rules module cannot answer a comparison when no caller has put "
+        f"its own directory on the path:\n{completed.stderr.strip()}"
+    )
+    assert "configuration.yaml" in completed.stdout
 
 
 def test_a_localised_on_screen_name_is_reported() -> None:
