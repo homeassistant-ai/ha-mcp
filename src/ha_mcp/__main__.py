@@ -503,15 +503,23 @@ def _setup_logging(log_level_str: str, force: bool = True) -> None:
     of the sweep ``force`` performs (which removes *and closes* every root
     handler) so ``ha_report_issue`` keeps its startup diagnostics.
     """
+    log_level = getattr(logging, log_level_str)
+
     from ha_mcp.utils.usage_logger import preserve_startup_collector
 
     with preserve_startup_collector():
         logging.basicConfig(
-            level=getattr(logging, log_level_str),
+            level=log_level,
             format="%(asctime)s %(name)s %(levelname)s: %(message)s",
             datefmt=_LOG_DATE_FORMAT,
             force=force,
         )
+
+    # FastMCP configures its own handler and disables propagation, so the root
+    # level above does not control its OIDC diagnostics. Preserve that handler
+    # and formatting while honoring ha-mcp's LOG_LEVEL setting.
+    logging.getLogger("fastmcp").setLevel(log_level)
+
     logging.getLogger("mcp.server.streamable_http").addFilter(
         StatelessSessionLogFilter()
     )

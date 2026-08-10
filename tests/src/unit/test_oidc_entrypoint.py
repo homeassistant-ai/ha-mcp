@@ -4,6 +4,7 @@ These tests verify environment variable validation, logging setup,
 and the OIDC server startup path without requiring a real OIDC provider.
 """
 
+import logging
 import os
 from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -267,6 +268,19 @@ class TestMainOidcLogging:
             main_module.main_oidc()
 
         assert setup_logging_calls[0]["level"] == "INFO"
+
+    def test_setup_logging_configures_fastmcp_logger(self):
+        """LOG_LEVEL should apply to FastMCP's non-propagating logger."""
+        import ha_mcp.__main__ as main_module
+
+        fastmcp_logger = logging.getLogger("fastmcp")
+        original_level = fastmcp_logger.level
+        try:
+            fastmcp_logger.setLevel(logging.INFO)
+            main_module._setup_logging("DEBUG", force=False)
+            assert fastmcp_logger.getEffectiveLevel() == logging.DEBUG
+        finally:
+            fastmcp_logger.setLevel(original_level)
 
 
 class TestRunOidcServer:
