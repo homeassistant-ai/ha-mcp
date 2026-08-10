@@ -2085,10 +2085,11 @@ def test_a_localised_on_screen_name_is_reported() -> None:
 
     Matching unquoted was considered and declined. Five names are hardcoded,
     fourteen keys carry one, 126 pairs across the nine catalogs — and the
-    unquoted rule reports 88 of them, 53 on "HA-MCP Server" and 35 on
-    "HA-MCP File & YAML Tools". Those are not defects that crept in;
-    "Servidor HA-MCP" is ordinary Spanish. The rule would mean repairing 88
-    pairs now and arguing with every translator afterwards. A do-not-translate
+    unquoted rule reports 80 of them — 88 name drops in all, 53 on
+    "HA-MCP Server" and 35 on "HA-MCP File & YAML Tools", with eight pairs
+    dropping both. Those are not defects that crept in; "Servidor HA-MCP" is
+    ordinary Spanish. The rule would mean repairing 80 pairs now and arguing
+    with every translator afterwards. A do-not-translate
     glossary was declined for a different reason: it is a second list beside
     ``translate_locales._hardcoded_ui_names()`` and can drift from it, while
     this arm reads that function at runtime and cannot.
