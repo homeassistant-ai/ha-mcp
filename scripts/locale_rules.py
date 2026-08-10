@@ -269,6 +269,67 @@ def _attaches_a_word(digits: str, translated: str) -> bool:
     )
 
 
+def _storage_units_carried(digits: str, translated: str) -> set[str]:
+    """The storage units this translation attaches to these digits.
+
+    EVERY occurrence of the digits, not the first one: "jusqu'a 256 Go puis
+    256 MB" carries the unit on its second, and settling on the first reported
+    a correct translation as a contradiction while missing this arm's own case.
+    One occurrence spelling the unit right is the translation carrying the
+    claim. A spelling outside the table stays uncomparable and is left out,
+    which is the safe arm.
+    """
+    return {
+        canonical
+        for match in re.finditer(
+            rf"(?<![A-Za-z0-9]){re.escape(digits)}\s*([A-Za-zА-Яа-я]{{2}})"
+            r"(?![A-Za-zА-Яа-я])",
+            translated,
+        )
+        if (canonical := _canonical_unit(match.group(1))) is not None
+    }
+
+
+def _magnitude_suffixes_carried(digits: str, translated: str) -> set[str]:
+    """The magnitude suffixes this translation writes straight onto these digits.
+
+    Same every-occurrence rule as the storage arm: "bis zu 5x schneller, etwa
+    5K Token" is a correct translation whose *first* run of these digits
+    carries an unrelated letter, and reading only that one turned it red --
+    post-merge that blocks the push for the whole run.
+    """
+    return {
+        match.group(1).upper()
+        for match in re.finditer(
+            rf"(?<![A-Za-z0-9]){re.escape(digits)}([A-Za-z])", translated
+        )
+    }
+
+
+def _unit_fault(
+    digits: str,
+    expected: str,
+    carried: set[str],
+    translated: str,
+    *,
+    require_unit: bool,
+    claim: str,
+) -> str | None:
+    """What one digits-and-unit claim contradicts, or None.
+
+    The two unit arms ask the same three-way question and differ only in what
+    counts as a unit, so the decision lives here once: a translation carrying
+    some unit for these digits must carry the right one, and a translation
+    carrying none has dropped it -- unless it attached a word instead, which is
+    a unit spelled out, or the caller is the engine, which tolerates the drop.
+    """
+    if carried:
+        return None if expected in carried else claim
+    if require_unit and not _attaches_a_word(digits, translated):
+        return f"{claim} dropped"
+    return None
+
+
 def _lost_magnitudes(
     english: str, translated: str, *, require_unit: bool = True
 ) -> list[str]:
@@ -317,24 +378,16 @@ def _lost_magnitudes(
     for digits, unit in _COMPOUND_UNIT_RE.findall(english):
         if unit.upper() not in _KNOWN_UNITS:
             continue
-        # EVERY occurrence of these digits, not the first one: "jusqu'a 256 Go
-        # puis 256 MB" carries the unit on its second, and settling on the
-        # first reported a correct translation as a contradiction while
-        # missing the storage arm's own case. One occurrence spelling the
-        # unit right is the translation carrying the claim.
-        carried = {
-            canonical
-            for match in re.finditer(
-                rf"(?<![A-Za-z0-9]){re.escape(digits)}\s*([A-Za-zА-Яа-я]{{2}})"
-                r"(?![A-Za-zА-Яа-я])",
-                translated,
-            )
-            if (canonical := _canonical_unit(match.group(1))) is not None
-        }
-        if carried and unit.upper() not in carried:
-            contradicted.add(f"{digits} {unit}")
-        elif not carried and require_unit and not _attaches_a_word(digits, translated):
-            contradicted.add(f"{digits} {unit} dropped")
+        fault = _unit_fault(
+            digits,
+            unit.upper(),
+            _storage_units_carried(digits, translated),
+            translated,
+            require_unit=require_unit,
+            claim=f"{digits} {unit}",
+        )
+        if fault:
+            contradicted.add(fault)
     for name, operator, digits in _COMPARISON_RE.findall(english):
         # The threshold ends where its number ends, and it starts where its
         # name starts: unbounded, "N > 5" is satisfied by "N > 50" and by
@@ -353,20 +406,16 @@ def _lost_magnitudes(
         if not re.search(rf"(?<![A-Za-z0-9]){re.escape(digits)}\s?[%％]", translated):
             contradicted.add(f"{digits}%")
     for digits, suffix in _MAGNITUDE_RE.findall(english):
-        # Same every-occurrence rule as the storage arm. "bis zu 5x schneller,
-        # etwa 5K Token" is a correct translation whose *first* run of these
-        # digits carries an unrelated letter, and reading only that one turned
-        # it red -- post-merge that blocks the push for the whole run.
-        carried = {
-            match.group(1).upper()
-            for match in re.finditer(
-                rf"(?<![A-Za-z0-9]){re.escape(digits)}([A-Za-z])", translated
-            )
-        }
-        if carried and suffix.upper() not in carried:
-            contradicted.add(f"{digits}{suffix}")
-        elif not carried and require_unit and not _attaches_a_word(digits, translated):
-            contradicted.add(f"{digits}{suffix} dropped")
+        fault = _unit_fault(
+            digits,
+            suffix.upper(),
+            _magnitude_suffixes_carried(digits, translated),
+            translated,
+            require_unit=require_unit,
+            claim=f"{digits}{suffix}",
+        )
+        if fault:
+            contradicted.add(fault)
     return sorted(contradicted)
 
 
