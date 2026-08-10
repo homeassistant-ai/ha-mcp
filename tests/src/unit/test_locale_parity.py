@@ -1170,8 +1170,34 @@ _MAGNITUDE_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)([KMGT])(?![A-Za-z])")
 _PERCENT_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)\s?%")
 # A storage unit is part of the claim too: "1-256 MB" and "1-256 GB" differ by
 # three orders of magnitude while the digits match.
-_COMPOUND_UNIT_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)\s*([A-Za-z]{2})(?![A-Za-z])")
+_COMPOUND_UNIT_RE = re.compile(
+    r"(?<![A-Za-z0-9])(\d+)\s*([A-Za-zА-Яа-я]{2})(?![A-Za-zА-Яа-я])"
+)
 _KNOWN_UNITS = frozenset({"KB", "MB", "GB", "TB"})
+# The same four units as every catalog spells them. Without this the filter
+# that stops a localised spelling false-positiving also stops a *wrong*
+# localised spelling reporting: "предел 1-256 ГБ" and "limite de 1-256 Go"
+# both state gigabytes where the English says megabytes, and both passed.
+# Russian transliterates the prefix and abbreviates "байт"; French sets "o"
+# for "octet". Only spellings a shipped catalog actually uses are listed --
+# an unknown two-letter token stays uncomparable, which is the safe arm.
+_LOCALISED_UNITS = {
+    "КБ": "KB",
+    "МБ": "MB",
+    "ГБ": "GB",
+    "ТБ": "TB",
+    "Ko": "KB",
+    "Mo": "MB",
+    "Go": "GB",
+    "To": "TB",
+}
+
+
+def _canonical_unit(unit: str) -> str | None:
+    """One storage unit as its English spelling, or None if not comparable."""
+    if unit.upper() in _KNOWN_UNITS:
+        return unit.upper()
+    return _LOCALISED_UNITS.get(unit)
 # "N > 0" and "N < 0" are opposite conditions with identical numbers.
 _COMPARISON_RE = re.compile(r"([A-Za-z_]\w*)\s*([<>]=?)\s*(\d+)")
 # A range is an ordered claim, and reversing it leaves the digits untouched:
@@ -1192,12 +1218,17 @@ _GROUP_SEPARATOR_RE = re.compile(r"[.,   ]")
 # Tokens a reader has to type, search for, or find on disk. Prose slashes
 # ("read/write") are not paths, hence the requirement that a path start at a
 # separator; a bare word is not an identifier, hence the required underscore.
+# Files come FIRST inside the literal pattern below: with snake_case ahead of
+# them, "tool_policy.json" tokenised as "tool_policy" plus ".json", and neither
+# half is the name a reader has to find. "*" belongs in the stem for
+# "packages/*.yaml". Spelled here rather than inline so the reverse check can
+# ask for this shape alone without a second copy of it to keep in step.
+_FILE_PATTERN = r"[\w.~*/-]*\.(?:yaml|yml|json|py|md|txt)"
+_FILE_RE = re.compile(_FILE_PATTERN)
+
 _LITERAL_RE = re.compile(
-    r"""(?:
-        # Files come FIRST: with snake_case ahead of them, "tool_policy.json"
-        # tokenised as "tool_policy" plus ".json", and neither half is the name
-        # a reader has to find. "*" belongs in the stem for "packages/*.yaml".
-        [\w.~*/-]*\.(?:yaml|yml|json|py|md|txt)  # files: configuration.yaml
+    rf"""(?:
+        {_FILE_PATTERN}                         # files: configuration.yaml
       | [a-z][a-z0-9]*(?:_[a-z0-9]+)+           # snake_case: enable_tool_search
       | [A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+           # ALL_CAPS: DISABLED_TOOLS
       | (?<![\w/<])~?/[\w.*-]+(?:/[\w.*-]+)*    # paths: /api/settings/features
@@ -1232,16 +1263,24 @@ _PROSE_ABBREVIATIONS = frozenset({"e.g", "i.e"})
 # The tolerated loss is named, not the pair: everything else about the key --
 # any other number, every literal -- is still checked, so a later hand edit
 # cannot hide behind the exception.
+#
+# Counted, not set-valued: the entry excuses as many occurrences of that
+# number as it records, so a second "5" appearing on the same key later still
+# reports. Liveness is asserted by
+# ``test_every_literal_parity_exception_is_load_bearing`` -- an entry the
+# catalog outgrew is a permanent blind spot on its key, and the sync rewriting
+# one of these sentences is exactly how that happens.
 LITERAL_PARITY_EXCEPTIONS: dict[
-    tuple[str, str, str], tuple[frozenset[Any], frozenset[Any], str]
+    tuple[str, str, str],
+    tuple[Counter[tuple[str, ...]], Counter[tuple[str, ...]], str],
 ] = {
     (
         "zh-Hans",
         TOOL_SOURCES_SURFACE,
         "ha_config_set_helper.description",
     ): (
-        frozenset(),
-        frozenset({("28",)}),
+        Counter(),
+        Counter({("28",): 1}),
         "The Chinese catalog translates the tool's full summary, including the "
         '"(28 types, unified interface)" clause that sits on the second line '
         "of the docstring. The rendering the engine sends is the first line "
@@ -1252,8 +1291,8 @@ LITERAL_PARITY_EXCEPTIONS: dict[
         "src/ha_mcp/settings_ui/locales",
         "messages.features.enable_beta_features.help",
     ): (
-        frozenset({("5",)}),
-        frozenset(),
+        Counter({("5",): 1}),
+        Counter(),
         'Russian spells the count out: "для пяти экспериментальных '
         'подпараметров" for "the 5 experimental sub-flags". The digit is '
         "missing because the sentence is right, not because a number was lost.",
@@ -1294,22 +1333,42 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
     write "90 %" and four "90%", so only the space is free. Requiring a
     magnitude suffix outright would be wrong, though: Polish writes
     "5 tys." and Russian "5 тыс." for it, and both are correct. So the suffix
-    is only compared when the translation itself puts a Latin letter straight
+    is only compared when the translation itself puts a letter straight
     onto those digits -- six of the nine catalogs do, Polish and Russian spell
     it out, and the Italian value is one this branch deletes for the sync to
     rewrite.
+
+    A storage unit is compared in the alphabet the catalog writes it in, not
+    only in Latin: "предел 1-256 ГБ" and "limite de 1-256 Go" both state
+    gigabytes where the English says megabytes, and while the filter that
+    keeps a *correct* localised spelling from reporting was in place, so was
+    the blind spot for a wrong one.
+
+    Both suffix arms ask whether ANY occurrence of the digits carries the
+    right unit, rather than settling on the first. The first occurrence is not
+    necessarily the matching one -- "bis zu 5x schneller, etwa 5K Token" is
+    faithful and reported, "jusqu'a 256 Go puis 256 MB" contradicts the
+    English and did not.
     """
     contradicted = set()
     for digits, unit in _COMPOUND_UNIT_RE.findall(english):
-        if unit not in _KNOWN_UNITS:
+        if unit.upper() not in _KNOWN_UNITS:
             continue
-        carried = re.search(
-            rf"(?<![A-Za-z0-9]){re.escape(digits)}\s*([A-Za-z]{{2}})(?![A-Za-z])",
-            translated,
-        )
-        # French writes "Mo" and Russian "МБ"; only a unit from the same
-        # vocabulary is comparable, anything else is a localised spelling.
-        if carried and carried.group(1) in _KNOWN_UNITS and carried.group(1) != unit:
+        # EVERY occurrence of these digits, not the first one: "jusqu'a 256 Go
+        # puis 256 MB" carries the unit on its second, and settling on the
+        # first reported a correct translation as a contradiction while
+        # missing the storage arm's own case. One occurrence spelling the
+        # unit right is the translation carrying the claim.
+        carried = {
+            canonical
+            for match in re.finditer(
+                rf"(?<![A-Za-z0-9]){re.escape(digits)}\s*([A-Za-zА-Яа-я]{{2}})"
+                r"(?![A-Za-zА-Яа-я])",
+                translated,
+            )
+            if (canonical := _canonical_unit(match.group(1))) is not None
+        }
+        if carried and unit.upper() not in carried:
             contradicted.add(f"{digits} {unit}")
     for name, operator, digits in _COMPARISON_RE.findall(english):
         if not re.search(
@@ -1320,10 +1379,17 @@ def _lost_magnitudes(english: str, translated: str) -> list[str]:
         if not re.search(rf"(?<![A-Za-z0-9]){re.escape(digits)}\s?%", translated):
             contradicted.add(f"{digits}%")
     for digits, suffix in _MAGNITUDE_RE.findall(english):
-        carried = re.search(
-            rf"(?<![A-Za-z0-9]){re.escape(digits)}([A-Za-z])", translated
-        )
-        if carried and carried.group(1).upper() != suffix.upper():
+        # Same every-occurrence rule as the storage arm. "bis zu 5x schneller,
+        # etwa 5K Token" is a correct translation whose *first* run of these
+        # digits carries an unrelated letter, and reading only that one turned
+        # it red -- post-merge that blocks the push for the whole run.
+        carried = {
+            match.group(1).upper()
+            for match in re.finditer(
+                rf"(?<![A-Za-z0-9]){re.escape(digits)}([A-Za-z])", translated
+            )
+        }
+        if carried and suffix.upper() not in carried:
             contradicted.add(f"{digits}{suffix}")
     return sorted(contradicted)
 
@@ -1364,6 +1430,48 @@ def _reversed_ordered_pairs(english: str, translated: str) -> list[str]:
 
 def _show_numbers(counted: Counter[tuple[str, ...]]) -> list[str]:
     return sorted(".".join(groups) for groups in counted.elements())
+
+
+def _parity_fault(
+    english: str,
+    translated: str,
+    *,
+    tolerated_losses: Counter[tuple[str, ...]] | None = None,
+    tolerated_additions: Counter[tuple[str, ...]] | None = None,
+) -> str:
+    """Everything one English/translated pair contradicts, or "" if nothing.
+
+    One function rather than an expression inline in the test, because the
+    set of arms it runs is itself a thing that can be broken: dropping any
+    one of them from the sum leaves every shipped pair green -- the corpus is
+    clean, so an arm that stops being called reports nothing and looks
+    identical to an arm that found nothing.
+    ``test_the_comparison_runs_every_arm`` holds each one to a case it must
+    report, which only works if there is a single place they are summed.
+
+    Numbers are compared as multisets in both directions; a tolerance is
+    subtracted by occurrence rather than by value.
+    """
+    losses = tolerated_losses if tolerated_losses is not None else Counter()
+    additions = tolerated_additions if tolerated_additions is not None else Counter()
+    lost_numbers = (_numbers(english) - _numbers(translated)) - losses
+    gained_numbers = (_numbers(translated) - _numbers(english)) - additions
+    lost = (
+        _lost_literals(english, translated)
+        + _lost_magnitudes(english, translated)
+        + _reversed_ordered_pairs(english, translated)
+        + _localised_hardcoded_name(english, translated)
+        + _invented_files(english, translated)
+    )
+    return ", ".join(
+        part
+        for part in (
+            f"numbers lost {_show_numbers(lost_numbers)}" if lost_numbers else "",
+            f"numbers added {_show_numbers(gained_numbers)}" if gained_numbers else "",
+            f"identifiers dropped {lost}" if lost else "",
+        )
+        if part
+    )
 
 
 @cache
@@ -1459,6 +1567,41 @@ def _lost_literals(english: str, translated: str) -> list[str]:
     )
 
 
+def _invented_files(english: str, translated: str) -> list[str]:
+    """Config files the translation names and its English does not.
+
+    Literal parity is otherwise one-directional: it asks what the English has
+    that the translation lost, so a translation naming a file of its own
+    passes. That is how three catalogs kept describing ``packages/*.yaml`` and
+    ``themes/*.yaml`` for a tool whose English stopped naming either -- the
+    English literal they *did* carry was still there, and nothing looked at
+    the rest.
+
+    Only files, deliberately, and the measurement is why. Asking the same
+    question of every literal shape reports 62 pairs on the shipped catalogs
+    and 58 of them are correct translations: German, Dutch and Swedish
+    compound with a slash ("Schreib-/Schreib-Tools"), which the path arm reads
+    as a literal the English never had, and Swedish abbreviates "till exempel"
+    as "t.ex". A file name has no such prose shape -- a catalog that names one
+    is naming a file on the reader's disk -- and restricted to that, the same
+    question reports six occurrences across the nine catalogs, all three of
+    them real.
+
+    A dropped duplicate is the other half of the number arm's multiset rule
+    and is not implemented here: no shipped English string names the same file
+    twice, so the arm would be structurally empty rather than verified, and
+    the reverse direction is what the live corpus actually needed.
+    """
+    return sorted(
+        {
+            stripped
+            for literal in _FILE_RE.findall(translated)
+            if (stripped := _without_sentence_punctuation(literal))
+            and not _carries(stripped, english)
+        }
+    )
+
+
 def _localised_hardcoded_name(english: str, translated: str) -> list[str]:
     """The on-screen name this translation localised away, if any.
 
@@ -1504,16 +1647,22 @@ def _pending_keys(surface: str) -> frozenset[str]:
     )
 
 
-def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, frozenset[str]]]:
-    """(surface, key, translated, english variants) for one locale.
+def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, str]]:
+    """(surface, key, translated, english) for one locale.
 
     Both authored catalogs plus the tool titles and descriptions, which live
     in the settings catalog but take their English from the tool definitions.
+
+    One English string per pair, as a ``str``. Every producer only ever had
+    one, and while the field was a set the consumer read it as "accept
+    whichever rendering matches" -- the semantics
+    ``_english_tool_sent_to_translators`` exists to refuse. Typing it narrowly
+    makes reintroducing the set a type error rather than a silent revert.
     """
     english = _catalogs_by_surface("en")
     translated = _catalogs_by_surface(locale)
     pairs = [
-        (surface, key, text, frozenset({english[surface][key]}))
+        (surface, key, text, english[surface][key])
         for surface, catalog in translated.items()
         for key, text in catalog.items()
         if key in english[surface] and key not in _pending_keys(surface)
@@ -1522,7 +1671,7 @@ def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, frozenset[st
     pending_tools = _pending_keys(TOOL_SOURCES_SURFACE)
     catalog = _settings_catalog(locale)
     pairs += [
-        (TOOL_SOURCES_SURFACE, key, text, frozenset({sent[key]}))
+        (TOOL_SOURCES_SURFACE, key, text, sent[key])
         for key, text in _flatten(catalog.get("tools", {})).items()
         if key in sent and key not in pending_tools
     ]
@@ -1532,9 +1681,22 @@ def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, frozenset[st
     # rather than verified — it is here so the surface stops being an
     # exception the day a heading gains one.
     pairs += [
-        ("settings UI tool group headings", key, text, frozenset({key}))
+        ("settings UI tool group headings", key, text, key)
         for key, text in _flatten(catalog.get("tool_groups", {})).items()
     ]
+    # A surface whose baseline key no longer resolves makes every key look
+    # like one whose English moved, and the whole check passes having compared
+    # nothing: substituting an empty baseline drops this list from 746 pairs
+    # to the 29 group headings, which are the arm that carries no literal at
+    # all. Renaming TOOL_SOURCES_SURFACE or a path key in _catalogs_by_surface
+    # is enough to trigger it, and the only test that sees surface drift is
+    # completeness-gated, so PR CI never runs it. A floor is what makes the
+    # difference between "nothing to check" and "checked and clean" visible.
+    assert len(pairs) > 100, (
+        f"only {len(pairs)} literal-parity pairs for {locale} — the surfaces "
+        "no longer resolve against the baseline, so a green run here compared "
+        "almost nothing"
+    )
     return pairs
 
 
@@ -1573,52 +1735,24 @@ def test_translations_keep_english_numbers_and_identifiers(locale: str) -> None:
     ``_english_tool_texts()`` and feeds the engine that alone.
     """
     divergent: dict[str, str] = {}
-    for surface, key, text, variants in _literal_parity_pairs(locale):
-        tolerated_losses, tolerated_additions, _ = LITERAL_PARITY_EXCEPTIONS.get(
-            (locale, surface, key), (frozenset(), frozenset(), "")
+    for surface, key, text, english in _literal_parity_pairs(locale):
+        tolerated_losses, tolerated_additions, reason = LITERAL_PARITY_EXCEPTIONS.get(
+            (locale, surface, key), (Counter(), Counter(), "")
         )
-        faults: list[str] = []
-        for english in variants:
-            lost_numbers = Counter(
-                {
-                    number: count
-                    for number, count in (_numbers(english) - _numbers(text)).items()
-                    if number not in tolerated_losses
-                }
-            )
-            gained_numbers = Counter(
-                {
-                    number: count
-                    for number, count in (_numbers(text) - _numbers(english)).items()
-                    if number not in tolerated_additions
-                }
-            )
-            lost = (
-                _lost_literals(english, text)
-                + _lost_magnitudes(english, text)
-                + _reversed_ordered_pairs(english, text)
-                + _localised_hardcoded_name(english, text)
-            )
-            if not (lost_numbers or gained_numbers or lost):
-                faults = []
-                break
-            faults.append(
-                ", ".join(
-                    part
-                    for part in (
-                        f"numbers lost {_show_numbers(lost_numbers)}"
-                        if lost_numbers
-                        else "",
-                        f"numbers added {_show_numbers(gained_numbers)}"
-                        if gained_numbers
-                        else "",
-                        f"identifiers dropped {lost}" if lost else "",
-                    )
-                    if part
-                )
-            )
-        if faults:
-            divergent[f"{surface}: {key}"] = min(faults, key=len)
+        fault = _parity_fault(
+            english,
+            text,
+            tolerated_losses=tolerated_losses,
+            tolerated_additions=tolerated_additions,
+        )
+        if not fault:
+            continue
+        if reason:
+            # The reason a tolerance exists is the first thing a reader of the
+            # failure needs; discarding it left the message describing a pair
+            # that is partly excused without saying which part or why.
+            fault += f" (a tolerance is already in effect here: {reason})"
+        divergent[f"{surface}: {key}"] = fault
 
     assert not divergent, (
         f"the {locale} translation no longer carries what its English states "
@@ -1733,6 +1867,153 @@ def test_literal_extraction_ignores_sentence_punctuation(
 
 
 @pytest.mark.parametrize(
+    ("arm", "english", "translated", "expected_in_fault"),
+    [
+        # One case per arm of the comparison, each chosen so that ONLY that
+        # arm can report it. Removing an arm from _parity_fault turns its row
+        # green while the shipped catalogs stay green too, which is why the
+        # rows exist: the corpus cannot tell "found nothing" from "not run".
+        ("numbers lost", "keeps 30 entries", "behaelt Eintraege", "30"),
+        ("numbers added", "keeps entries", "behaelt 30 Eintraege", "30"),
+        ("lost literals", "edit configuration.yaml", "bearbeite die Datei", "configuration.yaml"),
+        ("wrong unit", "limit is 1-256 MB", "Grenze ist 1-256 GB", "256 MB"),
+        ("reversed pair", "Range 1-600.", "Bereich 600-1.", "1-600"),
+        (
+            "localised name",
+            'click "HA-MCP Server" to restart',
+            "klicke auf \u201eHA-MCP-Serverdienst\u201c",
+            "HA-MCP Server",
+        ),
+        (
+            "invented file",
+            "Add keys in configuration.yaml.",
+            "Fuegt Schluessel in configuration.yaml und themes/*.yaml hinzu.",
+            "themes/*.yaml",
+        ),
+    ],
+)
+def test_the_comparison_runs_every_arm(
+    arm: str, english: str, translated: str, expected_in_fault: str
+) -> None:
+    """Each arm is held to a fault only it can find.
+
+    The shipped catalogs are clean, so they cannot pin this: an arm dropped
+    from ``_parity_fault`` finds nothing, reports nothing, and every locale
+    stays green. Measured -- deleting the invented-file arm from the sum left
+    all 172 tests in this file passing before this test existed.
+    """
+    fault = _parity_fault(english, translated)
+    assert expected_in_fault in fault, (
+        f"the {arm} arm reported nothing for a pair it exists to catch: "
+        f"{english!r} -> {translated!r} produced {fault!r}"
+    )
+
+
+def test_every_literal_parity_exception_is_load_bearing() -> None:
+    """A tolerance the catalog outgrew is a blind spot, not a no-op.
+
+    Both entries excuse a specific sentence. Once the sync rewrites that
+    sentence -- and it will, the moment its English moves -- the tolerance
+    stops describing anything and silently keeps excusing the key it names.
+    Nothing else in the file would notice: the pair simply passes.
+    """
+    for (locale, surface, key), (
+        losses,
+        additions,
+        reason,
+    ) in LITERAL_PARITY_EXCEPTIONS.items():
+        pair = [
+            (text, english)
+            for pair_surface, pair_key, text, english in _literal_parity_pairs(locale)
+            if (pair_surface, pair_key) == (surface, key)
+        ]
+        assert pair, (
+            f"the {locale} exception names {surface}: {key}, which is no "
+            "longer a checked pair — the key was renamed, deleted, or its "
+            "English moved past the baseline"
+        )
+        text, english = pair[0]
+        assert (_numbers(english) - _numbers(text)) & losses or (
+            _numbers(text) - _numbers(english)
+        ) & additions, (
+            f"the {locale} exception on {surface}: {key} no longer excuses "
+            f"anything — the pair satisfies the rule on its own now, so drop "
+            f"the entry. It was recorded because: {reason}"
+        )
+        assert reason, f"the {locale} exception on {surface}: {key} states no reason"
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "same"),
+    [
+        # Thousands grouping is punctuation, not a different number: English
+        # ships 10000 and German writes it 10.000.
+        ("10000", "10.000", True),
+        ("10000", "10 000", True),
+        # A decimal is not, and folding it away is the mutation this guards:
+        # the contrast ratio 4.5 would become 45.
+        ("4.5", "45", False),
+        # ... while the decimal comma five catalogs write is the same number.
+        ("4.5", "4,5", True),
+        # A version has more groups than a thousands separator can explain.
+        ("1.2.4", "12.4", False),
+    ],
+)
+def test_a_number_keeps_its_groups_unless_they_are_thousands(
+    first: str, second: str, same: bool
+) -> None:
+    """The comparison that decides what "the same number" means.
+
+    Every reversal case routes through here and passes under the obvious
+    wrong implementation -- join the groups and compare the digits -- which
+    makes 4.5 equal to 45 and the component version 1.2.4 equal to 12.4.
+    Nothing exercised it directly, so that mutation left every shipped pair
+    and all three reversal cases green.
+    """
+    assert (_canonical_number(first) == _canonical_number(second)) is same
+
+
+@pytest.mark.parametrize(
+    ("english", "translated", "expected"),
+    [
+        # The live case: a catalog describing files its English stopped
+        # naming. Nothing was lost, so the forward direction saw nothing.
+        (
+            "Add, replace, or remove top-level keys in configuration.yaml.",
+            "Actualiza configuration.yaml, packages/*.yaml o themes/*.yaml.",
+            ["packages/*.yaml", "themes/*.yaml"],
+        ),
+        # Carrying exactly what the English names is the normal case.
+        (
+            "Edit configuration.yaml and packages/*.yaml.",
+            "Bearbeite configuration.yaml und packages/*.yaml.",
+            [],
+        ),
+        # A translation may punctuate its own sentence differently.
+        ("See docs/beta.md.", "Siehe docs/beta.md!", []),
+        # A compound the path arm reads as a literal is not an invented file:
+        # this is the shape that made the general reverse check unusable.
+        (
+            "Turns off all write tools.",
+            "Schaltet alle Schreib-/Lese-Tools aus.",
+            [],
+        ),
+    ],
+)
+def test_a_file_the_english_never_named_is_reported(
+    english: str, translated: str, expected: list[str]
+) -> None:
+    """The one direction literal parity was blind in.
+
+    A translation that keeps every English literal and adds a file of its own
+    passes the forward check by construction, and three shipped catalogs did
+    exactly that for years -- describing ``packages/*.yaml`` and
+    ``themes/*.yaml`` for a tool whose English names neither.
+    """
+    assert _invented_files(english, translated) == expected
+
+
+@pytest.mark.parametrize(
     ("english", "translated", "expected"),
     [
         # A unit carries as much of the claim as the digits do.
@@ -1742,6 +2023,16 @@ def test_literal_extraction_ignores_sentence_punctuation(
         # writes "Mo" and Russian "МБ", and neither contradicts "MB".
         ("limit is 1-256 MB", "limite de 1-256 Mo", []),
         ("limit is 1-256 MB", "предел 1-256 МБ", []),
+        # The wrong localised spelling is the case that filter used to hide:
+        # both of these say gigabytes where the English says megabytes.
+        ("limit is 1-256 MB", "limite de 1-256 Go", ["256 MB"]),
+        ("limit is 1-256 MB", "предел 1-256 ГБ", ["256 MB"]),
+        # An unknown two-letter token stays uncomparable rather than
+        # reporting: a locale is free to write a unit this table has not met.
+        ("limit is 1-256 MB", "raja 1-256 Xy", []),
+        # Which occurrence carries the unit is not the checker's to choose:
+        # the contradiction is real only when NO occurrence spells it right.
+        ("limit is 1-256 MB", "jusqu'a 256 Go puis 256 MB", []),
         # A comparison is reversible without touching a single digit.
         ("only when N > 0", "nur wenn N > 0", []),
         ("only when N > 0", "nur wenn N < 0", ["N > 0"]),
@@ -1749,6 +2040,9 @@ def test_literal_extraction_ignores_sentence_punctuation(
         # A magnitude suffix is compared only against a Latin one.
         ("about 5K tokens", "etwa 5M Token", ["5K"]),
         ("about 5K tokens", "около 5 тыс. токенов", []),
+        # ... and here too the first run of the digits is not necessarily the
+        # one carrying the suffix. This translation is faithful.
+        ("about 5K tokens", "bis zu 5x schneller, etwa 5K Token", []),
         # A percentage keeps its sign, spaced or not.
         ("roughly 90% less", "rund 90 % weniger", []),
         ("roughly 90% less", "rund 90 weniger", ["90%"]),
@@ -1763,6 +2057,10 @@ def test_units_and_comparisons_are_compared_where_they_are_comparable(
     "N < 0" are opposite conditions, and "90%" and a bare "90" say different
     things -- none of which the value comparison can see, because the numbers
     are identical in every pair.
+
+    Both directions are asserted for a localised unit. Pinning only that "Mo"
+    and "МБ" pass leaves the arm free to be narrowed back to Latin script and
+    stay green, which is how "1-256 ГБ" went unreported.
     """
     assert _lost_magnitudes(english, translated) == expected
 

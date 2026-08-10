@@ -621,8 +621,7 @@
       "description": "Crea o aggiorna uno script di Home Assistant."
     },
     "ha_config_set_yaml": {
-      "title": "Modifica diretta della configurazione YAML",
-      "description": "Aggiorna la configurazione YAML grezza in configuration.yaml, packages/*.yaml o themes/*.yaml (ULTIMA RISORSA)."
+      "title": "Modifica diretta della configurazione YAML"
     },
     "ha_delete_file": {
       "title": "Elimina un file",

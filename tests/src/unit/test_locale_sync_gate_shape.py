@@ -55,15 +55,19 @@ def _marker_env_names() -> set[str]:
 
 # The one verification step that must stay UNGATED. It runs on the partial
 # tree the completeness step cannot judge, and the arm it selects carries no
-# completeness marker. Setting the gate variable there would pull the gated
-# tests in alongside it, and those cannot pass on a half-finished tree, so the
-# step would fail every time and wedge the resumability the push job exists to
-# preserve.
+# completeness marker — so the gate variable is inert there today: the ``-k``
+# filter deselects everything that reads it. The assertion below still earns
+# its place, because it pairs with the step's own ``skipped="0"`` check to
+# make a widened filter fail loudly rather than quietly drag in tests that
+# cannot pass on a half-finished tree.
 _UNGATED_STEP_ID = "verify_partial"
 
 
 def _verification_steps() -> list[dict[str, Any]]:
-    """The translate-job steps that run the gated suites."""
+    """Every translate-job step that runs one of the locale suites.
+
+    Gated and ungated alike — the caller splits them two lines later.
+    """
     steps = _workflow()["jobs"]["translate"]["steps"]
     return [
         step
@@ -85,9 +89,10 @@ def test_every_verification_step_sets_the_gate_env_var() -> None:
     """The env linkage is the one edit that fails open; pin both sides.
 
     Both directions are asserted. A gated step that loses the variable
-    verifies nothing and exits 0; the partial-run step that gains it stops
-    verifying anything at all, because the gated tests it would drag in
-    cannot pass on a half-finished tree.
+    verifies nothing and exits 0. The partial-run step is asserted not to set
+    it for a narrower reason: the variable is inert there while the ``-k``
+    filter holds, so this pins the pair — variable absent, filter narrow —
+    rather than a runtime effect it has today.
     """
     steps = _verification_steps()
     gated = [step for step in steps if step.get("id") != _UNGATED_STEP_ID]
@@ -115,8 +120,69 @@ def test_every_verification_step_sets_the_gate_env_var() -> None:
         assert env_name not in env, (
             f"{_WORKFLOW.name} step {step.get('name')!r} must NOT set "
             f"{env_name}: it runs against a partial tree, where the gated "
-            "tests cannot pass, so the step would fail on every partial run "
-            "and block the progress the push job exists to land"
+            "tests cannot pass. The -k filter keeps them out today, so the "
+            "variable would be inert — but the two are one control, and a "
+            "later widening of the filter must not find the gate already open"
+        )
+
+
+def test_the_partial_step_runs_on_the_partial_path() -> None:
+    """The condition that decides whether the step runs at all.
+
+    Everything else about this step is pinned -- its id, its absent gate env,
+    its ``-k`` filter, the push clause that reads its outcome -- and none of
+    that survives the one edit that matters. Flip ``!=`` to ``==``, a
+    plausible copy from either neighbouring step, and the step never runs on
+    the path it exists for: its outcome becomes ``skipped``, which satisfies
+    the push job's ``!= 'failure'``, and the unverified tree lands with every
+    test in this file still green.
+    """
+    steps = _workflow()["jobs"]["translate"]["steps"]
+    (step,) = [s for s in steps if s.get("id") == _UNGATED_STEP_ID]
+    condition = " ".join(str(step.get("if", "")).split())
+    assert "steps.translate.outcome != 'success'" in condition, (
+        f"the {_UNGATED_STEP_ID!r} step no longer runs when the translate "
+        f"step did NOT succeed — its condition is {condition!r}. On the "
+        "partial path it would skip, and a skipped outcome passes the push "
+        "job's gate, so the unverified patch lands"
+    )
+    assert "steps.export.outputs.have_patch == 'true'" in condition, (
+        f"the {_UNGATED_STEP_ID!r} step must require an exported patch, or an "
+        "earlier hard failure reddens it over a tree nothing would push"
+    )
+    assert "!cancelled()" in condition, (
+        f"the {_UNGATED_STEP_ID!r} step needs !cancelled(): a step whose "
+        "predecessor failed is skipped by default, which is the whole path "
+        "this one covers"
+    )
+
+
+def test_the_push_gate_reads_outcomes_the_job_actually_publishes() -> None:
+    """An outcome the job never exports reads as the empty string.
+
+    The push condition compares three job outputs. Drop one from the
+    ``outputs:`` block and GitHub resolves the expression to ``''`` — which
+    is ``!= 'failure'`` — so the clause is satisfied for every run, including
+    the one whose verification went red. The push predicate is asserted in
+    full elsewhere; this is the other half of that contract.
+    """
+    translate = _workflow()["jobs"]["translate"]
+    outputs = translate.get("outputs") or {}
+    step_ids = {str(step.get("id")) for step in translate["steps"] if step.get("id")}
+    condition = " ".join(str(_workflow()["jobs"]["push"]["if"]).split())
+    consumed = set(re.findall(r"needs\.translate\.outputs\.(\w+)", condition))
+    missing = consumed - set(outputs)
+    assert not missing, (
+        f"the push job reads {sorted(missing)} from the translate job, which "
+        f"does not export {'it' if len(missing) == 1 else 'them'} — the "
+        "expression resolves to the empty string, and every comparison "
+        "against 'failure' passes"
+    )
+    for name in sorted(consumed):
+        referenced = re.findall(r"steps\.(\w+)\.", str(outputs[name]))
+        assert all(ref in step_ids for ref in referenced), (
+            f"the translate job's {name!r} output reads {referenced}, which "
+            f"names no step in the job — it would publish the empty string"
         )
 
 
