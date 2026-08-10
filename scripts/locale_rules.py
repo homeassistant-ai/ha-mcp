@@ -54,8 +54,9 @@ def _pipeline() -> Any:
 # Separators inside a number are kept as GROUP BOUNDARIES rather than deleted.
 # Deleting them tolerates locale punctuation but also erases the difference
 # between the "4.5:1" contrast ratio and "45:1", and between the minimum
-# component version "1.2.4" and "12.4" -- both live English strings. (It is
-# a floor a help string states, not what the component is on: that is 1.3.3.)
+# version floor "1.2.4" and "12.4" -- both live English strings. That 1.2.4
+# is a number a help string states, not MIN_COMPONENT_VERSION, which is a
+# different value and not pinned here.
 # Comparing the tuple
 # of groups keeps "4.5" and "4,5" equal while "45" stays a different number.
 _NUMBER_RE = re.compile(r"(?<![A-Za-z0-9])\d+(?:[.,   ]\d+)*")
@@ -72,6 +73,13 @@ _COMPOUND_UNIT_RE = re.compile(
     r"(?<![A-Za-z0-9])(\d+)\s*([A-Za-zА-Яа-я]{2})(?![A-Za-zА-Яа-я])"
 )
 _KNOWN_UNITS = frozenset({"KB", "MB", "GB", "TB"})
+# The same four units as the catalogs may spell them. Russian transliterates
+# the prefix and abbreviates "байт"; French sets "o" for "octet". Two of the
+# eight are live -- the shipped catalogs write "МБ" once and "Mo" once, beside
+# eight ASCII "MB" -- and the rest are those two vocabularies at the other
+# magnitudes, listed so a catalog reaching for one is compared rather than
+# waved through. A token outside the table stays uncomparable, which is the
+# safe arm.
 _LOCALISED_UNITS = {
     "КБ": "KB",
     "МБ": "MB",
@@ -165,7 +173,8 @@ def _canonical_number(token: str) -> tuple[str, ...]:
     A separator followed by groups of exactly three digits is grouping, not a
     boundary: English ships `10000`, `1440` and `65535`, and a locale writing
     `10.000` states the same number. Anything else keeps its groups, so the
-    "4.5:1" ratio and the minimum component version "1.2.4" stay distinct
+    "4.5:1" ratio and the version floor "1.2.4" a help string states stay
+    distinct
     from "45" and "12.4".
     A decimal written to exactly three places is the ambiguous case and folds
     with the thousands; no English string has one.

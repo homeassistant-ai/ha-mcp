@@ -112,8 +112,9 @@ class TestValidate:
         and no later run re-queues it: from then on the merge-time arm goes
         red every day, the push is held back whole, and the run re-spends its
         quota planning work it cannot land. One rejection and one retry costs
-        a single string instead. All three faults #2180 repaired by hand are
-        of this class.
+        a single string instead. The first three cases below are the faults
+        #2180 repaired by hand; the fourth is the unit contradiction the same
+        arm reports.
         """
         for english, bad in (
             ("See docs/beta.md for limits.", "Siehe die Beta-Dokumentation."),

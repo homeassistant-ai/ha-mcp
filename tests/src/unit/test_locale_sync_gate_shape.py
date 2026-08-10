@@ -160,7 +160,7 @@ def test_the_partial_step_runs_on_the_partial_path() -> None:
 def test_the_push_gate_reads_outcomes_the_job_actually_publishes() -> None:
     """An outcome the job never exports reads as the empty string.
 
-    The push condition compares three job outputs. Drop one from the
+    The push condition compares four job outputs. Drop one from the
     ``outputs:`` block and GitHub resolves the expression to ``''`` — which
     is ``!= 'failure'`` — so the clause is satisfied for every run, including
     the one whose verification went red. The push predicate is asserted in

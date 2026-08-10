@@ -1593,7 +1593,7 @@ def test_the_comparison_runs_every_arm(
     The shipped catalogs are clean, so they cannot pin this: an arm dropped
     from ``_parity_fault`` finds nothing, reports nothing, and every locale
     stays green. Measured -- deleting the invented-file arm from the sum left
-    all 172 tests in this file passing before this test existed.
+    every test in this file passing before this test existed.
     """
     fault = _parity_fault(english, translated)
     assert expected_in_fault in fault, (
@@ -1720,7 +1720,8 @@ def test_a_number_keeps_its_groups_unless_they_are_thousands(
 
     Every reversal case routes through here and passes under the obvious
     wrong implementation -- join the groups and compare the digits -- which
-    makes 4.5 equal to 45 and the minimum component version 1.2.4 equal to
+    makes 4.5 equal to 45 and the version floor 1.2.4 a help string states
+    equal to
     12.4.
     Nothing exercised it directly, so that mutation left every shipped pair
     and all three reversal cases green.
@@ -1903,6 +1904,23 @@ def test_a_localised_on_screen_name_is_reported() -> None:
 
     The name is taken from the source rather than written here, so a rename
     cannot leave this test guarding a string nobody displays any more.
+
+    QUOTED LABELS ONLY, by decision rather than by omission. The arm asks the
+    pipeline's own rule, which fires where the English quotes the name as an
+    on-screen label; an inflected prose mention is the catalog's business.
+    That it reports nothing across the shipped catalogs is the arm working,
+    not the arm sitting inert — the quoted labels are there and every catalog
+    keeps them verbatim.
+
+    Matching unquoted was considered and declined. Five names are hardcoded,
+    fourteen keys carry one, 126 pairs across the nine catalogs — and the
+    unquoted rule reports 88 of them, 53 on "HA-MCP Server" and 35 on
+    "HA-MCP File & YAML Tools". Those are not defects that crept in;
+    "Servidor HA-MCP" is ordinary Spanish. The rule would mean repairing 88
+    pairs now and arguing with every translator afterwards. A do-not-translate
+    glossary was declined for a different reason: it is a second list beside
+    ``translate_locales._hardcoded_ui_names()`` and can drift from it, while
+    this arm reads that function at runtime and cannot.
     """
     names = sorted(_untranslatable_names())
     assert names, "the pipeline reports no hardcoded on-screen names"
