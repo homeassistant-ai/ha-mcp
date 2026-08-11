@@ -39,7 +39,8 @@ def _assert_checkout_credentials_are_not_persisted(
             if "actions/checkout" not in str(step.get("uses", "")):
                 continue
             checked += 1
-            assert (step.get("with") or {}).get("persist-credentials") is False, (
+            persist_credentials = (step.get("with") or {}).get("persist-credentials")
+            assert persist_credentials is False or persist_credentials == "false", (
                 f"{path.relative_to(repo_root)} persists checkout credentials in a "
                 "pull_request workflow"
             )
@@ -84,10 +85,16 @@ def test_pr_checkout_guard_follows_reusable_workflows(tmp_path: Path) -> None:
     )
     reusable = workflow_dir / "reusable.yaml"
     reusable.write_text(
+        "jobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n"
+        '        with:\n          persist-credentials: "false"\n',
+        encoding="utf-8",
+    )
+    assert _assert_checkout_credentials_are_not_persisted(caller, tmp_path) == 1
+
+    reusable.write_text(
         "jobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n",
         encoding="utf-8",
     )
-
     with pytest.raises(AssertionError, match=r"reusable\.yaml persists"):
         _assert_checkout_credentials_are_not_persisted(caller, tmp_path)
 
