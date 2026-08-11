@@ -203,7 +203,7 @@ jobs:
 
           # Delete old pre-release with same tag if exists
           gh release delete "$TAG" --yes 2>/dev/null || true
-          git push origin --delete "$TAG" 2>/dev/null || true
+          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG" 2>/dev/null || true
 
           # Create new draft pre-release (binaries will be added by build-and-release workflow)
           gh release create "$TAG" \
@@ -245,6 +245,6 @@ jobs:
                 if [ -n "$tag" ]; then
                   echo "Deleting old dev release: $tag"
                   gh release delete "$tag" --yes --repo ${{ github.repository }} || true
-                  git push origin --delete "$tag" 2>/dev/null || true
+                  gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$tag" 2>/dev/null || true
                 fi
               done

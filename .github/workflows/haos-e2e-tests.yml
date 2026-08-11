@@ -60,6 +60,8 @@ jobs:
       run: ${{ steps.filter.outputs.run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Classify changed files
         id: filter
         env:
@@ -123,6 +125,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           # Required for tests/src/e2e/tools/test_skills_resources.py — the
           # skills bundle lives at src/ha_mcp/resources/skills-vendor.
           submodules: true
