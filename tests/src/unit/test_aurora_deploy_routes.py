@@ -19,10 +19,18 @@ from custom_components.aurora_deploy import adapter
 
 class _Content:
     def __init__(self, raw: bytes) -> None:
-        self._raw = raw
+        self._chunks = [raw, b""]
+        self.read_limits: list[int] = []
 
-    async def read(self, _limit: int) -> bytes:
-        return self._raw
+    async def read(self, limit: int) -> bytes:
+        self.read_limits.append(limit)
+        return self._chunks.pop(0) if self._chunks else b""
+
+
+class _ChunkedContent(_Content):
+    def __init__(self, *chunks: bytes) -> None:
+        self._chunks = [*chunks, b""]
+        self.read_limits = []
 
 
 class _Request(dict):
@@ -74,6 +82,75 @@ def _state(tmp_path, journal: dict | None = None):
 
 def _payload(response) -> dict:
     return json.loads(response.body.decode())
+
+
+@pytest.mark.asyncio
+async def test_body_reads_chunked_signed_stage_payload_to_eof():
+    payload = {"manifest": {"signature": "x" * (600 * 1024)}}
+    raw = json.dumps(payload).encode()
+    content = _ChunkedContent(
+        raw[:73_219],
+        raw[73_219:311_111],
+        raw[311_111:],
+    )
+    request = SimpleNamespace(content=content, content_length=len(raw))
+
+    assert await adapter._body(request) == payload
+    assert len(content.read_limits) == 4
+    assert all(0 < limit <= adapter.MAX_BODY + 1 for limit in content.read_limits)
+
+
+@pytest.mark.asyncio
+async def test_body_accepts_exact_limit_and_rejects_streamed_extra_byte(monkeypatch):
+    raw = b'{"a":"123"}'
+    monkeypatch.setattr(adapter, "MAX_BODY", len(raw))
+
+    exact = SimpleNamespace(
+        content=_ChunkedContent(raw[:4], raw[4:]),
+        content_length=len(raw),
+    )
+    assert await adapter._body(exact) == {"a": "123"}
+
+    oversized_content = _ChunkedContent(raw, b"x")
+    oversized = SimpleNamespace(content=oversized_content, content_length=None)
+    assert await adapter._body(oversized) is None
+    assert len(oversized_content.read_limits) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_length", [True, -1, "12", object()])
+async def test_body_rejects_invalid_content_length_without_reading(content_length):
+    content = _ChunkedContent(b"{}")
+    request = SimpleNamespace(content=content, content_length=content_length)
+
+    assert await adapter._body(request) is None
+    assert content.read_limits == []
+
+
+@pytest.mark.asyncio
+async def test_body_rejects_declared_oversize_without_reading(monkeypatch):
+    monkeypatch.setattr(adapter, "MAX_BODY", 8)
+    content = _ChunkedContent(b"{}")
+    request = SimpleNamespace(content=content, content_length=9)
+
+    assert await adapter._body(request) is None
+    assert content.read_limits == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"\xff",
+        b"{",
+        b"[]",
+        b'"scalar"',
+    ],
+)
+async def test_body_rejects_malformed_or_non_object_json(raw):
+    request = SimpleNamespace(content=_ChunkedContent(raw), content_length=len(raw))
+
+    assert await adapter._body(request) is None
 
 
 def _validation_signer(state, signer: str = "validation-e2e") -> Ed25519PrivateKey:

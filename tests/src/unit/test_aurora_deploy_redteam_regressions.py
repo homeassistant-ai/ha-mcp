@@ -19,8 +19,12 @@ from custom_components.aurora_deploy import adapter
 class _Content:
     def __init__(self, body: dict | None = None) -> None:
         self.raw = json.dumps(body or {}).encode()
+        self._read = False
 
     async def read(self, _limit: int) -> bytes:
+        if self._read:
+            return b""
+        self._read = True
         return self.raw
 
 

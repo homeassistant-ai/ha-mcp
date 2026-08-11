@@ -1094,11 +1094,25 @@ async def _admin(request: web.Request) -> bool:
 
 
 async def _body(request: web.Request) -> dict[str, Any] | None:
-    if request.content_length and request.content_length > MAX_BODY:
+    content_length = request.content_length
+    if content_length is not None and (
+        isinstance(content_length, bool)
+        or not isinstance(content_length, int)
+        or content_length < 0
+        or content_length > MAX_BODY
+    ):
         return None
-    raw = await request.content.read(MAX_BODY + 1)
-    if len(raw) > MAX_BODY:
-        return None
+    raw = bytearray()
+    while True:
+        remaining = MAX_BODY - len(raw)
+        chunk = await request.content.read(min(64 * 1024, remaining + 1))
+        if not isinstance(chunk, (bytes, bytearray, memoryview)):
+            return None
+        if not chunk:
+            break
+        if len(chunk) > remaining:
+            return None
+        raw.extend(chunk)
     try:
         value = json.loads(raw.decode("utf-8")) if raw else {}
     except (UnicodeError, json.JSONDecodeError):
