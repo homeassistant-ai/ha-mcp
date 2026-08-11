@@ -237,6 +237,98 @@ async def test_bootstrap_rejects_existing_dashboard_metadata_collision(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("title", "icon"),
+    [
+        ("Aurora Preview", "mdi:aurora"),
+        ("Aurora V9 Preview", "mdi:home-analytics"),
+    ],
+)
+async def test_bootstrap_accepts_closed_preview_metadata_compatibility_without_mutation(
+    tmp_path, monkeypatch, title, icon
+):
+    state = _state(tmp_path)
+    metadata = {
+        adapter.CONF_URL_PATH: adapter.PREVIEW,
+        adapter.CONF_TITLE: title,
+        adapter.CONF_ICON: icon,
+        adapter.CONF_SHOW_IN_SIDEBAR: False,
+        adapter.CONF_REQUIRE_ADMIN: True,
+    }
+    existing = _Dashboard(metadata)
+    dashboards = {adapter.PREVIEW: existing}
+    monkeypatch.setattr(
+        adapter,
+        "_dashboards",
+        AsyncMock(return_value=(SimpleNamespace(), dashboards)),
+    )
+
+    response = await adapter.RootView(state.hass, state).post(_Request(), "bootstrap")
+
+    assert response.status == 200
+    assert _payload(response) == {
+        "dashboard_target": adapter.PREVIEW,
+        "created": False,
+        "production_unchanged": True,
+    }
+    assert existing.config == metadata
+    existing.async_save.assert_not_awaited()
+    assert dashboards == {adapter.PREVIEW: existing}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("title", "icon", "url_path", "show_in_sidebar", "require_admin"),
+    [
+        ("Aurora Preview (drift)", "mdi:aurora", adapter.PREVIEW, False, True),
+        ("Aurora Preview", "mdi:weather-sunny", adapter.PREVIEW, False, True),
+        ("Aurora V9 Preview", "mdi:aurora", adapter.PREVIEW, False, True),
+        ("Aurora Preview", "mdi:aurora", adapter.PREVIEW, True, True),
+        ("Aurora V9 Preview", "mdi:home-analytics", adapter.PREVIEW, False, False),
+        (
+            "Aurora V9 Preview",
+            "mdi:home-analytics",
+            "aurora-preview-copy",
+            False,
+            True,
+        ),
+    ],
+)
+async def test_bootstrap_rejects_preview_metadata_outside_closed_compatibility(
+    tmp_path,
+    monkeypatch,
+    title,
+    icon,
+    url_path,
+    show_in_sidebar,
+    require_admin,
+):
+    state = _state(tmp_path)
+    metadata = {
+        adapter.CONF_URL_PATH: url_path,
+        adapter.CONF_TITLE: title,
+        adapter.CONF_ICON: icon,
+        adapter.CONF_SHOW_IN_SIDEBAR: show_in_sidebar,
+        adapter.CONF_REQUIRE_ADMIN: require_admin,
+    }
+    existing = _Dashboard(metadata)
+    dashboards = {adapter.PREVIEW: existing}
+    monkeypatch.setattr(
+        adapter,
+        "_dashboards",
+        AsyncMock(return_value=(SimpleNamespace(), dashboards)),
+    )
+
+    response = await adapter.RootView(state.hass, state).post(_Request(), "bootstrap")
+
+    assert response.status == 422
+    assert _payload(response) == {"error_code": "preview_collision"}
+    assert existing.config == metadata
+    existing.async_save.assert_not_awaited()
+    assert dashboards == {adapter.PREVIEW: existing}
+
+
+@pytest.mark.asyncio
 async def test_bootstrap_rejects_legacy_aurora_dashboard_without_creating_a_third_target(
     tmp_path, monkeypatch
 ):

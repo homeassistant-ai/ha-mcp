@@ -69,6 +69,12 @@ PRODUCTION = "home-command"
 LEGACY_PREVIEW = "home-command-preview"
 TARGET = "aurora-v9-preview"
 APPROVED_RELEASE = "0.1.16"
+APPROVED_PREVIEW_DISPLAY_PAIRS = frozenset(
+    {
+        ("Aurora Preview", "mdi:aurora"),
+        ("Aurora V9 Preview", "mdi:home-analytics"),
+    }
+)
 MAX_BODY = 80 * 1024 * 1024
 MAX_MANIFEST = 512 * 1024
 MAX_PACKAGE = 64 * 1024 * 1024
@@ -1121,7 +1127,15 @@ async def _ensure_preview(hass: HomeAssistant) -> tuple[bool, str]:
     }
     if existing is not None:
         config = getattr(existing, "config", {}) or {}
-        if any(config.get(key) != value for key, value in metadata.items()):
+        fixed_metadata = {
+            CONF_URL_PATH: PREVIEW,
+            CONF_SHOW_IN_SIDEBAR: False,
+            CONF_REQUIRE_ADMIN: True,
+        }
+        display_pair = (config.get(CONF_TITLE), config.get(CONF_ICON))
+        if any(
+            config.get(key) != value for key, value in fixed_metadata.items()
+        ) or display_pair not in APPROVED_PREVIEW_DISPLAY_PAIRS:
             raise ValueError("preview_collision")
         return False, PREVIEW
     from homeassistant.components.lovelace import _register_panel, dashboard

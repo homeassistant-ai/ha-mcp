@@ -38,8 +38,11 @@ Only these operations exist:
 The only dashboard targets are `aurora-preview` and `home-command`.
 `home-command-preview` is a refused legacy collision, not a third environment.
 Bootstrap creates the preview dashboard only when absent, hidden and admin-only;
-a mismatched existing preview fails closed. Bootstrap and staging never mutate
-production.
+an existing preview is accepted without registry mutation only for the canonical
+`Aurora Preview`/`mdi:aurora` display pair or the exact historical
+`Aurora V9 Preview`/`mdi:home-analytics` pair. Its URL path must remain
+`aurora-preview`, hidden, and admin-only; all other values for these guarded
+fields fail closed. Bootstrap and staging never mutate production.
 
 ## Verification and journal
 
