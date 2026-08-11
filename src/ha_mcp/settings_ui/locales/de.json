@@ -491,8 +491,7 @@
   },
   "tools": {
     "ha_bulk_control": {
-      "title": "Massensteuerung",
-      "description": "Steuert mehrere Geräte in einer einzigen Massenoperation."
+      "title": "Massensteuerung"
     },
     "ha_call_event": {
       "title": "Ereignis aufrufen",
@@ -567,8 +566,7 @@
       "description": "Entfernt eine Home-Assistant-Kategorie."
     },
     "ha_config_remove_group": {
-      "title": "Gruppe entfernen",
-      "description": "Entfernt eine Home-Assistant-Entitätsgruppe."
+      "title": "Gruppe entfernen"
     },
     "ha_config_remove_label": {
       "title": "Label entfernen",
@@ -603,8 +601,7 @@
       "description": "Erstellt oder aktualisiert eine Dashboard-Ressource aus Code oder externer URL."
     },
     "ha_config_set_group": {
-      "title": "Gruppe erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert eine Home-Assistant-Entitätsgruppe."
+      "title": "Gruppe erstellen/aktualisieren"
     },
     "ha_config_set_helper": {
       "title": "Helfer erstellen/aktualisieren",
@@ -623,8 +620,7 @@
       "description": "Erstellt oder aktualisiert ein Home-Assistant-Skript."
     },
     "ha_config_set_yaml": {
-      "title": "Rohes YAML bearbeiten",
-      "description": "Bearbeitet die Home-Assistant-YAML-Konfiguration; nur als letztes Mittel verwenden."
+      "title": "Rohes YAML bearbeiten"
     },
     "ha_delete_file": {
       "title": "Datei löschen",
@@ -662,10 +658,7 @@
       "title": "Dashboard-Screenshot abrufen",
       "description": "Ruft gerenderte Bilder einer Lovelace-Ansicht ab."
     },
-    "ha_get_device": {
-      "title": "Gerät abrufen",
-      "description": "Ruft Geräteinformationen ab, einschließlich Zigbee, Z-Wave und Matter."
-    },
+    "ha_get_device": {},
     "ha_get_entity": {
       "title": "Entität abrufen",
       "description": "Ruft Registerinformationen über eine oder mehrere Entitäten ab."
@@ -691,8 +684,7 @@
       "description": "Ruft Home-Assistant-Protokolle aus verschiedenen Quellen ab."
     },
     "ha_get_operation_status": {
-      "title": "Operationsstatus",
-      "description": "Prüft den Status einer oder mehrerer Geräteoperationen."
+      "title": "Operationsstatus"
     },
     "ha_get_overview": {
       "title": "System-Übersicht",

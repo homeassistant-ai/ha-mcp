@@ -114,7 +114,6 @@
     "visibility.assist.help": "Nasconde le entità non esposte all'assistente vocale Assist («conversation») di Home Assistant, rispecchiando l'elenco in Impostazioni > Assistenti vocali > Esponi. Aggiunge due letture via websocket per ogni ricerca mentre è attivo.",
     "visibility.assist.only_exposed": "Mostra solo le entità esposte ad Assist",
     "features.enable_tool_search.label": "Attiva la ricerca degli strumenti",
-    "features.enable_tool_search.help": "Sostituisce il catalogo completo degli strumenti con una scoperta basata sulla ricerca. Riduce il contesto a riposo da circa 46K a 5K token. ⚠️ NON attivarla se usi Claude in modalità Sonnet o Opus: quei modelli hanno una propria ricerca di strumenti / strumenti differiti integrata, che va in conflitto con la nostra. Per usare la ricerca di ha-mcp con Claude, disattiva prima quella integrata di Claude; altrimenti lascia questa opzione disattivata. Usala solo con LLM privi di strumenti differiti nativi (per esempio Claude Haiku, modelli locali compatibili con OpenAI) o con finestre di contesto più piccole. Gli strumenti si trovano tramite ha_search_tools e vengono eseguiti tramite proxy suddivisi per categoria (lettura/scrittura/eliminazione). Richiede il riavvio per avere effetto.",
     "features.tool_search_max_results.label": "Numero massimo di risultati della ricerca degli strumenti",
     "features.tool_search_max_results.help": "Numero massimo di strumenti restituiti da ha_search_tools quando la ricerca degli strumenti è attiva. Valori bassi (2-3) risparmiano token di contesto ma possono escludere strumenti pertinenti. Intervallo: 2-10. Richiede il riavvio.",
     "features.enable_tool_security_policies.label": "Attiva i criteri di sicurezza degli strumenti (avanzato)",
@@ -455,8 +454,7 @@
     "addon.pinned_tools.name": "Strumenti fissati (separati da virgole)",
     "addon.pinned_tools.description": "Gli strumenti elencati qui restano fissati in modo bloccato: compaiono in cima alla scheda Strumenti e non possono essere sganciati dall'interfaccia web delle impostazioni senza prima togliere questa opzione. Utile in combinazione con la ricerca degli strumenti. Nomi degli strumenti separati da virgole.",
     "addon.verify_ssl.name": "Verifica il certificato TLS",
-    "addon.verify_ssl.description": "Verifica il certificato TLS del server Home Assistant. Il componente aggiuntivo si collega tramite il proxy del Supervisor, quindi di norma questo non ha alcun effetto e conviene lasciarlo attivo. Disattivalo solo se hai riconfigurato il componente aggiuntivo per parlare con HA tramite un nome host HTTPS pubblico con certificato autofirmato o con nome host non corrispondente. Disattivarlo indebolisce la sicurezza del trasporto: lascialo attivo a meno che tu non sappia di averne bisogno. Richiede il riavvio per avere effetto.",
-    "addon_stable.enable_tool_search.description": "Sostituisce il catalogo completo degli strumenti con una scoperta basata sulla ricerca. Riduce il contesto a riposo da circa 46K a 5K token. ⚠️ NON attivarla se usi Claude in modalità Sonnet o Opus: quei modelli hanno una propria ricerca di strumenti / strumenti differiti integrata, che va in conflitto con la nostra. Per usare la ricerca di ha-mcp con Claude, disattiva prima quella integrata di Claude; altrimenti lascia questa opzione disattivata. Usala solo con LLM privi di strumenti differiti nativi (per esempio Claude Haiku, modelli locali compatibili con OpenAI) o con finestre di contesto più piccole. Gli strumenti si trovano tramite ha_search_tools e vengono eseguiti tramite proxy suddivisi per categoria (lettura/scrittura/eliminazione). Richiede il riavvio del componente aggiuntivo per avere effetto; poi riconnetti o aggiorna il server MCP nel tuo client di IA in modo che ricarichi l'elenco degli strumenti. Riavviare solo il componente aggiuntivo NON aggiorna l'elenco degli strumenti memorizzato nella cache del client; vale per qualsiasi impostazione modificata qui."
+    "addon.verify_ssl.description": "Verifica il certificato TLS del server Home Assistant. Il componente aggiuntivo si collega tramite il proxy del Supervisor, quindi di norma questo non ha alcun effetto e conviene lasciarlo attivo. Disattivalo solo se hai riconfigurato il componente aggiuntivo per parlare con HA tramite un nome host HTTPS pubblico con certificato autofirmato o con nome host non corrispondente. Disattivarlo indebolisce la sicurezza del trasporto: lascialo attivo a meno che tu non sappia di averne bisogno. Richiede il riavvio per avere effetto."
   },
   "tool_groups": {
     "Add-ons": "Componenti aggiuntivi",
@@ -623,8 +621,7 @@
       "description": "Crea o aggiorna uno script di Home Assistant."
     },
     "ha_config_set_yaml": {
-      "title": "Modifica diretta della configurazione YAML",
-      "description": "Aggiorna la configurazione YAML grezza in configuration.yaml, packages/*.yaml o themes/*.yaml (ULTIMA RISORSA)."
+      "title": "Modifica diretta della configurazione YAML"
     },
     "ha_delete_file": {
       "title": "Elimina un file",

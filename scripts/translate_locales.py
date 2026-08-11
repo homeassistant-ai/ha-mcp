@@ -67,6 +67,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import generate_locales  # type: ignore[import-not-found]  # noqa: E402
+import locale_rules  # type: ignore[import-not-found]  # noqa: E402
 from update_locale_baseline import (  # type: ignore[import-not-found]  # noqa: E402
     _load_test_module,
 )
@@ -502,6 +503,25 @@ def _validate(item: WorkItem, translated: Any) -> str | None:
             _PANEL_LINK_RE.findall(item.english)
         ):
             return "panel-link targets differ from English"
+    # The same comparison the merge gate runs, so the engine cannot produce
+    # what that gate will later refuse. Without it a single dropped
+    # identifier is accepted, lands as a backfilled key no later run
+    # re-queues, and from then on reddens the parity arm every day -- the
+    # push is held back whole, the progress file is discarded, and the run
+    # re-spends its quota planning the same work again. Rejecting the one
+    # string instead costs one retry and leaves the key for tomorrow.
+    #
+    # Asked at the engine's setting, which narrows three arms the merge gate
+    # runs in full (``locale_rules._parity_fault`` names each). Numbers are
+    # the reason the dial exists: the two recorded tolerances are number
+    # entries and the engine cannot read them, so a full multiset here would
+    # refuse two correct strings on every run -- while asking nothing left a
+    # freshly written key unchecked here and checked there, which lands the
+    # fault and holds the whole tree back. Both failures cost a human one
+    # tolerance entry; only this one keeps the cost to a single key.
+    fault = locale_rules._parity_fault(item.english, translated, gate="engine")
+    if fault:
+        return f"contradicts the English source: {fault}"
     return None
 
 
