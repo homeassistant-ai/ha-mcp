@@ -117,7 +117,7 @@ def _manifest(private_key, package: bytes, dashboard: bytes, *, expires: datetim
     document = {
         "schema_version": 1,
         "target": "aurora-v9-preview",
-        "dashboard_target": "home-command-preview",
+        "dashboard_target": "aurora-preview",
         "preview_only": True,
         "target_release": "0.1.16",
         "privacy_policy": "no-sensitive-inference-v1",

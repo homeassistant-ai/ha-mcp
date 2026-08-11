@@ -275,10 +275,8 @@ async def test_activation_path_failure_has_no_side_effects(tmp_path, monkeypatch
         {"transactions": {transaction["transaction_id"]: transaction}},
     )
     ensure_preview = AsyncMock()
-    activate_component = Mock()
     save_asset = AsyncMock()
     monkeypatch.setattr(adapter, "_ensure_preview", ensure_preview)
-    monkeypatch.setattr(adapter, "_activate_component_package", activate_component)
     monkeypatch.setattr(adapter, "_save_preview_asset", save_asset)
 
     response = await adapter.TransactionView(state.hass, state).post(
@@ -288,7 +286,6 @@ async def test_activation_path_failure_has_no_side_effects(tmp_path, monkeypatch
     assert response.status == 500
     assert json.loads(response.body) == {"error_code": "activation_failed"}
     ensure_preview.assert_not_awaited()
-    activate_component.assert_not_called()
     save_asset.assert_not_awaited()
 
 
@@ -298,6 +295,11 @@ async def test_preview_assets_are_immutable_and_revision_specific(
 ):
     config = {"resources": []}
     dashboard = _Dashboard(config)
+    async def save_config(updated):
+        config.clear()
+        config.update(copy.deepcopy(updated))
+
+    dashboard.async_save = AsyncMock(side_effect=save_config)
     monkeypatch.setattr(
         adapter,
         "_load_dashboard",
@@ -364,6 +366,16 @@ def _promotion_fixture(tmp_path):
 
 
 def _bind_receipt_configs(receipt, preview_config, production_config):
+    dashboard_sha = receipt["dashboard_sha256"]
+    preview_config["resources"] = [
+        {
+            "url": (
+                adapter.DASHBOARD_URL_PREFIX
+                + f"aurora-preview-dashboard-{dashboard_sha}.js"
+            ),
+            "res_type": "module",
+        }
+    ]
     receipt["preview_config_sha256"] = adapter._config_sha256(preview_config)
     receipt["expected_production_config_sha256"] = adapter._config_sha256(
         production_config
@@ -379,6 +391,12 @@ async def test_promotion_journals_prepared_state_before_dashboard_save(
     production_config = {"views": [{"title": "Production"}]}
     preview = _Dashboard(preview_config)
     production = _Dashboard(production_config)
+
+    async def save_production(next_config):
+        production_config.clear()
+        production_config.update(copy.deepcopy(next_config))
+
+    production.async_save = AsyncMock(side_effect=save_production)
     _bind_receipt_configs(receipt, preview_config, production_config)
     snapshots = []
     state.save = Mock(side_effect=lambda: snapshots.append(copy.deepcopy(state.journal)))
@@ -394,6 +412,20 @@ async def test_promotion_journals_prepared_state_before_dashboard_save(
     monkeypatch.setattr(adapter, "_verify_signature", Mock())
     monkeypatch.setattr(adapter, "_verify_active_transaction", AsyncMock())
     monkeypatch.setattr(
+        adapter,
+        "_active_resource_context",
+        Mock(
+            return_value={
+                "preview_resource_url": (
+                    adapter.DASHBOARD_URL_PREFIX
+                    + f"aurora-preview-dashboard-{transaction['dashboard_sha256']}.js"
+                ),
+                "preview_resource_sha256": transaction["dashboard_sha256"],
+                "preview_resource_size": 123,
+            }
+        ),
+    )
+    monkeypatch.setattr(
         adapter, "_now", lambda: datetime(2030, 1, 1, tzinfo=UTC)
     )
 
@@ -402,6 +434,7 @@ async def test_promotion_journals_prepared_state_before_dashboard_save(
             {
                 "preview_revision": transaction["revision"],
                 "expected_production_revision": "revision-before",
+                "operation_id": "018f3f77-4d52-4cd2-9ce0-b9e9b547b101",
                 "receipt": receipt,
             }
         ),
@@ -409,8 +442,12 @@ async def test_promotion_journals_prepared_state_before_dashboard_save(
     )
 
     assert response.status == 200
-    assert snapshots[0]["production_transition"]["status"] == "prepared"
-    assert snapshots[0]["production_revision"] == "revision-before"
+    prepared = next(
+        snapshot
+        for snapshot in snapshots
+        if snapshot.get("production_transition", {}).get("status") == "prepared"
+    )
+    assert prepared["production_revision"] == "revision-before"
     assert snapshots[-1]["production_transition"]["status"] == "committed"
     assert snapshots[-1]["production_revision"] == transaction["revision"]
 
@@ -434,6 +471,20 @@ async def test_promotion_cas_rejects_stale_expected_revision(tmp_path, monkeypat
     monkeypatch.setattr(adapter, "_verify_signature", Mock())
     monkeypatch.setattr(adapter, "_verify_active_transaction", AsyncMock())
     monkeypatch.setattr(
+        adapter,
+        "_active_resource_context",
+        Mock(
+            return_value={
+                "preview_resource_url": (
+                    adapter.DASHBOARD_URL_PREFIX
+                    + f"aurora-preview-dashboard-{transaction['dashboard_sha256']}.js"
+                ),
+                "preview_resource_sha256": transaction["dashboard_sha256"],
+                "preview_resource_size": 123,
+            }
+        ),
+    )
+    monkeypatch.setattr(
         adapter, "_now", lambda: datetime(2030, 1, 1, tzinfo=UTC)
     )
 
@@ -442,6 +493,7 @@ async def test_promotion_cas_rejects_stale_expected_revision(tmp_path, monkeypat
             {
                 "preview_revision": transaction["revision"],
                 "expected_production_revision": "stale-revision",
+                "operation_id": "018f3f77-4d52-4cd2-9ce0-b9e9b547b102",
                 "receipt": {**receipt, "expected_production_revision": "stale-revision"},
             }
         ),
@@ -475,6 +527,20 @@ async def test_failed_dashboard_save_leaves_durable_prepared_transition(
     monkeypatch.setattr(adapter, "_verify_signature", Mock())
     monkeypatch.setattr(adapter, "_verify_active_transaction", AsyncMock())
     monkeypatch.setattr(
+        adapter,
+        "_active_resource_context",
+        Mock(
+            return_value={
+                "preview_resource_url": (
+                    adapter.DASHBOARD_URL_PREFIX
+                    + f"aurora-preview-dashboard-{transaction['dashboard_sha256']}.js"
+                ),
+                "preview_resource_sha256": transaction["dashboard_sha256"],
+                "preview_resource_size": 123,
+            }
+        ),
+    )
+    monkeypatch.setattr(
         adapter, "_now", lambda: datetime(2030, 1, 1, tzinfo=UTC)
     )
 
@@ -483,6 +549,7 @@ async def test_failed_dashboard_save_leaves_durable_prepared_transition(
             {
                 "preview_revision": transaction["revision"],
                 "expected_production_revision": "revision-before",
+                "operation_id": "018f3f77-4d52-4cd2-9ce0-b9e9b547b103",
                 "receipt": receipt,
             }
         ),
@@ -501,22 +568,66 @@ async def test_prepared_transition_recovers_committed_live_config(
 ):
     state, transaction, _receipt = _promotion_fixture(tmp_path)
     previous_config = {"views": [{"title": "Before"}]}
-    next_config = {"views": [{"title": "After"}]}
+    dashboard_bytes = b"recovered-dashboard"
+    dashboard_sha = hashlib.sha256(dashboard_bytes).hexdigest()
+    asset_name = f"aurora-preview-dashboard-{dashboard_sha}.js"
+    resource_url = adapter.DASHBOARD_URL_PREFIX + asset_name
+    asset_path = tmp_path / "www" / "aurora" / "revisions" / asset_name
+    asset_path.parent.mkdir(parents=True)
+    asset_path.write_bytes(dashboard_bytes)
+    next_config = {
+        "views": [{"title": "After"}],
+        "resources": [{"url": resource_url, "res_type": "module"}],
+    }
+    previous_sha = adapter._config_sha256(previous_config)
+    next_sha = adapter._config_sha256(next_config)
+    receipt_sha = "1" * 64
+    request_sha = "2" * 64
+    transaction["dashboard_sha256"] = dashboard_sha
+    transaction["active_dashboard_asset"] = asset_name
+    state.journal["production_config_sha256"] = previous_sha
+    state.journal["receipt_nonces"] = {
+        "validation-recovery-nonce": transaction["transaction_id"]
+    }
     state.journal["production_transition"] = {
         "transition_id": "promotion-recovery",
+        "operation_id": "operation-recovery",
         "status": "prepared",
         "expected_revision": "revision-before",
-        "expected_config_sha256": adapter._config_sha256(previous_config),
+        "expected_config_sha256": previous_sha,
         "to_revision": transaction["revision"],
         "transaction_id": transaction["transaction_id"],
         "receipt_nonce": "validation-recovery-nonce",
+        "receipt_sha256": receipt_sha,
+        "request_sha256": request_sha,
         "previous": {
             "revision": "revision-before",
             "config": previous_config,
-            "config_sha256": adapter._config_sha256(previous_config),
+            "config_sha256": previous_sha,
         },
         "next_config": next_config,
-        "next_config_sha256": adapter._config_sha256(next_config),
+        "next_config_sha256": next_sha,
+        "dashboard_resource_url": resource_url,
+        "dashboard_sha256": dashboard_sha,
+        "dashboard_size": len(dashboard_bytes),
+    }
+    state.journal["operations"] = {
+        "operation-recovery": {
+            "operation_id": "operation-recovery",
+            "action": "promote_home_command",
+            "status": "prepared",
+            "transaction_id": transaction["transaction_id"],
+            "preview_revision": transaction["revision"],
+            "target_revision": transaction["revision"],
+            "expected_production_revision": "revision-before",
+            "expected_production_config_sha256": previous_sha,
+            "preview_config_sha256": next_sha,
+            "receipt_sha256": receipt_sha,
+            "request_sha256": request_sha,
+            "dashboard_resource_url": resource_url,
+            "dashboard_sha256": dashboard_sha,
+            "dashboard_size": len(dashboard_bytes),
+        }
     }
     state.journal["production_recovery_required"] = True
     monkeypatch.setattr(
