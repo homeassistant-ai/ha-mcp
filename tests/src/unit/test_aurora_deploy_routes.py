@@ -872,6 +872,14 @@ async def test_transaction_readback_reconciles_lost_preview_outcome_without_resa
     assert transaction[transition_key]["status"] == (
         "committed" if applied else "aborted"
     )
+    if transition_kind == "rollback" and applied:
+        assert payload["dashboard_resource_present"] is True
+        assert payload["active_dashboard_verified"] is True
+        assert payload["active_dashboard_resource_url"] == (
+            adapter.DASHBOARD_URL_PREFIX + prior_asset_name
+        )
+        assert payload["active_dashboard_sha256"] == prior_dashboard_sha
+        assert payload["active_dashboard_size"] == len(prior_dashboard)
     assert preview.async_save.await_count == 0
     assert state.save.call_count == 1
 

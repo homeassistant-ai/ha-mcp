@@ -106,6 +106,7 @@ APPROVED_COMPONENT_FILES = frozenset(
         "models.py",
         "review_store.py",
         "services.yaml",
+        "synthetic_fixture.py",
         "timeline_contract.py",
         "vehicle_catalog_v1.json",
     }
@@ -2849,6 +2850,7 @@ class TransactionView(HomeAssistantView):
                     "previous_revision": active_revision,
                     "preview_active": isinstance(active_revision, str),
                     "dashboard_resource_present": bool(restored_resource_binding),
+                    "active_dashboard_verified": bool(restored_resource_binding),
                     **(
                         {
                             "active_dashboard_resource_url": restored_resource_binding[

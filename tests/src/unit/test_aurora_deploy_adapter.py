@@ -206,18 +206,41 @@ def test_archive_rejects_traversal_links_nested_and_unapproved_members() -> None
         _validate_package(output.getvalue())
 
 
+def test_archive_accepts_declared_synthetic_fixture_but_rejects_other_extras() -> None:
+    synthetic = b"safe-synthetic-fixture"
+
+    reviewed = _validate_package(
+        _package(
+            name=adapter.PACKAGE_ROOT + "synthetic_fixture.py",
+            content=synthetic,
+        )
+    )
+
+    assert reviewed["synthetic_fixture.py"] == synthetic
+    assert set(reviewed) == adapter.APPROVED_COMPONENT_FILES
+    with pytest.raises(ValueError, match="package_member"):
+        _validate_package(
+            _package(
+                name=adapter.PACKAGE_ROOT + "undeclared_fixture.py",
+                content=b"undeclared",
+            )
+        )
+
+
 def test_archive_requires_complete_reviewed_component_source() -> None:
     raw = _package()
     source = io.BytesIO(raw)
     output = io.BytesIO()
     missing = adapter.PACKAGE_ROOT + "coordinator.py"
-    with tarfile.open(fileobj=source, mode="r:gz") as original:
-        with tarfile.open(fileobj=output, mode="w:gz") as rebuilt:
-            for member in original.getmembers():
-                if member.name == missing:
-                    continue
-                stream = original.extractfile(member)
-                rebuilt.addfile(member, stream)
+    with (
+        tarfile.open(fileobj=source, mode="r:gz") as original,
+        tarfile.open(fileobj=output, mode="w:gz") as rebuilt,
+    ):
+        for member in original.getmembers():
+            if member.name == missing:
+                continue
+            stream = original.extractfile(member)
+            rebuilt.addfile(member, stream)
     with pytest.raises(ValueError, match="package_source_missing"):
         _validate_package(output.getvalue())
 

@@ -51,6 +51,9 @@ absence, expanded-size/file-count bounds, and privacy denylist before writing a
 fresh revision directory. The archive remains staged evidence only: this adapter
 never installs, replaces, reloads, or rolls back `custom_components/aurora_camera_ai`.
 The Camera AI backend has its own release and restart lifecycle.
+The closed reviewed source allowlist includes the runtime-imported
+`custom_components/aurora_camera_ai/synthetic_fixture.py`; any undeclared archive
+member remains rejected.
 
 Stage requires a caller-known safe `transaction_id`. Before writing artifact
 bytes, the journal records a prepared stage transition bound to the exact
