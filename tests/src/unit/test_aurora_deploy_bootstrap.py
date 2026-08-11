@@ -330,10 +330,27 @@ def _preflight_values(now: datetime | None = None) -> dict[str, Any]:
         "supervisor": {
             "healthy": True,
             "supported": True,
-            "state": "running",
             "arch": "amd64",
         },
-        "host": {"arch": "amd64", "features": []},
+        "host": {
+            "deployment": "production",
+            "operating_system": "Home Assistant OS 18.2",
+            "agent_version": "1.10.0",
+            "features": [
+                "reboot",
+                "shutdown",
+                "services",
+                "network",
+                "hostname",
+                "timedate",
+                "os_agent",
+                "haos",
+                "resolved",
+                "journal",
+                "disk",
+                "mount",
+            ],
+        },
         "backup": {
             "state": "idle",
             "failed_agent_ids": [],
@@ -368,7 +385,7 @@ def _preflight_values(now: datetime | None = None) -> dict[str, Any]:
             "ingress": True,
             "ingress_entry": "/api/hassio_ingress/fixed-session",
             "host_network": False,
-            "network": {},
+            "network": None,
             "repository": "core",
         },
         "store": {
@@ -377,16 +394,123 @@ def _preflight_values(now: datetime | None = None) -> dict[str, Any]:
             "version_latest": bootstrap.FILE_EDITOR_VERSION,
             "repository": "core",
             "ingress": True,
-            "network": {},
+            "network": None,
             "arch": ["amd64"],
             "available": True,
-            "map": ["homeassistant_config:rw"],
         },
         "backup_id": "backup-1",
         "expected_backup_agent_id": bootstrap.APPROVED_BACKUP_AGENT_ID,
         "require_backup": True,
         "now": current,
     }
+
+
+def test_current_live_haos_2026_8_1_supervisor_host_schema_is_accepted() -> None:
+    values = _preflight_values()
+    # These retain the security-significant shape observed from the raw live
+    # endpoints: Supervisor omits state; Host omits both architecture fields.
+    assert "state" not in values["supervisor"]
+    assert {"arch", "architecture"}.isdisjoint(values["host"])
+    assert values["host"]["agent_version"] == "1.10.0"
+    assert values["host"]["features"] == [
+        "reboot",
+        "shutdown",
+        "services",
+        "network",
+        "hostname",
+        "timedate",
+        "os_agent",
+        "haos",
+        "resolved",
+        "journal",
+        "disk",
+        "mount",
+    ]
+    assert values["addon"]["network"] is None
+    assert values["store"]["network"] is None
+    assert "map" not in values["addon"]
+    assert "map" not in values["store"]
+    assert bootstrap.validate_supervisor_preflight(**values).startswith("/api/")
+
+
+def test_present_supervisor_state_and_architecture_remain_fail_closed() -> None:
+    wrong_state = _preflight_values()
+    wrong_state["supervisor"]["state"] = "degraded"
+    with pytest.raises(bootstrap.BootstrapError, match="supervisor_not_ready"):
+        bootstrap.validate_supervisor_preflight(**wrong_state)
+
+    null_state = _preflight_values()
+    null_state["supervisor"]["state"] = None
+    with pytest.raises(bootstrap.BootstrapError, match="supervisor_not_ready"):
+        bootstrap.validate_supervisor_preflight(**null_state)
+
+    wrong_arch = _preflight_values()
+    wrong_arch["supervisor"]["arch"] = "aarch64"
+    with pytest.raises(bootstrap.BootstrapError, match="unsupported_architecture"):
+        bootstrap.validate_supervisor_preflight(**wrong_arch)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    (
+        ("deployment", "development", "host_metadata_invalid"),
+        ("operating_system", "Ubuntu 26.04", "host_metadata_invalid"),
+        ("operating_system", "Home Assistant OS ", "host_metadata_invalid"),
+        (
+            "operating_system",
+            f"Home Assistant OS 18.2{'a' * 64}",
+            "host_metadata_invalid",
+        ),
+        ("agent_version", "", "host_metadata_invalid"),
+        ("agent_version", " " * 65, "host_metadata_invalid"),
+        ("features", ["haos"], "host_metadata_invalid"),
+        ("features", ["os_agent"], "host_metadata_invalid"),
+        ("features", ["haos", "os_agent", 1], "host_metadata_invalid"),
+        ("arch", "aarch64", "unsupported_architecture"),
+        ("architecture", "armv7", "unsupported_architecture"),
+    ),
+)
+def test_host_identity_fallback_rejects_fake_or_contradictory_metadata(
+    field: str, value: Any, error: str
+) -> None:
+    values = _preflight_values()
+    values["host"][field] = value
+    with pytest.raises(bootstrap.BootstrapError, match=error):
+        bootstrap.validate_supervisor_preflight(**values)
+
+
+@pytest.mark.parametrize("field", ("arch", "architecture"))
+def test_present_amd64_host_architecture_is_accepted_as_authoritative(
+    field: str,
+) -> None:
+    values = _preflight_values()
+    values["host"] = {field: "amd64"}
+    assert bootstrap.validate_supervisor_preflight(**values).startswith("/api/")
+
+
+def test_absent_file_editor_network_fields_are_accepted() -> None:
+    values = _preflight_values()
+    values["addon"].pop("network")
+    values["store"].pop("network")
+    assert bootstrap.validate_supervisor_preflight(**values).startswith("/api/")
+
+
+@pytest.mark.parametrize(
+    ("section", "network"),
+    (
+        ("addon", {}),
+        ("store", {}),
+        ("addon", {"3218/tcp": 3218}),
+        ("store", {"3218/tcp": 3218}),
+    ),
+)
+def test_present_file_editor_network_mapping_is_rejected(
+    section: str, network: dict[str, int]
+) -> None:
+    values = _preflight_values()
+    values[section]["network"] = network
+    with pytest.raises(bootstrap.BootstrapError, match="file_editor_network_exposed"):
+        bootstrap.validate_supervisor_preflight(**values)
 
 
 def test_preflight_requires_explicit_safe_supervisor_and_strong_backup_metadata() -> (
@@ -578,6 +702,9 @@ def test_partial_stage_resume_skips_exact_files_and_rejects_conflicts(
         def create_stage(self, _txid: str) -> None:
             return None
 
+        def verify_fixed_root_write_capability(self, _txid: str) -> None:
+            return None
+
         def stage_file_exists(self, _txid: str, relative: str) -> bool:
             return relative in self.files
 
@@ -603,6 +730,108 @@ def test_partial_stage_resume_skips_exact_files_and_rejects_conflicts(
         bootstrap._stage_payload(conflict, txid, payload)
     assert conflict.files[bootstrap.SOURCE_PATHS[0]] == b"external-stage-writer"
     assert bootstrap.SOURCE_PATHS[1] not in conflict.files
+
+
+def test_fixed_root_capability_probe_is_read_back_and_cleaned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _file_editor_client()
+    txid = str(uuid.uuid4())
+    staged: dict[str, bytes] = {}
+    uploaded: list[str] = []
+    uploaded_content: list[bytes] = []
+
+    monkeypatch.setattr(
+        client,
+        "stage_file_exists",
+        lambda _txid, relative: relative in staged,
+    )
+    monkeypatch.setattr(
+        client,
+        "download_stage",
+        lambda _txid, relative: staged[relative],
+    )
+
+    def upload(_txid: str, relative: str, content: bytes) -> None:
+        uploaded.append(relative)
+        uploaded_content.append(content)
+        staged[relative] = content
+
+    def request(
+        endpoint: str, *, form: dict[str, str], **_kwargs: Any
+    ) -> dict[str, Any]:
+        assert endpoint == "/api/delete"
+        assert form["path"].endswith(f"/{bootstrap.CAPABILITY_PROBE_NAME}")
+        del staged[bootstrap.CAPABILITY_PROBE_NAME]
+        return {
+            "error": False,
+            "message": "Deletion successful",
+            "path": form["path"],
+        }
+
+    monkeypatch.setattr(client, "upload", upload)
+    monkeypatch.setattr(client, "_request", request)
+    client.verify_fixed_root_write_capability(txid)
+
+    assert uploaded == [bootstrap.CAPABILITY_PROBE_NAME]
+    assert staged == {}
+
+    # A crash after marker publication remains transaction-owned and resumable.
+    staged[bootstrap.CAPABILITY_PROBE_NAME] = uploaded_content[0]
+    client.verify_fixed_root_write_capability(txid)
+    assert uploaded == [
+        bootstrap.CAPABILITY_PROBE_NAME,
+        bootstrap.CAPABILITY_PROBE_NAME,
+    ]
+    assert staged == {}
+
+
+def test_missing_fixed_root_write_capability_stops_before_payload_upload(
+    tmp_path: Path,
+) -> None:
+    payload = _payload(_source_root(tmp_path))
+
+    class MissingCapabilityClient:
+        payload_upload_attempted = False
+
+        def create_stage(self, _txid: str) -> None:
+            return None
+
+        def verify_fixed_root_write_capability(self, _txid: str) -> None:
+            raise bootstrap.BootstrapError("fixed_root_write_capability_required")
+
+        def upload(self, *_args: Any) -> None:
+            self.payload_upload_attempted = True
+
+    client = MissingCapabilityClient()
+    with pytest.raises(
+        bootstrap.BootstrapError, match="fixed_root_write_capability_required"
+    ):
+        bootstrap._stage_payload(client, str(uuid.uuid4()), payload)
+    assert client.payload_upload_attempted is False
+
+
+def test_fixed_root_capability_probe_preserves_foreign_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _file_editor_client()
+    staged = {bootstrap.CAPABILITY_PROBE_NAME: b"foreign-writer"}
+    monkeypatch.setattr(
+        client,
+        "stage_file_exists",
+        lambda _txid, relative: relative in staged,
+    )
+    monkeypatch.setattr(
+        client,
+        "download_stage",
+        lambda _txid, relative: staged[relative],
+    )
+
+    with pytest.raises(
+        bootstrap.BootstrapError, match="fixed_root_capability_conflict"
+    ):
+        client.verify_fixed_root_write_capability(str(uuid.uuid4()))
+    assert staged == {bootstrap.CAPABILITY_PROBE_NAME: b"foreign-writer"}
 
 
 def test_upload_accepts_exact_hass_configurator_0_6_0_success_schema(
@@ -2600,6 +2829,9 @@ async def test_partial_upload_resumes_same_exact_local_transaction(  # noqa: C90
         def create_stage(self, _txid: str) -> None:
             return None
 
+        def verify_fixed_root_write_capability(self, _txid: str) -> None:
+            return None
+
         def stage_file_exists(self, _txid: str, relative: str) -> bool:
             return relative in self.staged
 
@@ -2692,6 +2924,9 @@ async def test_abort_uses_persisted_old_installer_when_source_checkout_is_gone(
             return False
 
         def create_stage(self, _txid: str) -> None:
+            return None
+
+        def verify_fixed_root_write_capability(self, _txid: str) -> None:
             return None
 
         def stage_file_exists(self, _txid: str, relative: str) -> bool:
@@ -2819,6 +3054,9 @@ async def test_failed_config_check_uses_remote_transaction_rollback(  # noqa: C9
             return relative in self.staged
 
         def create_stage(self, _txid: str) -> None:
+            return None
+
+        def verify_fixed_root_write_capability(self, _txid: str) -> None:
             return None
 
         def upload(self, _txid: str, relative: str, content: bytes) -> None:

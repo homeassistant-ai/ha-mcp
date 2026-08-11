@@ -45,6 +45,7 @@ TRANSACTION_PREFIX = ".aurora-deploy-bootstrap-transaction-"
 TRANSACTION_INIT_PREFIX = ".aurora-deploy-bootstrap-transaction-init-"
 INSTALLER_NAME = "install-aurora-deploy-bootstrap.py"
 PAYLOAD_MANIFEST_NAME = "payload-manifest.json"
+CAPABILITY_PROBE_NAME = "fixed-root-capability-probe.json"
 COMPONENT_FILES = ("__init__.py", "adapter.py", "manifest.json")
 SOURCE_PATHS = tuple(
     f"custom_components/aurora_deploy/{name}" for name in COMPONENT_FILES
@@ -66,9 +67,12 @@ SAFE_INGRESS_ENTRY = re.compile(r"^/api/hassio_ingress/[A-Za-z0-9_-]+$")
 SAFE_SESSION = re.compile(r"^[A-Za-z0-9._~+/=-]{16,1024}$")
 SAFE_BACKUP_ID = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
 SAFE_KEY_ID = re.compile(r"^(?=.{8,64}$)(?:release|validation)-[A-Za-z0-9._-]+$")
+SAFE_HAOS_VERSION = re.compile(r"^[0-9][A-Za-z0-9._+-]{0,31}$")
+SAFE_OS_AGENT_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
 SAFE_PYCACHE = re.compile(
     r"^__pycache__/(?:__init__|adapter)\.cpython-\d{3}(?:\.opt-[12])?\.pyc$"
 )
+REQUIRED_HAOS_FEATURES = frozenset({"haos", "os_agent"})
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 REVISION = re.compile(r"^[0-9a-f]{40,64}$")
 
@@ -425,19 +429,6 @@ def _fresh_ha_recovery_backup(
     return item
 
 
-def _homeassistant_config_rw(value: Any) -> bool:
-    if not isinstance(value, list):
-        return False
-    for item in value:
-        if item == "homeassistant_config:rw":
-            return True
-        if isinstance(item, dict):
-            name = item.get("type", item.get("name"))
-            if name == "homeassistant_config" and item.get("read_only") is False:
-                return True
-    return False
-
-
 def validate_supervisor_preflight(  # noqa: C901
     *,
     user: dict[str, Any],
@@ -456,11 +447,38 @@ def validate_supervisor_preflight(  # noqa: C901
     if (
         supervisor.get("healthy") is not True
         or supervisor.get("supported") is not True
-        or supervisor.get("state") != "running"
+        or ("state" in supervisor and supervisor["state"] != "running")
     ):
         raise BootstrapError("supervisor_not_ready")
-    if supervisor.get("arch") != "amd64" or host.get("arch") != "amd64":
+    if supervisor.get("arch") != "amd64":
         raise BootstrapError("unsupported_architecture")
+    host_arch_fields = [key for key in ("arch", "architecture") if key in host]
+    if host_arch_fields:
+        if any(host[key] != "amd64" for key in host_arch_fields):
+            raise BootstrapError("unsupported_architecture")
+    else:
+        operating_system = host.get("operating_system")
+        agent_version = host.get("agent_version")
+        features = host.get("features")
+        if (
+            host.get("deployment") != "production"
+            or not isinstance(operating_system, str)
+            or not operating_system.startswith("Home Assistant OS ")
+            or SAFE_HAOS_VERSION.fullmatch(
+                operating_system.removeprefix("Home Assistant OS ")
+            )
+            is None
+            or not isinstance(agent_version, str)
+            or SAFE_OS_AGENT_VERSION.fullmatch(agent_version) is None
+            or not isinstance(features, list)
+            or len(features) > 64
+            or any(
+                not isinstance(feature, str) or not feature or len(feature) > 64
+                for feature in features
+            )
+            or not REQUIRED_HAOS_FEATURES.issubset(features)
+        ):
+            raise BootstrapError("host_metadata_invalid")
     if host.get("features") is not None and not isinstance(host["features"], list):
         raise BootstrapError("host_metadata_invalid")
     if require_backup:
@@ -492,7 +510,9 @@ def validate_supervisor_preflight(  # noqa: C901
     ingress = addon.get("ingress_entry")
     if not isinstance(ingress, str) or SAFE_INGRESS_ENTRY.fullmatch(ingress) is None:
         raise BootstrapError("ingress_entry_invalid")
-    if addon.get("host_network") is not False or addon.get("network") != {}:
+    if addon.get("host_network") is not False or (
+        "network" in addon and addon["network"] is not None
+    ):
         raise BootstrapError("file_editor_network_exposed")
     if addon.get("repository") != "core":
         raise BootstrapError("file_editor_not_official")
@@ -503,12 +523,13 @@ def validate_supervisor_preflight(  # noqa: C901
         or store_version != FILE_EDITOR_VERSION
         or store.get("repository") != "core"
         or store.get("ingress") is not True
-        or store.get("network") != {}
-        or "amd64" not in (store.get("arch") or [])
+        or not isinstance(store.get("arch"), list)
+        or "amd64" not in store["arch"]
         or store.get("available") is not True
-        or not _homeassistant_config_rw(store.get("map"))
     ):
         raise BootstrapError("file_editor_store_mismatch")
+    if "network" in store and store["network"] is not None:
+        raise BootstrapError("file_editor_network_exposed")
     return ingress
 
 
@@ -813,6 +834,7 @@ class FileEditorIngressClient:
             "/api/listdir",
             "/api/newfolder",
             "/api/upload",
+            "/api/delete",
             "/api/file",
             "/api/exec_command",
         }:
@@ -913,7 +935,12 @@ class FileEditorIngressClient:
         return self._exists(self._stage(transaction_id), expected_type="dir")
 
     def stage_file_exists(self, transaction_id: str, relative: str) -> bool:
-        if relative not in {*PAYLOAD_PATHS, PAYLOAD_MANIFEST_NAME, INSTALLER_NAME}:
+        if relative not in {
+            *PAYLOAD_PATHS,
+            PAYLOAD_MANIFEST_NAME,
+            INSTALLER_NAME,
+            CAPABILITY_PROBE_NAME,
+        }:
             raise BootstrapError("stage_target_invalid")
         return self._exists(self._stage(transaction_id, relative), expected_type="file")
 
@@ -934,7 +961,12 @@ class FileEditorIngressClient:
                 self._mkdir(directory)
 
     def upload(self, transaction_id: str, relative: str, content: bytes) -> None:
-        if relative not in {*PAYLOAD_PATHS, PAYLOAD_MANIFEST_NAME, INSTALLER_NAME}:
+        if relative not in {
+            *PAYLOAD_PATHS,
+            PAYLOAD_MANIFEST_NAME,
+            INSTALLER_NAME,
+            CAPABILITY_PROBE_NAME,
+        }:
             raise BootstrapError("upload_target_invalid")
         target = self._stage(transaction_id, relative)
         destination, filename = (
@@ -978,9 +1010,52 @@ class FileEditorIngressClient:
         )
 
     def download_stage(self, transaction_id: str, relative: str) -> bytes:
-        if relative not in {*PAYLOAD_PATHS, PAYLOAD_MANIFEST_NAME, INSTALLER_NAME}:
+        if relative not in {
+            *PAYLOAD_PATHS,
+            PAYLOAD_MANIFEST_NAME,
+            INSTALLER_NAME,
+            CAPABILITY_PROBE_NAME,
+        }:
             raise BootstrapError("download_target_invalid")
         return self._download_path(self._stage(transaction_id, relative))
+
+    def _delete_stage_capability_probe(self, transaction_id: str) -> None:
+        target = self._stage(transaction_id, CAPABILITY_PROBE_NAME)
+        result = self._request("/api/delete", form={"path": target})
+        if (
+            set(result) != {"error", "message", "path"}
+            or result["error"] is not False
+            or result["message"] != "Deletion successful"
+            or result["path"] != target
+        ):
+            raise BootstrapError("fixed_root_capability_cleanup_failed")
+        if self.stage_file_exists(transaction_id, CAPABILITY_PROBE_NAME):
+            raise BootstrapError("fixed_root_capability_cleanup_failed")
+
+    def verify_fixed_root_write_capability(self, transaction_id: str) -> None:
+        marker = _canonical(
+            {
+                "schemaVersion": "aurora-deploy-fixed-root-capability-v1",
+                "transactionId": _validate_uuid(transaction_id),
+                "installerSha256": INSTALLER_SHA256,
+            }
+        )
+        expected = _digest(marker)
+        if self.stage_file_exists(transaction_id, CAPABILITY_PROBE_NAME):
+            if (
+                _digest(self.download_stage(transaction_id, CAPABILITY_PROBE_NAME))
+                != expected
+            ):
+                raise BootstrapError("fixed_root_capability_conflict")
+            self._delete_stage_capability_probe(transaction_id)
+        self.upload(transaction_id, CAPABILITY_PROBE_NAME, marker)
+        if (
+            not self.stage_file_exists(transaction_id, CAPABILITY_PROBE_NAME)
+            or _digest(self.download_stage(transaction_id, CAPABILITY_PROBE_NAME))
+            != expected
+        ):
+            raise BootstrapError("fixed_root_write_capability_required")
+        self._delete_stage_capability_probe(transaction_id)
 
     def configuration_bytes(self) -> bytes:
         if not self._exists(REMOTE_CONFIGURATION, expected_type="file"):
@@ -2007,6 +2082,10 @@ def _stage_payload(
     client: FileEditorIngressClient, txid: str, payload: Payload
 ) -> None:
     client.create_stage(txid)
+    # Store metadata does not expose the add-on mount map on current HAOS.
+    # Prove the fixed root is writable using a transaction-owned marker, exact
+    # readback, and deletion before any installer execution.
+    client.verify_fixed_root_write_capability(txid)
     # The trusted installer is first so every later partial upload can be
     # resumed or explicitly removed. Existing bytes must match; source drift
     # never silently overwrites a partially staged transaction.
