@@ -122,11 +122,15 @@ configuration:
       at runtime regardless of its value here.
   enable_lite_docstrings:
     name: Enable lite tool docstrings (beta)
-    description: 'Beta feature. Replaces the docstrings on a handful of heavy ha-mcp
-      tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml)
-      with shorter variants that defer schema and example detail to the ha_get_skill_guide
-      tool (or its skill:// resource). WARNING: this reduces idle token usage, but
-      may degrade LLM performance — the trimmed descriptions rely on the LLM actually
+    description: 'Beta feature. Replaces the docstrings on 15 heavy ha-mcp tools (ha_config_get_automation,
+      ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene,
+      ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard,
+      ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup,
+      ha_report_issue) with shorter variants that defer schema and example detail
+      to the ha_get_skill_guide tool (or its skill:// resource). One exception: ha_report_issue
+      defers to the instructions field of its own response instead. Tuning the Backup-hint
+      setting still applies in lite mode. WARNING: this reduces idle token usage,
+      but may degrade LLM performance — the trimmed descriptions rely on the LLM actually
       calling the skill tool or reading the skill resource for detail, which is not
       guaranteed (some models will skip the extra tool call and end up with less guidance
       than they had before). Best paired with a client that supports MCP resources
