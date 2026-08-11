@@ -24,7 +24,10 @@ def _triggers(data: dict[str, Any]) -> set[str]:
 
 def test_pr_workflows_do_not_persist_checkout_credentials() -> None:
     checked = 0
-    for path in sorted(_WORKFLOW_DIR.glob("*.yml")):
+    workflow_paths = sorted(
+        path for path in _WORKFLOW_DIR.iterdir() if path.suffix in {".yml", ".yaml"}
+    )
+    for path in workflow_paths:
         data = _workflow(path.name)
         if "pull_request" not in _triggers(data):
             continue
