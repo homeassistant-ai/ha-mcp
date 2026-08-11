@@ -1898,6 +1898,9 @@ class RootView(HomeAssistantView):
         )
         if transaction is None or self._state.journal.get("active_preview") != revision:
             return _error(409, "preview_revision_not_active")
+        transaction_id = transaction.get("transaction_id")
+        if not isinstance(transaction_id, str) or not transaction_id:
+            return _error(409, "preview_integrity_failed")
         try:
             await _verify_active_transaction(self._hass, transaction, self._state.root)
             resource_context = await asyncio.to_thread(
@@ -1919,7 +1922,8 @@ class RootView(HomeAssistantView):
             return _json_response(
                 {
                     "preview_revision": revision,
-                    "transaction_id": transaction.get("transaction_id"),
+                    "transaction_id": transaction_id,
+                    "active_preview_transaction_id": transaction_id,
                     "status": transaction.get("status"),
                     "active_revision": self._state.journal.get("active_preview"),
                     "dashboard_target": PREVIEW,

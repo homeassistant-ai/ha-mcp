@@ -198,7 +198,7 @@ def _v2_receipt(
         {
             "schema_version": 2,
             "preview_revision": inspection["preview_revision"],
-            "transaction_id": inspection["transaction_id"],
+            "transaction_id": inspection["active_preview_transaction_id"],
             "operation_id": "operation-" + nonce,
             "expected_production_revision": inspection["production_revision"],
             "preview_config_sha256": inspection["preview_config_sha256"],
@@ -1121,9 +1121,11 @@ async def test_promotion_inspection_is_non_mutating_and_promotion_requires_recei
     )
 
     assert inspection.status == 200
-    assert _payload(inspection) == {
+    inspection_payload = _payload(inspection)
+    assert inspection_payload == {
         "preview_revision": revision,
         "transaction_id": transaction["transaction_id"],
+        "active_preview_transaction_id": transaction["transaction_id"],
         "status": "activated",
         "active_revision": revision,
         "dashboard_target": adapter.PREVIEW,
@@ -1138,6 +1140,10 @@ async def test_promotion_inspection_is_non_mutating_and_promotion_requires_recei
         "verified": True,
         **resource_context,
     }
+    assert (
+        inspection_payload["active_preview_transaction_id"]
+        == inspection_payload["transaction_id"]
+    )
     production.async_save.assert_not_awaited()
     assert state.journal["production_revision"] == "revision-before"
 
@@ -1193,6 +1199,7 @@ async def test_promotion_inspection_is_non_mutating_and_promotion_requires_recei
         "verified": True,
         "dashboard_resource_present": True,
     }
+    assert "active_preview_transaction_id" not in promoted_payload
     verify_signature.assert_called_once_with(state.hass, receipt, prefix="validation-")
     production.async_save.assert_awaited_once_with(preview_config)
     assert state.journal["previous_production"] == {
