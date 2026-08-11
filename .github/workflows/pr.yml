@@ -44,7 +44,9 @@ jobs:
     timeout-minutes: 5
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Fail component changes riding an already-released version
         env:
           BASE_REF: ${{ github.base_ref }}
@@ -96,7 +98,9 @@ jobs:
     outputs:
       run: ${{ steps.filter.outputs.run }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Classify changed files
         id: filter
         env:
@@ -199,7 +203,9 @@ jobs:
     timeout-minutes: 5
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
     - name: Verify uv.lock is in sync with pyproject.toml
       run: uv lock --check
@@ -242,7 +248,9 @@ jobs:
     timeout-minutes: 1
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
     - name: Check AGENTS.md size
       run: |
@@ -263,17 +271,19 @@ jobs:
       run:
         working-directory: site
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
     - name: Setup Node
-      uses: actions/setup-node@v7
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
       with:
         node-version: "22"
         cache: npm
         cache-dependency-path: site/package-lock.json
 
     - name: Install dependencies
-      run: npm ci
+      run: corepack npm ci
 
     - name: Astro type & diagnostics check
       run: npm run check
@@ -301,7 +311,9 @@ jobs:
     - name: Install git for changed-files diff
       run: apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
 
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
     - name: Install dependencies
       run: uv sync --dev
@@ -311,7 +323,7 @@ jobs:
 
     - name: Run ruff format check on changed Python files
       run: |
-        # actions/checkout@v7 sets safe.directory in a temp HOME that this
+        # actions/checkout sets safe.directory in a temp HOME that this
         # step doesn't inherit; re-add it here so git operations succeed
         # when the checkout dir is owned by a different UID than the
         # container's root.
@@ -345,7 +357,9 @@ jobs:
     timeout-minutes: 2
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
     - name: Install dependencies
       run: uv sync --dev
@@ -362,7 +376,9 @@ jobs:
     timeout-minutes: 5
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
 
     - name: Install dependencies
       run: uv sync --dev
@@ -387,21 +403,13 @@ jobs:
 
     steps:
     - name: Restore apt download cache
-      # Cache /var/cache/apt/archives so the nodejs .deb (~30 MB) and its
-      # deps don't re-download on every PR — the bulk of "Install git and
-      # Node.js" was the network download, not the extract. apt-get
-      # install still runs (unpack is fast); we're just skipping the
-      # download leg on cache hit.
-      uses: actions/cache@v6
+      # Cache apt downloads used by this containerized job.
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /var/cache/apt/archives
-        key: apt-trixie-git-nodejs-npm-v1
+        key: apt-trixie-git-v1
 
-    - name: Install git and Node.js
-      # Node + npm power the JS behaviour tests under tests/src/unit/
-      # (harness in tests/js/) — they spawn `node tests/js/harness.mjs`
-      # to drive rendered <script> bodies through JSDOM. Without node
-      # the tests skip; install here so coverage actually runs.
+    - name: Install git
       run: |
         # Keep cached .debs after install so the cache stays warm for
         # future runs (default Debian behaviour deletes them).
@@ -409,29 +417,29 @@ jobs:
         echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
           > /etc/apt/apt.conf.d/keep-downloaded
         apt-get update -qq
-        apt-get install -y -qq git nodejs npm >/dev/null 2>&1
+        apt-get install -y -qq git >/dev/null 2>&1
 
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
+        persist-credentials: false
         submodules: true
+
+    - name: Set up Node.js
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      with:
+        # Corepack is bundled only through Node 24; `corepack npm ci` enforces packageManager.
+        node-version: "24"
+        cache: npm
+        cache-dependency-path: tests/js/package-lock.json
 
     - name: Install Python dependencies
       run: uv sync --all-extras --dev
 
-    - name: Restore JS test node_modules cache
-      # Lockfile-keyed so a dependency bump invalidates cleanly. `npm ci`
-      # is still safe to run on cache hit (it short-circuits when the
-      # tree already matches the lockfile).
-      uses: actions/cache@v6
-      with:
-        path: tests/js/node_modules
-        key: tests-js-node-modules-${{ hashFiles('tests/js/package-lock.json') }}
-
     - name: Install JS test dependencies (jsdom, esbuild)
       # `npm ci` enforces package-lock.json — same reproducibility
-      # discipline as uv.lock on the Python side. No-op on cache hit
-      # if node_modules matches the lockfile.
-      run: npm ci --prefix tests/js
+      # discipline as uv.lock on the Python side. setup-node caches npm's
+      # download cache; node_modules is intentionally recreated by npm ci.
+      run: cd tests/js && corepack npm ci
 
     - name: Run unit tests
       run: uv run pytest tests/src/unit/ -n auto --tb=short -v
@@ -475,8 +483,9 @@ jobs:
             pytest_workers: 4
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
+        persist-credentials: false
         submodules: true
 
     - name: Set up Docker Buildx
@@ -497,7 +506,7 @@ jobs:
 
     - name: Cache HA Docker image
       id: cache-ha-image
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /tmp/ha-image.tar
         key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
@@ -576,8 +585,9 @@ jobs:
             pytest_workers: 3
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
+        persist-credentials: false
         submodules: true
 
     - name: Set up Docker Buildx
@@ -598,7 +608,7 @@ jobs:
 
     - name: Cache HA Docker image
       id: cache-ha-image
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /tmp/ha-image.tar
         key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
@@ -673,8 +683,9 @@ jobs:
     timeout-minutes: 30
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
+        persist-credentials: false
         submodules: true
         # fetch-depth 0: the update-path scenario checks the custom component
         # out at the released ``stable`` git tag, which the default shallow
@@ -706,7 +717,7 @@ jobs:
 
     - name: Cache HA Docker image
       id: cache-ha-image
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /tmp/ha-image.tar
         key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
@@ -761,8 +772,9 @@ jobs:
     timeout-minutes: 15
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
+        persist-credentials: false
         submodules: true
 
     - name: Set up Docker Buildx
