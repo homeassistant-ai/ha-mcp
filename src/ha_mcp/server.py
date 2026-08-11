@@ -958,7 +958,7 @@ class HomeAssistantSmartMCPServer:
         stay free to contain literal braces (Jinja examples, JSON) without
         a stray ``{`` turning into a ``KeyError`` at startup. An unknown
         placeholder is left verbatim rather than raising —
-        ``test_every_lite_placeholder_is_resolvable`` is what catches a
+        ``test_every_placeholder_in_the_map_is_resolvable`` is what catches a
         typo'd token, at test time instead of in a user's tool catalog.
         """
         tokens = cls._lite_docstring_tokens()

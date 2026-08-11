@@ -10,8 +10,8 @@ Covers three layers:
    ``add_transform`` failure path. Uses the ``MagicMock`` stub pattern
    from ``test_categorized_search.TestApplySearchKeywordEnrichment``.
 3. The ``_LITE_DOCSTRINGS`` mapping invariant — every lite description
-   names ``ha_get_skill_guide`` so the LLM still has a path to
-   detailed guidance from inside the trimmed text.
+   names the anchor that reaches its own declared destination, so the LLM
+   still has a path to detailed guidance from inside the trimmed text.
 4. The mapping's *ends* — that every key is a registered tool name, and
    that the guidance each entry defers to actually exists. Layer 3 checks
    the pointer text; layer 4 checks the two things that can be wrong
@@ -315,23 +315,47 @@ class TestApplyLiteDocstrings:
 class TestLiteDocstringsMappingInvariants:
     """Guard-rails on the user-visible lite descriptions themselves."""
 
-    def test_every_lite_description_references_skill(self) -> None:
-        """The design promise: every lite description points at a skill tool.
+    def test_every_lite_description_names_its_own_destination(self) -> None:
+        """The design promise: every lite description points somewhere real.
 
-        Without this anchor, the user-facing behaviour of the toggle
-        regresses to "shorter descriptions, no guidance" the moment
-        someone trims an entry too aggressively.
+        Without an anchor, the user-facing behaviour of the toggle regresses
+        to "shorter descriptions, no guidance" the moment someone trims an
+        entry too aggressively.
+
+        Derived from ``_LITE_DOCSTRING_DESTINATIONS`` rather than hunting a
+        fixed string. The previous version of this test required the literal
+        ``"ha_get_skill_guide"`` in every value, which made it impossible to
+        add a tool the skill pack doesn't cover WITHOUT manufacturing a
+        dead-end pointer — and, worse, was satisfiable by a sentence saying
+        the guide does *not* cover the tool. Now the required anchor follows
+        from where the entry actually defers:
+
+        * skill-path destination → must name ``ha_get_skill_guide``, the
+          tool that serves it.
+        * ``tool-response:<field>`` → must name ``<field>`` instead, and
+          must NOT send the reader to the skill guide for the content.
         """
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
         offenders: list[str] = []
         for name, lite in HomeAssistantSmartMCPServer._LITE_DOCSTRINGS.items():
-            if "ha_get_skill_guide" not in lite:
-                offenders.append(name)
+            dest = HomeAssistantSmartMCPServer._LITE_DOCSTRING_DESTINATIONS[name]
+            if dest.startswith(_TOOL_RESPONSE_PREFIX):
+                field = dest[len(_TOOL_RESPONSE_PREFIX) :]
+                if f"`{field}`" not in lite:
+                    offenders.append(
+                        f"{name}: defers to its own {field!r} response field "
+                        "but the description never names it"
+                    )
+            elif "ha_get_skill_guide" not in lite:
+                offenders.append(
+                    f"{name}: defers to {dest!r} but the description has no "
+                    "ha_get_skill_guide pointer to reach it"
+                )
 
         assert not offenders, (
-            "Lite descriptions missing a ha_get_skill_guide pointer "
-            f"(invariant from _LITE_DOCSTRINGS docstring): {offenders}"
+            "Lite descriptions with an unreachable anchor:\n"
+            + "\n".join(f"  - {entry}" for entry in offenders)
         )
 
     def test_every_lite_description_starts_with_action_verb(self) -> None:
