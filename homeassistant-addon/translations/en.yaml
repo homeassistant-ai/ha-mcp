@@ -124,7 +124,9 @@ configuration:
     description: 'Captures a per-entity snapshot before every wrapped write/destructive
       MCP tool call (automation, script, scene, helper, dashboard, dashboard resource,
       label, category, group, zone, area, calendar, todo, entity, device, integration,
-      and sibling remove/delete tools). Snapshots are saved as YAML files under /data/ha_mcp_backups/
+      and sibling remove/delete tools). The auto-backup throttle bounds how often
+      that happens: 0 (default) captures on every such call, N>0 at most one snapshot
+      per N minutes per entity. Snapshots are saved as YAML files under /data/ha_mcp_backups/
       (override via HAMCP_BACKUP_DIR) and listed, restored, or deleted via the Backups
       tab in the web settings UI or via ha_manage_backup(scope=''edits'', ...). For
       those domains the capture is best-effort — a failure logs a WARNING and the
