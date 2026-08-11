@@ -13,24 +13,39 @@ def _workflow(name: str) -> dict[str, Any]:
     return yaml.safe_load((_WORKFLOW_DIR / name).read_text(encoding="utf-8"))
 
 
+def _triggers(data: dict[str, Any]) -> set[str]:
+    on_node = data.get(True) or data.get("on") or {}
+    if isinstance(on_node, str):
+        return {on_node}
+    if isinstance(on_node, list):
+        return set(on_node)
+    return set(on_node)
+
+
 def test_pr_workflows_do_not_persist_checkout_credentials() -> None:
-    for name in (
-        "haos-e2e-tests.yml",
-        "build-binary.yml",
-        "performance-tests.yml",
-    ):
-        jobs = _workflow(name)["jobs"].values()
+    checked = 0
+    for path in sorted(_WORKFLOW_DIR.glob("*.yml")):
+        data = _workflow(path.name)
+        if "pull_request" not in _triggers(data):
+            continue
+
+        jobs = data["jobs"].values()
         checkouts = [
             step
             for job in jobs
             for step in job.get("steps", [])
             if "actions/checkout" in str(step.get("uses", ""))
         ]
-        assert checkouts, f"{name} must contain a checkout step"
+        if not checkouts:
+            continue
+
+        checked += 1
         assert all(
             (step.get("with") or {}).get("persist-credentials") is False
             for step in checkouts
-        ), f"{name} persists checkout credentials in a pull_request workflow"
+        ), f"{path.name} persists checkout credentials in a pull_request workflow"
+
+    assert checked, "trigger derivation matched no pull_request workflow with checkout"
 
 
 def test_dev_release_tag_cleanup_uses_authenticated_github_api() -> None:
