@@ -491,7 +491,8 @@
   },
   "tools": {
     "ha_bulk_control": {
-      "title": "Contrôle groupé"
+      "title": "Contrôle groupé",
+      "description": "Contrôler plusieurs appareils avec prise en charge des opérations en masse et suivi WebSocket."
     },
     "ha_call_event": {
       "title": "Déclencher un événement",
@@ -566,7 +567,8 @@
       "description": "Supprime une catégorie Home Assistant."
     },
     "ha_config_remove_group": {
-      "title": "Supprimer le groupe"
+      "title": "Supprimer le groupe",
+      "description": "Supprimer un groupe d'entités Home Assistant basé sur un service via le service group.remove."
     },
     "ha_config_remove_label": {
       "title": "Supprimer l'étiquette",
@@ -601,7 +603,8 @@
       "description": "Crée ou met à jour une ressource de tableau de bord à partir de code ou d'une URL externe."
     },
     "ha_config_set_group": {
-      "title": "Créer/mettre à jour le groupe"
+      "title": "Créer/mettre à jour le groupe",
+      "description": "Créer ou mettre à jour un groupe d'entités Home Assistant basé sur un service via le service group.set."
     },
     "ha_config_set_helper": {
       "title": "Créer/mettre à jour l'assistant",
@@ -620,7 +623,8 @@
       "description": "Crée ou met à jour un script Home Assistant."
     },
     "ha_config_set_yaml": {
-      "title": "Modifier le YAML brut"
+      "title": "Modifier le YAML brut",
+      "description": "Ajouter, remplacer ou supprimer des clés de niveau supérieur dans configuration.yaml ou les fichiers de package."
     },
     "ha_delete_file": {
       "title": "Supprimer le fichier",
@@ -658,7 +662,10 @@
       "title": "Obtenir une capture d'écran du tableau de bord",
       "description": "Récupère les images rendues d'une vue Lovelace."
     },
-    "ha_get_device": {},
+    "ha_get_device": {
+      "title": "Obtenir un appareil (incl. Zigbee/ZHA/Z2M, Z-Wave et Matter)",
+      "description": "Obtenir les informations de l'appareil avec pagination, y compris les appareils Zigbee (ZHA/Z2M) et Z-Wave JS."
+    },
     "ha_get_entity": {
       "title": "Obtenir l'entité",
       "description": "Récupère les informations du registre sur une ou plusieurs entités."
@@ -684,7 +691,8 @@
       "description": "Récupère les journaux Home Assistant à partir de diverses sources."
     },
     "ha_get_operation_status": {
-      "title": "Statut de l'opération"
+      "title": "Statut de l'opération",
+      "description": "Obtenir le statut d'une ou plusieurs opérations d'appareil avec vérification WebSocket en temps réel."
     },
     "ha_get_overview": {
       "title": "Aperçu du système",

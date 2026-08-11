@@ -491,7 +491,8 @@
   },
   "tools": {
     "ha_bulk_control": {
-      "title": "Массовое управление"
+      "title": "Массовое управление",
+      "description": "Управление несколькими устройствами с поддержкой массовых операций и отслеживанием через WebSocket."
     },
     "ha_call_event": {
       "title": "Вызвать событие",
@@ -566,7 +567,8 @@
       "description": "Удалить категорию Home Assistant."
     },
     "ha_config_remove_group": {
-      "title": "Удалить группу"
+      "title": "Удалить группу",
+      "description": "Удалить группу сущностей Home Assistant на основе сервиса через сервис group.remove."
     },
     "ha_config_remove_label": {
       "title": "Удалить метку",
@@ -601,7 +603,8 @@
       "description": "Создать или обновить ресурс панели из кода или внешнего URL."
     },
     "ha_config_set_group": {
-      "title": "Создать или изменить группу"
+      "title": "Создать или изменить группу",
+      "description": "Создать или обновить группу сущностей Home Assistant на основе сервиса через сервис group.set."
     },
     "ha_config_set_helper": {
       "title": "Создать или изменить помощник",
@@ -620,7 +623,8 @@
       "description": "Создать новый или обновить скрипт Home Assistant."
     },
     "ha_config_set_yaml": {
-      "title": "Изменить исходный YAML"
+      "title": "Изменить исходный YAML",
+      "description": "Добавить, заменить или удалить ключи верхнего уровня в configuration.yaml или файлах пакетов."
     },
     "ha_delete_file": {
       "title": "Удалить файл",
@@ -658,7 +662,10 @@
       "title": "Получить снимок панели",
       "description": "Получить отрисованные изображения представления Lovelace."
     },
-    "ha_get_device": {},
+    "ha_get_device": {
+      "title": "Получить устройство (вкл. Zigbee/ZHA/Z2M, Z-Wave и Matter)",
+      "description": "Получить информацию об устройстве с пагинацией, включая устройства Zigbee (ZHA/Z2M) и Z-Wave JS."
+    },
     "ha_get_entity": {
       "title": "Получить сущность",
       "description": "Получить сведения из реестра об одной или нескольких сущностях."
@@ -684,7 +691,8 @@
       "description": "Получить журналы Home Assistant из разных источников."
     },
     "ha_get_operation_status": {
-      "title": "Статус операции"
+      "title": "Статус операции",
+      "description": "Получить статус одной или нескольких операций устройства с проверкой в реальном времени через WebSocket."
     },
     "ha_get_overview": {
       "title": "Обзор системы",

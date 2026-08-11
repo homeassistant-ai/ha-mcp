@@ -623,7 +623,8 @@
       "description": "创建或更新 Home Assistant 脚本。"
     },
     "ha_config_set_yaml": {
-      "title": "原始 YAML 配置编辑"
+      "title": "原始 YAML 配置编辑",
+      "description": "添加、替换或移除 configuration.yaml 或包文件中的顶级键。"
     },
     "ha_delete_file": {
       "title": "删除文件",

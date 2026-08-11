@@ -623,7 +623,8 @@
       "description": "Crea o actualiza un script de Home Assistant."
     },
     "ha_config_set_yaml": {
-      "title": "Edición directa de configuración YAML"
+      "title": "Edición directa de configuración YAML",
+      "description": "Añadir, reemplazar o eliminar claves de nivel superior en configuration.yaml o archivos de paquete."
     },
     "ha_delete_file": {
       "title": "Eliminar archivo",

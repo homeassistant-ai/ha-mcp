@@ -491,7 +491,8 @@
   },
   "tools": {
     "ha_bulk_control": {
-      "title": "Massensteuerung"
+      "title": "Massensteuerung",
+      "description": "Steuere mehrere Geräte mit Unterstützung für Massenoperationen und WebSocket-Verfolgung."
     },
     "ha_call_event": {
       "title": "Ereignis aufrufen",
@@ -566,7 +567,8 @@
       "description": "Entfernt eine Home-Assistant-Kategorie."
     },
     "ha_config_remove_group": {
-      "title": "Gruppe entfernen"
+      "title": "Gruppe entfernen",
+      "description": "Entferne eine dienstbasierte Home Assistant Entitätsgruppe über den Dienst group.remove."
     },
     "ha_config_remove_label": {
       "title": "Label entfernen",
@@ -601,7 +603,8 @@
       "description": "Erstellt oder aktualisiert eine Dashboard-Ressource aus Code oder externer URL."
     },
     "ha_config_set_group": {
-      "title": "Gruppe erstellen/aktualisieren"
+      "title": "Gruppe erstellen/aktualisieren",
+      "description": "Erstelle oder aktualisiere eine dienstbasierte Home Assistant Entitätsgruppe über den Dienst group.set."
     },
     "ha_config_set_helper": {
       "title": "Helfer erstellen/aktualisieren",
@@ -620,7 +623,8 @@
       "description": "Erstellt oder aktualisiert ein Home-Assistant-Skript."
     },
     "ha_config_set_yaml": {
-      "title": "Rohes YAML bearbeiten"
+      "title": "Rohes YAML bearbeiten",
+      "description": "Füge Schlüssel der obersten Ebene in configuration.yaml oder Paketdateien hinzu, ersetze oder entferne sie."
     },
     "ha_delete_file": {
       "title": "Datei löschen",
@@ -658,7 +662,10 @@
       "title": "Dashboard-Screenshot abrufen",
       "description": "Ruft gerenderte Bilder einer Lovelace-Ansicht ab."
     },
-    "ha_get_device": {},
+    "ha_get_device": {
+      "title": "Gerät abrufen (inkl. Zigbee/ZHA/Z2M, Z-Wave und Matter)",
+      "description": "Rufe Geräteinformationen mit Paginierung ab, einschließlich Zigbee (ZHA/Z2M) und Z-Wave JS Geräten."
+    },
     "ha_get_entity": {
       "title": "Entität abrufen",
       "description": "Ruft Registerinformationen über eine oder mehrere Entitäten ab."
@@ -684,7 +691,8 @@
       "description": "Ruft Home-Assistant-Protokolle aus verschiedenen Quellen ab."
     },
     "ha_get_operation_status": {
-      "title": "Operationsstatus"
+      "title": "Operationsstatus",
+      "description": "Rufe den Status einer oder mehrerer Geräteoperationen mit Echtzeit-WebSocket-Verifizierung ab."
     },
     "ha_get_overview": {
       "title": "System-Übersicht",
