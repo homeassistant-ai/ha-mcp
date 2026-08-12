@@ -113,6 +113,29 @@ class TestFormatDetailedTrace:
             "to_state": None,
         }
 
+    def test_format_template_trigger_with_state_objects(self) -> None:
+        """Preserve state strings from entity-driven template trigger traces."""
+        trace_data = {
+            "trace": {
+                "trigger/0": [
+                    {
+                        "changed_variables": {
+                            "trigger": {
+                                "platform": "template",
+                                "from_state": {"state": "off"},
+                                "to_state": {"state": "on"},
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+
+        result = _format_detailed_trace("automation.test", "run_123", trace_data)
+
+        assert result["trigger"]["from_state"] == "off"
+        assert result["trigger"]["to_state"] == "on"
+
     def test_format_legacy_trace_structure(self):
         """Test fallback parsing of potential legacy trace structure (lists)."""
 
