@@ -6,17 +6,19 @@ Verifies that ha_get_automation_traces returns non-empty traces after automation
 """
 
 import logging
+import time
 from typing import Any
 
 import pytest
 
 from ...utilities.assertions import (
+    MCPAssertions,
     assert_mcp_success,
     parse_mcp_result,
     safe_call_tool,
 )
 from ...utilities.entity_finders import find_test_light_entity
-from ...utilities.wait_helpers import wait_for_condition
+from ...utilities.wait_helpers import wait_for_condition, wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,57 @@ class TestAutomationTraces:
     async def _find_test_light_entity(self, mcp_client) -> str:
         """Delegates to the suite-wide helper in utilities.entity_finders."""
         return await find_test_light_entity(mcp_client)
+
+    async def test_template_trace_with_null_trigger_states(
+        self,
+        mcp_client: Any,
+        cleanup_tracker: Any,
+        test_data_factory: Any,
+    ) -> None:
+        """Return time-driven template traces whose HA states are null."""
+        trigger_after = int(time.time()) + 45
+        create_config = test_data_factory.automation_config(
+            "Template Null State Trace",
+            trigger=[
+                {
+                    "platform": "template",
+                    "value_template": (
+                        f"{{{{ as_timestamp(now()) >= {trigger_after} }}}}"
+                    ),
+                }
+            ],
+            action=[{"delay": {"seconds": 0}}],
+            initial_state=True,
+        )
+
+        async with MCPAssertions(mcp_client) as mcp:
+            create_data = await mcp.call_tool_success(
+                "ha_config_set_automation", {"config": create_config}
+            )
+            automation_id = create_data.get("entity_id") or create_data.get(
+                "automation_id"
+            )
+            assert automation_id is not None
+            cleanup_tracker.track("automation", automation_id)
+
+            traces_data = await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_get_automation_traces",
+                arguments={"automation_id": automation_id},
+                predicate=lambda data: data.get("trace_count", 0) > 0,
+                timeout=120,
+                poll_interval=1,
+                description="time-driven template automation trace",
+            )
+            run_id = traces_data["traces"][0]["run_id"]
+            detailed_data = await mcp.call_tool_success(
+                "ha_get_automation_traces",
+                {"automation_id": automation_id, "run_id": run_id},
+            )
+
+        assert detailed_data["trigger"]["platform"] == "template"
+        assert detailed_data["trigger"]["from_state"] is None
+        assert detailed_data["trigger"]["to_state"] is None
 
     async def test_automation_trace_after_trigger(
         self, mcp_client, cleanup_tracker, test_data_factory

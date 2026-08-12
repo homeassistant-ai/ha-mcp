@@ -80,6 +80,39 @@ class TestFormatDetailedTrace:
         assert actions[0]["result"]["params"]["service"] == "turn_on"
         assert actions[1]["child_id"]["item_id"] == "set_brightness_chambre"
 
+    def test_format_template_trigger_with_null_states(self) -> None:
+        """Preserve null states from time-driven template trigger traces."""
+        trace_data = {
+            "state": "stopped",
+            "trace": {
+                "trigger/0": [
+                    {
+                        "path": "trigger/0",
+                        "changed_variables": {
+                            "trigger": {
+                                "platform": "template",
+                                "description": "time change or manual update via template",
+                                "entity_id": None,
+                                "from_state": None,
+                                "to_state": None,
+                            }
+                        },
+                    }
+                ]
+            },
+        }
+
+        result = _format_detailed_trace("automation.test", "run_123", trace_data)
+
+        assert result["success"] is True
+        assert result["trigger"] == {
+            "platform": "template",
+            "description": "time change or manual update via template",
+            "entity_id": None,
+            "from_state": None,
+            "to_state": None,
+        }
+
     def test_format_legacy_trace_structure(self):
         """Test fallback parsing of potential legacy trace structure (lists)."""
 
