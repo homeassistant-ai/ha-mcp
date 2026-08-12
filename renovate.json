@@ -8,7 +8,7 @@
     "after 3pm on tuesday"
   ],
   "minimumReleaseAge": "7 days",
-  "minimumReleaseAgeBehaviour": "timestamp-required",
+  "minimumReleaseAgeBehaviour": "timestamp-optional",
   "logLevelRemap": [
     {
       "matchMessage": "External host error causing abort - skipping",
@@ -86,18 +86,6 @@
     }
   ],
   "packageRules": [
-    {
-      "description": "Docker update streams verified not to publish usable release timestamps",
-      "matchDatasources": [
-        "docker"
-      ],
-      "matchPackageNames": [
-        "ghcr.io/astral-sh/uv",
-        "ghcr.io/home-assistant/home-assistant",
-        "python"
-      ],
-      "minimumReleaseAgeBehaviour": "timestamp-optional"
-    },
     {
       "description": "Keep Python interpreter changes coordinated while allowing same-tag digest refreshes",
       "matchManagers": [

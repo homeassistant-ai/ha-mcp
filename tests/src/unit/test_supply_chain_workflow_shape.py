@@ -145,29 +145,24 @@ def test_renovate_engine_uses_a_full_version_pin() -> None:
     )
 
 
-def test_renovate_age_gate_is_exact_and_scoped() -> None:
+def test_renovate_age_gate_does_not_freeze_timestamp_less_updates() -> None:
     config = json.loads((_REPO_ROOT / "renovate.json").read_text(encoding="utf-8"))
 
     assert config.get("minimumReleaseAge") == "7 days", (
         "the release-age gate from #2196 is part of the supply-chain contract"
     )
-    assert config.get("minimumReleaseAgeBehaviour") == "timestamp-required"
-
-    optional_rules = [
+    assert config.get("minimumReleaseAgeBehaviour") == "timestamp-optional", (
+        "timestamp-required permanently freezes updates from registries that do "
+        "not publish release timestamps"
+    )
+    required_rules = [
         rule
         for rule in config["packageRules"]
-        if rule.get("minimumReleaseAgeBehaviour") == "timestamp-optional"
+        if rule.get("minimumReleaseAgeBehaviour") == "timestamp-required"
     ]
-    assert len(optional_rules) == 1
-    optional_rule = optional_rules[0]
-    assert optional_rule.get("matchDatasources") == ["docker"]
-    assert set(optional_rule.get("matchPackageNames", [])) == {
-        "ghcr.io/astral-sh/uv",
-        "ghcr.io/home-assistant/home-assistant",
-        "python",
-    }, (
-        "only the verified GHCR streams and version-locked Python digest updates "
-        "may bypass the age gate"
+    assert not required_rules, (
+        "package-level timestamp requirements can recreate the permanent freeze "
+        "fixed by #2200"
     )
 
 
@@ -201,8 +196,8 @@ def test_renovate_log_levels_make_failures_actionable_without_warning_noise() ->
         in str(remap.get("matchMessage", ""))
     ]
     assert timestamp_warning_levels == ["info"], (
-        "the expected warning for the two scoped GHCR exceptions should not pollute "
-        "the dependency dashboard"
+        "the expected warning for timestamp-less sources should not pollute the "
+        "dependency dashboard"
     )
 
 
