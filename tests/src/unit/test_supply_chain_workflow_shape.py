@@ -1,5 +1,6 @@
 """Guard supply-chain hardening that cannot be exercised by PR workflows."""
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -97,6 +98,34 @@ def test_pr_checkout_guard_follows_reusable_workflows(tmp_path: Path) -> None:
     )
     with pytest.raises(AssertionError, match=r"reusable\.yaml persists"):
         _assert_checkout_credentials_are_not_persisted(caller, tmp_path)
+
+
+def test_renovate_token_can_read_vulnerability_alerts() -> None:
+    steps = _workflow(_WORKFLOW_DIR / "renovate.yml")["jobs"]["renovate"]["steps"]
+    token_step = next(
+        step
+        for step in steps
+        if "actions/create-github-app-token" in str(step.get("uses", ""))
+    )
+
+    assert (token_step["with"]).get("permission-vulnerability-alerts") == "read", (
+        "the Renovate token lists permission-* inputs and so drops every "
+        "permission it does not name; without vulnerability_alerts read the "
+        "vulnerabilityAlerts carve-out in renovate.json cannot fire"
+    )
+
+
+def test_renovate_age_gate_tolerates_datasources_without_timestamps() -> None:
+    config = json.loads((_REPO_ROOT / "renovate.json").read_text(encoding="utf-8"))
+
+    assert config.get("minimumReleaseAge") is not None, (
+        "the release-age gate from #2196 is part of the supply-chain contract"
+    )
+    assert config.get("minimumReleaseAgeBehaviour") == "timestamp-optional", (
+        "ghcr.io tags carry no releaseTimestamp - the docker datasource reads it "
+        "from Docker Hub only - so minimumReleaseAge under the default "
+        "timestamp-required behaviour holds every ghcr update pending forever"
+    )
 
 
 def test_dev_release_tag_cleanup_uses_authenticated_github_api() -> None:

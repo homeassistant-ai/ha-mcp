@@ -44,6 +44,10 @@ jobs:
           permission-contents: write
           permission-issues: write
           permission-pull-requests: write
+          # Without this the vulnerabilityAlerts carve-out in renovate.json is
+          # dead: an installation token that lists any permission-* input drops
+          # every permission it does not name, including vulnerability_alerts.
+          permission-vulnerability-alerts: read
           permission-workflows: write
 
       - name: Self-hosted Renovate

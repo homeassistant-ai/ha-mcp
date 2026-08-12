@@ -8,6 +8,7 @@
     "after 3pm on tuesday"
   ],
   "minimumReleaseAge": "7 days",
+  "minimumReleaseAgeBehaviour": "timestamp-optional",
   "vulnerabilityAlerts": {
     "minimumReleaseAge": null
   },
