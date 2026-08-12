@@ -118,10 +118,10 @@ def test_renovate_token_can_read_vulnerability_alerts() -> None:
 def test_renovate_age_gate_tolerates_datasources_without_timestamps() -> None:
     config = json.loads((_REPO_ROOT / "renovate.json").read_text(encoding="utf-8"))
 
-    assert (
-        config.get("minimumReleaseAge") is None
-        or config.get("minimumReleaseAgeBehaviour") == "timestamp-optional"
-    ), (
+    assert config.get("minimumReleaseAge") is not None, (
+        "the release-age gate from #2196 is part of the supply-chain contract"
+    )
+    assert config.get("minimumReleaseAgeBehaviour") == "timestamp-optional", (
         "ghcr.io tags carry no releaseTimestamp - the docker datasource reads it "
         "from Docker Hub only - so minimumReleaseAge under the default "
         "timestamp-required behaviour holds every ghcr update pending forever"
