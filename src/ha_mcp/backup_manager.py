@@ -1441,10 +1441,11 @@ async def _fetch_dashboard(client: Any, entity_id: str) -> Any:
     try:
         config, _config_hash = await _get_dashboard_config_internal(client, fetch_path)
     except ToolError as err:
-        # ToolError carries the structured failure payload; treat a
-        # missing/unknown dashboard as "nothing to back up" (also covers a
-        # brand-new dashboard on the create path). "Unknown config
-        # specified" is HA's message for an unresolved url_path.
+        # ToolError carries the structured failure payload, including HA's
+        # preserved ``config_not_found`` code; treat a missing/unknown
+        # dashboard as "nothing to back up" (also covers a brand-new dashboard
+        # on the create path). "Unknown config specified" is HA's message for
+        # an unresolved url_path.
         msg = str(err).lower()
         if "not_found" in msg or "config_not_found" in msg or "unknown config" in msg:
             return None

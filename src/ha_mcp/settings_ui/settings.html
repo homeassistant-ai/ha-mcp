@@ -205,6 +205,7 @@
         mode when enabled) stay available with their write operations
         blocked.
       </div>
+      <div class="feature-locked-note" id="read-only-locked" style="display:none"></div>
     </div>
     <div class="feature-control">
       <label class="switch">
@@ -213,7 +214,7 @@
       </label>
     </div>
   </div>
-  <div class="pin-notice" id="roUnknownNotice" data-i18n="tools.read_only.unknown">
+  <div class="pin-notice" id="roUnknownNotice" role="alert" aria-live="assertive" data-i18n="tools.read_only.unknown">
     Could not read server settings. Read Only Mode status unknown; this
     view may not reflect what the server enforces.
   </div>
@@ -309,6 +310,11 @@
 
   <section id="policy-global-settings" style="margin-bottom:16px">
     <h3 style="font-size:1rem;margin-bottom:8px" data-i18n="policies.global.title">Global settings</h3>
+    <div class="pin-notice" id="policyUnknownNotice" role="alert" aria-live="assertive" data-i18n="policies.global.unknown">
+      Could not read server settings. The two switches below are shown as
+      unknown and cannot be changed until the page reloads successfully;
+      this view may not reflect what the server enforces.
+    </div>
     <div class="feature-row">
       <div class="feature-info">
         <div class="feature-name" id="policy-master-label" data-i18n="policies.global.enabled.label">Enable Tool Security Policies</div>
@@ -318,12 +324,51 @@
           gating middleware. While off, the rules below persist but
           aren't enforced.
         </div>
+        <div class="feature-locked-note" id="policy-master-locked" style="display:none"></div>
       </div>
       <div class="feature-control">
         <label class="switch">
           <input type="checkbox" id="policy-master-toggle" aria-labelledby="policy-master-label">
           <span class="slider"></span>
         </label>
+      </div>
+    </div>
+    <!-- Registers ha_manage_security_policy. Deliberately rendered here and
+         not in the Server Settings feature list (the flag ships no
+         features.* locale keys, so it never enters FEATURE_META): the
+         warning below only makes sense next to the rules it governs. -->
+    <div class="feature-row">
+      <div class="feature-info">
+        <div class="feature-name" id="policy-manage-tool-label" data-i18n="policies.global.manage_tool.label">Let AI agents edit these policies (ha_manage_security_policy)</div>
+        <div class="feature-help" data-i18n="policies.global.manage_tool.help">
+          Registers the ha_manage_security_policy tool, which reads and
+          replaces the policy document this tab edits. Off by default.
+          Independent of the master switch above: this controls who can
+          edit the rules, not whether they are enforced. The tool does not
+          expose pending-approval queue operations, but a policy-gated set
+          action can still require approval.
+        </div>
+        <div class="feature-locked-note" id="policy-manage-tool-locked" style="display:none"></div>
+      </div>
+      <div class="feature-control">
+        <label class="switch">
+          <input type="checkbox" id="policy-manage-tool-toggle" aria-labelledby="policy-manage-tool-label">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+    <div class="ha-alert ha-alert-warning" role="note">
+      <svg class="ha-alert-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M12,2L1,21H23M12,6L19.53,19H4.47M11,10V14H13V10M11,16V18H13V16"/>
+      </svg>
+      <div class="ha-alert-body" data-i18n="policies.global.manage_tool.warning">
+        Enabling this lets connected AI agents rewrite the security policies
+        on this tab, including removing approval gates. To keep a human in
+        the loop, gate the tool BEFORE you enable it: on the Tools tab,
+        switch on "security gated" for Manage Security Policy. That rule can
+        be authored while the tool is still off, and it enforces once the
+        master switch above is on and the server has restarted. Restart the
+        App (add-on) after toggling either switch.
       </div>
     </div>
     <div class="feature-row">

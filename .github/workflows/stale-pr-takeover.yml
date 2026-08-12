@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Remind inactive PR authors and flag takeover-eligible PRs
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             // HTML anchors — drift-resistant vs matching display text (same pattern as close-needs-info.yml)

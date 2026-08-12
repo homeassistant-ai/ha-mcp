@@ -22,8 +22,9 @@ import asyncio
 import contextlib
 import logging
 import os
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 try:  # POSIX
     import fcntl
@@ -128,3 +129,15 @@ def config_file_lock(data_dir: Path | None = None) -> Iterator[None]:
                         msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
             with contextlib.suppress(OSError):
                 os.close(fd)
+
+
+def run_with_file_lock(fn: Callable[..., Any], /, *args: Any) -> Any:
+    """Run ``fn(*args)`` holding the cross-process config file lock.
+
+    Thread-side companion of ``config_write_guard()`` and the single entry
+    point every load-modify-save uses from inside ``asyncio.to_thread``:
+    callers hold the asyncio lock on the loop, so the file lock never nests
+    in-process.
+    """
+    with config_file_lock():
+        return fn(*args)

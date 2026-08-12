@@ -48,6 +48,32 @@ def _result(rule_id: str | None, uri: str, line: int, text: str) -> dict:
     return result
 
 
+_SCOPED_REASON = "Awaiting the cancelled task is the effect."
+
+
+def _ineffectual_allowlist(
+    path_fragment: str, code_substring: str
+) -> tuple[tuple[str, str, str, str, str], ...]:
+    """A one-entry ALLOWLIST for the rule whose message is always generic."""
+    return (
+        (
+            "py/ineffectual-statement",
+            path_fragment,
+            "This statement has no effect",
+            code_substring,
+            _SCOPED_REASON,
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _clear_source_cache():
+    """Source lines are cached per path; keep reads from leaking between tests."""
+    gate._source_lines.cache_clear()
+    yield
+    gate._source_lines.cache_clear()
+
+
 def test_load_findings_sorted_and_parsed(tmp_path: Path) -> None:
     path = _write_sarif(
         tmp_path,
@@ -109,11 +135,29 @@ def test_vendored_paths_are_ignored(tmp_path: Path) -> None:
         tmp_path,
         [
             _result("py/empty-except", "tests/initial_test_state/x.py", 1, "vendored"),
+            _result(
+                "py/empty-except",
+                "src/ha_mcp/_vendor/websockets/client.py",
+                1,
+                "vendored websockets",
+            ),
+            # Our OWN file inside _vendor/: the ignore is scoped to the
+            # library subtree, matching ruff's extend-exclude, so this must
+            # still gate. Ignoring all of _vendor/ would silently ungate it.
+            _result(
+                "py/empty-except",
+                "src/ha_mcp/_vendor/__init__.py",
+                1,
+                "authored",
+            ),
             _result("py/empty-except", "src/a.py", 1, "first-party"),
         ],
     )
     findings = gate.load_findings(path)
-    assert [f[0] for f in findings] == ["src/a.py"]
+    assert [f[0] for f in findings] == [
+        "src/a.py",
+        "src/ha_mcp/_vendor/__init__.py",
+    ]
 
 
 def test_javascript_findings_gate_and_vendored_js_is_ignored(tmp_path: Path) -> None:
@@ -233,6 +277,149 @@ def test_allowlist_wrong_path_is_not_suppressed(tmp_path: Path) -> None:
     findings, suppressed = gate.classify(path)
     assert len(findings) == 1
     assert not suppressed
+
+
+def test_code_scoped_entry_suppresses_the_named_statement(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An entry with a code substring matches against the flagged line's text."""
+    source = tmp_path / "teardown.py"
+    source.write_text(
+        "async def teardown(task):\n"
+        "    with contextlib.suppress(asyncio.CancelledError):\n"
+        "        await task\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        gate, "ALLOWLIST", _ineffectual_allowlist(source.name, "await task")
+    )
+    path = _write_sarif(
+        tmp_path,
+        [
+            _result(
+                "py/ineffectual-statement",
+                str(source),
+                3,
+                "This statement has no effect.",
+            )
+        ],
+    )
+    findings, suppressed = gate.classify(path)
+    assert not findings
+    assert [(f[1], f[4]) for f in suppressed] == [(3, _SCOPED_REASON)]
+
+
+def test_other_ineffectual_statement_in_same_file_still_gates(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Scoping is per statement: a second dead statement in the file still fails.
+
+    Same rule, same file, same generic message as the allowlisted one — only the
+    flagged line's text differs, which is all the gate has to tell them apart.
+    """
+    source = tmp_path / "teardown.py"
+    source.write_text(
+        "async def teardown(task, x):\n"
+        "    with contextlib.suppress(asyncio.CancelledError):\n"
+        "        await task\n"
+        "    x == 1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        gate, "ALLOWLIST", _ineffectual_allowlist(source.name, "await task")
+    )
+    path = _write_sarif(
+        tmp_path,
+        [
+            _result(
+                "py/ineffectual-statement",
+                str(source),
+                3,
+                "This statement has no effect.",
+            ),
+            _result(
+                "py/ineffectual-statement",
+                str(source),
+                4,
+                "This statement has no effect.",
+            ),
+        ],
+    )
+    findings, suppressed = gate.classify(path)
+    assert [f[1] for f in findings] == [4]
+    assert [f[1] for f in suppressed] == [3]
+    assert gate.main(["prog", str(path)]) == 1
+
+
+def test_code_scoped_entry_fails_closed_when_source_is_unreadable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A gate must not suppress a statement it cannot read back from the tree."""
+    missing = tmp_path / "gone.py"
+    monkeypatch.setattr(
+        gate, "ALLOWLIST", _ineffectual_allowlist(missing.name, "await task")
+    )
+    path = _write_sarif(
+        tmp_path,
+        [
+            _result(
+                "py/ineffectual-statement",
+                str(missing),
+                3,
+                "This statement has no effect.",
+            )
+        ],
+    )
+    findings, suppressed = gate.classify(path)
+    assert len(findings) == 1
+    assert not suppressed
+
+
+def test_code_scoped_entry_fails_closed_without_a_line_number(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """No region.startLine means no statement to verify, so no suppression."""
+    source = tmp_path / "teardown.py"
+    source.write_text("        await task\n", encoding="utf-8")
+    monkeypatch.setattr(
+        gate, "ALLOWLIST", _ineffectual_allowlist(source.name, "await task")
+    )
+    path = _write_sarif(
+        tmp_path,
+        [
+            _result(
+                "py/ineffectual-statement",
+                str(source),
+                0,
+                "This statement has no effect.",
+            )
+        ],
+    )
+    findings, suppressed = gate.classify(path)
+    assert len(findings) == 1
+    assert not suppressed
+
+
+def test_empty_code_substring_suppresses_without_reading_the_source(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An entry with "" keeps the rule/path/message-only behavior."""
+    missing = tmp_path / "gone.py"
+    monkeypatch.setattr(gate, "ALLOWLIST", _ineffectual_allowlist(missing.name, ""))
+    path = _write_sarif(
+        tmp_path,
+        [
+            _result(
+                "py/ineffectual-statement",
+                str(missing),
+                3,
+                "This statement has no effect.",
+            )
+        ],
+    )
+    findings, suppressed = gate.classify(path)
+    assert not findings
+    assert [f[4] for f in suppressed] == [_SCOPED_REASON]
 
 
 def test_result_without_location_still_gates(tmp_path: Path) -> None:

@@ -1,0 +1,161 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Niestandardowy komponent HA-MCP",
+        "description": "Wybierz, co dodać. **Serwer HA-MCP** uruchamia pełny serwer ha-mcp wewnątrz Home Assistanta i udostępnia go poprzez webhook Home Assistanta – jest to instalacja, której większość osób potrzebuje. Jest to samodzielny serwer i kompletny zamiennik dla każdej innej metody instalacji (dodatek, Docker, uvx/PyPI, stdio); jeśli go uruchomisz, nie uruchamiaj jednocześnie żadnej z pozostałych. **Narzędzia plików i YAML HA-MCP** dodają uprzywilejowane usługi edycji plików i YAML, potrzebne tylko wtedy, gdy włączysz opcjonalne narzędzia plików/YAML ha-mcp. Jeśli Twój serwer ha-mcp działa już gdzie indziej (dodatek, Docker, uvx), nie potrzebujesz wpisu serwera – dodaj tylko ten wpis dotyczący plików i YAML, i tylko jeśli używasz tych narzędzi. Działa z każdym typem serwera i można go dodać w dowolnym momencie.",
+        "menu_options": {
+          "server": "Serwer HA-MCP (zalecane)",
+          "tools": "Narzędzia plików i YAML HA-MCP (opcjonalne)"
+        }
+      },
+      "tools": {
+        "title": "Narzędzia plików i YAML HA-MCP",
+        "description": "Konfiguruje uprzywilejowane usługi plików i konfiguracji YAML. Potrzebne tylko wtedy, gdy włączysz opcjonalne narzędzia edycji plików/YAML ha-mcp (flagi funkcji, domyślnie wyłączone) – dotyczy to każdego typu serwera, w tym serwera HA-MCP działającego w procesie. Możesz dodać lub usunąć ten wpis w dowolnym momencie."
+      },
+      "server": {
+        "title": "Serwer HA-MCP",
+        "description": "Uruchamia pełny serwer ha-mcp wewnątrz Home Assistanta i udostępnia go zdalnie poprzez webhook Home Assistanta (dostępny przez Nabu Casa lub dowolny reverse proxy). Jest to samodzielny serwer i kompletny zamiennik dla metod instalacji: dodatku, Docker, uvx/PyPI i stdio – nie uruchamiaj go równolegle z innym serwerem ha-mcp. Wybierz **Zatwierdź**, aby go uruchomić; port, powiązanie i uwierzytelnianie możesz zmienić później w opcjach integracji."
+      }
+    },
+    "abort": {
+      "already_configured": "Ten wpis jest już skonfigurowany.",
+      "unsupported_home_assistant": "Serwer HA-MCP działający w procesie wymaga Home Assistanta w wersji {required} lub nowszej, ale ta instancja działa na wersji {installed}. Nadal możesz używać wpisu Narzędzia plików i YAML HA-MCP tego komponentu z zewnętrznym serwerem ha-mcp działającym jako dodatek lub kontener Docker."
+    }
+  },
+  "options": {
+    "step": {
+      "tools_info": {
+        "title": "Narzędzia plików i YAML HA-MCP",
+        "description": "Skonfiguruj uprzywilejowane usługi edycji plików i YAML używane przez opcjonalne narzędzia plików/YAML ha-mcp. Te ustawienia pojawiają się również w interfejsie ustawień serwera ha-mcp i są stosowane na żywo, bez restartu. Nienadpisywalna blokada nadal blokuje wrażliwe ścieżki (np. .storage) i klucze graniczne zaufania (homeassistant, http, frontend, lovelace).",
+        "data": {
+          "allowed_dirs": "Dodatkowe katalogi plików",
+          "extra_yaml_keys": "Dodatkowe klucze zapisu YAML"
+        },
+        "data_description": {
+          "allowed_dirs": "Katalogi względem katalogu konfiguracyjnego, każdy z uprawnieniami do odczytu i zapisu (np. pyscript). Wpisy poza konfiguracją i przechodzenie przez katalogi są odrzucane.",
+          "extra_yaml_keys": "Klucze najwyższego poziomu, które ha_config_set_yaml może zapisywać oprócz wbudowanych, dla integracji opartych na YAML w tej instalacji (np. alert2). Klucze graniczne zaufania są odrzucane."
+        }
+      },
+      "init": {
+        "title": "Serwer HA-MCP",
+        "description": "Skonfiguruj serwer HA-MCP. {panel_hint}Zmiany są stosowane po zapisaniu.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
+        "data": {
+          "channel": "Kanał wydania",
+          "auto_update": "Automatyczne aktualizacje serwera",
+          "server_port": "Port nasłuchu serwera MCP",
+          "bind_host": "Dostęp sieciowy",
+          "webhook_auth": "Tryb uwierzytelniania",
+          "oauth_client_id_override": "Legacy OAuth: niestandardowy Client ID (opcjonalnie)",
+          "oauth_client_secret_override": "Legacy OAuth: niestandardowy Client Secret (opcjonalnie)",
+          "oauth_regenerate": "Legacy OAuth: wygeneruj ponownie Client ID/Secret teraz",
+          "pip_spec": "Deweloper: nadpisanie pakietu ha-mcp",
+          "server_url": "URL Home Assistanta (zaawansowane)",
+          "external_url": "Zewnętrzny URL (opcjonalnie)",
+          "webhook_id_override": "Niestandardowy sekret webhooka (opcjonalnie)",
+          "secret_path_override": "Niestandardowa ścieżka bezpośredniego dostępu (opcjonalnie)",
+          "regenerate_secrets": "Wygeneruj ponownie sekrety połączenia teraz",
+          "enable_webhook": "Zdalny dostęp przez webhook",
+          "enable_llm_api": "API LLM agenta konwersacyjnego",
+          "llm_api_exposure": "Udostępnianie narzędzi agenta konwersacyjnego",
+          "enable_startup_notification": "Powiadomienie o uruchomieniu",
+          "enable_sidebar_panel": "Panel ustawień paska bocznego"
+        },
+        "data_description": {
+          "channel": "„Stable” instaluje najnowszą stabilną wersję; „Development” instaluje najnowszą wersję rozwojową. Gdy automatyczne aktualizacje są włączone, przeładowanie lub restart, a także okresowe sprawdzanie, instalują najnowszą kompilację wybranego kanału. Nadpisanie pakietu deweloperskiego poniżej ma pierwszeństwo i wyłącza automatyczne aktualizacje.",
+          "auto_update": "Gdy włączone, najnowsza wersja wybranego kanału jest instalowana automatycznie – podczas przeładowania lub restartu oraz poprzez okresowe sprawdzanie. Gdy wyłączone, serwer pozostaje na aktualnie zainstalowanej wersji, dopóki nie włączysz tej opcji ponownie. Kontroluje to tylko pakiet serwera ha-mcp; aktualizacje samego niestandardowego komponentu HA-MCP nadal pochodzą z HACS.",
+          "server_port": "Port, na którym nasłuchuje ten serwer. Dodatek ha-mcp używa portu 9583, więc domyślnie jest to 9584, aby umożliwić ich równoczesne działanie – jeśli nie używasz dodatku, dowolny wolny port będzie działać.",
+          "bind_host": "Kto może bezpośrednio połączyć się z portem serwera MCP. Domyślne ustawienie odpowiada dodatkowi: dostępne w Twojej sieci lokalnej, z tajną ścieżką jako poświadczeniem. Wybierz „loopback”, aby zezwolić tylko na połączenia z samej maszyny Home Assistant – URL webhooka i panel paska bocznego działają w obu przypadkach.",
+          "webhook_auth": "Jak klienci MCP uwierzytelniają się pod adresem URL webhooka. W przypadku tajnego URL, sam link jest poświadczeniem. W przypadku logowania Home Assistant, klienci tacy jak claude.ai logują się za pomocą konta administratora Home Assistant (OAuth). W przypadku legacy OAuth, ta integracja wydaje własne Client ID i Secret do wklejenia w klientach, które tego wymagają, takich jak Google Gemini Spark – wymaga restartu Home Assistanta, aby włączyć lub wyłączyć.",
+          "oauth_client_id_override": "Zastępuje automatycznie wygenerowany Client ID legacy OAuth. Pozostaw puste, aby zachować obecny. Używane tylko, gdy tryb uwierzytelniania jest ustawiony na legacy OAuth.",
+          "oauth_client_secret_override": "Zastępuje automatycznie wygenerowany Client Secret legacy OAuth. Pozostaw puste, aby zachować obecny. Używane tylko, gdy tryb uwierzytelniania jest ustawiony na legacy OAuth.",
+          "oauth_regenerate": "Jednorazowa akcja: generuje nowe Client ID i Secret dla trybu legacy OAuth. Wchodzi w życie dopiero po restarcie Home Assistanta, o który prosi monit naprawy – dopóki nie zrestartujesz, poprzednie Client ID i Secret nadal działają, a nowe nie. Czyści również dwa powyższe pola nadpisania.",
+          "pip_spec": "Pozostaw puste. Tylko do testowania konkretnej kompilacji ha-mcp (na przykład przypiętej wersji przedpremierowej); nadpisuje kanał wydania i wyłącza automatyczne aktualizacje, dopóki nie zostanie wyczyszczone.",
+          "server_url": "URL, którego serwer działający w procesie używa do dotarcia do Twojego Home Assistanta (zazwyczaj tej samej instancji). Pozostaw puste, aby wyprowadzić go z portu i ustawień SSL tej instancji; ustaw wartość tylko wtedy, gdy serwer potrzebuje innej trasy.",
+          "external_url": "Wyświetlany jako główny URL połączenia — użyj go, gdy Home Assistant znajduje się za Twoją własną domeną lub odwrotnym proxy. Wprowadź pełny adres bazowy, włączając schemat. Musi wskazywać bezpośrednio na Home Assistant – otwarcie go w przeglądarce powinno prowadzić do strony logowania HA – i nie może zawierać portu, takiego jak :8123 (ani żadnego innego portu), w przeciwnym razie zdalne klienty MCP nie będą mogły się z nim połączyć. Pozostaw puste, aby automatycznie użyć Nabu Casa / adresu lokalnego.",
+          "webhook_id_override": "Zastępuje losowy sekret webhooka w URL-u połączenia (/api/webhook/...). URL jest poświadczeniem – użyj długiej, trudnej do odgadnięcia wartości. Pozostaw puste, aby zachować obecny.",
+          "secret_path_override": "Zastępuje losową ścieżkę używaną do bezpośredniego dostępu na porcie serwera. Ta sama zasada: ścieżka jest poświadczeniem. Pozostaw puste, aby zachować obecny.",
+          "regenerate_secrets": "Jednorazowa akcja: generuje nowy, losowy sekret webhooka i ścieżkę bezpośredniego dostępu, natychmiast unieważniając stare URL-e połączenia. Czyści również dwa powyższe pola nadpisania.",
+          "enable_webhook": "Wyłącz dla trybu tylko lokalnego: webhook Home Assistant nie jest w ogóle rejestrowany, więc nic – w tym Nabu Casa – nie może dotrzeć do serwera przez Home Assistant. Bezpośredni port serwera i panel boczny nadal działają.",
+          "enable_llm_api": "Oferuj pełny zestaw narzędzi agentom konwersacyjnym Home Assistant (OpenAI, Google, Ollama, ...): gdy włączone, agenci mogą wybrać „HA-MCP Server” w sekcji „Steruj Home Assistant” i używać narzędzi z czatu i głosu Assist. Włączenie tylko sprawia, że jest ono dostępne do wyboru – nic nie jest ujawniane, dopóki nie wybierzesz go dla agenta. Przewodnik użytkowania: {llm_api_docs_url}",
+          "llm_api_exposure": "Kształt zestawu narzędzi oferowanego agentom konwersacyjnym. Wyszukiwanie narzędzi (domyślne) utrzymuje mały kontekst agenta: kompaktowe API z przypiętymi narzędziami plus meta-narzędzia do wyszukiwania/wykonywania. Pełny katalog wyświetla każde ujawnione narzędzie bezpośrednio – lepsze dla modeli o dużym kontekście. Oba rejestrują się obok siebie, więc każdy agent wybiera własne w sekcji „Steruj Home Assistant”. Ujawnianie poszczególnych narzędzi jest zarządzane w panelu ustawień HA-MCP; szczegóły: {llm_api_docs_url}",
+          "enable_startup_notification": "Pokazuj powiadomienie za każdym razem, gdy serwer się uruchamia, wskazujące na powierzchnie ustawień tylko dla administratorów. Wyłącz, aby uruchamiać cicho – URL-e połączenia nadal pojawiają się w logu Home Assistant.",
+          "enable_sidebar_panel": "Pokaż panel ustawień HA-MCP na pasku bocznym (tylko dla administratorów). Wyłącz, aby usunąć wpis z paska bocznego – opcje serwera pozostają dostępne na tym ekranie."
+        }
+      }
+    }
+  },
+  "issues": {
+    "server_start_failed": {
+      "title": "Serwer HA-MCP w procesie nie uruchomił się",
+      "description": "Serwer HA-MCP w procesie nie mógł zostać uruchomiony wewnątrz Home Assistant:\n\n{detail}\n\nSprawdź logi Home Assistant, a następnie przeładuj integrację (lub napraw podstawowy problem i przeładuj), aby spróbować ponownie."
+    },
+    "server_package_install_failed": {
+      "title": "Pakiet serwera HA-MCP w procesie nie mógł zostać zainstalowany",
+      "description": "Instalacja pakietu ha-mcp dla serwera w procesie nie powiodła się:\n\n{detail}\n\nRozwiąż problem zgodności lub instalacji opisany powyżej, a następnie przeładuj integrację, aby spróbować ponownie."
+    },
+    "component_outdated": {
+      "title": "Zaktualizuj niestandardowy komponent HA-MCP przez HACS",
+      "description": "Zainstalowany serwer ha-mcp wymaga niestandardowego komponentu HA-MCP {required} lub nowszego, ale masz {installed}. Zaktualizuj komponent przez HACS (otwórz wpis niestandardowego komponentu HA-MCP i użyj „Aktualizuj informacje”, jeśli aktualizacja nie jest jeszcze widoczna) i uruchom ponownie Home Assistant. Serwer działa w międzyczasie, ale niektóre nowsze funkcje mogą nie działać, dopóki komponent nie zostanie zaktualizowany."
+    },
+    "server_update_held": {
+      "title": "Aktualizacja serwera HA-MCP oczekuje na aktualizację komponentu",
+      "description": "Serwer ha-mcp {latest} jest dostępny, ale ta wersja zaktualizowała również niestandardowy komponent HA-MCP (do {shipped}; używasz {running}). Aby uniknąć uruchamiania wersji serwera, z którą działający komponent nigdy nie był testowany, automatyczna aktualizacja serwera jest wstrzymana do czasu aktualizacji komponentu.\n\nZaktualizuj komponent przez HACS (otwórz wpis niestandardowego komponentu HA-MCP i użyj „Aktualizuj informacje”, jeśli aktualizacja nie jest jeszcze widoczna), a następnie uruchom ponownie Home Assistant – aktualizacja serwera zainstaluje się automatycznie później. Aby mimo wszystko zainstalować aktualizację serwera, naciśnij „Zainstaluj” na encji aktualizacji serwera HA-MCP."
+    },
+    "legacy_hacs_source": {
+      "title": "Komponent zainstalowany z przestarzałego repozytorium",
+      "description": "HACS śledzi główne repozytorium serwera ha-mcp dla tego komponentu, więc HACS wyświetla tutaj numery wersji serwera (7.x) i jego notatki o wydaniu zamiast własnych komponentu (1.x). Aktualizacje nadal działają, ale pozostają błędnie oznaczone. Aby to naprawić: usuń to repozytorium z HACS (Twoje ustawienia integracji i wpisy konfiguracyjne zostaną zachowane), dodaj homeassistant-ai/ha-mcp-integration jako niestandardowe repozytorium, zainstaluj ponownie komponent z niego i uruchom ponownie Home Assistant."
+    },
+    "legacy_oauth_restart": {
+      "title": "Uruchom ponownie Home Assistant, aby zastosować zmianę legacy OAuth",
+      "description": "Tryb uwierzytelniania legacy OAuth rejestruje własne punkty końcowe /authorize i /token, które Home Assistant może powiązać lub zwolnić tylko po pełnym ponownym uruchomieniu – niezależnie od tego, czy właśnie włączyłeś ten tryb, wyłączyłeś go, czy zmieniłeś jego Client ID/Secret. Uruchom ponownie Home Assistant (Ustawienia - System - Uruchom ponownie), aby zastosować zmianę; do tego czasu poprzednie zachowanie pozostaje w mocy."
+    }
+  },
+  "selector": {
+    "server_channel": {
+      "options": {
+        "stable": "Stabilny (zalecany)",
+        "dev": "Deweloperski (najnowsza kompilacja)"
+      }
+    },
+    "server_webhook_auth": {
+      "options": {
+        "none": "Tajny URL webhooka (domyślny)",
+        "ha_auth": "Zaloguj się za pomocą Home Assistant (OAuth)",
+        "legacy": "Legacy OAuth (Client ID/Secret, dla Google Gemini Spark)"
+      }
+    },
+    "llm_api_exposure": {
+      "options": {
+        "tool_search": "Wyszukiwanie narzędzi (kompaktowe, domyślne)",
+        "full": "Pełny katalog",
+        "both": "Oba (wybór na agenta)"
+      }
+    }
+  },
+  "entity": {
+    "update": {
+      "server_update": {
+        "name": "Aktualizacja"
+      }
+    }
+  },
+  "common": {
+    "connect_direct_access": "Bezpośredni dostęp z maszyny Home Assistant: {url}",
+    "connect_local_lan": "Lokalnie/LAN (gdy dostęp do sieci to \"Local network\"): {url}",
+    "connect_remote_url": "Zdalny URL połączenia: {url}",
+    "connect_urls_label": "URL(e) połączenia:",
+    "connect_urls_pending": "URL-e połączenia pojawią się tutaj (i w logu Home Assistant) po uruchomieniu serwera.",
+    "connect_webhook_disabled": "Zdalny dostęp przez webhook jest wyłączony (tryb tylko lokalny).",
+    "oauth_creds_pending": "Client ID i Client Secret pojawią się tutaj po uruchomieniu serwera.",
+    "oauth_not_serving": "Legacy OAuth jeszcze ich nie udostępnia — uruchom ponownie Home Assistanta, gdy pojawi się taka prośba, aby je aktywować.",
+    "oauth_select_legacy_mode": "Ustaw tryb uwierzytelniania na legacy OAuth powyżej i zapisz, aby wygenerować Client ID i Client Secret.",
+    "panel_hint": "Otwórz [panel ustawień HA-MCP](/ha-mcp) do zarządzania narzędziami i ustawieniami serwera.",
+    "tools_module_installed": "Moduł narzędzi beta/zaawansowanych plików i YAML (opcjonalny): Zainstalowany",
+    "tools_module_not_installed": "Moduł narzędzi beta/zaawansowanych plików i YAML (opcjonalny): Niezainstalowany — naciśnij „Dodaj wpis” na stronie tej integracji i wybierz „HA-MCP File & YAML Tools”, aby go dodać",
+    "tools_module_not_loaded": "Moduł narzędzi beta/zaawansowanych plików i YAML (opcjonalny): Zainstalowany, ale niezaładowany — włącz lub przeładuj wpis „HA-MCP File & YAML Tools” na stronie tej integracji",
+    "version_line": "Komponent {component_version} - Serwer ha-mcp {server_version} (kanał {channel})",
+    "version_not_installed": "jeszcze niezainstalowany",
+    "version_unknown": "nieznany"
+  }
+}

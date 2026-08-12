@@ -40,6 +40,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
+from .tools_config_helpers import validate_registry_ids
 from .util_helpers import (
     JSON_STRING_COERCION,
     apply_entity_category,
@@ -290,49 +291,13 @@ class ConfigSceneTools:
         with a phantom reference invisible in
         ``ha_config_get_category(scope='scene')`` results. Pre-validating
         the ID against the live category registry is the only place the
-        phantom can be caught without changing HA itself.
+        phantom can be caught without changing HA itself. Issue #2159 moved
+        the check onto the shared cross-registry validator so every write
+        tool rejects dangling references identically.
         """
-        try:
-            result = await self._client.send_websocket_message(
-                {"type": "config/category_registry/list", "scope": "scene"}
-            )
-        except (
-            TimeoutError,
-            HomeAssistantAPIError,
-            HomeAssistantConnectionError,
-        ) as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to validate category {category!r}: {e}",
-                    context={"category": category, "scope": "scene"},
-                )
-            )
-        if not isinstance(result, dict) or not result.get("success"):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to list categories for validation of {category!r}",
-                    context={"category": category, "scope": "scene"},
-                )
-            )
-        valid_ids = {
-            c.get("category_id")
-            for c in (result.get("result") or [])
-            if isinstance(c, dict)
-        }
-        if category not in valid_ids:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Category {category!r} does not exist in scope 'scene'",
-                    suggestions=[
-                        "Use ha_config_get_category(scope='scene') to list available categories",
-                        "Use ha_config_set_category(name=..., scope='scene') to create a new category",
-                    ],
-                    context={"category": category, "scope": "scene"},
-                )
-            )
+        await validate_registry_ids(
+            self._client, None, None, {"scene": category}, fail_closed=True
+        )
 
     @tool(
         name="ha_config_get_scene",

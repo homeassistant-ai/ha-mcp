@@ -59,7 +59,9 @@ jobs:
     outputs:
       run: ${{ steps.filter.outputs.run }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Classify changed files
         id: filter
         env:
@@ -121,8 +123,9 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           # Required for tests/src/e2e/tools/test_skills_resources.py — the
           # skills bundle lives at src/ha_mcp/resources/skills-vendor.
           submodules: true
@@ -155,7 +158,7 @@ jobs:
 
       - name: Restore image from cache
         id: restore-cache
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: /tmp/haos-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
@@ -223,7 +226,7 @@ jobs:
         # doesn't save, see the block comment at the same position in
         # ``haos-e2e-inaddon-tests.yml``.
         if: steps.restore-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: /tmp/haos-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
@@ -278,9 +281,20 @@ jobs:
         run: |
           sudo chmod +r /boot/vmlinuz-* || true
           mkdir -p /tmp/haos-diagnostics
+          # Bake-stage failures leave their image + serial log under
+          # /tmp/haos-build (build_image.py's work dir), not the test-run
+          # paths probed below - without this the whole diagnostics
+          # artifact is empty exactly when the failure is hardest to see
+          # (the 2026-08-05 bake timeouts against the day-of-release HA
+          # 2026.8.0 shipped a 263-byte artifact). Capture the bake
+          # serial log and point the guestfish probes at whichever qcow2
+          # exists.
+          cp /tmp/haos-build/haos-serial.log /tmp/haos-diagnostics/bake-serial.log 2>/dev/null || true
+          QCOW2=/tmp/haos-test-image.qcow2
+          [ -f "$QCOW2" ] || QCOW2=/tmp/haos-build/haos-test-image.qcow2
           # Probe: full directory listing of HA's config dir. Captures
           # whatever HA actually writes (log filenames vary by config).
-          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
+          guestfish --ro -a "$QCOW2" run \
             : mount /dev/sda8 / \
             : ll /supervisor/homeassistant \
             > /tmp/haos-diagnostics/config-dir-listing.txt 2>&1 \
@@ -288,12 +302,12 @@ jobs:
           # Pull everything log-shaped + the .storage tree out as a tar.
           # tar-out includes the full subtree so anything-named-log gets
           # captured; .storage gives us config_entries + other state.
-          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
+          guestfish --ro -a "$QCOW2" run \
             : mount /dev/sda8 / \
             : tar-out /supervisor/homeassistant/.storage /tmp/haos-diagnostics/storage.tar \
             || echo ".storage tar-out failed"
           # Same for any log files in the config root.
-          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
+          guestfish --ro -a "$QCOW2" run \
             : mount /dev/sda8 / \
             : glob copy-out '/supervisor/homeassistant/*.log*' /tmp/haos-diagnostics/ \
             || echo "log glob copy failed"
@@ -308,7 +322,7 @@ jobs:
 
       - name: Upload HAOS diagnostics
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: haos-diagnostics
           path: |

@@ -29,6 +29,7 @@ import logging
 from typing import Any, Literal
 
 from ..errors import ErrorCode, create_error_response
+from ..redaction import sentinel_option_keys
 from .config_entry_flow_form import _extract_schema_field_names
 from .config_entry_flow_walker import (
     _FlowType,
@@ -38,6 +39,31 @@ from .config_entry_flow_walker import (
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
+
+
+def _reject_redaction_sentinels(config_dict: dict[str, Any]) -> None:
+    """Reject config values that are redaction placeholders (#2157).
+
+    A caller round-tripping a redacted read back through a flow write would
+    overwrite the live credential with the placeholder string. Omitting the
+    key keeps the current value, so rejection loses nothing. Active
+    regardless of the redact_secrets toggle: a sentinel captured while
+    redaction was on must not overwrite a credential after the operator
+    turns it off.
+    """
+    sentinel_keys = sentinel_option_keys(config_dict)
+    if sentinel_keys:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "config contains redaction placeholder values for: "
+                f"{', '.join(sentinel_keys)}. These came from a redacted "
+                "read, not real values — omit these keys to keep the "
+                "current values, or submit the real value.",
+                context={"parameter": "config"},
+            )
+        )
+
 
 # 15 helpers that use Config Entry Flow API (Issue #324).
 SUPPORTED_HELPERS = Literal[
@@ -106,6 +132,7 @@ async def set_config_subentry(
     ``show_advanced_options`` is a no-op on HA 2026.6+ and kept only for older
     HA versions pending removal before HA 2027.6.
     """
+    _reject_redaction_sentinels(config_dict)
     flow_result = await client.start_config_subentry_flow(
         entry_id,
         subentry_type,
@@ -220,6 +247,7 @@ async def update_config_entry_options(
     an options flow, walks the flow steps, and returns the result. Aborts the
     flow on error. ``noun`` only affects response wording.
     """
+    _reject_redaction_sentinels(config_dict)
     config_entry = await client.get_config_entry(entry_id)
     actual_domain = config_entry.get("domain")
     if expected_domain is not None and actual_domain != expected_domain:
@@ -318,6 +346,7 @@ async def create_config_entry(
     and returns the result. Aborts the flow on error. ``noun`` only affects
     response wording.
     """
+    _reject_redaction_sentinels(config_dict)
     flow_result = await client.start_config_flow(domain)
     flow_id = flow_result.get("flow_id")
 

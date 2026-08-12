@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 87+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 88+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -293,7 +293,7 @@ Requires add-on restart to take effect.
 
 **Default:** `false`
 
-Replaces the full tool catalog (~87 tools) with search-based discovery (~4 proxy tools). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~88 tools) with search-based discovery (~4 proxy tools). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 > ⚠️ **Do NOT enable this if your client has its own built-in tool search / deferred tools (claude.ai, Claude Desktop, Claude Code).** The two search layers conflict — running both at once does not work — and the client's built-in tool search is the better choice there anyway. Leave this off in those clients. Some Codex models and ChatGPT include deferred tools too — check your client/model directly to confirm its features so you don't leave this enabled unnecessarily.
 
@@ -369,6 +369,29 @@ The same toggle appears at the top of the **Tools** tab in the web UI. Off by de
 
 ```yaml
 read_only_mode: true
+```
+
+### redact_secrets
+
+**Default:** `false`
+
+Redacts secrets from tool responses before they reach the AI assistant. When enabled:
+
+- **Add-on options** (`ha_get_addon`, `ha_manage_addon`): any option value whose add-on schema marks it `format: password` is replaced with `<redacted: set>` or `<redacted: empty>` — so "is this credential configured at all?" stays answerable without disclosing the value.
+- **Integration options** (`ha_get_integration`): fields the options flow marks with a password selector get the same treatment, including the `include_schema=True` schema echo.
+- **All other tool responses** (logs, file reads, diagnostics, etc.): occurrences of secret values the server has already seen on the surfaces above are scrubbed to `<redacted>`.
+
+Redaction is schema-driven — fields not marked as passwords by their schema cannot be detected and are returned as-is until the value scrub has seen them. The value scrub skips secrets shorter than 6 characters (replacing tiny fragments would corrupt unrelated output). Writes through `ha_manage_addon` keep working with partial updates (merging uses the real current options server-side), and submitting a redaction marker as a value is rejected so a redacted read can never be written back into a live config.
+
+**When to enable:**
+- Add-on or integration configs hold credentials (API tokens, PATs, database passwords) that must not land in AI conversation transcripts
+
+Off by default. Requires add-on restart to take effect.
+
+**Example Configuration:**
+
+```yaml
+redact_secrets: true
 ```
 
 ---
@@ -486,7 +509,7 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 87+ MCP tools for controlling Home Assistant:
+The add-on provides 88+ MCP tools for controlling Home Assistant:
 
 > **Note:** This list is regenerated from the `master` branch on every push, but the add-on image you have installed only updates on stable releases (biweekly, Wednesdays 10:00 UTC). A tool listed below may not yet be present in your installed runtime. If so, calling it returns an "unknown tool" error until the next stable release.
 
@@ -563,7 +586,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 
 ### HACS
 - `ha_get_hacs_info` — Get HACS (Home Assistant Community Store) data — search the store or fetch repository details.
-- `ha_manage_hacs` — Manage HACS (Home Assistant Community Store) — install/update, remove, or add custom repositories.
+- `ha_manage_hacs` — Manage HACS (Home Assistant Community Store) — install/update, remove, add custom repositories, or refresh repository information.
 
 ### Helper Entities
 - `ha_config_list_helpers` — List Home Assistant helpers of a specific type with their configurations.
@@ -618,6 +641,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_config_set_yaml` **(beta — dev channel only)** — Update raw YAML configuration in configuration.yaml, packages/*.yaml, or themes/*.yaml (LAST RESORT).
 - `ha_manage_backup` — Polymorphic backup tool. See the tool description for the routing matrix.
 - `ha_manage_custom_tool` **(beta — dev channel only)** — Create and run a custom tool in a sandbox, or manage saved custom tools.
+- `ha_manage_security_policy` — Manage the tool security policy that gates high-stakes tool calls behind user approval.
 - `ha_manage_theme` — Manage Home Assistant frontend themes.
 - `ha_manage_updates` — Manage Home Assistant updates -- list, read details, batch install, skip, or un-skip.
 - `ha_reload_core` — Reload Home Assistant configuration without full restart.

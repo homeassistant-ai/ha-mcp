@@ -1,0 +1,161 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA-MCP Aangepaste Component",
+        "description": "Kies wat je wilt toevoegen. **HA-MCP Server** draait de volledige ha-mcp server binnen Home Assistant en stelt deze beschikbaar via een Home Assistant webhook - dit is de installatie die de meeste mensen willen. Het is een standalone server en een complete vervanging voor elke andere installatiemethode (add-on, Docker, uvx/PyPI, stdio); als je deze draait, draai dan niet ook een van die andere. **HA-MCP Bestands- & YAML-hulpmiddelen** voegt de geprivilegieerde bestands- en YAML-bewerkingsservices toe, alleen nodig als je de opt-in bestands-/YAML-hulpmiddelen van ha-mcp inschakelt. Als je ha-mcp server al elders draait (add-on, Docker, uvx), heb je de server-ingang niet nodig - voeg alleen deze Bestands- & YAML-ingang toe, en alleen als je die hulpmiddelen gebruikt. Het werkt met elk servertype en kan op elk moment later worden toegevoegd.",
+        "menu_options": {
+          "server": "HA-MCP Server (aanbevolen)",
+          "tools": "HA-MCP Bestands- & YAML-hulpmiddelen (optioneel)"
+        }
+      },
+      "tools": {
+        "title": "HA-MCP Bestands- & YAML-hulpmiddelen",
+        "description": "Stelt de geprivilegieerde bestands- en YAML-configuratieservices in. Alleen nodig als je de opt-in bestands-/YAML-bewerkingshulpmiddelen van ha-mcp inschakelt (feature flags, standaard uitgeschakeld) - dit geldt voor elk servertype, inclusief de in-process HA-MCP Server. Je kunt deze ingang op elk moment toevoegen of verwijderen."
+      },
+      "server": {
+        "title": "HA-MCP Server",
+        "description": "Dit draait de volledige ha-mcp server binnen Home Assistant en stelt deze op afstand beschikbaar via een Home Assistant webhook (bereikbaar via Nabu Casa of elke reverse proxy). Het is een standalone server en een complete vervanging voor de add-on, Docker, uvx/PyPI en stdio installatiemethoden - draai het niet naast een andere ha-mcp server. Selecteer **Verzenden** om het te starten; je kunt de poort, binding en authenticatie daarna wijzigen in de integratie-opties."
+      }
+    },
+    "abort": {
+      "already_configured": "Deze ingang is al ingesteld.",
+      "unsupported_home_assistant": "De in-process HA-MCP Server vereist Home Assistant {required} of nieuwer, maar deze instantie draait {installed}. Je kunt nog steeds de HA-MCP Bestands- & YAML-hulpmiddelen ingang van deze component gebruiken met een externe ha-mcp server die draait als een add-on of Docker-container."
+    }
+  },
+  "options": {
+    "step": {
+      "tools_info": {
+        "title": "HA-MCP Bestands- & YAML-hulpmiddelen",
+        "description": "Configureer de geprivilegieerde bestands- en YAML-bewerkingsservices die worden gebruikt door de opt-in bestands-/YAML-hulpmiddelen van ha-mcp. Deze instellingen verschijnen ook in de eigen instellingen-UI van de ha-mcp server en worden direct toegepast, zonder herstart. Een niet-overbrugbare blokkade weigert nog steeds gevoelige paden (bijv. .storage) en trust-boundary sleutels (homeassistant, http, frontend, lovelace).",
+        "data": {
+          "allowed_dirs": "Extra bestandsmappen",
+          "extra_yaml_keys": "Extra YAML-schrijfsleutels"
+        },
+        "data_description": {
+          "allowed_dirs": "Mappen relatief aan de configuratiemap, elk met lees- en schrijfrechten (bijv. pyscript). Traversale en buiten-configuratie ingangen worden genegeerd.",
+          "extra_yaml_keys": "Top-level sleutels die ha_config_set_yaml mag schrijven naast de ingebouwde, voor YAML-first integraties op deze installatie (bijv. alert2). Trust-boundary sleutels worden genegeerd."
+        }
+      },
+      "init": {
+        "title": "HA-MCP Server",
+        "description": "Configureer de HA-MCP server. {panel_hint}Wijzigingen hier worden toegepast bij opslaan.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
+        "data": {
+          "channel": "Releasekanaal",
+          "auto_update": "Automatische serverupdates",
+          "server_port": "Luisterpoort MCP server",
+          "bind_host": "Netwerktoegang",
+          "webhook_auth": "Authenticatiemodus",
+          "oauth_client_id_override": "Legacy OAuth: aangepaste Client ID (optioneel)",
+          "oauth_client_secret_override": "Legacy OAuth: aangepaste Client Secret (optioneel)",
+          "oauth_regenerate": "Legacy OAuth: genereer nu Client ID/Secret opnieuw",
+          "pip_spec": "Ontwikkelaar: ha-mcp pakketoverheersing",
+          "server_url": "Home Assistant URL (geavanceerd)",
+          "external_url": "Externe URL (optioneel)",
+          "webhook_id_override": "Aangepast webhook geheim (optioneel)",
+          "secret_path_override": "Aangepast direct-toegangspad (optioneel)",
+          "regenerate_secrets": "Genereer verbindingsgeheimen nu opnieuw",
+          "enable_webhook": "Toegang op afstand via webhook",
+          "enable_llm_api": "Conversatie-agent LLM API",
+          "llm_api_exposure": "Blootstelling van conversatie-agent hulpmiddelen",
+          "enable_startup_notification": "Opstartmelding",
+          "enable_sidebar_panel": "Zijbalk instellingenpaneel"
+        },
+        "data_description": {
+          "channel": "Stabiel installeert de nieuwste stabiele release; Ontwikkeling installeert de nieuwste ontwikkelingsbuild. Wanneer automatische updates zijn ingeschakeld, installeert een herlaadbeurt of herstart, plus een periodieke controle, de nieuwste build van het geselecteerde kanaal. Een ontwikkelaarspakket overschrijving hieronder heeft voorrang en schakelt automatische updates uit.",
+          "auto_update": "Wanneer ingeschakeld, wordt de nieuwste release van het geselecteerde kanaal automatisch geïnstalleerd - bij een herlaadbeurt of herstart, en via een periodieke controle. Wanneer uitgeschakeld, blijft de server op de momenteel geïnstalleerde versie totdat je dit weer inschakelt. Dit beheert alleen het ha-mcp serverpakket; updates voor de HA-MCP Aangepaste Component zelf komen nog steeds via HACS.",
+          "server_port": "De poort waarop deze server luistert. De ha-mcp add-on gebruikt 9583, dus dit is standaard 9584 om beide naast elkaar te laten draaien - als je de add-on niet draait, werkt elke vrije poort.",
+          "bind_host": "Wie kan direct verbinding maken met de MCP serverpoort. De standaardinstelling komt overeen met de add-on: bereikbaar op je lokale netwerk, met het geheime pad als de referentie. Kies loopback om alleen verbindingen vanaf de Home Assistant machine zelf toe te staan - de webhook URL en het zijbalkpaneel werken hoe dan ook.",
+          "webhook_auth": "Hoe MCP-clients zich bewijzen bij de webhook URL. Met de geheime URL is de link zelf de referentie. Met Home Assistant aanmelding loggen clients zoals claude.ai in met een Home Assistant beheerdersaccount (OAuth). Met legacy OAuth geeft deze integratie zijn eigen Client ID en Secret uit om te plakken in clients die er een vereisen, zoals Google Gemini Spark - het vereist een Home Assistant herstart om in of uit te schakelen.",
+          "oauth_client_id_override": "Vervangt de automatisch gegenereerde legacy OAuth Client ID. Laat leeg om de huidige te behouden. Alleen gebruikt wanneer Authenticatiemodus is ingesteld op legacy OAuth.",
+          "oauth_client_secret_override": "Vervangt de automatisch gegenereerde legacy OAuth Client Secret. Laat leeg om de huidige te behouden. Alleen gebruikt wanneer Authenticatiemodus is ingesteld op legacy OAuth.",
+          "oauth_regenerate": "Eenmalige actie: genereert een nieuwe Client ID en Secret voor legacy OAuth-modus. Het wordt pas van kracht na de Home Assistant herstart waar de reparatieprompt om vraagt - totdat je herstart, blijven de vorige Client ID en Secret werken en de nieuwe niet. Maakt ook de twee overschrijvingsvelden hierboven leeg.",
+          "pip_spec": "Laat leeg. Alleen voor het testen van een specifieke ha-mcp build (bijvoorbeeld een pre-release pin); overschrijft het releasekanaal en schakelt automatische updates uit totdat het leeg is gemaakt.",
+          "server_url": "De URL die de in-process server gebruikt om je Home Assistant te bereiken (meestal deze instantie zelf). Laat leeg om het af te leiden van de poort- en SSL-instellingen van deze instantie; stel alleen een waarde in wanneer de server een andere route nodig heeft.",
+          "external_url": "Weergegeven als de primaire verbindings-URL - gebruik dit wanneer Home Assistant achter je eigen domein of reverse proxy zit. Voer het volledige basisadres in, inclusief het schema. Het moet direct naar Home Assistant wijzen - het openen in een browser zou je HA-inlogpagina moeten bereiken - en mag geen poort bevatten zoals :8123 (of enige andere poort), anders kunnen externe MCP-clients het niet bereiken. Laat leeg om Nabu Casa / het lokale adres automatisch te gebruiken.",
+          "webhook_id_override": "Vervangt het willekeurige webhook-geheim in de verbindings-URL (/api/webhook/...). De URL is de referentie - gebruik een lange, moeilijk te raden waarde. Laat leeg om de huidige te behouden.",
+          "secret_path_override": "Vervangt het willekeurige pad dat wordt gebruikt voor directe toegang op de serverpoort. Dezelfde regel: het pad is de referentie. Laat leeg om de huidige te behouden.",
+          "regenerate_secrets": "Eenmalige actie: genereert een nieuw willekeurig webhook-geheim en direct-toegangspad, waardoor de oude verbindings-URL's onmiddellijk ongeldig worden. Maakt ook de twee bovenstaande overschrijvingsvelden leeg.",
+          "enable_webhook": "Schakel uit voor de lokale-modus: de Home Assistant-webhook wordt helemaal niet geregistreerd, dus niets - inclusief Nabu Casa - kan de server via Home Assistant bereiken. De directe serverpoort en het zijbalkpaneel blijven werken.",
+          "enable_llm_api": "Bied de volledige toolset aan Home Assistant conversatie-agents (OpenAI, Google, Ollama, ...): wanneer ingeschakeld, kunnen agents 'HA-MCP Server' selecteren onder Home Assistant bedienen en de tools aansturen vanuit Assist chat en spraak. Inschakelen maakt het alleen selecteerbaar - niets wordt blootgesteld totdat je het kiest op een agent. Gebruikershandleiding: {llm_api_docs_url}",
+          "llm_api_exposure": "Vorm van de toolset die wordt aangeboden aan conversatie-agents. Tool zoeken (standaard) houdt de context van de agent klein: een compacte API met vastgezette tools plus zoek-/uitvoer meta-tools. Volledige catalogus toont elke blootgestelde tool direct - beter voor modellen met een grote context. Beide registreert de twee naast elkaar, zodat elke agent zijn eigen kiest onder Home Assistant bedienen. Blootstelling per tool wordt beheerd in het HA-MCP instellingenpaneel; details: {llm_api_docs_url}",
+          "enable_startup_notification": "Toon een melding elke keer dat de server start, verwijzend naar de instellingenpagina's die alleen voor beheerders zijn. Schakel uit om stil te starten - de verbindings-URL's verschijnen nog steeds in het Home Assistant-logboek.",
+          "enable_sidebar_panel": "Toon het HA-MCP instellingenpaneel in de zijbalk (alleen beheerders). Schakel uit om de zijbalkvermelding te verwijderen - serveropties blijven beschikbaar op dit scherm."
+        }
+      }
+    }
+  },
+  "issues": {
+    "server_start_failed": {
+      "title": "De HA-MCP in-process server kon niet starten",
+      "description": "De HA-MCP in-process server kon niet worden gestart binnen Home Assistant:\n\n{detail}\n\nControleer de Home Assistant-logboeken en herlaad vervolgens de integratie (of los het onderliggende probleem op en herlaad) om opnieuw te proberen."
+    },
+    "server_package_install_failed": {
+      "title": "Het HA-MCP in-process serverpakket kon niet worden geïnstalleerd",
+      "description": "Het installeren van het ha-mcp pakket voor de in-process server is mislukt:\n\n{detail}\n\nLos het hierboven beschreven compatibiliteits- of installatieprobleem op en herlaad vervolgens de integratie om opnieuw te proberen."
+    },
+    "component_outdated": {
+      "title": "Update de HA-MCP Custom Component via HACS",
+      "description": "De geïnstalleerde ha-mcp server vereist HA-MCP Custom Component {required} of nieuwer, maar je hebt {installed}. Update de component via HACS (open de HA-MCP Custom Component-vermelding en gebruik 'Update informatie' als er nog geen update wordt getoond) en herstart Home Assistant. De server blijft ondertussen draaien, maar sommige nieuwere functies werken mogelijk niet totdat de component is bijgewerkt."
+    },
+    "server_update_held": {
+      "title": "HA-MCP serverupdate wacht op een componentupdate",
+      "description": "ha-mcp server {latest} is beschikbaar, maar die release heeft ook de HA-MCP Custom Component bijgewerkt (naar {shipped}; je draait {running}). Om te voorkomen dat een serverversie wordt gestart waarmee de draaiende component nog nooit is getest, wordt de automatische serverupdate uitgesteld totdat de component is bijgewerkt.\n\nUpdate de component via HACS (open de HA-MCP Custom Component-vermelding en gebruik 'Update informatie' als er nog geen update wordt getoond) en herstart vervolgens Home Assistant - de serverupdate wordt daarna automatisch geïnstalleerd. Om de serverupdate toch te installeren, druk je op Installeren op de HA-MCP serverupdate-entiteit."
+    },
+    "legacy_hacs_source": {
+      "title": "Component geïnstalleerd vanuit de verouderde repository",
+      "description": "HACS volgt de hoofd ha-mcp server repository voor deze component, dus HACS toont hier de versienummers van de server (7.x) en de releasenotes van de server in plaats van die van de component zelf (1.x). Updates blijven werken, maar blijven op deze manier verkeerd gelabeld. Om dit te verhelpen: verwijder deze repository uit HACS (je integratie-instellingen en configuratie-items blijven behouden), voeg homeassistant-ai/ha-mcp-integration toe als een aangepaste repository, installeer de component opnieuw hiervandaan en herstart Home Assistant."
+    },
+    "legacy_oauth_restart": {
+      "title": "Herstart Home Assistant om de legacy OAuth-wijziging toe te passen",
+      "description": "De legacy OAuth-authenticatiemodus registreert zijn eigen /authorize en /token web-eindpunten, die Home Assistant alleen kan binden of vrijgeven wanneer het volledig opnieuw opstart - of je deze modus nu net hebt ingeschakeld, uitgeschakeld, of de Client ID/Secret hebt gewijzigd. Herstart Home Assistant (Instellingen - Systeem - Herstarten) om de wijziging toe te passen; tot die tijd blijft het vorige gedrag van kracht."
+    }
+  },
+  "selector": {
+    "server_channel": {
+      "options": {
+        "stable": "Stabiel (aanbevolen)",
+        "dev": "Ontwikkeling (laatste build)"
+      }
+    },
+    "server_webhook_auth": {
+      "options": {
+        "none": "Geheime webhook-URL (standaard)",
+        "ha_auth": "Aanmelden met Home Assistant (OAuth)",
+        "legacy": "Legacy OAuth (Client ID/Secret, voor Google Gemini Spark)"
+      }
+    },
+    "llm_api_exposure": {
+      "options": {
+        "tool_search": "Tool zoeken (compact, standaard)",
+        "full": "Volledige catalogus",
+        "both": "Beide (kies per agent)"
+      }
+    }
+  },
+  "entity": {
+    "update": {
+      "server_update": {
+        "name": "Update"
+      }
+    }
+  },
+  "common": {
+    "connect_direct_access": "Directe toegang vanaf de Home Assistant-machine: {url}",
+    "connect_local_lan": "Lokaal/LAN (wanneer Netwerktoegang \"Local network\" is): {url}",
+    "connect_remote_url": "Verbindings-URL op afstand: {url}",
+    "connect_urls_label": "Verbindings-URL('s):",
+    "connect_urls_pending": "De verbindings-URL's verschijnen hier (en in het Home Assistant-logboek) zodra de server is gestart.",
+    "connect_webhook_disabled": "Toegang op afstand via webhook is uitgeschakeld (alleen-lokale modus).",
+    "oauth_creds_pending": "De Client ID en Client Secret verschijnen hier zodra de server is gestart.",
+    "oauth_not_serving": "Legacy OAuth levert deze nog niet — start Home Assistant opnieuw op wanneer je daarom wordt gevraagd, om ze te activeren.",
+    "oauth_select_legacy_mode": "Stel de authenticatiemodus hierboven in op legacy OAuth en sla op om een Client ID en Client Secret te genereren.",
+    "panel_hint": "Open het [HA-MCP instellingenpaneel](/ha-mcp) voor toolbeheer en serverinstellingen.",
+    "tools_module_installed": "Bèta/geavanceerde bestands- & YAML-tools module (optioneel): Geïnstalleerd",
+    "tools_module_not_installed": "Bèta/geavanceerde bestands- & YAML-tools module (optioneel): Niet geïnstalleerd — druk op \"Item toevoegen\" op de pagina van deze integratie en kies \"HA-MCP File & YAML Tools\" om deze toe te voegen",
+    "tools_module_not_loaded": "Bèta/geavanceerde bestands- & YAML-tools module (optioneel): Geïnstalleerd maar niet geladen — schakel het \"HA-MCP File & YAML Tools\" item op de pagina van deze integratie in of herlaad het",
+    "version_line": "Component {component_version} - Server ha-mcp {server_version} ({channel} kanaal)",
+    "version_not_installed": "nog niet geïnstalleerd",
+    "version_unknown": "onbekend"
+  }
+}

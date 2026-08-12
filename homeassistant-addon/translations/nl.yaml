@@ -1,0 +1,180 @@
+---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/nl.json (keys addon.*, features.*,
+# addon_stable.*); regenerate with: python scripts/generate_locales.py
+configuration:
+  backup_hint:
+    name: Suggestieniveau voor volledige HA-snapshot (LLM-gericht)
+    description: 'Stem de formulering af van de hint die de LLM ziet in de
+
+      beschrijving van de tool `ha_manage_backup(scope=''snapshot'')` voor wanneer
+      een
+
+      volledige Home Assistant tarball-backup moet worden voorgesteld vóór risicovolle
+      bewerkingen
+
+      (bijv. massale apparaatverwijderingen). Beïnvloedt ALLEEN deze ene LLM-gerichte
+      prompts
+
+      zin.
+
+
+      Voor automatische snapshots per bewerking van automatiseringen / scripts / helpers
+      /
+
+      enz., gebruik de afzonderlijke schakelaar **Automatische back-up van bewerkingen
+      inschakelen** hieronder.'
+  secret_path:
+    name: Overschrijving van geheim pad
+    description: 'Optioneel aangepast HTTP-pad voor de MCP-server. Laat leeg om het
+      automatisch gegenereerde veilige pad te gebruiken.
+
+      '
+  enable_tool_search:
+    name: Schakel tool-zoekfunctie in
+    description: 'Vervang de volledige toolcatalogus door zoekgebaseerde ontdekking.
+      Vermindert de inactieve context met ongeveer 90%, tot ongeveer 5K tokens. ⚠️
+      Schakel dit NIET in bij clients met hun eigen ingebouwde toolzoekfunctie / uitgestelde
+      tools (claude.ai, Claude Desktop, Claude Code) — de twee zoeklagen conflicteren,
+      en de ingebouwde toolzoekfunctie van de client is daar de betere keuze; laat
+      dit uitgeschakeld. Of tools worden uitgesteld, hangt af van je client- en modelcombinatie:
+      gebruik dit wanneer je setup de volledige catalogus vooraf laadt — modellen
+      zonder native uitgestelde tools (bijv. Gemini, OpenAI-compatibele lokale modellen,
+      Claude Haiku), clients die alle toolschema''s inline plaatsen ongeacht het model
+      (bijv. GitHub Copilot CLI), of kleinere contextvensters. Sommige Codex-modellen
+      en ChatGPT bevatten ook uitgestelde tools — controleer je client/model direct
+      om de functies te bevestigen, zodat je dit niet onnodig ingeschakeld laat. Tools
+      worden gevonden via ha_search_tools en uitgevoerd via gecategoriseerde proxies
+      (lezen/schrijven/verwijderen). Vereist een herstart van de add-on om van kracht
+      te worden — maak vervolgens opnieuw verbinding of vernieuw de MCP-server in
+      je AI-client zodat deze de toollijst opnieuw laadt. Alleen het herstarten van
+      de add-on vernieuwt de gecachte toollijst van een client NIET; dit geldt na
+      het wijzigen van elke instelling hier.'
+  tool_search_max_results:
+    name: Max. resultaten tool-zoekfunctie
+    description: 'Maximaal aantal tools geretourneerd door ha_search_tools wanneer
+      de tool-zoekfunctie is ingeschakeld. Lagere waarden (2-3) besparen context-tokens,
+      maar kunnen relevante tools missen. Bereik: 2-10. Vereist een herstart.'
+  enable_tool_security_policies:
+    name: Schakel Tool Beveiligingsbeleid in (geavanceerd)
+    description: Beveilig risicovolle tool-aanroepen (vergrendelings-/alarmbediening,
+      automatiseringsschrijvingen, enz.) achter gebruikersgoedkeuring. Wanneer een
+      beveiligde tool wordt aangeroepen, instrueert de agent de gebruiker om het tabblad
+      'Tool Security Policies' in de web-UI te openen en op 'Goedkeuren' te klikken
+      voordat de aanroep doorgaat. Per-tool regels met optionele argumentcondities
+      worden geconfigureerd in het tabblad 'Tool Security Policies'. Standaard uitgeschakeld.
+      Vereist een herstart om van kracht te worden.
+  enable_security_policy_tool:
+    name: Laat AI-agenten het beveiligingsbeleid van tools bewerken
+    description: 'Registreert de ha_manage_security_policy tool, waarmee verbonden
+      AI-agenten het beveiligingsbeleid van tools kunnen lezen en herschrijven — inclusief
+      het verwijderen van goedkeuringspoorten. Standaard uitgeschakeld. Onafhankelijk
+      van de optie ''Tool Security Policies'' hierboven: dit bepaalt wie de regels
+      kan bewerken, niet of ze worden afgedwongen. De tool kan openstaande goedkeuringen
+      niet zien of beslissen. Om een mens in de lus te houden, sluit de tool af voordat
+      je deze inschakelt: schakel "security gated" in voor ''Manage Security Policy''
+      op het tabblad ''Tools'' van de web-UI. Vereist herstart om van kracht te worden.'
+  read_only_mode:
+    name: Alleen-lezen modus
+    description: Schakelt alle schrijftools uit en verwijdert de mogelijkheid voor
+      tools om schrijf- of destructieve aanroepen te doen. Gemengde lees-/schrijftools
+      (back-ups, add-ons, energievoorkeuren, spraakpijplijnen en codemodus indien
+      ingeschakeld) blijven beschikbaar, maar hun schrijfbewerkingen zijn geblokkeerd.
+      Zelfde schakelaar als het tabblad 'Tools' in de web-UI. Standaard uitgeschakeld.
+      Vereist een herstart om van kracht te worden.
+  redact_secrets:
+    name: Geheimen redigeren
+    description: Redigeert geheimen uit tool-antwoorden voordat ze de AI-assistent
+      bereiken. Add-on-opties en integratievelden die als wachtwoorden zijn gemarkeerd,
+      worden vervangen door een ingestelde/lege markering (zodat "is deze referentie
+      geconfigureerd?" beantwoordbaar blijft), en andere tool-antwoorden worden ontdaan
+      van geheime waarden die de server al heeft gezien (waarden korter dan 6 tekens
+      worden overgeslagen, aangezien het vervangen van kleine fragmenten ongerelateerde
+      uitvoer zou beschadigen). Velden die niet als wachtwoorden zijn gemarkeerd door
+      hun schema, kunnen niet worden gedetecteerd. Standaard uitgeschakeld.
+  enable_mandatory_bps:
+    name: Koppel best-practice vaardigheden aan schrijfbewerkingen
+    description: 'Hoofdschakelaar voor de functie voor het leveren van vaardigheidsinhoud
+      voor schrijftools (issue #1182). Wanneer ingeschakeld (standaard), koppelen
+      de zes configuratie-schrijftools (automatiseringen, scripts, scènes, helpers,
+      dashboards, ruwe YAML) de canonieke Home Assistant best-practice referentiebestanden
+      onder `skill_content` bij elke succesvolle schrijfbewerking, plus automatisch
+      ingebedde referentiesecties die worden genoemd in best-practice waarschuwingen.
+      Elke tool exposeert ook een per-aanroep `MandatoryBPS`-parameter die de agent
+      op ''false'' kan zetten bij volgende aanroepen zodra deze de inhoud heeft. Wanneer
+      deze hoofdschakelaar uit staat, wordt GEEN `skill_content` verzonden, ongeacht
+      de per-aanroep parameter of BP-waarschuwingen. Aanbevolen AAN als eerste keuze;
+      alleen uitschakelen voor modellen met zeer kleine contextvensters. Het uitschakelen
+      hiervan kan de schijfnauwkeurigheid verminderen. Vereist een herstart om van
+      kracht te worden.'
+  enable_strict_mandatory_bps:
+    name: Strikte best-practices modus
+    description: 'Strikte modus: voorkomt dat de client de tool gebruikt totdat deze
+      kan bewijzen dat het de best practices heeft gelezen. Wanneer ingeschakeld,
+      worden de zes best-practice schrijftools (automatiseringen, scripts, scènes,
+      helpers, dashboards, ruwe YAML) geblokkeerd en retourneren ze een fout die de
+      client instrueert om de best-practice vaardigheid te lezen via ha_get_skill_guide
+      en de daar verkregen bevestigingssleutel terug te sturen. Wanneer ingeschakeld,
+      is de ha_get_skill_guide tool vergrendeld ingeschakeld — het is de enige uitgever
+      van de bevestigingssleutel. Onderdeel van de optie "Koppel best-practice vaardigheden
+      aan schrijfbewerkingen" hierboven en inactief zolang die ouder uitgeschakeld
+      is. Vereist een herstart om van kracht te worden.'
+  disabled_tools:
+    name: Uitgeschakelde tools (komma-gescheiden)
+    description: Tools die hier worden vermeld, zijn geforceerd uitgeschakeld en vergrendeld
+      in de webinstellingen-UI (tabblad 'Tools') — ze kunnen daar niet opnieuw worden
+      ingeschakeld zonder eerst deze optie ongedaan te maken. Een kleine set verplichte
+      tools (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      kan niet worden uitgeschakeld en blijft actief, zelfs als ze hier worden vermeld.
+      ha_get_skill_guide kan alleen worden uitgeschakeld als de strikte best-practices-modus
+      (enable_strict_mandatory_bps) is uitgeschakeld. Door komma's gescheiden toolnamen
+      (bijv. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Vastgezette tools (komma-gescheiden)
+    description: Tools die hier worden vermeld, zijn vastgezet — ze verschijnen bovenaan
+      het tabblad 'Tools' en kunnen niet worden losgemaakt vanuit de webinstellingen-UI
+      zonder eerst deze optie ongedaan te maken. Handig in combinatie met Tool Search.
+      Door komma's gescheiden toolnamen.
+  enable_auto_backup:
+    name: Automatische back-up van bewerkingen inschakelen
+    description: Maakt een snapshot per entiteit vóór elke omwikkelde schrijf-/destructieve
+      MCP-toolaanroep (automatisering, script, scène, helper, dashboard, label, categorie,
+      groep, zone, gebied, kalender, todo, entiteit, integratie en gerelateerde verwijder-/delete-tools).
+      Snapshots worden opgeslagen als YAML-bestanden onder /data/ha_mcp_backups/ (overschrijven
+      via HAMCP_BACKUP_DIR) en kunnen worden weergegeven, hersteld of verwijderd via
+      het tabblad 'Back-ups' in de webinstellingen-UI of via ha_manage_backup(scope='edits',
+      ...). Best-effort — fouten loggen een WAARSCHUWING maar blokkeren nooit de onderliggende
+      schrijfbewerking. Standaard ingeschakeld; deselecteer om af te melden. Vereist
+      herstart om van kracht te worden.
+  auto_backup_throttle_minutes:
+    name: Automatische back-up vertraging (minuten)
+    description: Vertragingsvenster per entiteit. 0 (standaard) maakt een snapshot
+      bij elke omwikkelde schrijfbewerking. N>0 maakt maximaal één snapshot per N
+      minuten per entiteit. Bereik 0–1440.
+  auto_backup_retain_per_entity:
+    name: Automatische back-up retentie (per entiteit)
+    description: Maximaal aantal snapshots per entiteit. Oudere snapshots die deze
+      limiet overschrijden, worden verwijderd bij elke succesvolle opname. Standaard
+      100, bereik 1–10000.
+  enable_snapshot_delete:
+    name: Snapshotverwijdering toestaan
+    description: Laat ha_manage_backup volledige HA snapshot tarballs verwijderen
+      (scope='snapshot', action='delete'). Standaard uitgeschakeld — een snapshot
+      kan het laatste herstelpunt zijn na een foutieve wijziging, dus een mens moet
+      hier expliciet toestemming geven. Zelfs wanneer ingeschakeld, blijven geplande
+      back-ups, de nieuwste resterende snapshot en alles wat jonger is dan de onderstaande
+      leeftijdsgrens beschermd.
+  snapshot_delete_min_age_days:
+    name: Minimale snapshotleeftijd om te verwijderen (dagen)
+    description: Een snapshot moet minstens zo oud zijn voordat het kan worden verwijderd.
+      Bereik 0–365; 0 schakelt de ondergrens uit (de nieuwste-snapshot en geplande-back-up
+      beschermingen blijven van toepassing). Standaard 7.
+  verify_ssl:
+    name: TLS-certificaat verifiëren
+    description: Verifieer het TLS-certificaat van de Home Assistant-server. De add-on
+      maakt verbinding via de Supervisor-proxy, dus dit heeft normaal gesproken geen
+      effect en moet ingeschakeld blijven. Schakel alleen uit als je de add-on opnieuw
+      hebt geconfigureerd om met HA te communiceren via een openbare HTTPS-hostnaam
+      met een zelfondertekend certificaat of een hostnaam-mismatch. Uitschakelen verzwakt
+      de transportbeveiliging — laat ingeschakeld, tenzij je weet dat je het nodig
+      hebt. Vereist herstart om van kracht te worden.

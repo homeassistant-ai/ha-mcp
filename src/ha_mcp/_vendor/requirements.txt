@@ -1,0 +1,8 @@
+# Vendored-library pins, bumped by the renovate custom manager that matches
+# this exact path (see renovate.json — no stock manager sees this file).
+#
+# A bump lands here FIRST and the tree stays stale, so the drift test in
+# tests/src/unit/test_vendored_websockets.py fails that PR on purpose:
+# run `python scripts/vendor_websockets.py` and commit the regenerated tree
+# to make it green. That red CI is the handoff, not a mistake.
+websockets==17.0.1

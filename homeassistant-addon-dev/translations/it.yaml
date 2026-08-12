@@ -30,17 +30,22 @@ configuration:
       '
   enable_tool_search:
     name: Attiva la ricerca degli strumenti
-    description: 'Sostituisce il catalogo completo degli strumenti con una scoperta
-      basata sulla ricerca. Riduce il contesto a riposo da circa 46K a 5K token. ⚠️
-      NON attivarla se usi Claude in modalità Sonnet o Opus: quei modelli hanno una
-      propria ricerca di strumenti / strumenti differiti integrata, che va in conflitto
-      con la nostra. Per usare la ricerca di ha-mcp con Claude, disattiva prima quella
-      integrata di Claude; altrimenti lascia questa opzione disattivata. Usala solo
-      con LLM privi di strumenti differiti nativi (per esempio Claude Haiku, modelli
-      locali compatibili con OpenAI) o con finestre di contesto più piccole. Gli strumenti
-      si trovano tramite ha_search_tools e vengono eseguiti tramite proxy suddivisi
-      per categoria (lettura/scrittura/eliminazione). Richiede il riavvio per avere
-      effetto.'
+    description: 'Sostituisci il catalogo completo degli strumenti con la scoperta
+      basata sulla ricerca. Riduce il contesto inattivo di circa il 90%, a circa 5K
+      token. ⚠️ NON abilitare questa opzione nei client con la propria ricerca strumenti
+      integrata / strumenti differiti (claude.ai, Claude Desktop, Claude Code) — i
+      due livelli di ricerca entrano in conflitto, e la ricerca strumenti integrata
+      del client è la scelta migliore in quel caso; lasciala disattivata. Se gli strumenti
+      sono differiti dipende dalla combinazione client e modello: usa questa opzione
+      quando la tua configurazione carica il catalogo completo in anticipo — modelli
+      senza strumenti differiti nativi (es. Gemini, modelli locali compatibili con
+      OpenAI, Claude Haiku), client che incorporano tutti gli schemi degli strumenti
+      indipendentemente dal modello (es. GitHub Copilot CLI), o finestre di contesto
+      più piccole. Alcuni modelli Codex e ChatGPT includono anche strumenti differiti
+      — controlla direttamente il tuo client/modello per confermarne le funzionalità
+      in modo da non lasciare questa opzione abilitata inutilmente. Gli strumenti
+      vengono trovati tramite ha_search_tools ed eseguiti tramite proxy categorizzati
+      (read/write/delete). Richiede un riavvio per avere effetto.'
   enable_tool_security_policies:
     name: Attiva i criteri di sicurezza degli strumenti (avanzato)
     description: Subordina all'approvazione dell'utente le chiamate agli strumenti
@@ -51,6 +56,17 @@ configuration:
       strumento, con condizioni facoltative sugli argomenti, si configurano nella
       scheda Criteri di sicurezza degli strumenti. Disattivato per impostazione predefinita.
       Richiede il riavvio per avere effetto.
+  enable_security_policy_tool:
+    name: Consenti agli agenti IA di modificare le policy di sicurezza degli strumenti
+    description: 'Registra lo strumento ha_manage_security_policy, che consente agli
+      agenti IA connessi di leggere e riscrivere le policy di sicurezza degli strumenti
+      — inclusa la rimozione dei gate di approvazione. Disattivato per impostazione
+      predefinita. Indipendente dall''opzione Policy di Sicurezza degli Strumenti
+      sopra: questo controlla chi può modificare le regole, non se vengono applicate.
+      Lo strumento non può vedere o decidere le approvazioni in sospeso. Per mantenere
+      un essere umano nel ciclo, proteggi lo strumento prima di abilitarlo: attiva
+      "protetto da sicurezza" per Gestisci Policy di Sicurezza nella scheda Strumenti
+      dell''interfaccia web. Richiede un riavvio per avere effetto.'
   read_only_mode:
     name: Modalità di sola lettura
     description: Disattiva tutti gli strumenti di scrittura e impedisce a qualunque
@@ -60,6 +76,17 @@ configuration:
       con le operazioni di scrittura bloccate. È la stessa opzione della scheda Strumenti
       nell'interfaccia web. Disattivata per impostazione predefinita. Richiede il
       riavvio per avere effetto.
+  redact_secrets:
+    name: Rimuovi Segreti
+    description: Rimuove i segreti dalle risposte degli strumenti prima che raggiungano
+      l'assistente IA. Le opzioni dell'add-on e i campi di integrazione contrassegnati
+      come password vengono sostituiti con un marcatore impostato/vuoto (così "questa
+      credenziale è configurata?" rimane una domanda a cui si può rispondere), e altre
+      risposte degli strumenti vengono ripulite dai valori segreti che il server ha
+      già visto (i valori più corti di 6 caratteri vengono saltati, poiché la sostituzione
+      di frammenti minuscoli corromperebbe l'output non correlato). I campi non contrassegnati
+      come password dal loro schema non possono essere rilevati. Disattivato per impostazione
+      predefinita.
   enable_beta_features:
     name: Attiva le funzioni beta (principale)
     description: '⚠ PERICOLO — questi strumenti possono DANNEGGIARE IN MODO PERMANENTE

@@ -64,6 +64,17 @@ configuration:
       que l'appel ne continue. Les règles par outil avec conditions d'argument optionnelles
       sont configurées dans l'onglet Politiques de sécurité des outils. Désactivé
       par défaut. Nécessite un redémarrage pour prendre effet.
+  enable_security_policy_tool:
+    name: Permettre aux agents IA de modifier les politiques de sécurité des outils
+    description: 'Enregistre l''outil ha_manage_security_policy, qui permet aux agents
+      IA connectés de lire et de réécrire les politiques de sécurité des outils —
+      y compris la suppression des portes d''approbation. Désactivé par défaut. Indépendant
+      de l''option Politiques de sécurité des outils ci-dessus : ceci contrôle qui
+      peut modifier les règles, et non si elles sont appliquées. L''outil ne peut
+      pas voir ou décider des approbations en attente. Pour garder un humain dans
+      la boucle, soumettez l''outil à une approbation avant de l''activer : activez
+      « soumis à la sécurité » pour Gérer la politique de sécurité dans l''onglet
+      Outils de l''interface web. Nécessite un redémarrage pour prendre effet.'
   read_only_mode:
     name: Mode lecture seule
     description: Désactive tous les outils d'écriture et supprime la capacité des
@@ -72,6 +83,17 @@ configuration:
       vocaux et mode code lorsqu'il est activé) restent disponibles avec leurs opérations
       d'écriture bloquées. Même bouton que l'onglet Outils de l'interface Web. Désactivé
       par défaut. Nécessite un redémarrage pour prendre effet.
+  redact_secrets:
+    name: Masquer les secrets
+    description: Masque les secrets des réponses des outils avant qu'ils n'atteignent
+      l'assistant IA. Les options d'add-on et les champs d'intégration marqués comme
+      mots de passe sont remplacés par un marqueur défini/vide (afin que la question
+      « cette information d'identification est-elle configurée ? » reste répondable),
+      et les autres réponses des outils sont nettoyées des valeurs secrètes que le
+      serveur a déjà vues (les valeurs de moins de 6 caractères sont ignorées, car
+      le remplacement de petits fragments corromprait la sortie non liée). Les champs
+      non marqués comme mots de passe par leur schéma ne peuvent pas être détectés.
+      Désactivé par défaut.
   enable_mandatory_bps:
     name: Attacher les compétences de bonnes pratiques aux écritures
     description: 'Interrupteur principal pour la fonction de livraison de contenu

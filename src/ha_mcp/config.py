@@ -147,6 +147,17 @@ class Settings(BaseSettings):
         False, alias="ENABLE_TOOL_SECURITY_POLICIES"
     )
 
+    # Security-policy editing tool (issue #2148) — registers
+    # ha_manage_security_policy, an ordinary MCP tool that reads and rewrites
+    # the same tool_policy.json the Tool Security Policies tab edits. Disabled
+    # by default, and deliberately NOT a beta flag: it is a standing safety
+    # decision, not a preview feature, so it must stay out of
+    # BETA_FEATURE_FIELDS (where the beta master would force it off). Its
+    # toggle renders on the Policies tab, next to the master switch above.
+    enable_security_policy_tool: bool = Field(
+        False, alias="ENABLE_SECURITY_POLICY_TOOL"
+    )
+
     # Read Only Mode — global safety toggle (discussion #1569). When on,
     # write-capable tools are hidden from the MCP catalog and every write
     # operation is blocked at call time with a structured READ_ONLY_MODE
@@ -154,6 +165,18 @@ class Settings(BaseSettings):
     # duplicate stay available with their write actions blocked (see
     # read_only.py:READ_ONLY_EXEMPT_TOOLS). Off by default.
     read_only_mode: bool = Field(False, alias="READ_ONLY_MODE")
+
+    # Redact Secrets — opt-in secret redaction (issue #2157). When on,
+    # add-on option values whose schema entry carries ``format: password``
+    # and integration option fields marked with a password selector are
+    # replaced with set/empty sentinels, and any tool response is scrubbed
+    # of secret values already seen while serving those surfaces (see
+    # redaction.py). Off by default; no redaction runs while off, with one
+    # deliberate exception: the sentinel write guards are unconditional, so
+    # a submitted value that is or contains a redaction marker is rejected
+    # even with the flag off — a marker captured while it was on must never
+    # overwrite a live credential.
+    redact_secrets: bool = Field(False, alias="REDACT_SECRETS")
 
     # Master beta-features toggle. UI-only — intentionally not in any
     # addon config.yaml schema. Consumed by the master gate in
@@ -302,6 +325,29 @@ class Settings(BaseSettings):
     # schemas so it stays out of the add-on Configuration page.
     enable_dev_mode: bool = Field(False, alias="HAMCP_ENABLE_DEV_MODE")
 
+    # Dev-tools access to tool-security policy state (issue #2141).
+    # Developer mode may stay on while this stays off: the dev tools'
+    # policy-override surfaces — set_policy, set_tool(gated=...),
+    # approve/deny of queued approvals, and set/reset of
+    # enable_tool_security_policies — are refused while it is off, so a
+    # connected agent cannot rewrite the rules that gate it nor click
+    # "accept" on its own gated calls. The guard reads env var + override
+    # file fresh per call (NOT this cached Settings object), so a change
+    # applies live without a restart even in stdio mode, where the web
+    # settings UI runs in a detached sidecar process whose POST cannot
+    # reset this process' settings singleton. Editable
+    # from the web settings UI (Developer section) or the env var ONLY —
+    # the dev tools' own settings surfaces refuse to write this field, in
+    # either direction, and it is absent from the add-on config schemas
+    # like enable_dev_mode. A leash on those surfaces, NOT a sandbox: dev
+    # mode's update_source/restart can still replace the running server
+    # build, and in add-on mode ha_manage_addon can reach the add-on's
+    # own options and ingress — gate those tools with policy rules (or
+    # keep dev mode off) where that boundary matters.
+    dev_tools_security_policy_access: bool = Field(
+        False, alias="HAMCP_DEV_SECURITY_POLICY_ACCESS"
+    )
+
     # Code Mode — sandboxed Python execution via pydantic-monty.
     # Provides an "escape hatch" tool (ha_manage_custom_tool) that lets LLMs write
     # custom one-off Python code when no existing tool covers the request.
@@ -395,6 +441,7 @@ class Settings(BaseSettings):
     @field_validator(
         "enable_filesystem_tools",
         "enable_dashboard_screenshot",
+        "enable_security_policy_tool",
         mode="before",
     )
     @classmethod
@@ -668,11 +715,24 @@ FEATURE_FLAG_FIELDS: tuple[FeatureFlagField, ...] = (
     FeatureFlagField(
         "enable_tool_security_policies", "ENABLE_TOOL_SECURITY_POLICIES", bool
     ),
+    # Registers ha_manage_security_policy (#2148). Non-beta, like the master
+    # policy flag above it, so it is deliberately NOT in BETA_FEATURE_FIELDS.
+    # It carries no ``features.*`` locale keys either: that is what keeps it
+    # out of the generated FEATURE_META and therefore out of the generic
+    # Server Settings feature list, while /api/settings/features still serves
+    # and persists it for the Policies-tab toggle.
+    FeatureFlagField(
+        "enable_security_policy_tool", "ENABLE_SECURITY_POLICY_TOOL", bool
+    ),
     # Non-beta global safety toggle (discussion #1569). Lives here so the
     # Tools-tab toggle and the Server Settings row share the same
     # /api/settings/features plumbing, override-file persistence, and
     # addon Supervisor routing as every other feature flag.
     FeatureFlagField("read_only_mode", "READ_ONLY_MODE", bool),
+    # Non-beta secret-redaction toggle (issue #2157). Same shared plumbing
+    # as read_only_mode: web-UI row, override-file persistence, addon
+    # Supervisor routing, stdio sidecar — all registry-driven.
+    FeatureFlagField("redact_secrets", "REDACT_SECRETS", bool),
     # Non-beta, default-ON master switch for write-tool skill_content
     # delivery (#1182). Grouped with the non-beta flags above the beta
     # run below; intentionally NOT in BETA_FEATURE_FIELDS (it must not be
@@ -912,6 +972,17 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
     # among the feature toggles, and stays independent of the beta
     # master gate.
     AdvancedField("enable_dev_mode", "HAMCP_ENABLE_DEV_MODE", bool, "developer", True),
+    # Dev-tools security-policy access (issue #2141). Renders directly
+    # below the dev-mode toggle in the same Developer section. Editable
+    # here and via the env var; the dev tools themselves refuse to write
+    # it, so the AI cannot grant itself policy access.
+    AdvancedField(
+        "dev_tools_security_policy_access",
+        "HAMCP_DEV_SECURITY_POLICY_ACCESS",
+        bool,
+        "developer",
+        True,
+    ),
 )
 
 

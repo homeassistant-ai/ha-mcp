@@ -84,9 +84,9 @@ _SKIP_CEILING_PER_LANE = {
     # gain 10; container is unchanged because the tests run there.
     # Entries below are CI-observed item counts, bumped only for intentional
     # marker-gated additions rather than runtime skips.
-    "container": 72,  # was 71; +1 Puppet-management test (haos_only + inaddon_only)
-    "haos": 46,  # was 45; +1 py3.14 invalidate_caches recovery e2e (container_only)
-    "haos_inaddon": 75,  # was 74; +1 inline dashboard_resource auto-backup e2e (external_only, #2060)
+    "container": 73,  # was 72; +1 inaddon startup-nudge e2e (haos_only + inaddon_only)
+    "haos": 48,  # was 46; +1 embedded HACS-nudge skip e2e (container_only), +1 inaddon startup-nudge e2e (inaddon_only)
+    "haos_inaddon": 76,  # was 75; +1 embedded HACS-nudge skip e2e (container_only)
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
     # lane's marker-skips PLUS two embedded-specific additions:
     #   - haos_only + inaddon_only tests skip on embedded just like on container
@@ -97,10 +97,10 @@ _SKIP_CEILING_PER_LANE = {
     # Static def-level derivation (Docker-less, so parametrize item-inflation isn't
     # visible locally): haos_only 52 + inaddon_only-outside-haos 11 + external_only
     # 36 (auto_backup 19, supervisor_mock 15, self_update_notice 1, file_operations
-    # 1) + not_on_embedded 2 = 101. Initially set to 115 as a buffer for
-    # parametrize item-inflation; round 6 (run 28709196071) observed the exact
-    # item count and the entry below is pinned to it.
-    "embedded": 130,  # was 129; +1 inline dashboard_resource auto-backup e2e (external_only, #2060)
+    # 1) + not_on_embedded 2 = 101. Parametrize inflates that to the CI-observed
+    # count the entry below is pinned to — 133 on this PR's run, 132 before the
+    # self-restart e2e. Read the count off a run rather than deriving it.
+    "embedded": 133,  # was 132; +1 embedded self-restart e2e (haos_only)
     # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it
     # skips the SAME set as the external HAOS lane (container_only + inaddon_only)
     # PLUS two haos_embedded-specific additions:
@@ -108,17 +108,16 @@ _SKIP_CEILING_PER_LANE = {
     #     HAOS core container, unreachable by test-process env/monkeypatch — same
     #     reason as inaddon/container-embedded; alternative coverage on the external
     #     HAOS lane, where the in-process FastMCP server IS in the test process), and
-    #   - the 3 haos_only embedded smoke tests skip (not_on_haos_embedded) because
+    #   - the haos_only embedded smoke tests skip (not_on_haos_embedded) because
     #     the session backend already enables the entry + drives the server.
     # Static def-level derivation (Docker/HAOS-less locally, so parametrize
     # item-inflation isn't visible): container_only 16 + inaddon_only 20 +
-    # external_only 40 + smoke 3 = 79 (no overlaps: no external_only test is also
+    # external_only 40 + smoke 4 = 80 (no overlaps: no external_only test is also
     # container_only/inaddon_only, and the 2 not_on_embedded tests are already
-    # container_only). Applying the ~1.16x parametrize inflation the other HAOS
-    # lanes show (haos def 30 → ~35 observed; haos_inaddon def 50 → ~58) gives
-    # ~84; initially set to 90 with a small buffer, and round 8 observed
-    # exactly 90 — the entry below is pinned to the observed count.
-    "haos_embedded": 104,  # was 103; +1 inline dashboard_resource auto-backup e2e (external_only, #2060)
+    # container_only). Parametrize inflates that to the CI-observed count the
+    # entry below is pinned to — 107 on this PR's run, 106 before the
+    # self-restart e2e. Read the count off a run rather than deriving it.
+    "haos_embedded": 107,  # was 106; +1 embedded self-restart e2e (not_on_haos_embedded)
 }
 
 

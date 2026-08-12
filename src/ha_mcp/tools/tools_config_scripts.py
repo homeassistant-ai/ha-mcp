@@ -33,6 +33,7 @@ from .best_practice_checker import (
 from .best_practice_checker import (
     check_script_config as _check_best_practices,
 )
+from .component_config_reads import fetch_entity_lookup_via_component
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -41,6 +42,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
+from .tools_config_helpers import validate_registry_ids
 from .util_helpers import (
     JSON_STRING_COERCION,
     apply_entity_category,
@@ -706,6 +708,21 @@ class ConfigScriptTools:
                 transformed_config, resolved_id = await self._prepare_script_transform(
                     script_id, config_hash, python_transform
                 )
+                # Mirror the automations transform path (issue #2159): honor
+                # the category param and a transform-set "category" key (the
+                # REST API rejects unknown keys), validate before the write,
+                # and apply post-upsert.
+                transform_category = transformed_config.pop("category", None)
+                effective_category = (
+                    category if category is not None else transform_category
+                )
+                await validate_registry_ids(
+                    self._client,
+                    None,
+                    None,
+                    {"script": effective_category},
+                    fail_closed=True,
+                )
                 bp_warnings = _check_best_practices(transformed_config)
                 return await self._commit_script_transform(
                     script_id,
@@ -714,6 +731,7 @@ class ConfigScriptTools:
                     python_transform,
                     bp_warnings,
                     MandatoryBPS,
+                    effective_category,
                 )
 
             if config is None:
@@ -747,6 +765,17 @@ class ConfigScriptTools:
 
             # Pre-check for best-practice issues.
             bp_warnings = _check_best_practices(config_dict)
+
+            # Issue #2159: the category is applied post-upsert via
+            # ``apply_entity_category``, which HA accepts unchecked. Reject an
+            # unknown one here so no script is created under it.
+            await validate_registry_ids(
+                self._client,
+                None,
+                None,
+                {"script": effective_category},
+                fail_closed=True,
+            )
 
             return await self._commit_script_config(
                 config_dict,
@@ -859,6 +888,47 @@ class ConfigScriptTools:
             )
         return transformed_config, resolved_id
 
+    async def _resolve_script_entity_id(self, storage_key: str) -> str:
+        """Resolve a script storage key to its current entity_id.
+
+        Normally ``script.<storage_key>``, but a registry rename decouples
+        the entity_id from the storage key while the registry entry keeps
+        ``unique_id == storage_key``. Component lookup first, then a
+        registry-get fast path, then a registry-list scan; the constructed id
+        is the last resort (fresh creates resolve here before registration).
+        """
+        constructed = f"script.{storage_key}"
+        try:
+            matches = await fetch_entity_lookup_via_component(
+                self._client, storage_key, domain="script"
+            )
+            if matches is not None:
+                for match in matches:
+                    entity_id = match.get("entity_id") or ""
+                    if entity_id.startswith("script."):
+                        return str(entity_id)
+                return constructed
+            result = await self._client.send_websocket_message(
+                {"type": "config/entity_registry/get", "entity_id": constructed}
+            )
+            if isinstance(result, dict) and result.get("success"):
+                return constructed
+            listing = await self._client.send_websocket_message(
+                {"type": "config/entity_registry/list"}
+            )
+            entries = (listing.get("result") or []) if isinstance(listing, dict) else []
+            for entry in entries:
+                if (
+                    isinstance(entry, dict)
+                    and entry.get("platform") == "script"
+                    and entry.get("unique_id") == storage_key
+                    and str(entry.get("entity_id", "")).startswith("script.")
+                ):
+                    return str(entry["entity_id"])
+        except Exception as e:
+            logger.debug(f"Failed to resolve entity_id for script {storage_key}: {e}")
+        return constructed
+
     async def _commit_script_transform(
         self,
         script_id: str,
@@ -867,6 +937,7 @@ class ConfigScriptTools:
         python_transform: str,
         bp_warnings: BestPracticeCheckResult,
         MandatoryBPS: bool,
+        effective_category: str | None = None,
     ) -> dict[str, Any]:
         """Upsert a transformed script config and build the tool response.
 
@@ -885,6 +956,19 @@ class ConfigScriptTools:
 
         # Re-fetch to get authoritative hash (HA may normalize after save)
         _, new_config_hash, _ = await self._get_script_config_internal(script_id)
+
+        # Apply category to entity registry if provided (parity with the
+        # full-config branch — issue #2159). Resolve the storage key first: a
+        # registry-renamed script no longer lives at script.<storage_key>.
+        if effective_category:
+            await apply_entity_category(
+                self._client,
+                await self._resolve_script_entity_id(script_id),
+                effective_category,
+                "script",
+                result,
+                "script",
+            )
 
         response: dict[str, Any] = {
             "success": True,
@@ -928,8 +1012,15 @@ class ConfigScriptTools:
 
         result = await self._upsert_script(config_dict, script_id, resolved_key)
 
-        # Wait for script to be queryable
-        entity_id = f"script.{script_id}"
+        # Resolve the storage key only when the entity_id is consumed (the
+        # wait poll or the category write): with wait=False and no category —
+        # the documented bulk path — the resolution round-trips would be pure
+        # cost. A registry-renamed script no longer lives at
+        # script.<storage_key>; fresh creates fall back to the constructed id.
+        if wait or effective_category:
+            entity_id = await self._resolve_script_entity_id(script_id)
+        else:
+            entity_id = f"script.{script_id}"
         if wait:
             try:
                 registered = await wait_for_entity_registered(self._client, entity_id)

@@ -44,8 +44,9 @@ jobs:
       dev_version: ${{ steps.version.outputs.dev_version }}
       short_sha: ${{ steps.version.outputs.short_sha }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           # Full history: the dev version number is the commit count.
           fetch-depth: 0
 
@@ -82,8 +83,9 @@ jobs:
     env:
       DEV_VERSION: ${{ needs.prepare.outputs.dev_version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           submodules: true
 
       - name: Install uv
@@ -120,8 +122,9 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           submodules: true
 
       - name: Set up Docker Buildx
@@ -161,7 +164,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Create pre-release
         env:
@@ -198,7 +203,7 @@ jobs:
 
           # Delete old pre-release with same tag if exists
           gh release delete "$TAG" --yes 2>/dev/null || true
-          git push origin --delete "$TAG" 2>/dev/null || true
+          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG" 2>/dev/null || true
 
           # Create new draft pre-release (binaries will be added by build-and-release workflow)
           gh release create "$TAG" \
@@ -240,6 +245,6 @@ jobs:
                 if [ -n "$tag" ]; then
                   echo "Deleting old dev release: $tag"
                   gh release delete "$tag" --yes --repo ${{ github.repository }} || true
-                  git push origin --delete "$tag" 2>/dev/null || true
+                  gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$tag" 2>/dev/null || true
                 fi
               done

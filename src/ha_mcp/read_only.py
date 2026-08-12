@@ -125,6 +125,15 @@ def _pipeline_write(args: dict[str, Any]) -> str | None:
     return f"action={action!r}"
 
 
+def _security_policy_write(args: dict[str, Any]) -> str | None:
+    # ``action`` has no schema default, so an absent key is a malformed call
+    # rather than an implicit read — fail closed.
+    action = args.get("action")
+    if action == "get":
+        return None
+    return f"action={action!r}"
+
+
 def _custom_tool_write(args: dict[str, Any]) -> str | None:
     if args.get("list_saved") and not args.get("code") and not args.get("run_saved"):
         return None
@@ -171,7 +180,9 @@ def _radio_write(args: dict[str, Any]) -> str | None:
 # cache is only listable here; ha_manage_radio's 'ping' probe, 'cluster_read'
 # and 'list_datasets' have no pure-read duplicate elsewhere, while its
 # 'diagnostics'/'network_status' reads mirror ha_get_device /
-# ha_get_system_health but stay reachable here mid-management). Everything
+# ha_get_system_health but stay reachable here mid-management;
+# ha_manage_security_policy's policy read is duplicated only by the
+# dev-mode-only ha_dev_manage_settings('get_policy')). Everything
 # NOT in this table and not ``readOnlyHint=True`` is hidden and blocked
 # outright.
 #
@@ -220,6 +231,14 @@ READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
         _updates_write,
         "listing pending updates (action='list', the default) and reading "
         "update details/release notes (action='get')",
+    ),
+    # Reading the security-policy document has no pure-read duplicate in
+    # standard mode: ha_dev_manage_settings('get_policy') is the only other
+    # reader and dev mode is off by default. Editing the policy stays
+    # blocked — it is exactly the kind of write read-only mode exists for.
+    "ha_manage_security_policy": ReadOnlyExemption(
+        _security_policy_write,
+        "reading the policy document (action='get')",
     ),
 }
 

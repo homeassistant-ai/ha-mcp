@@ -132,6 +132,65 @@ class TestBuildSettingsHandlers:
         body = resp.json()
         assert body["tools"] == payload
 
+    def test_policy_put_holds_the_cross_process_lock(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The sidecar's policy PUT must do its version-check + save under
+        the same cross-process file lock the policy tools take (#2148).
+
+        The sidecar is a SEPARATE process from the MCP server, so without
+        it the optimistic-concurrency check is not a compare-and-swap: the
+        sidecar could read version N, lose the race to a tool write, and
+        overwrite that commit.
+        """
+        import contextlib
+
+        import ha_mcp.utils.config_write_lock as cwl
+        from ha_mcp.policy import persistence
+
+        events: list[str] = []
+
+        @contextlib.contextmanager
+        def _recording_lock(data_dir: Path | None = None) -> Any:
+            events.append("acquire")
+            try:
+                yield
+            finally:
+                events.append("release")
+
+        def _recording_save(data_dir: Path, policy: Any) -> None:
+            events.append("save")
+            real_save(data_dir, policy)
+
+        real_save = persistence.save_policy
+        monkeypatch.setattr(cwl, "config_file_lock", _recording_lock)
+        monkeypatch.setattr(persistence, "save_policy", _recording_save)
+
+        handlers = build_settings_handlers(server=None)
+        app = Starlette(
+            routes=[
+                Route(
+                    "/api/policy/config",
+                    handlers["policy_put_config"],
+                    methods=["PUT"],
+                )
+            ]
+        )
+        resp = TestClient(app).put(
+            "/api/policy/config",
+            json={
+                "wait_seconds": 60,
+                "approval_ttl_minutes": 5,
+                "rules": [],
+                "version": 0,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["saved"] is True
+        assert events == ["acquire", "save", "release"], (
+            f"the save must happen INSIDE the file lock; got {events}"
+        )
+
     def test_restart_addon_returns_400_without_server(self) -> None:
         from starlette.routing import Route
 

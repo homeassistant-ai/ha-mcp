@@ -26,7 +26,7 @@ change would otherwise warn forever about an advisory nicety.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .const import (
     DOMAIN,
@@ -113,14 +113,15 @@ async def async_nudge_hacs_refresh(hass: HomeAssistant, target_version: str) -> 
 
 
 async def _async_force_hacs_repo_refresh(hass: HomeAssistant) -> bool:
-    """Run HACS's "Update information" force-refresh for this component's repo.
+    """Run HACS's "Update information" force-refresh for this component's repos.
 
-    Returns True when a tracked repository was found and its refresh completed,
-    False when there is nothing to refresh (no HACS, or no INSTALLED repository
-    under either candidate name). Reaches into HACS internals —
-    the top-level lookups are ``getattr``-guarded so a wholly different HACS
-    shape returns False cleanly; anything deeper that changes shape raises and is
-    swallowed by :func:`async_nudge_hacs_refresh`.
+    Returns True when at least one INSTALLED tracked repository completed its
+    refresh, False when there was nothing to refresh (no HACS, or no installed
+    repository under either candidate name) or every candidate's refresh
+    failed. Reaches into HACS internals — the top-level lookups are
+    ``getattr``-guarded so a wholly different HACS shape returns False cleanly;
+    anything deeper that changes shape raises and is swallowed by
+    :func:`async_nudge_hacs_refresh`.
     """
     hacs = hass.data.get("hacs")
     if hacs is None:
@@ -133,7 +134,7 @@ async def _async_force_hacs_repo_refresh(hass: HomeAssistant) -> bool:
     if get_by_full_name is None:
         return False
 
-    repository = None
+    installed_candidates: list[Any] = []
     for full_name in _CANDIDATE_REPO_FULL_NAMES:
         candidate = get_by_full_name(full_name)
         if candidate is None:
@@ -146,20 +147,41 @@ async def _async_force_hacs_repo_refresh(hass: HomeAssistant) -> bool:
         # only an installed candidate counts (review finding).
         if not getattr(getattr(candidate, "data", None), "installed", False):
             continue
-        repository = candidate
-        break
-    if repository is None:
+        installed_candidates.append(candidate)
+    if not installed_candidates:
         return False
 
-    # The repository's "Update information" menu action: re-fetch its release
-    # data ignoring cached state, then push the fresh data to HACS's own update
-    # entity so Home Assistant advertises the component update immediately.
-    await repository.update_repository(ignore_issues=True, force=True)
-    # The refresh is complete at this point; the listener push below only
-    # re-publishes the fresh data to HACS's update entity sooner. Guarded
-    # separately so a HACS shape change here cannot void the completed
-    # refresh's throttle and re-run the network fetch every pass (review
-    # finding).
+    # Every installed candidate, not just the first. Two entries read
+    # installed when the mirror was downloaded without removing the legacy
+    # record — HACS blocks adding the same repository twice but not two
+    # repositories sharing a domain — and each carries its own update entity,
+    # so refreshing only the first left the other stale.
+    refreshed_any = False
+    for repository in installed_candidates:
+        # The repository's "Update information" menu action: re-fetch its
+        # release data ignoring cached state.
+        try:
+            await repository.update_repository(ignore_issues=True, force=True)
+        except Exception:
+            # One candidate's failure must not skip the other's refresh.
+            _LOGGER.debug(
+                "HA-MCP: HACS refresh failed for one candidate repository",
+                exc_info=True,
+            )
+            continue
+        refreshed_any = True
+        _poke_hacs_update_entity(hacs, repository)
+    return refreshed_any
+
+
+def _poke_hacs_update_entity(hacs: Any, repository: Any) -> None:
+    """Push the freshly fetched data to HACS's own update entity.
+
+    The refresh is already complete when this runs; the push only makes Home
+    Assistant advertise the component update sooner. Guarded separately so a
+    HACS shape change here cannot void the completed refresh's throttle and
+    re-run the network fetch every pass (review finding).
+    """
     try:
         coordinators = getattr(hacs, "coordinators", None) or {}
         category = getattr(getattr(repository, "data", None), "category", None)
@@ -171,4 +193,3 @@ async def _async_force_hacs_repo_refresh(hass: HomeAssistant) -> bool:
             "HA-MCP: HACS listener push after the repository refresh failed",
             exc_info=True,
         )
-    return True
