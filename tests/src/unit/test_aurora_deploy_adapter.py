@@ -192,8 +192,12 @@ def test_manifest_requires_explicit_preview_and_privacy_binding(tmp_path: Path) 
 
 
 def test_archive_rejects_traversal_links_nested_and_unapproved_members() -> None:
-    for name in ("../escape", "custom_components/other/file.py", "nested.tgz"):
-        with pytest.raises(ValueError):
+    for name, expected in (
+        ("../escape", "package_path"),
+        ("custom_components/other/file.py", "package_member"),
+        ("nested.tgz", "package_member"),
+    ):
+        with pytest.raises(ValueError, match=expected):
             _validate_package(_package(name=name))
 
     output = io.BytesIO()
@@ -246,7 +250,7 @@ def test_archive_requires_complete_reviewed_component_source() -> None:
 
 
 def test_privacy_functionality_is_rejected_before_staging() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="privacy"):
         _validate_package(_package(content=b"biometric identity inference"))
 
 @pytest.mark.asyncio

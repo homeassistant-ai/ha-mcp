@@ -107,6 +107,24 @@ def _staged_transaction(tmp_path) -> tuple[dict, dict[str, bytes]]:
 
 
 @pytest.mark.asyncio
+async def test_readback_accepts_untouched_staged_artifacts(tmp_path, monkeypatch):
+    transaction, _artifacts = _staged_transaction(tmp_path)
+    monkeypatch.setattr(adapter, "_verify_signature", Mock())
+    state = adapter.AuroraState(
+        _hass(tmp_path),
+        tmp_path,
+        {"transactions": {transaction["transaction_id"]: transaction}},
+    )
+
+    response = await adapter.TransactionView(state.hass, state).get(
+        _Request(), transaction["transaction_id"], "readback"
+    )
+
+    assert response.status == 200
+    assert json.loads(response.body)["status"] == "verified"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "artifact_name",
     [
@@ -352,14 +370,14 @@ async def test_preview_assets_are_immutable_and_revision_specific(
     await adapter._save_preview_asset(hass, b"revision-one")
     first_url = config["resources"][0]["url"]
     first_path = tmp_path / "www" / first_url.removeprefix("/local/")
-    promoted_config = copy.deepcopy(config)
 
     await adapter._save_preview_asset(hass, b"revision-two")
     second_url = config["resources"][0]["url"]
+    second_path = tmp_path / "www" / second_url.removeprefix("/local/")
 
     assert first_url != second_url
     assert first_path.read_bytes() == b"revision-one"
-    assert promoted_config["resources"][0]["url"] == first_url
+    assert second_path.read_bytes() == b"revision-two"
 
 
 def _promotion_fixture(tmp_path):

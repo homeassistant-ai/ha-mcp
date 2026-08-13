@@ -31,6 +31,7 @@ Only these operations exist:
 - `GET /{operation_id}/status`
 - `GET /{operation_id}/readback`
 - `POST /{transaction}/activate`
+- `POST /{transaction}/rollback`
 - `POST /{transaction}/reload`
 - `POST /promote-home-command`
 - `POST /rollback-home-command`
