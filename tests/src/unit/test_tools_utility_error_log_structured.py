@@ -416,16 +416,15 @@ class TestParseErrorLogStructured:
         assert result["top_issues"] == []
 
     def test_message_truncated_to_max_len(self):
-        long_msg = "x" * 300
+        long_msg = "x" * (_MAX_MESSAGE_LEN + 100)
         log = f"2026-05-27 10:00:01.000 ERROR (MainThread) [homeassistant.components.test] {long_msg}\n"
         result = _parse_error_log_structured(log)
         message = result["top_issues"][0]["message"]
         # Truncation is MARKED: an unmarked cut is indistinguishable from a
-        # genuinely short message, and silently merges distinct errors that
-        # happen to share their first 200 characters.
+        # genuinely short message.
         assert message.endswith(_TRUNCATION_MARK)
-        assert len(message) == 200 + len(_TRUNCATION_MARK)
-        assert message[:200] == "x" * 200
+        assert len(message) == _MAX_MESSAGE_LEN + len(_TRUNCATION_MARK)
+        assert message[:_MAX_MESSAGE_LEN] == "x" * _MAX_MESSAGE_LEN
 
     def test_messages_differing_past_the_cap_stay_distinct(self):
         # The dedup key runs on the full message. Keying on the capped display
