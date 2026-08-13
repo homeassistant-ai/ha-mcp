@@ -91,7 +91,7 @@ SETTINGS_SURFACE = "src/ha_mcp/settings_ui/locales"
 COMPONENT_SURFACE = "custom_components/ha_mcp_tools/translations"
 TOOLS_SURFACE = "settings UI tool titles and descriptions"
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 # Free-tier pacing: stay comfortably under the strictest published RPM.
 _SECONDS_BETWEEN_REQUESTS = 7.0
 # Self-imposed wall-clock bound, kept below the workflow's job timeout: when
