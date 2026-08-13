@@ -1063,6 +1063,7 @@ class UtilityTools:
                 context={"source": "error_log"},
                 suggestions=self._addon_auth_error_suggestions(),
             )
+            raise  # unreachable: exception_to_structured_error always raises
         except (
             HomeAssistantConnectionError,
             HomeAssistantAPIError,
