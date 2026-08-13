@@ -492,7 +492,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Massensteuerung",
-      "description": "Steuert mehrere Geräte in einer einzigen Massenoperation."
+      "description": "Steuere mehrere Geräte mit Unterstützung für Massenoperationen und WebSocket-Verfolgung."
     },
     "ha_call_event": {
       "title": "Ereignis aufrufen",
@@ -568,7 +568,7 @@
     },
     "ha_config_remove_group": {
       "title": "Gruppe entfernen",
-      "description": "Entfernt eine Home-Assistant-Entitätsgruppe."
+      "description": "Entferne eine dienstbasierte Home Assistant Entitätsgruppe über den Dienst group.remove."
     },
     "ha_config_remove_label": {
       "title": "Label entfernen",
@@ -604,7 +604,7 @@
     },
     "ha_config_set_group": {
       "title": "Gruppe erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert eine Home-Assistant-Entitätsgruppe."
+      "description": "Erstelle oder aktualisiere eine dienstbasierte Home Assistant Entitätsgruppe über den Dienst group.set."
     },
     "ha_config_set_helper": {
       "title": "Helfer erstellen/aktualisieren",
@@ -624,7 +624,7 @@
     },
     "ha_config_set_yaml": {
       "title": "Rohes YAML bearbeiten",
-      "description": "Bearbeitet die Home-Assistant-YAML-Konfiguration; nur als letztes Mittel verwenden."
+      "description": "Füge Schlüssel der obersten Ebene in configuration.yaml oder Paketdateien hinzu, ersetze oder entferne sie."
     },
     "ha_delete_file": {
       "title": "Datei löschen",
@@ -663,8 +663,8 @@
       "description": "Ruft gerenderte Bilder einer Lovelace-Ansicht ab."
     },
     "ha_get_device": {
-      "title": "Gerät abrufen",
-      "description": "Ruft Geräteinformationen ab, einschließlich Zigbee, Z-Wave und Matter."
+      "title": "Gerät abrufen (inkl. Zigbee/ZHA/Z2M, Z-Wave und Matter)",
+      "description": "Rufe Geräteinformationen mit Paginierung ab, einschließlich Zigbee (ZHA/Z2M) und Z-Wave JS Geräten."
     },
     "ha_get_entity": {
       "title": "Entität abrufen",
@@ -692,7 +692,7 @@
     },
     "ha_get_operation_status": {
       "title": "Operationsstatus",
-      "description": "Prüft den Status einer oder mehrerer Geräteoperationen."
+      "description": "Rufe den Status einer oder mehrerer Geräteoperationen mit Echtzeit-WebSocket-Verifizierung ab."
     },
     "ha_get_overview": {
       "title": "System-Übersicht",

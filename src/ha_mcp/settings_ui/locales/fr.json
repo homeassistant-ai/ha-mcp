@@ -492,7 +492,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Contrôle groupé",
-      "description": "Contrôle plusieurs appareils en une seule opération groupée."
+      "description": "Contrôler plusieurs appareils avec prise en charge des opérations en masse et suivi WebSocket."
     },
     "ha_call_event": {
       "title": "Déclencher un événement",
@@ -568,7 +568,7 @@
     },
     "ha_config_remove_group": {
       "title": "Supprimer le groupe",
-      "description": "Supprime un groupe d'entités Home Assistant."
+      "description": "Supprimer un groupe d'entités Home Assistant basé sur un service via le service group.remove."
     },
     "ha_config_remove_label": {
       "title": "Supprimer l'étiquette",
@@ -604,7 +604,7 @@
     },
     "ha_config_set_group": {
       "title": "Créer/mettre à jour le groupe",
-      "description": "Crée ou met à jour un groupe d'entités Home Assistant."
+      "description": "Créer ou mettre à jour un groupe d'entités Home Assistant basé sur un service via le service group.set."
     },
     "ha_config_set_helper": {
       "title": "Créer/mettre à jour l'assistant",
@@ -624,7 +624,7 @@
     },
     "ha_config_set_yaml": {
       "title": "Modifier le YAML brut",
-      "description": "Modifie la configuration YAML de Home Assistant ; à utiliser uniquement en dernier recours."
+      "description": "Ajouter, remplacer ou supprimer des clés de niveau supérieur dans configuration.yaml ou les fichiers de package."
     },
     "ha_delete_file": {
       "title": "Supprimer le fichier",
@@ -663,8 +663,8 @@
       "description": "Récupère les images rendues d'une vue Lovelace."
     },
     "ha_get_device": {
-      "title": "Obtenir l'appareil",
-      "description": "Récupère les informations sur l'appareil, y compris Zigbee, Z-Wave et Matter."
+      "title": "Obtenir un appareil (incl. Zigbee/ZHA/Z2M, Z-Wave et Matter)",
+      "description": "Obtenir les informations de l'appareil avec pagination, y compris les appareils Zigbee (ZHA/Z2M) et Z-Wave JS."
     },
     "ha_get_entity": {
       "title": "Obtenir l'entité",
@@ -692,7 +692,7 @@
     },
     "ha_get_operation_status": {
       "title": "Statut de l'opération",
-      "description": "Vérifie le statut d'une ou plusieurs opérations sur les appareils."
+      "description": "Obtenir le statut d'une ou plusieurs opérations d'appareil avec vérification WebSocket en temps réel."
     },
     "ha_get_overview": {
       "title": "Aperçu du système",

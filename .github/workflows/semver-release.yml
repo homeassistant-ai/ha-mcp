@@ -68,8 +68,9 @@ jobs:
     outputs:
       has_changes: ${{ steps.check.outputs.has_changes }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Check for releasable commits since last tag
@@ -113,8 +114,9 @@ jobs:
     name: Validate Docker Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           submodules: true
 
       - name: Set up Docker Buildx
@@ -150,14 +152,15 @@ jobs:
     # Generate GitHub App token with bypass permissions for tag creation
     - name: Generate GitHub App token
       id: app-token
-      uses: actions/create-github-app-token@v3
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
       with:
         app-id: ${{ secrets.RELEASE_APP_ID }}
         private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        permission-contents: write
       # Fallback to RELEASE_TOKEN (PAT) or GITHUB_TOKEN if app credentials not configured
       continue-on-error: true
 
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         fetch-depth: 0
         # Priority: GitHub App token > RELEASE_TOKEN (PAT) > GITHUB_TOKEN

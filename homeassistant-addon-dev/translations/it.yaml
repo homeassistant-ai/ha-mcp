@@ -30,17 +30,22 @@ configuration:
       '
   enable_tool_search:
     name: Attiva la ricerca degli strumenti
-    description: 'Sostituisce il catalogo completo degli strumenti con una scoperta
-      basata sulla ricerca. Riduce il contesto a riposo da circa 46K a 5K token. ⚠️
-      NON attivarla se usi Claude in modalità Sonnet o Opus: quei modelli hanno una
-      propria ricerca di strumenti / strumenti differiti integrata, che va in conflitto
-      con la nostra. Per usare la ricerca di ha-mcp con Claude, disattiva prima quella
-      integrata di Claude; altrimenti lascia questa opzione disattivata. Usala solo
-      con LLM privi di strumenti differiti nativi (per esempio Claude Haiku, modelli
-      locali compatibili con OpenAI) o con finestre di contesto più piccole. Gli strumenti
-      si trovano tramite ha_search_tools e vengono eseguiti tramite proxy suddivisi
-      per categoria (lettura/scrittura/eliminazione). Richiede il riavvio per avere
-      effetto.'
+    description: 'Sostituisci il catalogo completo degli strumenti con la scoperta
+      basata sulla ricerca. Riduce il contesto inattivo di circa il 90%, a circa 5K
+      token. ⚠️ NON abilitare questa opzione nei client con la propria ricerca strumenti
+      integrata / strumenti differiti (claude.ai, Claude Desktop, Claude Code) — i
+      due livelli di ricerca entrano in conflitto, e la ricerca strumenti integrata
+      del client è la scelta migliore in quel caso; lasciala disattivata. Se gli strumenti
+      sono differiti dipende dalla combinazione client e modello: usa questa opzione
+      quando la tua configurazione carica il catalogo completo in anticipo — modelli
+      senza strumenti differiti nativi (es. Gemini, modelli locali compatibili con
+      OpenAI, Claude Haiku), client che incorporano tutti gli schemi degli strumenti
+      indipendentemente dal modello (es. GitHub Copilot CLI), o finestre di contesto
+      più piccole. Alcuni modelli Codex e ChatGPT includono anche strumenti differiti
+      — controlla direttamente il tuo client/modello per confermarne le funzionalità
+      in modo da non lasciare questa opzione abilitata inutilmente. Gli strumenti
+      vengono trovati tramite ha_search_tools ed eseguiti tramite proxy categorizzati
+      (read/write/delete). Richiede un riavvio per avere effetto.'
   enable_tool_security_policies:
     name: Attiva i criteri di sicurezza degli strumenti (avanzato)
     description: Subordina all'approvazione dell'utente le chiamate agli strumenti

@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # The default GITHUB_TOKEN cannot push commits that modify any file
       # under .github/workflows/ — GitHub blocks workflow-file mutations
@@ -37,17 +37,25 @@ jobs:
       # has Workflows: write.
       - name: Generate Renovate app token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
-          app-id: ${{ secrets.RENOVATE_APP_ID }}
+          client-id: ${{ secrets.RENOVATE_APP_ID }}
           private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+          # Without this the vulnerabilityAlerts carve-out in renovate.json is
+          # dead: an installation token that lists any permission-* input drops
+          # every permission it does not name, including vulnerability_alerts.
+          permission-vulnerability-alerts: read
+          permission-workflows: write
 
       - name: Self-hosted Renovate
         uses: renovatebot/github-action@316d7cd859606d6039a2182b7d69199e9b036835 # v46.2.1
         with:
           configurationFile: renovate.json
+          renovate-version: 44.26.0
           token: ${{ steps.app-token.outputs.token }}
         env:
           LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
-          RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '["^cat.*", "^echo.*", "^cut.*", "^sed.*", "^git add.*"]'
           RENOVATE_REPOSITORIES: ${{ github.repository }}

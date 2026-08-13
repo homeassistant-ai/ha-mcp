@@ -209,7 +209,7 @@ JSON
 
     - id: run_comment
       if: ${{ inputs.mode == 'comment' && env.GH_TOKEN_CODEX_COMMENT != '' }}
-      uses: actions/github-script@v7
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
       env:
         COMMENT_TOKEN: ${{ env.GH_TOKEN_CODEX_COMMENT }}
       with:

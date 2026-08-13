@@ -7,6 +7,25 @@
   "schedule": [
     "after 3pm on tuesday"
   ],
+  "minimumReleaseAge": "7 days",
+  "minimumReleaseAgeBehaviour": "timestamp-optional",
+  "logLevelRemap": [
+    {
+      "matchMessage": "External host error causing abort - skipping",
+      "newLogLevel": "error"
+    },
+    {
+      "matchMessage": "Git error - aborting",
+      "newLogLevel": "error"
+    },
+    {
+      "matchMessage": "/^Some release\\(s\\) did not have a releaseTimestamp, but as we're running with minimumReleaseAgeBehaviour=timestamp-optional, proceeding\\. See debug logs for more information$/",
+      "newLogLevel": "info"
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "minimumReleaseAge": null
+  },
   "enabledManagers": [
     "custom.regex",
     "dockerfile",
@@ -52,60 +71,44 @@
       ],
       "depNameTemplate": "{{{depName}}}",
       "datasourceTemplate": "{{{datasource}}}"
+    },
+    {
+      "description": "Exact Renovate engine version used by renovatebot/github-action",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/renovate\\.yml$/"
+      ],
+      "matchStrings": [
+        "renovate-version:\\s*(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "renovatebot/renovate",
+      "datasourceTemplate": "github-releases"
     }
   ],
   "packageRules": [
     {
-      "description": "Python runtime images - managed by asdf postUpgradeTasks, not independently",
+      "description": "Keep Python interpreter changes coordinated while allowing same-tag digest refreshes",
       "matchManagers": [
         "dockerfile"
       ],
       "matchPackageNames": [
         "python"
       ],
-      "enabled": false
+      "allowedVersions": "/^3\\.13-slim$/"
     },
     {
-      "description": "Python version upgrades - wait 6 months after release",
+      "description": "Webhook proxy images change only through the dev-first promotion workflow",
       "matchManagers": [
-        "asdf"
+        "dockerfile"
       ],
       "matchPackageNames": [
         "python"
       ],
-      "minimumReleaseAge": "180 days",
-      "postUpgradeTasks": {
-        "commands": [
-          "PYTHON_VERSION=$(cat .python-version)",
-          "PYTHON_MAJOR=$(echo $PYTHON_VERSION | cut -d. -f1)",
-          "PYTHON_MINOR=$(echo $PYTHON_VERSION | cut -d. -f2)",
-          "PYTHON_NEXT=\"${PYTHON_MAJOR}.$((PYTHON_MINOR + 1))\"",
-          "sed -i \"s/requires-python = \\\">=3\\.[0-9]\\+,<3\\.[0-9]\\+\\\"/requires-python = \\\">=${PYTHON_VERSION},<${PYTHON_NEXT}\\\"/\" pyproject.toml",
-          "sed -i '/Programming Language :: Python :: 3\\.[0-9]\\+/d' pyproject.toml",
-          "sed -i \"/Programming Language :: Python :: 3\\\",/a\\\\    \\\"Programming Language :: Python :: ${PYTHON_VERSION}\\\",\" pyproject.toml",
-          "sed -i \"s/python3\\.[0-9]\\+\\(-[a-z]\\+-slim\\)/python${PYTHON_VERSION}\\1/\" Dockerfile homeassistant-addon/Dockerfile homeassistant-addon-dev/Dockerfile .github/workflows/pr.yml",
-          "sed -i \"s/python:3\\.[0-9]\\+-slim/python:${PYTHON_VERSION}-slim/\" Dockerfile homeassistant-addon/Dockerfile homeassistant-addon-dev/Dockerfile",
-          "sed -i \"s/Python 3\\.[0-9]\\+ - Security/Python ${PYTHON_VERSION} - Security/\" Dockerfile homeassistant-addon/Dockerfile homeassistant-addon-dev/Dockerfile",
-          "sed -i \"s/PYTHON_VERSION: \\\"3\\.[0-9]\\+\\\"/PYTHON_VERSION: \\\"${PYTHON_VERSION}\\\"/\" .github/workflows/pr.yml .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml .github/workflows/performance-tests.yml",
-          "sed -i \"s/python-version: '3\\.[0-9]\\+'/python-version: '${PYTHON_VERSION}'/\" .github/workflows/_build-and-release.yml .github/workflows/build-binary.yml",
-          "git add .python-version pyproject.toml Dockerfile homeassistant-addon/Dockerfile homeassistant-addon-dev/Dockerfile .github/workflows/pr.yml .github/workflows/test.yml .github/workflows/e2e-tests.yml .github/workflows/semver-release.yml .github/workflows/performance-tests.yml .github/workflows/_build-and-release.yml .github/workflows/build-binary.yml"
-        ],
-        "fileFilters": [
-          ".python-version",
-          "pyproject.toml",
-          "Dockerfile",
-          "homeassistant-addon/Dockerfile",
-          "homeassistant-addon-dev/Dockerfile",
-          ".github/workflows/pr.yml",
-          ".github/workflows/test.yml",
-          ".github/workflows/e2e-tests.yml",
-          ".github/workflows/semver-release.yml",
-          ".github/workflows/performance-tests.yml",
-          ".github/workflows/_build-and-release.yml",
-          ".github/workflows/build-binary.yml"
-        ],
-        "executionMode": "branch"
-      }
+      "matchFileNames": [
+        "homeassistant-addon-webhook-proxy/Dockerfile",
+        "homeassistant-addon-webhook-proxy-dev/Dockerfile"
+      ],
+      "enabled": false
     }
   ],
   "labels": [

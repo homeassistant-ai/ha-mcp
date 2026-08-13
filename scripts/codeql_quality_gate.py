@@ -204,6 +204,20 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "codec at startup. Rewriting it risks the binary build.",
     ),
     (
+        "py/import-and-import-from",
+        "tests/src/unit/test_translate_locales.py",
+        "Module 'translate_locales' is imported with both",
+        "import translate_locales",
+        "Both forms are load-bearing in this one file. The module object is "
+        "what the monkeypatch sites need — translate_locales.time, .httpx and "
+        "._call_gemini are replaced per test, twenty-three attributes in all — "
+        "while the from-imports name the API under test at seventy call sites. "
+        "Collapsing either direction requalifies those without making anything "
+        "clearer. The pair predates this entry and is unchanged from master; "
+        "it began reporting once scripts/ gained a second module importing "
+        "translate_locales, which is what lets the extractor resolve the name.",
+    ),
+    (
         "py/catch-base-exception",
         "homeassistant-addon/start.py",
         "BaseException",

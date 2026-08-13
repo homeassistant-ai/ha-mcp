@@ -12,8 +12,9 @@ jobs:
   require-version-bump:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Require a dev version bump and config/manifest parity
         env:
