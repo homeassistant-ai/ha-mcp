@@ -280,7 +280,11 @@ def _parse_error_log_structured(
             }
             dedup[key] = record
         record["count"] += 1
-        record["last_seen"] = entry["timestamp"]
+        # Bounds, not last-write-wins: a log whose lines are not perfectly
+        # ordered would otherwise drag last_seen backwards, which also
+        # misplaces the issue in the recency tiebreaker below.
+        record["first_seen"] = min(record["first_seen"], entry["timestamp"])
+        record["last_seen"] = max(record["last_seen"], entry["timestamp"])
 
     # Count first, then severity, then recency. Python's sort is stable, so
     # count alone would return the *oldest* of a tied run — and on a log whose

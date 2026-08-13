@@ -276,6 +276,20 @@ class TestParseErrorLogStructured:
         assert device_timeout["first_seen"] == "2026-05-27 10:00:01.123"
         assert device_timeout["last_seen"] == "2026-05-27 10:00:04.000"
 
+    def test_seen_bounds_survive_out_of_order_lines(self):
+        # first_seen/last_seen are the bounds of the occurrences, not the first
+        # and last line that happened to arrive. Last-write-wins drags last_seen
+        # backwards on an unordered log, and the recency tiebreaker then ranks
+        # the issue by a timestamp it never actually ended at.
+        log = textwrap.dedent("""\
+            2026-05-27 10:00:09.000 ERROR (MainThread) [a.b.c] boom
+            2026-05-27 10:00:01.000 ERROR (MainThread) [a.b.c] boom
+            2026-05-27 10:00:05.000 ERROR (MainThread) [a.b.c] boom
+        """)
+        issue = _parse_error_log_structured(log)["top_issues"][0]
+        assert issue["first_seen"] == "2026-05-27 10:00:01.000"
+        assert issue["last_seen"] == "2026-05-27 10:00:09.000"
+
     def test_by_component_contains_all_components(self):
         result = _parse_error_log_structured(_SAMPLE_LOG)
         assert "homeassistant.components.zha" in result["by_component"]
