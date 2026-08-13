@@ -23,6 +23,7 @@ from ha_mcp.client.rest_client import HomeAssistantAuthError
 from ha_mcp.tools.tools_utility import (
     _DEFAULT_TOP_N,
     _MAX_COMPONENTS,
+    _MAX_MESSAGE_LEN,
     _TRUNCATION_MARK,
     _get_component_prefix,
     _parse_error_log_structured,
@@ -181,10 +182,22 @@ class TestGetComponentPrefix:
     def test_single_segment_logger(self):
         assert _get_component_prefix("homeassistant") == "homeassistant"
 
-    def test_custom_component_prefix(self):
+    def test_custom_component_prefix_is_the_integration_not_the_module(self):
+        # A custom integration's identity is custom_components.<domain>. Taking
+        # three segments would make each of its modules its own component, so
+        # one integration's totals split and consume several cap slots.
         assert (
             _get_component_prefix("custom_components.my_integration.sensor")
-            == "custom_components.my_integration.sensor"
+            == "custom_components.my_integration"
+        )
+        assert _get_component_prefix(
+            "custom_components.my_integration.switch"
+        ) == _get_component_prefix("custom_components.my_integration.sensor")
+
+    def test_custom_component_without_module_is_unchanged(self):
+        assert (
+            _get_component_prefix("custom_components.my_integration")
+            == "custom_components.my_integration"
         )
 
 
@@ -399,6 +412,23 @@ class TestParseErrorLogStructured:
         assert message.endswith(_TRUNCATION_MARK)
         assert len(message) == 200 + len(_TRUNCATION_MARK)
         assert message[:200] == "x" * 200
+
+    def test_messages_differing_past_the_cap_stay_distinct(self):
+        # The dedup key runs on the full message. Keying on the capped display
+        # value merges two unrelated errors that share a long prefix into one
+        # issue with a summed count — invisible in the output, since both
+        # render as the same truncated string.
+        shared = "x" * _MAX_MESSAGE_LEN
+        log = (
+            f"2026-05-27 10:00:01.000 ERROR (MainThread) [a.b.c] {shared}first\n"
+            f"2026-05-27 10:00:02.000 ERROR (MainThread) [a.b.c] {shared}second\n"
+        )
+        result = _parse_error_log_structured(log)
+        assert result["summary"]["unique_issues"] == 2
+        assert [i["count"] for i in result["top_issues"]] == [1, 1]
+        assert all(
+            i["message"].endswith(_TRUNCATION_MARK) for i in result["top_issues"]
+        )
 
     def test_short_message_is_not_marked_truncated(self):
         log = "2026-05-27 10:00:01.000 ERROR (MainThread) [homeassistant.components.test] short\n"

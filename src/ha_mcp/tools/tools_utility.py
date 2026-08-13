@@ -84,6 +84,7 @@ _HA_LOG_LINE_RE = re.compile(
 )
 _MAX_MESSAGE_LEN = 200
 _COMPONENT_PREFIX_DEPTH = 3
+_CUSTOM_COMPONENT_PREFIX_DEPTH = 2
 _DEFAULT_TOP_N = 20
 _MAX_COMPONENTS = 50
 # Marks a message the 200-char cap cut short, so a truncated entry is never
@@ -109,11 +110,28 @@ def _strip_ansi(text: str) -> str:
 
 
 def _get_component_prefix(logger_name: str) -> str:
-    """Extract the component prefix (first N dotted segments) of a logger name."""
+    """Extract the component prefix (first N dotted segments) of a logger name.
+
+    A custom integration's identity is ``custom_components.<domain>`` — one
+    segment shallower than a core component — so its modules roll up into one
+    bucket instead of one per module.
+    """
     parts = logger_name.split(".")
-    if len(parts) >= _COMPONENT_PREFIX_DEPTH:
-        return ".".join(parts[:_COMPONENT_PREFIX_DEPTH])
+    depth = (
+        _CUSTOM_COMPONENT_PREFIX_DEPTH
+        if parts[0] == "custom_components"
+        else _COMPONENT_PREFIX_DEPTH
+    )
+    if len(parts) >= depth:
+        return ".".join(parts[:depth])
     return logger_name
+
+
+def _truncate_message(message: str) -> str:
+    """Cap a message for display, marking it when it was cut."""
+    if len(message) <= _MAX_MESSAGE_LEN:
+        return message
+    return message[:_MAX_MESSAGE_LEN] + _TRUNCATION_MARK
 
 
 class _ExtractedLines(NamedTuple):
@@ -185,14 +203,15 @@ def _extract_log_entries(
             and needle not in logger_name.lower()
         ):
             continue
-        truncated = len(message) > _MAX_MESSAGE_LEN
         entries.append(
             {
                 "timestamp": timestamp,
                 "level": log_level,
                 "logger": logger_name,
-                "message": message[:_MAX_MESSAGE_LEN]
-                + (_TRUNCATION_MARK if truncated else ""),
+                # Kept whole: the display cap is applied at dedup time, because
+                # keying on a capped message merges two errors that differ only
+                # past the cap into one issue with a summed count.
+                "message": message,
             }
         )
 
@@ -241,9 +260,11 @@ def _parse_error_log_structured(
     extracted = _extract_log_entries(lines, search=search, level=level)
     parsed = extracted.entries
 
-    # Dedupe on (level, logger, message). Level belongs in the key: the same
-    # text is logged at different levels, and a level-less key would report a
-    # later ERROR under the level of the first line that carried that text.
+    # Dedupe on (level, logger, message), keyed on the FULL message: two errors
+    # that differ only past the display cap are distinct issues, and a capped
+    # key merges them into one with a summed count. Level belongs in the key
+    # too: the same text is logged at different levels, and a level-less key
+    # would report a later ERROR under the level of the first line to carry it.
     dedup: dict[tuple[str, str, str], dict[str, Any]] = {}
     for entry in parsed:
         key = (entry["level"], entry["logger"], entry["message"])
@@ -252,7 +273,7 @@ def _parse_error_log_structured(
             record = {
                 "logger": entry["logger"],
                 "level": entry["level"],
-                "message": entry["message"],
+                "message": _truncate_message(entry["message"]),
                 "count": 0,
                 "first_seen": entry["timestamp"],
                 "last_seen": entry["timestamp"],
