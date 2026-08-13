@@ -41,8 +41,8 @@ logger = logging.getLogger(__name__)
 _RETRYABLE_STATUS = frozenset({502, 503, 504})
 _MAX_REQUEST_ATTEMPTS = 3
 # Journald window requested for the Core error log on Supervisor-backed
-# installs. Kept as one constant so the add-on and supervised branches of
-# get_error_log() cannot drift apart again.
+# installs. Both such branches of get_error_log() build their request from this
+# constant, so the window they ask for cannot drift apart.
 _ERROR_LOG_LINES = 20000
 
 
@@ -590,11 +590,10 @@ class HomeAssistantClient:
         """
         if is_running_in_addon():
             logger.debug("Fetching error log via Supervisor direct (core service)")
-            # Match the supervised branch's window below. Without an explicit
-            # `lines`, Supervisor returns its 100-line default, so the add-on
-            # saw a ~100-line log where the in-process server saw ~18k on the
-            # same instance — and any "what keeps repeating?" analysis over that
-            # slice is meaningless. See #1721 for the same fix on _get_supervisor_log.
+            # An explicit `lines` is required: without it Supervisor applies its
+            # 100-line default, which is far too short a slice to tell what keeps
+            # repeating. `_get_supervisor_log` plumbs the same parameter for the
+            # same reason (#1734).
             return await self._supervisor_logs_get("core", lines=_ERROR_LOG_LINES)
 
         if await self._is_supervised_install():
@@ -603,7 +602,7 @@ class HomeAssistantClient:
             )
             raw_response = await self._raw_request(
                 "GET",
-                "/hassio/core/logs?lines=20000",
+                f"/hassio/core/logs?lines={_ERROR_LOG_LINES}",
                 headers={"Accept": "text/plain"},
             )
             return raw_response.text

@@ -9,14 +9,17 @@ Covers:
 
 import asyncio
 import inspect
+import json
 import textwrap
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 from pydantic import TypeAdapter
 
+from ha_mcp.client.rest_client import HomeAssistantAuthError
 from ha_mcp.tools.tools_utility import (
     _DEFAULT_TOP_N,
     _MAX_COMPONENTS,
@@ -49,21 +52,40 @@ _UNPARSEABLE_LOG = textwrap.dedent("""\
     2026-05-27 10:00:01 INVALIDLEVEL (thread) [logger] message
 """)
 
-# Ordering fixture: emitted deliberately WORST-first so the sort is
-# load-bearing. `noisy` has one issue seen 5 times (5 occurrences, 1 issue);
-# `chatty` has three distinct issues seen once each (3 occurrences, 3 issues) —
-# so ranking by total_occurrences and ranking by issue_count disagree, and the
-# assertions can tell which one the code used.
-_UNSORTED_LOG = textwrap.dedent("""\
-    2026-05-27 10:00:00.000 ERROR (MainThread) [chatty.sub.mod] alpha
-    2026-05-27 10:00:01.000 ERROR (MainThread) [chatty.sub.mod] beta
-    2026-05-27 10:00:02.000 ERROR (MainThread) [chatty.sub.mod] gamma
-    2026-05-27 10:00:03.000 ERROR (MainThread) [noisy.sub.mod] frequent
-    2026-05-27 10:00:04.000 ERROR (MainThread) [noisy.sub.mod] frequent
-    2026-05-27 10:00:05.000 ERROR (MainThread) [noisy.sub.mod] frequent
-    2026-05-27 10:00:06.000 ERROR (MainThread) [noisy.sub.mod] frequent
-    2026-05-27 10:00:07.000 ERROR (MainThread) [noisy.sub.mod] frequent
-""")
+
+def _many_small_issues_log() -> str:
+    """`chatty` out-totals `noisy` while every single one of its issues is smaller.
+
+    Both sorts are load-bearing against this fixture:
+
+    * `top_issues` ranks per issue, so `noisy`'s one count-5 issue must come
+      first — but `chatty`'s issues are emitted first, so insertion order alone
+      gives the opposite answer.
+    * `by_component` ranks per component *total*, so `chatty` (10 issues x2 = 20)
+      must come first — but it is built by iterating the already-count-sorted
+      issues, so insertion order alone again gives the opposite answer.
+    """
+    lines = [
+        f"2026-05-27 10:{i:02d}:{repeat:02d}.000 ERROR (MainThread) "
+        f"[chatty.sub.mod] issue {i}"
+        for i in range(10)
+        for repeat in range(2)
+    ]
+    lines += [
+        f"2026-05-27 11:00:{i:02d}.000 ERROR (MainThread) [noisy.sub.mod] frequent"
+        for i in range(5)
+    ]
+    return "\n".join(lines) + "\n"
+
+
+_UNSORTED_LOG = _many_small_issues_log()
+
+# Since Python 3.10 an unnamed thread is called "Thread-N (target_fn)", so the
+# thread field of a log line can itself contain parentheses.
+_NESTED_PAREN_THREAD_LOG = (
+    "2026-05-27 10:00:01.000 ERROR (Thread-4 (_read_loop)) "
+    "[pychromecast.socket_client] Connection reset\n"
+)
 
 # What Supervisor-backed installs (add-on / HAOS / supervised) actually return:
 # HA Core's journald stream, ANSI-coloured. Only container/pip installs read the
@@ -208,15 +230,30 @@ class TestParseErrorLogStructured:
         assert device_timeout["component"] == "homeassistant.components.zha"
 
     def test_top_issues_sorted_by_count_desc(self):
-        # _UNSORTED_LOG deliberately emits the *least* frequent issue first, so
-        # this fails if the sort is removed. Asserting on _SAMPLE_LOG would not:
-        # its insertion order already equals its sorted order, so the assertion
-        # held with the sort deleted.
+        # _UNSORTED_LOG emits the *least* frequent issues first, so this fails if
+        # the sort is removed. Asserting on _SAMPLE_LOG would not: its insertion
+        # order already equals its sorted order.
         result = _parse_error_log_structured(_UNSORTED_LOG)
         counts = [i["count"] for i in result["top_issues"]]
         assert counts == sorted(counts, reverse=True)
         assert counts[0] > counts[-1], "fixture must have a non-flat count spread"
         assert result["top_issues"][0]["message"] == "frequent"
+
+    def test_equal_counts_are_broken_by_recency_then_severity(self):
+        # Python's sort is stable, so count alone returns the OLDEST of a tied
+        # run — and logs whose messages embed ids/ports tie at count 1 for
+        # everything, turning "top N" into "the N oldest".
+        log = textwrap.dedent("""\
+            2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] oldest
+            2026-05-27 10:00:01.000 WARNING (MainThread) [a.b.c] middle
+            2026-05-27 10:00:02.000 WARNING (MainThread) [a.b.c] newest
+        """)
+        messages = [
+            i["message"] for i in _parse_error_log_structured(log)["top_issues"]
+        ]
+        # All three tie at count 1: ERROR outranks the WARNINGs on severity, and
+        # the newer WARNING outranks the older one.
+        assert messages == ["oldest", "newest", "middle"]
 
     def test_top_issues_first_and_last_seen(self):
         result = _parse_error_log_structured(_SAMPLE_LOG)
@@ -233,16 +270,25 @@ class TestParseErrorLogStructured:
         assert "homeassistant.loader" in result["by_component"]
 
     def test_by_component_sorted_by_total_occurrences(self):
-        # In _UNSORTED_LOG the component that appears FIRST has several small
-        # issues that out-total another component's single larger one, so the
-        # ordering can only come from the sort, not from insertion order.
+        # by_component is filled by iterating the already-count-sorted issues,
+        # so insertion order follows the largest SINGLE issue. In _UNSORTED_LOG
+        # the component with the largest single issue is not the one with the
+        # largest total, so only the by_component sort can produce this order.
         result = _parse_error_log_structured(_UNSORTED_LOG)
         totals = [v["total_occurrences"] for v in result["by_component"].values()]
         assert totals == sorted(totals, reverse=True)
-        first, second = list(result["by_component"].items())[:2]
-        assert first[1]["total_occurrences"] > second[1]["total_occurrences"]
-        # The winner wins on volume despite having fewer distinct issues.
-        assert first[1]["issue_count"] < second[1]["issue_count"]
+        (first_name, first), (second_name, second) = list(
+            result["by_component"].items()
+        )[:2]
+        assert (first_name, second_name) == ("chatty.sub.mod", "noisy.sub.mod")
+        assert first["total_occurrences"] > second["total_occurrences"]
+        # The winner wins on volume with many small issues, not one big one.
+        assert first["issue_count"] > second["issue_count"]
+        top_issue = result["top_issues"][0]
+        assert top_issue["component"] == second_name, (
+            "the per-issue ranking must still favour the single biggest issue, "
+            "otherwise the two sorts are not distinguishable"
+        )
 
     def test_by_component_issue_count(self):
         result = _parse_error_log_structured(_SAMPLE_LOG)
@@ -291,6 +337,38 @@ class TestParseErrorLogStructured:
         assert result["summary"]["unique_issues"] == 0
         assert result["top_issues"] == []
         assert result["by_component"] == {}
+
+    def test_window_reports_the_slice_that_was_read(self):
+        # Counts are bounded by the fetched window; without it the caller cannot
+        # tell a 2-hour journald slice from the instance's whole history.
+        summary = _parse_error_log_structured(_SAMPLE_LOG)["summary"]
+        assert summary["window_start"] == "2026-05-27 10:00:01.123"
+        assert summary["window_end"] == "2026-05-27 10:00:08.444"
+
+    def test_window_covers_filtered_out_entries_too(self):
+        # The window describes the log slice that was read, not the summary's
+        # contents — a level filter must not shrink it.
+        summary = _parse_error_log_structured(_SAMPLE_LOG, level="WARNING")["summary"]
+        assert summary["window_start"] == "2026-05-27 10:00:01.123"
+        assert summary["window_end"] == "2026-05-27 10:00:08.444"
+
+    def test_window_is_none_when_nothing_parsed(self):
+        summary = _parse_error_log_structured(_UNPARSEABLE_LOG)["summary"]
+        assert summary["window_start"] is None
+        assert summary["window_end"] is None
+
+    def test_nested_paren_thread_name_parses(self):
+        # threading.Thread(target=fn) is named "Thread-N (fn)" since 3.10, and
+        # libraries that spawn raw threads for device I/O log under that name.
+        # A thread group that cannot cross a nested ')' drops those lines into
+        # unparseable_lines, where nothing discloses that a whole component is
+        # structurally missing from top_issues and by_component.
+        result = _parse_error_log_structured(_NESTED_PAREN_THREAD_LOG)
+        assert result["summary"]["unparseable_lines"] == 0
+        assert result["summary"]["parsed_entries"] == 1
+        issue = result["top_issues"][0]
+        assert issue["logger"] == "pychromecast.socket_client"
+        assert issue["message"] == "Connection reset"
 
     def test_unparseable_lines_are_skipped(self):
         result = _parse_error_log_structured(_UNPARSEABLE_LOG)
@@ -433,20 +511,88 @@ class TestHaGetLogsStructured:
         assert "warnings" in result
         assert any("structured" in w for w in result["warnings"])
 
+    @pytest.mark.asyncio
+    async def test_top_n_without_structured_emits_warning(self):
+        """top_n on the raw path does nothing — the obvious caller mistake."""
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](source="error_log", top_n=5)
+        assert "log" in result
+        assert any("top_n" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_top_n_on_other_source_emits_warning(self):
+        client = _make_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](source="system", top_n=5)
+        assert any("top_n" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_top_n_in_structured_mode_does_not_warn(self):
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](
+            source="error_log", structured=True, top_n=5
+        )
+        assert not any("top_n" in w for w in result.get("warnings", []))
+
+    @pytest.mark.asyncio
+    async def test_invalid_top_n_names_top_n_not_limit(self):
+        """The validation error must name the parameter the caller passed."""
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        with pytest.raises(ToolError) as exc_info:
+            await tools["ha_get_logs"](source="error_log", structured=True, top_n=0)
+        payload = json.loads(str(exc_info.value))
+        assert "top_n must be at least 1" in payload["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_level_critical_is_accepted(self):
+        """CRITICAL is in VALID_LOG_LEVELS; CRITICAL lines must be isolatable."""
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](
+            source="error_log", structured=True, level="CRITICAL"
+        )
+        assert [i["message"] for i in result["top_issues"]] == ["DB error"]
+
+    @pytest.mark.asyncio
+    async def test_auth_error_surfaces_as_structured_tool_error(self):
+        """A 401 must not escape raw.
+
+        ``HomeAssistantAuthError`` is a sibling of ``HomeAssistantAPIError``,
+        not a subclass, so an ``except (HomeAssistantAPIError, ...)`` tuple lets
+        it through to FastMCP without a structured ``code``.
+        """
+        client = _make_client()
+        client.get_error_log = AsyncMock(
+            side_effect=HomeAssistantAuthError("401 Unauthorized")
+        )
+        tools = _register_and_collect(client)
+        with pytest.raises(ToolError) as exc_info:
+            await tools["ha_get_logs"](source="error_log")
+        payload = json.loads(str(exc_info.value))
+        assert payload["success"] is False
+        assert payload["error"]["code"]
+        assert payload.get("source") == "error_log"
+
 
 # ---------------------------------------------------------------------------
-# Regression tests for the review blockers (PR #2107)
+# Supervisor-backed installs
 #
-# Each of these fails against the original implementation. They exist because
-# the first version of this feature was validated only against plain-file
-# fixtures, which is the one install type most users do NOT have.
+# The plain-file fixtures above imitate container/pip installs. Add-on, HAOS and
+# supervised installs read HA Core's journald stream instead, which is the one
+# most users have — and the format these tests pin.
 # ---------------------------------------------------------------------------
 class TestSupervisorInstallRegressions:
     """Supervisor-backed installs (add-on / HAOS) serve ANSI-coloured journald."""
 
     def test_ansi_coloured_lines_parse(self):
-        # The original ^-anchored regex matched none of these, so a log full of
-        # errors summarised as "success: true, top_issues: []".
+        # An ^-anchored regex matches no colour-wrapped line at all, which turns
+        # a log full of errors into "success: true, top_issues: []".
         result = _parse_error_log_structured(_ANSI_LOG)
         assert result["summary"]["parsed_entries"] == 3
         assert result["summary"]["unparseable_lines"] == 0
@@ -473,13 +619,23 @@ class TestSupervisorInstallRegressions:
         assert "NOT evidence" in result["warnings"][0]
         assert "warning" not in result
 
-    def test_empty_log_does_not_warn(self):
-        # No input is genuinely nothing to report — distinct from format drift.
-        assert "warnings" not in _parse_error_log_structured("")
+    def test_empty_fetch_warns_instead_of_reading_as_all_clear(self):
+        # A running instance always logs something, so zero lines means the
+        # fetch produced nothing (empty journald window, proxy answering 200
+        # with no body) — not a healthy instance.
+        result = _parse_error_log_structured("")
+        assert "NOT evidence" in result["warnings"][0]
+        assert "empty or failed fetch" in result["warnings"][0]
+
+    def test_blank_only_input_warns_like_an_empty_fetch(self):
+        result = _parse_error_log_structured("\n\n   \n")
+        assert result["summary"]["blank_lines"] == 3
+        assert result["summary"]["unparseable_lines"] == 0
+        assert "empty or failed fetch" in result["warnings"][0]
 
 
 class TestCountSemantics:
-    """`unparseable` and `filtered out` are different things."""
+    """`unparseable`, `filtered out` and `blank` are different things."""
 
     def test_traceback_lines_counted_as_unparseable(self):
         # 1 ERROR line + 4 traceback lines (header, File, source, exception).
@@ -490,11 +646,25 @@ class TestCountSemantics:
         assert s["unparseable_lines"] == 4
         assert s["parsed_entries"] < s["total_raw_lines"]
 
+    def test_every_input_line_is_accounted_for(self):
+        # Every bucket is named, so the four counters reconcile exactly; an
+        # unnamed residual leaves a caller unable to tell what the gap was.
+        log = _SAMPLE_LOG + "\nTraceback (most recent call last):\n"
+        s = _parse_error_log_structured(log, level="ERROR")["summary"]
+        assert (
+            s["blank_lines"] + s["unparseable_lines"] + s["matched_lines"]
+            == s["total_raw_lines"]
+        )
+        assert s["blank_lines"] == 1
+        assert s["unparseable_lines"] == 1
+        assert s["matched_lines"] == 8
+        # matched_lines - parsed_entries is exactly what the filters removed.
+        assert s["parsed_entries"] == 4
+
     def test_filtered_out_lines_are_not_reported_as_unparseable(self):
-        # The bug this guards: with level='ERROR' on a healthy log, a caller
-        # reading parsed_entries vs total_raw_lines concluded "99% unparseable"
-        # and fell back to the raw log — the exact behaviour this feature exists
-        # to prevent.
+        # A caller reading parsed_entries against total_raw_lines must not read
+        # a narrow filter as "99% unparseable" and fall back to the raw log —
+        # the exact behaviour this feature exists to prevent.
         lines = [
             f"2026-05-27 10:00:{i % 60:02d}.000 INFO (MainThread) [homeassistant.core] tick"
             for i in range(200)
@@ -512,6 +682,26 @@ class TestCountSemantics:
         assert result["summary"]["parsed_entries"] == 0
         assert result["summary"]["unparseable_lines"] == 0
         assert "reflects the filters" in result["warnings"][0]
+
+    def test_filtered_empty_result_with_tracebacks_does_not_claim_format_drift(self):
+        # The arrangement that reaches every real log and that _SAMPLE_LOG (zero
+        # unparseable lines) cannot produce: entries parse fine, tracebacks push
+        # the unparseable count high, and the filter matches none of the entries.
+        # Keying the warning on unparseable_lines answers "no CRITICAL entries"
+        # with "no log lines could be parsed", sending the agent back to the
+        # 20,000-line raw fetch this mode exists to avoid.
+        log = _TRACEBACK_LOG * 5
+        result = _parse_error_log_structured(log, level="CRITICAL")
+        s = result["summary"]
+        assert s["unparseable_lines"] == 20
+        assert s["matched_lines"] == 5
+        assert s["parsed_entries"] == 0
+        assert s["unparseable_lines"] > s["matched_lines"], (
+            "fixture must be mostly unparseable, like a real log with tracebacks"
+        )
+        warning = result["warnings"][0]
+        assert "reflects the filters" in warning
+        assert "could not" not in warning and "NOT evidence" not in warning
 
 
 class TestBoundedOutput:

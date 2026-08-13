@@ -9,7 +9,7 @@ import logging
 import re
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, Literal, NoReturn
+from typing import Annotated, Any, Literal, NamedTuple, NoReturn
 
 from fastmcp.exceptions import ToolError
 from pydantic import Field
@@ -70,10 +70,14 @@ VALID_LOG_LEVELS = ("ERROR", "WARNING", "INFO", "DEBUG", "CRITICAL")
 # Full HA log line, e.g.
 # "2026-05-27 10:15:23.456 ERROR (MainThread) [homeassistant.components.zha] msg"
 # Distinct from _LOG_LEVEL_RE above, which only sniffs the level out of a line.
+# The thread field is matched lazily instead of as `\([^)]*\)`: since Python 3.10
+# an unnamed thread is called "Thread-1 (target_fn)", so the field itself can
+# contain parentheses, and a class that cannot cross them drops every line those
+# threads log.
 _HA_LOG_LINE_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?)"
     r"\s+(DEBUG|INFO|WARNING|ERROR|CRITICAL)"
-    r"\s+\([^)]*\)"
+    r"\s+\(.*?\)"
     r"\s+\[([^\]]+)\]"
     r"\s+(.+)$",
     re.IGNORECASE,
@@ -81,21 +85,21 @@ _HA_LOG_LINE_RE = re.compile(
 _MAX_MESSAGE_LEN = 200
 _COMPONENT_PREFIX_DEPTH = 3
 _DEFAULT_TOP_N = 20
-_MAX_TOP_N = MAX_LIMIT
 _MAX_COMPONENTS = 50
 # Marks a message the 200-char cap cut short, so a truncated entry is never
-# mistaken for the whole message (and so two distinct errors that happen to
-# share a prefix are visibly, not invisibly, merged).
+# mistaken for the whole message.
 _TRUNCATION_MARK = "…[truncated]"
+# Tie-breaker for issues with equal counts: a same-count CRITICAL outranks an
+# INFO. Ordering only — not a filter, and not tied to VALID_LOG_LEVELS.
+_LEVEL_SEVERITY = {"CRITICAL": 4, "ERROR": 3, "WARNING": 2, "INFO": 1, "DEBUG": 0}
 
 # Supervisor-backed installs (add-on, HAOS, supervised) read HA Core's journald
 # stream, where every line is wrapped in ANSI colour codes:
 #   "\x1b[31m2026-08-02 08:12:27.290 ERROR (MainThread) [x] msg\x1b[0m"
-# Only container/pip installs read the plain home-assistant.log file. Because
-# _HA_LOG_LINE_RE is ^-anchored and str.strip() does not remove ESC, an
-# un-stripped journald line matches NOTHING — which previously produced a
-# confident "no errors found" on an instance whose log was full of them. Strip
-# first, always.
+# Only container/pip installs read the plain home-assistant.log file.
+# _HA_LOG_LINE_RE is ^-anchored and str.strip() does not remove ESC, so an
+# un-stripped journald line matches nothing and the trailing reset code lands
+# inside `message`, splitting the dedup key. Strip first, always.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
@@ -112,35 +116,66 @@ def _get_component_prefix(logger_name: str) -> str:
     return logger_name
 
 
+class _ExtractedLines(NamedTuple):
+    """Tallies from one pass over the raw log; every input line lands in one.
+
+    ``matched`` counts lines that are valid HA log lines *before* ``level`` and
+    ``search`` run; ``entries`` holds the subset that survived them. The two are
+    kept apart because they answer different questions: only ``matched == 0``
+    means the parser could not read the log, while ``matched > 0`` with no
+    entries just means the filters excluded everything.
+
+    ``total input lines == blank + unparseable + matched`` holds by construction.
+    """
+
+    entries: list[dict[str, str]]
+    matched: int
+    unparseable: int
+    blank: int
+    window_start: str | None
+    window_end: str | None
+
+
 def _extract_log_entries(
     lines: list[str],
     search: str | None = None,
     level: str | None = None,
-) -> tuple[list[dict[str, str]], int]:
-    """Parse raw log lines into entries, returning ``(entries, unparseable)``.
+) -> _ExtractedLines:
+    """Parse raw log lines into entries plus the per-line tallies around them.
 
     Split out from ``_parse_error_log_structured`` to keep both under the repo's
-    complexity ceiling. Counts a line as unparseable only when it does not match
+    complexity ceiling. A line counts as unparseable only when it does not match
     the HA log format at all — lines dropped by ``level``/``search`` are simply
     absent from ``entries``, never counted as unparseable.
     """
     entries: list[dict[str, str]] = []
+    matched = 0
     unparseable = 0
+    blank = 0
+    window_start: str | None = None
+    window_end: str | None = None
     needle = search.lower() if search else None
 
     for line in lines:
         # Strip ANSI *before* matching: on Supervisor-backed installs the line
-        # arrives colour-wrapped and would otherwise never match, and the
-        # trailing reset code would land inside `message` and split the dedup
-        # key for what is really one recurring error.
+        # arrives colour-wrapped, so an un-stripped line matches nothing and the
+        # trailing reset code splits the dedup key for one recurring error.
         clean = _strip_ansi(line).strip()
         if not clean:
+            blank += 1
             continue
         match = _HA_LOG_LINE_RE.match(clean)
         if not match:
             unparseable += 1
             continue
+        matched += 1
         timestamp, log_level, logger_name, message = match.groups()
+        # Widen the covered window on every parseable line, filtered or not:
+        # it describes the log slice that was read, not the summary's contents.
+        if window_start is None or timestamp < window_start:
+            window_start = timestamp
+        if window_end is None or timestamp > window_end:
+            window_end = timestamp
         log_level = log_level.upper()
         if level and log_level != level:
             continue
@@ -161,7 +196,14 @@ def _extract_log_entries(
             }
         )
 
-    return entries, unparseable
+    return _ExtractedLines(
+        entries=entries,
+        matched=matched,
+        unparseable=unparseable,
+        blank=blank,
+        window_start=window_start,
+        window_end=window_end,
+    )
 
 
 def _parse_error_log_structured(
@@ -178,26 +220,30 @@ def _parse_error_log_structured(
     This collapses identical (level, logger, message) triples into counted
     issues, groups them by component, and returns only the ``top_n`` noisiest.
 
-    Counting is deliberately split three ways, because conflating these two
-    reasons for "not in the summary" made an aggressively filtered log look like
-    an unparseable one:
+    Every input line is accounted for exactly once, because "not in the summary"
+    has several causes that must not be conflated:
 
-    * ``total_raw_lines``   - lines in the input
-    * ``unparseable_lines`` - lines that did not match the HA log format at all
-      (tracebacks, continuation lines, format drift)
-    * ``parsed_entries``    - lines that parsed AND survived ``level``/``search``
+    * ``total_raw_lines``   - lines in the input, and the sum of the next three
+    * ``blank_lines``       - empty after ANSI stripping
+    * ``unparseable_lines`` - not the HA log format at all (traceback bodies,
+      continuation lines, format drift)
+    * ``matched_lines``     - valid log lines, before ``level``/``search``
+    * ``parsed_entries``    - the subset of ``matched_lines`` the filters kept
 
-    Only ``unparseable_lines`` says anything about whether falling back to the
-    raw text would reveal more; a small ``parsed_entries`` under a narrow filter
-    is the feature working, not data loss.
+    Only ``matched_lines == 0`` says the parser could not read the log; a small
+    ``parsed_entries`` under a narrow filter is the feature working, not data
+    loss. Counts are bounded by the fetched window (``window_start`` ..
+    ``window_end``), which on a busy instance can be far shorter than the log's
+    full history.
     """
     lines = raw_text.splitlines() if raw_text else []
     total_raw_lines = len(lines)
-    parsed, unparseable_lines = _extract_log_entries(lines, search=search, level=level)
+    extracted = _extract_log_entries(lines, search=search, level=level)
+    parsed = extracted.entries
 
-    # Dedupe on (level, logger, message). Level is part of the key because a
-    # first-wins level meant a later ERROR could be reported under an earlier
-    # WARNING with the same text.
+    # Dedupe on (level, logger, message). Level belongs in the key: the same
+    # text is logged at different levels, and a level-less key would report a
+    # later ERROR under the level of the first line that carried that text.
     dedup: dict[tuple[str, str, str], dict[str, Any]] = {}
     for entry in parsed:
         key = (entry["level"], entry["logger"], entry["message"])
@@ -215,7 +261,19 @@ def _parse_error_log_structured(
         record["count"] += 1
         record["last_seen"] = entry["timestamp"]
 
-    all_issues = sorted(dedup.values(), key=lambda i: i["count"], reverse=True)
+    # Count first, then severity, then recency. Python's sort is stable, so
+    # count alone would return the *oldest* of a tied run — and on a log whose
+    # messages embed volatile ids every issue ties at count 1, which quietly
+    # turns "top 20 issues" into "the 20 oldest".
+    all_issues = sorted(
+        dedup.values(),
+        key=lambda i: (
+            i["count"],
+            _LEVEL_SEVERITY.get(i["level"], 0),
+            i["last_seen"],
+        ),
+        reverse=True,
+    )
 
     by_component: dict[str, dict[str, Any]] = {}
     for issue in all_issues:
@@ -250,12 +308,19 @@ def _parse_error_log_structured(
 
     summary: dict[str, Any] = {
         "total_raw_lines": total_raw_lines,
-        "unparseable_lines": unparseable_lines,
+        "blank_lines": extracted.blank,
+        "unparseable_lines": extracted.unparseable,
+        "matched_lines": extracted.matched,
         "parsed_entries": len(parsed),
         "unique_issues": len(all_issues),
         "components_affected": len(by_component),
         "showing_top_n": min(top_n, len(all_issues)),
         "showing_components": len(component_table),
+        # Counts describe this window only. The fetched slice of a busy
+        # instance's journal can span a couple of hours, so an issue's count
+        # here is not its count since it first occurred.
+        "window_start": extracted.window_start,
+        "window_end": extracted.window_end,
     }
 
     result: dict[str, Any] = {
@@ -267,24 +332,34 @@ def _parse_error_log_structured(
         "by_component": component_table,
     }
 
-    # Fail loudly on format drift. Silence here is what turned an unreadable log
-    # into a confident "no errors found"; if nothing parsed but there WAS input,
-    # say so rather than returning an empty summary that reads as all-clear.
+    # An empty summary has three causes and they need different answers, so the
+    # branch keys on `matched_lines` — the pre-filter count. Keying on the raw
+    # unparseable count instead reports format drift for an ordinary filtered
+    # result, because tracebacks alone push a healthy log past 90% unparseable.
     # Degraded-operation notices go in the top-level `warnings` list — the one
     # channel this repo's tools use — never a singular `warning` string.
-    if total_raw_lines > 0 and not parsed:
-        if unparseable_lines > 0:
+    if extracted.matched == 0:
+        if extracted.unparseable > 0:
             result["warnings"] = [
-                f"No log lines could be parsed ({unparseable_lines} of "
+                f"No log lines could be parsed ({extracted.unparseable} of "
                 f"{total_raw_lines} did not match the expected Home Assistant log "
                 "format). This summary is NOT evidence that the log is clean - "
                 "re-run with structured=False to read the raw text."
             ]
         else:
             result["warnings"] = [
-                "No entries matched the requested filters. The log parsed "
-                "successfully, so this reflects the filters, not a parse failure."
+                f"No log entries arrived to parse ({total_raw_lines} lines "
+                "fetched, none of them log entries). A running Home Assistant "
+                "always logs something, so this is an empty or failed fetch, "
+                "NOT evidence that the log is clean - re-run with "
+                "structured=False to see the raw response."
             ]
+    elif not parsed:
+        result["warnings"] = [
+            f"None of the {extracted.matched} parsed log entries matched the "
+            "requested filters. The log itself parsed fine, so this reflects "
+            "the filters, not a parse failure."
+        ]
     return result
 
 
@@ -310,6 +385,7 @@ class UtilityTools:
         limit: int | None,
         default: int = DEFAULT_LIMIT,
         suggestion_example: str = "50",
+        param_name: str = "limit",
     ) -> int:
         """Validate a limit parameter, raising a structured tool error on failure."""
         effective = limit if limit is not None else default
@@ -317,9 +393,10 @@ class UtilityTools:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"limit must be at least 1, got {effective}",
+                    f"{param_name} must be at least 1, got {effective}",
                     suggestions=[
-                        f"Provide limit as an integer (e.g., {suggestion_example})"
+                        f"Provide {param_name} as an integer "
+                        f"(e.g., {suggestion_example})"
                     ],
                 )
             )
@@ -493,10 +570,16 @@ class UtilityTools:
         warnings = self._collect_log_warnings(
             source, level, entity_id, end_time, slug, order
         )
+        structured_error_log = structured and source == "error_log"
         if structured and source != "error_log":
             warnings.append(
                 "Parameter 'structured' only applies to source='error_log'; "
                 f"ignored for source='{source}'"
+            )
+        if top_n is not None and not structured_error_log:
+            warnings.append(
+                "Parameter 'top_n' only applies to source='error_log' with "
+                f"structured=True; ignored for source='{source}'"
             )
         self._validate_log_slug(source, slug)
         result = await self._fetch_log_source(
@@ -511,7 +594,7 @@ class UtilityTools:
             level,
             slug,
             order,
-            structured=structured and source == "error_log",
+            structured=structured_error_log,
             top_n=top_n,
         )
         if warnings:
@@ -850,13 +933,16 @@ class UtilityTools:
     ) -> dict[str, Any]:
         """Summarise the raw error log and annotate what shaped the result."""
         effective_top_n = self._coerce_limit(
-            top_n, default=_DEFAULT_TOP_N, suggestion_example="20"
+            top_n,
+            default=_DEFAULT_TOP_N,
+            suggestion_example="20",
+            param_name="top_n",
         )
         result = _parse_error_log_structured(
             raw_log,
             search=search,
             level=level,
-            top_n=min(effective_top_n, _MAX_TOP_N),
+            top_n=effective_top_n,
         )
         # Report the filters that shaped the summary, matching the raw path —
         # otherwise an empty summary is indistinguishable from a quiet log.
@@ -895,22 +981,17 @@ class UtilityTools:
         structured: bool = False,
         top_n: int | None = None,
     ) -> dict[str, Any]:
-        """Fetch raw error log text from home-assistant.log.
+        """Fetch raw error log text (home-assistant.log, or journald).
+
+        Container/pip installs read the plain ``home-assistant.log`` file;
+        Supervisor-backed installs read HA Core's journald stream instead.
 
         With ``structured=True`` the raw text is collapsed into a counted,
         component-grouped summary instead (see ``_parse_error_log_structured``);
-        ``limit``/``order`` do not apply in that mode (the summary is ranked by
-        occurrence count over the whole log, not a positional window), and
-        ``top_n`` bounds it instead.
+        ``limit``/``order`` do not apply in that mode (the summary ranks the
+        whole fetched window by occurrence count rather than returning a
+        positional slice of it), and ``top_n`` bounds it instead.
         """
-        # In structured mode the summary covers the whole log, so `limit` is
-        # meaningless — and validating it here would reject limit=0 for a
-        # parameter that has no effect. Only coerce it on the raw path.
-        if not structured:
-            effective_limit = self._coerce_limit(
-                limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
-            )
-
         try:
             raw_log = await self._client.get_error_log()
 
@@ -924,6 +1005,12 @@ class UtilityTools:
                     order=order,
                 )
 
+            # Coerced after the structured return: the summary covers the whole
+            # fetched window, so `limit` has no meaning there and validating it
+            # would reject limit=0 for a parameter with no effect.
+            effective_limit = self._coerce_limit(
+                limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
+            )
             lines = raw_log.splitlines() if raw_log else []
 
             filters_applied: dict[str, str] = {}
@@ -966,6 +1053,16 @@ class UtilityTools:
 
         except ToolError:
             raise
+        except HomeAssistantAuthError as e:
+            # AuthError is a sibling of HomeAssistantAPIError, not a subclass,
+            # so the tuple below never catches it and a 401 would propagate raw
+            # to FastMCP without a structured `code`. All three fetch branches
+            # (addon Supervisor, hassio proxy, /api/error_log) can raise it.
+            exception_to_structured_error(
+                e,
+                context={"source": "error_log"},
+                suggestions=self._addon_auth_error_suggestions(),
+            )
         except (
             HomeAssistantConnectionError,
             HomeAssistantAPIError,
@@ -1502,7 +1599,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Sort order for time-ordered sources (logbook, system, "
                     "error_log, supervisor, system_service): 'newest' (default) "
                     "returns most-recent first; 'oldest' returns chronological-"
-                    "first. Ignored for source='logger'."
+                    "first. Ignored for source='logger', and for "
+                    "source='error_log' with structured=True (that summary is "
+                    "ranked by occurrence count, not by time)."
                 )
             ),
         ] = "newest",
@@ -1532,8 +1631,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 ge=1,
                 description=(
-                    "Max distinct issues to return when structured=True "
-                    "(default 20). Bounds the response regardless of log size."
+                    f"Max distinct issues to return when structured=True "
+                    f"(default {_DEFAULT_TOP_N}, capped at {MAX_LIMIT}). Bounds "
+                    "the response regardless of log size."
                 ),
             ),
         ] = None,
@@ -1546,11 +1646,20 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **Sources:**
         - "logbook" (default): Entity state change history with pagination
         - "system": Structured system log entries (errors, warnings) via system_log/list
-        - "error_log": Raw home-assistant.log text
+        - "error_log": Raw log text (home-assistant.log on container/pip installs; HA Core's journald stream on Supervisor-backed installs)
         - "supervisor": Add-on container logs (requires slug = add-on slug)
         - "system_service": HA-Supervisor-managed system service logs (requires
           slug ∈ {supervisor, host, core, dns, audio, cli, multicast, observer})
         - "logger": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)
+
+        **Prefer source='system' for triage.** It returns HA's own deduplicated
+        system_log entries with counts, first_occurred and full tracebacks; only
+        the tracebacks are unrecoverable from error_log text. Its counts also run
+        since each error first occurred, while structured error_log counts only
+        what is inside the fetched window (reported as window_start/window_end,
+        a couple of hours on a busy instance). Use error_log with structured=True
+        for entries below system_log's WARNING+ ~50-entry cap, or for the
+        per-component rollup.
 
         **Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')
         **Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service); ignored for source='logger' and for error_log with structured=True. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window.
@@ -1558,13 +1667,8 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **System/error_log params:** level (ERROR, WARNING, INFO, DEBUG, CRITICAL)
         **error_log params:** structured, top_n. In structured mode `search`
             matches the message and logger name only, whereas on the raw path it
-            matches the whole line; `limit`/`order` do not apply.
-
-        **Prefer source='system' for triage.** It returns HA's own deduplicated
-        system_log entries with counts, first_occurred and full tracebacks, which
-        error_log parsing cannot recover. Use error_log with structured=True when
-        you need coverage past system_log's window (it keeps ~50 recent
-        WARNING+ entries) or the per-component rollup.
+            matches the whole line; `limit`/`order` do not apply, and issues are
+            ranked by count, then severity, then recency.
         **Supervisor params:** slug = add-on slug, e.g. "core_mosquitto" (use
             ha_get_addon() to list installed slugs)
         **System-service params:** slug = service name. The slug "supervisor"

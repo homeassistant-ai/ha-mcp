@@ -17,7 +17,6 @@ Covers two REST-client paths and their tools_utility wrappers:
   error translation.
 """
 
-import inspect
 import json
 import re
 from pathlib import Path
@@ -586,7 +585,7 @@ class TestGetErrorLogBranchSelection:
         # Fetch via _raw_request (text/plain payload, not JSON).
         mock_client._raw_request.assert_awaited_once_with(
             "GET",
-            "/hassio/core/logs?lines=20000",
+            f"/hassio/core/logs?lines={_ERROR_LOG_LINES}",
             headers={"Accept": "text/plain"},
         )
 
@@ -606,32 +605,38 @@ class TestGetErrorLogBranchSelection:
             result = await mock_client.get_error_log()
 
         assert "error log via supervisor" in result
-        # An explicit window is required. Without `lines`, Supervisor returns
-        # its 100-line default, so the add-on saw ~100 lines where the
-        # supervised branch (?lines=20000) saw ~18k on the same instance — and
-        # any "what keeps repeating?" analysis over that slice is meaningless.
+        # An explicit window is required: without `lines`, Supervisor applies
+        # its 100-line default, far too short a slice to tell what keeps
+        # repeating.
         mock_client._supervisor_logs_get.assert_called_once_with(
             "core", lines=_ERROR_LOG_LINES
         )
         mock_client._request.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_addon_and_supervised_branches_request_the_same_window(
         self, mock_client
     ):
         """Both Supervisor-backed branches must read the same amount of log.
 
-        They drifted once already (add-on had no window at all); pin them
-        together so a change to one is a visible change to the other.
+        Asserted on the requests the two branches actually issue — a source
+        check would also pass on a match inside a comment.
         """
         mock_client._supervisor_logs_get = AsyncMock(return_value="x")
         with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=True):
             await mock_client.get_error_log()
         addon_lines = mock_client._supervisor_logs_get.call_args.kwargs["lines"]
 
+        mock_response = MagicMock()
+        mock_response.text = "x"
+        mock_client._request = AsyncMock(return_value={"components": ["hassio"]})
+        mock_client._raw_request = AsyncMock(return_value=mock_response)
+        with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False):
+            await mock_client.get_error_log()
+        supervised_url = mock_client._raw_request.call_args.args[1]
+
         assert addon_lines == _ERROR_LOG_LINES
-        # The supervised branch builds the window into its URL literal.
-        source = inspect.getsource(type(mock_client).get_error_log)
-        assert f"lines={_ERROR_LOG_LINES}" in source
+        assert supervised_url.endswith(f"lines={addon_lines}")
 
 
 class TestGetSystemServiceLogs:
