@@ -88,6 +88,15 @@ class PayloadFile(NamedTuple):
     size: int
 
 
+class BootstrapInputs(NamedTuple):
+    txid: str | None
+    payload: Payload | None
+    configuration_sha256: str | None
+    component_sha256: str | None
+    trust_sha256: str | None
+    recovery_arguments: dict[str, str | bool]
+
+
 class Payload(NamedTuple):
     files: tuple[PayloadFile, ...]
     manifest: bytes
@@ -168,9 +177,8 @@ def _validate_url(value: str) -> str:
     return value.rstrip("/")
 
 
-def _load_credentials() -> tuple[str, str]:  # noqa: C901
-    """Load credentials only from the fixed main-repository ``.env``."""
-    env_path = APPROVED_CREDENTIAL_ENV
+def _credential_env_lines(env_path: Path) -> list[str]:
+    """Read the fixed credential file after exact type and mode checks."""
     try:
         info = env_path.lstat()
     except OSError:
@@ -179,30 +187,42 @@ def _load_credentials() -> tuple[str, str]:  # noqa: C901
         raise BootstrapError("root_env_invalid")
     if stat.S_IMODE(info.st_mode) != 0o600:
         raise BootstrapError("root_env_permissions_unsafe")
-    values: dict[str, str] = {}
     try:
-        lines = env_path.read_text(encoding="utf-8").splitlines()
+        return env_path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError):
         raise BootstrapError("root_env_invalid") from None
+
+
+def _credential_assignment(raw: str) -> tuple[str, str] | None:
+    """Return one allowed credential assignment or ignore an unrelated line."""
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        return None
+    if line.startswith("export "):
+        line = line[7:].strip()
+    if "=" not in line:
+        return None
+    key, value = (part.strip() for part in line.split("=", 1))
+    if key not in {"HOMEASSISTANT_URL", "HOMEASSISTANT_TOKEN"}:
+        return None
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        value = value[1:-1]
+    if not value or "\r" in value or "\n" in value or "${" in value:
+        raise BootstrapError("root_env_invalid")
+    return key, value
+
+
+def _load_credentials() -> tuple[str, str]:
+    """Load credentials only from the fixed main-repository ``.env``."""
+    values: dict[str, str] = {}
+    lines = _credential_env_lines(APPROVED_CREDENTIAL_ENV)
     for raw in lines:
-        line = raw.strip()
-        if not line or line.startswith("#"):
+        assignment = _credential_assignment(raw)
+        if assignment is None:
             continue
-        if line.startswith("export "):
-            line = line[7:].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if key not in {"HOMEASSISTANT_URL", "HOMEASSISTANT_TOKEN"}:
-            continue
+        key, value = assignment
         if key in values:
             raise BootstrapError("root_env_duplicate_credential")
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-            value = value[1:-1]
-        if not value or "\r" in value or "\n" in value or "${" in value:
-            raise BootstrapError("root_env_invalid")
         values[key] = value
     if set(values) != {"HOMEASSISTANT_URL", "HOMEASSISTANT_TOKEN"}:
         raise BootstrapError("root_env_credentials_required")
@@ -272,7 +292,50 @@ def _git_output(source_root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def validate_local_payload(  # noqa: C901 - exact source and independent pin gate
+def _validated_source_root(source_root: Path) -> Path:
+    """Resolve the source root and reject symlinked or non-directory roots."""
+    try:
+        info = source_root.lstat()
+        root = source_root.resolve(strict=True)
+    except OSError:
+        raise BootstrapError("source_root_unavailable") from None
+    if stat.S_ISLNK(info.st_mode) or not root.is_dir():
+        raise BootstrapError("source_root_invalid")
+    return root
+
+
+def _validate_component_file_set(root: Path) -> None:
+    """Require the exact Aurora component source file set."""
+    directory = root / "custom_components" / "aurora_deploy"
+    try:
+        info = directory.lstat()
+    except OSError:
+        raise BootstrapError("source_component_unavailable") from None
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise BootstrapError("source_component_invalid")
+    actual: set[str] = set()
+    for item in directory.iterdir():
+        if item.name == "__pycache__" and item.is_dir() and not item.is_symlink():
+            continue
+        if item.is_symlink() or not item.is_file():
+            raise BootstrapError("source_component_file_set_invalid")
+        actual.add(item.name)
+    if actual != set(COMPONENT_FILES):
+        raise BootstrapError("source_component_file_set_invalid")
+
+
+def _validated_payload_files(root: Path) -> tuple[PayloadFile, ...]:
+    """Require every payload path to be tracked and return exact bytes."""
+    for relative in PAYLOAD_PATHS:
+        _git_output(root, "ls-files", "--error-unmatch", "--", relative)
+    return tuple(
+        PayloadFile(relative, content, _digest(content), len(content))
+        for relative in PAYLOAD_PATHS
+        for content in (_regular_bytes(root, relative),)
+    )
+
+
+def validate_local_payload(
     source_root: Path,
     *,
     expected_manifest_sha256: str,
@@ -292,41 +355,14 @@ def validate_local_payload(  # noqa: C901 - exact source and independent pin gat
     )
     if REVISION.fullmatch(expected_source_revision) is None:
         raise BootstrapError("expected_source_revision_required")
-    try:
-        root_info = source_root.lstat()
-        root = source_root.resolve(strict=True)
-    except OSError:
-        raise BootstrapError("source_root_unavailable") from None
-    if stat.S_ISLNK(root_info.st_mode) or not root.is_dir():
-        raise BootstrapError("source_root_invalid")
-    component_directory = root / "custom_components" / "aurora_deploy"
-    try:
-        component_info = component_directory.lstat()
-    except OSError:
-        raise BootstrapError("source_component_unavailable") from None
-    if stat.S_ISLNK(component_info.st_mode) or not stat.S_ISDIR(component_info.st_mode):
-        raise BootstrapError("source_component_invalid")
-    actual_component_files: set[str] = set()
-    for item in component_directory.iterdir():
-        if item.name == "__pycache__" and item.is_dir() and not item.is_symlink():
-            continue
-        if item.is_symlink() or not item.is_file():
-            raise BootstrapError("source_component_file_set_invalid")
-        actual_component_files.add(item.name)
-    if actual_component_files != set(COMPONENT_FILES):
-        raise BootstrapError("source_component_file_set_invalid")
+    root = _validated_source_root(source_root)
+    _validate_component_file_set(root)
     revision = _git_output(root, "rev-parse", "HEAD")
     if revision != expected_source_revision:
         raise BootstrapError("source_revision_mismatch")
     if _git_output(root, "status", "--porcelain=v1", "--untracked-files=all"):
         raise BootstrapError("source_worktree_not_clean")
-    for relative in PAYLOAD_PATHS:
-        _git_output(root, "ls-files", "--error-unmatch", "--", relative)
-    files = tuple(
-        PayloadFile(relative, content, _digest(content), len(content))
-        for relative in PAYLOAD_PATHS
-        for content in (_regular_bytes(root, relative),)
-    )
+    files = _validated_payload_files(root)
     component_manifest = next(
         item for item in files if item.relative_path.endswith("/manifest.json")
     )
@@ -429,29 +465,8 @@ def _fresh_ha_recovery_backup(
     return item
 
 
-def validate_supervisor_preflight(  # noqa: C901
-    *,
-    user: dict[str, Any],
-    supervisor: dict[str, Any],
-    host: dict[str, Any],
-    backup: dict[str, Any] | None,
-    addon: dict[str, Any],
-    store: dict[str, Any],
-    backup_id: str | None,
-    expected_backup_agent_id: str | None,
-    require_backup: bool,
-    now: datetime | None = None,
-) -> str:
-    if user.get("is_admin") is not True:
-        raise BootstrapError("administrator_required")
-    if (
-        supervisor.get("healthy") is not True
-        or supervisor.get("supported") is not True
-        or ("state" in supervisor and supervisor["state"] != "running")
-    ):
-        raise BootstrapError("supervisor_not_ready")
-    if supervisor.get("arch") != "amd64":
-        raise BootstrapError("unsupported_architecture")
+def _validate_haos_host(host: dict[str, Any]) -> None:
+    """Validate either explicit host architecture or legacy HAOS metadata."""
     host_arch_fields = [key for key in ("arch", "architecture") if key in host]
     if host_arch_fields:
         if any(host[key] != "amd64" for key in host_arch_fields):
@@ -481,9 +496,17 @@ def validate_supervisor_preflight(  # noqa: C901
             raise BootstrapError("host_metadata_invalid")
     if host.get("features") is not None and not isinstance(host["features"], list):
         raise BootstrapError("host_metadata_invalid")
-    if require_backup:
-        if (
-            expected_backup_agent_id != APPROVED_BACKUP_AGENT_ID
+
+
+def _validate_recovery_backup(
+    backup: dict[str, Any] | None,
+    backup_id: str | None,
+    expected_agent_id: str | None,
+    now: datetime | None,
+) -> None:
+    """Validate one fresh protected database-inclusive HA backup."""
+    if (
+            expected_agent_id != APPROVED_BACKUP_AGENT_ID
             or not isinstance(backup_id, str)
             or SAFE_BACKUP_ID.fullmatch(backup_id) is None
             or not isinstance(backup, dict)
@@ -493,12 +516,16 @@ def validate_supervisor_preflight(  # noqa: C901
             or _fresh_ha_recovery_backup(
                 backup.get("backups"),
                 backup_id,
-                expected_backup_agent_id,
+                expected_agent_id,
                 now=now,
             )
             is None
-        ):
-            raise BootstrapError("protected_ha_recovery_backup_required")
+    ):
+        raise BootstrapError("protected_ha_recovery_backup_required")
+
+
+def _validate_file_editor_addon(addon: dict[str, Any]) -> str:
+    """Validate the installed File editor identity and confinement."""
     if addon.get("slug") != FILE_EDITOR_SLUG or addon.get("name") != "File editor":
         raise BootstrapError("file_editor_identity_mismatch")
     if addon.get("version") != FILE_EDITOR_VERSION:
@@ -516,6 +543,11 @@ def validate_supervisor_preflight(  # noqa: C901
         raise BootstrapError("file_editor_network_exposed")
     if addon.get("repository") != "core":
         raise BootstrapError("file_editor_not_official")
+    return ingress
+
+
+def _validate_file_editor_store(store: dict[str, Any]) -> None:
+    """Validate the Supervisor store metadata for the pinned add-on."""
     store_version = store.get("version_latest") or store.get("version")
     if (
         store.get("slug") != FILE_EDITOR_SLUG
@@ -530,6 +562,38 @@ def validate_supervisor_preflight(  # noqa: C901
         raise BootstrapError("file_editor_store_mismatch")
     if "network" in store and store["network"] is not None:
         raise BootstrapError("file_editor_network_exposed")
+
+
+def validate_supervisor_preflight(
+    *,
+    user: dict[str, Any],
+    supervisor: dict[str, Any],
+    host: dict[str, Any],
+    backup: dict[str, Any] | None,
+    addon: dict[str, Any],
+    store: dict[str, Any],
+    backup_id: str | None,
+    expected_backup_agent_id: str | None,
+    require_backup: bool,
+    now: datetime | None = None,
+) -> str:
+    if user.get("is_admin") is not True:
+        raise BootstrapError("administrator_required")
+    if (
+        supervisor.get("healthy") is not True
+        or supervisor.get("supported") is not True
+        or ("state" in supervisor and supervisor["state"] != "running")
+    ):
+        raise BootstrapError("supervisor_not_ready")
+    if supervisor.get("arch") != "amd64":
+        raise BootstrapError("unsupported_architecture")
+    _validate_haos_host(host)
+    if require_backup:
+        _validate_recovery_backup(
+            backup, backup_id, expected_backup_agent_id, now
+        )
+    ingress = _validate_file_editor_addon(addon)
+    _validate_file_editor_store(store)
     return ingress
 
 
@@ -672,22 +736,10 @@ def _validated_file_state(value: Any, *, required: bool) -> dict[str, Any]:
     return value
 
 
-def _component_state_digest(value: Any) -> str:  # noqa: C901
-    if not isinstance(value, dict) or not isinstance(value.get("exists"), bool):
-        raise BootstrapError("transaction_invalid")
-    if value["exists"] is False:
-        if value != {"exists": False, "files": {}, "directories": {}}:
-            raise BootstrapError("transaction_invalid")
-        return _digest(_canonical({"exists": False, "files": {}, "directories": []}))
-    if (
-        set(value) != {"exists", "files", "directories"}
-        or not isinstance(value["files"], dict)
-        or not isinstance(value["directories"], dict)
-        or len(value["files"]) + len(value["directories"]) > 129
-    ):
-        raise BootstrapError("transaction_invalid")
+def _component_file_hashes(entries: dict[Any, Any]) -> dict[str, str]:
+    """Validate component files and omit bounded interpreter artifacts."""
     files: dict[str, str] = {}
-    for name, state in value["files"].items():
+    for name, state in entries.items():
         if not isinstance(name, str):
             raise BootstrapError("transaction_invalid")
         _validated_file_state({"exists": True, **state}, required=True)
@@ -696,8 +748,13 @@ def _component_state_digest(value: Any) -> str:  # noqa: C901
                 raise BootstrapError("component_generated_artifact_invalid")
             continue
         files[name] = state["sha256"]
+    return files
+
+
+def _component_directories(entries: dict[Any, Any]) -> list[str]:
+    """Validate component directory metadata and return semantic paths."""
     directories: list[str] = []
-    for name, state in value["directories"].items():
+    for name, state in entries.items():
         if (
             not isinstance(name, str)
             or not isinstance(state, dict)
@@ -713,10 +770,29 @@ def _component_state_digest(value: Any) -> str:  # noqa: C901
         if name.startswith("__pycache__/"):
             raise BootstrapError("component_generated_artifact_invalid")
         directories.append(name)
-    if "." not in value["directories"]:
+    if "." not in entries:
         raise BootstrapError("transaction_invalid")
+    return sorted(directories)
+
+
+def _component_state_digest(value: Any) -> str:
+    if not isinstance(value, dict) or not isinstance(value.get("exists"), bool):
+        raise BootstrapError("transaction_invalid")
+    if value["exists"] is False:
+        if value != {"exists": False, "files": {}, "directories": {}}:
+            raise BootstrapError("transaction_invalid")
+        return _digest(_canonical({"exists": False, "files": {}, "directories": []}))
+    if (
+        set(value) != {"exists", "files", "directories"}
+        or not isinstance(value["files"], dict)
+        or not isinstance(value["directories"], dict)
+        or len(value["files"]) + len(value["directories"]) > 129
+    ):
+        raise BootstrapError("transaction_invalid")
+    files = _component_file_hashes(value["files"])
+    directories = _component_directories(value["directories"])
     return _digest(
-        _canonical({"exists": True, "files": files, "directories": sorted(directories)})
+        _canonical({"exists": True, "files": files, "directories": directories})
     )
 
 
@@ -1067,7 +1143,43 @@ class FileEditorIngressClient:
             return "absent"
         return _digest(self._download_path(REMOTE_TRUST))
 
-    def component_tree_sha256(self) -> str:  # noqa: C901
+    def _component_tree_item(
+        self,
+        item: Any,
+        directory: str,
+        prefix: str,
+        files: dict[str, str],
+        directories: set[str],
+        pending: list[tuple[str, str]],
+    ) -> int:
+        """Validate and account for one remote component entry."""
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            raise BootstrapError("remote_component_invalid")
+        name = item["name"]
+        if name in {".", ".."} or "/" in name or "\\" in name:
+            raise BootstrapError("remote_component_invalid")
+        relative = f"{prefix}/{name}".lstrip("/")
+        if len(PurePosixPath(relative).parts) > 8 or len(files) + len(pending) >= 128:
+            raise BootstrapError("remote_component_too_large")
+        expected = f"{directory}/{name}"
+        if item.get("fullpath") != expected or item.get("type") not in {"file", "dir"}:
+            raise BootstrapError("remote_component_invalid")
+        if item["type"] == "dir":
+            if relative != "__pycache__":
+                if relative.startswith("__pycache__/"):
+                    raise BootstrapError("component_generated_artifact_invalid")
+                directories.add(relative)
+            pending.append((expected, relative))
+            return 0
+        content = self._download_path(expected)
+        if SAFE_PYCACHE.fullmatch(relative) is not None:
+            return len(content)
+        if relative.startswith("__pycache__/"):
+            raise BootstrapError("component_generated_artifact_invalid")
+        files[relative] = _digest(content)
+        return len(content)
+
+    def component_tree_sha256(self) -> str:
         if not self._exists(REMOTE_COMPONENT, expected_type="dir"):
             return _digest(
                 _canonical({"exists": False, "files": {}, "directories": []})
@@ -1079,41 +1191,11 @@ class FileEditorIngressClient:
         while pending:
             directory, prefix = pending.pop()
             for item in self._list(directory):
-                if not isinstance(item, dict) or not isinstance(item.get("name"), str):
-                    raise BootstrapError("remote_component_invalid")
-                name = item["name"]
-                if name in {".", ".."} or "/" in name or "\\" in name:
-                    raise BootstrapError("remote_component_invalid")
-                relative = f"{prefix}/{name}".lstrip("/")
-                if (
-                    len(PurePosixPath(relative).parts) > 8
-                    or len(files) + len(pending) >= 128
-                ):
+                total_bytes += self._component_tree_item(
+                    item, directory, prefix, files, directories, pending
+                )
+                if total_bytes > 8 * 1024 * 1024:
                     raise BootstrapError("remote_component_too_large")
-                expected = f"{directory}/{name}"
-                if item.get("fullpath") != expected or item.get("type") not in {
-                    "file",
-                    "dir",
-                }:
-                    raise BootstrapError("remote_component_invalid")
-                if item["type"] == "dir":
-                    if relative == "__pycache__":
-                        pass
-                    elif relative.startswith("__pycache__/"):
-                        raise BootstrapError("component_generated_artifact_invalid")
-                    else:
-                        directories.add(relative)
-                    pending.append((expected, relative))
-                else:
-                    content = self._download_path(expected)
-                    total_bytes += len(content)
-                    if total_bytes > 8 * 1024 * 1024:
-                        raise BootstrapError("remote_component_too_large")
-                    if SAFE_PYCACHE.fullmatch(relative) is not None:
-                        continue
-                    if relative.startswith("__pycache__/"):
-                        raise BootstrapError("component_generated_artifact_invalid")
-                    files[relative] = _digest(content)
         return _digest(
             _canonical(
                 {
@@ -1233,9 +1315,10 @@ class FileEditorIngressClient:
         verified = all(result.get(key) == value for key, value in current.items())
         return {**result, **current, "verified": verified}
 
-    def execute(  # noqa: C901 - fixed command and lost-response state machine
-        self, *, mode: str, transaction_id: str, arguments: dict[str, str | bool]
-    ) -> dict[str, Any]:
+    def _installer_command(
+        self, mode: str, transaction_id: str, arguments: dict[str, str | bool]
+    ) -> str:
+        """Build the fixed installer command after exact argument validation."""
         if mode not in {
             "install",
             "rollback",
@@ -1280,6 +1363,38 @@ class FileEditorIngressClient:
                 raise BootstrapError("installer_argument_invalid")
         if any(char in command for char in ";&|`$<>(){}[]\\\r\n"):
             raise BootstrapError("installer_command_invalid")
+        return command
+
+    def _validated_command_wrapper(
+        self,
+        wrapper: dict[str, Any],
+        command: str,
+        mode: str,
+        transaction_id: str,
+    ) -> dict[str, Any]:
+        """Validate File editor command output and installer receipt."""
+        if (
+            set(wrapper) != {"error", "message", "returncode", "stdout", "stderr"}
+            or wrapper["error"] is not False
+            or wrapper["message"] != f"Command executed: {command}"
+            or not isinstance(wrapper["returncode"], int)
+            or isinstance(wrapper["returncode"], bool)
+            or wrapper["returncode"] != 0
+        ):
+            raise BootstrapError("installer_outcome_unknown")
+        stdout = wrapper.get("stdout")
+        if not isinstance(stdout, str) or wrapper.get("stderr") != "" or len(stdout) > 4096:
+            raise BootstrapError("installer_outcome_unknown")
+        return _validated_installer_receipt(
+            _json_object(stdout.encode(), "installer_output_invalid"),
+            mode,
+            transaction_id,
+        )
+
+    def execute(
+        self, *, mode: str, transaction_id: str, arguments: dict[str, str | bool]
+    ) -> dict[str, Any]:
+        command = self._installer_command(mode, transaction_id, arguments)
         try:
             wrapper = self._request(
                 "/api/exec_command",
@@ -1294,26 +1409,8 @@ class FileEditorIngressClient:
                 raise
             return self._reconcile_lost_response(mode, transaction_id, arguments)
         try:
-            if (
-                set(wrapper) != {"error", "message", "returncode", "stdout", "stderr"}
-                or wrapper["error"] is not False
-                or wrapper["message"] != f"Command executed: {command}"
-                or not isinstance(wrapper["returncode"], int)
-                or isinstance(wrapper["returncode"], bool)
-                or wrapper["returncode"] != 0
-            ):
-                raise BootstrapError("installer_outcome_unknown")
-            stdout = wrapper.get("stdout")
-            if (
-                not isinstance(stdout, str)
-                or wrapper.get("stderr") != ""
-                or len(stdout) > 4096
-            ):
-                raise BootstrapError("installer_outcome_unknown")
-            return _validated_installer_receipt(
-                _json_object(stdout.encode(), "installer_output_invalid"),
-                mode,
-                transaction_id,
+            return self._validated_command_wrapper(
+                wrapper, command, mode, transaction_id
             )
         except Exception:
             return self._reconcile_lost_response(mode, transaction_id, arguments)
@@ -1970,7 +2067,103 @@ async def _addon_action(url: str, token: str, action: str, socket_factory: Any) 
     raise BootstrapError("file_editor_lifecycle_unverified")
 
 
-async def _open_editor(  # noqa: C901
+def _preflight_snapshot(
+    snapshot: dict[str, Any],
+    backup_id: str | None,
+    expected_agent: str | None,
+    require_backup: bool,
+) -> tuple[Any, str]:
+    """Validate one Supervisor snapshot and return state plus ingress id."""
+    return snapshot["addon"].get("state"), validate_supervisor_preflight(
+        **snapshot,
+        backup_id=backup_id,
+        expected_backup_agent_id=expected_agent,
+        require_backup=require_backup,
+    )
+
+
+async def _adopt_lifecycle_lease(
+    url: str,
+    token: str,
+    observed: Any,
+    initial: Any,
+    operation_mode: str,
+    transaction_id: str | None,
+    socket_factory: Any,
+) -> tuple[Any, Any, bool]:
+    """Recover or adopt one stale File editor lifecycle lease."""
+    lease = _read_lifecycle_lease()
+    if lease is None:
+        return observed, initial, False
+    if _lifecycle_process_alive(lease["processId"]):
+        raise BootstrapError("file_editor_lifecycle_lease_active")
+    if lease["initialState"] == "started":
+        if observed == "stopped":
+            await _addon_action(url, token, "start", socket_factory)
+        _clear_lifecycle_lease()
+        return "started", "started", False
+    if observed == "started":
+        _write_lifecycle_lease(operation_mode, transaction_id, create=False)
+        return observed, "stopped", True
+    _clear_lifecycle_lease()
+    return observed, initial, False
+
+
+async def _start_editor_for_operation(
+    url: str,
+    token: str,
+    operation_mode: str,
+    transaction_id: str | None,
+    observed: Any,
+    initial: Any,
+    adopted: bool,
+    socket_factory: Any,
+) -> tuple[bool, bool]:
+    """Start or cycle File editor and return cleanup/recheck flags."""
+    started_by_us = initial == "stopped"
+    recovery_cycled = operation_mode == "recover-lock" and observed == "started"
+    if recovery_cycled:
+        if not adopted:
+            _write_lifecycle_lease(
+                operation_mode, transaction_id, create=True, initial_state="started"
+            )
+        await _addon_action(url, token, "stop", socket_factory)
+        await _addon_action(url, token, "start", socket_factory)
+        if not adopted:
+            _clear_lifecycle_lease()
+    elif started_by_us and not adopted:
+        _write_lifecycle_lease(operation_mode, transaction_id, create=True)
+        await _addon_action(url, token, "start", socket_factory)
+    return started_by_us, recovery_cycled
+
+
+async def _ingress_session(url: str, token: str, socket_factory: Any) -> str:
+    """Create and validate one bounded Supervisor ingress session."""
+    async with socket_factory(url, token) as socket:
+        session = _supervisor_data(
+            await socket.call(
+                "supervisor/api", endpoint="/ingress/session", method="post", data={}
+            )
+        ).get("session")
+    if not isinstance(session, str) or SAFE_SESSION.fullmatch(session) is None:
+        raise BootstrapError("ingress_session_invalid")
+    return session
+
+
+async def _restore_editor_after_failure(
+    url: str, token: str, initial: Any, socket_factory: Any
+) -> None:
+    """Restore the add-on to its recorded initial state after failure."""
+    if initial != "stopped":
+        return
+    try:
+        await _addon_action(url, token, "stop", socket_factory)
+        _clear_lifecycle_lease()
+    except BaseException:
+        raise BootstrapError("operation_failed_and_file_editor_restore_failed") from None
+
+
+async def _open_editor(
     url: str,
     token: str,
     backup_id: str | None,
@@ -1981,100 +2174,34 @@ async def _open_editor(  # noqa: C901
     socket_factory: Any,
 ) -> tuple[str, str, str]:
     snapshot = await _supervisor_snapshot(url, token, socket_factory)
-    observed_initial = snapshot["addon"].get("state")
-    initial = observed_initial
-    ingress = validate_supervisor_preflight(
-        **snapshot,
-        backup_id=backup_id,
-        expected_backup_agent_id=expected_backup_agent_id,
-        require_backup=require_backup,
+    observed_initial, ingress = _preflight_snapshot(
+        snapshot, backup_id, expected_backup_agent_id, require_backup
     )
-    lease = _read_lifecycle_lease()
-    adopted = False
-    if lease is not None:
-        if _lifecycle_process_alive(lease["processId"]):
-            raise BootstrapError("file_editor_lifecycle_lease_active")
-        if lease["initialState"] == "started":
-            if observed_initial == "stopped":
-                await _addon_action(url, token, "start", socket_factory)
-            _clear_lifecycle_lease()
-            snapshot = await _supervisor_snapshot(url, token, socket_factory)
-            observed_initial = snapshot["addon"].get("state")
-            initial = observed_initial
-            ingress = validate_supervisor_preflight(
-                **snapshot,
-                backup_id=backup_id,
-                expected_backup_agent_id=expected_backup_agent_id,
-                require_backup=require_backup,
-            )
-        elif observed_initial == "started":
-            _write_lifecycle_lease(operation_mode, transaction_id, create=False)
-            initial = "stopped"
-            adopted = True
-        else:
-            _clear_lifecycle_lease()
-    started_by_us = initial == "stopped"
-    restore_started_on_failure = False
+    initial = observed_initial
+    observed_initial, initial, adopted = await _adopt_lifecycle_lease(
+        url,
+        token,
+        observed_initial,
+        initial,
+        operation_mode,
+        transaction_id,
+        socket_factory,
+    )
     try:
-        recovery_cycled = False
-        if operation_mode == "recover-lock" and observed_initial == "started":
-            if not adopted:
-                _write_lifecycle_lease(
-                    operation_mode,
-                    transaction_id,
-                    create=True,
-                    initial_state="started",
-                )
-                restore_started_on_failure = True
-            await _addon_action(url, token, "stop", socket_factory)
-            await _addon_action(url, token, "start", socket_factory)
-            recovery_cycled = True
-            if restore_started_on_failure:
-                _clear_lifecycle_lease()
-                restore_started_on_failure = False
-        if started_by_us:
-            if not adopted and not recovery_cycled:
-                _write_lifecycle_lease(operation_mode, transaction_id, create=True)
-                await _addon_action(url, token, "start", socket_factory)
+        started_by_us, recovery_cycled = await _start_editor_for_operation(
+            url, token, operation_mode, transaction_id, observed_initial,
+            initial, adopted, socket_factory
+        )
         if started_by_us or recovery_cycled:
             snapshot = await _supervisor_snapshot(url, token, socket_factory)
-            ingress = validate_supervisor_preflight(
-                **snapshot,
-                backup_id=backup_id,
-                expected_backup_agent_id=expected_backup_agent_id,
-                require_backup=require_backup,
+            state, ingress = _preflight_snapshot(
+                snapshot, backup_id, expected_backup_agent_id, require_backup
             )
-            if snapshot["addon"].get("state") != "started":
+            if state != "started":
                 raise BootstrapError("file_editor_start_unverified")
-        async with socket_factory(url, token) as socket:
-            session = _supervisor_data(
-                await socket.call(
-                    "supervisor/api",
-                    endpoint="/ingress/session",
-                    method="post",
-                    data={},
-                )
-            ).get("session")
-        if not isinstance(session, str) or SAFE_SESSION.fullmatch(session) is None:
-            raise BootstrapError("ingress_session_invalid")
-        return initial, ingress, session
+        return initial, ingress, await _ingress_session(url, token, socket_factory)
     except BaseException as primary:
-        if restore_started_on_failure:
-            try:
-                await _addon_action(url, token, "start", socket_factory)
-                _clear_lifecycle_lease()
-            except BaseException:
-                raise BootstrapError(
-                    "operation_failed_and_file_editor_restore_failed"
-                ) from None
-        elif started_by_us:
-            try:
-                await _addon_action(url, token, "stop", socket_factory)
-                _clear_lifecycle_lease()
-            except BaseException:
-                raise BootstrapError(
-                    "operation_failed_and_file_editor_restore_failed"
-                ) from None
+        await _restore_editor_after_failure(url, token, initial, socket_factory)
         raise primary
 
 
@@ -2126,9 +2253,8 @@ def _ensure_stage_abort_installer(
         raise BootstrapError("remote_installer_hash_mismatch")
 
 
-def _write_local_record(  # noqa: C901
-    txid: str, value: dict[str, Any], *, create: bool
-) -> None:
+def _local_record_path(txid: str, *, create: bool) -> tuple[Path, Path, str]:
+    """Validate local state root and target file semantics."""
     directory = APPROVED_STATE_DIRECTORY
     local_root = directory.parent
     if local_root.exists() and local_root.is_symlink():
@@ -2155,6 +2281,11 @@ def _write_local_record(  # noqa: C901
     elif not create:
         raise BootstrapError("local_transaction_missing")
     prefix = f".{txid}.new-"
+    return directory, path, prefix
+
+
+def _cleanup_local_residue(directory: Path, prefix: str) -> None:
+    """Remove only stale, structurally valid temp files."""
     residue = [item for item in directory.iterdir() if item.name.startswith(prefix)]
     if len(residue) > 128:
         raise BootstrapError("local_state_invalid")
@@ -2176,10 +2307,14 @@ def _write_local_record(  # noqa: C901
             item.unlink()
         except PermissionError:
             pass
+
+
+def _write_temp_record(directory: Path, prefix: str, value: dict[str, Any]) -> tuple[Path, os.stat_result]:
+    """Create, fully write, and fsync one protected temp record."""
     temp = directory / f"{prefix}{os.getpid()}-{secrets.token_hex(8)}"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(temp, flags, 0o600)
-    temp_info = os.fstat(fd)
+    info = os.fstat(fd)
     try:
         try:
             remaining = memoryview(_canonical(value))
@@ -2191,6 +2326,35 @@ def _write_local_record(  # noqa: C901
             os.fsync(fd)
         finally:
             os.close(fd)
+    except BaseException:
+        _remove_temp_record(temp, info)
+        raise
+    return temp, info
+
+
+def _remove_temp_record(temp: Path, expected: os.stat_result) -> None:
+    """Delete a temp record only if its inode is unchanged."""
+    if not os.path.lexists(temp):
+        return
+    current = temp.lstat()
+    if (
+        stat.S_ISLNK(current.st_mode)
+        or not stat.S_ISREG(current.st_mode)
+        or current.st_dev != expected.st_dev
+        or current.st_ino != expected.st_ino
+    ):
+        raise BootstrapError("local_state_invalid")
+    temp.unlink()
+    _fsync_local_directory(temp.parent)
+
+
+def _write_local_record(
+    txid: str, value: dict[str, Any], *, create: bool
+) -> None:
+    directory, path, prefix = _local_record_path(txid, create=create)
+    _cleanup_local_residue(directory, prefix)
+    temp, temp_info = _write_temp_record(directory, prefix, value)
+    try:
         if create:
             try:
                 os.link(temp, path, follow_symlinks=False)
@@ -2200,17 +2364,7 @@ def _write_local_record(  # noqa: C901
             os.replace(temp, path)
         _fsync_local_directory(directory)
     finally:
-        if os.path.lexists(temp):
-            current = temp.lstat()
-            if (
-                stat.S_ISLNK(current.st_mode)
-                or not stat.S_ISREG(current.st_mode)
-                or current.st_dev != temp_info.st_dev
-                or current.st_ino != temp_info.st_ino
-            ):
-                raise BootstrapError("local_state_invalid") from None
-            temp.unlink()
-            _fsync_local_directory(directory)
+        _remove_temp_record(temp, temp_info)
 
 
 def _fsync_local_directory(directory: Path) -> None:
@@ -2562,7 +2716,441 @@ def _credential_transport_receipt(url: str) -> dict[str, str]:
     }
 
 
-async def bootstrap(  # noqa: C901
+def _verify_client_hashes(
+    client: FileEditorIngressClient,
+    expected_configuration: Any,
+    expected_component: Any,
+    expected_trust: Any,
+    code: str,
+) -> None:
+    """Verify all three remote state hashes or raise one stable code."""
+    if (
+        _digest(client.configuration_bytes()) != expected_configuration
+        or client.component_tree_sha256() != expected_component
+        or client.trust_sha256() != expected_trust
+    ):
+        raise BootstrapError(code)
+
+
+def _preflight_result(client: FileEditorIngressClient, payload: Payload) -> dict[str, Any]:
+    """Return the exact local and remote pins established by preflight."""
+    return {
+        "status": "preflight_ready",
+        "configurationSha256": _digest(client.configuration_bytes()),
+        "componentTreeSha256": client.component_tree_sha256(),
+        "trustSha256": client.trust_sha256(),
+        "payloadManifestSha256": payload.manifest_sha256,
+        "releaseKeySha256": payload.release_key_sha256,
+        "validationKeySha256": payload.validation_key_sha256,
+        "sourceRevision": payload.source_revision,
+        "installerSha256": INSTALLER_SHA256,
+    }
+
+
+def _install_result(
+    client: FileEditorIngressClient,
+    txid: str,
+    payload: Payload,
+    expected_configuration: str,
+    expected_component: str,
+    expected_trust: str,
+    replace_exact: bool,
+    recovery_arguments: dict[str, str | bool],
+    config_check: Any,
+    url: str,
+    token: str,
+) -> dict[str, Any]:
+    """Stage, install, validate, and roll back on failed validation."""
+    config_check(url, token)
+    _verify_client_hashes(
+        client, expected_configuration, expected_component, expected_trust,
+        "prestage_cas_mismatch"
+    )
+    _stage_payload(client, txid, payload)
+    arguments = dict(recovery_arguments)
+    if replace_exact:
+        arguments["replace-exact"] = True
+    result = client.execute(mode="install", transaction_id=txid, arguments=arguments)
+    try:
+        config_check(url, token)
+        _verify_client_hashes(
+            client,
+            result.get("configurationSha256"),
+            result.get("componentTreeSha256"),
+            result.get("trustSha256"),
+            "post_install_readback_mismatch",
+        )
+    except BaseException:
+        try:
+            rollback = client.execute(
+                mode="rollback", transaction_id=txid, arguments=recovery_arguments
+            )
+            config_check(url, token)
+            _verify_client_hashes(
+                client,
+                rollback.get("configurationSha256"),
+                rollback.get("componentTreeSha256"),
+                rollback.get("trustSha256"),
+                "rollback_readback_mismatch",
+            )
+        except BaseException:
+            raise BootstrapError("post_install_validation_failed_rollback_unverified") from None
+        raise BootstrapError("post_install_validation_failed_rolled_back") from None
+    result["restartRequired"] = True
+    return result
+
+
+def _rollback_result(
+    client: FileEditorIngressClient,
+    txid: str,
+    arguments: dict[str, str | bool],
+    config_check: Any,
+    url: str,
+    token: str,
+) -> dict[str, Any]:
+    """Execute and verify one exact bootstrap rollback."""
+    result = client.execute(mode="rollback", transaction_id=txid, arguments=arguments)
+    config_check(url, token)
+    _verify_client_hashes(
+        client,
+        result.get("configurationSha256"),
+        result.get("componentTreeSha256"),
+        result.get("trustSha256"),
+        "rollback_readback_mismatch",
+    )
+    result["restartRequired"] = True
+    return result
+
+
+def _abort_stage_result(
+    client: FileEditorIngressClient,
+    txid: str,
+    arguments: dict[str, str | bool],
+) -> dict[str, Any]:
+    """Ensure the pinned installer exists and abort an uncommitted stage."""
+    if client.transaction_exists(txid):
+        raise BootstrapError("stage_abort_transaction_exists")
+    expected = arguments["expected-installer-sha256"]
+    if not isinstance(expected, str):
+        raise BootstrapError("expected_installer_hash_required")
+    _ensure_stage_abort_installer(
+        client, txid, expected, _local_installer_bytes(_read_local_record(txid))
+    )
+    return client.execute(
+        mode="abort-stage",
+        transaction_id=txid,
+        arguments={"expected-installer-sha256": expected},
+    )
+
+
+def _reconciled_finalize_result(
+    client: FileEditorIngressClient,
+    txid: str,
+    status: dict[str, Any],
+    local: dict[str, Any],
+    config_check: Any,
+    url: str,
+    token: str,
+) -> dict[str, Any] | None:
+    """Finish a local finalize after the remote transaction already vanished."""
+    if status.get("status") != "not_found":
+        return None
+    absent = all(
+        status.get(key) is False
+        for key in (
+            "lockHeld", "lockOwnerMatches", "stagePresent", "lockCandidatePresent",
+            "transactionPresent", "initializationPresent",
+        )
+    )
+    if local.get("status") not in {"finalize_authorized", "finalized"} or not absent:
+        raise BootstrapError("finalize_not_allowed")
+    expected_configuration = _validate_hash(
+        local.get("finalizeConfigurationSha256"), "finalize_authorization_invalid"
+    )
+    expected_component = _validate_hash(
+        local.get("finalizeComponentTreeSha256"), "finalize_authorization_invalid"
+    )
+    expected_trust = _validate_hash(
+        local.get("finalizeTrustSha256"), "finalize_authorization_invalid", absent=True
+    )
+    config_check(url, token)
+    _verify_client_hashes(
+        client, expected_configuration, expected_component, expected_trust,
+        "finalize_readback_mismatch"
+    )
+    return {
+        "status": "finalized",
+        "transactionId": txid,
+        "payloadManifestSha256": _validate_hash(
+            local.get("payloadManifestSha256"), "local_payload_pin_required"
+        ),
+        "reconciled": True,
+    }
+
+
+def _validate_finalize_status(
+    client: FileEditorIngressClient,
+    status: dict[str, Any],
+    config_check: Any,
+    url: str,
+    token: str,
+) -> None:
+    """Verify a remote transaction is in one permitted finalize state."""
+    allowed = {
+        "installed", "restart_verified", "finalize_prepared", "rolled_back",
+        "rolled_back_after_failure", "rolled_back_after_recovery",
+        "rollback_finalize_prepared",
+    }
+    if status.get("status") not in allowed:
+        raise BootstrapError("finalize_not_allowed")
+    if status.get("verified") is not True:
+        raise BootstrapError("restart_readback_mismatch")
+    config_check(url, token)
+    _verify_client_hashes(
+        client,
+        status.get("configurationSha256"),
+        status.get("componentTreeSha256"),
+        status.get("trustSha256"),
+        "restart_readback_mismatch",
+    )
+
+
+def _finalize_result(
+    client: FileEditorIngressClient,
+    txid: str,
+    arguments: dict[str, str | bool],
+    config_check: Any,
+    component_route_check: Any,
+    url: str,
+    token: str,
+) -> dict[str, Any]:
+    """Authorize, execute, or reconcile one exact finalization."""
+    status = _bind_status_to_local(
+        _redacted_status(client, txid, readback=True), txid, required=True
+    )
+    local = _read_local_record(txid)
+    reconciled = _reconciled_finalize_result(
+        client, txid, status, local, config_check, url, token
+    )
+    if reconciled is not None:
+        return reconciled
+    _validate_finalize_status(client, status, config_check, url, token)
+    rolled_back = status.get("status") in {
+        "rolled_back", "rolled_back_after_failure", "rolled_back_after_recovery",
+        "rollback_finalize_prepared",
+    }
+    if not rolled_back:
+        component_route_check(url, token, txid)
+        if status.get("status") == "installed":
+            client.execute(
+                mode="mark-verified", transaction_id=txid, arguments=arguments
+            )
+    local.update(
+        {
+            "status": "finalize_authorized",
+            "finalizeConfigurationSha256": status["configurationSha256"],
+            "finalizeComponentTreeSha256": status["componentTreeSha256"],
+            "finalizeTrustSha256": status["trustSha256"],
+            "finalizeRemoteStatus": status["status"],
+        }
+    )
+    _write_local_record(txid, local, create=False)
+    return client.execute(mode="finalize", transaction_id=txid, arguments=arguments)
+
+
+def _execute_bootstrap_mode(
+    mode: str,
+    client: FileEditorIngressClient,
+    txid: str | None,
+    payload: Payload | None,
+    expected_configuration: str | None,
+    expected_component: str | None,
+    expected_trust: str | None,
+    replace_exact: bool,
+    recovery_arguments: dict[str, str | bool],
+    config_check: Any,
+    component_route_check: Any,
+    url: str,
+    token: str,
+) -> dict[str, Any]:
+    """Execute one fixed bootstrap mode using already validated inputs."""
+    if mode in {"status", "readback"}:
+        return _bind_status_to_local(
+            _redacted_status(client, txid, readback=mode == "readback"),
+            txid,
+            required=False,
+        )
+    if mode == "preflight" and payload is not None:
+        return _preflight_result(client, payload)
+    if txid is None:
+        raise BootstrapError("transaction_id_required")
+    if mode == "install" and payload is not None:
+        if not all(isinstance(value, str) for value in (
+            expected_configuration, expected_component, expected_trust
+        )):
+            raise BootstrapError("install_pins_required")
+        return _install_result(
+            client, txid, payload, expected_configuration, expected_component,
+            expected_trust, replace_exact, recovery_arguments, config_check, url, token
+        )
+    if mode == "rollback":
+        return _rollback_result(client, txid, recovery_arguments, config_check, url, token)
+    if mode == "recover-lock":
+        return client.execute(
+            mode="recover-lock", transaction_id=txid, arguments=recovery_arguments
+        )
+    if mode == "abort-stage":
+        return _abort_stage_result(client, txid, recovery_arguments)
+    return _finalize_result(
+        client, txid, recovery_arguments, config_check,
+        component_route_check, url, token
+    )
+
+
+def _prepare_bootstrap_inputs(
+    *,
+    mode: str,
+    source_root: Path,
+    transaction_id: str | None,
+    expected_configuration: str | None,
+    expected_component: str | None,
+    expected_trust: str | None,
+    expected_manifest: str | None,
+    expected_release_key: str | None,
+    expected_validation_key: str | None,
+    expected_source_revision: str | None,
+    replace_exact: bool,
+    config_check: Any,
+    url: str,
+    token: str,
+) -> BootstrapInputs:
+    """Validate local payload, CAS pins, and durable recovery arguments."""
+    txid = None if mode == "preflight" and transaction_id is None else _validate_uuid(transaction_id)
+    payload = None
+    if mode in {"preflight", "install"}:
+        payload = validate_local_payload(
+            source_root,
+            expected_manifest_sha256=_validate_hash(
+                expected_manifest, "expected_payload_manifest_hash_required"
+            ),
+            expected_release_key_sha256=_validate_hash(
+                expected_release_key, "expected_release_key_fingerprint_required"
+            ),
+            expected_validation_key_sha256=_validate_hash(
+                expected_validation_key, "expected_validation_key_fingerprint_required"
+            ),
+            expected_source_revision=expected_source_revision or "",
+        )
+        config_check(url, token)
+    if mode == "install":
+        configuration = _validate_hash(
+            expected_configuration, "expected_configuration_hash_required"
+        )
+        component = _validate_hash(
+            expected_component, "expected_component_tree_hash_required"
+        )
+        trust = _validate_hash(expected_trust, "expected_trust_hash_required", absent=True)
+        _prepare_install_record(
+            txid,
+            {
+                "schemaVersion": "aurora-deploy-bootstrap-local-v1",
+                "status": "prepared",
+                "transactionId": txid,
+                "payloadManifestSha256": payload.manifest_sha256,
+                "sourceRevision": payload.source_revision,
+                "sourceRoot": str(source_root.resolve(strict=True)),
+                "installerSha256": INSTALLER_SHA256,
+                "installerSourceBase64": base64.b64encode(INSTALLER_SOURCE).decode(),
+                "replaceExact": replace_exact,
+                "expectedConfigurationSha256": configuration,
+                "expectedComponentTreeSha256": component,
+                "expectedTrustSha256": trust,
+            },
+        )
+        recovery = {
+            "expected-installer-sha256": INSTALLER_SHA256,
+            "payload-manifest-sha256": payload.manifest_sha256,
+            "expected-configuration-sha256": configuration,
+            "expected-component-tree-sha256": component,
+            "expected-trust-sha256": trust,
+        }
+        return BootstrapInputs(txid, payload, configuration, component, trust, recovery)
+    recovery = (
+        _persist_local_request(txid, mode)
+        if mode in {"rollback", "recover-lock", "abort-stage", "finalize"}
+        else {}
+    )
+    return BootstrapInputs(
+        txid, payload, expected_configuration, expected_component, expected_trust, recovery
+    )
+
+
+async def _run_with_editor(
+    *,
+    mode: str,
+    inputs: BootstrapInputs,
+    url: str,
+    token: str,
+    backup_id: str | None,
+    expected_backup_agent_id: str | None,
+    replace_exact: bool,
+    socket_factory: Any,
+    ingress_client_factory: Any,
+    config_check: Any,
+    component_route_check: Any,
+) -> dict[str, Any]:
+    """Open File editor, execute one mode, and always restore add-on state."""
+    initial: Any = None
+    primary: BaseException | None = None
+    result: dict[str, Any] | None = None
+    try:
+        initial, ingress, session = await _open_editor(
+            url, token, backup_id, expected_backup_agent_id,
+            mode in {"preflight", "install"}, mode, inputs.txid, socket_factory
+        )
+        client = ingress_client_factory(url, ingress, session)
+        result = _execute_bootstrap_mode(
+            mode, client, inputs.txid, inputs.payload, inputs.configuration_sha256,
+            inputs.component_sha256, inputs.trust_sha256, replace_exact,
+            inputs.recovery_arguments, config_check, component_route_check, url, token
+        )
+    except BaseException as error:
+        primary = error
+    cleanup: BaseException | None = None
+    if initial == "stopped":
+        try:
+            await _addon_action(url, token, "stop", socket_factory)
+            _clear_lifecycle_lease()
+        except BaseException as error:
+            cleanup = error
+    if primary is not None and cleanup is not None:
+        raise BootstrapError("operation_failed_and_file_editor_restore_failed") from None
+    if cleanup is not None:
+        raise BootstrapError("file_editor_restore_failed") from None
+    if primary is not None:
+        if isinstance(primary, (BootstrapError, asyncio.CancelledError)):
+            raise primary
+        raise BootstrapError("operation_failed") from None
+    if result is None:
+        raise BootstrapError("operation_failed")
+    return result
+
+
+def _record_bootstrap_receipt(
+    mode: str, txid: str | None, result: dict[str, Any]
+) -> None:
+    """Bind one mutating operation's local record to its redacted receipt."""
+    if txid is None or mode not in {
+        "install", "rollback", "recover-lock", "abort-stage", "finalize"
+    }:
+        return
+    local = _read_local_record(txid)
+    local["status"] = str(result.get("status"))
+    local["receiptSha256"] = _digest(_canonical(result))
+    _write_local_record(txid, local, create=False)
+
+
+async def bootstrap(
     *,
     mode: str,
     source_root: Path,
@@ -2598,320 +3186,24 @@ async def bootstrap(  # noqa: C901
     url, token = credential_loader()
     if mode == "credential-check":
         return _credential_transport_receipt(url)
-    txid = (
-        None
-        if mode == "preflight" and transaction_id is None
-        else _validate_uuid(transaction_id)
+    inputs = _prepare_bootstrap_inputs(
+        mode=mode, source_root=source_root, transaction_id=transaction_id,
+        expected_configuration=expected_configuration_sha256,
+        expected_component=expected_component_tree_sha256,
+        expected_trust=expected_trust_sha256,
+        expected_manifest=expected_payload_manifest_sha256,
+        expected_release_key=expected_release_key_sha256,
+        expected_validation_key=expected_validation_key_sha256,
+        expected_source_revision=expected_source_revision,
+        replace_exact=replace_exact, config_check=config_check, url=url, token=token,
     )
-    payload = None
-    if mode in {"preflight", "install"}:
-        payload = validate_local_payload(
-            source_root,
-            expected_manifest_sha256=_validate_hash(
-                expected_payload_manifest_sha256,
-                "expected_payload_manifest_hash_required",
-            ),
-            expected_release_key_sha256=_validate_hash(
-                expected_release_key_sha256, "expected_release_key_fingerprint_required"
-            ),
-            expected_validation_key_sha256=_validate_hash(
-                expected_validation_key_sha256,
-                "expected_validation_key_fingerprint_required",
-            ),
-            expected_source_revision=expected_source_revision or "",
-        )
-        config_check(url, token)
-    recovery_arguments: dict[str, str | bool] = {}
-    if mode == "install":
-        expected_configuration_sha256 = _validate_hash(
-            expected_configuration_sha256, "expected_configuration_hash_required"
-        )
-        expected_component_tree_sha256 = _validate_hash(
-            expected_component_tree_sha256, "expected_component_tree_hash_required"
-        )
-        expected_trust_sha256 = _validate_hash(
-            expected_trust_sha256, "expected_trust_hash_required", absent=True
-        )
-        _prepare_install_record(
-            txid,
-            {
-                "schemaVersion": "aurora-deploy-bootstrap-local-v1",
-                "status": "prepared",
-                "transactionId": txid,
-                "payloadManifestSha256": payload.manifest_sha256,
-                "sourceRevision": payload.source_revision,
-                "sourceRoot": str(source_root.resolve(strict=True)),  # noqa: ASYNC240
-                "installerSha256": INSTALLER_SHA256,
-                "installerSourceBase64": base64.b64encode(INSTALLER_SOURCE).decode(),
-                "replaceExact": replace_exact,
-                "expectedConfigurationSha256": expected_configuration_sha256,
-                "expectedComponentTreeSha256": expected_component_tree_sha256,
-                "expectedTrustSha256": expected_trust_sha256,
-            },
-        )
-        recovery_arguments = {
-            "expected-installer-sha256": INSTALLER_SHA256,
-            "payload-manifest-sha256": payload.manifest_sha256,
-            "expected-configuration-sha256": expected_configuration_sha256,
-            "expected-component-tree-sha256": expected_component_tree_sha256,
-            "expected-trust-sha256": expected_trust_sha256,
-        }
-    elif mode in {"rollback", "recover-lock", "abort-stage", "finalize"}:
-        recovery_arguments = _persist_local_request(txid, mode)
-    initial = None
-    primary: BaseException | None = None
-    result: dict[str, Any] | None = None
-    try:
-        initial, ingress, session = await _open_editor(
-            url,
-            token,
-            backup_id,
-            expected_backup_agent_id,
-            mode in {"preflight", "install"},
-            mode,
-            txid,
-            socket_factory,
-        )
-        client = ingress_client_factory(url, ingress, session)
-        if mode in {"status", "readback"}:
-            result = _bind_status_to_local(
-                _redacted_status(client, txid, readback=mode == "readback"),
-                txid,
-                required=False,
-            )
-        elif mode == "preflight":
-            result = {
-                "status": "preflight_ready",
-                "configurationSha256": _digest(client.configuration_bytes()),
-                "componentTreeSha256": client.component_tree_sha256(),
-                "trustSha256": client.trust_sha256(),
-                "payloadManifestSha256": payload.manifest_sha256,
-                "releaseKeySha256": payload.release_key_sha256,
-                "validationKeySha256": payload.validation_key_sha256,
-                "sourceRevision": payload.source_revision,
-                "installerSha256": INSTALLER_SHA256,
-            }
-        elif mode == "install":
-            config_check(url, token)
-            if (
-                _digest(client.configuration_bytes()) != expected_configuration_sha256
-                or client.component_tree_sha256() != expected_component_tree_sha256
-                or client.trust_sha256() != expected_trust_sha256
-            ):
-                raise BootstrapError("prestage_cas_mismatch")
-            _stage_payload(client, txid, payload)
-            result = client.execute(
-                mode="install",
-                transaction_id=txid,
-                arguments={
-                    "expected-configuration-sha256": expected_configuration_sha256,
-                    "expected-component-tree-sha256": expected_component_tree_sha256,
-                    "expected-trust-sha256": expected_trust_sha256,
-                    "payload-manifest-sha256": payload.manifest_sha256,
-                    "expected-installer-sha256": INSTALLER_SHA256,
-                    **({"replace-exact": True} if replace_exact else {}),
-                },
-            )
-            try:
-                config_check(url, token)
-                if (
-                    _digest(client.configuration_bytes())
-                    != result.get("configurationSha256")
-                    or client.component_tree_sha256()
-                    != result.get("componentTreeSha256")
-                    or client.trust_sha256() != result.get("trustSha256")
-                ):
-                    raise BootstrapError("post_install_readback_mismatch")
-            except BaseException:
-                try:
-                    rollback = client.execute(
-                        mode="rollback",
-                        transaction_id=txid,
-                        arguments=recovery_arguments,
-                    )
-                    config_check(url, token)
-                    if (
-                        _digest(client.configuration_bytes())
-                        != rollback.get("configurationSha256")
-                        or client.component_tree_sha256()
-                        != rollback.get("componentTreeSha256")
-                        or client.trust_sha256() != rollback.get("trustSha256")
-                    ):
-                        raise BootstrapError("rollback_readback_mismatch")
-                except BaseException:
-                    raise BootstrapError(
-                        "post_install_validation_failed_rollback_unverified"
-                    ) from None
-                raise BootstrapError(
-                    "post_install_validation_failed_rolled_back"
-                ) from None
-            result["restartRequired"] = True
-        elif mode == "rollback":
-            result = client.execute(
-                mode="rollback",
-                transaction_id=txid,
-                arguments=recovery_arguments,
-            )
-            config_check(url, token)
-            if (
-                _digest(client.configuration_bytes())
-                != result.get("configurationSha256")
-                or client.component_tree_sha256() != result.get("componentTreeSha256")
-                or client.trust_sha256() != result.get("trustSha256")
-            ):
-                raise BootstrapError("rollback_readback_mismatch")
-            result["restartRequired"] = True
-        elif mode == "recover-lock":
-            result = client.execute(
-                mode="recover-lock",
-                transaction_id=txid,
-                arguments=recovery_arguments,
-            )
-        elif mode == "abort-stage":
-            if client.transaction_exists(txid):
-                raise BootstrapError("stage_abort_transaction_exists")
-            _ensure_stage_abort_installer(
-                client,
-                txid,
-                recovery_arguments["expected-installer-sha256"],
-                _local_installer_bytes(_read_local_record(txid)),
-            )
-            result = client.execute(
-                mode="abort-stage",
-                transaction_id=txid,
-                arguments={
-                    "expected-installer-sha256": recovery_arguments[
-                        "expected-installer-sha256"
-                    ]
-                },
-            )
-        else:
-            status = _bind_status_to_local(
-                _redacted_status(client, txid, readback=True), txid, required=True
-            )
-            local = _read_local_record(txid)
-            if status.get("status") == "not_found":
-                if (
-                    local.get("status") not in {"finalize_authorized", "finalized"}
-                    or status.get("lockHeld") is not False
-                    or status.get("lockOwnerMatches") is not False
-                    or status.get("stagePresent") is not False
-                    or status.get("lockCandidatePresent") is not False
-                    or status.get("transactionPresent") is not False
-                    or status.get("initializationPresent") is not False
-                ):
-                    raise BootstrapError("finalize_not_allowed")
-                expected_configuration = _validate_hash(
-                    local.get("finalizeConfigurationSha256"),
-                    "finalize_authorization_invalid",
-                )
-                expected_component = _validate_hash(
-                    local.get("finalizeComponentTreeSha256"),
-                    "finalize_authorization_invalid",
-                )
-                expected_trust = _validate_hash(
-                    local.get("finalizeTrustSha256"),
-                    "finalize_authorization_invalid",
-                    absent=True,
-                )
-                config_check(url, token)
-                if (
-                    _digest(client.configuration_bytes()) != expected_configuration
-                    or client.component_tree_sha256() != expected_component
-                    or client.trust_sha256() != expected_trust
-                ):
-                    raise BootstrapError("finalize_readback_mismatch")
-                result = {
-                    "status": "finalized",
-                    "transactionId": txid,
-                    "payloadManifestSha256": _validate_hash(
-                        local.get("payloadManifestSha256"),
-                        "local_payload_pin_required",
-                    ),
-                    "reconciled": True,
-                }
-                status = None
-            if status is None:
-                pass
-            elif status.get("status") not in {
-                "installed",
-                "restart_verified",
-                "finalize_prepared",
-                "rolled_back",
-                "rolled_back_after_failure",
-                "rolled_back_after_recovery",
-                "rollback_finalize_prepared",
-            }:
-                raise BootstrapError("finalize_not_allowed")
-            elif status.get("verified") is not True:
-                raise BootstrapError("restart_readback_mismatch")
-            else:
-                config_check(url, token)
-                if (
-                    _digest(client.configuration_bytes())
-                    != status.get("configurationSha256")
-                    or client.component_tree_sha256()
-                    != status.get("componentTreeSha256")
-                    or client.trust_sha256() != status.get("trustSha256")
-                ):
-                    raise BootstrapError("restart_readback_mismatch")
-            if status is not None and status.get("status") not in {
-                "rolled_back",
-                "rolled_back_after_failure",
-                "rolled_back_after_recovery",
-                "rollback_finalize_prepared",
-            }:
-                component_route_check(url, token, txid)
-                if status.get("status") == "installed":
-                    client.execute(
-                        mode="mark-verified",
-                        transaction_id=txid,
-                        arguments=recovery_arguments,
-                    )
-            if status is not None:
-                local["status"] = "finalize_authorized"
-                local["finalizeConfigurationSha256"] = status["configurationSha256"]
-                local["finalizeComponentTreeSha256"] = status["componentTreeSha256"]
-                local["finalizeTrustSha256"] = status["trustSha256"]
-                local["finalizeRemoteStatus"] = status["status"]
-                _write_local_record(txid, local, create=False)
-                result = client.execute(
-                    mode="finalize",
-                    transaction_id=txid,
-                    arguments=recovery_arguments,
-                )
-    except BaseException as error:
-        primary = error
-    cleanup: BaseException | None = None
-    if initial == "stopped":
-        try:
-            await _addon_action(url, token, "stop", socket_factory)
-            _clear_lifecycle_lease()
-        except BaseException as error:
-            cleanup = error
-    if primary is not None and cleanup is not None:
-        raise BootstrapError(
-            "operation_failed_and_file_editor_restore_failed"
-        ) from None
-    if cleanup is not None:
-        raise BootstrapError("file_editor_restore_failed") from None
-    if primary is not None:
-        if isinstance(primary, (BootstrapError, asyncio.CancelledError)):
-            raise primary
-        raise BootstrapError("operation_failed") from None
-    if result is None:
-        raise BootstrapError("operation_failed")
-    if txid is not None and mode in {
-        "install",
-        "rollback",
-        "recover-lock",
-        "abort-stage",
-        "finalize",
-    }:
-        local = _read_local_record(txid)
-        local["status"] = str(result.get("status"))
-        local["receiptSha256"] = _digest(_canonical(result))
-        _write_local_record(txid, local, create=False)
+    result = await _run_with_editor(
+        mode=mode, inputs=inputs, url=url, token=token, backup_id=backup_id,
+        expected_backup_agent_id=expected_backup_agent_id, replace_exact=replace_exact,
+        socket_factory=socket_factory, ingress_client_factory=ingress_client_factory,
+        config_check=config_check, component_route_check=component_route_check,
+    )
+    _record_bootstrap_receipt(mode, inputs.txid, result)
     return result
 
 

@@ -69,6 +69,19 @@ def _standalone_web_response(monkeypatch):
         )
 
 
+@pytest.fixture(autouse=True)
+def _allow_legacy_unsigned_staged_fixtures(monkeypatch):
+    """Keep route fixtures focused while production manifests remain signed."""
+    verify_signature = adapter._verify_signature
+
+    def verify(hass, document, *, prefix):
+        if prefix == "release-" and "signature" not in document:
+            return None
+        return verify_signature(hass, document, prefix=prefix)
+
+    monkeypatch.setattr(adapter, "_verify_signature", verify)
+
+
 def _hass(tmp_path):
     return SimpleNamespace(
         config=SimpleNamespace(path=lambda relative: str(tmp_path / relative)),
@@ -433,6 +446,7 @@ async def test_stage_persists_verified_transaction_and_rejects_nonce_replay(
     dashboard_sha = hashlib.sha256(dashboard).hexdigest()
     validate = Mock(return_value=(manifest_sha, package_sha, dashboard_sha))
     monkeypatch.setattr(adapter, "_validate_manifest", validate)
+    monkeypatch.setattr(adapter, "_verify_signature", Mock())
     body = {
         "transaction_id": "transaction-stage-route-001",
         "dashboard_target": adapter.PREVIEW,
@@ -490,8 +504,9 @@ async def test_stage_persists_verified_transaction_and_rejects_nonce_replay(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("staged_state", ["complete", "partial", "absent"])
 async def test_transaction_readback_reconciles_lost_stage_outcome(
-    tmp_path, staged_state
+    tmp_path, monkeypatch, staged_state
 ):
+    monkeypatch.setattr(adapter, "_verify_signature", Mock())
     manifest = {"schema_version": 1}
     package = b"lost-stage-package"
     dashboard = b"lost-stage-dashboard"
@@ -559,8 +574,12 @@ async def test_transaction_readback_reconciles_lost_stage_outcome(
 
 
 @pytest.mark.asyncio
-async def test_transaction_readback_exposes_verification_hashes_only(tmp_path):
+async def test_transaction_readback_exposes_verification_hashes_only(
+    tmp_path, monkeypatch
+):
     import hashlib
+
+    monkeypatch.setattr(adapter, "_verify_signature", Mock())
 
     manifest = b'{"schema_version":1}'
     package = b"package-readback"
@@ -647,6 +666,7 @@ async def test_activate_revalidates_dashboard_without_mutating_backend(
     load_preview = AsyncMock(side_effect=lambda *_args: (preview, preview.config))
     save_preview_asset = AsyncMock(wraps=adapter._save_preview_asset)
     monkeypatch.setattr(adapter, "_validate_package", validate_package)
+    monkeypatch.setattr(adapter, "_verify_signature", Mock())
     monkeypatch.setattr(adapter, "_ensure_preview", ensure_preview)
     monkeypatch.setattr(adapter, "_save_preview_asset", save_preview_asset)
     monkeypatch.setattr(adapter, "_load_dashboard", load_preview)
@@ -725,6 +745,7 @@ async def test_activation_rejects_untracked_aurora_resource_prestate(
         }
     )
     monkeypatch.setattr(adapter, "_validate_package", Mock(return_value={}))
+    monkeypatch.setattr(adapter, "_verify_signature", Mock())
     monkeypatch.setattr(
         adapter, "_ensure_preview", AsyncMock(return_value=(False, adapter.PREVIEW))
     )
@@ -1220,6 +1241,12 @@ async def test_promotion_inspection_is_non_mutating_and_promotion_requires_recei
     assert _payload(repeated)["verified"] is True
     assert production.async_save.await_count == 1
 
+    inexact_retry = await view.post(
+        _Request({"preview_revision": revision}), "promote-home-command"
+    )
+    assert inexact_retry.status == 422
+    assert _payload(inexact_retry) == {"error_code": "validation_receipt_required"}
+
     collision_receipt = json.loads(json.dumps(receipt))
     collision_receipt["nonce"] = "validation-nonce-route-collision-001"
     collision = await view.post(
@@ -1647,6 +1674,63 @@ async def test_promotion_inspection_fails_when_active_bytes_are_not_verified(
 
     assert response.status == 409
     assert _payload(response) == {"error_code": "preview_integrity_failed"}
+
+
+@pytest.mark.asyncio
+async def test_promotion_reconciles_prepared_rollback_before_dispatch(
+    tmp_path, monkeypatch
+):
+    state = _state(tmp_path)
+    reconcile_production = AsyncMock()
+    reconcile_rollback = AsyncMock(side_effect=ValueError("recovery conflict"))
+    promote = AsyncMock()
+    monkeypatch.setattr(adapter, "_reconcile_production_transition", reconcile_production)
+    monkeypatch.setattr(adapter, "_reconcile_rollback_transition", reconcile_rollback)
+    monkeypatch.setattr(adapter.RootView, "_promote", promote)
+
+    response = await adapter.RootView(state.hass, state).post(
+        _Request({"preview_revision": "candidate"}), "promote-home-command"
+    )
+
+    assert response.status == 409
+    assert _payload(response) == {"error_code": "production_recovery_required"}
+    reconcile_production.assert_awaited_once_with(state.hass, state)
+    reconcile_rollback.assert_awaited_once_with(state.hass, state)
+    promote.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_inspection_refreshes_drifted_production_baseline(
+    tmp_path, monkeypatch
+):
+    state, transaction, _preview, production, _now = _promotion_context(
+        tmp_path, monkeypatch, "drift-refresh"
+    )
+    old_revision = state.journal["production_revision"]
+    old_config = json.loads(json.dumps(production.config))
+    old_sha = adapter._config_sha256(old_config)
+    state.journal["production_config_sha256"] = old_sha
+    state.journal["previous_production"] = {
+        "revision": "older-production",
+        "config": {"views": []},
+        "config_sha256": adapter._config_sha256({"views": []}),
+    }
+    production.config = {"views": [{"title": "Operator edit"}]}
+    new_sha = adapter._config_sha256(production.config)
+
+    response = await adapter.RootView(state.hass, state).post(
+        _Request({"preview_revision": transaction["revision"], "inspect": True}),
+        "promote-home-command",
+    )
+
+    assert response.status == 200
+    payload = _payload(response)
+    assert payload["production_revision"] == "baseline-" + new_sha
+    assert payload["production_revision"] != old_revision
+    assert payload["expected_production_config_sha256"] == new_sha
+    assert state.journal["production_revision"] == "baseline-" + new_sha
+    assert state.journal["production_config_sha256"] == new_sha
+    assert state.journal["previous_production"] is None
 
 
 @pytest.mark.asyncio

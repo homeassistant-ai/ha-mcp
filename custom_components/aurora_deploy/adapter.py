@@ -81,6 +81,8 @@ MAX_PACKAGE = 64 * 1024 * 1024
 MAX_DASHBOARD = 8 * 1024 * 1024
 MAX_MEMBERS = 256
 MAX_EXPANDED = 32 * 1024 * 1024
+MAX_STAGED_REVISIONS = 8
+MAX_STAGED_TOTAL_BYTES = 256 * 1024 * 1024
 CLOCK_SKEW = timedelta(minutes=5)
 MAX_LIFETIME = timedelta(hours=24)
 MAX_AUTOMATED_E2E_LIFETIME = timedelta(minutes=10)
@@ -389,7 +391,43 @@ def _json_object(raw: bytes, error_code: str) -> dict[str, Any]:
     return value
 
 
-def _package_members(raw: bytes) -> dict[str, bytes]:  # noqa: C901 - archive policy is intentionally explicit
+def _package_file_name(member: tarfile.TarInfo) -> str | None:
+    """Validate one archive member and return its approved file name."""
+    name = member.name.replace("\\", "/")
+    path = PurePosixPath(name)
+    if path.is_absolute() or ".." in path.parts or name == "":
+        raise ValueError("package_path")
+    if member.issym() or member.islnk() or member.isdev() or member.isfifo():
+        raise ValueError("package_link")
+    if member.isdir():
+        if name.rstrip("/") not in APPROVED_PACKAGE_DIRECTORIES:
+            raise ValueError("package_member")
+        return None
+    if not member.isfile():
+        raise ValueError("package_member_type")
+    if name not in APPROVED_PACKAGE_FILES:
+        raise ValueError("package_member")
+    if name.endswith((".tar", ".tar.gz", ".tgz", ".zip")):
+        raise ValueError("nested_archive")
+    return name
+
+
+def _read_archive_member(
+    archive: tarfile.TarFile, member: tarfile.TarInfo
+) -> bytes:
+    """Read one member exactly and apply the privacy denylist."""
+    stream = archive.extractfile(member)
+    if stream is None:
+        raise ValueError("package_member")
+    data = stream.read(member.size + 1)
+    if len(data) != member.size:
+        raise ValueError("package_size")
+    _scan_privacy(data)
+    return data
+
+
+def _extract_package_files(raw: bytes) -> dict[str, bytes]:
+    """Extract only the fixed, regular-file package allowlist."""
     if not raw.startswith(b"\x1f\x8b"):
         raise ValueError("package_format")
     count = 0
@@ -401,61 +439,64 @@ def _package_members(raw: bytes) -> dict[str, bytes]:  # noqa: C901 - archive po
                 count += 1
                 if count > MAX_MEMBERS:
                     raise ValueError("package_members")
-                name = member.name.replace("\\", "/")
-                path = PurePosixPath(name)
-                if path.is_absolute() or ".." in path.parts or name == "":
-                    raise ValueError("package_path")
-                if (
-                    member.issym()
-                    or member.islnk()
-                    or member.isdev()
-                    or member.isfifo()
-                ):
-                    raise ValueError("package_link")
-                normalized = name.rstrip("/")
-                if member.isdir():
-                    if normalized not in APPROVED_PACKAGE_DIRECTORIES:
-                        raise ValueError("package_member")
+                name = _package_file_name(member)
+                if name is None:
                     continue
-                if not member.isfile():
-                    raise ValueError("package_member_type")
-                if name not in APPROVED_PACKAGE_FILES:
-                    raise ValueError("package_member")
-                if name.endswith((".tar", ".tar.gz", ".tgz", ".zip")):
-                    raise ValueError("nested_archive")
                 if name in files:
                     raise ValueError("package_duplicate")
                 expanded += max(0, member.size)
                 if expanded > MAX_EXPANDED:
                     raise ValueError("package_expanded")
-                stream = archive.extractfile(member)
-                if stream is None:
-                    raise ValueError("package_member")
-                data = stream.read(member.size + 1)
-                if len(data) != member.size:
-                    raise ValueError("package_size")
-                _scan_privacy(data)
-                files[name] = data
+                files[name] = _read_archive_member(archive, member)
     except (tarfile.TarError, OSError) as exc:
         raise ValueError("package_format") from exc
-
     if set(files) != APPROVED_PACKAGE_FILES:
         raise ValueError("package_source_missing")
+    return files
 
+
+def _validate_component_entries(
+    files: dict[str, bytes], entries: Any
+) -> None:
+    """Validate the component manifest's exact file list and digests."""
+    if not isinstance(entries, list):
+        raise ValueError("package_component_manifest")
+    described: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("package_component_manifest")
+        path = entry.get("path")
+        if not isinstance(path, str) or path not in APPROVED_PACKAGE_FILES:
+            raise ValueError("package_component_manifest")
+        if not path.startswith(PACKAGE_ROOT) or path in described:
+            raise ValueError("package_component_manifest")
+        data = files[path]
+        if entry.get("size") != len(data):
+            raise ValueError("package_component_hash")
+        if entry.get("sha256") != hashlib.sha256(data).hexdigest():
+            raise ValueError("package_component_hash")
+        described.add(path)
+    expected = {PACKAGE_ROOT + name for name in APPROVED_COMPONENT_FILES}
+    if described != expected:
+        raise ValueError("package_source_missing")
+
+
+def _validate_component_manifest(files: dict[str, bytes]) -> None:
+    """Validate the component installation manifest and every file digest."""
     component_manifest_raw = files["custom-component-manifest.json"]
     component_manifest = _json_object(
         component_manifest_raw, "package_component_manifest"
     )
-    if any(
-        (
-            component_manifest.get("schemaVersion") != "1.0",
-            component_manifest.get("domain") != COMPONENT_DOMAIN,
-            component_manifest.get("version") != COMPONENT_VERSION,
-            component_manifest.get("configurationKey") != COMPONENT_DOMAIN,
-            component_manifest.get("restartRequired") is not True,
-        )
-    ):
+    required = {
+        "schemaVersion": "1.0",
+        "domain": COMPONENT_DOMAIN,
+        "version": COMPONENT_VERSION,
+        "configurationKey": COMPONENT_DOMAIN,
+        "restartRequired": True,
+    }
+    if any(component_manifest.get(key) != value for key, value in required.items()):
         raise ValueError("package_component_manifest")
+
     installation = component_manifest.get("installation")
     rollback = component_manifest.get("rollback")
     if not isinstance(installation, dict) or any(
@@ -476,30 +517,12 @@ def _package_members(raw: bytes) -> dict[str, bytes]:  # noqa: C901 - archive po
     ):
         raise ValueError("package_component_manifest")
 
-    entries = component_manifest.get("files")
-    if not isinstance(entries, list):
-        raise ValueError("package_component_manifest")
-    described: set[str] = set()
-    for entry in entries:
-        if not isinstance(entry, dict):
-            raise ValueError("package_component_manifest")
-        path = entry.get("path")
-        if not isinstance(path, str) or path not in APPROVED_PACKAGE_FILES:
-            raise ValueError("package_component_manifest")
-        if not path.startswith(PACKAGE_ROOT) or path in described:
-            raise ValueError("package_component_manifest")
-        data = files[path]
-        if (
-            entry.get("size") != len(data)
-            or entry.get("sha256") != hashlib.sha256(data).hexdigest()
-        ):
-            raise ValueError("package_component_hash")
-        described.add(path)
-    expected_component_paths = {
-        PACKAGE_ROOT + filename for filename in APPROVED_COMPONENT_FILES
-    }
-    if described != expected_component_paths:
-        raise ValueError("package_source_missing")
+    _validate_component_entries(files, component_manifest.get("files"))
+
+
+def _validate_package_metadata(files: dict[str, bytes]) -> None:
+    """Bind the package entrypoints to the exact component manifest bytes."""
+    component_manifest_raw = files["custom-component-manifest.json"]
 
     package_manifest = _json_object(files["manifest.json"], "package_manifest")
     installer = package_manifest.get("installer")
@@ -525,6 +548,13 @@ def _package_members(raw: bytes) -> dict[str, bytes]:  # noqa: C901 - archive po
         )
     ):
         raise ValueError("package_manifest")
+
+
+def _package_members(raw: bytes) -> dict[str, bytes]:
+    """Return the validated component members from one release package."""
+    files = _extract_package_files(raw)
+    _validate_component_manifest(files)
+    _validate_package_metadata(files)
 
     integration_manifest = _json_object(
         files[PACKAGE_ROOT + "manifest.json"], "package_integration_manifest"
@@ -574,29 +604,17 @@ async def _verify_active_bindings(
 async def _verify_active_transaction(
     hass: HomeAssistant, transaction: dict[str, Any], root: Path | None = None
 ) -> str:
-    package, dashboard, _manifest = _verify_staged_artifacts(transaction, root)
+    package, dashboard, _manifest = _verify_staged_artifacts(
+        transaction, root, hass
+    )
     if package is None or dashboard is None:
         raise ValueError("staged_artifact_missing")
     _validate_package(package)
     return await _verify_active_bindings(hass, transaction, dashboard)
 
 
-def _validate_manifest(  # noqa: C901 - fail-closed policy checks are kept together
-    hass: HomeAssistant, manifest: Any, package: bytes, dashboard: bytes
-) -> tuple[str, str, str]:
-    if not isinstance(manifest, dict) or len(_json_bytes(manifest)) > MAX_MANIFEST:
-        raise ValueError("manifest")
-    if manifest.get("schema_version") != 1 or manifest.get("target") != TARGET:
-        raise ValueError("target")
-    if (
-        manifest.get("dashboard_target", PREVIEW) != PREVIEW
-        or manifest.get("preview_only") is not True
-    ):
-        raise ValueError("dashboard")
-    if manifest.get("target_release") != APPROVED_RELEASE:
-        raise ValueError("release")
-    if manifest.get("privacy_policy") != "no-sensitive-inference-v1":
-        raise ValueError("privacy_policy")
+def _validate_manifest_window(manifest: dict[str, Any]) -> None:
+    """Validate the signed release lifetime and nonce."""
     issued = _parse_time(manifest.get("issued_at", manifest.get("created_at")))
     expires = _parse_time(manifest.get("expires_at"))
     now = _now()
@@ -618,6 +636,43 @@ def _validate_manifest(  # noqa: C901 - fail-closed policy checks are kept toget
         )
     ):
         raise ValueError("nonce")
+
+
+def _validate_manifest_assets(
+    manifest: dict[str, Any], expected: dict[str, str]
+) -> None:
+    """Validate the exact two-artifact allowlist and digests."""
+    assets = manifest.get("assets")
+    if not isinstance(assets, list) or len(assets) != len(expected):
+        raise ValueError("assets")
+    seen: set[str] = set()
+    for item in assets:
+        if not isinstance(item, dict):
+            raise ValueError("assets")
+        name = item.get("name")
+        if name not in expected or name in seen or item.get("sha256") != expected[name]:
+            raise ValueError("assets")
+        seen.add(name)
+    if seen != set(expected):
+        raise ValueError("assets")
+
+
+def _validate_manifest(
+    hass: HomeAssistant, manifest: Any, package: bytes, dashboard: bytes
+) -> tuple[str, str, str]:
+    if not isinstance(manifest, dict) or len(_json_bytes(manifest)) > MAX_MANIFEST:
+        raise ValueError("manifest")
+    if manifest.get("schema_version") != 1 or manifest.get("target") != TARGET:
+        raise ValueError("target")
+    if manifest.get("dashboard_target", PREVIEW) != PREVIEW:
+        raise ValueError("dashboard")
+    if manifest.get("preview_only") is not True:
+        raise ValueError("dashboard")
+    if manifest.get("target_release") != APPROVED_RELEASE:
+        raise ValueError("release")
+    if manifest.get("privacy_policy") != PRIVACY_POLICY:
+        raise ValueError("privacy_policy")
+    _validate_manifest_window(manifest)
     _verify_signature(hass, manifest, prefix="release-")
     package_hash = hashlib.sha256(package).hexdigest()
     dashboard_hash = hashlib.sha256(dashboard).hexdigest()
@@ -626,25 +681,11 @@ def _validate_manifest(  # noqa: C901 - fail-closed policy checks are kept toget
         or manifest.get("dashboard_sha256") != dashboard_hash
     ):
         raise ValueError("hash")
-    assets = manifest.get("assets")
     expected = {
         "aurora-preview-package": package_hash,
         "aurora-preview-dashboard": dashboard_hash,
     }
-    if not isinstance(assets, list) or len(assets) != 2:
-        raise ValueError("assets")
-    seen: set[str] = set()
-    for item in assets:
-        if (
-            not isinstance(item, dict)
-            or item.get("name") not in expected
-            or item["name"] in seen
-            or item.get("sha256") != expected[item["name"]]
-        ):
-            raise ValueError("assets")
-        seen.add(item["name"])
-    if seen != set(expected):
-        raise ValueError("assets")
+    _validate_manifest_assets(manifest, expected)
     _scan_privacy(_json_bytes(manifest))
     _scan_privacy(dashboard)
     _validate_package(package)
@@ -673,6 +714,43 @@ def _atomic_write(path: Path, data: bytes) -> None:
     finally:
         if temporary.exists():
             temporary.unlink(missing_ok=True)
+
+
+def _staged_revision_size(path: Path) -> int:
+    """Return one staged revision's bounded regular-file size."""
+    if path.is_symlink() or not path.is_dir():
+        raise ValueError("staged_retention_invalid")
+    total = 0
+    for artifact in path.iterdir():
+        metadata = artifact.stat(follow_symlinks=False)
+        if artifact.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("staged_retention_invalid")
+        total += metadata.st_size
+        if total > MAX_STAGED_TOTAL_BYTES:
+            raise ValueError("staged_capacity_exceeded")
+    return total
+
+
+def _reserve_staged_capacity(
+    root: Path, revision: str, incoming_size: int
+) -> None:
+    """Reject a new staged revision before it can exceed fixed disk quotas."""
+    if _SAFE_REVISION.fullmatch(revision) is None or incoming_size < 0:
+        raise ValueError("staged_retention_invalid")
+    staged_root = root / "staged"
+    staged_root.mkdir(parents=True, exist_ok=True)
+    if staged_root.is_symlink() or not staged_root.is_dir():
+        raise ValueError("staged_retention_invalid")
+    revisions = list(staged_root.iterdir())
+    total = sum(_staged_revision_size(path) for path in revisions)
+    already_retained = any(path.name == revision for path in revisions)
+    revision_count = len(revisions) + (0 if already_retained else 1)
+    projected = total + (0 if already_retained else incoming_size)
+    if (
+        revision_count > MAX_STAGED_REVISIONS
+        or projected > MAX_STAGED_TOTAL_BYTES
+    ):
+        raise ValueError("staged_capacity_exceeded")
 
 
 def _staged_revision_dir(transaction: dict[str, Any], root: Path) -> Path:
@@ -717,32 +795,43 @@ def _read_staged_file(path: Path, limit: int) -> bytes:
             os.close(fd)
 
 
-def _verify_staged_artifacts(  # noqa: C901 - staged evidence checks are fail-closed
+def _existing_staged_paths(
+    transaction: dict[str, Any], root: Path, expected: dict[str, Any]
+) -> tuple[Path, Path, Path] | None:
+    """Return the complete staged artifact set or a legacy missing marker."""
+    revision_dir = _staged_revision_dir(transaction, root)
+    paths = (
+        revision_dir / "manifest.json",
+        revision_dir / "aurora-preview-package.tar.gz",
+        revision_dir / "aurora-preview-dashboard.js",
+    )
+    for path in paths:
+        if path.is_symlink():
+            raise ValueError("staged_artifact_symlink")
+        if not path.exists():
+            if all(isinstance(value, str) for value in expected.values()):
+                raise ValueError("staged_artifact_missing")
+            return None
+        if not path.is_file():
+            raise ValueError("staged_artifact_invalid")
+    return paths
+
+
+def _verify_staged_artifacts(
     transaction: dict[str, Any],
     root: Path,
+    hass: HomeAssistant,
 ) -> tuple[bytes | None, bytes | None, dict[str, Any] | None]:
     """Read and rehash all staged artifacts beneath the fixed state root."""
-    revision_dir = _staged_revision_dir(transaction, root)
-    manifest_path = revision_dir / "manifest.json"
-    package_path = revision_dir / "aurora-preview-package.tar.gz"
-    dashboard_path = revision_dir / "aurora-preview-dashboard.js"
     expected = {
         "manifest_sha256": transaction.get("manifest_sha256"),
         "package_sha256": transaction.get("package_sha256"),
         "dashboard_sha256": transaction.get("dashboard_sha256"),
     }
-    paths = (manifest_path, package_path, dashboard_path)
-    for path in paths:
-        if path.is_symlink():
-            raise ValueError("staged_artifact_symlink")
-        if not path.exists():
-            # Transactions created before staged readback verification did not retain
-            # a complete artifact set. New transactions always have all three hashes.
-            if all(isinstance(value, str) for value in expected.values()):
-                raise ValueError("staged_artifact_missing")
-            return None, None, None
-        if not path.is_file():
-            raise ValueError("staged_artifact_invalid")
+    paths = _existing_staged_paths(transaction, root, expected)
+    if paths is None:
+        return None, None, None
+    manifest_path, package_path, dashboard_path = paths
     try:
         manifest = json.loads(
             _read_staged_file(manifest_path, MAX_MANIFEST).decode("utf-8")
@@ -751,6 +840,7 @@ def _verify_staged_artifacts(  # noqa: C901 - staged evidence checks are fail-cl
         raise ValueError("staged_manifest_invalid") from exc
     if not isinstance(manifest, dict):
         raise ValueError("staged_manifest_invalid")
+    _verify_signature(hass, manifest, prefix="release-")
     package = _read_staged_file(package_path, MAX_PACKAGE)
     dashboard = _read_staged_file(dashboard_path, MAX_DASHBOARD)
     actual = {
@@ -845,13 +935,59 @@ class AuroraState:
         return True
 
 
-def _ensure_production_baseline(state: AuroraState, config_sha256: str) -> str:
+class _RequestFailure(ValueError):
+    """Carry one stable HTTP status and public adapter error code."""
+
+    def __init__(self, status: int, code: str) -> None:
+        super().__init__(code)
+        self.status = status
+        self.code = code
+
+
+@dataclass
+class _PromotionContext:
+    revision: str
+    transaction: dict[str, Any]
+    transaction_id: str
+    resource: dict[str, Any]
+    preview_config: dict[str, Any]
+    production: Any
+    production_config: dict[str, Any]
+    preview_sha: str
+    production_sha: str
+    expected_revision: str
+    audience: str
+
+
+def _has_prepared_production_transition(state: AuroraState) -> bool:
+    """Return whether production state has an unsettled durable transition."""
+    return any(
+        isinstance(state.journal.get(key), dict)
+        and state.journal[key].get("status") == "prepared"
+        for key in ("production_transition", "rollback_transition")
+    )
+
+
+def _ensure_production_baseline(
+    state: AuroraState,
+    config_sha256: str,
+    *,
+    allow_refresh: bool = False,
+) -> str:
     """Persist a deterministic CAS revision for a fresh installation."""
     current = state.journal.get("production_revision")
     recorded_hash = state.journal.get("production_config_sha256")
     if isinstance(current, str) and current:
         if _is_sha256(recorded_hash) and recorded_hash != config_sha256:
-            raise ValueError("production_config_conflict")
+            if not allow_refresh or _has_prepared_production_transition(state):
+                raise ValueError("production_config_conflict")
+            refreshed = "baseline-" + config_sha256
+            state.journal["production_revision"] = refreshed
+            state.journal["production_config_sha256"] = config_sha256
+            state.journal["previous_production"] = None
+            state.journal["production_baseline_refreshed_at"] = _now().isoformat()
+            state.save()
+            return refreshed
         if recorded_hash != config_sha256:
             state.journal["production_config_sha256"] = config_sha256
             state.save()
@@ -1047,6 +1183,173 @@ def _config_has_exact_dashboard_resource(
         and item.get("res_type") == "module"
         for item in resources
     )
+
+
+def _decode_stage_request(
+    body: dict[str, Any],
+) -> tuple[str, dict[str, Any], bytes, bytes]:
+    """Validate and decode the fixed stage request schema."""
+    required = {
+        "transaction_id",
+        "dashboard_target",
+        "preview_only",
+        "manifest",
+        "artifacts",
+    }
+    if set(body) != required:
+        raise ValueError("stage_request_schema_invalid")
+    if body.get("dashboard_target") != PREVIEW or body.get("preview_only") is not True:
+        raise ValueError("fixed_target_required")
+    transaction_id = body.get("transaction_id")
+    if not isinstance(transaction_id, str) or _SAFE_NONCE.fullmatch(transaction_id) is None:
+        raise ValueError("transaction_id_required")
+    artifacts = body.get("artifacts")
+    if not isinstance(artifacts, dict) or set(artifacts) != {"package", "dashboard"}:
+        raise ValueError("stage_request_schema_invalid")
+    manifest = body.get("manifest")
+    if not isinstance(manifest, dict):
+        raise ValueError("manifest")
+    return (
+        transaction_id,
+        manifest,
+        _decode_b64(artifacts.get("package"), MAX_PACKAGE),
+        _decode_b64(artifacts.get("dashboard"), MAX_DASHBOARD),
+    )
+
+
+def _stage_request_sha256(
+    transaction_id: str,
+    manifest: dict[str, Any],
+    package: bytes,
+    dashboard: bytes,
+) -> str:
+    """Bind stage idempotency to decoded artifact bytes and manifest nonce."""
+    return hashlib.sha256(
+        _json_bytes(
+            {
+                "transaction_id": transaction_id,
+                "dashboard_target": PREVIEW,
+                "preview_only": True,
+                "manifest_sha256": hashlib.sha256(
+                    _canonical_manifest(manifest)
+                ).hexdigest(),
+                "package_sha256": hashlib.sha256(package).hexdigest(),
+                "dashboard_sha256": hashlib.sha256(dashboard).hexdigest(),
+                "nonce": manifest.get("nonce"),
+            }
+        )
+    ).hexdigest()
+
+
+def _stage_response(
+    transaction: dict[str, Any], *, idempotent: bool = False
+) -> web.Response:
+    """Project a staged transaction without exposing paths or signed bytes."""
+    public_keys = (
+        "transaction_id",
+        "revision",
+        "status",
+        "manifest_sha256",
+        "package_sha256",
+        "dashboard_sha256",
+        "target",
+        "created_at",
+        "expires_at",
+    )
+    payload = {key: transaction[key] for key in public_keys}
+    payload.update(
+        {
+            "staged_revision": transaction["revision"],
+            "previous_revision": transaction.get(
+                "preview_revision_before",
+                transaction.get("stage_previous_revision"),
+            ),
+        }
+    )
+    if idempotent:
+        payload["idempotent"] = True
+    return _json_response(payload)
+
+
+def _receipt_schema(receipt: dict[str, Any]) -> int:
+    """Validate the closed receipt keyset and return its schema version."""
+    schema_version = receipt.get("schema_version")
+    expected = {
+        1: VALIDATION_RECEIPT_V1_KEYS,
+        2: VALIDATION_RECEIPT_V2_KEYS,
+    }.get(schema_version)
+    if expected is None or set(receipt) != expected:
+        raise _RequestFailure(422, "validation_receipt_schema_invalid")
+    return schema_version
+
+
+def _validate_receipt_results(receipt: dict[str, Any], schema_version: int) -> None:
+    """Validate physical-device or automated-profile success evidence."""
+    if schema_version == 1:
+        results = receipt.get("device_results")
+        required = {"mobile", "kiosk", "tablet", "laptop", "desktop"}
+        valid = (
+            isinstance(results, list)
+            and len(results) == len(required)
+            and {
+                item.get("device_id") for item in results if isinstance(item, dict)
+            }
+            == required
+            and all(
+                isinstance(item, dict)
+                and set(item) == {"device_id", "passed"}
+                and item.get("passed") is True
+                for item in results
+            )
+        )
+        if not valid:
+            raise _RequestFailure(422, "validation_receipt_devices_invalid")
+        return
+    results = receipt.get("profile_results")
+    valid = isinstance(results, list) and len(results) == len(AUTOMATED_E2E_PROFILES)
+    if valid:
+        valid = all(
+            isinstance(item, dict)
+            and set(item)
+            == {
+                "profile_id",
+                "width",
+                "height",
+                "passed",
+                "screenshot_sha256",
+            }
+            and item.get("profile_id") == profile_id
+            and item.get("width") == width
+            and not isinstance(item.get("width"), bool)
+            and item.get("height") == height
+            and not isinstance(item.get("height"), bool)
+            and item.get("passed") is True
+            and _is_sha256(item.get("screenshot_sha256"))
+            for item, (profile_id, width, height) in zip(
+                results, AUTOMATED_E2E_PROFILES, strict=True
+            )
+        )
+    if not valid:
+        raise _RequestFailure(422, "validation_receipt_profiles_invalid")
+
+
+def _validate_receipt_window(receipt: dict[str, Any], schema_version: int) -> str:
+    """Validate receipt time bounds and return its replay nonce."""
+    issued_at = _parse_time(receipt.get("issued_at"))
+    expires_at = _parse_time(receipt.get("expires_at"))
+    lifetime = MAX_AUTOMATED_E2E_LIFETIME if schema_version == 2 else MAX_LIFETIME
+    now = _now()
+    if (
+        issued_at - CLOCK_SKEW > now
+        or expires_at <= issued_at
+        or expires_at <= now
+        or expires_at - issued_at > lifetime
+    ):
+        raise _RequestFailure(422, "validation_receipt_time_invalid")
+    nonce = receipt.get("nonce")
+    if not isinstance(nonce, str) or _SAFE_NONCE.fullmatch(nonce) is None:
+        raise _RequestFailure(422, "validation_receipt_nonce_invalid")
+    return nonce
 
 
 def _verify_operation_resource_binding(
@@ -1487,7 +1790,7 @@ def _reconcile_stage_transition(
         return
     try:
         package, dashboard, manifest = _verify_staged_artifacts(
-            transaction, state.root
+            transaction, state.root, state.hass
         )
     except ValueError as exc:
         if str(exc) != "staged_artifact_missing":
@@ -1511,29 +1814,31 @@ def _reconcile_stage_transition(
     state.save()
 
 
-async def _reconcile_transaction_transition(  # noqa: C901 - fail-closed recovery
-    hass: HomeAssistant,
-    state: AuroraState,
+def _prepared_preview_transition(
     transaction: dict[str, Any],
-) -> None:
-    """Settle a prepared preview activation or rollback from live config."""
-    _reconcile_stage_transition(state, transaction)
+) -> tuple[str, dict[str, Any]] | None:
+    """Return the sole prepared preview transition, if present."""
     activation = transaction.get("activation_transition")
     rollback = transaction.get("preview_rollback_transition")
     prepared = [
-        ("activate", activation),
-        ("rollback", rollback),
-    ]
-    prepared = [
         (kind, item)
-        for kind, item in prepared
+        for kind, item in (("activate", activation), ("rollback", rollback))
         if isinstance(item, dict) and item.get("status") == "prepared"
     ]
     if not prepared:
-        return
+        return None
     if len(prepared) != 1:
         raise ValueError("preview_transition_invalid")
-    kind, transition = prepared[0]
+    return prepared[0]
+
+
+def _validate_preview_transition(
+    state: AuroraState,
+    transaction: dict[str, Any],
+    kind: str,
+    transition: dict[str, Any],
+) -> None:
+    """Validate common and action-specific durable preview evidence."""
     preview_before = transaction.get("preview_before")
     dashboard_sha = transaction.get("dashboard_sha256")
     expected_asset = (
@@ -1586,6 +1891,20 @@ async def _reconcile_transaction_transition(  # noqa: C901 - fail-closed recover
         )
     ):
         raise ValueError("preview_transition_invalid")
+
+
+async def _reconcile_transaction_transition(
+    hass: HomeAssistant,
+    state: AuroraState,
+    transaction: dict[str, Any],
+) -> None:
+    """Settle a prepared preview activation or rollback from live config."""
+    _reconcile_stage_transition(state, transaction)
+    prepared = _prepared_preview_transition(transaction)
+    if prepared is None:
+        return
+    kind, transition = prepared
+    _validate_preview_transition(state, transaction, kind, transition)
     _preview, current_config = await _load_dashboard(hass, PREVIEW)
     current_sha = _config_sha256(current_config)
     if current_sha == transition["next_config_sha256"]:
@@ -1652,7 +1971,32 @@ class RootView(HomeAssistantView):
         self._hass = hass
         self._state = state
 
-    async def post(  # noqa: C901 - explicit fixed-route dispatcher
+    async def _dispatch(self, operation: str, body: dict[str, Any]) -> web.Response:
+        """Dispatch one fixed root operation after authentication and recovery."""
+        if operation in {"promote-home-command", "rollback-home-command"}:
+            try:
+                await _reconcile_production_transition(self._hass, self._state)
+                await _reconcile_rollback_transition(self._hass, self._state)
+            except ValueError:
+                return _error(409, "production_recovery_required")
+        if operation == "bootstrap":
+            created, target = await _ensure_preview(self._hass)
+            return _json_response(
+                {
+                    "dashboard_target": target,
+                    "created": created,
+                    "production_unchanged": True,
+                }
+            )
+        handlers = {
+            "stage": self._stage,
+            "promote-home-command": self._promote,
+            "rollback-home-command": self._rollback,
+        }
+        handler = handlers.get(operation)
+        return await handler(body) if handler is not None else _error(404, "not_found")
+
+    async def post(
         self, request: web.Request, operation: str
     ) -> web.Response:
         if not await _admin(request):
@@ -1664,140 +2008,80 @@ class RootView(HomeAssistantView):
                 body = await asyncio.wait_for(_body(request), REQUEST_TIMEOUT_SECONDS)
                 if body is None:
                     return _error(400, "invalid_body")
-                if operation in {"promote-home-command", "rollback-home-command"}:
-                    try:
-                        await _reconcile_production_transition(self._hass, self._state)
-                        if operation == "rollback-home-command":
-                            await _reconcile_rollback_transition(
-                                self._hass, self._state
-                            )
-                    except ValueError:
-                        return _error(409, "production_recovery_required")
-                if operation == "bootstrap":
-                    created, target = await _ensure_preview(self._hass)
-                    return _json_response(
-                        {
-                            "dashboard_target": target,
-                            "created": created,
-                            "production_unchanged": True,
-                        }
-                    )
-                if operation == "stage":
-                    return await self._stage(body)
-                if operation == "promote-home-command":
-                    return await self._promote(body)
-                if operation == "rollback-home-command":
-                    return await self._rollback(body)
+                return await self._dispatch(operation, body)
             except ValueError as exc:
                 return _error(422, str(exc))
             except (OSError, RuntimeError):
                 return _error(500, "adapter_failure")
-        return _error(404, "not_found")
 
-    async def _stage(  # noqa: C901 - durable staged-artifact transaction
-        self, body: dict[str, Any]
+    async def _existing_stage(
+        self,
+        existing: Any,
+        request_sha: str,
     ) -> web.Response:
-        if set(body) != {
-            "transaction_id",
-            "dashboard_target",
-            "preview_only",
-            "manifest",
-            "artifacts",
-        }:
+        """Verify and return one exact idempotent stage retry."""
+        if (
+            not isinstance(existing, dict)
+            or existing.get("stage_request_sha256") != request_sha
+        ):
+            return _error(409, "transaction_id_conflict")
+        try:
+            _reconcile_stage_transition(self._state, existing)
+            if existing.get("status") != "aborted":
+                artifacts = _verify_staged_artifacts(
+                    existing, self._state.root, self._hass
+                )
+                if any(item is None for item in artifacts):
+                    raise ValueError("staged_artifact_missing")
+        except (OSError, ValueError):
+            return _error(409, "staged_integrity_failed")
+        return _stage_response(existing, idempotent=True)
+
+    def _write_staged_artifacts(
+        self,
+        transaction: dict[str, Any],
+        manifest: dict[str, Any],
+        package: bytes,
+        dashboard: bytes,
+    ) -> None:
+        """Persist and reverify the immutable bytes for one prepared stage."""
+        revision_dir = self._state.root / "staged" / transaction["revision"]
+        revision_dir.mkdir(parents=True, exist_ok=True)
+        if revision_dir.is_symlink() or not revision_dir.is_dir():
+            raise ValueError("staged_revision_invalid")
+        _save_immutable_asset(revision_dir / "manifest.json", _json_bytes(manifest))
+        _save_immutable_asset(
+            revision_dir / "aurora-preview-package.tar.gz", package
+        )
+        _save_immutable_asset(
+            revision_dir / "aurora-preview-dashboard.js", dashboard
+        )
+        readback = _verify_staged_artifacts(
+            transaction, self._state.root, self._hass
+        )
+        if any(item is None for item in readback):
+            raise ValueError("staged_artifact_missing")
+
+    async def _stage(self, body: dict[str, Any]) -> web.Response:
+        try:
+            transaction_id, manifest, package, dashboard = _decode_stage_request(body)
+        except ValueError as exc:
             transaction_id = body.get("transaction_id")
             if (
                 isinstance(transaction_id, str)
                 and self._state.tx(transaction_id) is not None
             ):
                 return _error(409, "transaction_id_conflict")
-            return _error(422, "stage_request_schema_invalid")
-        if (
-            body.get("dashboard_target") != PREVIEW
-            or body.get("preview_only") is not True
-        ):
-            return _error(422, "fixed_target_required")
-        transaction_id = body.get("transaction_id")
-        if (
-            not isinstance(transaction_id, str)
-            or _SAFE_NONCE.fullmatch(transaction_id) is None
-        ):
-            return _error(422, "transaction_id_required")
+            return _error(422, str(exc))
         if transaction_id in self._state.journal.get("operations", {}):
             return _error(409, "transaction_id_conflict")
-        artifacts = body.get("artifacts")
-        if not isinstance(artifacts, dict) or set(artifacts) != {
-            "package",
-            "dashboard",
-        }:
-            return _error(422, "stage_request_schema_invalid")
-        package = _decode_b64(artifacts.get("package"), MAX_PACKAGE)
-        dashboard = _decode_b64(artifacts.get("dashboard"), MAX_DASHBOARD)
-        manifest = body.get("manifest")
-        if not isinstance(manifest, dict):
-            return _error(422, "manifest")
-        manifest_sha = hashlib.sha256(_canonical_manifest(manifest)).hexdigest()
-        package_sha = hashlib.sha256(package).hexdigest()
-        dashboard_sha = hashlib.sha256(dashboard).hexdigest()
-        nonce = manifest.get("nonce")
-        request_sha = hashlib.sha256(
-            _json_bytes(
-                {
-                    "transaction_id": transaction_id,
-                    "dashboard_target": PREVIEW,
-                    "preview_only": True,
-                    "manifest_sha256": manifest_sha,
-                    "package_sha256": package_sha,
-                    "dashboard_sha256": dashboard_sha,
-                    "nonce": nonce,
-                }
-            )
-        ).hexdigest()
+        request_sha = _stage_request_sha256(
+            transaction_id, manifest, package, dashboard
+        )
         transactions = self._state.journal.setdefault("transactions", {})
-        existing = transactions.get(transaction_id)
         if transaction_id in transactions:
-            if (
-                not isinstance(existing, dict)
-                or existing.get("stage_request_sha256") != request_sha
-            ):
-                return _error(409, "transaction_id_conflict")
-            try:
-                _reconcile_stage_transition(self._state, existing)
-                if existing.get("status") != "aborted":
-                    package_readback, dashboard_readback, manifest_readback = (
-                        _verify_staged_artifacts(existing, self._state.root)
-                    )
-                    if any(
-                        item is None
-                        for item in (
-                            package_readback,
-                            dashboard_readback,
-                            manifest_readback,
-                        )
-                    ):
-                        raise ValueError("staged_artifact_missing")
-            except (OSError, ValueError):
-                return _error(409, "staged_integrity_failed")
-            public_keys = (
-                "transaction_id",
-                "revision",
-                "status",
-                "manifest_sha256",
-                "package_sha256",
-                "dashboard_sha256",
-                "target",
-                "created_at",
-                "expires_at",
-            )
-            return _json_response(
-                {key: existing[key] for key in public_keys}
-                | {
-                    "staged_revision": existing["revision"],
-                    "previous_revision": existing.get(
-                        "preview_revision_before",
-                        existing.get("stage_previous_revision"),
-                    ),
-                    "idempotent": True,
-                }
+            return await self._existing_stage(
+                transactions.get(transaction_id), request_sha
             )
         manifest_sha, package_sha, dashboard_sha = _validate_manifest(
             self._hass, manifest, package, dashboard
@@ -1809,6 +2093,16 @@ class RootView(HomeAssistantView):
         revision = hashlib.sha256(
             (manifest_sha + package_sha + dashboard_sha).encode()
         ).hexdigest()[:32]
+        try:
+            _reserve_staged_capacity(
+                self._state.root,
+                revision,
+                len(_json_bytes(manifest)) + len(package) + len(dashboard),
+            )
+        except ValueError as exc:
+            if str(exc) == "staged_capacity_exceeded":
+                return _error(409, "staged_capacity_exceeded")
+            raise
         prepared_at = _now().isoformat()
         transaction = {
             "transaction_id": transaction_id,
@@ -1836,56 +2130,21 @@ class RootView(HomeAssistantView):
         transactions[transaction_id] = transaction
         used[nonce] = transaction_id
         self._state.save()
-        revision_dir = self._state.root / "staged" / revision
-        revision_dir.mkdir(parents=True, exist_ok=True)
-        if revision_dir.is_symlink() or not revision_dir.is_dir():
-            raise ValueError("staged_revision_invalid")
-        _save_immutable_asset(revision_dir / "manifest.json", _json_bytes(manifest))
-        _save_immutable_asset(
-            revision_dir / "aurora-preview-package.tar.gz", package
-        )
-        _save_immutable_asset(
-            revision_dir / "aurora-preview-dashboard.js", dashboard
-        )
-        package_readback, dashboard_readback, manifest_readback = (
-            _verify_staged_artifacts(transaction, self._state.root)
-        )
-        if any(
-            item is None
-            for item in (package_readback, dashboard_readback, manifest_readback)
-        ):
-            raise ValueError("staged_artifact_missing")
+        self._write_staged_artifacts(transaction, manifest, package, dashboard)
         transaction["status"] = "verified"
         transaction["verified_at"] = _now().isoformat()
         transaction["stage_transition"]["status"] = "committed"
         transaction["stage_transition"]["committed_at"] = transaction["verified_at"]
         self._state.save()
-        public_keys = (
-            "transaction_id",
-            "revision",
-            "status",
-            "manifest_sha256",
-            "package_sha256",
-            "dashboard_sha256",
-            "target",
-            "created_at",
-            "expires_at",
-        )
-        return _json_response(
-            {key: transaction[key] for key in public_keys}
-            | {
-                "staged_revision": revision,
-                "previous_revision": transaction.get("stage_previous_revision"),
-            }
-        )
+        return _stage_response(transaction)
 
-    async def _promote(  # noqa: C901 - explicit fail-closed promotion state machine
+    async def _promotion_context(
         self, body: dict[str, Any]
-    ) -> web.Response:
-        """Durably prepare, CAS-check, apply, and commit one promotion."""
+    ) -> _PromotionContext:
+        """Load and verify the active preview and production CAS context."""
         revision = body.get("preview_revision")
         if not isinstance(revision, str):
-            return _error(422, "preview_revision_required")
+            raise _RequestFailure(422, "preview_revision_required")
         transaction = next(
             (
                 item
@@ -1897,465 +2156,513 @@ class RootView(HomeAssistantView):
             None,
         )
         if transaction is None or self._state.journal.get("active_preview") != revision:
-            return _error(409, "preview_revision_not_active")
+            raise _RequestFailure(409, "preview_revision_not_active")
         transaction_id = transaction.get("transaction_id")
         if not isinstance(transaction_id, str) or not transaction_id:
-            return _error(409, "preview_integrity_failed")
+            raise _RequestFailure(409, "preview_integrity_failed")
         try:
             await _verify_active_transaction(self._hass, transaction, self._state.root)
             resource_context = await asyncio.to_thread(
                 _active_resource_context, self._hass, transaction
             )
         except (OSError, ValueError, RuntimeError):
-            return _error(409, "preview_integrity_failed")
+            raise _RequestFailure(409, "preview_integrity_failed") from None
         _preview, preview_config = await _load_dashboard(self._hass, PREVIEW)
         production, production_config = await _load_dashboard(self._hass, PRODUCTION)
         preview_config_sha = _config_sha256(preview_config)
         production_config_sha = _config_sha256(production_config)
+        inspection_requested = body.get("inspect") is True
+        if inspection_requested and set(body) != {"preview_revision", "inspect"}:
+            raise _RequestFailure(422, "promotion_inspection_schema_invalid")
         expected_production_revision = _ensure_production_baseline(
-            self._state, production_config_sha
+            self._state,
+            production_config_sha,
+            allow_refresh=inspection_requested,
         )
         audience = _deployment_audience(self._state)
-        if body.get("inspect") is True:
-            if set(body) != {"preview_revision", "inspect"}:
-                return _error(422, "promotion_inspection_schema_invalid")
-            return _json_response(
-                {
-                    "preview_revision": revision,
-                    "transaction_id": transaction_id,
-                    "active_preview_transaction_id": transaction_id,
-                    "status": transaction.get("status"),
-                    "active_revision": self._state.journal.get("active_preview"),
-                    "dashboard_target": PREVIEW,
-                    "target_dashboard": PRODUCTION,
-                    "preview_config_sha256": preview_config_sha,
-                    "production_revision": expected_production_revision,
-                    "expected_production_config_sha256": production_config_sha,
-                    "manifest_sha256": transaction.get("manifest_sha256"),
-                    "package_sha256": transaction.get("package_sha256"),
-                    "dashboard_sha256": transaction.get("dashboard_sha256"),
-                    "audience": audience,
-                    "verified": True,
-                    **resource_context,
-                }
-            )
-        if (
-            transaction.get("status") == "promoted"
-            and self._state.journal.get("production_revision") == revision
-            and production_config_sha == preview_config_sha
-            and not isinstance(body.get("receipt"), dict)
-        ):
-            previous = self._state.journal.get("previous_production")
-            return _json_response(
-                {
-                    "promoted": True,
-                    "operation_id": transaction.get("promotion_operation_id"),
-                    "status": "committed",
-                    "active_revision": revision,
-                    "previous_revision": (
-                        previous.get("revision") if isinstance(previous, dict) else None
-                    ),
-                    "preview_config_sha256": preview_config_sha,
-                    "expected_production_config_sha256": production_config_sha,
-                }
-            )
+        return _PromotionContext(
+            revision=revision,
+            transaction=transaction,
+            transaction_id=transaction_id,
+            resource=resource_context,
+            preview_config=preview_config,
+            production=production,
+            production_config=production_config,
+            preview_sha=preview_config_sha,
+            production_sha=production_config_sha,
+            expected_revision=expected_production_revision,
+            audience=audience,
+        )
+
+    def _promotion_inspection(self, context: _PromotionContext) -> web.Response:
+        """Return signed-input evidence for an exact promotion request."""
+        transaction = context.transaction
+        return _json_response(
+            {
+                "preview_revision": context.revision,
+                "transaction_id": context.transaction_id,
+                "active_preview_transaction_id": context.transaction_id,
+                "status": transaction.get("status"),
+                "active_revision": self._state.journal.get("active_preview"),
+                "dashboard_target": PREVIEW,
+                "target_dashboard": PRODUCTION,
+                "preview_config_sha256": context.preview_sha,
+                "production_revision": context.expected_revision,
+                "expected_production_config_sha256": context.production_sha,
+                "manifest_sha256": transaction.get("manifest_sha256"),
+                "package_sha256": transaction.get("package_sha256"),
+                "dashboard_sha256": transaction.get("dashboard_sha256"),
+                "audience": context.audience,
+                "verified": True,
+                **context.resource,
+            }
+        )
+
+    def _validate_promotion_receipt(
+        self, body: dict[str, Any], context: _PromotionContext
+    ) -> tuple[dict[str, Any], str, str, str, str]:
+        """Validate a complete signed receipt and return durable request ids."""
         receipt = body.get("receipt")
         if not isinstance(receipt, dict):
-            return _error(422, "validation_receipt_required")
-        if set(body) != {
+            raise _RequestFailure(422, "validation_receipt_required")
+        required_body = {
             "preview_revision",
             "expected_production_revision",
             "operation_id",
             "receipt",
-        }:
-            claimed_operation_id = body.get("operation_id")
-            if isinstance(claimed_operation_id, str) and claimed_operation_id in (
-                self._state.journal.get("operations", {})
+        }
+        if set(body) != required_body:
+            claimed = body.get("operation_id")
+            if isinstance(claimed, str) and claimed in self._state.journal.get(
+                "operations", {}
             ):
-                return _error(409, "operation_id_conflict")
-            return _error(422, "promotion_request_schema_invalid")
-        schema_version = receipt.get("schema_version")
-        if schema_version == 1:
-            expected_receipt_keys = VALIDATION_RECEIPT_V1_KEYS
-        elif schema_version == 2:
-            expected_receipt_keys = VALIDATION_RECEIPT_V2_KEYS
-        else:
-            return _error(422, "validation_receipt_schema_invalid")
-        if set(receipt) != expected_receipt_keys:
-            return _error(422, "validation_receipt_schema_invalid")
-        if (
-            receipt.get("preview_revision") != revision
-            or receipt.get("dashboard_target") != PREVIEW
-        ):
-            return _error(422, "validation_receipt_invalid")
+                raise _RequestFailure(409, "operation_id_conflict")
+            raise _RequestFailure(422, "promotion_request_schema_invalid")
+        schema_version = _receipt_schema(receipt)
+        if receipt.get("preview_revision") != context.revision:
+            raise _RequestFailure(422, "validation_receipt_invalid")
+        if receipt.get("dashboard_target") != PREVIEW:
+            raise _RequestFailure(422, "validation_receipt_invalid")
+        self._validate_receipt_identity(body, receipt, schema_version, context)
+        _validate_receipt_results(receipt, schema_version)
+        receipt_nonce = _validate_receipt_window(receipt, schema_version)
+        _verify_signature(self._hass, receipt, prefix="validation-")
+        receipt_sha = hashlib.sha256(_canonical_manifest(receipt)).hexdigest()
+        operation_id = self._receipt_operation_id(body, receipt, schema_version)
+        request_sha = hashlib.sha256(
+            _json_bytes({"action": "promote_home_command", "request": body})
+        ).hexdigest()
+        return receipt, operation_id, receipt_nonce, receipt_sha, request_sha
+
+    def _validate_receipt_identity(
+        self,
+        body: dict[str, Any],
+        receipt: dict[str, Any],
+        schema_version: int,
+        context: _PromotionContext,
+    ) -> None:
+        """Bind receipt identity, action, audience, and production revision."""
         if schema_version == 1 and receipt.get("physical_validation") is not True:
-            return _error(422, "validation_receipt_invalid")
+            raise _RequestFailure(422, "validation_receipt_invalid")
         if schema_version == 2 and any(
             (
-                receipt.get("transaction_id") != transaction.get("transaction_id"),
+                receipt.get("transaction_id") != context.transaction_id,
                 not isinstance(receipt.get("operation_id"), str),
                 _SAFE_NONCE.fullmatch(receipt.get("operation_id", "")) is None,
                 body.get("operation_id") != receipt.get("operation_id"),
                 receipt.get("validation_kind") != "automated_e2e",
-                receipt.get("audience") != audience,
+                receipt.get("audience") != context.audience,
                 receipt.get("action") != "promote_home_command",
                 not _is_sha256(receipt.get("e2e_evidence_sha256")),
             )
         ):
-            return _error(422, "validation_receipt_invalid")
-        expected_production_revision = body.get("expected_production_revision")
-        if (
-            not isinstance(expected_production_revision, str)
-            or not expected_production_revision
-        ):
-            return _error(422, "expected_production_revision_required")
-        if receipt.get("expected_production_revision") != expected_production_revision:
-            claimed_operation_id = body.get("operation_id")
-            if isinstance(
-                claimed_operation_id, str
-            ) and claimed_operation_id in self._state.journal.get("operations", {}):
-                return _error(409, "operation_id_conflict")
-            return _error(422, "validation_receipt_revision_mismatch")
-        if schema_version == 1:
-            device_results = receipt.get("device_results")
-            required_devices = {"mobile", "kiosk", "tablet", "laptop", "desktop"}
-            if (
-                not isinstance(device_results, list)
-                or len(device_results) != len(required_devices)
-                or {
-                    item.get("device_id")
-                    for item in device_results
-                    if isinstance(item, dict)
-                }
-                != required_devices
-                or any(
-                    not isinstance(item, dict)
-                    or set(item) != {"device_id", "passed"}
-                    or item.get("passed") is not True
-                    for item in device_results
-                )
+            raise _RequestFailure(422, "validation_receipt_invalid")
+        expected = body.get("expected_production_revision")
+        if not isinstance(expected, str) or not expected:
+            raise _RequestFailure(422, "expected_production_revision_required")
+        if receipt.get("expected_production_revision") != expected:
+            claimed = body.get("operation_id")
+            if isinstance(claimed, str) and claimed in self._state.journal.get(
+                "operations", {}
             ):
-                return _error(422, "validation_receipt_devices_invalid")
-        else:
-            profile_results = receipt.get("profile_results")
-            if (
-                not isinstance(profile_results, list)
-                or len(profile_results) != len(AUTOMATED_E2E_PROFILES)
-                or any(
-                    not isinstance(item, dict)
-                    or set(item)
-                    != {
-                        "profile_id",
-                        "width",
-                        "height",
-                        "passed",
-                        "screenshot_sha256",
-                    }
-                    or item.get("profile_id") != profile_id
-                    or item.get("width") != width
-                    or isinstance(item.get("width"), bool)
-                    or item.get("height") != height
-                    or isinstance(item.get("height"), bool)
-                    or item.get("passed") is not True
-                    or not _is_sha256(item.get("screenshot_sha256"))
-                    for item, (profile_id, width, height) in zip(
-                        profile_results, AUTOMATED_E2E_PROFILES, strict=True
-                    )
-                )
-            ):
-                return _error(422, "validation_receipt_profiles_invalid")
-        issued_at = _parse_time(receipt.get("issued_at"))
-        expires_at = _parse_time(receipt.get("expires_at"))
-        now = _now()
-        if (
-            issued_at - CLOCK_SKEW > now
-            or expires_at <= issued_at
-            or expires_at <= now
-            or expires_at - issued_at
-            > (MAX_AUTOMATED_E2E_LIFETIME if schema_version == 2 else MAX_LIFETIME)
-        ):
-            return _error(422, "validation_receipt_time_invalid")
-        receipt_nonce = receipt.get("nonce")
-        if (
-            not isinstance(receipt_nonce, str)
-            or _SAFE_NONCE.fullmatch(receipt_nonce) is None
-        ):
-            return _error(422, "validation_receipt_nonce_invalid")
-        receipt_sha = hashlib.sha256(_canonical_manifest(receipt)).hexdigest()
-        _verify_signature(self._hass, receipt, prefix="validation-")
+                raise _RequestFailure(409, "operation_id_conflict")
+            raise _RequestFailure(422, "validation_receipt_revision_mismatch")
+
+    @staticmethod
+    def _receipt_operation_id(
+        body: dict[str, Any], receipt: dict[str, Any], schema_version: int
+    ) -> str:
+        """Return the schema-bound operation id after UUID validation."""
         if schema_version == 2:
-            operation_id = receipt["operation_id"]
-        else:
-            requested_operation_id = body.get("operation_id")
-            if not _is_uuid_operation_id(requested_operation_id):
-                return _error(422, "operation_id_uuid_required")
-            operation_id = requested_operation_id
-        request_sha = hashlib.sha256(
-            _json_bytes(
-                {
-                    "action": "promote_home_command",
-                    "request": body,
-                }
-            )
-        ).hexdigest()
+            return receipt["operation_id"]
+        operation_id = body.get("operation_id")
+        if not _is_uuid_operation_id(operation_id):
+            raise _RequestFailure(422, "operation_id_uuid_required")
+        return operation_id
+
+    async def _existing_promotion_response(
+        self,
+        context: _PromotionContext,
+        receipt: dict[str, Any],
+        operation_id: str,
+        receipt_sha: str,
+        request_sha: str,
+    ) -> web.Response | None:
+        """Return one exact committed or aborted promotion retry."""
         operations = self._state.journal.setdefault("operations", {})
-        existing_operation = operations.get(operation_id)
-        if operation_id in operations or self._state.tx(operation_id) is not None:
-            if (
-                not isinstance(existing_operation, dict)
-                or existing_operation.get("operation_id") != operation_id
-                or existing_operation.get("action") != "promote_home_command"
-                or existing_operation.get("request_sha256") != request_sha
-                or existing_operation.get("receipt_sha256") != receipt_sha
-                or existing_operation.get("transaction_id")
-                != transaction.get("transaction_id")
-                or existing_operation.get("preview_revision") != revision
-                or existing_operation.get("expected_production_revision")
-                != expected_production_revision
-                or existing_operation.get("expected_production_config_sha256")
-                != receipt.get("expected_production_config_sha256")
-            ):
-                return _error(409, "operation_id_conflict")
-            status = existing_operation.get("status")
-            if status == "committed":
-                if (
-                    self._state.journal.get("production_revision") != revision
-                    or production_config_sha
-                    != existing_operation.get("production_config_sha256")
-                    or production_config_sha != preview_config_sha
-                ):
-                    return _error(409, "operation_readback_mismatch")
-                try:
-                    resource_binding = await asyncio.to_thread(
-                        _verify_operation_resource_binding,
-                        self._hass,
-                        self._state,
-                        existing_operation,
-                        production_config,
-                    )
-                except (OSError, ValueError, RuntimeError):
-                    return _error(409, "operation_readback_mismatch")
-                return _json_response(
-                    {
-                        "promoted": True,
-                        "operation_id": operation_id,
-                        "status": "committed",
-                        "active_revision": revision,
-                        "previous_revision": existing_operation.get(
-                            "previous_production_revision"
-                        ),
-                        "preview_config_sha256": preview_config_sha,
-                        "expected_production_config_sha256": receipt.get(
-                            "expected_production_config_sha256"
-                        ),
-                        "applied": True,
-                        "verified": True,
-                        "dashboard_resource_present": True,
-                        "idempotent": True,
-                        **resource_binding,
-                    }
-                )
-            if status == "aborted":
-                if (
-                    self._state.journal.get("production_revision")
-                    != expected_production_revision
-                    or production_config_sha
-                    != receipt.get("expected_production_config_sha256")
-                ):
-                    return _error(409, "operation_readback_mismatch")
-                try:
-                    resource_binding = await asyncio.to_thread(
-                        _verify_recorded_resource_binding,
-                        self._hass,
-                        production_config,
-                        existing_operation,
-                        prefix="expected_",
-                    )
-                except (OSError, ValueError, RuntimeError):
-                    return _error(409, "operation_readback_mismatch")
-                return _json_response(
-                    {
-                        "promoted": False,
-                        "operation_id": operation_id,
-                        "status": "aborted",
-                        "active_revision": expected_production_revision,
-                        "expected_production_config_sha256": production_config_sha,
-                        "applied": False,
-                        "verified": True,
-                        "dashboard_resource_present": bool(resource_binding),
-                        "idempotent": True,
-                        **resource_binding,
-                    }
-                )
-            return _error(409, "operation_transition_in_progress")
-        used_receipts = self._state.journal.setdefault("receipt_nonces", {})
-        if receipt_nonce in used_receipts:
-            return _error(409, "validation_receipt_replay")
-        if any(
-            receipt.get(key) != transaction.get(key)
-            for key in ("manifest_sha256", "package_sha256", "dashboard_sha256")
-        ):
-            return _error(422, "validation_receipt_hash_mismatch")
-        expected_revision = self._state.journal.get("production_revision")
-        if expected_production_revision != expected_revision:
-            return _error(409, "production_revision_conflict")
+        existing = operations.get(operation_id)
+        if operation_id not in operations and self._state.tx(operation_id) is None:
+            return None
+        valid = (
+            isinstance(existing, dict)
+            and existing.get("operation_id") == operation_id
+            and existing.get("action") == "promote_home_command"
+            and existing.get("request_sha256") == request_sha
+            and existing.get("receipt_sha256") == receipt_sha
+            and existing.get("transaction_id") == context.transaction_id
+            and existing.get("preview_revision") == context.revision
+            and existing.get("expected_production_revision")
+            == receipt.get("expected_production_revision")
+            and existing.get("expected_production_config_sha256")
+            == receipt.get("expected_production_config_sha256")
+        )
+        if not valid:
+            return _error(409, "operation_id_conflict")
+        if existing.get("status") == "committed":
+            return await self._committed_promotion_retry(context, receipt, existing)
+        if existing.get("status") == "aborted":
+            return await self._aborted_promotion_retry(context, existing)
+        return _error(409, "operation_transition_in_progress")
+
+    async def _committed_promotion_retry(
+        self,
+        context: _PromotionContext,
+        receipt: dict[str, Any],
+        operation: dict[str, Any],
+    ) -> web.Response:
+        """Verify and project an already committed promotion."""
         if (
-            not _is_sha256(receipt.get("preview_config_sha256"))
-            or receipt.get("preview_config_sha256") != preview_config_sha
+            self._state.journal.get("production_revision") != context.revision
+            or context.production_sha != operation.get("production_config_sha256")
+            or context.production_sha != context.preview_sha
         ):
-            return _error(422, "validation_receipt_preview_config_mismatch")
-        if (
-            not _is_sha256(receipt.get("expected_production_config_sha256"))
-            or receipt.get("expected_production_config_sha256") != production_config_sha
-        ):
-            return _error(409, "production_config_conflict")
+            return _error(409, "operation_readback_mismatch")
         try:
-            expected_resource_binding = await asyncio.to_thread(
-                _dashboard_resource_binding_from_config,
+            binding = await asyncio.to_thread(
+                _verify_operation_resource_binding,
                 self._hass,
-                production_config,
+                self._state,
+                operation,
+                context.production_config,
             )
         except (OSError, ValueError, RuntimeError):
-            return _error(409, "production_config_integrity_failed")
-        expected_resource_record = {
-            "expected_" + key: value
-            for key, value in expected_resource_binding.items()
-        }
-        transition = self._state.journal.get("production_transition")
-        if isinstance(transition, dict) and transition.get("status") == "prepared":
-            return _error(409, "production_transition_in_progress")
+            return _error(409, "operation_readback_mismatch")
+        return _json_response(
+            {
+                "promoted": True,
+                "operation_id": operation["operation_id"],
+                "status": "committed",
+                "active_revision": context.revision,
+                "previous_revision": operation.get("previous_production_revision"),
+                "preview_config_sha256": context.preview_sha,
+                "expected_production_config_sha256": receipt.get(
+                    "expected_production_config_sha256"
+                ),
+                "applied": True,
+                "verified": True,
+                "dashboard_resource_present": True,
+                "idempotent": True,
+                **binding,
+            }
+        )
+
+    async def _aborted_promotion_retry(
+        self, context: _PromotionContext, operation: dict[str, Any]
+    ) -> web.Response:
+        """Verify and project an already aborted promotion."""
+        if (
+            self._state.journal.get("production_revision")
+            != context.expected_revision
+            or context.production_sha
+            != operation.get("expected_production_config_sha256")
+        ):
+            return _error(409, "operation_readback_mismatch")
+        try:
+            binding = await asyncio.to_thread(
+                _verify_recorded_resource_binding,
+                self._hass,
+                context.production_config,
+                operation,
+                prefix="expected_",
+            )
+        except (OSError, ValueError, RuntimeError):
+            return _error(409, "operation_readback_mismatch")
+        return _json_response(
+            {
+                "promoted": False,
+                "operation_id": operation["operation_id"],
+                "status": "aborted",
+                "active_revision": context.expected_revision,
+                "expected_production_config_sha256": context.production_sha,
+                "applied": False,
+                "verified": True,
+                "dashboard_resource_present": bool(binding),
+                "idempotent": True,
+                **binding,
+            }
+        )
+
+    async def _validate_new_promotion(
+        self,
+        context: _PromotionContext,
+        receipt: dict[str, Any],
+        receipt_nonce: str,
+    ) -> dict[str, Any]:
+        """Validate replay, artifact, CAS, and live resource preconditions."""
+        if receipt_nonce in self._state.journal.setdefault("receipt_nonces", {}):
+            raise _RequestFailure(409, "validation_receipt_replay")
+        self._validate_promotion_hashes(context, receipt)
+        try:
+            binding = await asyncio.to_thread(
+                _dashboard_resource_binding_from_config,
+                self._hass,
+                context.production_config,
+            )
+        except (OSError, ValueError, RuntimeError):
+            raise _RequestFailure(409, "production_config_integrity_failed") from None
+        if _has_prepared_production_transition(self._state):
+            raise _RequestFailure(409, "production_transition_in_progress")
+        return {"expected_" + key: value for key, value in binding.items()}
+
+    def _validate_promotion_hashes(
+        self, context: _PromotionContext, receipt: dict[str, Any]
+    ) -> None:
+        """Bind signed artifact and config hashes to current CAS state."""
+        if any(
+            receipt.get(key) != context.transaction.get(key)
+            for key in ("manifest_sha256", "package_sha256", "dashboard_sha256")
+        ):
+            raise _RequestFailure(422, "validation_receipt_hash_mismatch")
+        if receipt.get("expected_production_revision") != context.expected_revision:
+            raise _RequestFailure(409, "production_revision_conflict")
+        if context.expected_revision != self._state.journal.get("production_revision"):
+            raise _RequestFailure(409, "production_revision_conflict")
+        if receipt.get("preview_config_sha256") != context.preview_sha:
+            raise _RequestFailure(422, "validation_receipt_preview_config_mismatch")
+        if not _is_sha256(receipt.get("preview_config_sha256")):
+            raise _RequestFailure(422, "validation_receipt_preview_config_mismatch")
+        if receipt.get("expected_production_config_sha256") != context.production_sha:
+            raise _RequestFailure(409, "production_config_conflict")
+        if not _is_sha256(receipt.get("expected_production_config_sha256")):
+            raise _RequestFailure(409, "production_config_conflict")
+
+    def _prepare_promotion(
+        self,
+        context: _PromotionContext,
+        operation_id: str,
+        receipt_nonce: str,
+        receipt_sha: str,
+        request_sha: str,
+        expected_resource: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        """Durably prepare one promotion before touching production config."""
         previous = {
-            "revision": expected_revision,
-            "config": json.loads(_json_bytes(production_config)),
-            "config_sha256": production_config_sha,
+            "revision": context.expected_revision,
+            "config": json.loads(_json_bytes(context.production_config)),
+            "config_sha256": context.production_sha,
         }
-        next_config = json.loads(_json_bytes(preview_config))
         prepared_at = _now().isoformat()
-        operation_record = {
+        common = {
+            "dashboard_resource_url": context.resource["preview_resource_url"],
+            "dashboard_sha256": context.resource["preview_resource_sha256"],
+            "dashboard_size": context.resource["preview_resource_size"],
+            **expected_resource,
+        }
+        operation = {
             "operation_id": operation_id,
             "action": "promote_home_command",
             "status": "prepared",
-            "transaction_id": transaction["transaction_id"],
-            "preview_revision": revision,
-            "target_revision": revision,
-            "expected_production_revision": expected_revision,
-            "expected_production_config_sha256": production_config_sha,
-            "preview_config_sha256": preview_config_sha,
-            "previous_production_revision": expected_revision,
+            "transaction_id": context.transaction_id,
+            "preview_revision": context.revision,
+            "target_revision": context.revision,
+            "expected_production_revision": context.expected_revision,
+            "expected_production_config_sha256": context.production_sha,
+            "preview_config_sha256": context.preview_sha,
+            "previous_production_revision": context.expected_revision,
             "receipt_sha256": receipt_sha,
             "request_sha256": request_sha,
-            "dashboard_resource_url": resource_context["preview_resource_url"],
-            "dashboard_sha256": resource_context["preview_resource_sha256"],
-            "dashboard_size": resource_context["preview_resource_size"],
-            **expected_resource_record,
+            **common,
             "created_at": prepared_at,
         }
         transition = {
             "transition_id": "promotion-" + secrets.token_hex(16),
             "operation_id": operation_id,
             "status": "prepared",
-            "expected_revision": expected_revision,
-            "expected_config_sha256": production_config_sha,
-            "to_revision": revision,
-            "transaction_id": transaction["transaction_id"],
+            "expected_revision": context.expected_revision,
+            "expected_config_sha256": context.production_sha,
+            "to_revision": context.revision,
+            "transaction_id": context.transaction_id,
             "receipt_nonce": receipt_nonce,
             "receipt_sha256": receipt_sha,
             "request_sha256": request_sha,
             "previous": previous,
-            "next_config": next_config,
-            "next_config_sha256": preview_config_sha,
-            "dashboard_resource_url": resource_context["preview_resource_url"],
-            "dashboard_sha256": resource_context["preview_resource_sha256"],
-            "dashboard_size": resource_context["preview_resource_size"],
-            **expected_resource_record,
+            "next_config": json.loads(_json_bytes(context.preview_config)),
+            "next_config_sha256": context.preview_sha,
+            **common,
             "prepared_at": prepared_at,
         }
+        operations = self._state.journal.setdefault("operations", {})
         if operation_id in operations or self._state.tx(operation_id) is not None:
-            return _error(409, "operation_id_conflict")
-        operations[operation_id] = operation_record
-        used_receipts[receipt_nonce] = transaction["transaction_id"]
+            raise _RequestFailure(409, "operation_id_conflict")
+        operations[operation_id] = operation
+        self._state.journal.setdefault("receipt_nonces", {})[receipt_nonce] = (
+            context.transaction_id
+        )
         self._state.journal["production_transition"] = transition
         self._state.save()
+        return previous, operation, transition
+
+    async def _apply_promotion(
+        self,
+        context: _PromotionContext,
+        previous: dict[str, Any],
+        operation: dict[str, Any],
+        transition: dict[str, Any],
+    ) -> web.Response:
+        """CAS-check, write, read back, and commit one prepared promotion."""
         if (
-            self._state.journal.get("production_revision") != expected_revision
+            self._state.journal.get("production_revision") != context.expected_revision
             or self._state.journal.get("production_transition") is not transition
         ):
             return _error(409, "production_revision_conflict")
-        _preview_check, preview_check = await _load_dashboard(self._hass, PREVIEW)
-        _production_check, production_check = await _load_dashboard(
-            self._hass, PRODUCTION
-        )
-        if _config_sha256(preview_check) != preview_config_sha:
+        _preview, preview = await _load_dashboard(self._hass, PREVIEW)
+        _production, production = await _load_dashboard(self._hass, PRODUCTION)
+        if _config_sha256(preview) != context.preview_sha:
             return _error(409, "preview_config_conflict")
-        if _config_sha256(production_check) != production_config_sha:
+        if _config_sha256(production) != context.production_sha:
             return _error(409, "production_config_conflict")
-        await production.async_save(next_config)
-        _production_readback, production_readback = await _load_dashboard(
-            self._hass, PRODUCTION
-        )
-        if _config_sha256(production_readback) != preview_config_sha:
+        await context.production.async_save(transition["next_config"])
+        _dashboard, readback = await _load_dashboard(self._hass, PRODUCTION)
+        if _config_sha256(readback) != context.preview_sha:
             return _error(409, "production_readback_failed")
         try:
             await asyncio.to_thread(
                 _verify_operation_resource_binding,
                 self._hass,
                 self._state,
-                operation_record,
-                production_readback,
+                operation,
+                readback,
             )
         except (OSError, ValueError, RuntimeError):
             return _error(409, "production_readback_failed")
+        return self._commit_promotion(context, previous, operation, transition)
+
+    def _commit_promotion(
+        self,
+        context: _PromotionContext,
+        previous: dict[str, Any],
+        operation: dict[str, Any],
+        transition: dict[str, Any],
+    ) -> web.Response:
+        """Commit journal pointers after exact production readback."""
         if (
-            self._state.journal.get("production_revision") != expected_revision
+            self._state.journal.get("production_revision") != context.expected_revision
             or self._state.journal.get("production_transition") is not transition
         ):
             return _error(409, "production_revision_conflict")
         self._state.journal["previous_production"] = previous
-        self._state.journal["production_revision"] = revision
-        self._state.journal["production_config_sha256"] = preview_config_sha
-        transaction["status"] = "promoted"
-        transaction["promoted_at"] = _now().isoformat()
-        transaction["promotion_operation_id"] = operation_id
-        transition["status"] = "committed"
-        transition["committed_at"] = transaction["promoted_at"]
-        operation_record["status"] = "committed"
-        operation_record["production_config_sha256"] = preview_config_sha
-        operation_record["completed_at"] = transaction["promoted_at"]
+        self._state.journal["production_revision"] = context.revision
+        self._state.journal["production_config_sha256"] = context.preview_sha
+        promoted_at = _now().isoformat()
+        context.transaction.update(
+            {
+                "status": "promoted",
+                "promoted_at": promoted_at,
+                "promotion_operation_id": operation["operation_id"],
+            }
+        )
+        transition.update({"status": "committed", "committed_at": promoted_at})
+        operation.update(
+            {
+                "status": "committed",
+                "production_config_sha256": context.preview_sha,
+                "completed_at": promoted_at,
+            }
+        )
         self._state.save()
         return _json_response(
             {
                 "promoted": True,
-                "operation_id": operation_id,
+                "operation_id": operation["operation_id"],
                 "status": "committed",
-                "active_revision": revision,
+                "active_revision": context.revision,
                 "previous_revision": previous.get("revision"),
-                "preview_config_sha256": preview_config_sha,
-                "expected_production_config_sha256": production_config_sha,
-                "dashboard_resource_url": operation_record[
-                    "dashboard_resource_url"
-                ],
-                "dashboard_sha256": operation_record["dashboard_sha256"],
-                "dashboard_size": operation_record["dashboard_size"],
+                "preview_config_sha256": context.preview_sha,
+                "expected_production_config_sha256": context.production_sha,
+                "dashboard_resource_url": operation["dashboard_resource_url"],
+                "dashboard_sha256": operation["dashboard_sha256"],
+                "dashboard_size": operation["dashboard_size"],
                 "applied": True,
                 "verified": True,
                 "dashboard_resource_present": True,
             }
         )
 
-    async def _rollback(  # noqa: C901 - explicit rollback CAS state machine
+    async def _promote(
         self, body: dict[str, Any]
     ) -> web.Response:
+        """Durably prepare, CAS-check, apply, and commit one promotion."""
+        try:
+            context = await self._promotion_context(body)
+        except _RequestFailure as exc:
+            return _error(exc.status, exc.code)
+        if body.get("inspect") is True:
+            return self._promotion_inspection(context)
+        try:
+            receipt, operation_id, receipt_nonce, receipt_sha, request_sha = (
+                self._validate_promotion_receipt(body, context)
+            )
+        except _RequestFailure as exc:
+            return _error(exc.status, exc.code)
+        existing_response = await self._existing_promotion_response(
+            context, receipt, operation_id, receipt_sha, request_sha
+        )
+        if existing_response is not None:
+            return existing_response
+        try:
+            expected_resource = await self._validate_new_promotion(
+                context, receipt, receipt_nonce
+            )
+            previous, operation, transition = self._prepare_promotion(
+                context,
+                operation_id,
+                receipt_nonce,
+                receipt_sha,
+                request_sha,
+                expected_resource,
+            )
+        except _RequestFailure as exc:
+            return _error(exc.status, exc.code)
+        return await self._apply_promotion(
+            context, previous, operation, transition
+        )
+
+    def _decode_rollback_request(
+        self, body: dict[str, Any]
+    ) -> tuple[str, str, str, str]:
+        """Validate rollback CAS inputs and return their request digest."""
         operation_id = body.get("operation_id")
-        if set(body) != {
+        required = {
             "operation_id",
             "expected_current_revision",
             "expected_current_config_sha256",
-        }:
+        }
+        if set(body) != required:
             if isinstance(operation_id, str) and operation_id in (
                 self._state.journal.get("operations", {})
             ):
-                return _error(409, "operation_id_conflict")
-            return _error(422, "rollback_request_schema_invalid")
+                raise _RequestFailure(409, "operation_id_conflict")
+            raise _RequestFailure(422, "rollback_request_schema_invalid")
         expected_current_revision = body.get("expected_current_revision")
         expected_current_config_sha = body.get("expected_current_config_sha256")
         if (
@@ -2364,92 +2671,83 @@ class RootView(HomeAssistantView):
             or not isinstance(expected_current_revision, str)
             or not _is_sha256(expected_current_config_sha)
         ):
-            return _error(422, "rollback_cas_required")
+            raise _RequestFailure(422, "rollback_cas_required")
         request_sha = hashlib.sha256(
             _json_bytes({"action": "rollback_home_command", "request": body})
         ).hexdigest()
+        return (
+            operation_id,
+            expected_current_revision,
+            expected_current_config_sha,
+            request_sha,
+        )
+
+    async def _existing_rollback_response(
+        self, operation_id: str, request_sha: str
+    ) -> web.Response | None:
+        """Verify and project one exact completed rollback retry."""
         operations = self._state.journal.setdefault("operations", {})
-        if operation_id in operations or self._state.tx(operation_id) is not None:
-            if operation_id not in operations:
-                return _error(409, "operation_id_conflict")
-            existing = operations[operation_id]
-            if (
-                isinstance(existing, dict)
-                and existing.get("action") == "rollback_home_command"
-                and existing.get("request_sha256") == request_sha
-                and existing.get("status") == "committed"
-            ):
-                _production, current = await _load_dashboard(self._hass, PRODUCTION)
-                current_sha = _config_sha256(current)
-                if self._state.journal.get("production_revision") != existing.get(
-                    "target_revision"
-                ) or current_sha != existing.get("production_config_sha256"):
-                    return _error(409, "operation_readback_mismatch")
-                try:
-                    resource_binding = await asyncio.to_thread(
-                        _verify_recorded_resource_binding,
-                        self._hass,
-                        current,
-                        existing,
-                    )
-                except (OSError, ValueError, RuntimeError):
-                    return _error(409, "operation_readback_mismatch")
-                return _json_response(
-                    {
-                        "rolled_back": True,
-                        "operation_id": operation_id,
-                        "status": "committed",
-                        "active_revision": existing.get("target_revision"),
-                        "production_config_sha256": current_sha,
-                        "applied": True,
-                        "verified": True,
-                        "dashboard_resource_present": bool(resource_binding),
-                        "idempotent": True,
-                        **resource_binding,
-                    }
-                )
-            if (
-                isinstance(existing, dict)
-                and existing.get("action") == "rollback_home_command"
-                and existing.get("request_sha256") == request_sha
-                and existing.get("status") == "aborted"
-            ):
-                _production, current = await _load_dashboard(self._hass, PRODUCTION)
-                current_sha = _config_sha256(current)
-                if (
-                    self._state.journal.get("production_revision")
-                    != existing.get("expected_production_revision")
-                    or current_sha
-                    != existing.get("expected_production_config_sha256")
-                ):
-                    return _error(409, "operation_readback_mismatch")
-                try:
-                    resource_binding = await asyncio.to_thread(
-                        _verify_recorded_resource_binding,
-                        self._hass,
-                        current,
-                        existing,
-                        prefix="expected_",
-                    )
-                except (OSError, ValueError, RuntimeError):
-                    return _error(409, "operation_readback_mismatch")
-                return _json_response(
-                    {
-                        "rolled_back": False,
-                        "operation_id": operation_id,
-                        "status": "aborted",
-                        "active_revision": existing.get(
-                            "expected_production_revision"
-                        ),
-                        "production_config_sha256": current_sha,
-                        "applied": False,
-                        "verified": True,
-                        "dashboard_resource_present": bool(resource_binding),
-                        "idempotent": True,
-                        **resource_binding,
-                    }
-                )
+        if operation_id not in operations and self._state.tx(operation_id) is None:
+            return None
+        existing = operations.get(operation_id)
+        if (
+            not isinstance(existing, dict)
+            or existing.get("action") != "rollback_home_command"
+            or existing.get("request_sha256") != request_sha
+        ):
             return _error(409, "operation_id_conflict")
+        if existing.get("status") not in {"committed", "aborted"}:
+            return _error(409, "operation_id_conflict")
+        return await self._rollback_retry_response(existing)
+
+    async def _rollback_retry_response(
+        self, operation: dict[str, Any]
+    ) -> web.Response:
+        """Rehash live production for one committed or aborted rollback."""
+        _production, current = await _load_dashboard(self._hass, PRODUCTION)
+        current_sha = _config_sha256(current)
+        committed = operation.get("status") == "committed"
+        revision_key = "target_revision" if committed else "expected_production_revision"
+        sha_key = "production_config_sha256" if committed else "expected_production_config_sha256"
+        prefix = "" if committed else "expected_"
+        if (
+            self._state.journal.get("production_revision") != operation.get(revision_key)
+            or current_sha != operation.get(sha_key)
+        ):
+            return _error(409, "operation_readback_mismatch")
+        try:
+            binding = await asyncio.to_thread(
+                _verify_recorded_resource_binding,
+                self._hass,
+                current,
+                operation,
+                prefix=prefix,
+            )
+        except (OSError, ValueError, RuntimeError):
+            return _error(409, "operation_readback_mismatch")
+        return _json_response(
+            {
+                "rolled_back": committed,
+                "operation_id": operation["operation_id"],
+                "status": operation["status"],
+                "active_revision": operation.get(revision_key),
+                "production_config_sha256": current_sha,
+                "applied": committed,
+                "verified": True,
+                "dashboard_resource_present": bool(binding),
+                "idempotent": True,
+                **binding,
+            }
+        )
+
+    async def _prepare_rollback(
+        self,
+        operation_id: str,
+        expected_revision: str,
+        expected_sha: str,
+        request_sha: str,
+    ) -> tuple[Any, dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+        """Validate evidence and durably prepare one rollback transition."""
         previous = self._state.journal.get("previous_production")
         if (
             not isinstance(previous, dict)
@@ -2458,19 +2756,17 @@ class RootView(HomeAssistantView):
             or not _is_sha256(previous.get("config_sha256"))
             or not _is_sha256(self._state.journal.get("production_config_sha256"))
         ):
-            return _error(409, "no_prior_production_revision")
+            raise _RequestFailure(409, "no_prior_production_revision")
         active = self._state.journal.get("production_revision")
-        if expected_current_revision != active:
-            return _error(409, "production_revision_conflict")
-        if expected_current_config_sha != self._state.journal.get(
-            "production_config_sha256"
-        ):
-            return _error(409, "production_config_conflict")
+        if expected_revision != active:
+            raise _RequestFailure(409, "production_revision_conflict")
+        if expected_sha != self._state.journal.get("production_config_sha256"):
+            raise _RequestFailure(409, "production_config_conflict")
         production, current = await _load_dashboard(self._hass, PRODUCTION)
-        if _config_sha256(current) != expected_current_config_sha:
-            return _error(409, "production_config_conflict")
+        if _config_sha256(current) != expected_sha:
+            raise _RequestFailure(409, "production_config_conflict")
         if _config_sha256(previous["config"]) != previous["config_sha256"]:
-            return _error(409, "production_rollback_evidence_invalid")
+            raise _RequestFailure(409, "production_rollback_evidence_invalid")
         try:
             expected_resource_binding = await asyncio.to_thread(
                 _dashboard_resource_binding_from_config, self._hass, current
@@ -2481,7 +2777,7 @@ class RootView(HomeAssistantView):
                 previous["config"],
             )
         except (OSError, ValueError, RuntimeError):
-            return _error(409, "production_rollback_evidence_invalid")
+            raise _RequestFailure(409, "production_rollback_evidence_invalid") from None
         expected_resource_record = {
             "expected_" + key: value
             for key, value in expected_resource_binding.items()
@@ -2492,7 +2788,7 @@ class RootView(HomeAssistantView):
             "action": "rollback_home_command",
             "status": "prepared",
             "expected_production_revision": active,
-            "expected_production_config_sha256": expected_current_config_sha,
+            "expected_production_config_sha256": expected_sha,
             "target_revision": previous["revision"],
             "request_sha256": request_sha,
             **target_resource_binding,
@@ -2504,7 +2800,7 @@ class RootView(HomeAssistantView):
             "status": "prepared",
             "from_revision": active,
             "to_revision": previous["revision"],
-            "expected_config_sha256": expected_current_config_sha,
+            "expected_config_sha256": expected_sha,
             "next_config": json.loads(_json_bytes(previous["config"])),
             "next_config_sha256": previous["config_sha256"],
             "request_sha256": request_sha,
@@ -2512,13 +2808,27 @@ class RootView(HomeAssistantView):
             **expected_resource_record,
             "prepared_at": prepared_at,
         }
+        operations = self._state.journal.setdefault("operations", {})
         operations[operation_id] = operation_record
         self._state.journal["rollback_transition"] = transition
         self._state.save()
+        return production, previous, operation_record, transition, target_resource_binding
+
+    async def _apply_rollback(
+        self,
+        production: Any,
+        previous: dict[str, Any],
+        operation: dict[str, Any],
+        transition: dict[str, Any],
+        target_binding: dict[str, Any],
+    ) -> web.Response:
+        """CAS-check, apply, read back, and commit one prepared rollback."""
+        active = transition["from_revision"]
+        expected_sha = transition["expected_config_sha256"]
         if (
             self._state.journal.get("production_revision") != active
             or self._state.journal.get("production_config_sha256")
-            != expected_current_config_sha
+            != expected_sha
             or self._state.journal.get("rollback_transition") is not transition
         ):
             return _error(409, "production_revision_conflict")
@@ -2531,30 +2841,47 @@ class RootView(HomeAssistantView):
                 _verify_recorded_resource_binding,
                 self._hass,
                 readback,
-                operation_record,
+                operation,
             )
         except (OSError, ValueError, RuntimeError):
             return _error(409, "production_rollback_readback_failed")
         if (
             self._state.journal.get("production_revision") != active
             or self._state.journal.get("production_config_sha256")
-            != expected_current_config_sha
+            != expected_sha
         ):
             return _error(409, "production_revision_conflict")
-        _commit_rollback_transition(self._state, transition, operation_record)
+        _commit_rollback_transition(self._state, transition, operation)
         return _json_response(
             {
                 "rolled_back": True,
-                "operation_id": operation_id,
+                "operation_id": operation["operation_id"],
                 "status": "committed",
                 "active_revision": previous["revision"],
                 "production_config_sha256": previous["config_sha256"],
                 "applied": True,
                 "verified": True,
-                "dashboard_resource_present": bool(target_resource_binding),
-                **target_resource_binding,
+                "dashboard_resource_present": bool(target_binding),
+                **target_binding,
             }
         )
+
+    async def _rollback(self, body: dict[str, Any]) -> web.Response:
+        try:
+            operation_id, expected_revision, expected_sha, request_sha = (
+                self._decode_rollback_request(body)
+            )
+            existing = await self._existing_rollback_response(
+                operation_id, request_sha
+            )
+            if existing is not None:
+                return existing
+            prepared = await self._prepare_rollback(
+                operation_id, expected_revision, expected_sha, request_sha
+            )
+        except _RequestFailure as exc:
+            return _error(exc.status, exc.code)
+        return await self._apply_rollback(*prepared)
 
 
 class TransactionView(HomeAssistantView):
@@ -2568,7 +2895,121 @@ class TransactionView(HomeAssistantView):
         self._hass = hass
         self._state = state
 
-    async def get(  # noqa: C901 - transaction and operation readback dispatcher
+    @staticmethod
+    def _operation_payload(operation: dict[str, Any]) -> dict[str, Any]:
+        """Project public operation fields."""
+        keys = (
+            "operation_id", "action", "status", "transaction_id",
+            "preview_revision", "target_revision", "expected_production_revision",
+            "expected_production_config_sha256", "preview_config_sha256",
+            "production_config_sha256", "created_at", "completed_at",
+        )
+        payload = {key: operation[key] for key in keys if operation.get(key) is not None}
+        if operation.get("action") == "rollback_home_command":
+            payload.update(
+                {
+                    "expected_current_revision": operation.get(
+                        "expected_production_revision"
+                    ),
+                    "expected_current_config_sha256": operation.get(
+                        "expected_production_config_sha256"
+                    ),
+                }
+            )
+        return payload
+
+    async def _operation_binding(
+        self,
+        operation: dict[str, Any],
+        config: dict[str, Any],
+        applied: bool,
+    ) -> dict[str, Any]:
+        """Verify the action-specific production dashboard resource binding."""
+        action = operation.get("action")
+        if applied and action == "promote_home_command":
+            return await asyncio.to_thread(
+                _verify_operation_resource_binding,
+                self._hass,
+                self._state,
+                operation,
+                config,
+            )
+        if action == "promote_home_command":
+            prefix = "expected_"
+        elif action == "rollback_home_command":
+            prefix = "" if applied else "expected_"
+        else:
+            return {}
+        return await asyncio.to_thread(
+            _verify_recorded_resource_binding,
+            self._hass,
+            config,
+            operation,
+            prefix=prefix,
+        )
+
+    async def _operation_readback(
+        self, operation: dict[str, Any], payload: dict[str, Any]
+    ) -> web.Response:
+        """Verify live production against one terminal operation."""
+        try:
+            _production, config = await _load_dashboard(self._hass, PRODUCTION)
+        except (OSError, ValueError, RuntimeError):
+            return _error(409, "operation_readback_failed")
+        live_sha = _config_sha256(config)
+        committed = operation.get("status") == "committed"
+        aborted = operation.get("status") == "aborted"
+        if not committed and not aborted:
+            return _error(409, "operation_readback_mismatch")
+        revision = operation.get(
+            "target_revision" if committed else "expected_production_revision",
+            operation.get("preview_revision"),
+        )
+        expected_sha = operation.get(
+            "production_config_sha256"
+            if committed
+            else "expected_production_config_sha256"
+        )
+        if self._state.journal.get("production_revision") != revision or live_sha != expected_sha:
+            return _error(409, "operation_readback_mismatch")
+        try:
+            binding = await self._operation_binding(operation, config, committed)
+        except (OSError, ValueError, RuntimeError):
+            return _error(409, "operation_readback_mismatch")
+        payload.update(
+            {
+                "target_dashboard": PRODUCTION,
+                "active_revision": self._state.journal.get("production_revision"),
+                "live_production_config_sha256": live_sha,
+                "applied": committed,
+                "verified": True,
+                "dashboard_resource_present": bool(binding),
+                **binding,
+            }
+        )
+        return _json_response(payload)
+
+    async def _operation_get(
+        self, transaction_id: str, operation: str, record: dict[str, Any]
+    ) -> web.Response:
+        """Reconcile and return one operation status or readback."""
+        try:
+            await _reconcile_operation_transition(
+                self._hass, self._state, transaction_id, record
+            )
+        except (OSError, ValueError, RuntimeError):
+            return _error(409, "production_recovery_required")
+        record = self._state.journal.get("operations", {}).get(transaction_id)
+        if not isinstance(record, dict):
+            return _error(409, "operation_recovery_invalid")
+        payload = self._operation_payload(record)
+        return (
+            await self._operation_readback(record, payload)
+            if operation == "readback"
+            else _json_response(payload)
+        )
+
+    async def get(
         self, request: web.Request, transaction_id: str, operation: str
     ) -> web.Response:
         if not await _admin(request):
@@ -2577,139 +3018,9 @@ class TransactionView(HomeAssistantView):
             return _error(429, "rate_limited")
         if operation in {"status", "readback"}:
             async with self._state.lock:
-                operation_record = self._state.journal.get("operations", {}).get(
-                    transaction_id
-                )
-                if isinstance(operation_record, dict):
-                    try:
-                        await _reconcile_operation_transition(
-                            self._hass,
-                            self._state,
-                            transaction_id,
-                            operation_record,
-                        )
-                    except (OSError, ValueError, RuntimeError):
-                        return _error(409, "production_recovery_required")
-                    operation_record = self._state.journal.get("operations", {}).get(
-                        transaction_id
-                    )
-                    if not isinstance(operation_record, dict):
-                        return _error(409, "operation_recovery_invalid")
-                    public_keys = (
-                        "operation_id",
-                        "action",
-                        "status",
-                        "transaction_id",
-                        "preview_revision",
-                        "target_revision",
-                        "expected_production_revision",
-                        "expected_production_config_sha256",
-                        "preview_config_sha256",
-                        "production_config_sha256",
-                        "created_at",
-                        "completed_at",
-                    )
-                    payload = {
-                        key: operation_record.get(key)
-                        for key in public_keys
-                        if operation_record.get(key) is not None
-                    }
-                    if operation_record.get("action") == "rollback_home_command":
-                        payload.update(
-                            {
-                                "expected_current_revision": operation_record.get(
-                                    "expected_production_revision"
-                                ),
-                                "expected_current_config_sha256": operation_record.get(
-                                    "expected_production_config_sha256"
-                                ),
-                            }
-                        )
-                    if operation == "readback":
-                        try:
-                            _production, production_config = await _load_dashboard(
-                                self._hass, PRODUCTION
-                            )
-                        except (OSError, ValueError, RuntimeError):
-                            return _error(409, "operation_readback_failed")
-                        live_sha = _config_sha256(production_config)
-                        status = operation_record.get("status")
-                        if status == "committed":
-                            expected_revision = operation_record.get(
-                                "target_revision",
-                                operation_record.get("preview_revision"),
-                            )
-                            expected_sha = operation_record.get(
-                                "production_config_sha256"
-                            )
-                            applied = True
-                        elif status == "aborted":
-                            expected_revision = operation_record.get(
-                                "expected_production_revision"
-                            )
-                            expected_sha = operation_record.get(
-                                "expected_production_config_sha256"
-                            )
-                            applied = False
-                        else:
-                            return _error(409, "operation_readback_mismatch")
-                        if (
-                            self._state.journal.get("production_revision")
-                            != expected_revision
-                            or live_sha != expected_sha
-                        ):
-                            return _error(409, "operation_readback_mismatch")
-                        resource_binding: dict[str, Any] = {}
-                        if (
-                            applied
-                            and operation_record.get("action") == "promote_home_command"
-                        ):
-                            try:
-                                resource_binding = await asyncio.to_thread(
-                                    _verify_operation_resource_binding,
-                                    self._hass,
-                                    self._state,
-                                    operation_record,
-                                    production_config,
-                                )
-                            except (OSError, ValueError, RuntimeError):
-                                return _error(409, "operation_readback_mismatch")
-                        elif operation_record.get("action") == "promote_home_command":
-                            try:
-                                resource_binding = await asyncio.to_thread(
-                                    _verify_recorded_resource_binding,
-                                    self._hass,
-                                    production_config,
-                                    operation_record,
-                                    prefix="expected_",
-                                )
-                            except (OSError, ValueError, RuntimeError):
-                                return _error(409, "operation_readback_mismatch")
-                        elif operation_record.get("action") == "rollback_home_command":
-                            try:
-                                resource_binding = await asyncio.to_thread(
-                                    _verify_recorded_resource_binding,
-                                    self._hass,
-                                    production_config,
-                                    operation_record,
-                                    prefix="" if applied else "expected_",
-                                )
-                            except (OSError, ValueError, RuntimeError):
-                                return _error(409, "operation_readback_mismatch")
-                        payload.update(
-                            {
-                                "target_dashboard": PRODUCTION,
-                                "active_revision": self._state.journal.get(
-                                    "production_revision"
-                                ),
-                                "live_production_config_sha256": live_sha,
-                                "applied": applied,
-                                "verified": True,
-                                "dashboard_resource_present": bool(resource_binding),
-                                **resource_binding,
-                            }
-                        )
-                    return _json_response(payload)
+                record = self._state.journal.get("operations", {}).get(transaction_id)
+                if isinstance(record, dict):
+                    return await self._operation_get(transaction_id, operation, record)
         if operation != "readback":
             return _error(404, "not_found")
         async with self._state.lock:
@@ -2724,9 +3035,9 @@ class TransactionView(HomeAssistantView):
                 return _error(409, "transaction_recovery_required")
             return await self._transaction_readback(transaction)
 
-    async def _transaction_readback(  # noqa: C901 - fail-closed outcome projection
-        self, transaction: dict[str, Any]
-    ) -> web.Response:
+    @staticmethod
+    def _transaction_payload(transaction: dict[str, Any]) -> dict[str, Any]:
+        """Project public transaction fields and durable transition statuses."""
         stage = transaction.get("stage_transition")
         previous_revision = (
             transaction.get("preview_revision_before")
@@ -2747,12 +3058,26 @@ class TransactionView(HomeAssistantView):
         }
         payload["previous_revision"] = previous_revision
         payload["dashboard_resource_present"] = False
-        if isinstance(stage, dict) and stage.get("status") in {
-            "committed",
-            "aborted",
-        }:
+        if isinstance(stage, dict) and stage.get("status") in {"committed", "aborted"}:
             payload["stage_status"] = stage["status"]
+        for key, name in (
+            ("activation_transition", "activation_status"),
+            ("preview_rollback_transition", "rollback_status"),
+        ):
+            transition = transaction.get(key)
+            if isinstance(transition, dict) and transition.get("status") in {
+                "committed", "aborted"
+            }:
+                payload[name] = transition["status"]
+        return payload
+
+    @staticmethod
+    def _aborted_stage_readback(
+        transaction: dict[str, Any], payload: dict[str, Any]
+    ) -> web.Response | None:
+        """Return a verified aborted stage result when applicable."""
         if transaction.get("status") == "aborted":
+            stage = transaction.get("stage_transition")
             if (
                 not isinstance(stage, dict)
                 or stage.get("status") != "aborted"
@@ -2763,6 +3088,12 @@ class TransactionView(HomeAssistantView):
                 return _error(409, "stage_readback_failed")
             payload.update({"verified": False, "staged_package_verified": False})
             return _json_response(payload)
+        return None
+
+    def _staged_readback_artifacts(
+        self, transaction: dict[str, Any]
+    ) -> tuple[bytes, bytes, dict[str, Any]]:
+        """Validate staged transaction metadata, bytes, hashes, and signature."""
         if any(
             (
                 transaction.get("target") != PREVIEW,
@@ -2772,76 +3103,55 @@ class TransactionView(HomeAssistantView):
                 transaction.get("status") == "staging",
             )
         ):
-            return _error(409, "staged_integrity_failed")
+            raise _RequestFailure(409, "staged_integrity_failed")
         try:
             package, dashboard, manifest = _verify_staged_artifacts(
-                transaction, self._state.root
+                transaction, self._state.root, self._hass
             )
         except (OSError, ValueError):
-            return _error(409, "staged_integrity_failed")
+            raise _RequestFailure(409, "staged_integrity_failed") from None
         if package is None or dashboard is None or manifest is None:
-            return _error(409, "staged_integrity_failed")
-        active_dashboard_sha: str | None = None
-        active_resource_binding: dict[str, Any] = {}
-        if transaction.get("status") in {"activated", "reloaded", "promoted"}:
-            try:
-                _validate_package(package)
-                active_dashboard_sha = await _verify_active_bindings(
-                    self._hass, transaction, dashboard
-                )
-                active_context = await asyncio.to_thread(
-                    _active_resource_context, self._hass, transaction
-                )
-                active_resource_binding = {
-                    "active_dashboard_resource_url": active_context[
-                        "preview_resource_url"
-                    ],
-                    "active_dashboard_sha256": active_context[
-                        "preview_resource_sha256"
-                    ],
-                    "active_dashboard_size": active_context[
-                        "preview_resource_size"
-                    ],
-                }
-                _preview, preview_config = await _load_dashboard(self._hass, PREVIEW)
-                if any(
-                    (
-                        self._state.journal.get("active_preview")
-                        != transaction.get("revision"),
-                        not _is_sha256(
-                            transaction.get("active_preview_config_sha256")
-                        ),
-                        _config_sha256(preview_config)
-                        != transaction.get("active_preview_config_sha256"),
-                    )
-                ):
-                    raise ValueError("active_preview_binding")
-            except (OSError, ValueError, RuntimeError):
-                return _error(409, "active_integrity_failed")
-        payload["staged_package_verified"] = True
-        activation = transaction.get("activation_transition")
-        if isinstance(activation, dict) and activation.get("status") in {
-            "committed",
-            "aborted",
-        }:
-            payload["activation_status"] = activation["status"]
-        rollback = transaction.get("preview_rollback_transition")
-        if isinstance(rollback, dict) and rollback.get("status") in {
-            "committed",
-            "aborted",
-        }:
-            payload["rollback_status"] = rollback["status"]
-        if active_dashboard_sha is not None:
-            payload.update(
-                {
-                    "active_revision": self._state.journal.get("active_preview"),
-                    "active_dashboard_verified": True,
-                    "dashboard_resource_present": True,
-                    **active_resource_binding,
-                }
+            raise _RequestFailure(409, "staged_integrity_failed")
+        return package, dashboard, manifest
+
+    async def _active_transaction_readback(
+        self, transaction: dict[str, Any], package: bytes, dashboard: bytes
+    ) -> dict[str, Any]:
+        """Verify an active preview and return its public resource evidence."""
+        if transaction.get("status") not in {"activated", "reloaded", "promoted"}:
+            return {}
+        try:
+            _validate_package(package)
+            await _verify_active_bindings(self._hass, transaction, dashboard)
+            context = await asyncio.to_thread(
+                _active_resource_context, self._hass, transaction
             )
-        if transaction.get("status") == "rolled_back":
-            if (
+            _preview, config = await _load_dashboard(self._hass, PREVIEW)
+            if self._state.journal.get("active_preview") != transaction.get("revision"):
+                raise ValueError("active_preview_binding")
+            if not _is_sha256(transaction.get("active_preview_config_sha256")):
+                raise ValueError("active_preview_binding")
+            if _config_sha256(config) != transaction.get("active_preview_config_sha256"):
+                raise ValueError("active_preview_binding")
+        except (OSError, ValueError, RuntimeError):
+            raise _RequestFailure(409, "active_integrity_failed") from None
+        return {
+            "active_revision": self._state.journal.get("active_preview"),
+            "active_dashboard_verified": True,
+            "dashboard_resource_present": True,
+            "active_dashboard_resource_url": context["preview_resource_url"],
+            "active_dashboard_sha256": context["preview_resource_sha256"],
+            "active_dashboard_size": context["preview_resource_size"],
+        }
+
+    async def _rolled_back_transaction_readback(
+        self, transaction: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Verify a restored preview snapshot and return its resource evidence."""
+        if transaction.get("status") != "rolled_back":
+            return {}
+        rollback = transaction.get("preview_rollback_transition")
+        if (
                 not isinstance(rollback, dict)
                 or rollback.get("status") != "committed"
                 or rollback.get("action") != "rollback"
@@ -2854,52 +3164,59 @@ class TransactionView(HomeAssistantView):
                 != transaction.get("preview_config_sha256_before")
                 or not _is_sha256(rollback.get("next_config_sha256"))
             ):
-                return _error(409, "preview_rollback_readback_failed")
-            try:
-                _preview, preview_config = await _load_dashboard(self._hass, PREVIEW)
-            except (OSError, ValueError, RuntimeError):
-                return _error(409, "preview_rollback_readback_failed")
+            raise _RequestFailure(409, "preview_rollback_readback_failed")
+        try:
+            _preview, config = await _load_dashboard(self._hass, PREVIEW)
             active_revision = self._state.journal.get("active_preview")
-            if (
-                _config_sha256(preview_config) != rollback["next_config_sha256"]
-                or active_revision != rollback.get("to_revision")
-            ):
-                return _error(409, "preview_rollback_readback_failed")
-            try:
-                restored_resource_binding = await asyncio.to_thread(
-                    _verify_preview_revision_resource_binding,
-                    self._hass,
-                    self._state,
-                    active_revision,
-                    preview_config,
-                )
-            except (OSError, ValueError, RuntimeError):
-                return _error(409, "preview_rollback_readback_failed")
-            payload.update(
+            if _config_sha256(config) != rollback["next_config_sha256"]:
+                raise ValueError("preview_rollback_readback_failed")
+            if active_revision != rollback.get("to_revision"):
+                raise ValueError("preview_rollback_readback_failed")
+            binding = await asyncio.to_thread(
+                _verify_preview_revision_resource_binding,
+                self._hass,
+                self._state,
+                active_revision,
+                config,
+            )
+        except (OSError, ValueError, RuntimeError):
+            raise _RequestFailure(409, "preview_rollback_readback_failed") from None
+        result = {
+            "rolled_back": True,
+            "active_revision": active_revision,
+            "previous_revision": active_revision,
+            "preview_active": isinstance(active_revision, str),
+            "dashboard_resource_present": bool(binding),
+            "active_dashboard_verified": bool(binding),
+        }
+        if binding:
+            result.update(
                 {
-                    "rolled_back": True,
-                    "active_revision": active_revision,
-                    "previous_revision": active_revision,
-                    "preview_active": isinstance(active_revision, str),
-                    "dashboard_resource_present": bool(restored_resource_binding),
-                    "active_dashboard_verified": bool(restored_resource_binding),
-                    **(
-                        {
-                            "active_dashboard_resource_url": restored_resource_binding[
-                                "dashboard_resource_url"
-                            ],
-                            "active_dashboard_sha256": restored_resource_binding[
-                                "dashboard_sha256"
-                            ],
-                            "active_dashboard_size": restored_resource_binding[
-                                "dashboard_size"
-                            ],
-                        }
-                        if restored_resource_binding
-                        else {}
-                    ),
+                    "active_dashboard_resource_url": binding["dashboard_resource_url"],
+                    "active_dashboard_sha256": binding["dashboard_sha256"],
+                    "active_dashboard_size": binding["dashboard_size"],
                 }
             )
+        return result
+
+    async def _transaction_readback(
+        self, transaction: dict[str, Any]
+    ) -> web.Response:
+        payload = self._transaction_payload(transaction)
+        aborted = self._aborted_stage_readback(transaction, payload)
+        if aborted is not None:
+            return aborted
+        try:
+            package, dashboard, _manifest = self._staged_readback_artifacts(transaction)
+            payload.update(
+                await self._active_transaction_readback(
+                    transaction, package, dashboard
+                )
+            )
+            payload.update(await self._rolled_back_transaction_readback(transaction))
+        except _RequestFailure as exc:
+            return _error(exc.status, exc.code)
+        payload["staged_package_verified"] = True
         payload["verified"] = transaction.get("status") in {
             "verified",
             "activated",
@@ -2909,7 +3226,262 @@ class TransactionView(HomeAssistantView):
         }
         return _json_response(payload)
 
-    async def post(  # noqa: C901 - explicit transaction lifecycle dispatcher
+    async def _verify_active_config(self, transaction: dict[str, Any]) -> None:
+        """Verify staged bytes, active resource, and current preview config hash."""
+        await _verify_active_transaction(self._hass, transaction, self._state.root)
+        _preview, config = await _load_dashboard(self._hass, PREVIEW)
+        expected = transaction.get("active_preview_config_sha256")
+        if not _is_sha256(expected) or _config_sha256(config) != expected:
+            raise _RequestFailure(409, "active_integrity_failed")
+
+    @staticmethod
+    def _lifecycle_response(
+        transaction: dict[str, Any], action: str, *, idempotent: bool = False
+    ) -> web.Response:
+        """Project a successful activate or reload lifecycle result."""
+        payload = {
+            {"activate": "activated", "reload": "reloaded"}[action]: True,
+            "active_revision": transaction["revision"],
+            "previous_revision": transaction.get("preview_revision_before"),
+            "status": transaction["status"],
+            "restart_required": False,
+            "backend_unchanged": True,
+        }
+        if action == "reload":
+            payload["verified"] = True
+        if idempotent:
+            payload["idempotent"] = True
+        return _json_response(payload)
+
+    async def _apply_activation(
+        self,
+        transaction: dict[str, Any],
+        preview: Any,
+        dashboard: bytes,
+        transition: dict[str, Any],
+    ) -> web.Response:
+        """Save the immutable asset, verify preview readback, and commit activation."""
+        try:
+            saved = await _save_preview_asset(self._hass, dashboard)
+            if saved != transition["asset_name"]:
+                raise ValueError("active_dashboard_binding")
+            _preview, readback = await _load_dashboard(self._hass, PREVIEW)
+            await _verify_active_bindings(self._hass, transaction, dashboard)
+        except (OSError, ValueError, RuntimeError):
+            try:
+                await preview.async_save(transaction["preview_before"])
+            except (OSError, ValueError, RuntimeError):
+                pass
+            raise
+        if _config_sha256(readback) != transition["next_config_sha256"]:
+            raise ValueError("preview_activation_readback_failed")
+        _commit_preview_activation(self._state, transaction, transition)
+        return self._lifecycle_response(transaction, "activate")
+
+    async def _activate(self, transaction: dict[str, Any]) -> web.Response:
+        """Activate one verified staged dashboard transaction."""
+        already_active = transaction.get("status") in {
+            "activated", "reloaded", "promoted"
+        } and self._state.journal.get("active_preview") == transaction.get("revision")
+        if already_active:
+            await self._verify_active_config(transaction)
+            return self._lifecycle_response(transaction, "activate", idempotent=True)
+        if transaction.get("status") != "verified":
+            return _error(409, "transaction_not_verified")
+        package, dashboard, _manifest = _verify_staged_artifacts(
+            transaction, self._state.root, self._hass
+        )
+        if package is None or dashboard is None:
+            raise ValueError("staged_artifact_missing")
+        _validate_package(package)
+        await _ensure_preview(self._hass)
+        preview, config = await _load_dashboard(self._hass, PREVIEW)
+        try:
+            await asyncio.to_thread(
+                _verify_preview_revision_resource_binding,
+                self._hass,
+                self._state,
+                self._state.journal.get("active_preview"),
+                config,
+            )
+        except (OSError, ValueError, RuntimeError):
+            return _error(409, "preview_prestate_invalid")
+        transaction["preview_before"] = json.loads(_json_bytes(config))
+        transaction["preview_config_sha256_before"] = _config_sha256(config)
+        transaction["preview_revision_before"] = self._state.journal.get("active_preview")
+        asset_name = f"aurora-preview-dashboard-{transaction['dashboard_sha256']}.js"
+        next_config = _dashboard_config_with_asset(config, asset_name)
+        transition = {
+            "status": "prepared",
+            "action": "activate",
+            "transaction_id": transaction["transaction_id"],
+            "previous_revision": transaction.get("preview_revision_before"),
+            "next_revision": transaction["revision"],
+            "previous_config_sha256": _config_sha256(config),
+            "next_config_sha256": _config_sha256(next_config),
+            "asset_name": asset_name,
+            "prepared_at": _now().isoformat(),
+        }
+        transaction["active_dashboard_asset"] = asset_name
+        transaction["activation_transition"] = transition
+        self._state.save()
+        return await self._apply_activation(transaction, preview, dashboard, transition)
+
+    async def _rolled_back_response(
+        self, transaction: dict[str, Any]
+    ) -> web.Response:
+        """Verify and project an idempotent preview rollback."""
+        rollback = transaction.get("preview_rollback_transition")
+        active_revision = self._state.journal.get("active_preview")
+        try:
+            _preview, config = await _load_dashboard(self._hass, PREVIEW)
+            valid = (
+                isinstance(rollback, dict)
+                and rollback.get("status") == "committed"
+                and rollback.get("action") == "rollback"
+                and rollback.get("transaction_id") == transaction.get("transaction_id")
+                and rollback.get("from_revision") == transaction.get("revision")
+                and rollback.get("to_revision") == active_revision
+                and rollback.get("to_revision") == transaction.get("preview_revision_before")
+                and _is_sha256(rollback.get("next_config_sha256"))
+                and rollback.get("next_config_sha256") == transaction.get("preview_config_sha256_before")
+                and isinstance(transaction.get("preview_before"), dict)
+                and _config_sha256(transaction["preview_before"]) == rollback.get("next_config_sha256")
+                and _config_sha256(config) == rollback.get("next_config_sha256")
+            )
+            if not valid:
+                raise ValueError("preview_rollback_readback_failed")
+            await asyncio.to_thread(
+                _verify_preview_revision_resource_binding,
+                self._hass,
+                self._state,
+                active_revision,
+                config,
+            )
+        except (OSError, ValueError, RuntimeError):
+            return _error(409, "preview_rollback_readback_failed")
+        return _json_response(
+            {
+                "rolled_back": True,
+                "active_revision": active_revision,
+                "previous_revision": active_revision,
+                "preview_active": isinstance(active_revision, str),
+                "status": "rolled_back",
+                "idempotent": True,
+            }
+        )
+
+    async def _prepare_preview_rollback(
+        self, transaction: dict[str, Any]
+    ) -> tuple[Any, dict[str, Any], dict[str, Any]]:
+        """Validate and durably prepare restoration of the prior preview."""
+        previous = transaction.get("preview_before")
+        if (
+            not isinstance(previous, dict)
+            or not _is_sha256(transaction.get("preview_config_sha256_before"))
+            or _config_sha256(previous) != transaction.get("preview_config_sha256_before")
+            or not _is_sha256(transaction.get("active_preview_config_sha256"))
+        ):
+            raise _RequestFailure(409, "preview_rollback_snapshot_missing")
+        try:
+            await asyncio.to_thread(
+                _verify_preview_revision_resource_binding,
+                self._hass,
+                self._state,
+                transaction.get("preview_revision_before"),
+                previous,
+            )
+        except (OSError, ValueError, RuntimeError):
+            raise _RequestFailure(409, "preview_rollback_snapshot_missing") from None
+        if self._state.journal.get("active_preview") != transaction.get("revision"):
+            raise _RequestFailure(409, "preview_revision_conflict")
+        preview, current = await _load_dashboard(self._hass, PREVIEW)
+        if _config_sha256(current) != transaction.get("active_preview_config_sha256"):
+            raise _RequestFailure(409, "preview_config_conflict")
+        try:
+            await _verify_active_transaction(self._hass, transaction, self._state.root)
+        except (OSError, ValueError, RuntimeError):
+            raise _RequestFailure(409, "active_integrity_failed") from None
+        transition = {
+            "status": "prepared",
+            "action": "rollback",
+            "transaction_id": transaction["transaction_id"],
+            "from_status": transaction["status"],
+            "from_revision": transaction["revision"],
+            "to_revision": transaction.get("preview_revision_before"),
+            "previous_config_sha256": _config_sha256(current),
+            "next_config_sha256": transaction["preview_config_sha256_before"],
+            "asset_name": transaction.get("active_dashboard_asset"),
+            "prepared_at": _now().isoformat(),
+        }
+        transaction["preview_rollback_transition"] = transition
+        self._state.save()
+        return preview, previous, transition
+
+    async def _apply_preview_rollback(
+        self,
+        transaction: dict[str, Any],
+        preview: Any,
+        previous: dict[str, Any],
+        transition: dict[str, Any],
+    ) -> web.Response:
+        """Restore, verify, and commit a prepared preview rollback."""
+        await preview.async_save(previous)
+        _preview, readback = await _load_dashboard(self._hass, PREVIEW)
+        if _config_sha256(readback) != transition["next_config_sha256"]:
+            return _error(409, "preview_rollback_readback_failed")
+        try:
+            await asyncio.to_thread(
+                _verify_preview_revision_resource_binding,
+                self._hass,
+                self._state,
+                transition.get("to_revision"),
+                readback,
+            )
+        except (OSError, ValueError, RuntimeError):
+            return _error(409, "preview_rollback_readback_failed")
+        _commit_preview_rollback(self._state, transaction, transition)
+        active_revision = self._state.journal.get("active_preview")
+        return _json_response(
+            {
+                "rolled_back": True,
+                "active_revision": active_revision,
+                "previous_revision": active_revision,
+                "preview_active": isinstance(active_revision, str),
+                "status": "rolled_back",
+            }
+        )
+
+    async def _preview_rollback(self, transaction: dict[str, Any]) -> web.Response:
+        """Rollback an active preview transaction once, with exact idempotency."""
+        if transaction.get("status") == "rolled_back":
+            return await self._rolled_back_response(transaction)
+        if transaction.get("status") not in {"activated", "reloaded"}:
+            return _error(409, "transaction_not_rollbackable")
+        try:
+            preview, previous, transition = await self._prepare_preview_rollback(
+                transaction
+            )
+        except _RequestFailure as exc:
+            return _error(exc.status, exc.code)
+        return await self._apply_preview_rollback(
+            transaction, preview, previous, transition
+        )
+
+    async def _reload(self, transaction: dict[str, Any]) -> web.Response:
+        """Verify and mark one active dashboard transaction reloaded."""
+        if transaction.get("status") == "reloaded":
+            await self._verify_active_config(transaction)
+            return self._lifecycle_response(transaction, "reload", idempotent=True)
+        if transaction.get("status") != "activated":
+            return _error(409, "transaction_not_activated")
+        await self._verify_active_config(transaction)
+        transaction["status"] = "reloaded"
+        transaction["reloaded_at"] = _now().isoformat()
+        self._state.save()
+        return self._lifecycle_response(transaction, "reload")
+
+    async def post(
         self, request: web.Request, transaction_id: str, operation: str
     ) -> web.Response:
         if not await _admin(request):
@@ -2924,331 +3496,16 @@ class TransactionView(HomeAssistantView):
                 await _reconcile_transaction_transition(
                     self._hass, self._state, transaction
                 )
-                if operation == "activate":
-                    if transaction.get("status") in {
-                        "activated",
-                        "reloaded",
-                        "promoted",
-                    } and self._state.journal.get("active_preview") == transaction.get(
-                        "revision"
-                    ):
-                        await _verify_active_transaction(
-                            self._hass, transaction, self._state.root
-                        )
-                        _preview, active_config = await _load_dashboard(
-                            self._hass, PREVIEW
-                        )
-                        if (
-                            not _is_sha256(
-                                transaction.get("active_preview_config_sha256")
-                            )
-                            or _config_sha256(active_config)
-                            != transaction.get("active_preview_config_sha256")
-                        ):
-                            return _error(409, "active_integrity_failed")
-                        return _json_response(
-                            {
-                                "activated": True,
-                                "active_revision": transaction["revision"],
-                                "previous_revision": transaction.get(
-                                    "preview_revision_before"
-                                ),
-                                "status": transaction["status"],
-                                "restart_required": False,
-                                "backend_unchanged": True,
-                                "idempotent": True,
-                            }
-                        )
-                    if transaction.get("status") != "verified":
-                        return _error(409, "transaction_not_verified")
-                    package, dashboard, _manifest = _verify_staged_artifacts(
-                        transaction, self._state.root
-                    )
-                    if package is None or dashboard is None:
-                        raise ValueError("staged_artifact_missing")
-                    _validate_package(package)
-                    await _ensure_preview(self._hass)
-                    preview, preview_config = await _load_dashboard(self._hass, PREVIEW)
-                    try:
-                        await asyncio.to_thread(
-                            _verify_preview_revision_resource_binding,
-                            self._hass,
-                            self._state,
-                            self._state.journal.get("active_preview"),
-                            preview_config,
-                        )
-                    except (OSError, ValueError, RuntimeError):
-                        return _error(409, "preview_prestate_invalid")
-                    transaction["preview_before"] = json.loads(
-                        _json_bytes(preview_config)
-                    )
-                    transaction["preview_config_sha256_before"] = _config_sha256(
-                        preview_config
-                    )
-                    transaction["preview_revision_before"] = self._state.journal.get(
-                        "active_preview"
-                    )
-                    asset_name = (
-                        f"aurora-preview-dashboard-{transaction['dashboard_sha256']}.js"
-                    )
-                    next_config = _dashboard_config_with_asset(
-                        preview_config, asset_name
-                    )
-                    transition = {
-                        "status": "prepared",
-                        "action": "activate",
-                        "transaction_id": transaction["transaction_id"],
-                        "previous_revision": transaction.get(
-                            "preview_revision_before"
-                        ),
-                        "next_revision": transaction["revision"],
-                        "previous_config_sha256": _config_sha256(preview_config),
-                        "next_config_sha256": _config_sha256(next_config),
-                        "asset_name": asset_name,
-                        "prepared_at": _now().isoformat(),
-                    }
-                    transaction["active_dashboard_asset"] = asset_name
-                    transaction["activation_transition"] = transition
-                    self._state.save()
-                    try:
-                        saved_asset_name = await _save_preview_asset(
-                            self._hass, dashboard
-                        )
-                        if saved_asset_name != asset_name:
-                            raise ValueError("active_dashboard_binding")
-                    except (OSError, ValueError, RuntimeError):
-                        try:
-                            await preview.async_save(transaction["preview_before"])
-                        except (OSError, ValueError, RuntimeError):
-                            pass
-                        raise
-                    try:
-                        _preview_readback, preview_readback = await _load_dashboard(
-                            self._hass, PREVIEW
-                        )
-                        await _verify_active_bindings(
-                            self._hass, transaction, dashboard
-                        )
-                    except (OSError, ValueError, RuntimeError):
-                        try:
-                            await preview.async_save(transaction["preview_before"])
-                        except (OSError, ValueError, RuntimeError):
-                            pass
-                        raise
-                    if (
-                        _config_sha256(preview_readback)
-                        != transition["next_config_sha256"]
-                    ):
-                        raise ValueError("preview_activation_readback_failed")
-                    _commit_preview_activation(self._state, transaction, transition)
-                    return _json_response(
-                        {
-                            "activated": True,
-                            "active_revision": transaction["revision"],
-                            "previous_revision": transaction.get(
-                                "preview_revision_before"
-                            ),
-                            "status": "activated",
-                            "restart_required": False,
-                            "backend_unchanged": True,
-                        }
-                    )
-                if operation == "rollback":
-                    if transaction.get("status") == "rolled_back":
-                        rollback = transaction.get("preview_rollback_transition")
-                        active_revision = self._state.journal.get("active_preview")
-                        try:
-                            _preview, rolled_back_config = await _load_dashboard(
-                                self._hass, PREVIEW
-                            )
-                        except (OSError, ValueError, RuntimeError):
-                            return _error(409, "preview_rollback_readback_failed")
-                        if (
-                            not isinstance(rollback, dict)
-                            or rollback.get("status") != "committed"
-                            or rollback.get("action") != "rollback"
-                            or rollback.get("transaction_id")
-                            != transaction.get("transaction_id")
-                            or rollback.get("from_revision")
-                            != transaction.get("revision")
-                            or rollback.get("to_revision") != active_revision
-                            or rollback.get("to_revision")
-                            != transaction.get("preview_revision_before")
-                            or not _is_sha256(rollback.get("next_config_sha256"))
-                            or rollback.get("next_config_sha256")
-                            != transaction.get("preview_config_sha256_before")
-                            or not isinstance(transaction.get("preview_before"), dict)
-                            or _config_sha256(transaction["preview_before"])
-                            != rollback.get("next_config_sha256")
-                            or _config_sha256(rolled_back_config)
-                            != rollback.get("next_config_sha256")
-                        ):
-                            return _error(409, "preview_rollback_readback_failed")
-                        try:
-                            await asyncio.to_thread(
-                                _verify_preview_revision_resource_binding,
-                                self._hass,
-                                self._state,
-                                active_revision,
-                                rolled_back_config,
-                            )
-                        except (OSError, ValueError, RuntimeError):
-                            return _error(409, "preview_rollback_readback_failed")
-                        return _json_response(
-                            {
-                                "rolled_back": True,
-                                "active_revision": active_revision,
-                                "previous_revision": active_revision,
-                                "preview_active": isinstance(active_revision, str),
-                                "status": "rolled_back",
-                                "idempotent": True,
-                            }
-                        )
-                    if transaction.get("status") not in {"activated", "reloaded"}:
-                        return _error(409, "transaction_not_rollbackable")
-                    previous_preview = transaction.get("preview_before")
-                    if (
-                        not isinstance(previous_preview, dict)
-                        or not _is_sha256(
-                            transaction.get("preview_config_sha256_before")
-                        )
-                        or _config_sha256(previous_preview)
-                        != transaction.get("preview_config_sha256_before")
-                        or not _is_sha256(
-                            transaction.get("active_preview_config_sha256")
-                        )
-                    ):
-                        return _error(409, "preview_rollback_snapshot_missing")
-                    try:
-                        await asyncio.to_thread(
-                            _verify_preview_revision_resource_binding,
-                            self._hass,
-                            self._state,
-                            transaction.get("preview_revision_before"),
-                            previous_preview,
-                        )
-                    except (OSError, ValueError, RuntimeError):
-                        return _error(409, "preview_rollback_snapshot_missing")
-                    if self._state.journal.get("active_preview") != transaction.get(
-                        "revision"
-                    ):
-                        return _error(409, "preview_revision_conflict")
-                    preview, current = await _load_dashboard(self._hass, PREVIEW)
-                    if _config_sha256(current) != transaction.get(
-                        "active_preview_config_sha256"
-                    ):
-                        return _error(409, "preview_config_conflict")
-                    try:
-                        await _verify_active_transaction(
-                            self._hass, transaction, self._state.root
-                        )
-                    except (OSError, ValueError, RuntimeError):
-                        return _error(409, "active_integrity_failed")
-                    transition = {
-                        "status": "prepared",
-                        "action": "rollback",
-                        "transaction_id": transaction["transaction_id"],
-                        "from_status": transaction["status"],
-                        "from_revision": transaction["revision"],
-                        "to_revision": transaction.get("preview_revision_before"),
-                        "previous_config_sha256": _config_sha256(current),
-                        "next_config_sha256": transaction[
-                            "preview_config_sha256_before"
-                        ],
-                        "asset_name": transaction.get("active_dashboard_asset"),
-                        "prepared_at": _now().isoformat(),
-                    }
-                    transaction["preview_rollback_transition"] = transition
-                    self._state.save()
-                    await preview.async_save(previous_preview)
-                    _preview_readback, preview_readback = await _load_dashboard(
-                        self._hass, PREVIEW
-                    )
-                    if _config_sha256(preview_readback) != transaction.get(
-                        "preview_config_sha256_before"
-                    ):
-                        return _error(409, "preview_rollback_readback_failed")
-                    try:
-                        await asyncio.to_thread(
-                            _verify_preview_revision_resource_binding,
-                            self._hass,
-                            self._state,
-                            transaction.get("preview_revision_before"),
-                            preview_readback,
-                        )
-                    except (OSError, ValueError, RuntimeError):
-                        return _error(409, "preview_rollback_readback_failed")
-                    _commit_preview_rollback(self._state, transaction, transition)
-                    active_revision = self._state.journal.get("active_preview")
-                    return _json_response(
-                        {
-                            "rolled_back": True,
-                            "active_revision": active_revision,
-                            "previous_revision": active_revision,
-                            "preview_active": isinstance(active_revision, str),
-                            "status": "rolled_back",
-                        }
-                    )
-                if operation == "reload":
-                    if transaction.get("status") == "reloaded":
-                        await _verify_active_transaction(
-                            self._hass, transaction, self._state.root
-                        )
-                        _preview, active_config = await _load_dashboard(
-                            self._hass, PREVIEW
-                        )
-                        if (
-                            not _is_sha256(
-                                transaction.get("active_preview_config_sha256")
-                            )
-                            or _config_sha256(active_config)
-                            != transaction.get("active_preview_config_sha256")
-                        ):
-                            return _error(409, "active_integrity_failed")
-                        return _json_response(
-                            {
-                                "reloaded": True,
-                                "verified": True,
-                                "active_revision": transaction["revision"],
-                                "previous_revision": transaction.get(
-                                    "preview_revision_before"
-                                ),
-                                "status": "reloaded",
-                                "restart_required": False,
-                                "backend_unchanged": True,
-                                "idempotent": True,
-                            }
-                        )
-                    if transaction.get("status") != "activated":
-                        return _error(409, "transaction_not_activated")
-                    await _verify_active_transaction(
-                        self._hass, transaction, self._state.root
-                    )
-                    _preview, active_config = await _load_dashboard(self._hass, PREVIEW)
-                    if (
-                        not _is_sha256(
-                            transaction.get("active_preview_config_sha256")
-                        )
-                        or _config_sha256(active_config)
-                        != transaction.get("active_preview_config_sha256")
-                    ):
-                        return _error(409, "active_integrity_failed")
-                    transaction["status"] = "reloaded"
-                    transaction["reloaded_at"] = _now().isoformat()
-                    self._state.save()
-                    return _json_response(
-                        {
-                            "reloaded": True,
-                            "verified": True,
-                            "active_revision": transaction["revision"],
-                            "previous_revision": transaction.get(
-                                "preview_revision_before"
-                            ),
-                            "status": "reloaded",
-                            "restart_required": False,
-                            "backend_unchanged": True,
-                        }
-                    )
+                handlers = {
+                    "activate": self._activate,
+                    "rollback": self._preview_rollback,
+                    "reload": self._reload,
+                }
+                handler = handlers.get(operation)
+                if handler is not None:
+                    return await handler(transaction)
+            except _RequestFailure as exc:
+                return _error(exc.status, exc.code)
             except (OSError, ValueError, RuntimeError):
                 return _error(500, "activation_failed")
         return _error(404, "not_found")

@@ -132,6 +132,44 @@ async def test_readback_rehashes_every_staged_artifact(tmp_path, artifact_name):
     assert json.loads(response.body) == {"error_code": "staged_integrity_failed"}
 
 
+def test_staged_readback_reverifies_release_signature(tmp_path, monkeypatch):
+    transaction, _artifacts = _staged_transaction(tmp_path)
+    verify_signature = Mock()
+    monkeypatch.setattr(adapter, "_verify_signature", verify_signature)
+
+    adapter._verify_staged_artifacts(
+        transaction,
+        tmp_path,
+        _hass(tmp_path),
+    )
+
+    verify_signature.assert_called_once()
+    passed_hass, document = verify_signature.call_args.args
+    assert passed_hass is not None
+    assert document["signature"] == "x"
+    assert verify_signature.call_args.kwargs == {"prefix": "release-"}
+
+
+def test_staged_artifact_quota_bounds_revision_count_and_bytes(
+    tmp_path, monkeypatch
+):
+    staged = tmp_path / "staged"
+    first = staged / "first-revision"
+    first.mkdir(parents=True)
+    (first / "manifest.json").write_bytes(b"1234")
+    monkeypatch.setattr(adapter, "MAX_STAGED_REVISIONS", 1)
+    monkeypatch.setattr(adapter, "MAX_STAGED_TOTAL_BYTES", 6)
+
+    with pytest.raises(ValueError, match="staged_capacity_exceeded"):
+        adapter._reserve_staged_capacity(tmp_path, "second-revision", 1)
+
+    monkeypatch.setattr(adapter, "MAX_STAGED_REVISIONS", 2)
+    with pytest.raises(ValueError, match="staged_capacity_exceeded"):
+        adapter._reserve_staged_capacity(tmp_path, "second-revision", 3)
+
+    adapter._reserve_staged_capacity(tmp_path, "second-revision", 2)
+
+
 @pytest.mark.asyncio
 async def test_readback_rejects_out_of_root_legacy_revision_dir(tmp_path):
     transaction, artifacts = _staged_transaction(tmp_path)

@@ -1044,154 +1044,114 @@ def _write_stage(remote: Path, txid: str, payload: bootstrap.Payload) -> Path:
     return stage
 
 
-def _installer_source(  # noqa: C901
-    remote: Path, *, failure: str | None = None
-) -> str:
+def _installer_source(remote: Path, *, failure: str | None = None) -> str:
     source = bootstrap.INSTALLER_SOURCE.decode().replace(
         'ROOT=Path("/homeassistant")', f"ROOT=Path({str(remote)!r})"
     )
-    if failure == "after_component":
-        source = source.replace(
-            'install_destination("component",COMPONENT,new_component,tx,current,installed)',
-            'install_destination("component",COMPONENT,new_component,tx,current,installed); raise OSError("injected")',
-        )
-    elif failure in {"post_cas_component", "post_cas_trust", "post_cas_config"}:
-        mutation = {
+    mutations = {
             "post_cas_component": 'COMPONENT.mkdir(); (COMPONENT/"writer.py").write_bytes(b"external-writer")',
             "post_cas_trust": 'TRUST.write_bytes(b"external-writer")',
             "post_cas_config": 'CONFIG.write_bytes(b"external-writer-config\\n")',
-        }[failure]
-        source = source.replace(
+    }
+    replacements: dict[str, list[tuple[str, str]]] = {
+        "after_component": [(
+            'install_destination("component",COMPONENT,new_component,tx,current,installed)',
+            'install_destination("component",COMPONENT,new_component,tx,current,installed); raise OSError("injected")',
+        )],
+        **{
+            name: [(
             'new_config=tx/"new-configuration.yaml"; assert_expected(states(),args)',
             f'new_config=tx/"new-configuration.yaml"; assert_expected(states(),args); {mutation}',
-        )
-    elif failure == "install_recreate_config":
-        source = source.replace(
+            )]
+            for name, mutation in mutations.items()
+        },
+        "install_recreate_config": [(
             "publish_verified(key,replacement,destination,installed[key])",
             'if key=="configuration": destination.write_bytes(b"external-recreated-config\\n")\n    publish_verified(key,replacement,destination,installed[key])',
-        )
-    elif failure == "rollback_recreate_config":
-        source = source.replace(
+        )],
+        "rollback_recreate_config": [(
             'if pre[key]["exists"]: publish_verified(key,previous,destination,pre[key])',
             'if pre[key]["exists"]:\n            if key=="configuration": destination.write_bytes(b"external-rollback-config\\n")\n            publish_verified(key,previous,destination,pre[key])',
-        )
-    elif failure == "lock_hold":
-        source = source.replace(
+        )],
+        "lock_hold": [(
             "fsync_dir(ROOT); cleanup_owned_lock_candidate(candidate,created)",
             "fsync_dir(ROOT); cleanup_owned_lock_candidate(candidate,created); time.sleep(1)",
-            1,
-        )
-    elif failure == "lock_link_failure":
-        source = source.replace(
+        )],
+        "lock_link_failure": [(
             "os.link(candidate,LOCK,follow_symlinks=False); published=True",
             '(_ for _ in ()).throw(OSError("injected-link-failure")); published=True',
-            1,
-        )
-    elif failure == "lock_partial_write":
-        source = source.replace(
+        )],
+        "lock_partial_write": [(
             'written=os.write(fd,view)\n                if written<=0: fail("global_lock_candidate_write_failed")',
             'written=os.write(fd,view[:1]); fail("global_lock_candidate_write_failed")\n                if written<=0: fail("global_lock_candidate_write_failed")',
-            1,
-        )
-    elif failure == "runtime_foreign_destination":
-        source = (
-            source.replace(
-                'if ROOT!=Path("/homeassistant"): return', "if False: return", 1
-            )
-            .replace(
-                'if sys.platform!="linux": fail("linux_runtime_required")',
-                'if False: fail("linux_runtime_required")',
-                1,
-            )
-            .replace(
+        )],
+        "runtime_foreign_destination": [
+            ('if ROOT!=Path("/homeassistant"): return', "if False: return"),
+            ('if sys.platform!="linux": fail("linux_runtime_required")', 'if False: fail("linux_runtime_required")'),
+            (
                 "created=create_runtime_probe(source,marker); renamed=False",
                 'created=create_runtime_probe(source,marker); renamed=False; destination.write_bytes(b"foreign-runtime-writer")',
-                1,
-            )
-        )
-    elif failure == "runtime_hardlink_failure":
-        source = (
-            source.replace(
-                'if ROOT!=Path("/homeassistant"): return', "if False: return", 1
-            )
-            .replace(
-                'if sys.platform!="linux": fail("linux_runtime_required")',
-                'if False: fail("linux_runtime_required")',
-                1,
-            )
-            .replace(
+            ),
+        ],
+        "runtime_hardlink_failure": [
+            ('if ROOT!=Path("/homeassistant"): return', "if False: return"),
+            ('if sys.platform!="linux": fail("linux_runtime_required")', 'if False: fail("linux_runtime_required")'),
+            (
                 "try: os.link(link_source,link_destination,follow_symlinks=False); linked=True",
                 'try: (_ for _ in ()).throw(OSError("injected-runtime-link")); linked=True',
-                1,
-            )
-        )
-    elif failure == "runtime_probe_partial_exit":
-        source = (
-            source.replace(
-                'if ROOT!=Path("/homeassistant"): return', "if False: return", 1
-            )
-            .replace(
-                'if sys.platform!="linux": fail("linux_runtime_required")',
-                'if False: fail("linux_runtime_required")',
-                1,
-            )
-            .replace(
+            ),
+        ],
+        "runtime_probe_partial_exit": [
+            ('if ROOT!=Path("/homeassistant"): return', "if False: return"),
+            ('if sys.platform!="linux": fail("linux_runtime_required")', 'if False: fail("linux_runtime_required")'),
+            (
                 'written=os.write(fd,view)\n                if written<=0: fail("runtime_probe_write_failed")',
                 'written=os.write(fd,view[:1]); os._exit(74)\n                if written<=0: fail("runtime_probe_write_failed")',
-                1,
-            )
-        )
-    elif failure in {
-        "init_exit_after_mkdir",
-        "init_exit_after_installer",
-        "init_exit_after_replacements",
-    }:
-        marker = {
+            ),
+        ],
+        **{
+            name: [(marker, f"{marker}; os._exit(71)")]
+            for name, marker in {
             "init_exit_after_mkdir": "initialization.mkdir(mode=0o700); fsync_dir(ROOT)",
             "init_exit_after_installer": "write_atomic(initialization/INSTALLER,installer_bytes)",
             "init_exit_after_replacements": 'write_atomic(new_config,config_data,current["configuration"])',
-        }[failure]
-        source = source.replace(marker, f"{marker}; os._exit(71)", 1)
-    elif failure == "journal_exit_initial":
-        source = source.replace(
+            }.items()
+        },
+        "journal_exit_initial": [(
             "os.replace(temp,path); fsync_dir(path.parent)",
             'if path.name=="transaction.json" and not lexists(path): os._exit(72)\n    os.replace(temp,path); fsync_dir(path.parent)',
-        )
-    elif failure == "journal_exit_later":
-        source = source.replace(
+        )],
+        "journal_exit_later": [(
             "os.replace(temp,path); fsync_dir(path.parent)",
             'marker=ROOT/f".test-later-journal-{args.transaction_id}" if "args" in globals() else ROOT/".test-unused"\n    if path.name=="transaction.json" and lexists(path) and not lexists(marker): marker.write_text("once"); os._exit(73)\n    os.replace(temp,path); fsync_dir(path.parent)',
-        )
-    elif failure == "init_raise_after_replacements":
-        source = source.replace(
+        )],
+        "init_raise_after_replacements": [(
             'write_atomic(new_config,config_data,current["configuration"])',
             'write_atomic(new_config,config_data,current["configuration"]); raise OSError("injected-init")',
-        )
-    elif failure == "config_aba":
-        source = source.replace(
+        )],
+        "config_aba": [(
             "config_state,config_bytes=configuration_snapshot()",
             'config_state,config_bytes=configuration_snapshot(); CONFIG.write_bytes(b"transient-b\\n"); CONFIG.write_bytes(config_bytes)',
-        )
-    elif failure == "finalize_after_prepared":
-        source = source.replace(
+        )],
+        "finalize_after_prepared": [(
             'if journal.get("status")!="finalize_prepared": journal["status"]="finalize_prepared"; write_journal(tx,journal)',
             'if journal.get("status")!="finalize_prepared": journal["status"]="finalize_prepared"; write_journal(tx,journal); raise OSError("injected_finalize_after_prepared")',
-        )
-    elif failure == "finalize_after_stage":
-        source = source.replace(
+        )],
+        "finalize_after_stage": [(
             'if lexists(stage): kind(stage,"dir","stage_invalid"); shutil.rmtree(stage); fsync_dir(ROOT)',
             'if lexists(stage): kind(stage,"dir","stage_invalid"); shutil.rmtree(stage); fsync_dir(ROOT); raise OSError("injected_finalize_after_stage")',
-        )
-    elif failure == "finalize_after_release":
-        source = source.replace(
+        )],
+        "finalize_after_release": [(
             "release(args.transaction_id); release_required=False",
             'release(args.transaction_id); release_required=False; marker=ROOT/f".test-finalize-release-{args.transaction_id}"; marker_preexisting=lexists(marker); marker.write_text("once"); (None if marker_preexisting else (_ for _ in ()).throw(OSError("injected_finalize_after_release")))',
-        )
-    elif failure == "finalize_after_tx":
-        source = source.replace(
+        )],
+        "finalize_after_tx": [(
             "shutil.rmtree(tx); fsync_dir(ROOT)",
             'shutil.rmtree(tx); fsync_dir(ROOT); raise OSError("injected_finalize_after_tx")',
-        )
+        )],
+    }
+    for old, new in replacements.get(failure or "", []):
+        source = source.replace(old, new, 1)
     return source
 
 
@@ -2076,14 +2036,69 @@ def test_finalize_crash_boundaries_never_leave_unrecoverable_lock(
 
 
 @pytest.mark.asyncio
-async def test_finalize_authorization_reconciles_process_death_after_remote_commit(  # noqa: C901
+class _FinalizeDeathIngress:
+    def __init__(
+        self,
+        local: dict[str, Any],
+        configuration: bytes,
+        component_sha: str,
+        trust_sha: str,
+    ) -> None:
+        self.local = local
+        self.configuration = configuration
+        self.component_sha = component_sha
+        self.trust_sha = trust_sha
+        self.finalized = False
+        self.execute_modes: list[str] = []
+
+    def readback(self, transaction_id: str) -> dict[str, Any]:
+        if self.finalized:
+            return {
+                "status": "not_found", "transactionId": transaction_id,
+                "stagePresent": False, "lockCandidatePresent": False,
+                "transactionPresent": False, "initializationPresent": False,
+                "lockHeld": False, "lockOwnerMatches": False, "verified": False,
+            }
+        local = self.local
+        return {
+            "status": "installed", "transactionId": transaction_id,
+            "payloadManifestSha256": local["payloadManifestSha256"],
+            "installerSha256": local["installerSha256"], "replaceExact": False,
+            "prestateConfigurationSha256": local["expectedConfigurationSha256"],
+            "prestateComponentTreeSha256": local["expectedComponentTreeSha256"],
+            "prestateTrustSha256": "absent",
+            "configurationSha256": hashlib.sha256(self.configuration).hexdigest(),
+            "componentTreeSha256": self.component_sha, "trustSha256": self.trust_sha,
+            "rollbackDeadline": int(time.time()) - 1, "stagePresent": True,
+            "lockCandidatePresent": False, "transactionPresent": True,
+            "initializationPresent": False, "lockHeld": False,
+            "lockOwnerMatches": False, "verified": True,
+        }
+
+    def configuration_bytes(self) -> bytes:
+        return self.configuration
+
+    def component_tree_sha256(self) -> str:
+        return self.component_sha
+
+    def trust_sha256(self) -> str:
+        return self.trust_sha
+
+    def execute(self, *, mode: str, transaction_id: str, **_kwargs: Any) -> dict[str, Any]:
+        self.execute_modes.append(mode)
+        if mode == "mark-verified":
+            return {"status": "restart_verified", "transactionId": transaction_id}
+        self.finalized = True
+        raise RuntimeError("simulated local process death after remote finalize")
+
+
+async def test_finalize_authorization_reconciles_process_death_after_remote_commit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     txid = str(uuid.uuid4())
     local = _local_record_value(txid)
     bootstrap._write_local_record(txid, local, create=True)
     configuration = b"verified-config\n"
-    configuration_sha = hashlib.sha256(configuration).hexdigest()
     component_sha = "4" * 64
     trust_sha = "5" * 64
 
@@ -2092,65 +2107,7 @@ async def test_finalize_authorization_reconciles_process_death_after_remote_comm
 
     monkeypatch.setattr(bootstrap, "_open_editor", open_editor)
 
-    class Ingress:
-        def __init__(self) -> None:
-            self.finalized = False
-            self.execute_modes: list[str] = []
-
-        def readback(self, transaction_id: str) -> dict[str, Any]:
-            if self.finalized:
-                return {
-                    "status": "not_found",
-                    "transactionId": transaction_id,
-                    "stagePresent": False,
-                    "lockCandidatePresent": False,
-                    "transactionPresent": False,
-                    "initializationPresent": False,
-                    "lockHeld": False,
-                    "lockOwnerMatches": False,
-                    "verified": False,
-                }
-            return {
-                "status": "installed",
-                "transactionId": transaction_id,
-                "payloadManifestSha256": local["payloadManifestSha256"],
-                "installerSha256": local["installerSha256"],
-                "replaceExact": False,
-                "prestateConfigurationSha256": local["expectedConfigurationSha256"],
-                "prestateComponentTreeSha256": local["expectedComponentTreeSha256"],
-                "prestateTrustSha256": "absent",
-                "configurationSha256": configuration_sha,
-                "componentTreeSha256": component_sha,
-                "trustSha256": trust_sha,
-                "rollbackDeadline": int(time.time()) - 1,
-                "stagePresent": True,
-                "lockCandidatePresent": False,
-                "transactionPresent": True,
-                "initializationPresent": False,
-                "lockHeld": False,
-                "lockOwnerMatches": False,
-                "verified": True,
-            }
-
-        def configuration_bytes(self) -> bytes:
-            return configuration
-
-        def component_tree_sha256(self) -> str:
-            return component_sha
-
-        def trust_sha256(self) -> str:
-            return trust_sha
-
-        def execute(
-            self, *, mode: str, transaction_id: str, **_kwargs: Any
-        ) -> dict[str, Any]:
-            self.execute_modes.append(mode)
-            if mode == "mark-verified":
-                return {"status": "restart_verified", "transactionId": transaction_id}
-            self.finalized = True
-            raise RuntimeError("simulated local process death after remote finalize")
-
-    ingress = Ingress()
+    ingress = _FinalizeDeathIngress(local, configuration, component_sha, trust_sha)
 
     async def run() -> dict[str, Any]:
         return await bootstrap.bootstrap(
@@ -2573,68 +2530,66 @@ def test_status_exposes_and_locally_binds_exact_partial_topology(
 
 
 @pytest.mark.asyncio
-async def test_read_only_status_needs_no_payload_or_stage_and_restores_addon_state(  # noqa: C901
+class _StatusSocket:
+    state = "stopped"
+
+    def __init__(self, *_args: Any) -> None:
+        pass
+
+    async def __aenter__(self) -> _StatusSocket:
+        return self
+
+    async def __aexit__(self, *_args: Any) -> None:
+        return None
+
+    async def call(self, command: str, **fields: Any) -> dict[str, Any]:
+        values = _preflight_values()
+        if command == "auth/current_user":
+            return values["user"]
+        if command == "backup/info":
+            return values["backup"]
+        endpoint = fields["endpoint"]
+        if endpoint.endswith("/start"):
+            type(self).state = "started"
+        if endpoint.endswith("/stop"):
+            type(self).state = "stopped"
+        data = {
+            "/supervisor/info": values["supervisor"],
+            "/host/info": values["host"],
+            f"/store/addons/{bootstrap.FILE_EDITOR_SLUG}": values["store"],
+            f"/addons/{bootstrap.FILE_EDITOR_SLUG}/info": {
+                **values["addon"], "state": type(self).state
+            },
+            f"/addons/{bootstrap.FILE_EDITOR_SLUG}/start": {},
+            f"/addons/{bootstrap.FILE_EDITOR_SLUG}/stop": {},
+            "/ingress/session": {"session": "A" * 32},
+        }.get(endpoint)
+        if data is None:
+            raise AssertionError(endpoint)
+        return {"result": "ok", "data": data}
+
+
+class _NotFoundIngress:
+    def __init__(self, *_args: Any) -> None:
+        pass
+
+    def status(self, transaction_id: str) -> dict[str, Any]:
+        return {"status": "not_found", "transactionId": transaction_id, "lockHeld": False}
+
+
+async def test_read_only_status_needs_no_payload_or_stage_and_restores_addon_state(
     tmp_path: Path,
 ) -> None:
     root = _source_root(tmp_path)
     txid = str(uuid.uuid4())
 
-    class Socket:
-        state = "stopped"
-
-        def __init__(self, *_args: Any) -> None:
-            pass
-
-        async def __aenter__(self) -> Socket:
-            return self
-
-        async def __aexit__(self, *_args: Any) -> None:
-            return None
-
-        async def call(self, command: str, **fields: Any) -> dict[str, Any]:
-            values = _preflight_values()
-            if command == "auth/current_user":
-                return values["user"]
-            if command == "backup/info":
-                return values["backup"]
-            endpoint = fields["endpoint"]
-            if endpoint == "/supervisor/info":
-                data = values["supervisor"]
-            elif endpoint == "/host/info":
-                data = values["host"]
-            elif endpoint == f"/store/addons/{bootstrap.FILE_EDITOR_SLUG}":
-                data = values["store"]
-            elif endpoint == f"/addons/{bootstrap.FILE_EDITOR_SLUG}/info":
-                data = {**values["addon"], "state": type(self).state}
-            elif endpoint == f"/addons/{bootstrap.FILE_EDITOR_SLUG}/start":
-                type(self).state = "started"
-                data = {}
-            elif endpoint == f"/addons/{bootstrap.FILE_EDITOR_SLUG}/stop":
-                type(self).state = "stopped"
-                data = {}
-            elif endpoint == "/ingress/session":
-                data = {"session": "A" * 32}
-            else:
-                raise AssertionError(endpoint)
-            return {"result": "ok", "data": data}
-
-    class Ingress:
-        def __init__(self, *_args: Any) -> None:
-            pass
-
-        def status(self, transaction_id: str) -> dict[str, Any]:
-            return {
-                "status": "not_found",
-                "transactionId": transaction_id,
-                "lockHeld": False,
-            }
-
+    _StatusSocket.state = "stopped"
     result = await bootstrap.bootstrap(
         mode="status",
         source_root=root,
         transaction_id=txid,
-        socket_factory=Socket,
-        ingress_client_factory=Ingress,
+        socket_factory=_StatusSocket,
+        ingress_client_factory=_NotFoundIngress,
         credential_loader=_test_credentials,
     )
     assert result == {
@@ -2642,7 +2597,7 @@ async def test_read_only_status_needs_no_payload_or_stage_and_restores_addon_sta
         "transactionId": txid,
         "lockHeld": False,
     }
-    assert Socket.state == "stopped"
+    assert _StatusSocket.state == "stopped"
 
 
 @pytest.mark.asyncio
@@ -2777,7 +2732,66 @@ async def test_transaction_is_persisted_before_any_remote_mutation(
 
 
 @pytest.mark.asyncio
-async def test_partial_upload_resumes_same_exact_local_transaction(  # noqa: C901
+class _PartialUploadIngress:
+    def __init__(
+        self,
+        payload: bootstrap.Payload,
+        before: bytes,
+        after: bytes,
+        installed_tree: str,
+        installed_trust: str,
+    ) -> None:
+        self.payload = payload
+        self.before = before
+        self.after = after
+        self.installed_tree = installed_tree
+        self.installed_trust = installed_trust
+        self.staged: dict[str, bytes] = {}
+        self.upload_counts: dict[str, int] = {}
+        self.failed = False
+        self.installed = False
+
+    def configuration_bytes(self) -> bytes:
+        return self.after if self.installed else self.before
+
+    def component_tree_sha256(self) -> str:
+        return self.installed_tree if self.installed else _empty_component_digest()
+
+    def trust_sha256(self) -> str:
+        return self.installed_trust if self.installed else "absent"
+
+    def create_stage(self, _txid: str) -> None:
+        return None
+
+    def verify_fixed_root_write_capability(self, _txid: str) -> None:
+        return None
+
+    def stage_file_exists(self, _txid: str, relative: str) -> bool:
+        return relative in self.staged
+
+    def download_stage(self, _txid: str, relative: str) -> bytes:
+        return self.staged[relative]
+
+    def upload(self, _txid: str, relative: str, content: bytes) -> None:
+        if len(self.staged) == 2 and not self.failed:
+            self.failed = True
+            raise bootstrap.BootstrapError("remote_upload_failed")
+        self.upload_counts[relative] = self.upload_counts.get(relative, 0) + 1
+        self.staged[relative] = content
+
+    def execute(self, *, mode: str, transaction_id: str, **_kwargs: Any) -> dict[str, Any]:
+        assert mode == "install"
+        self.installed = True
+        return {
+            "status": "installed", "transactionId": transaction_id,
+            "payloadManifestSha256": self.payload.manifest_sha256,
+            "configurationSha256": hashlib.sha256(self.after).hexdigest(),
+            "componentTreeSha256": self.installed_tree,
+            "trustSha256": self.installed_trust,
+        }
+
+
+async def test_partial_upload_resumes_same_exact_local_transaction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _source_root(tmp_path)
@@ -2810,56 +2824,9 @@ async def test_partial_upload_resumes_same_exact_local_transaction(  # noqa: C90
 
     monkeypatch.setattr(bootstrap, "_open_editor", open_editor)
 
-    class Ingress:
-        def __init__(self) -> None:
-            self.staged: dict[str, bytes] = {}
-            self.upload_counts: dict[str, int] = {}
-            self.failed = False
-            self.installed = False
-
-        def configuration_bytes(self) -> bytes:
-            return after if self.installed else before
-
-        def component_tree_sha256(self) -> str:
-            return installed_tree if self.installed else _empty_component_digest()
-
-        def trust_sha256(self) -> str:
-            return installed_trust if self.installed else "absent"
-
-        def create_stage(self, _txid: str) -> None:
-            return None
-
-        def verify_fixed_root_write_capability(self, _txid: str) -> None:
-            return None
-
-        def stage_file_exists(self, _txid: str, relative: str) -> bool:
-            return relative in self.staged
-
-        def download_stage(self, _txid: str, relative: str) -> bytes:
-            return self.staged[relative]
-
-        def upload(self, _txid: str, relative: str, content: bytes) -> None:
-            if len(self.staged) == 2 and not self.failed:
-                self.failed = True
-                raise bootstrap.BootstrapError("remote_upload_failed")
-            self.upload_counts[relative] = self.upload_counts.get(relative, 0) + 1
-            self.staged[relative] = content
-
-        def execute(
-            self, *, mode: str, transaction_id: str, **_kwargs: Any
-        ) -> dict[str, Any]:
-            assert mode == "install"
-            self.installed = True
-            return {
-                "status": "installed",
-                "transactionId": transaction_id,
-                "payloadManifestSha256": payload.manifest_sha256,
-                "configurationSha256": hashlib.sha256(after).hexdigest(),
-                "componentTreeSha256": installed_tree,
-                "trustSha256": installed_trust,
-            }
-
-    ingress = Ingress()
+    ingress = _PartialUploadIngress(
+        payload, before, after, installed_tree, installed_trust
+    )
 
     async def run(*, replace_exact: bool = False) -> dict[str, Any]:
         return await bootstrap.bootstrap(
@@ -2995,7 +2962,68 @@ async def test_invalid_prestate_config_check_has_zero_remote_or_local_mutation(
 
 
 @pytest.mark.asyncio
-async def test_failed_config_check_uses_remote_transaction_rollback(  # noqa: C901
+class _RollbackOnFailureIngress:
+    def __init__(
+        self,
+        payload: bootstrap.Payload,
+        before: bytes,
+        after: bytes,
+        installed_tree: str,
+        installed_trust: str,
+    ) -> None:
+        self.payload = payload
+        self.before = before
+        self.after = after
+        self.installed_tree = installed_tree
+        self.installed_trust = installed_trust
+        self.state = "prestate"
+        self.staged: dict[str, bytes] = {}
+        self.executions: list[str] = []
+
+    def configuration_bytes(self) -> bytes:
+        return self.before if self.state == "prestate" else self.after
+
+    def component_tree_sha256(self) -> str:
+        return _empty_component_digest() if self.state == "prestate" else self.installed_tree
+
+    def trust_sha256(self) -> str:
+        return "absent" if self.state == "prestate" else self.installed_trust
+
+    def stage_exists(self, _txid: str) -> bool:
+        return False
+
+    def stage_file_exists(self, _txid: str, relative: str) -> bool:
+        return relative in self.staged
+
+    def create_stage(self, _txid: str) -> None:
+        return None
+
+    def verify_fixed_root_write_capability(self, _txid: str) -> None:
+        return None
+
+    def upload(self, _txid: str, relative: str, content: bytes) -> None:
+        self.staged[relative] = content
+
+    def download_stage(self, _txid: str, relative: str) -> bytes:
+        return self.staged[relative]
+
+    def execute(self, *, mode: str, transaction_id: str, **_kwargs: Any) -> dict[str, Any]:
+        self.executions.append(mode)
+        installed = mode == "install"
+        self.state = "installed" if installed else "prestate"
+        return {
+            "status": "installed" if installed else "rolled_back",
+            "transactionId": transaction_id,
+            "payloadManifestSha256": self.payload.manifest_sha256,
+            "configurationSha256": hashlib.sha256(
+                self.after if installed else self.before
+            ).hexdigest(),
+            "componentTreeSha256": self.installed_tree if installed else _empty_component_digest(),
+            "trustSha256": self.installed_trust if installed else "absent",
+        }
+
+
+async def test_failed_config_check_uses_remote_transaction_rollback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _source_root(tmp_path)
@@ -3028,62 +3056,9 @@ async def test_failed_config_check_uses_remote_transaction_rollback(  # noqa: C9
 
     monkeypatch.setattr(bootstrap, "_open_editor", open_editor)
 
-    class Ingress:
-        def __init__(self, *_args: Any) -> None:
-            self.state = "prestate"
-            self.staged: dict[str, bytes] = {}
-            self.executions: list[str] = []
-
-        def configuration_bytes(self) -> bytes:
-            return before if self.state == "prestate" else after
-
-        def component_tree_sha256(self) -> str:
-            return (
-                _empty_component_digest()
-                if self.state == "prestate"
-                else installed_tree
-            )
-
-        def trust_sha256(self) -> str:
-            return "absent" if self.state == "prestate" else installed_trust
-
-        def stage_exists(self, _txid: str) -> bool:
-            return False
-
-        def stage_file_exists(self, _txid: str, relative: str) -> bool:
-            return relative in self.staged
-
-        def create_stage(self, _txid: str) -> None:
-            return None
-
-        def verify_fixed_root_write_capability(self, _txid: str) -> None:
-            return None
-
-        def upload(self, _txid: str, relative: str, content: bytes) -> None:
-            self.staged[relative] = content
-
-        def download_stage(self, _txid: str, relative: str) -> bytes:
-            return self.staged[relative]
-
-        def execute(
-            self, *, mode: str, transaction_id: str, **_kwargs: Any
-        ) -> dict[str, Any]:
-            self.executions.append(mode)
-            self.state = "installed" if mode == "install" else "prestate"
-            return {
-                "status": "installed" if mode == "install" else "rolled_back",
-                "transactionId": transaction_id,
-                "payloadManifestSha256": payload.manifest_sha256,
-                "configurationSha256": hashlib.sha256(
-                    after if mode == "install" else before
-                ).hexdigest(),
-                "componentTreeSha256": (
-                    installed_tree if mode == "install" else _empty_component_digest()
-                ),
-                "trustSha256": installed_trust if mode == "install" else "absent",
-            }
-
-    ingress = Ingress()
+    ingress = _RollbackOnFailureIngress(
+        payload, before, after, installed_tree, installed_trust
+    )
     checks = 0
 
     def check(*_args: Any) -> None:
