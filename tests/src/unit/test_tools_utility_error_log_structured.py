@@ -370,6 +370,19 @@ class TestParseErrorLogStructured:
         assert issue["logger"] == "pychromecast.socket_client"
         assert issue["message"] == "Connection reset"
 
+    def test_logger_is_the_first_bracket_group_not_the_last(self):
+        # The other half of the same regex change: the thread group extends past
+        # a nested ')' only because the following '[logger]' anchor demands it,
+        # and it must still stop at the FIRST match. A greedy group would read
+        # a later bracketed token in the message as the logger name instead.
+        log = (
+            "2026-05-27 10:00:01.123 ERROR (SyncWorker_3) [a.b] "
+            "msg with (parens) [brackets] and a tail\n"
+        )
+        issue = _parse_error_log_structured(log)["top_issues"][0]
+        assert issue["logger"] == "a.b"
+        assert issue["message"] == "msg with (parens) [brackets] and a tail"
+
     def test_unparseable_lines_are_skipped(self):
         result = _parse_error_log_structured(_UNPARSEABLE_LOG)
         assert result["summary"]["parsed_entries"] == 0

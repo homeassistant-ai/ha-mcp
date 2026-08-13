@@ -233,8 +233,8 @@ def _parse_error_log_structured(
     Only ``matched_lines == 0`` says the parser could not read the log; a small
     ``parsed_entries`` under a narrow filter is the feature working, not data
     loss. Counts are bounded by the fetched window (``window_start`` ..
-    ``window_end``), which on a busy instance can be far shorter than the log's
-    full history.
+    ``window_end``): Supervisor-backed installs read a capped journald slice, so
+    there the window can be far shorter than the log's full history.
     """
     lines = raw_text.splitlines() if raw_text else []
     total_raw_lines = len(lines)
@@ -316,9 +316,9 @@ def _parse_error_log_structured(
         "components_affected": len(by_component),
         "showing_top_n": min(top_n, len(all_issues)),
         "showing_components": len(component_table),
-        # Counts describe this window only. The fetched slice of a busy
-        # instance's journal can span a couple of hours, so an issue's count
-        # here is not its count since it first occurred.
+        # Counts describe this window only. On Supervisor-backed installs the
+        # fetch is a capped journald slice, so an issue's count here is not its
+        # count since it first occurred.
         "window_start": extracted.window_start,
         "window_end": extracted.window_end,
     }
@@ -967,8 +967,8 @@ class UtilityTools:
             # overwriting that would drop the "this is NOT an all-clear" notice.
             result.setdefault("warnings", []).append(
                 f"Parameter(s) {', '.join(ignored)} do not apply when "
-                "structured=True; the summary ranks the whole log by "
-                "occurrence count. Use top_n to bound the output."
+                "structured=True; the summary ranks the whole fetched window "
+                "by occurrence count. Use top_n to bound the output."
             )
         return result
 
@@ -1657,10 +1657,10 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         system_log entries with counts, first_occurred and full tracebacks; only
         the tracebacks are unrecoverable from error_log text. Its counts also run
         since each error first occurred, while structured error_log counts only
-        what is inside the fetched window (reported as window_start/window_end,
-        a couple of hours on a busy instance). Use error_log with structured=True
-        for entries below system_log's WARNING+ ~50-entry cap, or for the
-        per-component rollup.
+        what is inside the fetched window (reported as window_start/window_end;
+        Supervisor-backed installs read a capped journald slice). Use error_log
+        with structured=True for entries below system_log's WARNING+ ~50-entry
+        cap, or for the per-component rollup.
 
         **Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')
         **Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service); ignored for source='logger' and for error_log with structured=True. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window.
