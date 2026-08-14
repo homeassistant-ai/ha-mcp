@@ -627,11 +627,21 @@ class HomeAssistantClient:
         glitch or HTTP error returns False without setting the cache,
         so the next call re-probes. This is the only path that
         intentionally fails open — caller proceeds on the historical
-        Container branch (which on HAOS will also fail, but with a
-        clearer 404 than a probe-side exception would surface).
+        Container branch.
 
-        Auth / connection / HTTP errors are caught explicitly; runtime
-        bugs (TypeError, AttributeError) and BaseException derivatives
+        A 401 is deliberately excluded from that fail-open: it is a
+        definitive answer about the credential rather than a transient
+        glitch, and swallowing it strands exactly the install class this
+        probe exists for. Failing open sends a Supervised caller down
+        the Container branch to ``/api/error_log``, which HA Core never
+        registers under ``SUPERVISOR`` (see ``get_error_log``), so the
+        auth failure resurfaces as a 404 and the caller answers with
+        connection advice instead of "re-create the LLAT". Letting
+        ``HomeAssistantAuthError`` propagate reaches the auth handler
+        directly. Transport / HTTP fail-open is unchanged.
+
+        Connection / HTTP errors are caught explicitly; runtime bugs
+        (TypeError, AttributeError) and BaseException derivatives
         (KeyboardInterrupt, CancelledError) deliberately propagate so
         they're not silenced as "not supervised".
         """
@@ -640,16 +650,17 @@ class HomeAssistantClient:
         try:
             config = await self._request("GET", "/config")
         except (
-            HomeAssistantAuthError,
             HomeAssistantAPIError,
             HomeAssistantConnectionError,
             httpx.HTTPError,
             TimeoutError,
         ) as exc:
-            # Fail-open on transport / HTTP-layer failures only. Note:
-            # a 401 here likely means the LLA is bad and the /error_log
-            # fallback will also 401 — the user gets a clearer auth error
-            # from that path than a swallowed probe error would surface.
+            # Fail-open on transport / HTTP-layer failures only.
+            # HomeAssistantAuthError is deliberately absent: a 401 is a
+            # definitive verdict on the credential, and failing open on
+            # it routes a Supervised caller to /api/error_log — a route
+            # that does not exist there — turning the auth error into a
+            # 404 (see the docstring).
             # Logged at WARNING so it's visible at default log levels
             # without spamming on every call (probe runs at most once
             # per session per outcome).
