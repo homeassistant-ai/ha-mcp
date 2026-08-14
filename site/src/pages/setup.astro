@@ -243,6 +243,18 @@ const clientsData = [
     "httpNote": "Requires HTTPS - Remote deployment required",
     "clientNote": "Custom connected apps are OAuth-only. Only the HA-MCP Server component's legacy OAuth mode currently works with Spark — see the steps below.",
   },
+  {
+    "id": "hermes",
+    "name": "Hermes Agent",
+    "company": "Nous Research",
+    "logo": "/logos/hermes.png",
+    "transports": ["stdio", "sse", "streamable-http"],
+    "configFormat": "yaml",
+    "configLocation": "~/.hermes/config.yaml",
+    "accuracy": 4,
+    "order": 21,
+    "clientNote": "Run /reload-mcp in an active session after editing the config — Hermes picks up MCP changes without a restart.",
+  },
 ].map(c => ({ ...c, logo: withBase(c.logo) }));
 
 const platformsData: { id: string; name: string; icon: IconName; order: number }[] = [
@@ -2260,6 +2272,64 @@ ingress:
         </div>`);
       }
 
+    } else if (state.client.configFormat === 'yaml' && state.client.id === 'hermes') {
+      // Hermes keeps its servers in ~/.hermes/config.yaml under `mcp_servers`,
+      // a mapping keyed by server name — not Continue's list of
+      // {name, type, url} entries, so it needs its own YAML shape here.
+      if (isStdio) {
+        if (isDocker) {
+          config = `mcp_servers:
+  home-assistant:
+    command: "docker"
+    args:
+      - "run"
+      - "--rm"
+      - "-i"
+      - "-v"
+      - "ha-mcp-data:/home/mcpuser/.ha-mcp"
+      - "-e"
+      - "HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}"
+      - "-e"
+      - "HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}"
+      - "ghcr.io/homeassistant-ai/ha-mcp:latest"`;
+        } else {
+          config = `mcp_servers:
+  home-assistant:
+    command: "uvx"
+    args:
+      - "ha-mcp@latest"
+    env:
+      HOMEASSISTANT_URL: "{{HOMEASSISTANT_URL}}"
+      HOMEASSISTANT_TOKEN: "{{HOMEASSISTANT_TOKEN}}"`;
+        }
+      } else {
+        config = `mcp_servers:
+  home-assistant:
+    url: "${mcpUrl}"`;
+      }
+      if (!isStdio) {
+        instructions.push(`<div class="instruction-block">
+          <h3 class="instruction-title">Alternative: With Authentication Headers</h3>
+          <div class="text-sm text-slate-300 space-y-2">
+            <p class="text-slate-400">If your endpoint is behind a Bearer token, add a <code class="bg-slate-800 px-1 rounded">headers</code> block. Replace the config above with:</p>
+            <pre class="bg-slate-800 rounded p-2 text-xs overflow-x-auto">mcp_servers:
+  home-assistant:
+    url: "${mcpUrl}"
+    headers:
+      Authorization: "Bearer \${env:HA_TOKEN}"</pre>
+            <p class="text-slate-400">Hermes resolves <code class="bg-slate-800 px-1 rounded">\${env:VAR}</code> (and <code class="bg-slate-800 px-1 rounded">\${VAR}</code>) from <code class="bg-slate-800 px-1 rounded">~/.hermes/.env</code>, so the token stays out of the config file. For an endpoint that speaks OAuth instead, drop the headers and set <code class="bg-slate-800 px-1 rounded">auth: oauth</code> on the entry.</p>
+            <p class="text-slate-400">Add <code class="bg-slate-800 px-1 rounded">transport: sse</code> to the entry if you want the SSE transport instead of Streamable HTTP.</p>
+          </div>
+        </div>`);
+      }
+      instructions.push(`<div class="instruction-block">
+        <h3 class="instruction-title">Hermes Notes</h3>
+        <div class="text-sm text-slate-400 space-y-2">
+          <p><strong class="text-slate-300">Tool names:</strong> ha-mcp tools show up as <code class="bg-slate-800 px-1 rounded">mcp__home_assistant__&lt;tool&gt;</code> (Hermes replaces the hyphen in the server name with an underscore).</p>
+          <p><strong class="text-slate-300">Trimming the catalog:</strong> <code class="bg-slate-800 px-1 rounded">tools.include</code> / <code class="bg-slate-800 px-1 rounded">tools.exclude</code> on the server entry take exact tool names or globs. Use the <strong>original</strong> ha-mcp names (e.g. <code class="bg-slate-800 px-1 rounded">ha_get_state</code>), not the prefixed ones.</p>
+          <p><a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">Hermes MCP docs →</a></p>
+        </div>
+      </div>`);
     } else if (state.client.configFormat === 'yaml') {
       // Continue uses YAML format
       if (isStdio) {
