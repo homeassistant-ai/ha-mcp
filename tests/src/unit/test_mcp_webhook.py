@@ -1149,6 +1149,7 @@ class TestRegisterWebhook:
     async def test_legacy_route_conflict_uses_scoped_provider(
         self, monkeypatch, caplog
     ):
+        """Keep legacy mode live on scoped routes when a foreign owner holds root."""
         # The webhook-proxy add-on already owns the root routes. Setup still
         # succeeds with an unbound provider because the unified scoped routes
         # carry legacy mode; only metadata-ignoring root guesses hit the add-on.
@@ -1291,6 +1292,28 @@ class TestRegisterWebhook:
         # discovery views 404 per request.
         assert cfg.get(mw.CFG_AUTOAPPROVE_PROVIDER) is None
         assert mw.active_auth_mode(hass) is None
+
+    async def test_none_mode_invalid_dcr_key_leaves_oauth_surface_inactive(
+        self, monkeypatch
+    ):
+        """Fail open with both none-mode OAuth markers unset for an invalid key."""
+        hass = _register_hass()
+        fake_session = FakeSession()
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: fake_session)
+
+        await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_NONE,
+            dcr_signing_key="zz",
+        )
+
+        cfg = hass.data[DOMAIN][DATA_WEBHOOK]
+        assert cfg.get(mw.CFG_AUTOAPPROVE_PROVIDER) is None
+        assert cfg.get(mw.CFG_DCR_SIGNING_KEY) is None
+        assert fake_session.closed is False
 
     async def test_partial_metadata_bind_leaves_guard_flag_unset(self):
         # #1978 (Codex P2): the discovery-views "bound" flag must mean the FULL

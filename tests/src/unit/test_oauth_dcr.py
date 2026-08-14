@@ -29,6 +29,7 @@ OTHER_KEY = b"x" * 32
 
 
 def test_mint_and_verify_round_trip():
+    """Round-trip redirect URIs through a signed stateless client ID."""
     uris = ["https://claude.ai/api/mcp/auth_callback"]
     cid = mint_client_id(KEY, uris)
     assert cid.startswith("hamcp-dcr-")
@@ -36,17 +37,20 @@ def test_mint_and_verify_round_trip():
 
 
 def test_wrong_key_rejects():
+    """Reject a client ID verified with a different signing key."""
     cid = mint_client_id(KEY, ["https://example.com/cb"])
     assert client_redirect_uris(OTHER_KEY, cid) is None
 
 
 def test_tampered_blob_rejects():
+    """Reject a client ID whose signed blob was tampered with."""
     cid = mint_client_id(KEY, ["https://example.com/cb"])
     body, _, sig = cid.rpartition(".")
     assert client_redirect_uris(KEY, body + ".AAAA" + sig[4:]) is None
 
 
 def test_non_dcr_client_id_rejects():
+    """Reject URL-shaped, empty, and malformed non-DCR client IDs."""
     assert client_redirect_uris(KEY, "https://claude.ai") is None
     assert client_redirect_uris(KEY, "") is None
     assert client_redirect_uris(KEY, "hamcp-dcr-notablob") is None
@@ -82,10 +86,19 @@ async def dcr_view_client_factory():
         test_utils = importlib.import_module("aiohttp.test_utils")
         oauth_dcr.web = aiohttp_web
 
-        async def factory(*, dcr_key):
+        async def factory(
+            *,
+            dcr_key,
+            autoapprove_provider=None,
+            resource_server=None,
+        ):
             cfg = {}
             if dcr_key is not None:
                 cfg[CFG_DCR_SIGNING_KEY] = dcr_key
+            if autoapprove_provider is not None:
+                cfg["autoapprove_provider"] = autoapprove_provider
+            if resource_server is not None:
+                cfg["resource_server"] = resource_server
 
             app = aiohttp_web.Application()
             hass = SimpleNamespace(
@@ -116,6 +129,7 @@ async def dcr_view_client_factory():
 
 
 async def test_register_404s_when_no_dcr_key_live(dcr_view_client_factory):
+    """Return 404 when no live mode exposes a DCR signing key."""
     client = await dcr_view_client_factory(dcr_key=None)
     resp = await client.post(
         "/api/ha_mcp_tools/oauth/register",
@@ -125,6 +139,7 @@ async def test_register_404s_when_no_dcr_key_live(dcr_view_client_factory):
 
 
 async def test_register_mints_verifiable_client_id(dcr_view_client_factory):
+    """Return a verifiable public-client registration response."""
     client = await dcr_view_client_factory(dcr_key=KEY)
     resp = await client.post(
         "/api/ha_mcp_tools/oauth/register",
@@ -144,6 +159,7 @@ async def test_register_mints_verifiable_client_id(dcr_view_client_factory):
 
 
 async def test_register_rejects_bad_redirects(dcr_view_client_factory):
+    """Reject empty, unsafe, fragmented, and oversized redirect lists."""
     client = await dcr_view_client_factory(dcr_key=KEY)
     for bad in (
         [],
@@ -155,3 +171,40 @@ async def test_register_rejects_bad_redirects(dcr_view_client_factory):
             "/api/ha_mcp_tools/oauth/register", json={"redirect_uris": bad}
         )
         assert resp.status == 400, bad
+
+
+async def test_register_none_mode_advertises_authorization_code_only(
+    dcr_view_client_factory,
+):
+    """Advertise only authorization_code for none-mode registrations."""
+    client = await dcr_view_client_factory(
+        dcr_key=KEY,
+        autoapprove_provider=object(),
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/register",
+        json={"redirect_uris": ["https://a.example/cb"]},
+    )
+
+    assert resp.status == 201
+    assert (await resp.json())["grant_types"] == ["authorization_code"]
+
+
+async def test_register_ha_auth_advertises_refresh_token(dcr_view_client_factory):
+    """Advertise refresh_token when ha_auth forwards refresh grants to core."""
+    client = await dcr_view_client_factory(
+        dcr_key=KEY,
+        resource_server=object(),
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/register",
+        json={"redirect_uris": ["https://a.example/cb"]},
+    )
+
+    assert resp.status == 201
+    assert (await resp.json())["grant_types"] == [
+        "authorization_code",
+        "refresh_token",
+    ]

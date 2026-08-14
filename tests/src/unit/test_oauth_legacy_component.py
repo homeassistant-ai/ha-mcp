@@ -1021,6 +1021,37 @@ class TestLegacyCredentialsActive:
             is True
         )
 
+    def test_foreign_owner_uses_scoped_provider_fingerprint(self):
+        """Accept only scoped-provider credentials when a foreign owner holds root."""
+        hass = _make_hass()
+        hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "mcp_proxy_dev"
+        key = secrets.token_bytes(32)
+        oauth_legacy.build_unbound_legacy_provider(
+            hass,
+            CLIENT_ID,
+            CLIENT_SECRET,
+            key,
+        )
+
+        assert (
+            oauth_legacy.legacy_credentials_active(
+                hass,
+                CLIENT_ID,
+                CLIENT_SECRET,
+                key,
+            )
+            is True
+        )
+        assert (
+            oauth_legacy.legacy_credentials_active(
+                hass,
+                CLIENT_ID,
+                "different-secret",
+                key,
+            )
+            is False
+        )
+
 
 # ---------------------------------------------------------------------------
 # embedded_entry._ensure_legacy_oauth_secrets (credential provisioning)

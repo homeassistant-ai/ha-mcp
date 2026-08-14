@@ -45,13 +45,47 @@ class _FakeURL:
         return self._url
 
 
+class _CoreTokenResponse:
+    """Async context manager response returned by the core token stub."""
+
+    status = 200
+    content_type = "application/json"
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, _exc_type, _exc, _tb):
+        return None
+
+    async def read(self):
+        return b'{"access_token":"x"}'
+
+
+class _CoreTokenSession:
+    """Capture token-forward POSTs and optionally raise a transport error."""
+
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls = []
+
+    def post(self, url, *, data, timeout):
+        self.calls.append({"url": url, "data": data, "timeout": timeout})
+        if self.error is not None:
+            raise self.error
+        return _CoreTokenResponse()
+
+
 if "yarl" not in sys.modules:
     _yarl = ModuleType("yarl")
     _yarl.URL = _FakeURL  # type: ignore[attr-defined]
     sys.modules["yarl"] = _yarl
 
 import custom_components.ha_mcp_tools.oauth_autoapprove as aa  # noqa: E402
-from custom_components.ha_mcp_tools import oauth_legacy  # noqa: E402
+from custom_components.ha_mcp_tools import (  # noqa: E402
+    oauth_dcr,
+    oauth_ha_auth,
+    oauth_legacy,
+)
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_WEBHOOK,
     DOMAIN,
@@ -132,7 +166,12 @@ def _module_is(name: str, root: str) -> bool:
     return name == root or name.startswith(f"{root}.")
 
 
-def _mode_cfg(mode: str) -> dict[str, object | None]:
+def _mode_cfg(
+    mode: str,
+    *,
+    session: object | None = None,
+    dcr_key: bytes | None = None,
+) -> dict[str, object | None]:
     """Webhook cfg dict seeding exactly one live-mode marker (mirrors
     active_auth_mode's provider-presence checks)."""
     if mode == "legacy":
@@ -145,7 +184,11 @@ def _mode_cfg(mode: str) -> dict[str, object | None]:
             )
         }
     if mode == "ha_auth":
-        return {"resource_server": object(), "session": None}
+        return {
+            "resource_server": object(),
+            "session": session,
+            oauth_dcr.CFG_DCR_SIGNING_KEY: dcr_key,
+        }
     if mode == "none":
         return {aa.CFG_AUTOAPPROVE_PROVIDER: aa.AutoApproveProvider()}
     raise ValueError(f"unknown test mode: {mode}")
@@ -184,8 +227,13 @@ async def unified_view_client_factory():
         aa.web = aiohttp_web
         oauth_legacy.web = aiohttp_web
 
-        async def factory(*, mode: str):
-            cfg = _mode_cfg(mode)
+        async def factory(
+            *,
+            mode: str,
+            session: object | None = None,
+            dcr_key: bytes | None = None,
+        ):
+            cfg = _mode_cfg(mode, session=session, dcr_key=dcr_key)
 
             app = aiohttp_web.Application()
             hass = SimpleNamespace(
@@ -302,6 +350,7 @@ class TestAuthorizeView:
         assert params["iss"] == advertised
 
     async def test_claude_redirect_is_approved(self):
+        """Approve the canonical Claude hosted callback."""
         hass = _live_hass()
         view = aa.AutoApproveAuthorizeView(hass)
         resp = await view.get(_get_request(_authorize_query()))
@@ -568,6 +617,119 @@ async def test_scoped_authorize_redirects_into_core_when_ha_auth_live(
     assert query["code_challenge_method"] == ["S256"]
 
 
+async def test_ha_auth_authorize_preserves_repeated_resource_parameters(
+    unified_view_client_factory,
+):
+    """Preserve both RFC 8707 resource values when redirecting into core."""
+    client = await unified_view_client_factory(mode="ha_auth")
+    resp = await client.get(
+        "/api/ha_mcp_tools/oauth/authorize"
+        "?response_type=code&client_id=https%3A%2F%2Fclaude.ai"
+        "&redirect_uri=https%3A%2F%2Fclaude.ai%2Fapi%2Fmcp%2Fauth_callback"
+        "&code_challenge=" + "a" * 43 + "&code_challenge_method=S256"
+        "&resource=https%3A%2F%2Fha.example%2Ffirst"
+        "&resource=https%3A%2F%2Fha.example%2Fsecond",
+        allow_redirects=False,
+    )
+
+    from urllib.parse import parse_qs, urlparse
+
+    assert resp.status == 302
+    query = parse_qs(urlparse(resp.headers["Location"]).query)
+    assert query["resource"] == [
+        "https://ha.example/first",
+        "https://ha.example/second",
+    ]
+
+
+async def test_ha_auth_token_forwards_translated_client_id(
+    unified_view_client_factory, monkeypatch
+):
+    """Translate and forward the authorization-code token form to core."""
+    session = _CoreTokenSession()
+    dcr_key = b"d" * 32
+    client_id = oauth_dcr.mint_client_id(dcr_key, ["https://a.example/cb"])
+    monkeypatch.setattr(
+        oauth_ha_auth,
+        "core_token_base_url",
+        lambda _hass: "https://core.example",
+    )
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=dcr_key
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": "code-1",
+            "client_id": client_id,
+            "redirect_uri": "https://a.example/cb",
+        },
+    )
+
+    assert resp.status == 200
+    assert await resp.json() == {"access_token": "x"}
+    call = session.calls[0]
+    assert call["url"] == "https://core.example/auth/token"
+    assert call["data"]["grant_type"] == "authorization_code"
+    assert call["data"]["redirect_uri"] == "https://a.example/cb"
+    assert call["data"]["client_id"] == "https://a.example"
+
+
+async def test_ha_auth_refresh_forwards_translated_client_id(
+    unified_view_client_factory, monkeypatch
+):
+    """Re-derive and forward the translated client ID for a refresh grant."""
+    session = _CoreTokenSession()
+    dcr_key = b"d" * 32
+    client_id = oauth_dcr.mint_client_id(dcr_key, ["https://a.example/cb"])
+    monkeypatch.setattr(
+        oauth_ha_auth,
+        "core_token_base_url",
+        lambda _hass: "https://core.example",
+    )
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=dcr_key
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": "refresh-1",
+            "client_id": client_id,
+        },
+    )
+
+    assert resp.status == 200
+    call = session.calls[0]
+    assert call["data"]["grant_type"] == "refresh_token"
+    assert call["data"]["refresh_token"] == "refresh-1"
+    assert call["data"]["client_id"] == "https://a.example"
+
+
+async def test_ha_auth_token_timeout_returns_temporarily_unavailable(
+    unified_view_client_factory, monkeypatch
+):
+    """Map a core token-forward timeout to OAuth temporarily_unavailable."""
+    session = _CoreTokenSession(error=TimeoutError())
+    monkeypatch.setattr(
+        oauth_ha_auth,
+        "core_token_base_url",
+        lambda _hass: "https://core.example",
+    )
+    client = await unified_view_client_factory(mode="ha_auth", session=session)
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={"grant_type": "authorization_code", "code": "code-1"},
+    )
+
+    assert resp.status == 503
+    assert await resp.json() == {"error": "temporarily_unavailable"}
+
+
 async def test_scoped_authorize_still_autoapproves_in_none_mode(
     unified_view_client_factory,
 ):
@@ -671,6 +833,7 @@ async def test_none_mode_loopback_redirect_autoapproves(unified_view_client_fact
 
 
 async def test_none_mode_malformed_redirect_still_400s(unified_view_client_factory):
+    """Reject malformed redirect URIs before issuing a none-mode code."""
     client = await unified_view_client_factory(mode="none")
     resp = await client.get(
         "/api/ha_mcp_tools/oauth/authorize"
