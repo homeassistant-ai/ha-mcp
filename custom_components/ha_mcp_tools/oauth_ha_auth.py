@@ -283,7 +283,9 @@ def core_token_base_url(hass: HomeAssistant) -> str:
     from homeassistant.helpers.network import NoURLAvailableError, get_url
 
     try:
-        return get_url(hass, prefer_external=True, allow_cloud=True).rstrip("/")
+        # str() wrapper: hass typing stubs leave get_url as Any in this
+        # environment (mypy no-any-return).
+        return str(get_url(hass, prefer_external=True, allow_cloud=True)).rstrip("/")
     except NoURLAvailableError:
         # No configured URL with TLS on: best-effort loopback — the forward
         # fails loudly (503) rather than trusting caller-supplied headers.
