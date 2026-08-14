@@ -93,20 +93,49 @@ _TRUNCATION_MARK = "…[truncated]"
 # Tie-breaker for issues with equal counts: a same-count CRITICAL outranks an
 # INFO. Ordering only — not a filter, and not tied to VALID_LOG_LEVELS.
 _LEVEL_SEVERITY = {"CRITICAL": 4, "ERROR": 3, "WARNING": 2, "INFO": 1, "DEBUG": 0}
+# Shared by both response paths, because an empty fetch reads as an all-clear on
+# either one: an agent that receives no log content and no warning reports "no
+# errors" to the user. Only the remedy differs, so each path appends its own.
+_EMPTY_FETCH_WARNING = (
+    "A running Home Assistant always logs something, so this is an empty or "
+    "failed fetch, NOT evidence that the log is clean."
+)
 
 # Supervisor-backed installs (add-on, HAOS, supervised) read HA Core's journald
 # stream, where every line is wrapped in ANSI colour codes:
 #   "\x1b[31m2026-08-02 08:12:27.290 ERROR (MainThread) [x] msg\x1b[0m"
 # Only container/pip installs read the plain home-assistant.log file.
-# _HA_LOG_LINE_RE is ^-anchored and str.strip() does not remove ESC, so an
-# un-stripped journald line matches nothing and the trailing reset code lands
-# inside `message`, splitting the dedup key. Strip first, always.
+# Two independent reasons to strip, not one chain:
+#   * the leading code alone is already fatal — _HA_LOG_LINE_RE is ^-anchored
+#     and str.strip() does not remove ESC, so the line matches nothing and no
+#     `message` is produced at all;
+#   * the trailing reset is what a leading-only strip would leave behind: it
+#     lands inside `message` and splits the dedup key for one recurring error.
+# Strip both ends, always.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
 def _strip_ansi(text: str) -> str:
     """Remove ANSI escape sequences (journald colour codes) from a log line."""
     return _ANSI_RE.sub("", text)
+
+
+def _normalize_timestamp(timestamp: str) -> str:
+    """Put a matched timestamp on one date/time separator.
+
+    Every timestamp comparison downstream is lexicographic — the covered
+    window, an issue's ``first_seen``/``last_seen`` bounds, and the recency
+    tiebreaker. ``_HA_LOG_LINE_RE`` accepts both the space and the ``T`` form
+    (case-insensitively), and ``" "`` sorts below every digit while ``"T"``
+    sorts above them, so a stream mixing the two forms would corrupt all three
+    at once. HA core emits the space form, so normalize onto that: real logs
+    come out byte-identical and only the ISO-8601 variant is rewritten.
+
+    The date is fixed-width in the pattern (``\\d{4}-\\d{2}-\\d{2}``), so the
+    separator is always at index 10 — replacing by position also covers the
+    lowercase ``t`` that ``re.IGNORECASE`` admits.
+    """
+    return timestamp[:10] + " " + timestamp[11:]
 
 
 def _get_component_prefix(logger_name: str) -> str:
@@ -176,8 +205,10 @@ def _extract_log_entries(
 
     for line in lines:
         # Strip ANSI *before* matching: on Supervisor-backed installs the line
-        # arrives colour-wrapped, so an un-stripped line matches nothing and the
-        # trailing reset code splits the dedup key for one recurring error.
+        # arrives colour-wrapped. Both ends matter for separate reasons — the
+        # leading code alone already defeats the ^-anchor so the line matches
+        # nothing, and a leading-only strip would leave the trailing reset
+        # inside `message`, splitting the dedup key for one recurring error.
         clean = _strip_ansi(line).strip()
         if not clean:
             blank += 1
@@ -188,6 +219,7 @@ def _extract_log_entries(
             continue
         matched += 1
         timestamp, log_level, logger_name, message = match.groups()
+        timestamp = _normalize_timestamp(timestamp)
         # Widen the covered window on every parseable line, filtered or not:
         # it describes the log slice that was read, not the summary's contents.
         if window_start is None or timestamp < window_start:
@@ -374,10 +406,8 @@ def _parse_error_log_structured(
         else:
             result["warnings"] = [
                 f"No log entries arrived to parse ({total_raw_lines} lines "
-                "fetched, none of them log entries). A running Home Assistant "
-                "always logs something, so this is an empty or failed fetch, "
-                "NOT evidence that the log is clean - re-run with "
-                "structured=False to see the raw response."
+                f"fetched, none of them log entries). {_EMPTY_FETCH_WARNING} "
+                "Re-run with structured=False to see the raw response."
             ]
     elif not parsed:
         result["warnings"] = [
@@ -602,9 +632,17 @@ class UtilityTools:
                 f"ignored for source='{source}'"
             )
         if top_n is not None and not structured_error_log:
+            # Name the part that is actually missing. On source='error_log' the
+            # source is already right and `structured` is the omission, so
+            # blaming the source there contradicts the sentence's own opening.
+            reason = (
+                "ignored because structured=False"
+                if source == "error_log"
+                else f"ignored for source='{source}'"
+            )
             warnings.append(
                 "Parameter 'top_n' only applies to source='error_log' with "
-                f"structured=True; ignored for source='{source}'"
+                f"structured=True; {reason}"
             )
         self._validate_log_slug(source, slug)
         result = await self._fetch_log_source(
@@ -1073,6 +1111,17 @@ class UtilityTools:
             }
             if filters_applied:
                 data["filters_applied"] = filters_applied
+            # The default path must not bless a fetch the structured path
+            # refuses to bless: without this, `structured=False` answers an
+            # empty fetch with success, an empty `log` and total_lines 0, which
+            # an agent reports to the user as "no errors in the log". Keyed on
+            # the raw text, so this stays an empty *fetch* — an empty *filter
+            # result* is a different thing and stays distinguishable through
+            # `filters_applied`.
+            if not (raw_log or "").strip():
+                data["warnings"] = [
+                    f"The fetch returned no log content. {_EMPTY_FETCH_WARNING}"
+                ]
 
             return data
 
@@ -1679,8 +1728,10 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - "logger": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)
 
         **Prefer source='system' for triage.** It returns HA's own deduplicated
-        system_log entries with counts, first_occurred and full tracebacks; only
-        the tracebacks are unrecoverable from error_log text. Its counts also run
+        system_log entries with counts, first_occurred and full tracebacks; of
+        those only the tracebacks are unrecoverable from the structured
+        error_log summary — they are present in the raw text, so structured=False
+        gets them back. Its counts also run
         since each error first occurred, while structured error_log counts only
         what is inside the fetched window (reported as window_start/window_end;
         Supervisor-backed installs read a capped journald slice). Use error_log

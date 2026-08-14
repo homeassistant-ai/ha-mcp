@@ -13,7 +13,7 @@ import json
 import textwrap
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -80,6 +80,14 @@ def _many_small_issues_log() -> str:
 
 
 _UNSORTED_LOG = _many_small_issues_log()
+
+# Timestamps that neither ascend nor descend, so first-wins/last-wins and
+# min/max disagree on both the per-issue bounds and the covered window.
+_OUT_OF_ORDER_LOG = textwrap.dedent("""\
+    2026-05-27 10:00:09.000 ERROR (MainThread) [a.b.c] boom
+    2026-05-27 10:00:01.000 ERROR (MainThread) [a.b.c] boom
+    2026-05-27 10:00:05.000 ERROR (MainThread) [a.b.c] boom
+""")
 
 # Since Python 3.10 an unnamed thread is called "Thread-N (target_fn)", so the
 # thread field of a log line can itself contain parentheses.
@@ -252,7 +260,7 @@ class TestParseErrorLogStructured:
         assert counts[0] > counts[-1], "fixture must have a non-flat count spread"
         assert result["top_issues"][0]["message"] == "frequent"
 
-    def test_equal_counts_are_broken_by_recency_then_severity(self):
+    def test_equal_counts_are_broken_by_severity_then_recency(self):
         # Python's sort is stable, so count alone returns the OLDEST of a tied
         # run — and logs whose messages embed ids/ports tie at count 1 for
         # everything, turning "top N" into "the N oldest".
@@ -281,12 +289,7 @@ class TestParseErrorLogStructured:
         # and last line that happened to arrive. Last-write-wins drags last_seen
         # backwards on an unordered log, and the recency tiebreaker then ranks
         # the issue by a timestamp it never actually ended at.
-        log = textwrap.dedent("""\
-            2026-05-27 10:00:09.000 ERROR (MainThread) [a.b.c] boom
-            2026-05-27 10:00:01.000 ERROR (MainThread) [a.b.c] boom
-            2026-05-27 10:00:05.000 ERROR (MainThread) [a.b.c] boom
-        """)
-        issue = _parse_error_log_structured(log)["top_issues"][0]
+        issue = _parse_error_log_structured(_OUT_OF_ORDER_LOG)["top_issues"][0]
         assert issue["first_seen"] == "2026-05-27 10:00:01.000"
         assert issue["last_seen"] == "2026-05-27 10:00:09.000"
 
@@ -316,6 +319,25 @@ class TestParseErrorLogStructured:
             "the per-issue ranking must still favour the single biggest issue, "
             "otherwise the two sorts are not distinguishable"
         )
+
+    def test_custom_component_modules_roll_up_into_one_bucket(self):
+        # The prefix helper is unit-tested above, but nothing pinned that the
+        # summary actually routes through it: a custom integration that logs
+        # from several modules must appear as one component, not one per
+        # module, or by_component fragments exactly where HACS users read it.
+        log = textwrap.dedent("""\
+            2026-05-27 10:00:01.000 ERROR (MainThread) [custom_components.foo.sensor] a
+            2026-05-27 10:00:02.000 ERROR (MainThread) [custom_components.foo.climate] b
+            2026-05-27 10:00:03.000 ERROR (MainThread) [custom_components.foo.sensor] a
+        """)
+        result = _parse_error_log_structured(log)
+        assert list(result["by_component"]) == ["custom_components.foo"]
+        bucket = result["by_component"]["custom_components.foo"]
+        assert bucket["total_occurrences"] == 3
+        assert bucket["issue_count"] == 2
+        assert {i["component"] for i in result["top_issues"]} == {
+            "custom_components.foo"
+        }
 
     def test_by_component_issue_count(self):
         result = _parse_error_log_structured(_SAMPLE_LOG)
@@ -383,6 +405,36 @@ class TestParseErrorLogStructured:
         summary = _parse_error_log_structured(_UNPARSEABLE_LOG)["summary"]
         assert summary["window_start"] is None
         assert summary["window_end"] is None
+
+    def test_window_is_min_and_max_not_first_and_last_line(self):
+        # The three window tests above all read ascending fixtures, where
+        # first-wins/last-wins and min/max give the same answer — so none of
+        # them would redden if the bounds regressed to "the line that arrived
+        # first" and "the line that arrived last".
+        summary = _parse_error_log_structured(_OUT_OF_ORDER_LOG)["summary"]
+        assert summary["window_start"] == "2026-05-27 10:00:01.000"
+        assert summary["window_end"] == "2026-05-27 10:00:09.000"
+
+    def test_mixed_date_separators_do_not_corrupt_ordering(self):
+        # The line regex accepts both "2026-05-27 10:00:00" and the ISO
+        # "2026-05-27T10:00:00", and every timestamp comparison is a string
+        # compare: " " (0x20) sorts below every digit, "T" (0x54) above them.
+        # Un-normalized, the T-form line wins every max() and loses every
+        # min() regardless of the time it carries, which corrupts the window,
+        # the first/last_seen bounds and the recency tiebreaker at once.
+        log = textwrap.dedent("""\
+            2026-05-27T10:00:05.000 ERROR (MainThread) [a.b.c] boom
+            2026-05-27 10:00:09.000 ERROR (MainThread) [a.b.c] boom
+            2026-05-27T10:00:01.000 ERROR (MainThread) [a.b.c] boom
+        """)
+        result = _parse_error_log_structured(log)
+        issue = result["top_issues"][0]
+        assert issue["count"] == 3
+        assert issue["first_seen"] == "2026-05-27 10:00:01.000"
+        assert issue["last_seen"] == "2026-05-27 10:00:09.000"
+        summary = result["summary"]
+        assert summary["window_start"] == "2026-05-27 10:00:01.000"
+        assert summary["window_end"] == "2026-05-27 10:00:09.000"
 
     def test_nested_paren_thread_name_parses(self):
         # threading.Thread(target=fn) is named "Thread-N (fn)" since 3.10, and
@@ -569,12 +621,20 @@ class TestHaGetLogsStructured:
 
     @pytest.mark.asyncio
     async def test_top_n_without_structured_emits_warning(self):
-        """top_n on the raw path does nothing — the obvious caller mistake."""
+        """top_n on the raw path does nothing — the obvious caller mistake.
+
+        The warning must name the piece that is missing. On this call the
+        source is already the one the sentence asks for, so a tail blaming
+        the source tells the caller their correct argument is the problem
+        and leaves the real omission unstated.
+        """
         client = _make_client(_SAMPLE_LOG)
         tools = _register_and_collect(client)
         result = await tools["ha_get_logs"](source="error_log", top_n=5)
         assert "log" in result
-        assert any("top_n" in w for w in result["warnings"])
+        warning = next(w for w in result["warnings"] if "top_n" in w)
+        assert "ignored because structured=False" in warning
+        assert "ignored for source=" not in warning
 
     @pytest.mark.asyncio
     async def test_top_n_on_other_source_emits_warning(self):
@@ -584,7 +644,9 @@ class TestHaGetLogsStructured:
         )
         tools = _register_and_collect(client)
         result = await tools["ha_get_logs"](source="system", top_n=5)
-        assert any("top_n" in w for w in result["warnings"])
+        # Here the source IS the problem, so the tail must still name it.
+        warning = next(w for w in result["warnings"] if "top_n" in w)
+        assert "ignored for source='system'" in warning
 
     @pytest.mark.asyncio
     async def test_top_n_in_structured_mode_does_not_warn(self):
@@ -604,6 +666,33 @@ class TestHaGetLogsStructured:
             await tools["ha_get_logs"](source="error_log", structured=True, top_n=0)
         payload = json.loads(str(exc_info.value))
         assert "top_n must be at least 1" in payload["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_limit_zero_is_accepted_in_structured_mode(self):
+        """`limit` is coerced only on the raw path, and this pins why.
+
+        The coercion sits below the structured early-return because the
+        summary ranks the whole fetched window — `limit` has no meaning
+        there, so validating it would reject a value that changes nothing.
+        Moving it back above the return is invisible to every other test.
+        """
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](
+            source="error_log", structured=True, limit=0
+        )
+        assert result["structured"] is True
+        assert result["summary"]["parsed_entries"] == 8
+        # Accepted, but not silently: the caller still learns it did nothing.
+        assert any("limit" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_limit_zero_is_still_rejected_on_the_raw_path(self):
+        """The counterpart: where `limit` does apply, 0 is still invalid."""
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        with pytest.raises(ToolError):
+            await tools["ha_get_logs"](source="error_log", limit=0)
 
     @pytest.mark.asyncio
     async def test_level_critical_is_accepted(self):
@@ -634,6 +723,43 @@ class TestHaGetLogsStructured:
         assert payload["success"] is False
         assert payload["error"]["code"]
         assert payload.get("source") == "error_log"
+
+    @pytest.mark.asyncio
+    async def test_expired_token_on_a_supervised_install_reaches_the_auth_handler(
+        self,
+    ):
+        """A 401 raised by the install-class probe must reach the auth handler.
+
+        Driven through the real ``get_error_log`` rather than a stubbed one,
+        because the defect lived between the two: the probe swallowed the
+        401 and answered "not supervised", so the caller requested
+        ``/api/error_log`` — unregistered under SUPERVISOR — and the dead
+        token came back as a 404 with connection advice.
+        """
+        from ha_mcp.client.rest_client import HomeAssistantClient
+
+        with patch.object(HomeAssistantClient, "__init__", lambda self, **kw: None):
+            real = HomeAssistantClient()
+        real._supervised_detected = None
+        real._request = AsyncMock(
+            side_effect=HomeAssistantAuthError("401 Unauthorized")
+        )
+        real._raw_request = AsyncMock()
+
+        client = _make_client()
+        client.get_error_log = real.get_error_log
+        tools = _register_and_collect(client)
+        with patch(
+            "ha_mcp.client.rest_client.is_running_in_addon", return_value=False
+        ):
+            with pytest.raises(ToolError) as exc_info:
+                await tools["ha_get_logs"](source="error_log")
+
+        payload = json.loads(str(exc_info.value))
+        assert payload["success"] is False
+        assert payload["error"]["code"]
+        # The container fallback must never have been attempted.
+        real._raw_request.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -688,6 +814,46 @@ class TestSupervisorInstallRegressions:
         assert result["summary"]["blank_lines"] == 3
         assert result["summary"]["unparseable_lines"] == 0
         assert "empty or failed fetch" in result["warnings"][0]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("raw", ["", "\n\n   \n"])
+    async def test_empty_fetch_on_the_default_path_warns_too(self, raw):
+        """The same fetch must not be blessed by one mode and refused by the other.
+
+        `structured=False` is the default, so this is the path most agents
+        are on: an empty fetch there used to answer success with an empty
+        `log`, total_lines 0 and a note about matching filters — which
+        reads back to the user as "no errors in the log".
+        """
+        client = _make_client(raw)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](source="error_log")
+        assert result["success"] is True
+        # Whitespace-only counts as lines, so `total_lines` alone does not
+        # discriminate the two inputs — "no content arrived" does.
+        assert result["log"].strip() == ""
+        assert "empty or failed fetch" in result["warnings"][0]
+        assert "NOT evidence" in result["warnings"][0]
+
+    @pytest.mark.asyncio
+    async def test_empty_filter_result_is_not_reported_as_an_empty_fetch(self):
+        """An empty *filter result* is a different thing and keeps its own story.
+
+        The fetch worked and the filter simply excluded everything, which
+        `filters_applied` already discloses — warning about a failed fetch
+        here would send the caller after an infrastructure problem that
+        does not exist.
+        """
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](
+            source="error_log", search="nothing-matches-this"
+        )
+        assert result["total_lines"] == 0
+        assert result["filters_applied"] == {"search": "nothing-matches-this"}
+        assert not any(
+            "empty or failed fetch" in w for w in result.get("warnings", [])
+        )
 
 
 class TestCountSemantics:
