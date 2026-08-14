@@ -37,6 +37,7 @@ const withBase = (path: string) => {
         <li class="ml-4"><a href="#openai-tunnel" class="text-blue-400 hover:underline">ChatGPT Behind a Firewall (OpenAI Tunnel)</a></li>
         <li class="ml-4"><a href="#antigravity-troubleshooting" class="text-blue-400 hover:underline">Antigravity Client Troubleshooting</a></li>
         <li class="ml-4"><a href="#claude-ai-connection" class="text-blue-400 hover:underline">Claude.ai Connection Issues</a></li>
+        <li class="ml-4"><a href="#claude-ai-hosted-requirements" class="text-blue-400 hover:underline">Claude.ai Hosted Connector Requirements</a></li>
         <li class="ml-4"><a href="#google-spark-oauth" class="text-blue-400 hover:underline">Google Gemini Spark OAuth</a></li>
         <li class="ml-4"><a href="#copilot-cli-oauth-legacy" class="text-blue-400 hover:underline">Copilot CLI: Remote OAuth Requires Legacy Mode</a></li>
         <li class="ml-4"><a href="#quick-test" class="text-blue-400 hover:underline">Test ha-mcp Without Configuring a Client</a></li>
@@ -467,6 +468,16 @@ source ~/.zshrc
             <li><strong>Don't forget to click <em>Connect</em> on the connector</strong> — and, with OAuth enabled, click <strong>Allow</strong> on the consent page. Adding the connector alone does not complete the connection.</li>
             <li><strong>URL works in your browser but the LLM can't connect?</strong> Your reverse proxy is filtering the AI client — see <a href="#cloudflare-blocks-llm" class="text-blue-400 hover:underline">Cloudflare: LLM can't connect</a> below (Cloudflare's "Block AI training bots" and geo/country blocking are the usual causes).</li>
             <li><strong>Tailscale Funnel: use port <code class="bg-slate-800 px-1 rounded">443</code>.</strong> Funnel can also serve on the alternate HTTPS ports it offers (<code class="bg-slate-800 px-1 rounded">8443</code>, <code class="bg-slate-800 px-1 rounded">10000</code>), but Claude.ai's connector backend does not reliably reach non-standard ports — the connection fails identically in every auth mode and no request from Anthropic's range (<code class="bg-slate-800 px-1 rounded">160.79.104.0/21</code>) ever reaches the server. The official Tailscale add-on's <strong>"Share Home Assistant with Serve or Funnel"</strong> option already exposes Home Assistant on <code class="bg-slate-800 px-1 rounded">443</code> — use that hostname in the connector URL (same webhook path). See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/2080" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline">#2080</a>.</li>
+          </ol>
+        </div>
+
+        <div class="faq-item" id="claude-ai-hosted-requirements">
+          <h3 class="text-lg font-medium text-white mb-2">Claude.ai connects from my browser but the connector fails — ports, firewalls, timeouts</h3>
+          <p class="text-slate-300 mb-3">Hosted Claude surfaces (claude.ai, Claude Desktop connectors) reach your server FROM ANTHROPIC'S BACKEND, not from your browser. Three environment rules apply that no server-side setting can work around:</p>
+          <ol class="text-slate-300 space-y-2 list-decimal list-inside">
+            <li>Port 443 only. The connector URL must use standard HTTPS with no explicit port. https://ha.example.com:8123/... can never work from hosted Claude — put a reverse proxy or port-forward on 443 in front and keep 8123 internal.</li>
+            <li>Allowlist Anthropic's egress range. Backend traffic originates from 160.79.104.0/21. A WAF, geo-block, or bot filter (Cloudflare "AI crawl" rules included) that blocks that range breaks registration, token exchange, and the post-OAuth handshake even though your browser works fine.</li>
+            <li>Answer fast. Claude waits at most 10 seconds for discovery, registration, and token responses (30 for refresh). Slow reverse proxies or cold paths cause intermittent connection failures.</li>
           </ol>
         </div>
 
