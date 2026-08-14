@@ -21,7 +21,11 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    assert_mcp_success,
+    safe_call_tool,
+)
 from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
@@ -91,22 +95,22 @@ class TestConfigEntryFlow:
         `entity_id`/`state`/`type` it redeclares read-only are already in the
         flow's options, so nothing is resubmitted to them.
         """
-        result = await mcp_client.call_tool(
-            "ha_config_set_helper",
-            {
-                "helper_type": "history_stats",
-                "name": "test_history_stats_e2e",
-                "config": {
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_config_set_helper",
+                {
+                    "helper_type": "history_stats",
                     "name": "test_history_stats_e2e",
-                    "entity_id": "sensor.demo_temperature",
-                    "type": "time",
-                    "state": ["22.5"],
-                    "start": "{{ today_at('00:00') }}",
-                    "end": "{{ now() }}",
+                    "config": {
+                        "name": "test_history_stats_e2e",
+                        "entity_id": "sensor.demo_temperature",
+                        "type": "time",
+                        "state": ["22.5"],
+                        "start": "{{ today_at('00:00') }}",
+                        "end": "{{ now() }}",
+                    },
                 },
-            },
-        )
-        data = assert_mcp_success(result, "Create history_stats helper")
+            )
         assert data.get("success") is True
         entry_id = data.get("entry_id")
         assert entry_id is not None
@@ -134,21 +138,21 @@ class TestConfigEntryFlow:
         Single form step taking three source entities plus a calibration
         factor, which HA rejects at zero.
         """
-        result = await mcp_client.call_tool(
-            "ha_config_set_helper",
-            {
-                "helper_type": "mold_indicator",
-                "name": "test_mold_indicator_e2e",
-                "config": {
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_config_set_helper",
+                {
+                    "helper_type": "mold_indicator",
                     "name": "test_mold_indicator_e2e",
-                    "indoor_temp_sensor": "sensor.demo_temperature",
-                    "indoor_humidity_sensor": "sensor.demo_humidity",
-                    "outdoor_temp_sensor": "sensor.demo_outside_temperature",
-                    "calibration_factor": 2.0,
+                    "config": {
+                        "name": "test_mold_indicator_e2e",
+                        "indoor_temp_sensor": "sensor.demo_temperature",
+                        "indoor_humidity_sensor": "sensor.demo_humidity",
+                        "outdoor_temp_sensor": "sensor.demo_outside_temperature",
+                        "calibration_factor": 2.0,
+                    },
                 },
-            },
-        )
-        data = assert_mcp_success(result, "Create mold_indicator helper")
+            )
         assert data.get("success") is True
         entry_id = data.get("entry_id")
         assert entry_id is not None
