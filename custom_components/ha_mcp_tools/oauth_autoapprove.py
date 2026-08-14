@@ -30,18 +30,15 @@ or none-mode provider (and 404 when no remote OAuth mode is live), mirroring the
 discovery views so mode switches need no restart. The none-mode PKCE code store
 and redirect-URI floor are reused from :mod:`oauth_legacy` rather than copied.
 
-**Open-redirect defence.** ``/authorize`` 302-redirects to a caller-supplied
-``redirect_uri`` on the Home Assistant origin, so an unvalidated target would be
-an open redirector. On top of :func:`oauth_legacy._is_valid_redirect_uri`'s
-scheme/host/port floor, the redirect must EXACTLY match a known MCP callback
-(:data:`_AUTOAPPROVE_REDIRECT_ALLOWLIST`). Anything else is a hard 400 (no
-redirect). A "same origin as the client_id" rule was deliberately NOT used: the
-client_id is fully attacker-controlled, so ``client_id == redirect_uri origin``
-still lets an attacker bounce a victim to any site of their choosing (a real
-open redirect on a public HA origin). Properly honouring an arbitrary CIMD
-client would require fetching the attacker-supplied client_id URL — an SSRF
-vector — so the allowlist is both the safe and the simple choice. Add a client's
-callback here to support it.
+**Open-redirect policy.** In none mode THE SECRET WEBHOOK URL IS THE MAIN AND
+ONLY FORM OF SECURITY. The OAuth surface exists purely for client compatibility;
+its tokens grant nothing. ``/authorize`` therefore serves every provider and
+302-redirects to any spec-valid ``redirect_uri``; malformed targets still hard
+400 under :func:`oauth_legacy._is_valid_redirect_uri`. This makes the Home
+Assistant origin usable as a crafted-link redirector, an accepted risk in the
+secret-URL trust model. An exact-match callback allowlist shipped in PR #1976
+in July 2026; it was retired on 2026-08-14 by maintainer decision to serve every
+provider.
 """
 
 from __future__ import annotations
@@ -81,17 +78,6 @@ CFG_AUTOAPPROVE_PROVIDER = "autoapprove_provider"
 # mcp_webhook._OAUTH_VIEWS_REGISTERED_KEY).
 _AUTOAPPROVE_VIEWS_REGISTERED_KEY = "ha_mcp_tools_oauth_autoapprove_views_registered"
 
-# Known MCP OAuth callback URLs always accepted as a redirect target even when
-# the client_id is not a same-origin URL — claude.ai's connector onboarding
-# posts its authorization code here. Exact-match only (never a prefix test, so
-# ``https://claude.ai/api/mcp/auth_callback.evil.example`` cannot slip through).
-_AUTOAPPROVE_REDIRECT_ALLOWLIST = frozenset(
-    {
-        "https://claude.ai/api/mcp/auth_callback",
-    }
-)
-
-
 def _json_not_found() -> web.Response:
     """404 JSON body used when none-autoapprove is not the live mode."""
     return web.json_response({"error": "not_found"}, status=404)
@@ -105,21 +91,6 @@ def _json_error(
     if description is not None:
         body["error_description"] = description
     return web.json_response(body, status=status, headers=_TOKEN_RESPONSE_HEADERS)
-
-
-def _is_valid_autoapprove_redirect(redirect_uri: str) -> bool:
-    """Open-redirect gate for the auto-approve ``/authorize`` view.
-
-    Exact-match allowlist only, on top of
-    :func:`oauth_legacy._is_valid_redirect_uri`'s scheme/host/port floor. The
-    ``client_id`` is NOT consulted: it is attacker-controlled, so validating the
-    redirect against it (even "same origin") does not constrain the redirect
-    target to a trusted host. See the module docstring.
-    """
-    return (
-        _is_valid_redirect_uri(redirect_uri)
-        and redirect_uri in _AUTOAPPROVE_REDIRECT_ALLOWLIST
-    )
 
 
 def _redirect_with(redirect_uri: str, **params: str) -> web.Response:
@@ -249,11 +220,15 @@ class AutoApproveAuthorizeView(HomeAssistantView):
             return _json_error(
                 "invalid_request", 400, "invalid code_challenge (43-char base64url)"
             )
-        # SECURITY: an unvalidated redirect_uri would be an open redirector on
-        # the HA origin. Reject in-place (never redirect) unless it exactly
-        # matches a known MCP callback (client_id is attacker-controlled and is
-        # deliberately not consulted — see module docstring).
-        if not _is_valid_autoapprove_redirect(redirect_uri):
+        # Maintainer decision 2026-08-14 (supersedes the #1969-era exact-match
+        # allowlist): none mode's ONLY credential is the secret webhook URL, so
+        # the auto-approve flow completes invisibly for ANY spec-valid redirect
+        # — the token it yields is cosmetic and grants nothing. The HA origin
+        # being usable as a crafted-link redirector via this anonymous endpoint
+        # is an accepted trade within that trust model. The spec floor
+        # (_is_valid_redirect_uri: https or RFC 8252 loopback, valid port, no
+        # fragment) still hard-400s malformed targets without redirecting.
+        if not _is_valid_redirect_uri(redirect_uri):
             return _json_error("invalid_request", 400, "invalid redirect_uri")
 
         # RFC 9207: every authorization response — success or error — names the

@@ -4,8 +4,8 @@ Covers ``custom_components/ha_mcp_tools/oauth_autoapprove.py``: the invisible
 ``/authorize`` (issues a PKCE code + 302, no UI) and ``/token`` (public-client
 PKCE exchange, cosmetic opaque token) views, the ``AutoApproveProvider`` code
 lifecycle, and — most importantly — the open-redirect gate layered on top of
-:func:`oauth_legacy._is_valid_redirect_uri` (a strict exact-match allowlist of
-known MCP callbacks).
+:func:`oauth_legacy._is_valid_redirect_uri` (every spec-valid provider callback
+is accepted; malformed targets are rejected in place).
 
 Home Assistant / aiohttp are stubbed via ``_embedded_stubs``. ``yarl`` (an
 aiohttp dependency also absent here) is stubbed with the tiny
@@ -216,40 +216,6 @@ async def unified_view_client_factory():
 
 
 # ---------------------------------------------------------------------------
-# Open-redirect gate
-# ---------------------------------------------------------------------------
-
-
-class TestRedirectValidation:
-    def test_allowlisted_claude_callback_is_valid(self):
-        # The known MCP callback is accepted.
-        assert aa._is_valid_autoapprove_redirect(CLAUDE_REDIRECT) is True
-
-    def test_same_origin_non_allowlisted_is_rejected(self):
-        # SECURITY: client_id is attacker-controlled, so "redirect shares the
-        # client_id origin" is NOT a trust anchor — an attacker sets both to a
-        # site they own and bounces a victim there (open redirect). Only the
-        # allowlist is trusted, so a non-allowlisted target is rejected.
-        assert aa._is_valid_autoapprove_redirect("https://myclient.example/cb") is False
-
-    def test_cross_origin_redirect_is_rejected(self):
-        # SECURITY: the classic open-redirect / phishing target.
-        assert aa._is_valid_autoapprove_redirect("https://evil.example/steal") is False
-
-    def test_non_allowlisted_https_target_is_rejected(self):
-        assert (
-            aa._is_valid_autoapprove_redirect("https://somewhere.example/cb") is False
-        )
-
-    def test_redirect_failing_scheme_floor_is_rejected(self):
-        # http non-loopback fails the oauth_legacy floor before the allowlist check.
-        assert (
-            aa._is_valid_autoapprove_redirect("http://claude.ai/api/mcp/auth_callback")
-            is False
-        )
-
-
-# ---------------------------------------------------------------------------
 # AutoApproveProvider
 # ---------------------------------------------------------------------------
 
@@ -300,9 +266,7 @@ class TestAuthorizeView:
         hass = _live_hass(provider)
         view = aa.AutoApproveAuthorizeView(hass)
         verifier, challenge = _pkce_pair()
-        query = _authorize_query(
-            code_challenge=challenge
-        )  # allowlisted CLAUDE_REDIRECT
+        query = _authorize_query(code_challenge=challenge)
         resp = await view.get(_get_request(query))
 
         assert resp.status == 302
@@ -332,22 +296,13 @@ class TestAuthorizeView:
         _, params = _parse_location(resp.headers["Location"])
         assert params["iss"] == advertised
 
-    async def test_allowlisted_claude_redirect_is_approved(self):
+    async def test_claude_redirect_is_approved(self):
         hass = _live_hass()
         view = aa.AutoApproveAuthorizeView(hass)
         resp = await view.get(_get_request(_authorize_query()))
         assert resp.status == 302
         base, _ = _parse_location(resp.headers["Location"])
         assert base == CLAUDE_REDIRECT
-
-    async def test_cross_origin_redirect_is_400_not_redirect(self):
-        # SECURITY: never 302 to an unvalidated target — answer 400 in place.
-        hass = _live_hass()
-        view = aa.AutoApproveAuthorizeView(hass)
-        query = _authorize_query(redirect_uri="https://evil.example/steal")
-        resp = await view.get(_get_request(query))
-        assert resp.status == 400
-        assert "Location" not in resp.headers
 
     async def test_non_s256_method_rejected(self):
         hass = _live_hass()
@@ -622,3 +577,47 @@ async def test_scoped_authorize_still_autoapproves_in_none_mode(
     )
     assert resp.status == 302
     assert "code=" in resp.headers["Location"]
+
+
+AUTH_QS = (
+    "?response_type=code&client_id=anything"
+    "&code_challenge=" + "a" * 43 + "&code_challenge_method=S256&state=s1"
+)
+
+
+async def test_none_mode_any_valid_https_redirect_autoapproves(
+    unified_view_client_factory,
+):
+    """Maintainer decision 2026-08-14: none mode is secret-URL-only trust —
+    ChatGPT, Spark, and any other provider auto-approve invisibly, same as
+    claude.ai."""
+    client = await unified_view_client_factory(mode="none")
+    resp = await client.get(
+        "/api/ha_mcp_tools/oauth/authorize" + AUTH_QS
+        + "&redirect_uri=https%3A%2F%2Fchatgpt.example%2Fconnector%2Fcb",
+        allow_redirects=False,
+    )
+    assert resp.status == 302
+    assert "code=" in resp.headers["Location"]
+    assert "state=s1" in resp.headers["Location"]
+
+
+async def test_none_mode_loopback_redirect_autoapproves(unified_view_client_factory):
+    """Native/CLI loopback callbacks (RFC 8252) complete invisibly too."""
+    client = await unified_view_client_factory(mode="none")
+    resp = await client.get(
+        "/api/ha_mcp_tools/oauth/authorize" + AUTH_QS
+        + "&redirect_uri=http%3A%2F%2Flocalhost%3A61264%2Fcallback",
+        allow_redirects=False,
+    )
+    assert resp.status == 302
+    assert "code=" in resp.headers["Location"]
+
+
+async def test_none_mode_malformed_redirect_still_400s(unified_view_client_factory):
+    client = await unified_view_client_factory(mode="none")
+    resp = await client.get(
+        "/api/ha_mcp_tools/oauth/authorize" + AUTH_QS
+        + "&redirect_uri=https%3A%2F%2Fevil.example%2Fcb%23frag",
+    )
+    assert resp.status == 400
