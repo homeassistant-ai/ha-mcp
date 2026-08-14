@@ -62,6 +62,7 @@ from .oauth_autoapprove import (
     AutoApproveProvider,
     bind_autoapprove_views,
 )
+from .oauth_dcr import CFG_DCR_SIGNING_KEY, DcrRegisterView
 from .oauth_legacy import (
     AUTHORIZE_PATH,
     OAUTH_ROUTE_OWNER_KEY,
@@ -75,8 +76,6 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
-
-CFG_DCR_SIGNING_KEY = "dcr_signing_key"
 
 # Human-readable webhook name shown in the HA webhook registry.
 _WEBHOOK_NAME = "HA-MCP in-process server"
