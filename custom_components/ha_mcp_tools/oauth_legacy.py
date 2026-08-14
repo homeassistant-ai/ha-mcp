@@ -606,148 +606,7 @@ class LegacyOAuthProvider:
         """Verify PKCE S256 + one-shot consume a code (see PKCECodeStore)."""
         return self._code_store.consume_code(code, redirect_uri, code_verifier)
 
-    # -----------------------------------------------------------------
-    # Client authentication
-    # -----------------------------------------------------------------
-
-    def authenticate_client(
-        self, client_id: str | None, client_secret: str | None
-    ) -> bool:
-        if not client_id or not client_secret:
-            return False
-        return hmac.compare_digest(
-            client_id.encode(), self._client_id.encode()
-        ) and hmac.compare_digest(client_secret.encode(), self._client_secret.encode())
-
-
-# ---------------------------------------------------------------------------
-# Views (root /authorize + /token)
-# ---------------------------------------------------------------------------
-
-
-class AuthorizeView(HomeAssistantView):
-    """OAuth /authorize endpoint with a minimal consent page."""
-
-    requires_auth = False
-    url = AUTHORIZE_PATH
-    name = "ha_mcp_tools:oauth:authorize"
-
-    def __init__(self, provider: LegacyOAuthProvider) -> None:
-        self._provider = provider
-
-    @staticmethod
-    def _redirect_with(redirect_uri: str, **params: str) -> web.Response:
-        # yarl ships with aiohttp and handles existing-query-string merging
-        # plus parameter encoding correctly — safer than hand-rolling.
-        import yarl
-
-        url = yarl.URL(redirect_uri).update_query(params)
-        return web.Response(status=302, headers={"Location": str(url)})
-
-    async def get(self, request: web.Request) -> web.Response:
-        if not self._provider.is_active():
-            # Serve ONLY while legacy is the live mode. Both ha_auth/none (HA
-            # core or the secret URL is the authority) and a not-yet-live
-            # entry mean this root view must not serve — HA can't rebind or
-            # drop it without a restart, so a mode switch away leaves it
-            # bound. Refuse it.
-            return _text_error(404, "not found")
-        params = request.query
-        client_id = params.get("client_id", "")
-        redirect_uri = params.get("redirect_uri", "")
-        state = params.get("state", "")
-        code_challenge = params.get("code_challenge", "")
-        code_challenge_method = params.get("code_challenge_method", "")
-        response_type = params.get("response_type", "")
-
-        err = self._validate_authorize_params(
-            response_type=response_type,
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            code_challenge=code_challenge,
-            code_challenge_method=code_challenge_method,
-        )
-        if err is not None:
-            return err
-
-        # Render minimal consent page. Showing the redirect_uri lets the user
-        # verify the flow goes back to a domain they recognize.
-        html = f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Authorize MCP Connector</title>
-  <style>
-    body {{ font-family: system-ui, sans-serif; max-width: 36rem; margin: 4rem auto; padding: 0 1rem; }}
-    code {{ background: #f4f4f4; padding: 2px 6px; border-radius: 3px; word-break: break-all; }}
-    button {{ padding: 0.5rem 1rem; font-size: 1rem; margin-right: 0.5rem; }}
-    .approve {{ background: #2563eb; color: white; border: none; }}
-    .deny {{ background: #e5e7eb; color: #111; border: none; }}
-  </style>
-</head>
-<body>
-  <h1>Authorize MCP Connector</h1>
-  <p>An MCP client is requesting access to your Home Assistant MCP server.</p>
-  <p>It will redirect to:<br><code>{escape(redirect_uri)}</code></p>
-  <p>Only allow this if you started this connection yourself.</p>
-  <form method="POST" action="{AUTHORIZE_PATH}">
-    <input type="hidden" name="client_id" value="{escape(client_id)}">
-    <input type="hidden" name="redirect_uri" value="{escape(redirect_uri)}">
-    <input type="hidden" name="state" value="{escape(state)}">
-    <input type="hidden" name="code_challenge" value="{escape(code_challenge)}">
-    <button class="approve" type="submit" name="action" value="approve">Allow</button>
-    <button class="deny" type="submit" name="action" value="deny">Deny</button>
-  </form>
-</body>
-</html>"""
-        return web.Response(text=html, content_type="text/html")
-
-    async def post(self, request: web.Request) -> web.Response:
-        if not self._provider.is_active():
-            return _text_error(404, "not found")
-        data = await request.post()
-        action = str(data.get("action", ""))
-        client_id = str(data.get("client_id", ""))
-        redirect_uri = str(data.get("redirect_uri", ""))
-        state = str(data.get("state", ""))
-        code_challenge = str(data.get("code_challenge", ""))
-
-        # Re-validate everything from the form — never trust hidden fields.
-        # response_type/method aren't carried on the POST so we hard-code the
-        # spec values here; the validator still applies all the same rules to
-        # the user-influenceable fields.
-        err = self._validate_authorize_params(
-            response_type="code",
-            client_id=client_id,
-            redirect_uri=redirect_uri,
-            code_challenge=code_challenge,
-            code_challenge_method="S256",
-        )
-        if err is not None:
-            return err
-
-        # RFC 9207: every authorization response — success or error — names the
-        # issuer that produced it, so a client registered with several
-        # authorization servers cannot be fed a response minted by another one.
-        iss = _issuer_for(request)
-
-        if action == "deny":
-            return self._redirect_with(
-                redirect_uri, error="access_denied", state=state, iss=iss
-            )
-        if action != "approve":
-            return _text_error(400, "invalid action")
-
-        code = self._provider.issue_code(redirect_uri, code_challenge)
-        if code is None:
-            # Pending-code store at cap → signal back per RFC 6749 §4.1.2.1
-            # instead of silently failing.
-            return self._redirect_with(
-                redirect_uri, error="temporarily_unavailable", state=state, iss=iss
-            )
-        return self._redirect_with(redirect_uri, code=code, state=state, iss=iss)
-
-    def _validate_authorize_params(
+    def validate_authorize_params(
         self,
         *,
         response_type: str,
@@ -768,7 +627,7 @@ class AuthorizeView(HomeAssistantView):
             return _text_error(
                 400, "invalid code_challenge (must be 43-char base64url)"
             )
-        if client_id != self._provider.client_id:
+        if client_id != self.client_id:
             return _text_error(400, "invalid client_id", restart_hint=True)
         if not _is_valid_redirect_uri(redirect_uri):
             return _text_error(
@@ -777,6 +636,253 @@ class AuthorizeView(HomeAssistantView):
                 "URL) with a valid host and port",
             )
         return None
+
+    # -----------------------------------------------------------------
+    # Client authentication
+    # -----------------------------------------------------------------
+
+    def authenticate_client(
+        self, client_id: str | None, client_secret: str | None
+    ) -> bool:
+        if not client_id or not client_secret:
+            return False
+        return hmac.compare_digest(
+            client_id.encode(), self._client_id.encode()
+        ) and hmac.compare_digest(client_secret.encode(), self._client_secret.encode())
+
+
+# ---------------------------------------------------------------------------
+# Shared handlers + views (root /authorize + /token)
+# ---------------------------------------------------------------------------
+
+
+def _redirect_with_params(redirect_uri: str, **params: str) -> web.Response:
+    # yarl ships with aiohttp and handles existing-query-string merging
+    # plus parameter encoding correctly — safer than hand-rolling.
+    import yarl
+
+    url = yarl.URL(redirect_uri).update_query(params)
+    return web.Response(status=302, headers={"Location": str(url)})
+
+
+async def handle_legacy_authorize_get(
+    provider: LegacyOAuthProvider, request: web.Request
+) -> web.Response:
+    """Serve the legacy consent page (shared by the root and scoped routes).
+
+    The form posts back to ``request.path`` so the scoped
+    ``{OAUTH_BASE}/authorize`` route and the legacy root ``/authorize`` route
+    each round-trip through themselves.
+    """
+    params = request.query
+    client_id = params.get("client_id", "")
+    redirect_uri = params.get("redirect_uri", "")
+    state = params.get("state", "")
+    code_challenge = params.get("code_challenge", "")
+    code_challenge_method = params.get("code_challenge_method", "")
+    response_type = params.get("response_type", "")
+
+    err = provider.validate_authorize_params(
+        response_type=response_type,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        code_challenge=code_challenge,
+        code_challenge_method=code_challenge_method,
+    )
+    if err is not None:
+        return err
+
+    # Render minimal consent page. Showing the redirect_uri lets the user
+    # verify the flow goes back to a domain they recognize.
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Authorize MCP Connector</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; max-width: 36rem; margin: 4rem auto; padding: 0 1rem; }}
+    code {{ background: #f4f4f4; padding: 2px 6px; border-radius: 3px; word-break: break-all; }}
+    button {{ padding: 0.5rem 1rem; font-size: 1rem; margin-right: 0.5rem; }}
+    .approve {{ background: #2563eb; color: white; border: none; }}
+    .deny {{ background: #e5e7eb; color: #111; border: none; }}
+  </style>
+</head>
+<body>
+  <h1>Authorize MCP Connector</h1>
+  <p>An MCP client is requesting access to your Home Assistant MCP server.</p>
+  <p>It will redirect to:<br><code>{escape(redirect_uri)}</code></p>
+  <p>Only allow this if you started this connection yourself.</p>
+  <form method="POST" action="{escape(request.path)}">
+    <input type="hidden" name="client_id" value="{escape(client_id)}">
+    <input type="hidden" name="redirect_uri" value="{escape(redirect_uri)}">
+    <input type="hidden" name="state" value="{escape(state)}">
+    <input type="hidden" name="code_challenge" value="{escape(code_challenge)}">
+    <button class="approve" type="submit" name="action" value="approve">Allow</button>
+    <button class="deny" type="submit" name="action" value="deny">Deny</button>
+  </form>
+</body>
+</html>"""
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_legacy_authorize_post(
+    provider: LegacyOAuthProvider, request: web.Request
+) -> web.Response:
+    """Consume the consent form and redirect with a code (shared by both routes)."""
+    data = await request.post()
+    action = str(data.get("action", ""))
+    client_id = str(data.get("client_id", ""))
+    redirect_uri = str(data.get("redirect_uri", ""))
+    state = str(data.get("state", ""))
+    code_challenge = str(data.get("code_challenge", ""))
+
+    # Re-validate everything from the form — never trust hidden fields.
+    # response_type/method aren't carried on the POST so we hard-code the
+    # spec values here; the validator still applies all the same rules to
+    # the user-influenceable fields.
+    err = provider.validate_authorize_params(
+        response_type="code",
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        code_challenge=code_challenge,
+        code_challenge_method="S256",
+    )
+    if err is not None:
+        return err
+
+    # RFC 9207: every authorization response — success or error — names the
+    # issuer that produced it, so a client registered with several
+    # authorization servers cannot be fed a response minted by another one.
+    iss = _issuer_for(request)
+
+    if action == "deny":
+        return _redirect_with_params(
+            redirect_uri, error="access_denied", state=state, iss=iss
+        )
+    if action != "approve":
+        return _text_error(400, "invalid action")
+
+    code = provider.issue_code(redirect_uri, code_challenge)
+    if code is None:
+        # Pending-code store at cap → signal back per RFC 6749 §4.1.2.1
+        # instead of silently failing.
+        return _redirect_with_params(
+            redirect_uri, error="temporarily_unavailable", state=state, iss=iss
+        )
+    return _redirect_with_params(redirect_uri, code=code, state=state, iss=iss)
+
+
+def _extract_client_creds(
+    provider: LegacyOAuthProvider, request: web.Request, form: dict
+) -> tuple[str | None, str | None]:
+    """Pull client_id/secret from Basic auth header OR form body."""
+    header = request.headers.get("Authorization", "")
+    if header.lower().startswith("basic "):
+        try:
+            decoded = base64.b64decode(header[6:].strip(), validate=True).decode(
+                "utf-8"
+            )
+        except (ValueError, UnicodeDecodeError, binascii.Error):
+            return None, None
+        if ":" in decoded:
+            cid, _, sec = decoded.partition(":")
+            # RFC 6749 §2.3.1: client_secret_basic values are
+            # application/x-www-form-urlencoded before base64, so decode
+            # them back with unquote_PLUS ("+" means space in that
+            # encoding — plain unquote would leave it literal). A no-op for
+            # the generated credentials (URL-safe alphabets, nothing to
+            # decode) but required for custom overrides containing reserved
+            # characters — matches the form-body path below, which aiohttp
+            # also form-decodes ("+" → space).
+            return unquote_plus(cid), unquote_plus(sec)
+        return None, None
+    return form.get("client_id"), form.get("client_secret")
+
+
+async def _handle_authorization_code(
+    provider: LegacyOAuthProvider, form: dict
+) -> web.Response:
+    code = str(form.get("code", ""))
+    redirect_uri = str(form.get("redirect_uri", ""))
+    code_verifier = str(form.get("code_verifier", ""))
+    if not (code and redirect_uri and code_verifier):
+        return _json_error("invalid_request", 400)
+    if not provider.consume_code(code, redirect_uri, code_verifier):
+        return _json_error("invalid_grant", 400)
+    return web.json_response(
+        {
+            "access_token": provider.issue_access_token(),
+            "token_type": "Bearer",
+            "expires_in": ACCESS_TOKEN_TTL,
+            "refresh_token": provider.issue_refresh_token(),
+        },
+        headers=_TOKEN_RESPONSE_HEADERS,
+    )
+
+
+async def _handle_refresh(
+    provider: LegacyOAuthProvider, form: dict
+) -> web.Response:
+    refresh = str(form.get("refresh_token", ""))
+    if not refresh or not provider.validate_refresh_token(refresh):
+        return _json_error("invalid_grant", 400)
+    return web.json_response(
+        {
+            "access_token": provider.issue_access_token(),
+            "token_type": "Bearer",
+            "expires_in": ACCESS_TOKEN_TTL,
+            "refresh_token": provider.issue_refresh_token(),
+        },
+        headers=_TOKEN_RESPONSE_HEADERS,
+    )
+
+
+async def handle_legacy_token_post(
+    provider: LegacyOAuthProvider, request: web.Request
+) -> web.Response:
+    """Token endpoint body (shared by the root and scoped routes)."""
+    form = dict(await request.post())
+    client_id, client_secret = _extract_client_creds(provider, request, form)
+    if not provider.authenticate_client(client_id, client_secret):
+        return _json_error(
+            "invalid_client",
+            401,
+            headers={"WWW-Authenticate": 'Basic realm="HA-MCP OAuth"'},
+            restart_hint=True,
+        )
+
+    grant_type = form.get("grant_type", "")
+    if grant_type == "authorization_code":
+        return await _handle_authorization_code(provider, form)
+    if grant_type == "refresh_token":
+        return await _handle_refresh(provider, form)
+    return _json_error("unsupported_grant_type", 400)
+
+
+class AuthorizeView(HomeAssistantView):
+    """OAuth /authorize endpoint with a minimal consent page."""
+
+    requires_auth = False
+    url = AUTHORIZE_PATH
+    name = "ha_mcp_tools:oauth:authorize"
+
+    def __init__(self, provider: LegacyOAuthProvider) -> None:
+        self._provider = provider
+
+    async def get(self, request: web.Request) -> web.Response:
+        if not self._provider.is_active():
+            # Serve ONLY while legacy is the live mode. Both ha_auth/none (HA
+            # core or the secret URL is the authority) and a not-yet-live
+            # entry mean this root view must not serve — HA can't rebind or
+            # drop it without a restart, so a mode switch away leaves it
+            # bound. Refuse it.
+            return _text_error(404, "not found")
+        return await handle_legacy_authorize_get(self._provider, request)
+
+    async def post(self, request: web.Request) -> web.Response:
+        if not self._provider.is_active():
+            return _text_error(404, "not found")
+        return await handle_legacy_authorize_post(self._provider, request)
 
 
 class TokenView(HomeAssistantView):
@@ -790,81 +896,7 @@ class TokenView(HomeAssistantView):
     def __init__(self, provider: LegacyOAuthProvider) -> None:
         self._provider = provider
 
-    @staticmethod
-    def _extract_client_creds(
-        request: web.Request, form: dict
-    ) -> tuple[str | None, str | None]:
-        """Pull client_id/secret from Basic auth header OR form body."""
-        header = request.headers.get("Authorization", "")
-        if header.lower().startswith("basic "):
-            try:
-                decoded = base64.b64decode(header[6:].strip(), validate=True).decode(
-                    "utf-8"
-                )
-            except (ValueError, UnicodeDecodeError, binascii.Error):
-                return None, None
-            if ":" in decoded:
-                cid, _, sec = decoded.partition(":")
-                # RFC 6749 §2.3.1: client_secret_basic values are
-                # application/x-www-form-urlencoded before base64, so decode
-                # them back with unquote_PLUS ("+" means space in that
-                # encoding — plain unquote would leave it literal). A no-op for
-                # the generated credentials (URL-safe alphabets, nothing to
-                # decode) but required for custom overrides containing reserved
-                # characters — matches the form-body path below, which aiohttp
-                # also form-decodes ("+" → space).
-                return unquote_plus(cid), unquote_plus(sec)
-            return None, None
-        return form.get("client_id"), form.get("client_secret")
-
     async def post(self, request: web.Request) -> web.Response:
         if not self._provider.is_active():
             return _json_not_found()
-        form = dict(await request.post())
-        client_id, client_secret = self._extract_client_creds(request, form)
-        if not self._provider.authenticate_client(client_id, client_secret):
-            return _json_error(
-                "invalid_client",
-                401,
-                headers={"WWW-Authenticate": 'Basic realm="HA-MCP OAuth"'},
-                restart_hint=True,
-            )
-
-        grant_type = form.get("grant_type", "")
-        if grant_type == "authorization_code":
-            return await self._handle_authorization_code(form)
-        if grant_type == "refresh_token":
-            return await self._handle_refresh(form)
-        return _json_error("unsupported_grant_type", 400)
-
-    async def _handle_authorization_code(self, form: dict) -> web.Response:
-        code = str(form.get("code", ""))
-        redirect_uri = str(form.get("redirect_uri", ""))
-        code_verifier = str(form.get("code_verifier", ""))
-        if not (code and redirect_uri and code_verifier):
-            return _json_error("invalid_request", 400)
-        if not self._provider.consume_code(code, redirect_uri, code_verifier):
-            return _json_error("invalid_grant", 400)
-        return web.json_response(
-            {
-                "access_token": self._provider.issue_access_token(),
-                "token_type": "Bearer",
-                "expires_in": ACCESS_TOKEN_TTL,
-                "refresh_token": self._provider.issue_refresh_token(),
-            },
-            headers=_TOKEN_RESPONSE_HEADERS,
-        )
-
-    async def _handle_refresh(self, form: dict) -> web.Response:
-        refresh = str(form.get("refresh_token", ""))
-        if not refresh or not self._provider.validate_refresh_token(refresh):
-            return _json_error("invalid_grant", 400)
-        return web.json_response(
-            {
-                "access_token": self._provider.issue_access_token(),
-                "token_type": "Bearer",
-                "expires_in": ACCESS_TOKEN_TTL,
-                "refresh_token": self._provider.issue_refresh_token(),
-            },
-            headers=_TOKEN_RESPONSE_HEADERS,
-        )
+        return await handle_legacy_token_post(self._provider, request)

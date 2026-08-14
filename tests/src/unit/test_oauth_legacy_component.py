@@ -11,7 +11,7 @@ Home Assistant / aiohttp are stubbed via ``_embedded_stubs`` (same convention
 as ``test_embedded_setup.py`` / ``test_embedded_entry.py``). ``yarl`` (an
 aiohttp dependency, also not installed in this unit-test environment) is
 stubbed here with the tiny ``URL.update_query`` surface
-``AuthorizeView._redirect_with`` actually uses.
+``_redirect_with_params`` actually uses.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ install()
 
 class _FakeURL:
     """Stand-in for ``yarl.URL`` covering only ``update_query`` + ``str()`` --
-    the surface ``AuthorizeView._redirect_with`` uses to append ``code``/
+    the surface ``_redirect_with_params`` uses to append ``code``/
     ``state``/``error`` query params onto the client's redirect_uri."""
 
     def __init__(self, url: str) -> None:
@@ -116,6 +116,7 @@ def _authorize_query(**overrides: str) -> dict[str, str]:
 def _make_get_request(query: dict[str, str]) -> MagicMock:
     request = MagicMock(name="Request")
     request.query = query
+    request.path = oauth_legacy.AUTHORIZE_PATH
     return request
 
 
@@ -387,34 +388,42 @@ class TestAuthenticateClient:
 
 
 class TestExtractClientCreds:
-    """``TokenView._extract_client_creds`` -- Basic-auth header vs form body."""
+    """``_extract_client_creds`` -- Basic-auth header vs form body."""
 
     def test_extracts_from_basic_auth_header(self):
         encoded = base64.b64encode(b"cid:secret").decode()
         request = MagicMock()
         request.headers = {"Authorization": f"Basic {encoded}"}
-        cid, secret = oauth_legacy.TokenView._extract_client_creds(request, {})
+        cid, secret = oauth_legacy._extract_client_creds(
+            _make_provider(), request, {}
+        )
         assert (cid, secret) == ("cid", "secret")
 
     def test_extracts_from_form_body_when_no_basic_header(self):
         request = MagicMock()
         request.headers = {}
-        cid, secret = oauth_legacy.TokenView._extract_client_creds(
-            request, {"client_id": "cid", "client_secret": "secret"}
+        cid, secret = oauth_legacy._extract_client_creds(
+            _make_provider(),
+            request,
+            {"client_id": "cid", "client_secret": "secret"},
         )
         assert (cid, secret) == ("cid", "secret")
 
     def test_malformed_basic_header_returns_none(self):
         request = MagicMock()
         request.headers = {"Authorization": "Basic not-valid-base64!!!"}
-        cid, secret = oauth_legacy.TokenView._extract_client_creds(request, {})
+        cid, secret = oauth_legacy._extract_client_creds(
+            _make_provider(), request, {}
+        )
         assert (cid, secret) == (None, None)
 
     def test_basic_header_without_colon_returns_none(self):
         encoded = base64.b64encode(b"no-colon-here").decode()
         request = MagicMock()
         request.headers = {"Authorization": f"Basic {encoded}"}
-        cid, secret = oauth_legacy.TokenView._extract_client_creds(request, {})
+        cid, secret = oauth_legacy._extract_client_creds(
+            _make_provider(), request, {}
+        )
         assert (cid, secret) == (None, None)
 
     def test_percent_encoded_basic_creds_are_decoded(self):
@@ -424,7 +433,9 @@ class TestExtractClientCreds:
         encoded = base64.b64encode(b"c%40id:p%40ss%2Fword").decode()
         request = MagicMock()
         request.headers = {"Authorization": f"Basic {encoded}"}
-        cid, secret = oauth_legacy.TokenView._extract_client_creds(request, {})
+        cid, secret = oauth_legacy._extract_client_creds(
+            _make_provider(), request, {}
+        )
         assert (cid, secret) == ("c@id", "p@ss/word")
 
     def test_basic_creds_form_decode_plus_as_space_not_literal(self):
@@ -435,7 +446,9 @@ class TestExtractClientCreds:
         encoded = base64.b64encode(b"c+id:p%2Bss word").decode()
         request = MagicMock()
         request.headers = {"Authorization": f"Basic {encoded}"}
-        cid, secret = oauth_legacy.TokenView._extract_client_creds(request, {})
+        cid, secret = oauth_legacy._extract_client_creds(
+            _make_provider(), request, {}
+        )
         assert (cid, secret) == ("c id", "p+ss word")
 
 
