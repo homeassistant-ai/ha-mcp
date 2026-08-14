@@ -519,7 +519,7 @@ def _async_update_legacy_oauth_issue(hass: HomeAssistant, restart_needed: bool) 
             hass,
             DOMAIN,
             ISSUE_LEGACY_OAUTH_RESTART,
-            is_fixable=False,
+            is_fixable=True,
             severity=ir.IssueSeverity.WARNING,
             translation_key=ISSUE_LEGACY_OAUTH_RESTART,
         )
