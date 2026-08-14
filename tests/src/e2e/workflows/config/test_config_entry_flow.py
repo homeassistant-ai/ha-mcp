@@ -2,7 +2,8 @@
 E2E tests for Config Entry Flow API.
 
 Covers:
-- Creating a form-only helper (min_max)
+- Creating a form-only helper (min_max, mold_indicator)
+- Creating a multi-step form helper (history_stats — user, state, options)
 - Creating a menu-based helper (group — menu then form)
 - Error feedback on missing menu selection (data_schema_unavailable_reason
   marker + menu_options inline on validation errors)
@@ -80,6 +81,94 @@ class TestConfigEntryFlow:
             "ha_remove_helpers_integrations",
             {"target": entry_id, "confirm": True},
         )
+
+    async def test_create_history_stats_helper(self, mcp_client):
+        """Create a history_stats helper (issue #2187).
+
+        Three form steps — user, state, options — driven from one flat config:
+        each step pops the keys its own schema declares and leaves the rest for
+        the next. The options step takes exactly two of start/end/duration; the
+        `entity_id`/`state`/`type` it redeclares read-only are already in the
+        flow's options, so nothing is resubmitted to them.
+        """
+        result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "history_stats",
+                "name": "test_history_stats_e2e",
+                "config": {
+                    "name": "test_history_stats_e2e",
+                    "entity_id": "sensor.demo_temperature",
+                    "type": "time",
+                    "state": ["22.5"],
+                    "start": "{{ today_at('00:00') }}",
+                    "end": "{{ now() }}",
+                },
+            },
+        )
+        data = assert_mcp_success(result, "Create history_stats helper")
+        assert data.get("success") is True
+        entry_id = data.get("entry_id")
+        assert entry_id is not None
+        entity_ids = data.get("entity_ids") or []
+        assert entity_ids, f"No entity_ids in response: {data}"
+
+        try:
+            await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_get_state",
+                arguments={"entity_id": entity_ids[0]},
+                predicate=lambda d: d.get("data", {}).get("entity_id") == entity_ids[0],
+                description="history_stats helper entity is queryable",
+            )
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_remove_helpers_integrations",
+                {"target": entry_id, "confirm": True},
+            )
+
+    async def test_create_mold_indicator_helper(self, mcp_client):
+        """Create a mold_indicator helper (issue #2187).
+
+        Single form step taking three source entities plus a calibration
+        factor, which HA rejects at zero.
+        """
+        result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "mold_indicator",
+                "name": "test_mold_indicator_e2e",
+                "config": {
+                    "name": "test_mold_indicator_e2e",
+                    "indoor_temp_sensor": "sensor.demo_temperature",
+                    "indoor_humidity_sensor": "sensor.demo_humidity",
+                    "outdoor_temp_sensor": "sensor.demo_outside_temperature",
+                    "calibration_factor": 2.0,
+                },
+            },
+        )
+        data = assert_mcp_success(result, "Create mold_indicator helper")
+        assert data.get("success") is True
+        entry_id = data.get("entry_id")
+        assert entry_id is not None
+        entity_ids = data.get("entity_ids") or []
+        assert entity_ids, f"No entity_ids in response: {data}"
+
+        try:
+            await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_get_state",
+                arguments={"entity_id": entity_ids[0]},
+                predicate=lambda d: d.get("data", {}).get("entity_id") == entity_ids[0],
+                description="mold_indicator helper entity is queryable",
+            )
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_remove_helpers_integrations",
+                {"target": entry_id, "confirm": True},
+            )
 
     async def test_create_group_helper_light(self, mcp_client):
         """Create a light group helper (menu then form flow)."""

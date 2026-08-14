@@ -104,7 +104,7 @@ HelperTypeLiteral = Literal[
     "tag",
     # config-entry subentries
     "config_subentry",
-    # 15 FLOW
+    # 17 FLOW
     "template",
     "group",
     "utility_meter",
@@ -120,6 +120,8 @@ HelperTypeLiteral = Literal[
     "generic_thermostat",
     "switch_as_x",
     "generic_hygrostat",
+    "history_stats",
+    "mold_indicator",
 ]
 assert set(get_args(HelperTypeLiteral)) == (
     SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES | {"config_subentry"}
@@ -1846,7 +1848,9 @@ class IntegrationTools:
 
         WHEN NOT TO USE:
         - Helpers (template, group, utility_meter, ...): use
-          ha_config_set_helper.
+          ha_config_set_helper. The exception is `otp`, which is a helper in
+          the HA UI but is created HERE via domain="otp" — its flow needs a
+          live TOTP code, so ha_config_set_helper deliberately omits it.
         - Config subentries: use
           ha_config_set_helper(helper_type='config_subentry').
         - Removing an entry: use ha_remove_helpers_integrations.
@@ -2110,10 +2114,10 @@ class IntegrationTools:
         - SIMPLE (12, websocket-delete): input_button, input_boolean,
           input_select, input_number, input_text, input_datetime, counter,
           timer, schedule, zone, person, tag.
-        - FLOW (15, config-entry-delete via entity lookup): template, group,
+        - FLOW (17, config-entry-delete via entity lookup): template, group,
           utility_meter, derivative, min_max, threshold, integration,
           statistics, trend, random, filter, tod, generic_thermostat,
-          switch_as_x, generic_hygrostat.
+          switch_as_x, generic_hygrostat, history_stats, mold_indicator.
 
         ROUTING:
         - SIMPLE helper_type + bare helper_id or entity_id → websocket delete.
