@@ -20,15 +20,15 @@ from fastmcp.exceptions import ToolError
 from pydantic import TypeAdapter
 
 from ha_mcp.client.rest_client import HomeAssistantAuthError
-from ha_mcp.tools.tools_utility import (
+from ha_mcp.tools.error_log_parsing import (
     _DEFAULT_TOP_N,
     _MAX_COMPONENTS,
     _MAX_MESSAGE_LEN,
     _TRUNCATION_MARK,
     _get_component_prefix,
     _parse_error_log_structured,
-    register_utility_tools,
 )
+from ha_mcp.tools.tools_utility import register_utility_tools
 
 # ---------------------------------------------------------------------------
 # Sample log fixtures

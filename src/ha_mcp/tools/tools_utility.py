@@ -9,7 +9,7 @@ import logging
 import re
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, Literal, NamedTuple, NoReturn
+from typing import Annotated, Any, Literal, NoReturn
 
 from fastmcp.exceptions import ToolError
 from pydantic import Field
@@ -21,6 +21,11 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
+from .error_log_parsing import (
+    _DEFAULT_TOP_N,
+    _EMPTY_FETCH_WARNING,
+    _parse_error_log_structured,
+)
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     add_timezone_metadata,
@@ -66,356 +71,6 @@ _LOG_LEVEL_RE = re.compile(
 )
 
 VALID_LOG_LEVELS = ("ERROR", "WARNING", "INFO", "DEBUG", "CRITICAL")
-
-# Full HA log line, e.g.
-# "2026-05-27 10:15:23.456 ERROR (MainThread) [homeassistant.components.zha] msg"
-# Distinct from _LOG_LEVEL_RE above, which only sniffs the level out of a line.
-# The thread field is matched lazily instead of as `\([^)]*\)`: since Python 3.10
-# an unnamed thread is called "Thread-1 (target_fn)", so the field itself can
-# contain parentheses, and a class that cannot cross them drops every line those
-# threads log.
-_HA_LOG_LINE_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?)"
-    r"\s+(DEBUG|INFO|WARNING|ERROR|CRITICAL)"
-    r"\s+\(.*?\)"
-    r"\s+\[([^\]]+)\]"
-    r"\s+(.+)$",
-    re.IGNORECASE,
-)
-_MAX_MESSAGE_LEN = 200
-_COMPONENT_PREFIX_DEPTH = 3
-_CUSTOM_COMPONENT_PREFIX_DEPTH = 2
-_DEFAULT_TOP_N = 20
-_MAX_COMPONENTS = 50
-# Marks a message the 200-char cap cut short, so a truncated entry is never
-# mistaken for the whole message.
-_TRUNCATION_MARK = "…[truncated]"
-# Tie-breaker for issues with equal counts: a same-count CRITICAL outranks an
-# INFO. Ordering only — not a filter, and not tied to VALID_LOG_LEVELS.
-_LEVEL_SEVERITY = {"CRITICAL": 4, "ERROR": 3, "WARNING": 2, "INFO": 1, "DEBUG": 0}
-# Shared by both response paths, because an empty fetch reads as an all-clear on
-# either one: an agent that receives no log content and no warning reports "no
-# errors" to the user. Only the remedy differs, so each path appends its own.
-_EMPTY_FETCH_WARNING = (
-    "A running Home Assistant always logs something, so this is an empty or "
-    "failed fetch, NOT evidence that the log is clean."
-)
-
-# Supervisor-backed installs (add-on, HAOS, supervised) read HA Core's journald
-# stream, where every line is wrapped in ANSI colour codes:
-#   "\x1b[31m2026-08-02 08:12:27.290 ERROR (MainThread) [x] msg\x1b[0m"
-# Only container/pip installs read the plain home-assistant.log file.
-# Two independent reasons to strip, not one chain:
-#   * the leading code alone is already fatal — _HA_LOG_LINE_RE is ^-anchored
-#     and str.strip() does not remove ESC, so the line matches nothing and no
-#     `message` is produced at all;
-#   * the trailing reset is what a leading-only strip would leave behind: it
-#     lands inside `message` and splits the dedup key for one recurring error.
-# Strip both ends, always.
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-
-
-def _strip_ansi(text: str) -> str:
-    """Remove ANSI escape sequences (journald colour codes) from a log line."""
-    return _ANSI_RE.sub("", text)
-
-
-def _normalize_timestamp(timestamp: str) -> str:
-    """Put a matched timestamp on one date/time separator.
-
-    Every timestamp comparison downstream is lexicographic — the covered
-    window, an issue's ``first_seen``/``last_seen`` bounds, and the recency
-    tiebreaker. ``_HA_LOG_LINE_RE`` accepts both the space and the ``T`` form
-    (case-insensitively), and ``" "`` sorts below every digit while ``"T"``
-    sorts above them, so a stream mixing the two forms would corrupt all three
-    at once. HA core emits the space form, so normalize onto that: real logs
-    come out byte-identical and only the ISO-8601 variant is rewritten.
-
-    The date is fixed-width in the pattern (``\\d{4}-\\d{2}-\\d{2}``), so the
-    separator is always at index 10 — replacing by position also covers the
-    lowercase ``t`` that ``re.IGNORECASE`` admits.
-    """
-    return timestamp[:10] + " " + timestamp[11:]
-
-
-def _get_component_prefix(logger_name: str) -> str:
-    """Extract the component prefix (first N dotted segments) of a logger name.
-
-    A custom integration's identity is ``custom_components.<domain>`` — one
-    segment shallower than a core component — so its modules roll up into one
-    bucket instead of one per module.
-    """
-    parts = logger_name.split(".")
-    depth = (
-        _CUSTOM_COMPONENT_PREFIX_DEPTH
-        if parts[0] == "custom_components"
-        else _COMPONENT_PREFIX_DEPTH
-    )
-    if len(parts) >= depth:
-        return ".".join(parts[:depth])
-    return logger_name
-
-
-def _truncate_message(message: str) -> str:
-    """Cap a message for display, marking it when it was cut."""
-    if len(message) <= _MAX_MESSAGE_LEN:
-        return message
-    return message[:_MAX_MESSAGE_LEN] + _TRUNCATION_MARK
-
-
-class _ExtractedLines(NamedTuple):
-    """Tallies from one pass over the raw log; every input line lands in one.
-
-    ``matched`` counts lines that are valid HA log lines *before* ``level`` and
-    ``search`` run; ``entries`` holds the subset that survived them. The two are
-    kept apart because they answer different questions: only ``matched == 0``
-    means the parser could not read the log, while ``matched > 0`` with no
-    entries just means the filters excluded everything.
-
-    ``total input lines == blank + unparseable + matched`` holds by construction.
-    """
-
-    entries: list[dict[str, str]]
-    matched: int
-    unparseable: int
-    blank: int
-    window_start: str | None
-    window_end: str | None
-
-
-def _extract_log_entries(
-    lines: list[str],
-    search: str | None = None,
-    level: str | None = None,
-) -> _ExtractedLines:
-    """Parse raw log lines into entries plus the per-line tallies around them.
-
-    Split out from ``_parse_error_log_structured`` to keep both under the repo's
-    complexity ceiling. A line counts as unparseable only when it does not match
-    the HA log format at all — lines dropped by ``level``/``search`` are simply
-    absent from ``entries``, never counted as unparseable.
-    """
-    entries: list[dict[str, str]] = []
-    matched = 0
-    unparseable = 0
-    blank = 0
-    window_start: str | None = None
-    window_end: str | None = None
-    needle = search.lower() if search else None
-
-    for line in lines:
-        # Strip ANSI *before* matching: on Supervisor-backed installs the line
-        # arrives colour-wrapped. Both ends matter for separate reasons — the
-        # leading code alone already defeats the ^-anchor so the line matches
-        # nothing, and a leading-only strip would leave the trailing reset
-        # inside `message`, splitting the dedup key for one recurring error.
-        clean = _strip_ansi(line).strip()
-        if not clean:
-            blank += 1
-            continue
-        match = _HA_LOG_LINE_RE.match(clean)
-        if not match:
-            unparseable += 1
-            continue
-        matched += 1
-        timestamp, log_level, logger_name, message = match.groups()
-        timestamp = _normalize_timestamp(timestamp)
-        # Widen the covered window on every parseable line, filtered or not:
-        # it describes the log slice that was read, not the summary's contents.
-        if window_start is None or timestamp < window_start:
-            window_start = timestamp
-        if window_end is None or timestamp > window_end:
-            window_end = timestamp
-        log_level = log_level.upper()
-        if level and log_level != level:
-            continue
-        if (
-            needle
-            and needle not in message.lower()
-            and needle not in logger_name.lower()
-        ):
-            continue
-        entries.append(
-            {
-                "timestamp": timestamp,
-                "level": log_level,
-                "logger": logger_name,
-                # Kept whole: the display cap is applied at dedup time, because
-                # keying on a capped message merges two errors that differ only
-                # past the cap into one issue with a summed count.
-                "message": message,
-            }
-        )
-
-    return _ExtractedLines(
-        entries=entries,
-        matched=matched,
-        unparseable=unparseable,
-        blank=blank,
-        window_start=window_start,
-        window_end=window_end,
-    )
-
-
-def _parse_error_log_structured(
-    raw_text: str,
-    search: str | None = None,
-    level: str | None = None,
-    top_n: int = _DEFAULT_TOP_N,
-) -> dict[str, Any]:
-    """Parse the raw error log into a deduplicated, component-grouped summary.
-
-    ``source='error_log'`` normally returns raw text. A busy instance produces a
-    50-200 KB log in which the same handful of errors repeat thousands of times,
-    so the raw form can exhaust an agent's context while conveying very little.
-    This collapses identical (level, logger, message) triples into counted
-    issues, groups them by component, and returns only the ``top_n`` noisiest.
-
-    Every input line is accounted for exactly once, because "not in the summary"
-    has several causes that must not be conflated:
-
-    * ``total_raw_lines``   - lines in the input, and the sum of the next three
-    * ``blank_lines``       - empty after ANSI stripping
-    * ``unparseable_lines`` - not the HA log format at all (traceback bodies,
-      continuation lines, format drift)
-    * ``matched_lines``     - valid log lines, before ``level``/``search``
-    * ``parsed_entries``    - the subset of ``matched_lines`` the filters kept
-
-    Only ``matched_lines == 0`` says the parser could not read the log; a small
-    ``parsed_entries`` under a narrow filter is the feature working, not data
-    loss. Counts are bounded by the fetched window (``window_start`` ..
-    ``window_end``): Supervisor-backed installs read a capped journald slice, so
-    there the window can be far shorter than the log's full history.
-    """
-    lines = raw_text.splitlines() if raw_text else []
-    total_raw_lines = len(lines)
-    extracted = _extract_log_entries(lines, search=search, level=level)
-    parsed = extracted.entries
-
-    # Dedupe on (level, logger, message), keyed on the FULL message: two errors
-    # that differ only past the display cap are distinct issues, and a capped
-    # key merges them into one with a summed count. Level belongs in the key
-    # too: the same text is logged at different levels, and a level-less key
-    # would report a later ERROR under the level of the first line to carry it.
-    dedup: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for entry in parsed:
-        key = (entry["level"], entry["logger"], entry["message"])
-        record = dedup.get(key)
-        if record is None:
-            record = {
-                "logger": entry["logger"],
-                "level": entry["level"],
-                "message": _truncate_message(entry["message"]),
-                "count": 0,
-                "first_seen": entry["timestamp"],
-                "last_seen": entry["timestamp"],
-            }
-            dedup[key] = record
-        record["count"] += 1
-        # Bounds, not last-write-wins: a log whose lines are not perfectly
-        # ordered would otherwise drag last_seen backwards, which also
-        # misplaces the issue in the recency tiebreaker below.
-        record["first_seen"] = min(record["first_seen"], entry["timestamp"])
-        record["last_seen"] = max(record["last_seen"], entry["timestamp"])
-
-    # Count first, then severity, then recency. Python's sort is stable, so
-    # count alone would return the *oldest* of a tied run — and on a log whose
-    # messages embed volatile ids every issue ties at count 1, which quietly
-    # turns "top 20 issues" into "the 20 oldest".
-    all_issues = sorted(
-        dedup.values(),
-        key=lambda i: (
-            i["count"],
-            _LEVEL_SEVERITY.get(i["level"], 0),
-            i["last_seen"],
-        ),
-        reverse=True,
-    )
-
-    by_component: dict[str, dict[str, Any]] = {}
-    for issue in all_issues:
-        prefix = _get_component_prefix(issue["logger"])
-        bucket = by_component.setdefault(
-            prefix, {"total_occurrences": 0, "issue_count": 0}
-        )
-        bucket["total_occurrences"] += issue["count"]
-        bucket["issue_count"] += 1
-
-    top_issues = [
-        {
-            "component": _get_component_prefix(issue["logger"]),
-            "logger": issue["logger"],
-            "level": issue["level"],
-            "message": issue["message"],
-            "count": issue["count"],
-            "first_seen": issue["first_seen"],
-            "last_seen": issue["last_seen"],
-        }
-        for issue in all_issues[:top_n]
-    ]
-
-    # Cap by_component too: a log with thousands of distinct loggers would
-    # otherwise make the response unbounded, contradicting the whole premise.
-    ranked_components = sorted(
-        by_component.items(),
-        key=lambda kv: kv[1]["total_occurrences"],
-        reverse=True,
-    )
-    component_table = dict(ranked_components[:_MAX_COMPONENTS])
-
-    summary: dict[str, Any] = {
-        "total_raw_lines": total_raw_lines,
-        "blank_lines": extracted.blank,
-        "unparseable_lines": extracted.unparseable,
-        "matched_lines": extracted.matched,
-        "parsed_entries": len(parsed),
-        "unique_issues": len(all_issues),
-        "components_affected": len(by_component),
-        "showing_top_n": min(top_n, len(all_issues)),
-        "showing_components": len(component_table),
-        # Counts describe this window only. On Supervisor-backed installs the
-        # fetch is a capped journald slice, so an issue's count here is not its
-        # count since it first occurred.
-        "window_start": extracted.window_start,
-        "window_end": extracted.window_end,
-    }
-
-    result: dict[str, Any] = {
-        "success": True,
-        "source": "error_log",
-        "structured": True,
-        "summary": summary,
-        "top_issues": top_issues,
-        "by_component": component_table,
-    }
-
-    # An empty summary has three causes and they need different answers, so the
-    # branch keys on `matched_lines` — the pre-filter count. Keying on the raw
-    # unparseable count instead reports format drift for an ordinary filtered
-    # result, because tracebacks alone push a healthy log past 90% unparseable.
-    # Degraded-operation notices go in the top-level `warnings` list — the one
-    # channel this repo's tools use — never a singular `warning` string.
-    if extracted.matched == 0:
-        if extracted.unparseable > 0:
-            result["warnings"] = [
-                f"No log lines could be parsed ({extracted.unparseable} of "
-                f"{total_raw_lines} did not match the expected Home Assistant log "
-                "format). This summary is NOT evidence that the log is clean - "
-                "re-run with structured=False to read the raw text."
-            ]
-        else:
-            result["warnings"] = [
-                f"No log entries arrived to parse ({total_raw_lines} lines "
-                f"fetched, none of them log entries). {_EMPTY_FETCH_WARNING} "
-                "Re-run with structured=False to see the raw response."
-            ]
-    elif not parsed:
-        result["warnings"] = [
-            f"None of the {extracted.matched} parsed log entries matched the "
-            "requested filters. The log itself parsed fine, so this reflects "
-            "the filters, not a parse failure."
-        ]
-    return result
 
 
 def _compact_logbook_entries(entries: list[Any]) -> list[dict[str, Any]]:
@@ -1035,6 +690,70 @@ class UtilityTools:
             )
         return result
 
+    def _build_raw_error_log(
+        self,
+        raw_log: str,
+        search: str | None,
+        level: str | None,
+        limit: int | None,
+        order: Literal["newest", "oldest"],
+    ) -> dict[str, Any]:
+        """Return the most recent log window, and say when nothing arrived."""
+        # Coerced here rather than before the structured branch: the summary
+        # covers the whole fetched window, so `limit` has no meaning there and
+        # validating it would reject limit=0 for a parameter with no effect.
+        effective_limit = self._coerce_limit(
+            limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
+        )
+        lines = raw_log.splitlines()
+
+        filters_applied: dict[str, str] = {}
+
+        if level:
+
+            def _line_has_level(ln: str, target: str) -> bool:
+                m = _LOG_LEVEL_RE.search(ln)
+                return m is not None and m.group(1).upper() == target
+
+            lines = [ln for ln in lines if _line_has_level(ln, level)]
+            filters_applied["level"] = level
+
+        if search:
+            search_lower = search.lower()
+            lines = [ln for ln in lines if search_lower in ln.lower()]
+            filters_applied["search"] = search
+
+        total_lines = len(lines)
+        # Always take the most-recent window (the tail of the chronological
+        # file); 'order' controls only the display direction of that window.
+        lines = lines[-effective_limit:]
+        if order == "newest":
+            lines = list(reversed(lines))
+
+        data: dict[str, Any] = {
+            "success": True,
+            "source": "error_log",
+            "log": "\n".join(lines),
+            "total_lines": total_lines,
+            "returned_lines": len(lines),
+            "limit": effective_limit,
+            "order": order,
+            "note": "Returned the most recent log lines matching filters",
+        }
+        if filters_applied:
+            data["filters_applied"] = filters_applied
+        # This path must not bless a fetch the structured one refuses to bless:
+        # without the warning, an empty fetch answers with success, an empty
+        # `log` and total_lines 0, which an agent reports to the user as "no
+        # errors in the log". Keyed on the raw text, so this stays an empty
+        # *fetch* — an empty *filter result* is a different thing and stays
+        # distinguishable through `filters_applied`.
+        if not raw_log.strip():
+            data["warnings"] = [
+                f"The fetch returned no log content. {_EMPTY_FETCH_WARNING}"
+            ]
+        return data
+
     async def _get_error_log(
         self,
         limit: int | None = None,
@@ -1068,62 +787,13 @@ class UtilityTools:
                     order=order,
                 )
 
-            # Coerced after the structured return: the summary covers the whole
-            # fetched window, so `limit` has no meaning there and validating it
-            # would reject limit=0 for a parameter with no effect.
-            effective_limit = self._coerce_limit(
-                limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
+            return self._build_raw_error_log(
+                raw_log or "",
+                search=search,
+                level=level,
+                limit=limit,
+                order=order,
             )
-            lines = raw_log.splitlines() if raw_log else []
-
-            filters_applied: dict[str, str] = {}
-
-            if level:
-
-                def _line_has_level(ln: str, target: str) -> bool:
-                    m = _LOG_LEVEL_RE.search(ln)
-                    return m is not None and m.group(1).upper() == target
-
-                lines = [ln for ln in lines if _line_has_level(ln, level)]
-                filters_applied["level"] = level
-
-            if search:
-                search_lower = search.lower()
-                lines = [ln for ln in lines if search_lower in ln.lower()]
-                filters_applied["search"] = search
-
-            total_lines = len(lines)
-            # Always take the most-recent window (the tail of the chronological
-            # file); 'order' controls only the display direction of that window.
-            lines = lines[-effective_limit:]
-            if order == "newest":
-                lines = list(reversed(lines))
-
-            data: dict[str, Any] = {
-                "success": True,
-                "source": "error_log",
-                "log": "\n".join(lines),
-                "total_lines": total_lines,
-                "returned_lines": len(lines),
-                "limit": effective_limit,
-                "order": order,
-                "note": "Returned the most recent log lines matching filters",
-            }
-            if filters_applied:
-                data["filters_applied"] = filters_applied
-            # The default path must not bless a fetch the structured path
-            # refuses to bless: without this, `structured=False` answers an
-            # empty fetch with success, an empty `log` and total_lines 0, which
-            # an agent reports to the user as "no errors in the log". Keyed on
-            # the raw text, so this stays an empty *fetch* — an empty *filter
-            # result* is a different thing and stays distinguishable through
-            # `filters_applied`.
-            if not (raw_log or "").strip():
-                data["warnings"] = [
-                    f"The fetch returned no log content. {_EMPTY_FETCH_WARNING}"
-                ]
-
-            return data
 
         except ToolError:
             raise
