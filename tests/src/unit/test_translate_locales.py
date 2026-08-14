@@ -452,6 +452,32 @@ class TestStyleSamples:
             translate_locales._SECOND_PERSON_RE.search(english[key]) for key in keys
         ), f"component {locale}.json samples {keys} do not address the reader"
 
+    @pytest.mark.parametrize("locale", _COMPONENT_LOCALES)
+    def test_component_samples_survive_their_own_anchor_being_queued(
+        self, locale: str
+    ) -> None:
+        """The settings property, on the surface that has less to spare.
+
+        The exclusion is the same one production applies, and so is the
+        consequence: a component request whose only reader-addressing key is
+        queued goes out with neither tone sample nor register rule. What
+        differs is the margin. A settings catalog draws its candidates from
+        453 English messages, so the surface only loses its last one by a
+        rewording of the English; a component catalog is filled a key at a
+        time and can hold its whole register on the one key that arrived
+        first. That is the case where the run this guards is likeliest to
+        happen -- rewording that key is what queues it.
+        """
+        english, translated = translate_locales._surface_catalogs(locale, "component")
+        for queued in translate_locales._style_sample_keys(english, translated):
+            assert translate_locales._style_sample_keys(
+                english, translated, frozenset({queued})
+            ), (
+                f"component {locale}.json falls back to no style sample at all "
+                f"once {queued!r} is queued for retranslation, which is exactly "
+                "the run that would have needed one"
+            )
+
 
 class TestPromptRegisterRule:
     """The rule points at the samples, so it carries nothing without them."""
