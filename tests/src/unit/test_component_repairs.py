@@ -99,6 +99,8 @@ def test_legacy_oauth_repair_catalog_has_fix_flow(catalog_path):
     root = Path(__file__).parents[3]
     catalog = json.loads((root / catalog_path).read_text())
 
-    confirm = catalog["issues"]["legacy_oauth_restart"]["fix_flow"]["step"]["confirm"]
+    issue = catalog["issues"]["legacy_oauth_restart"]
+    assert "description" not in issue
+    confirm = issue["fix_flow"]["step"]["confirm"]
     assert confirm["title"]
     assert confirm["description"]

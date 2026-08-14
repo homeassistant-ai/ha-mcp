@@ -108,7 +108,6 @@
         },
         "legacy_oauth_restart": {
             "title": "Restart Home Assistant to apply the legacy OAuth change",
-            "description": "Home Assistant must restart before the legacy OAuth change takes effect. Until then, the previous behavior remains active.",
             "fix_flow": {
                 "step": {
                     "confirm": {
