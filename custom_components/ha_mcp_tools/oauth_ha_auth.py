@@ -30,7 +30,6 @@ considerations page).
 
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 import json
 import time
@@ -130,7 +129,7 @@ async def fetch_cimd_redirects(
                 raw = await resp.content.read(CIMD_MAX_BYTES + 1)
                 if len(raw) <= CIMD_MAX_BYTES:
                     result = _parse_cimd(raw, client_id)
-    except (aiohttp.ClientError, asyncio.TimeoutError, UnicodeDecodeError):
+    except (TimeoutError, aiohttp.ClientError, UnicodeDecodeError):
         result = None
 
     if len(_cimd_cache) >= _CIMD_CACHE_MAX:

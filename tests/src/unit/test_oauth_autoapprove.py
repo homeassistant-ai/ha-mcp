@@ -51,7 +51,7 @@ if "yarl" not in sys.modules:
     sys.modules["yarl"] = _yarl
 
 import custom_components.ha_mcp_tools.oauth_autoapprove as aa  # noqa: E402
-import custom_components.ha_mcp_tools.oauth_legacy as oauth_legacy  # noqa: E402
+from custom_components.ha_mcp_tools import oauth_legacy  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_WEBHOOK,
     DOMAIN,
@@ -132,6 +132,25 @@ def _module_is(name: str, root: str) -> bool:
     return name == root or name.startswith(f"{root}.")
 
 
+def _mode_cfg(mode: str) -> dict[str, object | None]:
+    """Webhook cfg dict seeding exactly one live-mode marker (mirrors
+    active_auth_mode's provider-presence checks)."""
+    if mode == "legacy":
+        return {
+            "oauth_provider": oauth_legacy.LegacyOAuthProvider(
+                client_id="hamcp-test-client-id-123",
+                client_secret="hamcp-test-secret",
+                signing_key=b"k" * 32,
+                active_mode_getter=lambda: WEBHOOK_AUTH_LEGACY,
+            )
+        }
+    if mode == "ha_auth":
+        return {"resource_server": object(), "session": None}
+    if mode == "none":
+        return {aa.CFG_AUTOAPPROVE_PROVIDER: aa.AutoApproveProvider()}
+    raise ValueError(f"unknown test mode: {mode}")
+
+
 @pytest.fixture
 async def unified_view_client_factory():
     """Build real aiohttp clients around the two unified scoped OAuth views."""
@@ -166,21 +185,7 @@ async def unified_view_client_factory():
         oauth_legacy.web = aiohttp_web
 
         async def factory(*, mode: str):
-            cfg: dict[str, object | None] = {}
-            if mode == "legacy":
-                cfg["oauth_provider"] = oauth_legacy.LegacyOAuthProvider(
-                    client_id="hamcp-test-client-id-123",
-                    client_secret="hamcp-test-secret",
-                    signing_key=b"k" * 32,
-                    active_mode_getter=lambda: WEBHOOK_AUTH_LEGACY,
-                )
-            elif mode == "ha_auth":
-                cfg["resource_server"] = object()
-                cfg["session"] = None
-            elif mode == "none":
-                cfg[aa.CFG_AUTOAPPROVE_PROVIDER] = aa.AutoApproveProvider()
-            else:
-                raise ValueError(f"unknown test mode: {mode}")
+            cfg = _mode_cfg(mode)
 
             app = aiohttp_web.Application()
             hass = SimpleNamespace(
@@ -642,7 +647,8 @@ async def test_none_mode_any_valid_https_redirect_autoapproves(
     claude.ai."""
     client = await unified_view_client_factory(mode="none")
     resp = await client.get(
-        "/api/ha_mcp_tools/oauth/authorize" + AUTH_QS
+        "/api/ha_mcp_tools/oauth/authorize"
+        + AUTH_QS
         + "&redirect_uri=https%3A%2F%2Fchatgpt.example%2Fconnector%2Fcb",
         allow_redirects=False,
     )
@@ -655,7 +661,8 @@ async def test_none_mode_loopback_redirect_autoapproves(unified_view_client_fact
     """Native/CLI loopback callbacks (RFC 8252) complete invisibly too."""
     client = await unified_view_client_factory(mode="none")
     resp = await client.get(
-        "/api/ha_mcp_tools/oauth/authorize" + AUTH_QS
+        "/api/ha_mcp_tools/oauth/authorize"
+        + AUTH_QS
         + "&redirect_uri=http%3A%2F%2Flocalhost%3A61264%2Fcallback",
         allow_redirects=False,
     )
@@ -666,7 +673,8 @@ async def test_none_mode_loopback_redirect_autoapproves(unified_view_client_fact
 async def test_none_mode_malformed_redirect_still_400s(unified_view_client_factory):
     client = await unified_view_client_factory(mode="none")
     resp = await client.get(
-        "/api/ha_mcp_tools/oauth/authorize" + AUTH_QS
+        "/api/ha_mcp_tools/oauth/authorize"
+        + AUTH_QS
         + "&redirect_uri=https%3A%2F%2Fevil.example%2Fcb%23frag",
     )
     assert resp.status == 400

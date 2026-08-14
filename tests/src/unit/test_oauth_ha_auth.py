@@ -23,9 +23,7 @@ KEY = b"k" * 32
 
 
 def test_redirect_matches_exact():
-    assert redirect_matches(
-        ["https://spark.example/cb"], "https://spark.example/cb"
-    )
+    assert redirect_matches(["https://spark.example/cb"], "https://spark.example/cb")
     assert not redirect_matches(
         ["https://spark.example/cb"], "https://spark.example/other"
     )
@@ -136,9 +134,7 @@ async def aiohttp_client_factory():
 
             app = aiohttp_web.Application()
             app.router.add_get("/client.json", serve_document)
-            client = test_utils.TestClient(
-                test_utils.TestServer(app, host="localhost")
-            )
+            client = test_utils.TestClient(test_utils.TestServer(app, host="localhost"))
             await client.start_server()
             clients.append(client)
             doc_url = str(client.make_url("/client.json"))
@@ -194,16 +190,9 @@ async def test_fetch_cimd_rejects_mismatched_client_id(
 
 @pytest.mark.asyncio
 async def test_fetch_cimd_refuses_ip_literal_and_loopback():
+    assert await oauth_ha_auth.fetch_cimd_redirects(None, "https://127.0.0.1/x") is None
     assert (
-        await oauth_ha_auth.fetch_cimd_redirects(None, "https://127.0.0.1/x")
+        await oauth_ha_auth.fetch_cimd_redirects(None, "https://10.0.0.5/doc.json")
         is None
     )
-    assert (
-        await oauth_ha_auth.fetch_cimd_redirects(
-            None, "https://10.0.0.5/doc.json"
-        )
-        is None
-    )
-    assert (
-        await oauth_ha_auth.fetch_cimd_redirects(None, "https://h.example/") is None
-    )
+    assert await oauth_ha_auth.fetch_cimd_redirects(None, "https://h.example/") is None

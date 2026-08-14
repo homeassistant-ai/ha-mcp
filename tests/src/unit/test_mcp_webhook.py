@@ -642,8 +642,7 @@ class TestDiscoveryViews:
         assert doc["token_endpoint_auth_methods_supported"] == ["none"]
         assert doc["client_id_metadata_document_supported"] is True
         assert (
-            doc["registration_endpoint"]
-            == f"https://x.nabu.casa{OAUTH_BASE}/register"
+            doc["registration_endpoint"] == f"https://x.nabu.casa{OAUTH_BASE}/register"
         )
 
     async def test_protected_resource_view_payload_when_live(self):
@@ -693,9 +692,7 @@ class TestDiscoveryViews:
         assert doc["authorization_endpoint"] == (
             f"https://abc.ui.nabu.casa{OAUTH_BASE}/authorize"
         )
-        assert doc["token_endpoint"] == (
-            f"https://abc.ui.nabu.casa{OAUTH_BASE}/token"
-        )
+        assert doc["token_endpoint"] == (f"https://abc.ui.nabu.casa{OAUTH_BASE}/token")
         assert doc["code_challenge_methods_supported"] == ["S256"]
         assert set(doc["token_endpoint_auth_methods_supported"]) == {
             "client_secret_basic",

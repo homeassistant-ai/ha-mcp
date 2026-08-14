@@ -43,7 +43,6 @@ provider.
 
 from __future__ import annotations
 
-import asyncio
 import secrets
 from typing import TYPE_CHECKING, Any
 
@@ -77,6 +76,7 @@ CFG_AUTOAPPROVE_PROVIDER = "autoapprove_provider"
 # views (and this ownership flag) must outlive the config entry (mirrors
 # mcp_webhook._OAUTH_VIEWS_REGISTERED_KEY).
 _AUTOAPPROVE_VIEWS_REGISTERED_KEY = "ha_mcp_tools_oauth_autoapprove_views_registered"
+
 
 def _json_not_found() -> web.Response:
     """404 JSON body used when none-autoapprove is not the live mode."""
@@ -158,6 +158,31 @@ def _active_autoapprove_provider(hass: HomeAssistant) -> AutoApproveProvider | N
     return provider if isinstance(provider, AutoApproveProvider) else None
 
 
+def _validate_autoapprove_authorize(params: Any) -> web.Response | None:
+    """Validate the none-mode /authorize query; a 400 Response, or None if OK.
+
+    Maintainer decision 2026-08-14 (supersedes the #1969-era exact-match
+    allowlist): none mode's ONLY credential is the secret webhook URL, so the
+    auto-approve flow completes invisibly for ANY spec-valid redirect — the
+    token it yields is cosmetic and grants nothing. The HA origin being usable
+    as a crafted-link redirector via this anonymous endpoint is an accepted
+    trade within that trust model. The spec floor (_is_valid_redirect_uri:
+    https or RFC 8252 loopback, valid port, no fragment) still hard-400s
+    malformed targets without redirecting.
+    """
+    if params.get("response_type", "") != "code":
+        return _json_error("unsupported_response_type", 400)
+    if params.get("code_challenge_method", "") != "S256":
+        return _json_error("invalid_request", 400, "code_challenge_method must be S256")
+    if not _PKCE_CHALLENGE_RE.match(params.get("code_challenge", "")):
+        return _json_error(
+            "invalid_request", 400, "invalid code_challenge (43-char base64url)"
+        )
+    if not _is_valid_redirect_uri(params.get("redirect_uri", "")):
+        return _json_error("invalid_request", 400, "invalid redirect_uri")
+    return None
+
+
 class AutoApproveAuthorizeView(HomeAssistantView):
     """Unified scoped ``/authorize`` dispatcher for every remote auth mode.
 
@@ -204,32 +229,13 @@ class AutoApproveAuthorizeView(HomeAssistantView):
             return _json_not_found()
 
         params = request.query
-        response_type = params.get("response_type", "")
         redirect_uri = params.get("redirect_uri", "")
         state = params.get("state", "")
         code_challenge = params.get("code_challenge", "")
-        code_challenge_method = params.get("code_challenge_method", "")
 
-        if response_type != "code":
-            return _json_error("unsupported_response_type", 400)
-        if code_challenge_method != "S256":
-            return _json_error(
-                "invalid_request", 400, "code_challenge_method must be S256"
-            )
-        if not _PKCE_CHALLENGE_RE.match(code_challenge):
-            return _json_error(
-                "invalid_request", 400, "invalid code_challenge (43-char base64url)"
-            )
-        # Maintainer decision 2026-08-14 (supersedes the #1969-era exact-match
-        # allowlist): none mode's ONLY credential is the secret webhook URL, so
-        # the auto-approve flow completes invisibly for ANY spec-valid redirect
-        # — the token it yields is cosmetic and grants nothing. The HA origin
-        # being usable as a crafted-link redirector via this anonymous endpoint
-        # is an accepted trade within that trust model. The spec floor
-        # (_is_valid_redirect_uri: https or RFC 8252 loopback, valid port, no
-        # fragment) still hard-400s malformed targets without redirecting.
-        if not _is_valid_redirect_uri(redirect_uri):
-            return _json_error("invalid_request", 400, "invalid redirect_uri")
+        err = _validate_autoapprove_authorize(params)
+        if err is not None:
+            return err
 
         # RFC 9207: every authorization response — success or error — names the
         # issuer that produced it, so a client registered with several
@@ -400,7 +406,7 @@ class AutoApproveTokenView(HomeAssistantView):
                     content_type=resp.content_type or "application/json",
                     headers=_TOKEN_RESPONSE_HEADERS,
                 )
-        except (aiohttp.ClientError, asyncio.TimeoutError):
+        except (TimeoutError, aiohttp.ClientError):
             return _json_error("temporarily_unavailable", 503)
 
 

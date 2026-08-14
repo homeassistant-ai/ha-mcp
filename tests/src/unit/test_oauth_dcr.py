@@ -12,7 +12,7 @@ from ._embedded_stubs import install
 
 install()
 
-import custom_components.ha_mcp_tools.oauth_dcr as oauth_dcr  # noqa: E402
+from custom_components.ha_mcp_tools import oauth_dcr  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_WEBHOOK,
     DOMAIN,

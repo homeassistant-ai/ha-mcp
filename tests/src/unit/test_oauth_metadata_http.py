@@ -284,7 +284,4 @@ def test_as_documents_pin_the_claude_cimd_selection_contract():
 
     # Legacy remains a pasted-credential AS: no DCR, confidential methods.
     assert "registration_endpoint" not in legacy_doc
-    assert (
-        "client_secret_basic"
-        in legacy_doc["token_endpoint_auth_methods_supported"]
-    )
+    assert "client_secret_basic" in legacy_doc["token_endpoint_auth_methods_supported"]

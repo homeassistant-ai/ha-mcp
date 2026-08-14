@@ -66,9 +66,7 @@ def client_redirect_uris(signing_key: bytes, client_id: str) -> list[str] | None
     if not sep or not body:
         return None
     try:
-        expected = hmac.new(
-            signing_key, body.encode("ascii"), hashlib.sha256
-        ).digest()
+        expected = hmac.new(signing_key, body.encode("ascii"), hashlib.sha256).digest()
         if not hmac.compare_digest(_b64url_decode(sig_part), expected):
             return None
         payload = json.loads(_b64url_decode(body))

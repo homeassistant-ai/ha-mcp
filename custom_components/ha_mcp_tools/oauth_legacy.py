@@ -839,9 +839,7 @@ async def _handle_authorization_code(
     )
 
 
-async def _handle_refresh(
-    provider: LegacyOAuthProvider, form: dict
-) -> web.Response:
+async def _handle_refresh(provider: LegacyOAuthProvider, form: dict) -> web.Response:
     refresh = str(form.get("refresh_token", ""))
     if not refresh or not provider.validate_refresh_token(refresh):
         return _json_error("invalid_grant", 400)

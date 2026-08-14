@@ -394,9 +394,7 @@ class TestExtractClientCreds:
         encoded = base64.b64encode(b"cid:secret").decode()
         request = MagicMock()
         request.headers = {"Authorization": f"Basic {encoded}"}
-        cid, secret = oauth_legacy._extract_client_creds(
-            _make_provider(), request, {}
-        )
+        cid, secret = oauth_legacy._extract_client_creds(_make_provider(), request, {})
         assert (cid, secret) == ("cid", "secret")
 
     def test_extracts_from_form_body_when_no_basic_header(self):
@@ -412,18 +410,14 @@ class TestExtractClientCreds:
     def test_malformed_basic_header_returns_none(self):
         request = MagicMock()
         request.headers = {"Authorization": "Basic not-valid-base64!!!"}
-        cid, secret = oauth_legacy._extract_client_creds(
-            _make_provider(), request, {}
-        )
+        cid, secret = oauth_legacy._extract_client_creds(_make_provider(), request, {})
         assert (cid, secret) == (None, None)
 
     def test_basic_header_without_colon_returns_none(self):
         encoded = base64.b64encode(b"no-colon-here").decode()
         request = MagicMock()
         request.headers = {"Authorization": f"Basic {encoded}"}
-        cid, secret = oauth_legacy._extract_client_creds(
-            _make_provider(), request, {}
-        )
+        cid, secret = oauth_legacy._extract_client_creds(_make_provider(), request, {})
         assert (cid, secret) == (None, None)
 
     def test_percent_encoded_basic_creds_are_decoded(self):
@@ -433,9 +427,7 @@ class TestExtractClientCreds:
         encoded = base64.b64encode(b"c%40id:p%40ss%2Fword").decode()
         request = MagicMock()
         request.headers = {"Authorization": f"Basic {encoded}"}
-        cid, secret = oauth_legacy._extract_client_creds(
-            _make_provider(), request, {}
-        )
+        cid, secret = oauth_legacy._extract_client_creds(_make_provider(), request, {})
         assert (cid, secret) == ("c@id", "p@ss/word")
 
     def test_basic_creds_form_decode_plus_as_space_not_literal(self):
@@ -446,9 +438,7 @@ class TestExtractClientCreds:
         encoded = base64.b64encode(b"c+id:p%2Bss word").decode()
         request = MagicMock()
         request.headers = {"Authorization": f"Basic {encoded}"}
-        cid, secret = oauth_legacy._extract_client_creds(
-            _make_provider(), request, {}
-        )
+        cid, secret = oauth_legacy._extract_client_creds(_make_provider(), request, {})
         assert (cid, secret) == ("c id", "p+ss word")
 
 

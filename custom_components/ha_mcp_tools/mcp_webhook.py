@@ -675,6 +675,95 @@ async def _async_handle_webhook(
 # ---------------------------------------------------------------------------
 
 
+def _bind_ha_auth_surface(
+    hass: HomeAssistant,
+    cfg: dict[str, Any],
+    webhook_id: str,
+    dcr_signing_key: str | None,
+) -> None:
+    """Bind the ha_auth surface (fail-closed) and mark cfg's live providers."""
+    provider = ResourceServer(hass, webhook_id)
+    _register_metadata_views(hass)
+    bind_autoapprove_views(hass)
+    bind_dcr_view(hass)
+    cfg["resource_server"] = provider
+    if dcr_signing_key:
+        cfg[CFG_DCR_SIGNING_KEY] = bytes.fromhex(dcr_signing_key)
+
+
+def _bind_legacy_surface(
+    hass: HomeAssistant,
+    cfg: dict[str, Any],
+    oauth_client_id: str | None,
+    oauth_client_secret: str | None,
+    oauth_signing_key: str | None,
+) -> bool:
+    """Bind the legacy surface (fail-closed); return oauth_restart_needed.
+
+    A root-route conflict with the Webhook Proxy add-on is survivable since the
+    unified scoped endpoints carry legacy's advertised URLs — downgrade it to a
+    warning and serve scoped-only via an unbound provider.
+    """
+    if not (oauth_client_id and oauth_client_secret and oauth_signing_key):
+        raise ValueError(
+            "legacy webhook auth mode requires oauth_client_id, "
+            "oauth_client_secret, and oauth_signing_key"
+        )
+    _register_metadata_views(hass)
+    bind_autoapprove_views(hass)
+    oauth_restart_needed = False
+    try:
+        oauth_provider, oauth_restart_needed = bind_legacy_views(
+            hass, oauth_client_id, oauth_client_secret, oauth_signing_key
+        )
+    except LegacyOAuthRouteConflict as err:
+        _LOGGER.warning(
+            "HA-MCP: the Webhook Proxy add-on ('%s') owns the root "
+            "/authorize and /token routes; legacy OAuth will serve "
+            "only on %s/authorize + %s/token (metadata-honoring "
+            "clients are unaffected; metadata-ignoring clients that "
+            "guess root paths reach the add-on instead).",
+            err,
+            OAUTH_BASE,
+            OAUTH_BASE,
+        )
+        oauth_provider = build_unbound_legacy_provider(
+            hass, oauth_client_id, oauth_client_secret, oauth_signing_key
+        )
+    cfg["oauth_provider"] = oauth_provider
+    return oauth_restart_needed
+
+
+def _bind_none_surface(
+    hass: HomeAssistant, cfg: dict[str, Any], dcr_signing_key: str | None
+) -> None:
+    """Bind the none-mode auto-approve surface — FAILS OPEN.
+
+    The secret webhook URL is the credential; this discovery surface is an
+    enhancement layered on a webhook that otherwise always forwards, so a
+    failure here must NOT tear down the unauthenticated endpoint (issue #1978)
+    — it only means claude.ai's rare OAuth-discovery fallback goes unassisted.
+    Both view bundles bind at most once per HA session; per-request resolvers
+    gate them on cfg, so a none<->ha_auth switch needs no restart (#1969).
+    Provider is assigned before the DCR key so a partial bind leaves
+    none-autoapprove inactive (plain proxy) rather than half-enabled.
+    """
+    try:
+        _register_metadata_views(hass)
+        bind_autoapprove_views(hass)
+        bind_dcr_view(hass)
+        cfg[CFG_AUTOAPPROVE_PROVIDER] = AutoApproveProvider()
+        if dcr_signing_key:
+            cfg[CFG_DCR_SIGNING_KEY] = bytes.fromhex(dcr_signing_key)
+    except Exception:
+        _LOGGER.exception(
+            "MCP webhook: failed to set up none-mode auto-approve "
+            "discovery; continuing as a plain unauthenticated proxy "
+            "(the webhook still forwards — only claude.ai's rare "
+            "OAuth-discovery fallback is unassisted)."
+        )
+
+
 async def async_register_webhook(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -749,75 +838,15 @@ async def async_register_webhook(
                 allowed_methods=["POST", "GET"],
             )
             if auth_mode == WEBHOOK_AUTH_HA:
-                provider = ResourceServer(hass, webhook_id)
-                _register_metadata_views(hass)
-                bind_autoapprove_views(hass)
-                bind_dcr_view(hass)
-                cfg["resource_server"] = provider
-                if dcr_signing_key:
-                    cfg[CFG_DCR_SIGNING_KEY] = bytes.fromhex(dcr_signing_key)
+                _bind_ha_auth_surface(hass, cfg, webhook_id, dcr_signing_key)
             elif auth_mode == WEBHOOK_AUTH_LEGACY:
-                if not (oauth_client_id and oauth_client_secret and oauth_signing_key):
-                    raise ValueError(
-                        "legacy webhook auth mode requires oauth_client_id, "
-                        "oauth_client_secret, and oauth_signing_key"
-                    )
-                _register_metadata_views(hass)
-                bind_autoapprove_views(hass)
-                try:
-                    oauth_provider, oauth_restart_needed = bind_legacy_views(
-                        hass, oauth_client_id, oauth_client_secret, oauth_signing_key
-                    )
-                except LegacyOAuthRouteConflict as err:
-                    _LOGGER.warning(
-                        "HA-MCP: the Webhook Proxy add-on ('%s') owns the root "
-                        "/authorize and /token routes; legacy OAuth will serve "
-                        "only on %s/authorize + %s/token (metadata-honoring "
-                        "clients are unaffected; metadata-ignoring clients that "
-                        "guess root paths reach the add-on instead).",
-                        err,
-                        OAUTH_BASE,
-                        OAUTH_BASE,
-                    )
-                    oauth_provider = build_unbound_legacy_provider(
-                        hass, oauth_client_id, oauth_client_secret, oauth_signing_key
-                    )
-                cfg["oauth_provider"] = oauth_provider
+                oauth_restart_needed = _bind_legacy_surface(
+                    hass, cfg, oauth_client_id, oauth_client_secret, oauth_signing_key
+                )
             else:
                 # WEBHOOK_AUTH_NONE (the only remaining mode — unknown modes
-                # already raised above). The secret webhook URL is the
-                # credential, but we still serve our own corrected discovery +
-                # an invisible auto-approve authorization server so claude.ai's
-                # intermittent OAuth discovery resolves against us instead of HA
-                # core's broken origin-root document, and completes with no HA
-                # login (issue #1969). Both view bundles bind at most once per
-                # HA session; the per-request resolvers gate them on this cfg,
-                # so a none<->ha_auth switch needs no restart.
-                #
-                # Fails OPEN, unlike ha_auth/legacy (issue #1978): none mode is
-                # intentionally unauthenticated, and this discovery is an
-                # enhancement layered on a webhook that (already registered
-                # above) otherwise always forwards. A failure here must NOT fall
-                # through to the outer teardown and take down a webhook the user
-                # configured to need no auth — it only means claude.ai's rare
-                # OAuth-discovery fallback goes unassisted. Mirrors the add-on's
-                # _setup_none_autoapprove. Provider is assigned last, so a
-                # partial bind leaves none-autoapprove inactive (plain proxy)
-                # rather than half-enabled.
-                try:
-                    _register_metadata_views(hass)
-                    bind_autoapprove_views(hass)
-                    bind_dcr_view(hass)
-                    cfg[CFG_AUTOAPPROVE_PROVIDER] = AutoApproveProvider()
-                    if dcr_signing_key:
-                        cfg[CFG_DCR_SIGNING_KEY] = bytes.fromhex(dcr_signing_key)
-                except Exception:
-                    _LOGGER.exception(
-                        "MCP webhook: failed to set up none-mode auto-approve "
-                        "discovery; continuing as a plain unauthenticated proxy "
-                        "(the webhook still forwards — only claude.ai's rare "
-                        "OAuth-discovery fallback is unassisted)."
-                    )
+                # already raised above).
+                _bind_none_surface(hass, cfg, dcr_signing_key)
         except Exception:
             # Never leave a live endpoint (or a leaked session) behind a failed
             # auth-setup path. suppress: the ORIGINAL error must be what
