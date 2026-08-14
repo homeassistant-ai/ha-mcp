@@ -27,6 +27,7 @@ install()
 
 import custom_components.ha_mcp_tools.mcp_webhook as mw  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
+    DATA_DCR_SIGNING_KEY,
     DATA_WEBHOOK,
     DATA_WEBHOOK_ID,
     DOMAIN,
@@ -915,6 +916,47 @@ class TestRegisterWebhook:
         mw.async_register.assert_called_once()
         # Reload-safe: clears any stale registration before (re)registering.
         mw.async_unregister.assert_called_once_with(hass, WEBHOOK_ID)
+
+    @pytest.mark.parametrize(
+        ("auth_mode", "carries_dcr_signing_key"),
+        [
+            (WEBHOOK_AUTH_NONE, True),
+            (WEBHOOK_AUTH_HA, True),
+            (WEBHOOK_AUTH_LEGACY, False),
+        ],
+    )
+    async def test_register_webhook_stores_dcr_signing_key_by_auth_mode(
+        self, monkeypatch, auth_mode, carries_dcr_signing_key
+    ):
+        """none and ha_auth cfgs carry the DCR signing key; legacy does not."""
+        hass = _register_hass()
+        entry = _entry()
+        entry.data[DATA_DCR_SIGNING_KEY] = "ab" * 32
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
+
+        legacy_kwargs = {}
+        if auth_mode == WEBHOOK_AUTH_LEGACY:
+            hass.is_running = False
+            legacy_kwargs = {
+                "oauth_client_id": "cid",
+                "oauth_client_secret": "secret",
+                "oauth_signing_key": secrets.token_hex(32),
+            }
+        await mw.async_register_webhook(
+            hass,
+            entry,
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=auth_mode,
+            dcr_signing_key=entry.data.get(DATA_DCR_SIGNING_KEY),
+            **legacy_kwargs,
+        )
+
+        cfg = hass.data[DOMAIN][DATA_WEBHOOK]
+        if carries_dcr_signing_key:
+            assert cfg[mw.CFG_DCR_SIGNING_KEY] == bytes.fromhex("ab" * 32)
+        else:
+            assert cfg[mw.CFG_DCR_SIGNING_KEY] is None
 
     async def test_none_auth_binds_discovery_and_autoapprove_views(self, monkeypatch):
         # #1969: none mode now serves our corrected discovery + the auto-approve

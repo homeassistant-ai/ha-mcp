@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 from contextlib import suppress
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -32,6 +33,7 @@ from .const import (
     CHANNEL_DEV,
     COMPONENT_MANIFEST_AT_TAG_URL,
     DATA_BRINGUP_TASK,
+    DATA_DCR_SIGNING_KEY,
     DATA_MANAGER,
     DATA_OAUTH_CLIENT_ID,
     DATA_OAUTH_CLIENT_SECRET,
@@ -123,6 +125,16 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
         # Always set up the loopback forwarding config — the sidebar settings
         # panel proxies through it (#1803); the option gates only the public
         # webhook endpoint. oauth_* args are ignored unless auth_mode is legacy.
+        if not entry.data.get(DATA_DCR_SIGNING_KEY):
+            # Upgrade path: entries created before 1.4.0 have no DCR key.
+            # entry.data must stay JSON-serializable, so store hex.
+            hass.config_entries.async_update_entry(
+                entry,
+                data={
+                    **entry.data,
+                    DATA_DCR_SIGNING_KEY: secrets.token_bytes(32).hex(),
+                },
+            )
         oauth_restart_needed = await async_register_webhook(
             hass,
             entry,
@@ -133,6 +145,7 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
             oauth_client_id=oauth_client_id,
             oauth_client_secret=oauth_client_secret,
             oauth_signing_key=entry.data.get(DATA_OAUTH_SIGNING_KEY),
+            dcr_signing_key=entry.data.get(DATA_DCR_SIGNING_KEY),
         )
         _async_update_legacy_oauth_issue(hass, oauth_restart_needed)
         if not webhook_enabled:

@@ -76,6 +76,8 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+CFG_DCR_SIGNING_KEY = "dcr_signing_key"
+
 # Human-readable webhook name shown in the HA webhook registry.
 _WEBHOOK_NAME = "HA-MCP in-process server"
 
@@ -679,6 +681,7 @@ async def async_register_webhook(
     oauth_client_id: str | None = None,
     oauth_client_secret: str | None = None,
     oauth_signing_key: str | None = None,
+    dcr_signing_key: str | None = None,
 ) -> bool:
     """Register the ingress webhook (and, for ha_auth/legacy, the OAuth surface).
 
@@ -726,6 +729,7 @@ async def async_register_webhook(
         "resource_server": None,
         "oauth_provider": None,
         CFG_AUTOAPPROVE_PROVIDER: None,
+        CFG_DCR_SIGNING_KEY: None,
     }
 
     oauth_restart_needed = False
@@ -743,6 +747,8 @@ async def async_register_webhook(
                 provider = ResourceServer(hass, webhook_id)
                 _register_metadata_views(hass)
                 cfg["resource_server"] = provider
+                if dcr_signing_key:
+                    cfg[CFG_DCR_SIGNING_KEY] = bytes.fromhex(dcr_signing_key)
             elif auth_mode == WEBHOOK_AUTH_LEGACY:
                 if not (oauth_client_id and oauth_client_secret and oauth_signing_key):
                     raise ValueError(
@@ -787,6 +793,8 @@ async def async_register_webhook(
                     _register_metadata_views(hass)
                     bind_autoapprove_views(hass)
                     cfg[CFG_AUTOAPPROVE_PROVIDER] = AutoApproveProvider()
+                    if dcr_signing_key:
+                        cfg[CFG_DCR_SIGNING_KEY] = bytes.fromhex(dcr_signing_key)
                 except Exception:
                     _LOGGER.exception(
                         "MCP webhook: failed to set up none-mode auto-approve "
