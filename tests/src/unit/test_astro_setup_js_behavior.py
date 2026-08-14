@@ -670,6 +670,54 @@ class TestYamlDialects:
             f"config={config!r}"
         )
 
+    def test_hermes_http_instructions_do_not_offer_sse(
+        self,
+        setup_script: str,
+        prelude: str,
+        wizard_vars: dict[str, Any],
+    ) -> None:
+        """Hermes can speak SSE; the ha-mcp endpoint cannot.
+
+        ``mcp.run(transport="http")`` serves Streamable HTTP only, and a GET
+        against the MCP path — which is what an SSE-style pre-flight sends —
+        is answered with 405 (see ``ProbeAccessLogFilter`` in
+        ``src/ha_mcp/__main__.py``). Telling a Hermes user they may add
+        ``transport: sse`` therefore points them at a transport this server
+        does not serve, so the instructions must not offer it.
+        """
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "ha-addon")
+                + _click("client", "hermes")
+                + _click("scope", "local")
+                + """
+                const instructionsEl = document.getElementById('setup-instructions');
+                document.body.dataset.instructionsHtml = String(
+                  (instructionsEl && instructionsEl.innerHTML) || ''
+                );
+                """
+            ),
+        )
+        _assert_clean_init(result)
+        match = re.search(r'data-instructions-html="([^"]*)"', result.dom)
+        assert match is not None, "setup-instructions was not captured"
+        html = match.group(1)
+
+        # Plausibility floor: an empty capture must not pass the absence
+        # assertion below by saying nothing at all.
+        assert "Streamable HTTP" in html, (
+            "hermes: HTTP instructions never rendered — the absence check "
+            f"below would pass vacuously; html={html[:300]!r}"
+        )
+        assert "transport: sse" not in html, (
+            "hermes: the instructions offer `transport: sse`, but the ha-mcp "
+            "endpoint is Streamable HTTP only and answers an SSE-style "
+            "pre-flight with 405"
+        )
+
 
 class TestStdioBridgeChoice:
     """The generated stdio-bridge config must use a bridge with a bounded SDK.

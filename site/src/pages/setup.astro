@@ -2318,7 +2318,7 @@ ingress:
     headers:
       Authorization: "Bearer \${env:HA_TOKEN}"</pre>
             <p class="text-slate-400">Hermes resolves <code class="bg-slate-800 px-1 rounded">\${env:VAR}</code> (and <code class="bg-slate-800 px-1 rounded">\${VAR}</code>) from <code class="bg-slate-800 px-1 rounded">~/.hermes/.env</code>, so the token stays out of the config file. For an endpoint that speaks OAuth instead, drop the headers and set <code class="bg-slate-800 px-1 rounded">auth: oauth</code> on the entry.</p>
-            <p class="text-slate-400">Add <code class="bg-slate-800 px-1 rounded">transport: sse</code> to the entry if you want the SSE transport instead of Streamable HTTP.</p>
+            <p class="text-slate-400">Leave the transport at its default. Hermes can switch a server to SSE, but the ha-mcp endpoint is Streamable HTTP only — it is POST-only and answers an SSE-style pre-flight with <code class="bg-slate-800 px-1 rounded">405</code>.</p>
           </div>
         </div>`);
       }
