@@ -316,7 +316,7 @@ def _english_tool_sources() -> dict[str, str]:
     first physical line cut at 120 characters — the same text for 84 of the 88
     tools. ``ha_config_set_helper`` wraps its summary and the Chinese catalog
     translates the half that wraps off, so hashing the displayed text would
-    leave "(28 types, unified interface)" free to move while a shipped
+    leave "(30 types, unified interface)" free to move while a shipped
     translation states it. The copy checks stay on the displayed text, because
     a paste is of what was on screen.
     """
@@ -1218,9 +1218,9 @@ LITERAL_PARITY_EXCEPTIONS: dict[
         "ha_config_set_helper.description",
     ): (
         Counter(),
-        Counter({("28",): 1}),
+        Counter({("30",): 1}),
         "The Chinese catalog translates the tool's full summary, including the "
-        '"(28 types, unified interface)" clause that sits on the second line '
+        '"(30 types, unified interface)" clause that sits on the second line '
         "of the docstring. The rendering the engine sends is the first line "
         "alone, so the catalog states more than its source, not something else.",
     ),

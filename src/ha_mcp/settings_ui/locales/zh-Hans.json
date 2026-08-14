@@ -608,7 +608,7 @@
     },
     "ha_config_set_helper": {
       "title": "创建或更新辅助实体",
-      "description": "创建或更新 Home Assistant 辅助实体与配置子条目（28 种类型，统一接口）。"
+      "description": "创建或更新 Home Assistant 辅助实体与配置子条目（30 种类型，统一接口）。"
     },
     "ha_config_set_label": {
       "title": "创建或更新标签",

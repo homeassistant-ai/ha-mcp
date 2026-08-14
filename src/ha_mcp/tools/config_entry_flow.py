@@ -7,7 +7,7 @@ Config Entry Flow API.
 
 The create/update entry point is the unified ha_config_set_helper tool in
 tools_config_helpers.py, which routes to create_flow_helper / update_flow_helper
-for the 15 helper types listed in FLOW_HELPER_TYPES.
+for the 17 helper types listed in FLOW_HELPER_TYPES.
 
 The same flow walkers drive every other config-entry surface, not just
 helpers: ``ha_set_integration`` creates entries for arbitrary domains through
@@ -65,7 +65,10 @@ def _reject_redaction_sentinels(config_dict: dict[str, Any]) -> None:
         )
 
 
-# 15 helpers that use Config Entry Flow API (Issue #324).
+# 17 helpers that use Config Entry Flow API (Issue #324, #2187).
+# `otp` is the one helper-typed config flow deliberately left out: its confirm
+# step demands a live TOTP code derived from the secret, which no flow walker
+# can supply. It stays reachable through ha_set_integration(domain="otp").
 SUPPORTED_HELPERS = Literal[
     "template",
     "group",
@@ -82,6 +85,8 @@ SUPPORTED_HELPERS = Literal[
     "generic_thermostat",
     "switch_as_x",
     "generic_hygrostat",
+    "history_stats",
+    "mold_indicator",
 ]
 
 # Value-set form of SUPPORTED_HELPERS for runtime routing checks.
@@ -103,6 +108,8 @@ FLOW_HELPER_TYPES: frozenset[str] = frozenset(
         "generic_thermostat",
         "switch_as_x",
         "generic_hygrostat",
+        "history_stats",
+        "mold_indicator",
     }
 )
 

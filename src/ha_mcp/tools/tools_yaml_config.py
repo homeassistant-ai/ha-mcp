@@ -403,7 +403,7 @@ class YamlConfigTools:
         - Automations (storage-mode) -> ha_config_set_automation
         - Scripts (storage-mode) -> ha_config_set_script
         - Scenes (storage-mode) -> ha_config_set_scene
-        - All 28 helper types (input_*, counter, timer, schedule, zone, person,
+        - All 30 helper types (input_*, counter, timer, schedule, zone, person,
           tag, group, min_max, threshold, derivative, statistics, utility_meter,
           trend, filter, switch_as_x, etc.) -> ha_config_set_helper
 
