@@ -579,6 +579,55 @@ async def test_scoped_authorize_still_autoapproves_in_none_mode(
     assert "code=" in resp.headers["Location"]
 
 
+async def test_authorize_ignores_resource_parameter(unified_view_client_factory):
+    """RFC 8707: clients MUST send ``resource``; the AS must tolerate it."""
+    client = await unified_view_client_factory(mode="none")
+    resp = await client.get(
+        "/api/ha_mcp_tools/oauth/authorize"
+        "?response_type=code&client_id=x"
+        "&redirect_uri=https%3A%2F%2Fclaude.ai%2Fapi%2Fmcp%2Fauth_callback"
+        "&code_challenge=" + "a" * 43 + "&code_challenge_method=S256"
+        "&resource=https%3A%2F%2Fha.example%2Fapi%2Fwebhook%2Fabc",
+        allow_redirects=False,
+    )
+
+    assert resp.status == 302
+    _, params = _parse_location(resp.headers["Location"])
+    assert params["code"]
+
+
+async def test_token_ignores_resource_parameter(unified_view_client_factory):
+    """RFC 8707: token requests tolerate the required ``resource`` field."""
+    client = await unified_view_client_factory(mode="none")
+    verifier = "fixed-verifier-" + "v" * 48
+    digest = hashlib.sha256(verifier.encode()).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+    authorize_resp = await client.get(
+        "/api/ha_mcp_tools/oauth/authorize"
+        "?response_type=code&client_id=x"
+        "&redirect_uri=https%3A%2F%2Fclaude.ai%2Fapi%2Fmcp%2Fauth_callback"
+        f"&code_challenge={challenge}&code_challenge_method=S256"
+        "&resource=https%3A%2F%2Fha.example%2Fapi%2Fwebhook%2Fabc",
+        allow_redirects=False,
+    )
+    assert authorize_resp.status == 302
+    _, authorize_params = _parse_location(authorize_resp.headers["Location"])
+    code = authorize_params["code"]
+
+    token_resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": CLAUDE_REDIRECT,
+            "code_verifier": verifier,
+            "resource": "https://ha.example/api/webhook/abc",
+        },
+    )
+    assert token_resp.status == 200
+
+
 AUTH_QS = (
     "?response_type=code&client_id=anything"
     "&code_challenge=" + "a" * 43 + "&code_challenge_method=S256&state=s1"
