@@ -2088,7 +2088,7 @@
   {
     "name": "ha_get_logs",
     "title": "Get Logs",
-    "description": "Get Home Assistant logs from various sources.\n\n**Sources:**\n- \"logbook\" (default): Entity state change history with pagination\n- \"system\": Structured system log entries (errors, warnings) via system_log/list\n- \"error_log\": Raw home-assistant.log text\n- \"supervisor\": Add-on container logs (requires slug = add-on slug)\n- \"system_service\": HA-Supervisor-managed system service logs (requires\n  slug ∈ {supervisor, host, core, dns, audio, cli, multicast, observer})\n- \"logger\": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)\n\n**Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')\n**Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service); ignored for source='logger'. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window.\n**Logbook params:** hours_back, entity_id, end_time, offset, compact (default True — strips attribute dicts to save context)\n**System/error_log params:** level (ERROR, WARNING, INFO, DEBUG)\n**Supervisor params:** slug = add-on slug, e.g. \"core_mosquitto\" (use\n    ha_get_addon() to list installed slugs)\n**System-service params:** slug = service name. The slug \"supervisor\"\n    here means the Supervisor service's own logs, NOT an add-on with\n    that name — the source param disambiguates.",
+    "description": "Get Home Assistant logs from various sources.\n\n**Sources:**\n- \"logbook\" (default): Entity state change history with pagination\n- \"system\": Structured system log entries (errors, warnings) via system_log/list\n- \"error_log\": Raw log text (home-assistant.log on container/pip installs; HA Core's journald stream on Supervisor-backed installs)\n- \"supervisor\": Add-on container logs (requires slug = add-on slug)\n- \"system_service\": HA-Supervisor-managed system service logs (requires\n  slug ∈ {supervisor, host, core, dns, audio, cli, multicast, observer})\n- \"logger\": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)\n\n**Prefer source='system' for triage.** It returns HA's own deduplicated\nsystem_log entries with counts, first_occurred and full tracebacks; of\nthose only the tracebacks are unrecoverable from the structured\nerror_log summary — they are present in the raw text, so structured=False\ngets them back. Its counts also run\nsince each error first occurred, while structured error_log counts only\nwhat is inside the fetched window (reported as window_start/window_end;\nSupervisor-backed installs read a capped journald slice). Use error_log\nwith structured=True for entries below system_log's WARNING+ ~50-entry\ncap, or for the per-component rollup.\n\n**Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')\n**Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service); ignored for source='logger' and for error_log with structured=True. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window.\n**Logbook params:** hours_back, entity_id, end_time, offset, compact (default True — strips attribute dicts to save context)\n**System/error_log params:** level (ERROR, WARNING, INFO, DEBUG, CRITICAL)\n**error_log params:** structured, top_n. In structured mode `search`\n    matches the message and logger name only, whereas on the raw path it\n    matches the whole line; `limit`/`order` do not apply, and issues are\n    ranked by count, then severity, then recency.\n**Supervisor params:** slug = add-on slug, e.g. \"core_mosquitto\" (use\n    ha_get_addon() to list installed slugs)\n**System-service params:** slug = service name. The slug \"supervisor\"\n    here means the Supervisor service's own logs, NOT an add-on with\n    that name — the source param disambiguates.",
     "inputSchema": {
       "properties": {
         "source": {
@@ -2104,7 +2104,7 @@
           "default": null
         },
         "order": {
-          "type": "Annotated[Literal['newest', 'oldest'], Field(description=\"Sort order for time-ordered sources (logbook, system, error_log, supervisor, system_service): 'newest' (default) returns most-recent first; 'oldest' returns chronological-first. Ignored for source='logger'.\")]",
+          "type": "Annotated[Literal['newest', 'oldest'], Field(description=\"Sort order for time-ordered sources (logbook, system, error_log, supervisor, system_service): 'newest' (default) returns most-recent first; 'oldest' returns chronological-first. Ignored for source='logger', and for source='error_log' with structured=True (that summary is ranked by occurrence count, not by time).\")]",
           "default": "newest"
         },
         "hours_back": {
@@ -2129,6 +2129,14 @@
         },
         "level": {
           "type": "str | None",
+          "default": null
+        },
+        "structured": {
+          "type": "Annotated[bool, Field(description=\"source='error_log' only. When True, return a deduplicated, component-grouped summary of the log (counted issues sorted by frequency) instead of raw text. Use this on busy instances where the raw log is large enough to exhaust context. Ignored for other sources.\")]",
+          "default": false
+        },
+        "top_n": {
+          "type": "Annotated[int | None, Field(ge=1, description=f'Max distinct issues to return when structured=True (default {_DEFAULT_TOP_N}, capped at {MAX_LIMIT}). Bounds the response regardless of log size.')]",
           "default": null
         },
         "slug": {
