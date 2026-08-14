@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "native_name": "Čeština",
+    "dir": "ltr"
+  },
+  "messages": {
+    "accessibility.storage_blocked": "Váš prohlížeč blokuje ukládání dat webu; vaše volby platí pouze pro tuto relaci.",
+    "actions.approve": "Schválit",
+    "actions.deny": "Zamítnout",
+    "notice.restart.standalone": "⚠ Změny uloženy. Restartujte proces ha-mcp a poté obnovte seznam nástrojů MCP ve vašem AI klientovi.",
+    "policies.operators.exists": "existuje",
+    "policies.operators.exists_long": "existuje (jakákoli hodnota)",
+    "policies.operators.eq": "rovná se",
+    "policies.operators.neq": "nerovná se",
+    "policies.operators.in": "je jedním z",
+    "policies.operators.not_in": "není jedním z",
+    "policies.operators.contains": "obsahuje",
+    "policies.operators.regex": "odpovídá regulárnímu výrazu",
+    "policies.operators.gt": "je větší než",
+    "policies.operators.lt": "je menší než",
+    "policies.pending.already_decided": "Toto schválení již bylo {decision}, pravděpodobně z jiné karty nebo relace.",
+    "policies.pending.decision.approved": "schváleno",
+    "policies.pending.decision.denied": "zamítnuto",
+    "visibility.errors.conflict": "Konfigurace byla změněna na jiné kartě nebo v jiné relaci. Znovu načtěte stránku a poté znovu použijte své změny."
+  }
+}
