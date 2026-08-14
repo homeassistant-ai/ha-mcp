@@ -1,0 +1,15 @@
+{
+  "common": {
+    "oauth_not_serving": "Legacy OAuth je zatím neposkytuje — restartujte Home Assistanta, až vás o to požádá, abyste je aktivovali."
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data_description": {
+          "server_port": "Port, na kterém tento server naslouchá. Doplněk ha-mcp používá 9583, takže zde je výchozí hodnota 9584, aby mohly běžet oba vedle sebe – pokud doplněk nepoužíváte, funguje jakýkoli volný port.",
+          "server_url": "Adresa URL, kterou server běžící ve stejném procesu používá k připojení k vašemu Home Assistantovi (obvykle k této instanci samotné). Ponechte prázdné, aby se odvodila z portu a nastavení SSL této instance; hodnotu nastavte pouze tehdy, když server potřebuje jinou cestu."
+        }
+      }
+    }
+  }
+}
