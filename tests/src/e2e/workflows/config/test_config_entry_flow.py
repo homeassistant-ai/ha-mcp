@@ -440,33 +440,34 @@ class TestConfigEntryFlow:
             mcp_client, "min_max", config, "min_max helper for update test"
         )
 
-        # Update via options flow
-        updated_config = {
-            "entity_ids": [
-                "sensor.demo_temperature",
-                "sensor.demo_outside_temperature",
-            ],
-            "type": "max",
-        }
-        async with MCPAssertions(mcp_client) as mcp:
-            update_data = await mcp.call_tool_success(
-                "ha_config_set_helper",
-                {
-                    "helper_type": "min_max",
-                    "name": "test_min_max_update_e2e",
-                    "config": updated_config,
-                    # unified tool normalizes entry_id -> helper_id for flow helpers
-                    "helper_id": entry_id,
-                },
+        try:
+            # Update via options flow
+            updated_config = {
+                "entity_ids": [
+                    "sensor.demo_temperature",
+                    "sensor.demo_outside_temperature",
+                ],
+                "type": "max",
+            }
+            async with MCPAssertions(mcp_client) as mcp:
+                update_data = await mcp.call_tool_success(
+                    "ha_config_set_helper",
+                    {
+                        "helper_type": "min_max",
+                        "name": "test_min_max_update_e2e",
+                        "config": updated_config,
+                        # unified tool normalizes entry_id -> helper_id
+                        # for flow helpers
+                        "helper_id": entry_id,
+                    },
+                )
+            assert update_data.get("updated") is True
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_remove_helpers_integrations",
+                {"target": entry_id, "confirm": True},
             )
-        assert update_data.get("updated") is True
-
-        # Cleanup
-        await safe_call_tool(
-            mcp_client,
-            "ha_remove_helpers_integrations",
-            {"target": entry_id, "confirm": True},
-        )
 
     async def test_get_integration_include_schema(self, mcp_client):
         """ha_get_integration with include_schema=True returns options_schema for eligible entries."""
