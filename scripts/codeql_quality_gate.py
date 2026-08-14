@@ -277,6 +277,18 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     # exact intended pattern. Re-audit when one of these files grows.
     (
         "py/clear-text-logging-sensitive-data",
+        "custom_components/ha_mcp_tools/mcp_webhook.py",
+        "as clear text",
+        "",
+        "False positive: the legacy route-conflict warning logs the route-owner "
+        "domain string from hass.data plus the OAUTH_BASE public URL-path "
+        "constant. CodeQL's name-based classification treats the oauth-named "
+        "symbols as password-class; no credential flows into the call (the "
+        "secret-bearing exception object was deliberately dropped from the log "
+        "in the same PR).",
+    ),
+    (
+        "py/clear-text-logging-sensitive-data",
         "custom_components/ha_mcp_tools/embedded_setup.py",
         "as clear text",
         "",
