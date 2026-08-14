@@ -64,9 +64,7 @@ from .oauth_autoapprove import (
 )
 from .oauth_dcr import CFG_DCR_SIGNING_KEY, bind_dcr_view
 from .oauth_legacy import (
-    AUTHORIZE_PATH,
     OAUTH_ROUTE_OWNER_KEY,
-    TOKEN_PATH,
     LegacyOAuthProvider,
     LegacyOAuthRouteConflict,
     bind_legacy_views,
@@ -142,19 +140,22 @@ def _build_base_url(request: web.Request) -> str:
 
 
 def _authorization_server_document(base: str) -> dict[str, Any]:
-    """RFC 8414 authorization-server metadata pointing at HA core's OAuth.
+    """RFC 8414 metadata for ha_auth mode — component-owned endpoints only.
 
-    Advertises HA core's own ``/auth/authorize`` + ``/auth/token`` as a public
-    client (``token_endpoint_auth_methods_supported: ["none"]``) and
-    ``client_id_metadata_document_supported`` so clients present a URL-shaped
-    ``client_id`` (CIMD) that HA core's long-standing IndieAuth handling accepts —
-    the user never pastes a credential. No ``registration_endpoint``: HA offers no
-    dynamic client registration; CIMD replaces it.
+    HA core is still the authorization server (the scoped /authorize 302s into
+    core's /auth/authorize and /token forwards server-side — see
+    oauth_autoapprove's ha_auth branches), but every URL a client can CACHE is
+    ours: a later auth-mode switch re-dispatches per request instead of
+    stranding the client on core paths we can never retract (#2188's
+    stickiness). ``registration_endpoint`` serves DCR-fallback brokers;
+    both CIMD-selection flags stay pinned (see
+    test_as_documents_pin_the_claude_cimd_selection_contract).
     """
     return {
         "issuer": f"{base}{OAUTH_BASE}",
-        "authorization_endpoint": f"{base}/auth/authorize",
-        "token_endpoint": f"{base}/auth/token",
+        "authorization_endpoint": f"{base}{OAUTH_BASE}/authorize",
+        "token_endpoint": f"{base}{OAUTH_BASE}/token",
+        "registration_endpoint": f"{base}{OAUTH_BASE}/register",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
@@ -318,15 +319,18 @@ def issuer_for_request(request: web.Request) -> str:
 
 
 def _legacy_authorization_server_document(base: str) -> dict[str, Any]:
-    """RFC 8414 authorization-server metadata for legacy mode's own root
-    ``/authorize`` + ``/token`` views (see :mod:`oauth_legacy`)."""
+    """RFC 8414 metadata for legacy mode's component-scoped endpoints.
+
+    The root ``/authorize`` + ``/token`` views remain bound as aliases for
+    metadata-ignoring clients (see :mod:`oauth_legacy`).
+    """
     return {
         "issuer": oauth_issuer(base),
         # RFC 9207 §3: authorization responses carry ``iss`` (oauth_legacy's
         # redirects); omission reads as "not supported" to discovery clients.
         "authorization_response_iss_parameter_supported": True,
-        "authorization_endpoint": f"{base}{AUTHORIZE_PATH}",
-        "token_endpoint": f"{base}{TOKEN_PATH}",
+        "authorization_endpoint": f"{base}{OAUTH_BASE}/authorize",
+        "token_endpoint": f"{base}{OAUTH_BASE}/token",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
@@ -358,6 +362,7 @@ def _none_mode_authorization_server_document(base: str) -> dict[str, Any]:
         "authorization_response_iss_parameter_supported": True,
         "authorization_endpoint": f"{base}{OAUTH_BASE}/authorize",
         "token_endpoint": f"{base}{OAUTH_BASE}/token",
+        "registration_endpoint": f"{base}{OAUTH_BASE}/register",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
         "code_challenge_methods_supported": ["S256"],
@@ -402,8 +407,8 @@ class _ProtectedResourceMetadataView(HomeAssistantView):
 class _AuthorizationServerMetadataView(HomeAssistantView):
     """RFC 8414 Authorization Server Metadata.
 
-    Mode-aware: ha_auth points at HA core's own ``/auth/*``; legacy points at
-    this module's root ``/authorize``/``/token`` views.
+    Every mode advertises the component-scoped authorize/token pair; the bound
+    views dispatch each request according to the currently active mode.
     """
 
     requires_auth = False

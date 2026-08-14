@@ -632,13 +632,19 @@ class TestDiscoveryViews:
     def test_authorization_server_document_shape(self):
         doc = mw._authorization_server_document("https://x.nabu.casa")
         assert doc["issuer"] == f"https://x.nabu.casa{OAUTH_BASE}"
-        assert doc["authorization_endpoint"] == "https://x.nabu.casa/auth/authorize"
-        assert doc["token_endpoint"] == "https://x.nabu.casa/auth/token"
+        assert (
+            doc["authorization_endpoint"]
+            == f"https://x.nabu.casa{OAUTH_BASE}/authorize"
+        )
+        assert doc["token_endpoint"] == f"https://x.nabu.casa{OAUTH_BASE}/token"
         assert doc["response_types_supported"] == ["code"]
         assert doc["code_challenge_methods_supported"] == ["S256"]
         assert doc["token_endpoint_auth_methods_supported"] == ["none"]
         assert doc["client_id_metadata_document_supported"] is True
-        assert "registration_endpoint" not in doc
+        assert (
+            doc["registration_endpoint"]
+            == f"https://x.nabu.casa{OAUTH_BASE}/register"
+        )
 
     async def test_protected_resource_view_payload_when_live(self):
         hass = _live_hass()
@@ -664,7 +670,10 @@ class TestDiscoveryViews:
         view = mw._AuthorizationServerMetadataView(hass)
         resp = await view.get(make_request(headers={"Host": "abc.ui.nabu.casa"}))
         assert resp.status == 200
-        assert resp.json_body["token_endpoint"] == "https://abc.ui.nabu.casa/auth/token"
+        assert (
+            resp.json_body["token_endpoint"]
+            == f"https://abc.ui.nabu.casa{OAUTH_BASE}/token"
+        )
 
     async def test_authorization_server_view_404_when_entry_unloaded(self):
         hass = _make_hass()  # no DOMAIN data at all
@@ -682,9 +691,11 @@ class TestDiscoveryViews:
         assert resp.status == 200
         doc = resp.json_body
         assert doc["authorization_endpoint"] == (
-            f"https://abc.ui.nabu.casa{mw.AUTHORIZE_PATH}"
+            f"https://abc.ui.nabu.casa{OAUTH_BASE}/authorize"
         )
-        assert doc["token_endpoint"] == f"https://abc.ui.nabu.casa{mw.TOKEN_PATH}"
+        assert doc["token_endpoint"] == (
+            f"https://abc.ui.nabu.casa{OAUTH_BASE}/token"
+        )
         assert doc["code_challenge_methods_supported"] == ["S256"]
         assert set(doc["token_endpoint_auth_methods_supported"]) == {
             "client_secret_basic",
@@ -836,7 +847,7 @@ class TestNoneModeDiscovery:
             f"https://abc.ui.nabu.casa{OAUTH_BASE}/authorize"
         )
 
-        # Flip to ha_auth: HA-core-pointing document.
+        # Flip to ha_auth: the same component-owned endpoints remain advertised.
         hass.data[DOMAIN][DATA_WEBHOOK] = {
             "webhook_id": WEBHOOK_ID,
             "auth_mode": WEBHOOK_AUTH_HA,
@@ -847,7 +858,7 @@ class TestNoneModeDiscovery:
         ha_doc = (await view.get(request)).json_body
         assert (
             ha_doc["authorization_endpoint"]
-            == "https://abc.ui.nabu.casa/auth/authorize"
+            == f"https://abc.ui.nabu.casa{OAUTH_BASE}/authorize"
         )
 
         # Flip back to none: auto-approve document again.
