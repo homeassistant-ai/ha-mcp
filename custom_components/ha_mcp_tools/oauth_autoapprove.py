@@ -1,4 +1,4 @@
-"""None-mode auto-approve OAuth authorization server (issue #1969).
+"""Unified scoped OAuth authorization endpoints (issue #1969).
 
 In ``none`` webhook auth mode the secret webhook URL *is* the credential, so no
 bearer is required and the forwarder always returns 200. But claude.ai's
@@ -11,11 +11,11 @@ through to Home Assistant *core*'s own origin-root
 ``registration_endpoint``. claude.ai then can neither use CIMD nor do dynamic
 client registration and shows "Automatic client registration isn't supported…".
 
-This module is the none-mode fix's authorization-server half: a pair of
-path-scoped ``OAUTH_BASE`` endpoints that complete OAuth *invisibly* — no login,
-no consent — so a connector that does run discovery resolves against our own
-corrected documents (served by :mod:`mcp_webhook`) instead of HA core's broken
-root doc, and connects with zero HA login:
+This module owns the pair of path-scoped ``OAUTH_BASE`` endpoints. In none mode
+they complete OAuth *invisibly* — no login, no consent — so a connector that
+does run discovery resolves against our own corrected documents (served by
+:mod:`mcp_webhook`) instead of HA core's broken root doc, and connects with zero
+HA login:
 
 * ``GET  {OAUTH_BASE}/authorize`` issues a PKCE-bound one-time code and
   immediately 302-redirects back to the client with ``?code=…&state=…`` — no
@@ -25,10 +25,10 @@ root doc, and connects with zero HA login:
   mode ignores bearers entirely — but is a real random string so a spec-strict
   client is satisfied.
 
-Both views are gated per request off ``hass.data`` (they 404 unless none mode is
-the live webhook auth mode), mirroring the discovery views, so a
-``none``\\ ↔\\ ``ha_auth`` switch needs no restart. The PKCE code store and the
-redirect-URI floor are reused from :mod:`oauth_legacy` rather than copied.
+Both views dispatch per request from ``hass.data`` to the live legacy, ha_auth,
+or none-mode provider (and 404 when no remote OAuth mode is live), mirroring the
+discovery views so mode switches need no restart. The none-mode PKCE code store
+and redirect-URI floor are reused from :mod:`oauth_legacy` rather than copied.
 
 **Open-redirect defence.** ``/authorize`` 302-redirects to a caller-supplied
 ``redirect_uri`` on the Home Assistant origin, so an unvalidated target would be
@@ -46,9 +46,11 @@ callback here to support it.
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 from typing import TYPE_CHECKING, Any
 
+import aiohttp
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 
@@ -72,7 +74,7 @@ if TYPE_CHECKING:
 # mode (mirrors the "resource_server"/"oauth_provider" presence keys).
 CFG_AUTOAPPROVE_PROVIDER = "autoapprove_provider"
 
-# TOP-LEVEL hass.data flag recording that the two auto-approve views are bound
+# TOP-LEVEL hass.data flag recording that the two unified scoped views are bound
 # for this HA session. Not under DOMAIN so it survives async_unload_entry's
 # teardown — aiohttp cannot unregister a bound view until HA restarts, so the
 # views (and this ownership flag) must outlive the config entry (mirrors
@@ -162,6 +164,15 @@ class AutoApproveProvider:
         return secrets.token_urlsafe(32)
 
 
+def _webhook_cfg(hass: HomeAssistant) -> dict[str, Any] | None:
+    """The live webhook cfg dict, or None when the entry is not set up."""
+    domain_data = hass.data.get(DOMAIN)
+    if not isinstance(domain_data, dict):
+        return None
+    cfg = domain_data.get(DATA_WEBHOOK)
+    return cfg if isinstance(cfg, dict) else None
+
+
 def _active_autoapprove_provider(hass: HomeAssistant) -> AutoApproveProvider | None:
     """The live none-mode auto-approve provider, or None when it is not live.
 
@@ -169,23 +180,19 @@ def _active_autoapprove_provider(hass: HomeAssistant) -> AutoApproveProvider | N
     bound views serve only while none-autoapprove is the active mode and 404
     otherwise — mirrors ``mcp_webhook._active_webhook_id``'s per-request gating.
     """
-    domain_data = hass.data.get(DOMAIN)
-    if not isinstance(domain_data, dict):
-        return None
-    cfg = domain_data.get(DATA_WEBHOOK)
-    if not isinstance(cfg, dict):
+    cfg = _webhook_cfg(hass)
+    if cfg is None:
         return None
     provider = cfg.get(CFG_AUTOAPPROVE_PROVIDER)
     return provider if isinstance(provider, AutoApproveProvider) else None
 
 
 class AutoApproveAuthorizeView(HomeAssistantView):
-    """None-mode auto-approve ``/authorize`` — issues a code, 302s, no UI.
+    """Unified scoped ``/authorize`` dispatcher for every remote auth mode.
 
-    Validates ``response_type=code``, PKCE S256, and the redirect_uri
-    open-redirect gate, then issues a PKCE-bound one-time code and redirects
-    straight back to the client. No login page and no consent screen render, so
-    claude.ai's OAuth flow completes invisibly (issue #1969).
+    Legacy mode serves the shared consent flow, ha_auth redirects into core,
+    and none mode validates PKCE plus the redirect gate before issuing a code
+    and redirecting invisibly (issue #1969).
 
     ACCEPTED RISK (issue #1978): this endpoint is anonymous by design — none
     mode requires zero HA login — so it consults neither the webhook id nor a
@@ -210,9 +217,19 @@ class AutoApproveAuthorizeView(HomeAssistantView):
         self._hass = hass
 
     async def get(self, request: web.Request) -> web.Response:
-        """Auto-approve the authorization request or reject with a 400/404."""
-        provider = _active_autoapprove_provider(self._hass)
-        if provider is None:
+        """Dispatch the authorization request to the active mode."""
+        cfg = _webhook_cfg(self._hass)
+        if cfg is None:
+            return _json_not_found()
+        legacy_provider = cfg.get("oauth_provider")
+        if legacy_provider is not None:
+            from .oauth_legacy import handle_legacy_authorize_get
+
+            return await handle_legacy_authorize_get(legacy_provider, request)
+        if cfg.get("resource_server") is not None:
+            return await self._ha_auth_authorize(cfg, request)
+        provider = cfg.get(CFG_AUTOAPPROVE_PROVIDER)
+        if not isinstance(provider, AutoApproveProvider):
             return _json_not_found()
 
         params = request.query
@@ -256,14 +273,57 @@ class AutoApproveAuthorizeView(HomeAssistantView):
             redirect_params["state"] = state
         return _redirect_with(redirect_uri, **redirect_params)
 
+    async def _ha_auth_authorize(
+        self, cfg: dict[str, Any], request: web.Request
+    ) -> web.Response:
+        """302 the browser into core's /auth/authorize (ha_auth indirection).
+
+        The user logs in on core's own page exactly as before; only the URL the
+        client learned is ours. client_id is upgraded via CIMD/DCR validation
+        when possible, else passed through untouched (core stays the authority).
+        """
+        from .oauth_dcr import CFG_DCR_SIGNING_KEY
+        from .oauth_ha_auth import resolve_forward_client_id
+
+        params = dict(request.query)
+        client_id = params.get("client_id", "")
+        redirect_uri = params.get("redirect_uri", "")
+        forward_id = await resolve_forward_client_id(
+            cfg.get("session"),
+            cfg.get(CFG_DCR_SIGNING_KEY),
+            client_id,
+            redirect_uri,
+        )
+        if forward_id != client_id:
+            params["client_id"] = forward_id
+        import yarl
+
+        from .mcp_webhook import _build_base_url
+
+        target = yarl.URL(f"{_build_base_url(request)}/auth/authorize").with_query(
+            params
+        )
+        return web.Response(status=302, headers={"Location": str(target)})
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Handle a legacy-mode consent submission on the scoped route."""
+        cfg = _webhook_cfg(self._hass)
+        if cfg is None:
+            return _json_not_found()
+        legacy_provider = cfg.get("oauth_provider")
+        if legacy_provider is None:
+            return _json_not_found()
+        from .oauth_legacy import handle_legacy_authorize_post
+
+        return await handle_legacy_authorize_post(legacy_provider, request)
+
 
 class AutoApproveTokenView(HomeAssistantView):
-    """None-mode auto-approve ``/token`` — PKCE code → opaque access token.
+    """Unified scoped ``/token`` dispatcher for every remote auth mode.
 
-    Public client (no ``client_secret``): the PKCE code_verifier is the only
-    proof required. The returned access token is cosmetic (none mode ignores
-    bearers), but real and opaque. Only the ``authorization_code`` grant is
-    supported — none mode has no refresh cycle.
+    Legacy mode uses the shared credentialed token handlers, ha_auth forwards
+    into core, and none mode exchanges a PKCE code as a public client for a
+    cosmetic opaque token (none mode ignores bearers and has no refresh cycle).
     """
 
     requires_auth = False
@@ -276,9 +336,19 @@ class AutoApproveTokenView(HomeAssistantView):
         self._hass = hass
 
     async def post(self, request: web.Request) -> web.Response:
-        """Exchange a PKCE authorization code for an opaque access token."""
-        provider = _active_autoapprove_provider(self._hass)
-        if provider is None:
+        """Dispatch the token request to the active mode."""
+        cfg = _webhook_cfg(self._hass)
+        if cfg is None:
+            return _json_not_found()
+        legacy_provider = cfg.get("oauth_provider")
+        if legacy_provider is not None:
+            from .oauth_legacy import handle_legacy_token_post
+
+            return await handle_legacy_token_post(legacy_provider, request)
+        if cfg.get("resource_server") is not None:
+            return await self._ha_auth_token(cfg, request)
+        provider = cfg.get(CFG_AUTOAPPROVE_PROVIDER)
+        if not isinstance(provider, AutoApproveProvider):
             return _json_not_found()
 
         form: dict[str, Any] = dict(await request.post())
@@ -302,23 +372,79 @@ class AutoApproveTokenView(HomeAssistantView):
             headers=_TOKEN_RESPONSE_HEADERS,
         )
 
+    async def _ha_auth_token(
+        self, cfg: dict[str, Any], request: web.Request
+    ) -> web.Response:
+        """Forward the token exchange to core's /auth/token (server-side).
+
+        client_id gets the same deterministic translation as the authorize leg
+        (core bound the code to the translated id). The refresh grant carries no
+        redirect_uri, so translation for DCR/CIMD identities re-derives from the
+        registered list's first entry.
+        """
+        from .oauth_dcr import CFG_DCR_SIGNING_KEY
+        from .oauth_ha_auth import (
+            core_token_base_url,
+            resolve_forward_client_id,
+            translated_client_id_for_refresh,
+        )
+
+        form = dict(await request.post())
+        client_id = str(form.get("client_id", ""))
+        redirect_uri = str(form.get("redirect_uri", ""))
+        if client_id:
+            if redirect_uri:
+                form["client_id"] = await resolve_forward_client_id(
+                    cfg.get("session"),
+                    cfg.get(CFG_DCR_SIGNING_KEY),
+                    client_id,
+                    redirect_uri,
+                )
+            else:
+                # refresh_token grant: no redirect_uri on the wire — re-derive
+                # the translation from the registered list alone.
+                translated = await translated_client_id_for_refresh(
+                    cfg.get("session"), cfg.get(CFG_DCR_SIGNING_KEY), client_id
+                )
+                if translated is not None:
+                    form["client_id"] = translated
+        session = cfg.get("session")
+        if session is None:
+            return _json_error("temporarily_unavailable", 503)
+        base = core_token_base_url(self._hass, request)
+        try:
+            async with session.post(
+                f"{base}/auth/token",
+                data=form,
+                timeout=aiohttp.ClientTimeout(total=25),
+            ) as resp:
+                body = await resp.read()
+                return web.Response(
+                    status=resp.status,
+                    body=body,
+                    content_type=resp.content_type or "application/json",
+                    headers=_TOKEN_RESPONSE_HEADERS,
+                )
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            return _json_error("temporarily_unavailable", 503)
+
 
 def bind_autoapprove_views(hass: HomeAssistant) -> None:
-    """Bind the two auto-approve views at most once per HA session.
+    """Bind the two unified OAuth views at most once per HA session.
 
     aiohttp cannot unregister a bound view, so a reload / re-enable / mode
     switch must reuse the already-bound views — they resolve the active
-    provider from ``hass.data`` per request (see
-    :func:`_active_autoapprove_provider`), so they serve only while
-    none-autoapprove is live and 404 otherwise. The guard flag lives at a
-    top-level ``hass.data`` key that survives config-entry teardown (mirrors
+    mode/provider from ``hass.data`` per request (see :func:`_webhook_cfg`), so
+    the same paths dispatch to legacy, ha_auth, or none-autoapprove without
+    rebinding. The guard flag lives at a top-level ``hass.data`` key that
+    survives config-entry teardown (mirrors
     :func:`mcp_webhook._register_metadata_views`).
     """
     if hass.data.get(_AUTOAPPROVE_VIEWS_REGISTERED_KEY):
         return
     # Set the flag only AFTER both views register (issue #1978): see
     # mcp_webhook._register_metadata_views. Marking the bundle bound before
-    # /token registers would let a later none-mode setup assign the provider and
+    # /token registers would let a later setup assign its mode provider and
     # advertise OAuth with an unbound /token — a 404 on the token exchange. The
     # flag must mean the full bundle succeeded; a partial bind leaves it unset.
     hass.http.register_view(AutoApproveAuthorizeView(hass))

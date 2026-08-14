@@ -16,8 +16,8 @@ Three auth postures, chosen in the options flow:
 * ``ha_auth`` — Home Assistant core is the OAuth authorization server. This
   module serves the RFC 8414 / RFC 9728 discovery documents (so claude.ai /
   ChatGPT can sign in with the user's HA account) and validates inbound bearer
-  tokens via ``hass.auth``. There is no bespoke authorization-server code here —
-  every protocol step is HA core's own ``/auth/*``.
+  tokens via ``hass.auth``. The component-scoped authorize/token views redirect
+  and forward into core's own ``/auth/*`` endpoints; core remains the authority.
 * ``legacy`` — this module (via :mod:`oauth_legacy`) is its own OAuth 2.1
   authorization server with a static client_id/secret, for MCP clients (Google
   Gemini Spark) that need a credential to paste rather than an HA sign-in.
@@ -62,7 +62,7 @@ from .oauth_autoapprove import (
     AutoApproveProvider,
     bind_autoapprove_views,
 )
-from .oauth_dcr import CFG_DCR_SIGNING_KEY, DcrRegisterView
+from .oauth_dcr import CFG_DCR_SIGNING_KEY, bind_dcr_view
 from .oauth_legacy import (
     AUTHORIZE_PATH,
     OAUTH_ROUTE_OWNER_KEY,
@@ -70,6 +70,7 @@ from .oauth_legacy import (
     LegacyOAuthProvider,
     LegacyOAuthRouteConflict,
     bind_legacy_views,
+    build_unbound_legacy_provider,
 )
 
 if TYPE_CHECKING:
@@ -745,6 +746,8 @@ async def async_register_webhook(
             if auth_mode == WEBHOOK_AUTH_HA:
                 provider = ResourceServer(hass, webhook_id)
                 _register_metadata_views(hass)
+                bind_autoapprove_views(hass)
+                bind_dcr_view(hass)
                 cfg["resource_server"] = provider
                 if dcr_signing_key:
                     cfg[CFG_DCR_SIGNING_KEY] = bytes.fromhex(dcr_signing_key)
@@ -755,17 +758,25 @@ async def async_register_webhook(
                         "oauth_client_secret, and oauth_signing_key"
                     )
                 _register_metadata_views(hass)
+                bind_autoapprove_views(hass)
                 try:
                     oauth_provider, oauth_restart_needed = bind_legacy_views(
                         hass, oauth_client_id, oauth_client_secret, oauth_signing_key
                     )
                 except LegacyOAuthRouteConflict as err:
-                    raise ValueError(
-                        "The Webhook Proxy add-on (or its dev flavor) already "
-                        f"owns the root /authorize and /token routes ({err}). "
-                        "Stop that add-on and restart Home Assistant, then "
-                        "enable legacy mode again."
-                    ) from err
+                    _LOGGER.warning(
+                        "HA-MCP: the Webhook Proxy add-on ('%s') owns the root "
+                        "/authorize and /token routes; legacy OAuth will serve "
+                        "only on %s/authorize + %s/token (metadata-honoring "
+                        "clients are unaffected; metadata-ignoring clients that "
+                        "guess root paths reach the add-on instead).",
+                        err,
+                        OAUTH_BASE,
+                        OAUTH_BASE,
+                    )
+                    oauth_provider = build_unbound_legacy_provider(
+                        hass, oauth_client_id, oauth_client_secret, oauth_signing_key
+                    )
                 cfg["oauth_provider"] = oauth_provider
             else:
                 # WEBHOOK_AUTH_NONE (the only remaining mode — unknown modes
@@ -791,6 +802,7 @@ async def async_register_webhook(
                 try:
                     _register_metadata_views(hass)
                     bind_autoapprove_views(hass)
+                    bind_dcr_view(hass)
                     cfg[CFG_AUTOAPPROVE_PROVIDER] = AutoApproveProvider()
                     if dcr_signing_key:
                         cfg[CFG_DCR_SIGNING_KEY] = bytes.fromhex(dcr_signing_key)

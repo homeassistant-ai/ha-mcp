@@ -17,10 +17,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import importlib
 import secrets
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from ._embedded_stubs import install
 
@@ -48,10 +51,12 @@ if "yarl" not in sys.modules:
     sys.modules["yarl"] = _yarl
 
 import custom_components.ha_mcp_tools.oauth_autoapprove as aa  # noqa: E402
+import custom_components.ha_mcp_tools.oauth_legacy as oauth_legacy  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_WEBHOOK,
     DOMAIN,
     OAUTH_BASE,
+    WEBHOOK_AUTH_LEGACY,
 )
 
 CLAUDE_CLIENT_ID = "https://claude.ai/api/mcp/client_metadata"
@@ -120,6 +125,94 @@ def _parse_location(location: str) -> tuple[str, dict[str, str]]:
     flat = {k: v[0] for k, v in parse_qs(parsed.query).items()}
     base = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
     return base, flat
+
+
+def _module_is(name: str, root: str) -> bool:
+    """Return whether a module name is ``root`` or one of its children."""
+    return name == root or name.startswith(f"{root}.")
+
+
+@pytest.fixture
+async def unified_view_client_factory():
+    """Build real aiohttp clients around the two unified scoped OAuth views."""
+    # Ensure every component module the view imports lazily is first loaded
+    # against the shared stubs. The real aiohttp/yarl modules below are only for
+    # this HTTP-level harness and must not leak into the rest of the unit suite.
+    for module_name in (
+        "custom_components.ha_mcp_tools.mcp_webhook",
+        "custom_components.ha_mcp_tools.oauth_ha_auth",
+    ):
+        importlib.import_module(module_name)
+
+    package_roots = ("aiohttp", "yarl")
+    saved_modules = {
+        name: module
+        for name, module in tuple(sys.modules.items())
+        if any(_module_is(name, root) for root in package_roots)
+    }
+    for name in saved_modules:
+        sys.modules.pop(name, None)
+
+    clients = []
+    stub_aiohttp = aa.aiohttp
+    stub_autoapprove_web = aa.web
+    stub_legacy_web = oauth_legacy.web
+    try:
+        aiohttp = importlib.import_module("aiohttp")
+        aiohttp_web = importlib.import_module("aiohttp.web")
+        test_utils = importlib.import_module("aiohttp.test_utils")
+        aa.aiohttp = aiohttp
+        aa.web = aiohttp_web
+        oauth_legacy.web = aiohttp_web
+
+        async def factory(*, mode: str):
+            cfg: dict[str, object | None] = {}
+            if mode == "legacy":
+                cfg["oauth_provider"] = oauth_legacy.LegacyOAuthProvider(
+                    client_id="hamcp-test-client-id-123",
+                    client_secret="hamcp-test-secret",
+                    signing_key=b"k" * 32,
+                    active_mode_getter=lambda: WEBHOOK_AUTH_LEGACY,
+                )
+            elif mode == "ha_auth":
+                cfg["resource_server"] = object()
+                cfg["session"] = None
+            elif mode == "none":
+                cfg[aa.CFG_AUTOAPPROVE_PROVIDER] = aa.AutoApproveProvider()
+            else:
+                raise ValueError(f"unknown test mode: {mode}")
+
+            app = aiohttp_web.Application()
+            hass = SimpleNamespace(
+                data={DOMAIN: {DATA_WEBHOOK: cfg}},
+                http=SimpleNamespace(),
+            )
+
+            def register_view(view):
+                if hasattr(view, "get"):
+                    app.router.add_get(view.url, view.get)
+                if hasattr(view, "post"):
+                    app.router.add_post(view.url, view.post)
+
+            hass.http.register_view = register_view
+            aa.bind_autoapprove_views(hass)
+
+            client = test_utils.TestClient(test_utils.TestServer(app))
+            await client.start_server()
+            clients.append(client)
+            return client
+
+        yield factory
+    finally:
+        for client in clients:
+            await client.close()
+        aa.aiohttp = stub_aiohttp
+        aa.web = stub_autoapprove_web
+        oauth_legacy.web = stub_legacy_web
+        for name in tuple(sys.modules):
+            if any(_module_is(name, root) for root in package_roots):
+                sys.modules.pop(name, None)
+        sys.modules.update(saved_modules)
 
 
 # ---------------------------------------------------------------------------
@@ -467,3 +560,65 @@ class TestRfc9207MetadataAdvertisement:
 
         doc = mcp_webhook._none_mode_authorization_server_document("https://ha.example")
         assert doc["authorization_response_iss_parameter_supported"] is True
+
+
+async def test_scoped_authorize_serves_legacy_consent_when_legacy_live(
+    unified_view_client_factory,
+):
+    """Legacy mode serves its consent form from the unified scoped route."""
+    client = await unified_view_client_factory(mode="legacy")
+    resp = await client.get(
+        "/api/ha_mcp_tools/oauth/authorize"
+        "?response_type=code&client_id=hamcp-test-client-id-123"
+        "&redirect_uri=https%3A%2F%2Fclaude.ai%2Fapi%2Fmcp%2Fauth_callback"
+        "&code_challenge=" + "a" * 43 + "&code_challenge_method=S256"
+    )
+    assert resp.status == 200
+    text = await resp.text()
+    assert "Authorize MCP Connector" in text
+    assert 'action="/api/ha_mcp_tools/oauth/authorize"' in text
+
+
+async def test_scoped_authorize_redirects_into_core_when_ha_auth_live(
+    unified_view_client_factory,
+):
+    """ha_auth mode redirects the unified route into core's authorize view."""
+    client = await unified_view_client_factory(mode="ha_auth")
+    resp = await client.get(
+        "/api/ha_mcp_tools/oauth/authorize"
+        "?response_type=code&client_id=https%3A%2F%2Fclaude.ai"
+        "&redirect_uri=https%3A%2F%2Fclaude.ai%2Fapi%2Fmcp%2Fauth_callback"
+        "&code_challenge=" + "a" * 43 + "&code_challenge_method=S256"
+        "&state=xyz",
+        allow_redirects=False,
+    )
+    assert resp.status == 302
+    # Parse rather than substring-match: yarl legally leaves ':' and '/'
+    # unencoded inside query values (RFC 3986 permits them in the query).
+    from urllib.parse import parse_qs, urlparse
+
+    location = urlparse(resp.headers["Location"])
+    assert location.path == "/auth/authorize"
+    query = parse_qs(location.query)
+    # Same-origin fast path: client_id passes through untranslated, and every
+    # original parameter is preserved.
+    assert query["client_id"] == ["https://claude.ai"]
+    assert query["state"] == ["xyz"]
+    assert query["redirect_uri"] == ["https://claude.ai/api/mcp/auth_callback"]
+    assert query["code_challenge_method"] == ["S256"]
+
+
+async def test_scoped_authorize_still_autoapproves_in_none_mode(
+    unified_view_client_factory,
+):
+    """None mode keeps the existing invisible auto-approve behavior."""
+    client = await unified_view_client_factory(mode="none")
+    resp = await client.get(
+        "/api/ha_mcp_tools/oauth/authorize"
+        "?response_type=code&client_id=anything"
+        "&redirect_uri=https%3A%2F%2Fclaude.ai%2Fapi%2Fmcp%2Fauth_callback"
+        "&code_challenge=" + "a" * 43 + "&code_challenge_method=S256",
+        allow_redirects=False,
+    )
+    assert resp.status == 302
+    assert "code=" in resp.headers["Location"]

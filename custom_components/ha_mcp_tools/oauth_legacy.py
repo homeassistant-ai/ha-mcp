@@ -242,6 +242,25 @@ def bind_legacy_views(
     return provider, pending_restart
 
 
+def build_unbound_legacy_provider(
+    hass: HomeAssistant,
+    client_id: str,
+    client_secret: str,
+    signing_key: bytes | str,
+) -> LegacyOAuthProvider:
+    """Build a legacy provider for the scoped endpoints only.
+
+    Root routes are owned by another integration this session. Nothing is
+    bound, so no restart bookkeeping applies.
+    """
+    return LegacyOAuthProvider(
+        client_id=client_id,
+        client_secret=client_secret,
+        signing_key=_normalize_signing_key(signing_key),
+        active_mode_getter=lambda: _live_auth_mode(hass),
+    )
+
+
 def legacy_credentials_active(
     hass: HomeAssistant,
     client_id: str,

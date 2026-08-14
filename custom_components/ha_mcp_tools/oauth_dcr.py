@@ -38,6 +38,8 @@ from .oauth_legacy import (
 # liveness gate for the register view (mirrors the mode-provider presence keys).
 CFG_DCR_SIGNING_KEY = "dcr_signing_key"
 
+_DCR_VIEW_REGISTERED_KEY = "ha_mcp_tools_oauth_dcr_view_registered"
+
 _CLIENT_ID_PREFIX = "hamcp-dcr-"
 
 # Registration floor: enough for any real client (claude.ai registers one
@@ -169,3 +171,11 @@ class DcrRegisterView(HomeAssistantView):
             if isinstance(body.get(field), str):
                 response[field] = body[field]
         return web.json_response(response, status=201)
+
+
+def bind_dcr_view(hass: HomeAssistant) -> None:
+    """Bind the register view at most once per HA session (per-request gated)."""
+    if hass.data.get(_DCR_VIEW_REGISTERED_KEY):
+        return
+    hass.http.register_view(DcrRegisterView(hass))
+    hass.data[_DCR_VIEW_REGISTERED_KEY] = True
