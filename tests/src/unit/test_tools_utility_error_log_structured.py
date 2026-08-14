@@ -749,11 +749,11 @@ class TestHaGetLogsStructured:
         client = _make_client()
         client.get_error_log = real.get_error_log
         tools = _register_and_collect(client)
-        with patch(
-            "ha_mcp.client.rest_client.is_running_in_addon", return_value=False
+        with (
+            patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False),
+            pytest.raises(ToolError) as exc_info,
         ):
-            with pytest.raises(ToolError) as exc_info:
-                await tools["ha_get_logs"](source="error_log")
+            await tools["ha_get_logs"](source="error_log")
 
         payload = json.loads(str(exc_info.value))
         assert payload["success"] is False
@@ -851,9 +851,7 @@ class TestSupervisorInstallRegressions:
         )
         assert result["total_lines"] == 0
         assert result["filters_applied"] == {"search": "nothing-matches-this"}
-        assert not any(
-            "empty or failed fetch" in w for w in result.get("warnings", [])
-        )
+        assert not any("empty or failed fetch" in w for w in result.get("warnings", []))
 
 
 class TestCountSemantics:

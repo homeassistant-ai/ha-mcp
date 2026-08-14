@@ -252,9 +252,11 @@ async def test_get_error_log_probe_401_never_reaches_the_container_branch(client
     client._raw_request = AsyncMock()
     client._supervisor_logs_get = AsyncMock()
 
-    with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False):
-        with pytest.raises(HomeAssistantAuthError):
-            await client.get_error_log()
+    with (
+        patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False),
+        pytest.raises(HomeAssistantAuthError),
+    ):
+        await client.get_error_log()
 
     client._raw_request.assert_not_called()
     client._supervisor_logs_get.assert_not_called()
