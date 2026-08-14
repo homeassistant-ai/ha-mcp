@@ -87,6 +87,25 @@ async def test_legacy_oauth_fix_flow_prompts_before_restart():
     hass.services.async_call.assert_not_awaited()
 
 
+async def test_legacy_oauth_fix_flow_does_not_complete_rejected_restart():
+    """A rejected restart must leave the repair flow—and issue—unfinished."""
+    repairs = _load_repairs_module()
+    hass = MagicMock()
+    hass.services.async_call = AsyncMock(side_effect=RuntimeError("restart rejected"))
+    flow = await repairs.async_create_fix_flow(
+        hass,
+        "legacy_oauth_restart",
+        None,
+    )
+    flow.hass = hass
+    flow.async_create_entry = MagicMock()
+
+    with pytest.raises(RuntimeError, match="restart rejected"):
+        await flow.async_step_confirm({})
+
+    flow.async_create_entry.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "catalog_path",
     [

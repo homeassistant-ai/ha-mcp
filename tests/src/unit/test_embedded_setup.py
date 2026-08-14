@@ -173,6 +173,8 @@ class TestBringUp:
         ]
         assert created, "legacy-OAuth restart repair was not filed"
         assert created[0].kwargs["is_fixable"] is True
+        cleared = {c.args[2] for c in esetup.ir.async_delete_issue.call_args_list}
+        assert esetup.ISSUE_LEGACY_OAUTH_RESTART not in cleared
         # The same restart-needed verdict must thread into the connect-URL
         # surfacing so the log carries the first-enable "not live" caveat --
         # deleting that kwarg would silently drop the caveat.

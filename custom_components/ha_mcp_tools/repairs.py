@@ -24,10 +24,10 @@ class LegacyOAuthRestartRepairFlow(RepairsFlow):
     ) -> data_entry_flow.FlowResult:
         """Restart Home Assistant after the user confirms the repair."""
         if user_input is not None:
-            # Wait for HA to accept the restart request so a failed config check
-            # remains visible instead of reporting a successful repair. The issue
-            # is intentionally cleared only after bring-up proves no restart is
-            # pending, so an aborted restart leaves the repair actionable.
+            # Wait for HA to validate the config and schedule the restart. If the
+            # service rejects the request, the exception prevents flow completion
+            # and the repair remains registered. The next startup independently
+            # re-evaluates whether the OAuth change is still pending.
             await self.hass.services.async_call(
                 "homeassistant",
                 "restart",
