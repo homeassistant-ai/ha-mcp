@@ -773,6 +773,10 @@ rests on whichever of them addresses the reader — losing it costs the engine
 the register for every later string of that language and says so only on
 stderr, which is why
 `test_every_shipped_component_catalog_gets_reader_addressing_samples` pins it.
+Author two such keys rather than one: a run that rewords one of them queues it,
+and queued keys are dropped from the sample candidates, so a surface resting on
+a single anchor is anchorless in precisely the run that rewrites it —
+`test_component_samples_survive_their_own_anchor_being_queued` pins that.
 `src/ha_mcp/settings_ui/locales/README.md` names the tests — including the one
 that skips locally until `tests/js/` has its npm dependencies.
 
