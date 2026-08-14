@@ -716,14 +716,18 @@ def _bind_legacy_surface(
         oauth_provider, oauth_restart_needed = bind_legacy_views(
             hass, oauth_client_id, oauth_client_secret, oauth_signing_key
         )
-    except LegacyOAuthRouteConflict as err:
+    except LegacyOAuthRouteConflict:
+        # Log the owner read directly from hass.data, NOT the exception object:
+        # the exception flowed through code holding the client secret, and
+        # CodeQL's taint tracking flags logging it as clear-text sensitive-data
+        # (#2213 gate). The owner string is what the message needs anyway.
         _LOGGER.warning(
             "HA-MCP: the Webhook Proxy add-on ('%s') owns the root "
             "/authorize and /token routes; legacy OAuth will serve "
             "only on %s/authorize + %s/token (metadata-honoring "
             "clients are unaffected; metadata-ignoring clients that "
             "guess root paths reach the add-on instead).",
-            err,
+            hass.data.get(OAUTH_ROUTE_OWNER_KEY),
             OAUTH_BASE,
             OAUTH_BASE,
         )
@@ -745,16 +749,20 @@ def _bind_none_surface(
     — it only means claude.ai's rare OAuth-discovery fallback goes unassisted.
     Both view bundles bind at most once per HA session; per-request resolvers
     gate them on cfg, so a none<->ha_auth switch needs no restart (#1969).
-    Provider is assigned before the DCR key so a partial bind leaves
-    none-autoapprove inactive (plain proxy) rather than half-enabled.
+    The DCR key parses before the provider is assigned, so ANY failure —
+    including a corrupt key — leaves the whole surface inactive (plain proxy)
+    rather than half-enabled.
     """
     try:
         _register_metadata_views(hass)
         bind_autoapprove_views(hass)
         bind_dcr_view(hass)
-        cfg[CFG_AUTOAPPROVE_PROVIDER] = AutoApproveProvider()
+        # Key BEFORE provider (#2213 review): a bad key raises here and leaves
+        # BOTH unset — plain proxy — instead of a half-enabled surface whose
+        # advertised /register 404s while /authorize auto-approves.
         if dcr_signing_key:
             cfg[CFG_DCR_SIGNING_KEY] = bytes.fromhex(dcr_signing_key)
+        cfg[CFG_AUTOAPPROVE_PROVIDER] = AutoApproveProvider()
     except Exception:
         _LOGGER.exception(
             "MCP webhook: failed to set up none-mode auto-approve "

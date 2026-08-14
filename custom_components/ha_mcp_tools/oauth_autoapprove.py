@@ -263,10 +263,14 @@ class AutoApproveAuthorizeView(HomeAssistantView):
         client learned is ours. client_id is upgraded via CIMD/DCR validation
         when possible, else passed through untouched (core stays the authority).
         """
+        from multidict import MultiDict
+
         from .oauth_dcr import CFG_DCR_SIGNING_KEY
         from .oauth_ha_auth import resolve_forward_client_id
 
-        params = dict(request.query)
+        # MultiDict copy: repeated OAuth params (e.g. RFC 8707 ``resource``)
+        # must survive the forward — a plain dict() collapses them.
+        params = MultiDict(request.query)
         client_id = params.get("client_id", "")
         redirect_uri = params.get("redirect_uri", "")
         forward_id = await resolve_forward_client_id(
@@ -276,11 +280,15 @@ class AutoApproveAuthorizeView(HomeAssistantView):
             redirect_uri,
         )
         if forward_id != client_id:
+            params.popall("client_id", None)
             params["client_id"] = forward_id
         import yarl
 
         from .mcp_webhook import _build_base_url
 
+        # Request-host-derived base is correct HERE (unlike the token forward):
+        # this is a BROWSER redirect back through the origin the user is
+        # already on, not a server-side request.
         target = yarl.URL(f"{_build_base_url(request)}/auth/authorize").with_query(
             params
         )
@@ -363,6 +371,8 @@ class AutoApproveTokenView(HomeAssistantView):
         redirect_uri, so translation for DCR/CIMD identities re-derives from the
         registered list's first entry.
         """
+        from multidict import MultiDict
+
         from .oauth_dcr import CFG_DCR_SIGNING_KEY
         from .oauth_ha_auth import (
             core_token_base_url,
@@ -370,17 +380,20 @@ class AutoApproveTokenView(HomeAssistantView):
             translated_client_id_for_refresh,
         )
 
-        form = dict(await request.post())
+        form = MultiDict(await request.post())
         client_id = str(form.get("client_id", ""))
         redirect_uri = str(form.get("redirect_uri", ""))
         if client_id:
             if redirect_uri:
-                form["client_id"] = await resolve_forward_client_id(
+                forward_id = await resolve_forward_client_id(
                     cfg.get("session"),
                     cfg.get(CFG_DCR_SIGNING_KEY),
                     client_id,
                     redirect_uri,
                 )
+                if forward_id != client_id:
+                    form.popall("client_id", None)
+                    form["client_id"] = forward_id
             else:
                 # refresh_token grant: no redirect_uri on the wire — re-derive
                 # the translation from the registered list alone.
@@ -388,11 +401,12 @@ class AutoApproveTokenView(HomeAssistantView):
                     cfg.get("session"), cfg.get(CFG_DCR_SIGNING_KEY), client_id
                 )
                 if translated is not None:
+                    form.popall("client_id", None)
                     form["client_id"] = translated
         session = cfg.get("session")
         if session is None:
             return _json_error("temporarily_unavailable", 503)
-        base = core_token_base_url(self._hass, request)
+        base = core_token_base_url(self._hass)
         try:
             async with session.post(
                 f"{base}/auth/token",

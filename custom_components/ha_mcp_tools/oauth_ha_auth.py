@@ -36,7 +36,6 @@ import time
 from urllib.parse import urlparse
 
 import aiohttp
-from aiohttp import web
 from homeassistant.core import HomeAssistant
 
 from .oauth_dcr import client_redirect_uris
@@ -82,6 +81,41 @@ def redirect_matches(registered: list[str], redirect_uri: str) -> bool:
         ):
             return True
     return False
+
+
+def stable_translation_origin(registered: list[str]) -> str | None:
+    """The single origin shared by every non-loopback registered redirect.
+
+    None when there is no such origin (no web redirects, or several distinct
+    ones). Loopback redirects are excluded because their runtime origin embeds
+    an ephemeral port (RFC 8252) — no origin derived from them is reproducible
+    on the redirect_uri-less refresh leg, so identities whose only redirects
+    are loopback are never translated (passthrough; core decides).
+    """
+    origins: set[str] = set()
+    for uri in registered:
+        parsed = urlparse(uri)
+        if parsed.hostname is None or _is_loopback_host(parsed.hostname):
+            continue
+        origins.add(f"{parsed.scheme}://{parsed.netloc}")
+    if len(origins) == 1:
+        return origins.pop()
+    return None
+
+
+def _translation_for(registered: list[str], client_id: str, redirect_uri: str) -> str:
+    """Translate iff the presented redirect is registered AND lands on the
+    stable origin — the one derivation the refresh leg can reproduce from the
+    registered list alone. Anything else passes through unchanged (core's own
+    validation stays the authority)."""
+    stable = stable_translation_origin(registered)
+    if (
+        stable is not None
+        and redirect_matches(registered, redirect_uri)
+        and origin_client_id(redirect_uri) == stable
+    ):
+        return stable
+    return client_id
 
 
 async def fetch_cimd_redirects(
@@ -181,20 +215,12 @@ async def resolve_forward_client_id(
     if dcr_key is not None:
         registered = client_redirect_uris(dcr_key, client_id)
         if registered is not None:
-            if redirect_matches(registered, redirect_uri) and origin_client_id(
-                redirect_uri
-            ) == origin_client_id(registered[0]):
-                return origin_client_id(redirect_uri)
-            return client_id
+            return _translation_for(registered, client_id, redirect_uri)
 
     if parsed_client.scheme == "https" and session is not None:
         registered = await fetch_cimd_redirects(session, client_id)
-        if (
-            registered is not None
-            and redirect_matches(registered, redirect_uri)
-            and origin_client_id(redirect_uri) == origin_client_id(registered[0])
-        ):
-            return origin_client_id(redirect_uri)
+        if registered is not None:
+            return _translation_for(registered, client_id, redirect_uri)
     return client_id
 
 
@@ -205,37 +231,60 @@ async def translated_client_id_for_refresh(
 ) -> str | None:
     """Translated client_id for the redirect_uri-less refresh grant, or None.
 
-    The authorize/code legs translate to ``origin(presented redirect)``; the
-    refresh leg has no redirect on the wire, so derive from the registered
-    list's first entry — identical for any client whose registered redirects
-    share one origin (every observed real client). Multi-origin lists were
-    never translated on the authorize leg either (passthrough), so the legs
-    stay consistent.
+    Must agree with what the authorize/code legs presented to core, or core
+    rejects the refresh (the token is bound to the client_id it was minted
+    under). The legs agree by construction:
+
+    * Same-origin identities (client_id origin == stable origin — claude.ai's
+      hosted surfaces) took the fast path untranslated → None here.
+    * Cross-origin identities with one stable web origin (Gemini Spark-class)
+      were translated to that origin on every leg → return it here.
+    * Identities with no stable origin (loopback-only, or several web origins)
+      were never translated → None here.
+
+    Known caveat, documented not hidden: an identity whose registration mixes
+    ONE stable web origin with loopback entries and that authorized via a
+    loopback redirect was passed through on the code leg but translates here —
+    that refresh fails and the client re-authorizes. No observed client has
+    that shape; fixing it would require remembering which redirect each token
+    used, i.e. server-side state this design deliberately avoids.
     """
+    registered: list[str] | None = None
     if dcr_key is not None:
         registered = client_redirect_uris(dcr_key, client_id)
-        if registered:
-            return origin_client_id(registered[0])
+    if registered is None:
+        parsed = urlparse(client_id)
+        if parsed.scheme == "https" and session is not None:
+            registered = await fetch_cimd_redirects(session, client_id)
+    if not registered:
+        return None
+    stable = stable_translation_origin(registered)
+    if stable is None:
+        return None
     parsed = urlparse(client_id)
-    if parsed.scheme == "https" and session is not None:
-        registered = await fetch_cimd_redirects(session, client_id)
-        if registered:
-            return origin_client_id(registered[0])
-    return None
+    if f"{parsed.scheme}://{parsed.netloc}" == stable:
+        return None
+    return stable
 
 
-def core_token_base_url(hass: HomeAssistant, request: web.Request) -> str:
-    """Base URL for the server-side ``/auth/token`` forward.
+def core_token_base_url(hass: HomeAssistant) -> str:
+    """Base URL for the server-side ``/auth/token`` forward — never
+    request-derived.
 
     Loopback when core serves plain http (no TLS mismatch possible); otherwise
-    the public origin THIS request arrived on — guaranteed reachable with a
-    certificate the local client stack trusts, because the request just
-    traversed it.
+    the operator-configured URL via ``homeassistant.helpers.network.get_url``.
+    A forwarded-header-derived base would let an anonymous caller steer this
+    server-side POST to a host of their choosing and read the relayed
+    response (#2213 review) — request headers are deliberately not consulted.
     """
     api = getattr(hass.config, "api", None)
     if api is not None and not getattr(api, "use_ssl", False):
         return f"http://127.0.0.1:{api.port}"
-    # Deferred to avoid a cycle: mcp_webhook imports this module.
-    from .mcp_webhook import _build_base_url
+    from homeassistant.helpers.network import NoURLAvailableError, get_url
 
-    return _build_base_url(request)
+    try:
+        return get_url(hass, prefer_external=True, allow_cloud=True).rstrip("/")
+    except NoURLAvailableError:
+        # No configured URL with TLS on: best-effort loopback — the forward
+        # fails loudly (503) rather than trusting caller-supplied headers.
+        return f"http://127.0.0.1:{getattr(api, 'port', 8123)}"

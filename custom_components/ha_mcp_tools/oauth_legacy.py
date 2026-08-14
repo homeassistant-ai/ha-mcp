@@ -138,6 +138,13 @@ _LEGACY_PENDING_RESTART_KEY = "ha_mcp_tools_oauth_legacy_pending_restart"
 _DOMAIN = "ha_mcp_tools"
 
 
+# TOP-LEVEL hass.data key holding the fingerprint of the credentials the
+# SCOPED-ONLY legacy provider serves (root routes owned by another integration
+# this session — see build_unbound_legacy_provider). Separate from
+# OAUTH_ROUTE_KEY_FINGERPRINT, which records what the bound ROOT views serve.
+_LEGACY_SCOPED_FP_KEY = "ha_mcp_tools_oauth_legacy_scoped_fingerprint"
+
+
 class LegacyOAuthRouteConflict(RuntimeError):
     """Raised when another integration already owns the root OAuth routes."""
 
@@ -253,10 +260,17 @@ def build_unbound_legacy_provider(
     Root routes are owned by another integration this session. Nothing is
     bound, so no restart bookkeeping applies.
     """
+    key_bytes = _normalize_signing_key(signing_key)
+    # The scoped views serve THIS provider from cfg immediately (no restart
+    # semantics apply) — record its identity so legacy_credentials_active
+    # reports these working credentials as live (#2213 review).
+    hass.data[_LEGACY_SCOPED_FP_KEY] = _oauth_route_fingerprint(
+        client_id, client_secret, key_bytes
+    )
     return LegacyOAuthProvider(
         client_id=client_id,
         client_secret=client_secret,
-        signing_key=_normalize_signing_key(signing_key),
+        signing_key=key_bytes,
         active_mode_getter=lambda: _live_auth_mode(hass),
     )
 
@@ -277,14 +291,18 @@ def legacy_credentials_active(
     in particular, which is reachable through the server's own log tools
     (review finding on #1880).
     """
-    if hass.data.get(OAUTH_ROUTE_OWNER_KEY) != _DOMAIN:
-        return False
-    bound = hass.data.get(OAUTH_ROUTE_KEY_FINGERPRINT)
-    if not isinstance(bound, str):
-        return False
     current = _oauth_route_fingerprint(
         client_id, client_secret, _normalize_signing_key(signing_key)
     )
+    if hass.data.get(OAUTH_ROUTE_OWNER_KEY) != _DOMAIN:
+        # Root routes owned elsewhere (webhook-proxy add-on). The scoped
+        # endpoints may still serve these credentials via the unbound provider
+        # (#2213 review) — surface them when its fingerprint matches.
+        scoped = hass.data.get(_LEGACY_SCOPED_FP_KEY)
+        return isinstance(scoped, str) and hmac.compare_digest(scoped, current)
+    bound = hass.data.get(OAUTH_ROUTE_KEY_FINGERPRINT)
+    if not isinstance(bound, str):
+        return False
     return hmac.compare_digest(bound, current)
 
 

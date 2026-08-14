@@ -94,6 +94,21 @@ def _active_dcr_key(hass: HomeAssistant) -> bytes | None:
     return key if isinstance(key, bytes) else None
 
 
+def _active_grant_types(hass: HomeAssistant) -> list[str]:
+    """Grant types the ACTIVE mode actually implements (RFC 7591 honesty).
+
+    none mode's auto-approve token endpoint rejects refresh grants and its AS
+    document advertises only ``authorization_code`` — the registration response
+    must not promise more (#2213 review). ha_auth forwards to core, which
+    serves refresh.
+    """
+    domain_data = hass.data.get(DOMAIN)
+    cfg = domain_data.get(DATA_WEBHOOK) if isinstance(domain_data, dict) else None
+    if isinstance(cfg, dict) and cfg.get("resource_server") is not None:
+        return ["authorization_code", "refresh_token"]
+    return ["authorization_code"]
+
+
 def _dcr_error(error: str, description: str) -> web.Response:
     """RFC 7591 §3.2.2 registration error response."""
     return web.json_response(
@@ -159,7 +174,7 @@ class DcrRegisterView(HomeAssistantView):
             "client_id_issued_at": int(time.time()),
             "redirect_uris": uris,
             "token_endpoint_auth_method": "none",
-            "grant_types": ["authorization_code", "refresh_token"],
+            "grant_types": _active_grant_types(self._hass),
             "response_types": ["code"],
         }
         # Echo benign metadata the client sent (RFC 7591 §3.2.1 lets the AS
