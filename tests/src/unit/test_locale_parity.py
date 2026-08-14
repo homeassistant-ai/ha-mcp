@@ -1196,12 +1196,14 @@ def test_component_catalog_is_not_a_copy_of_english(locale: str) -> None:
 # (locale, surface, key) -> why this pair cannot satisfy the rule. Keep the
 # reason specific enough that a later reader can re-decide it; an exception
 # whose justification is "the check is noisy" belongs in the check instead.
-# The tolerated loss is named, not the pair: everything else about the key --
-# any other number, every literal -- is still checked, so a later hand edit
-# cannot hide behind the exception.
+# The tolerated divergence is named, not the pair: everything else about the
+# key -- any other number, every literal -- is still checked, so a later hand
+# edit cannot hide behind the exception. Losses and additions are recorded
+# separately because they fail differently; today's single entry records only
+# an addition.
 #
 # Counted, not set-valued: the entry excuses as many occurrences of that
-# number as it records, so a second "5" appearing on the same key later still
+# number as it records, so a second "28" appearing on the same key later still
 # reports. Liveness is asserted by
 # ``test_every_literal_parity_exception_is_load_bearing`` -- an entry the
 # catalog outgrew is a permanent blind spot on its key, and the sync rewriting
@@ -1221,17 +1223,6 @@ LITERAL_PARITY_EXCEPTIONS: dict[
         '"(28 types, unified interface)" clause that sits on the second line '
         "of the docstring. The rendering the engine sends is the first line "
         "alone, so the catalog states more than its source, not something else.",
-    ),
-    (
-        "ru",
-        "src/ha_mcp/settings_ui/locales",
-        "messages.features.enable_beta_features.help",
-    ): (
-        Counter({("5",): 1}),
-        Counter(),
-        'Russian spells the count out: "для пяти экспериментальных '
-        'подпараметров" for "the 5 experimental sub-flags". The digit is '
-        "missing because the sentence is right, not because a number was lost.",
     ),
 }
 
@@ -1339,6 +1330,32 @@ def _is_owed_a_rewrite(surface: str, key: str, locale: str) -> bool:
     ).get(surface, frozenset())
 
 
+def _guarded_surface_sizes(locale: str) -> dict[str, int]:
+    """How many keys this locale's catalogs hold on each guarded surface.
+
+    Read off the raw catalogs -- before the pending exclusion, before the
+    English-side lookups the pairs go through. The two have to be able to
+    disagree for the assertions in ``_literal_parity_pairs`` to mean anything:
+    a surface that holds keys but yields no pair is the fault those
+    assertions exist for, and sizing it from the filtered pairs would hide
+    exactly that.
+    """
+    translated = _catalogs_by_surface(locale)
+    settings_catalog = _settings_catalog(locale)
+    return {
+        "src/ha_mcp/settings_ui/locales": len(
+            translated["src/ha_mcp/settings_ui/locales"]
+        ),
+        "custom_components/ha_mcp_tools/translations": len(
+            translated["custom_components/ha_mcp_tools/translations"]
+        ),
+        TOOL_SOURCES_SURFACE: len(_flatten(settings_catalog.get("tools", {}))),
+        "settings UI tool group headings": len(
+            _flatten(settings_catalog.get("tool_groups", {}))
+        ),
+    }
+
+
 def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, str]]:
     """(surface, key, translated, english) for one locale.
 
@@ -1394,16 +1411,43 @@ def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, str]]:
     # completeness-gated, so PR CI never runs it. Each surface therefore
     # carries its own floor, and the set of surfaces is asserted rather than
     # inferred from a count.
+    #
+    # Expected per locale rather than globally, because a locale ships its
+    # authored anchors before its first sync run: a fresh catalog carries
+    # neither `tools` nor `tool_groups`, so the two surfaces derived from them
+    # hold nothing — structurally absent rather than stopped resolving.
+    # Demanding all four of it reddens every new language for being new, which
+    # says nothing about the baseline.
+    #
+    # What that elasticity costs, and where it is paid back, measured rather
+    # than asserted. Sizes are read before the pending exclusion, so a drift
+    # that empties the *filter* — a planner section name the pending lookup no
+    # longer matches — still reddens here, per locale: nine of them, with the
+    # surface renamed at the pairs site alone. A drift in the *section name*
+    # moves this expectation along with it, because both sides read the same
+    # `settings_catalog.get("tools", ...)`, and then nothing here reddens at
+    # all. `test_every_guarded_surface_resolves_for_some_locale` is what
+    # catches that one, and is the reason it exists.
+    sizes = _guarded_surface_sizes(locale)
     compared = Counter(surface for surface, _, _, _ in pairs)
-    assert set(compared) == _GUARDED_SURFACES, (
+    expected = {surface for surface, size in sizes.items() if size}
+    assert set(compared) == expected, (
         f"literal parity compared {sorted(compared)} for {locale}, not "
-        f"{sorted(_GUARDED_SURFACES)} — a surface stopped resolving against "
-        "the baseline, and its catalogs are no longer checked at all"
+        f"{sorted(expected)} — a surface stopped resolving against the "
+        "baseline, and its catalogs are no longer checked at all"
     )
     # Ten, not a rounder number: the smallest live surface is the 29 tool
     # group headings, and a floor above that would redden on a legitimate
-    # consolidation of tool groups while pointing nowhere near the cause.
-    thin = {surface: count for surface, count in compared.items() if count < 10}
+    # consolidation of tool groups while pointing nowhere near the cause. A
+    # catalog holding fewer keys than the floor is not thin, it is small —
+    # the component surface of a locale awaiting its first sync run carries
+    # one key by design — so the floor applies where there is something to
+    # thin out.
+    thin = {
+        surface: count
+        for surface, count in compared.items()
+        if count < 10 <= sizes[surface]
+    }
     assert not thin, (
         f"literal parity compared {thin} for {locale} — that surface resolves "
         "but has almost nothing left to compare, so a green run says nothing "
@@ -1620,6 +1664,31 @@ def test_a_pending_hidden_rendering_keeps_its_base_key_checked(
         f"stub, which has not moved, so nothing is owed a rewrite here"
     )
     assert base in keys, f"{base} is no longer compared at all"
+
+
+def test_every_guarded_surface_resolves_for_some_locale() -> None:
+    """The per-locale expectation is elastic; this one is not.
+
+    ``_literal_parity_pairs`` asks each locale only for the surfaces its own
+    catalogs hold, so a catalog that ships before its first sync run is not
+    reddened for the two tool surfaces it cannot fill yet. That elasticity has
+    to be paid for somewhere: the fault it must not absorb is a surface whose
+    lookup stopped resolving, and that one takes the surface away from every
+    locale at once — a renamed ``TOOL_SOURCES_SURFACE``, a moved path key in
+    ``_catalogs_by_surface``, a planner section name the pending lookup no
+    longer matches. Asserting the union closes it without asking a fresh
+    language to be old.
+    """
+    resolved = {
+        surface
+        for locale in _non_english_settings_locales()
+        for surface, _, _, _ in _literal_parity_pairs(locale)
+    }
+    assert resolved == _GUARDED_SURFACES, (
+        f"literal parity resolves {sorted(resolved)} across every shipped "
+        f"locale, not {sorted(_GUARDED_SURFACES)} — the missing surface is "
+        "checked for nobody, so no catalog on it is compared at all"
+    )
 
 
 @pytest.mark.parametrize("locale", _non_english_settings_locales())
@@ -1985,10 +2054,16 @@ def _exception_still_fits(
 def test_every_literal_parity_exception_is_load_bearing() -> None:
     """A tolerance the catalog outgrew is a blind spot, not a no-op.
 
-    Both entries excuse a specific sentence. Once the sync rewrites that
+    Every entry excuses a specific sentence. Once the sync rewrites that
     sentence -- and it will, the moment its English moves -- the tolerance
     stops describing anything and silently keeps excusing the key it names.
     Nothing else in the file would notice: the pair simply passes.
+
+    The window opens earlier than the rewrite, and this is what reports it:
+    an entry whose English has moved but whose sync has not run yet already
+    fails here, because the pending exclusion drops the pair. The message
+    names all three causes for that reason -- renamed, deleted, or moved past
+    the baseline -- and only the third is a wait rather than a deletion.
     """
     for (locale, surface, key), (
         losses,
@@ -2032,39 +2107,34 @@ def test_every_literal_parity_exception_is_load_bearing() -> None:
 def test_an_exception_that_over_records_is_refused() -> None:
     """The liveness rule has to be containment, and the table cannot show it.
 
-    Every shipped entry records exactly what its pair loses, so the assertion
-    above cannot go red on the corpus — removing it changes no result today.
-    What it exists for is the entry that records more than it needs: under
-    intersection that entry reads as live while excusing occurrences that do
-    not exist, which is the blind spot the table's header rules out in prose.
-    """
-    recording = [
-        (entry, value) for entry, value in LITERAL_PARITY_EXCEPTIONS.items() if value[0]
-    ]
-    assert recording, (
-        "no exception entry records a loss, so this test has nothing to "
-        "inflate — the table changed shape and the containment rule is "
-        "unguarded"
-    )
-    (locale, surface, key), (losses, _, _) = recording[0]
-    pair = [
-        (pair_text, pair_english)
-        for pair_surface, pair_key, pair_text, pair_english in _literal_parity_pairs(
-            locale
-        )
-        if (pair_surface, pair_key) == (surface, key)
-    ]
-    assert pair, (
-        f"the {locale} exception names {surface}: {key}, which no longer "
-        "resolves to a checked pair"
-    )
-    text, english = pair[0]
-    lost = _numbers(english) - _numbers(text)
+    Every shipped entry records exactly what its pair diverges by, so the
+    assertion above cannot go red on the corpus — removing it changes no
+    result today. What it exists for is the entry that records more than it
+    needs: under intersection that entry reads as live while excusing
+    occurrences that do not exist, which is the blind spot the table's header
+    rules out in prose.
 
-    assert _exception_still_fits(losses, lost), (
-        "the shipped entry should record no more than the pair loses"
+    Built on a synthetic pair rather than on the first loss-recording entry of
+    the shipped table. Reading the table made this test's reach depend on the
+    corpus still carrying a specimen -- first on that entry's pair resolving,
+    which stopped when its English moved past the baseline, and then on the
+    table holding a loss-recording entry at all, which stopped when the entry
+    was dropped. Both failures were loud, and neither of them said anything
+    about containment: they reported the shape of the corpus. A synthetic pair
+    reports the rule.
+    """
+    english = "Master gate for the 5 experimental sub-flags below."
+    translated = "Главный переключатель для пяти экспериментальных подпараметров."
+    lost = _numbers(english) - _numbers(translated)
+    assert lost, (
+        "the synthetic pair loses no number, so the inflation below has "
+        "nothing to exceed and the containment rule is not exercised"
     )
-    inflated = Counter({token: count + 98 for token, count in losses.items()})
+
+    assert _exception_still_fits(lost, lost), (
+        "an entry recording exactly what its pair loses has to read as live"
+    )
+    inflated = Counter({token: count + 98 for token, count in lost.items()})
     assert inflated & lost, "intersection cannot tell the inflated entry apart"
     assert not _exception_still_fits(inflated, lost), (
         "containment must refuse an entry that records 98 more occurrences "

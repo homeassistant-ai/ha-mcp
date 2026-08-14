@@ -1,0 +1,15 @@
+{
+  "common": {
+    "oauth_not_serving": "Legacy OAuth ankoraŭ ne liveras ilin — rekomencu Home Assistant, kiam ĝi petas vin pri tio, por aktivigi ilin."
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data_description": {
+          "server_port": "La pordo, ĉe kiu ĉi tiu servilo aŭskultas. La kromprogramo ha-mcp uzas 9583, do ĉi tie la defaŭlta valoro estas 9584, por ke ambaŭ povu funkcii samtempe — se vi ne uzas la kromprogramon, iu ajn libera pordo taŭgas.",
+          "server_url": "La URL, kiun la servilo funkcianta en la sama procezo uzas por atingi vian Home Assistant (kutime ĉi tiu instanco mem). Lasu ĝin malplena por derivi la valoron el la pordo kaj la SSL-agordoj de ĉi tiu instanco; agordu valoron nur kiam la servilo bezonas alian vojon."
+        }
+      }
+    }
+  }
+}

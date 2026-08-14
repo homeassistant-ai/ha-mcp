@@ -1,6 +1,6 @@
 ---
 # GENERATED FILE — do not edit. Translations live in
-# src/ha_mcp/settings_ui/locales/en.json (keys addon.*, features.*,
+# src/ha_mcp/settings_ui/locales/eo.json (keys addon.*, features.*,
 # addon_stable.*); regenerate with: python scripts/generate_locales.py
 configuration:
   backup_hint:

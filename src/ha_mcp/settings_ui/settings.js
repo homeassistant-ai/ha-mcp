@@ -1936,7 +1936,7 @@ const FEATURE_META = {
   },
   enable_beta_features: {
     label: "Enable beta features (master)",
-    help: "⚠ DANGER — these tools can PERMANENTLY DAMAGE your Home Assistant installation. They write to your YAML config, your filesystem, install custom components, run arbitrary sandboxed Python, and edit tool docstrings the AI sees. There is no warranty and no support guarantee — you enable them at your OWN RISK. Take a Home Assistant backup before turning this on, and never enable in production without one. Master gate for the 5 experimental sub-flags below; sub-flags are ignored at runtime while this master is off, even when explicitly set to true. The same toggle is also surfaced in the web settings UI under \"Beta features (dangerous)\" — either surface reflects the other on restart.",
+    help: "⚠ DANGER — these tools can PERMANENTLY DAMAGE your Home Assistant installation. They write to your YAML config, your filesystem, install custom components, run arbitrary sandboxed Python, and edit tool docstrings the AI sees. There is no warranty and no support guarantee — you enable them at your OWN RISK. Take a Home Assistant backup before turning this on, and never enable in production without one. Master gate for the experimental sub-flags below; sub-flags are ignored at runtime while this master is off, even when explicitly set to true. The same toggle is also surfaced in the web settings UI under \"Beta features (dangerous)\" — either surface reflects the other on restart.",
   },
   enable_yaml_config_editing: {
     label: "Enable YAML config editing (beta)",

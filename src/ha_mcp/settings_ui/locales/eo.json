@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "native_name": "Esperanto",
+    "dir": "ltr"
+  },
+  "messages": {
+    "accessibility.storage_blocked": "Via retumilo blokas la konservadon de retejaj datumoj; viaj elektoj validas nur por ĉi tiu seanco.",
+    "actions.approve": "Aprobi",
+    "actions.deny": "Rifuzi",
+    "notice.restart.standalone": "⚠ Ŝanĝoj konservitaj. Restartigu la procezon ha-mcp, poste aktualigu la liston de MCP-iloj en via AI-kliento.",
+    "policies.operators.exists": "ekzistas",
+    "policies.operators.exists_long": "ekzistas (iu ajn valoro)",
+    "policies.operators.eq": "egalas",
+    "policies.operators.neq": "NE egalas",
+    "policies.operators.in": "estas unu el",
+    "policies.operators.not_in": "NE estas unu el",
+    "policies.operators.contains": "enhavas",
+    "policies.operators.regex": "kongruas kun regula esprimo",
+    "policies.operators.gt": "estas pli granda ol",
+    "policies.operators.lt": "estas pli malgranda ol",
+    "policies.pending.already_decided": "Ĉi tiu aprobo jam estis {decision}, eble de alia langeto aŭ seanco.",
+    "policies.pending.decision.approved": "aprobita",
+    "policies.pending.decision.denied": "rifuzita",
+    "visibility.errors.conflict": "La agordo estis ŝanĝita en alia langeto aŭ seanco. Reŝargu la paĝon, poste reapliku viajn ŝanĝojn."
+  }
+}
