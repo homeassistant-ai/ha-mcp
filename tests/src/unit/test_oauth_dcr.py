@@ -191,6 +191,26 @@ async def test_register_rejects_multiple_web_origins(dcr_view_client_factory):
     assert (await resp.json())["error"] == "invalid_redirect_uri"
 
 
+async def test_register_preserves_explicit_zero_port_in_web_origin(
+    dcr_view_client_factory,
+):
+    """Treat an explicit port zero as distinct from the HTTPS default port."""
+    client = await dcr_view_client_factory(dcr_key=KEY, resource_server=object())
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/register",
+        json={
+            "redirect_uris": [
+                "https://a.example/cb",
+                "https://a.example:0/cb",
+            ]
+        },
+    )
+
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "invalid_redirect_uri"
+
+
 async def test_register_none_mode_advertises_authorization_code_only(
     dcr_view_client_factory,
 ):

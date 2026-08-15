@@ -103,7 +103,8 @@ def _non_loopback_origins(redirect_uris: list[str]) -> set[tuple[str, str, int]]
         parsed = urlparse(uri)
         if parsed.hostname is None or _is_loopback_host(parsed.hostname):
             continue
-        origins.add((parsed.scheme, parsed.hostname, parsed.port or 443))
+        port = parsed.port
+        origins.add((parsed.scheme, parsed.hostname, 443 if port is None else port))
     return origins
 
 
