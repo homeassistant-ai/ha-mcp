@@ -108,7 +108,14 @@
     },
     "legacy_oauth_restart": {
       "title": "Herstart Home Assistant om de legacy OAuth-wijziging toe te passen",
-      "description": "De legacy OAuth-authenticatiemodus registreert zijn eigen /authorize en /token web-eindpunten, die Home Assistant alleen kan binden of vrijgeven wanneer het volledig opnieuw opstart - of je deze modus nu net hebt ingeschakeld, uitgeschakeld, of de Client ID/Secret hebt gewijzigd. Herstart Home Assistant (Instellingen - Systeem - Herstarten) om de wijziging toe te passen; tot die tijd blijft het vorige gedrag van kracht."
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Home Assistant opnieuw opstarten?",
+            "description": "Het indienen van dit formulier zal Home Assistant opnieuw opstarten en de legacy OAuth-wijziging toepassen.\n\nKlik op **Verzenden** om nu opnieuw op te starten."
+          }
+        }
+      }
     }
   },
   "selector": {

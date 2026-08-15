@@ -4,10 +4,314 @@
     "dir": "ltr"
   },
   "messages": {
+    "app.document_title": "Nastavení nástrojů HA-MCP",
+    "app.title": "Nastavení HA-MCP",
+    "language.label": "Jazyk",
+    "language.auto": "Automaticky",
+    "theme.label": "Motiv",
+    "theme.auto_os": "Automaticky (OS)",
+    "theme.light": "Světlý",
+    "theme.dark": "Tmavý",
+    "status.loading": "Načítání…",
+    "nav.skip": "Přejít na obsah",
+    "tabs.aria": "Sekce nastavení",
+    "tabs.tools": "Nástroje",
+    "tabs.server": "Nastavení serveru",
+    "tabs.backups": "Zálohy",
+    "tabs.policies": "Zásady zabezpečení nástrojů",
+    "tabs.visibility": "Viditelnost entit",
+    "tabs.accessibility": "Přístupnost",
+    "notice.restart_required": "⚠ Změny uloženy. Restartujte HA-MCP, aby se projevily. Při dalším spuštění HA-MCP zcela odstraní zakázané nástroje ze seznamu nástrojů MCP. Poté se znovu připojte nebo obnovte server MCP ve vašem AI klientovi (např. obnovte seznam nástrojů na claude.ai, znovu přidejte/obnovte konektor v ChatGPT, nebo zavřete a znovu otevřete Claude Desktop), aby se seznam nástrojů znovu načetl. Restartování aplikace (doplňku) nebo Home Assistant NEobnoví seznam nástrojů uložený ve vašem klientovi. ChatGPT někdy nadále poskytuje svůj uložený seznam nástrojů i po odebrání a opětovném přidání konektoru – pokud nástroje stále chybí, odstraňte konektor a vytvořte nový pod jiným názvem.",
+    "notice.shared_settings": "Funkce pro celý server (vyhledávání nástrojů, úprava konfigurace YAML, nástroje souborového systému atd.) se zobrazují jak na kartě <strong>Nastavení serveru</strong>, tak na stránce konfigurace aplikace (doplňku); v obou případech se jedná o stejná nastavení. Obě rozhraní zůstanou synchronizovaná po restartu aplikace (doplňku). Změny vyžadují restart HA-MCP.",
+    "notice.env_pins": "Nástroje uvedené v proměnných prostředí <code>DISABLED_TOOLS</code> nebo <code>PINNED_TOOLS</code> jsou uzamčeny pouze pro čtení; zrušte nastavení proměnné prostředí, abyste je zde mohli upravit. Přepínače připnutí se projeví pouze tehdy, když je povoleno vyhledávání nástrojů (karta Nastavení serveru nebo stránka konfigurace aplikace (doplňku)).",
+    "actions.restart_addon": "Restartovat aplikaci (doplněk)",
+    "actions.save": "Uložit",
+    "actions.save_settings": "Uložit nastavení",
+    "actions.refresh": "Obnovit",
+    "actions.close": "Zavřít",
+    "tools.read_only.label": "Režim pouze pro čtení",
+    "tools.read_only.help": "Vypne všechny nástroje pro zápis a zablokuje každému nástroji provádění zápisových nebo destruktivních volání. Nástroje pro smíšené čtení/zápis (zálohy, aplikace (doplňky), preference energie, hlasové pipeline a režim kódu, pokud je povolen) zůstanou dostupné s blokovanými operacemi zápisu.",
+    "tools.read_only.unknown": "Nepodařilo se načíst nastavení serveru. Stav režimu pouze pro čtení je neznámý; toto zobrazení nemusí odrážet to, co server vynucuje.",
+    "tools.search": "Hledat nástroje...",
+    "server.auto_save_notice": "Nastavení na této kartě se ukládají automaticky. Změny se projeví až po restartu aplikace (doplňku) (aplikuje je na straně serveru) a opětovném připojení nebo obnovení serveru MCP ve vašem AI klientovi (znovu načte seznam nástrojů), např. obnovení seznamu nástrojů na claude.ai, opětovné přidání nebo obnovení konektoru v ChatGPT, nebo zavření a opětovné otevření Claude Desktop. ChatGPT někdy nadále poskytuje svůj uložený seznam nástrojů i po odebrání a opětovném přidání konektoru – pokud nástroje stále chybí, odstraňte konektor a vytvořte nový pod jiným názvem.",
+    "server.sections.search": "Vyhledávání a shoda",
+    "server.sections.operations": "Operace",
+    "server.sections.tool_surface": "Rozhraní nástrojů",
+    "server.sections.diagnostics": "Diagnostika",
+    "server.sections.sidecar": "Doprovodné uživatelské rozhraní nastavení",
+    "server.sections.beta": "Beta funkce (nebezpečné)",
+    "server.sections.developer": "Vývojář",
+    "server.sidecar.disable": "Trvale zakázat server nastavení",
+    "server.sidecar.disable_title": "Trvale zakáže uživatelské rozhraní nastavení: zastaví tento server A zapíše ~/.ha-mcp/settings_ui_disabled, aby se nespustil při budoucích spuštěních ha-mcp. Pro opětovné povolení tento soubor smažte.",
+    "backups.loading": "Načítání stavu zálohy…",
+    "backups.filter.domain": "Doména (např. automation)",
+    "backups.filter.domain_aria": "Filtrovat zálohy podle domény",
+    "backups.filter.entity": "ID entity",
+    "backups.filter.entity_aria": "Filtrovat zálohy podle ID entity",
+    "backups.bulk_delete": "Hromadně smazat odpovídající…",
+    "policies.title": "Zásady zabezpečení nástrojů",
+    "policies.intro": "Schvalování volání s vysokým rizikem pro jednotlivé nástroje. Použijte kartu <strong>Nástroje</strong> k povolení schvalování pro nástroj a poté zde upřesněte podmínky shody a dobu platnosti schválení. Operátory podmínek: rovná se, je jedním z, regex, obsahuje, je přítomen, větší než, menší než.",
+    "policies.global.title": "Globální nastavení",
+    "policies.global.unknown": "Nepodařilo se načíst nastavení serveru. Dva přepínače níže jsou zobrazeny jako neznámé a nelze je změnit, dokud se stránka úspěšně nenačte; toto zobrazení nemusí odrážet to, co server vynucuje.",
+    "policies.global.enabled.label": "Povolit zásady zabezpečení nástrojů",
+    "policies.global.enabled.help": "Hlavní přepínač. Zrcadlí přepínač v Nastavení serveru. Ve výchozím nastavení vypnuto. Zapněte a restartujte aplikaci (doplněk) pro aktivaci schvalovacího middleware. Pokud je vypnuto, pravidla níže přetrvávají, ale nejsou vynucována.",
+    "policies.global.manage_tool.label": "Povolit AI agentům upravovat tyto zásady (ha_manage_security_policy)",
+    "policies.global.manage_tool.help": "Registruje nástroj ha_manage_security_policy, který čte a nahrazuje dokument zásad, který tato karta upravuje. Ve výchozím nastavení vypnuto. Nezávisle na hlavním přepínači výše: toto řídí, kdo může pravidla upravovat, nikoli zda jsou vynucována. Nástroj nezpřístupňuje operace fronty čekajících schválení, ale akce nastavení řízená zásadami může stále vyžadovat schválení.",
+    "policies.global.manage_tool.warning": "Povolení této možnosti umožňuje připojeným AI agentům přepisovat zásady zabezpečení na této kartě, včetně odstranění schvalovacích bran. Abyste udrželi člověka v procesu, zabezpečte nástroj PŘEDTÍM, než jej povolíte: na kartě Nástroje zapněte „security gated“ pro Manage Security Policy. Toto pravidlo lze vytvořit, když je nástroj stále vypnutý, a vynucuje se, jakmile je hlavní přepínač výše zapnutý a server byl restartován. Restartujte aplikaci (doplněk) po přepnutí kteréhokoli přepínače.",
+    "policies.global.wait.label": "Čekat sekund (5-600)",
+    "policies.global.wait.help": "Jak dlouho middleware čeká na schválení před vypršením časového limitu.",
+    "policies.global.ttl.label": "TTL schválení minut (1-60)",
+    "policies.global.ttl.help": "Jak dlouho zůstane čekající schválení ve frontě před vypršením platnosti.",
+    "policies.global.save": "Uložit globální nastavení",
+    "policies.pending.title": "Čekající schválení",
+    "policies.pending.empty": "Žádná čekající schválení.",
+    "policies.rules.title": "Zabezpečené nástroje",
+    "policies.rules.empty": "Žádné nástroje nejsou aktuálně zabezpečeny. Povolte zabezpečení pro jednotlivé nástroje na kartě <a href=\"#\" data-panel-link=\"tools\">Nástroje</a>.",
+    "accessibility.intro": "Tato nastavení se projeví okamžitě a jsou uložena v tomto prohlížeči a na serveru, takže přežijí restarty ve všech režimech (včetně stdio, kde se stránka nastavení může občas přesunout na nový port). Dokumentační web nabízí stejné ovládací prvky ve svém navigačním panelu; nemá server a ukládá nastavení pro každý prohlížeč.",
     "accessibility.storage_blocked": "Váš prohlížeč blokuje ukládání dat webu; vaše volby platí pouze pro tuto relaci.",
+    "accessibility.theme.title": "Motiv",
+    "accessibility.theme.help": "Barevná schémata jedním kliknutím. Automaticky, výchozí nastavení, se řídí preferencemi vašeho OS a mění se v reálném čase, když se změní.",
+    "accessibility.theme.preset": "Předvolba motivu",
+    "accessibility.theme.paper": "Papír",
+    "accessibility.theme.gray": "Šedá",
+    "accessibility.theme.contrast": "Vysoký kontrast",
+    "accessibility.text_size.title": "Velikost textu",
+    "accessibility.text_size.help": "Mění velikost základního písma. Zoom prohlížeče (Ctrl/Cmd +) stále funguje nad tímto nastavením.",
+    "accessibility.colors.title": "Vlastní barvy",
+    "accessibility.colors.help": "Vyberte si vlastní barvy nad vybraným motivem. Každý vzorník otevře systémový vizuální výběr barev.",
+    "accessibility.colors.background": "Pozadí",
+    "accessibility.colors.text": "Text",
+    "accessibility.colors.accent": "Akcent",
+    "accessibility.colors.low_contrast": "Zvolené barvy pozadí a textu mají kontrastní poměr nižší než 4,5:1 a mohou být obtížně čitelné dohromady.",
+    "accessibility.colors.clear": "Vymazat vlastní barvy",
+    "accessibility.reset": "Obnovit výchozí nastavení",
+    "visibility.intro": "Skryjte entity s nízkou hodnotou (automaticky generované diagnostické nebo pomocné entity, nebo explicitní seznam) z nástrojů pro čtení kolekcí <code>ha_search</code> a <code>ha_get_overview</code>, aby výsledky vyhledávání a přehledu byly méně přeplněné. Ve výchozím nastavení vypnuto; změny se projeví při dalším volání nástroje.",
+    "visibility.boundary": "Bez režimu vynucení (níže) jde o redukci šumu, nikoli o řízení přístupu: skrytá entita je stále vrácena přímým čtením jejího entity_id a stále se objevuje v obsahu automatizací, řídicích panelů a šablon. Nespoléhejte se na samotný filtr jako na bezpečnostní hranici.",
+    "visibility.enabled": "Povolit filtr viditelnosti entit",
+    "visibility.enforce.title": "Režim vynucení",
+    "visibility.enforce.help": "Rozšiřuje filtr z pročišťování vyhledávání a přehledu na každé čtení nástrojem. Přímé čtení skryté entity vrátí „nenalezeno“ a čtení obsahu (řídicí panel, šablona, automatizace, trasování, protokol nebo soubor), které by odhalilo skrytou entitu, je odmítnuto. Jde o nejlepší snahu o utajení proti náhodnému odhalení, nikoli o zesílenou bezpečnostní hranici.",
+    "visibility.enforce.only_enforced": "Učinit skryté entity nečitelnými napříč všemi nástroji (nejen vyhledáváním)",
+    "visibility.categories.title": "Skrýt podle kategorie",
+    "visibility.categories.help": "Home Assistant označuje automaticky generované entity jako diagnostické nebo konfigurační.",
+    "visibility.categories.legend": "Kategorie entit ke skrytí",
+    "visibility.categories.diagnostic": "Diagnostické",
+    "visibility.categories.config": "Konfigurační",
+    "visibility.categories.hidden": "Také entity již skryté v Home Assistant",
+    "visibility.area_label.title": "Skrýt podle oblasti nebo štítku",
+    "visibility.area_label.help": "ID oblastí nebo ID štítků oddělené čárkami; entity v jakékoli uvedené oblasti nebo se štítkem jsou skryty.",
+    "visibility.areas": "Oblasti",
+    "visibility.labels": "Štítky",
+    "visibility.entities.title": "Skrýt konkrétní entity",
+    "visibility.entities.help": "Jedno entity_id na řádek. Tyto zůstanou skryté i bez záznamu v registru entit.",
+    "visibility.entities.denied": "Zakázaná ID entit",
+    "visibility.allowlist.title": "Omezit na seznam povolených",
+    "visibility.allowlist.help": "Pokročilé: pokud je nastaveno jakékoli pole seznamu povolených, filtr se obrátí – zůstanou viditelné pouze entity odpovídající seznamu povolených, vše ostatní je skryto (včetně entit přidaných později). Ponechte všechna tři prázdná pro vypnutí.",
+    "visibility.allowlist.areas": "Povolené oblasti",
+    "visibility.allowlist.labels": "Povolené štítky",
+    "visibility.allowlist.entities_help": "Povolená ID entit, jedno na řádek.",
+    "visibility.allowlist.entities": "Povolená ID entit",
+    "visibility.assist.title": "Zohlednit expozici Assist",
+    "visibility.assist.help": "Skrýt entity, které nejsou vystaveny hlasovému asistentovi Home Assistant Assist („konverzace“), zrcadlící seznam Nastavení > Hlasoví asistenti > Zpřístupnit. Po povolení přidává dvě čtení websocketu na vyhledávání.",
+    "visibility.assist.only_exposed": "Zobrazit pouze entity vystavené Assistu",
+    "features.enable_tool_search.label": "Povolit vyhledávání nástrojů",
+    "features.enable_tool_search.help": "Nahradí celý katalog nástrojů vyhledáváním. Snižuje nečinný kontext přibližně o 90 %, na zhruba 5K tokenů. ⚠️ NEPOVOLUJTE toto v klientech s vlastním vestavěným vyhledáváním nástrojů / odloženými nástroji (claude.ai, Claude Desktop, Claude Code) — dvě vrstvy vyhledávání se střetávají a vestavěné vyhledávání nástrojů klienta je tam lepší volbou; nechte to vypnuté. Zda jsou nástroje odložené, závisí na kombinaci vašeho klienta a modelu: použijte toto, když vaše nastavení načítá celý katalog předem — modely bez nativních odložených nástrojů (např. Gemini, lokální modely kompatibilní s OpenAI, Claude Haiku), klienti, kteří vkládají všechna schémata nástrojů bez ohledu na model (např. GitHub Copilot CLI), nebo menší kontextová okna. Některé modely Codex a ChatGPT také zahrnují odložené nástroje — zkontrolujte přímo svého klienta/model, abyste potvrdili jeho funkce a nenechali to zbytečně povolené. Nástroje jsou nalezeny pomocí ha_search_tools a spouštěny prostřednictvím kategorizovaných proxy (čtení/zápis/mazání). Vyžaduje restart, aby se projevilo.",
+    "features.tool_search_max_results.label": "Max. výsledků vyhledávání nástrojů",
+    "features.tool_search_max_results.help": "Maximální počet nástrojů vrácených ha_search_tools, když je povoleno vyhledávání nástrojů. Nižší hodnoty (2-3) šetří kontextové tokeny, ale mohou přehlédnout relevantní nástroje. Rozsah: 2-10. Vyžaduje restart.",
+    "features.enable_tool_security_policies.label": "Povolit zásady zabezpečení nástrojů (pokročilé)",
+    "features.enable_tool_security_policies.help": "Podmiňuje vysoce rizikové volání nástrojů (ovládání zámků/alarmů, zápisy automatizací atd.) schválením uživatelem. Když je volán chráněný nástroj, agent řekne uživateli, aby otevřel záložku Zásady zabezpečení nástrojů ve webovém rozhraní a klikl na Schválit, než volání pokračuje. Pravidla pro jednotlivé nástroje s volitelnými podmínkami argumentů se konfigurují na záložce Zásady zabezpečení nástrojů. Ve výchozím nastavení vypnuto. Vyžaduje restart, aby se projevilo.",
+    "features.read_only_mode.label": "Režim pouze pro čtení",
+    "features.read_only_mode.help": "Vypne všechny nástroje pro zápis a odebere nástrojům možnost provádět jakékoli zápisové nebo destruktivní volání. Smíšené nástroje pro čtení/zápis (zálohy, doplňky, preference energie, hlasové pipeline a režim kódu, pokud je povolen) zůstanou dostupné s blokovanými operacemi zápisu. Stejný přepínač jako na záložce Nástroje ve webovém rozhraní. Ve výchozím nastavení vypnuto. Vyžaduje restart, aby se projevilo.",
+    "features.redact_secrets.label": "Redigovat tajemství",
+    "features.redact_secrets.help": "Rediguje tajemství z odpovědí nástrojů, než se dostanou k AI asistentovi. Možnosti doplňků a integrační pole označené jako hesla jsou nahrazeny značkou nastaveno/prázdné (takže otázka „je tento pověřovací údaj nakonfigurován?“ zůstane zodpověditelná) a další odpovědi nástrojů jsou očištěny od tajných hodnot, které server již viděl (hodnoty kratší než 6 znaků jsou přeskočeny, protože nahrazení malých fragmentů by poškodilo nesouvisející výstup). Pole, která nejsou schématem označena jako hesla, nelze detekovat. Ve výchozím nastavení vypnuto.",
+    "features.enable_mandatory_bps.label": "Připojit dovednosti osvědčených postupů při zápisu",
+    "features.enable_mandatory_bps.help": "Hlavní přepínač pro funkci doručování obsahu dovedností nástrojů pro zápis (problém #1182). Pokud je povoleno (výchozí), šest konfiguračních nástrojů pro zápis (automatizace, skripty, scény, pomocníci, řídicí panely, čistý YAML) připojí kanonické referenční soubory osvědčených postupů Home Assistant pod `skill_content` při každém úspěšném zápisu, plus automaticky vloží jakékoli referenční sekce citované varováními o osvědčených postupech. Každý nástroj také zpřístupňuje parametr `MandatoryBPS` pro každé volání, který může agent nastavit na false při následných voláních, jakmile má obsah. Když je tento hlavní přepínač vypnutý, ŽÁDNÝ `skill_content` není odeslán bez ohledu na parametr pro každé volání nebo varování BP. Doporučeno ZAPNUTO jako první volba; vypněte pouze pro modely s velmi malými kontextovými okny. Vypnutí této funkce může snížit přesnost zápisu. Vyžaduje restart, aby se projevilo.",
+    "features.enable_strict_mandatory_bps.label": "Přísný režim osvědčených postupů",
+    "features.enable_strict_mandatory_bps.help": "Přísný režim: zabraňuje klientovi používat nástroj, dokud neprokáže, že si přečetl osvědčené postupy. Pokud je zapnuto, šest nástrojů pro zápis osvědčených postupů (automatizace, skripty, scény, pomocníci, řídicí panely, čistý YAML) je blokováno a vrátí chybu, která klientovi nařídí přečíst si dovednost osvědčených postupů pomocí ha_get_skill_guide a vrátit potvrzovací klíč, který tam získá. Pokud je zapnuto, nástroj ha_get_skill_guide je uzamčen jako povolený — je jediným vydavatelem potvrzovacího klíče. Je podřízeno výše uvedené možnosti „Připojit dovednosti osvědčených postupů při zápisu“ a je neaktivní, pokud je tato nadřazená možnost vypnuta. Vyžaduje restart, aby se projevilo.",
+    "features.enable_beta_features.label": "Povolit beta funkce (hlavní)",
+    "features.enable_beta_features.help": "⚠ NEBEZPEČÍ — tyto nástroje mohou TRVALE POŠKODIT vaši instalaci Home Assistant. Zapisují do vaší YAML konfigurace, vašeho souborového systému, instalují vlastní komponenty, spouštějí libovolný Python v sandboxu a upravují docstringy nástrojů, které AI vidí. Neexistuje žádná záruka ani garance podpory — povolujete je na VLASTNÍ RIZIKO. Před zapnutím si vytvořte zálohu Home Assistant a nikdy je nepovolujte v produkčním prostředí bez ní. Hlavní přepínač pro experimentální pod-příznaky níže; pod-příznaky jsou za běhu ignorovány, pokud je tento hlavní přepínač vypnutý, i když jsou explicitně nastaveny na true. Stejný přepínač je také zobrazen v uživatelském rozhraní webového nastavení pod „Beta funkce (nebezpečné)“ — obě rozhraní se po restartu vzájemně synchronizují.",
+    "features.enable_yaml_config_editing.label": "Povolit úpravy YAML konfigurace (beta)",
+    "features.enable_yaml_config_editing.help": "Beta funkce. Umožňuje AI asistentům přidávat, nahrazovat nebo odstraňovat klíče nejvyšší úrovně v configuration.yaml a packages/*.yaml. Povoleny jsou pouze klíče na bílé listině (např. template, sensor, command_line, mqtt, knx); základní klíče jako homeassistant, http a recorder jsou blokovány. Každá úprava ověřuje syntaxi YAML, spouští kontrolu konfigurace a vytváří automatickou zálohu. Změny většiny klíčů vyžadují úplný restart HA, aby se projevily. Viz docs/beta.md pro známá omezení. Pokud jsou k dispozici, měly by být preferovány vyhrazené nástroje (automatizace, skripty, scény, pomocníci, šablonové senzory). VYŽADUJE, aby byl hlavní přepínač „Povolit beta funkce“ výše (a ve webovém rozhraní) zapnutý — jinak je tento podřízený příznak za běhu ignorován bez ohledu na jeho zdejší hodnotu.",
+    "features.enable_yaml_edit_confirm.label": "Vyžadovat potvrzení pro úpravy YAML (náhled rozdílů)",
+    "features.enable_yaml_edit_confirm.help": "Podpřepínač úprav konfigurace YAML, VE VÝCHOZÍM NASTAVENÍ ZAPNUTO (doporučeno). První volání ha_config_set_yaml vrátí sjednocený rozdíl přesně toho, co by se změnilo na disku, plus potvrzovací token a nic nezapíše; úprava se uloží pouze tehdy, když je volání zopakováno s tímto tokenem. Existuje proto, aby se nezáměrné změny mimo požadovanou úpravu zachytily dříve, než se dostanou na disk (problém #1720). Vypněte pouze pro úsporu jedné zpáteční cesty na úpravu.",
+    "features.enable_yaml_packages_automation.label": "Povolit automatizaci v packages/*.yaml",
+    "features.enable_yaml_packages_automation.help": "Podpřepínač úprav konfigurace YAML. Když je zapnuto, ha_config_set_yaml přijímá yaml_path='automation' uvnitř packages/*.yaml. Když je vypnuto, volání je odmítnuto jak na straně klienta, tak na straně serveru. Nástroj v režimu úložiště (ha_config_set_automation) není ovlivněn. Výchozí stav je VYPNUTO; platí pouze, když je zapnuto také \"Enable YAML config editing\" výše.",
+    "features.enable_yaml_packages_script.label": "Povolit skript v packages/*.yaml",
+    "features.enable_yaml_packages_script.help": "Podpřepínač úprav konfigurace YAML. Když je zapnuto, ha_config_set_yaml přijímá yaml_path='script' uvnitř packages/*.yaml. Když je vypnuto, volání je odmítnuto jak na straně klienta, tak na straně serveru. Nástroj v režimu úložiště (ha_config_set_script) není ovlivněn. Výchozí stav VYPNUTO; platí pouze tehdy, když je zapnuto i výše uvedené \"Povolit úpravy konfigurace YAML\".",
+    "features.enable_yaml_packages_scene.label": "Povolit scénu v packages/*.yaml",
+    "features.enable_yaml_packages_scene.help": "Podpřepínač úpravy konfigurace YAML. Když je zapnuto, ha_config_set_yaml přijímá yaml_path='scene' uvnitř packages/*.yaml. Když je vypnuto, volání je odmítnuto jak na straně klienta, tak na straně serveru. Nástroj v režimu úložiště (ha_config_set_scene) není ovlivněn. Výchozí stav VYPNUTO; platí pouze tehdy, když je také zapnuto „Povolit úpravy konfigurace YAML“ výše.",
+    "features.enable_filesystem_tools.label": "Povolit nástroje souborového systému (beta)",
+    "features.enable_filesystem_tools.help": "Nastaví HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Povoluje přímý přístup pro čtení/zápis souborů do vašeho souborového systému Home Assistant. VAROVÁNÍ: Tímto získá MCP server citlivý přímý přístup k souborům ve vašem systému. Povolte pouze v případě, že důvěřujete AI asistentovi s operacemi se soubory. Vyžaduje restart, aby se změny projevily. VYŽADUJE, aby byl zapnut hlavní přepínač „Enable beta features“ výše (a ve webovém rozhraní) — jinak je tento podřízený příznak za běhu ignorován bez ohledu na jeho hodnotu zde.",
+    "features.enable_code_mode.label": "Povolit sandbox vlastních nástrojů (beta)",
+    "features.enable_code_mode.help": "Beta funkce. Povoluje nástroj ha_manage_custom_tool, který umožňuje AI asistentům vytvářet, spouštět, ukládat a mazat vlastní kód Pythonu v zabezpečeném sandboxu, když žádný vestavěný nástroj nedokáže požadavek zpracovat. Kód běží v izolovaném interpretu bez přístupu k souborovému systému nebo libovolnému síťovému přístupu. Kód v sandboxu může přistupovat k HA REST API (api_get/api_post), posílat WebSocket příkazy (ws_send), volat existující nástroje MCP (call_tool) nebo odstranit uložený nástroj (delete_saved_tool). Uložené nástroje se ve výchozím nastavení ukládají do /data/saved_tools.json, takže přežijí restarty doplňku a jsou viditelné pro každého klienta, který se může připojit. Známá omezení naleznete v docs/beta.md. Vyžaduje restart, aby se projevilo. VYŽADUJE, aby byl zapnut hlavní přepínač „Enable beta features“ výše (a ve webovém rozhraní) – jinak je tento podřízený příznak za běhu ignorován bez ohledu na jeho hodnotu zde.",
+    "features.enable_lite_docstrings.label": "Povolit zjednodušené docstringy nástrojů (beta)",
+    "features.enable_lite_docstrings.help": "Beta funkce. Nahrazuje docstringy u několika náročných nástrojů ha-mcp (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) kratšími variantami, které odkládají podrobnosti o schématu a příkladech na nástroj ha_get_skill_guide (nebo jeho skill:// resource). UPOZORNĚNÍ: toto snižuje využití tokenů v nečinnosti, ale může snížit výkon LLM — zkrácené popisy spoléhají na to, že LLM skutečně zavolá nástroj skill nebo přečte skill resource pro podrobnosti, což není zaručeno (některé modely přeskočí dodatečné volání nástroje a skončí s menším vedením, než měly dříve). Nejlépe se kombinuje s klientem, který podporuje MCP resources nebo s enable_tool_search. Vyžaduje restart, aby se projevilo. VYŽADUJE, aby byl hlavní přepínač „Enable beta features“ výše (a ve web UI) zapnutý — jinak je tento podřízený příznak za runtime ignorován bez ohledu na jeho hodnotu zde.",
+    "features.enable_dashboard_screenshot.label": "Povolit režim snímání obrazovky dashboardu (beta)",
+    "features.enable_dashboard_screenshot.help": "Beta funkce — ve výchozím nastavení zakázáno. Přidává nástroj ha_get_dashboard_screenshot a možnosti include_screenshot / return_screenshot k nástrojům pro získání/nastavení panelu, takže asistenti AI mohou kontrolovat jeden nebo více responzivních obrázků Lovelace (např. k ověření panelu, který právě vytvořili). Podporuje stabilní pojmenované pohledy, dávky pro mobilní zařízení/tablety/desktopy a výstup PNG/JPEG/WebP/BMP. Vykreslování probíhá v samostatném, volitelném enginu — doplňku „Puppet“ od ballooba (headless Chromium) — který nainstalujete jednou (přidáte repozitář doplňků ballooba, poté nainstalujete „Puppet“) a udělíte mu dlouhodobý přístupový token; v nasazeních Docker/Container spustíte tento engine jako sidecar a nastavíte HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nic náročného se nenainstaluje, pokud tuto funkci nepovolíte a nenainstalujete engine. Vyžaduje restart, aby se projevilo. VYŽADUJE, aby byl zapnut hlavní přepínač „Enable beta features“ výše (a ve webovém rozhraní) — jinak je tento podřízený příznak za běhu ignorován bez ohledu na jeho hodnotu zde.",
+    "actions.restart_server": "Restartovat server HA-MCP",
+    "actions.restart_confirm": "Restartovat HA-MCP nyní? Stránka se automaticky znovu načte, jakmile bude opět online.",
+    "actions.view": "Zobrazit",
+    "actions.diff": "Rozdíly",
+    "actions.restore": "Obnovit",
+    "actions.delete": "Smazat",
+    "actions.edit": "upravit",
+    "actions.remove": "Odebrat",
+    "actions.cancel": "Zrušit",
     "actions.approve": "Schválit",
     "actions.deny": "Zamítnout",
+    "actions.dismiss": "Zavřít",
+    "status.loaded": "Načteno",
+    "status.loading_ellipsis": "Načítání…",
+    "status.loading_parentheses": "(načítání…)",
+    "status.unsaved": "Neuložené změny...",
+    "status.saving": "Ukládání…",
+    "status.saving_server_setting": "Ukládání nastavení serveru...",
+    "status.saved": "Uloženo.",
+    "status.saved_restart": "Uloženo. Vyžaduje restart.",
+    "status.saved_llm_api": "Uloženo. Zpřístupnění LLM API se projeví při další zprávě agenta.",
+    "status.saved_reload_failed": "Uloženo (znovunačtení selhalo; obnovte pro ověření).",
+    "status.nothing_editable": "Nic k úpravě.",
+    "status.stopping": "Zastavování...",
+    "status.stopped_offline": "Zastaveno. Tato stránka přejde do režimu offline",
+    "status.stopped_connection": "Zastaveno (spojení přerušeno)",
+    "status.restarting": "Restartování…",
+    "status.waiting_addon": "Čekání, až se aplikace (doplněk) vrátí online…",
+    "errors.javascript": "Chyba JS: {message} @ {where}",
+    "errors.async": "Asynchronní chyba: {message}",
+    "errors.network": "Chyba sítě: {message}",
+    "errors.network_endpoint": "Chyba sítě při připojování k {endpoint}: {message}",
+    "errors.http_endpoint": "{endpoint} vrátil HTTP {status} {detail}",
+    "errors.json_endpoint": "Nepodařilo se analyzovat odpověď {endpoint} jako JSON: {message}",
+    "errors.render": "Vykreslení selhalo: {message} (otevřete vývojářské nástroje prohlížeče pro zásobník)",
+    "errors.save_failed": "Uložení selhalo",
+    "errors.save_failed_detail": "Uložení selhalo: {message}",
+    "errors.save_failed_http": "Uložení selhalo (HTTP {status})",
+    "errors.save_failed_non_json": "Uložení selhalo (HTTP {status}, tělo není JSON)",
+    "errors.load_failed": "Načtení selhalo: {status}",
+    "errors.stop_failed": "Zastavení selhalo",
+    "errors.restart_failed": "Restart selhal",
+    "errors.failed_detail": "Selhalo: {detail}",
+    "errors.addon_not_back": "Aplikace (doplněk) se nevrátila online. Obnovte stránku ručně.",
+    "errors.unparseable_suffix": " (tělo odpovědi nelze analyzovat)",
+    "common.operation_failed": "{operation} selhala: {detail}",
+    "common.enabled": "povoleno",
+    "common.disabled": "zakázáno",
+    "common.env_locked": "uzamčeno prostředím",
+    "common.minutes_short": "{count} min",
+    "common.bytes": "{count} bajtů",
+    "common.none": "(žádné)",
+    "notice.restart.addon": "⚠ Změny uloženy. Klikněte na „Restartovat aplikaci (doplněk)“, aby se projevily. Zakázané nástroje budou při příštím spuštění odstraněny ze seznamu nástrojů MCP. Poté obnovte seznam nástrojů ve vašem AI klientovi; samotné restartování aplikace neobnoví seznam uložený v mezipaměti klienta.",
+    "notice.restart.embedded": "⚠ Změny uloženy. Klikněte na „Restartovat server HA-MCP“ pro opětovné načtení integrace v procesu. Poté obnovte seznam nástrojů MCP ve vašem AI klientovi.",
+    "notice.restart.sidecar": "⚠ Změny uloženy. Pro jejich projevení zcela ukončete a znovu otevřete svého klienta MCP. Zakázané nástroje budou při příštím spuštění odstraněny ze seznamu nástrojů MCP.",
     "notice.restart.standalone": "⚠ Změny uloženy. Restartujte proces ha-mcp a poté obnovte seznam nástrojů MCP ve vašem AI klientovi.",
+    "server.sidecar.confirm_disable": "⚠ TRVALE zakázat server nastavení?\n\nTím se server zastaví a zapíše se značka, která zabrání jeho opětovnému spuštění. Pro obnovení přístupu smažte ~/.ha-mcp/settings_ui_disabled a zrušte nastavení HA_MCP_DISABLE_SETTINGS_UI. Pokračovat?",
+    "tools.empty": "Nebyly nalezeny žádné nástroje. Sidecar čte ~/.ha-mcp/tool_metadata.json. Pokud chybí nebo je prázdný, restartujte svého klienta MCP. Podrobnosti naleznete v ~/.ha-mcp/sidecar.log.",
+    "tools.group_count": "{enabled}/{total} povoleno",
+    "tools.group_toggle_title": "Povolit/zakázat všechny nástroje v této skupině",
+    "tools.badges.mandatory": "povinné",
+    "tools.badges.read_only": "pouze pro čtení",
+    "tools.badges.writes": "zapisuje",
+    "tools.badges.deletes": "maže",
+    "tools.notes.gated_disabled": "Zakázáno. Zapněte {setting} — přepínač nástroje pro úpravu zásad je na kartě Zásady zabezpečení nástrojů — a poté restartujte aplikaci (doplněk).",
+    "tools.notes.beta_disabled": "Beta. Nastavte {setting} v konfiguraci vývojové aplikace (doplňku) nebo odpovídající proměnné prostředí (viz docs/beta.md).",
+    "tools.notes.env_pinned": "Připnuto proměnnou {variable}. Zrušte nastavení proměnné prostředí pro úpravu zde.",
+    "tools.notes.bps_locked": "Uzamčeno, když je zapnut režim přísných osvědčených postupů. Nejprve vypněte toto nastavení, abyste tento nástroj zakázali.",
+    "tools.notes.read_only_off": "Vypnuto. Režim pouze pro čtení je zapnut; nástroje pro zápis jsou zakázány.",
+    "tools.notes.read_only_partial": "Režim pouze pro čtení: operace zápisu tohoto nástroje jsou blokovány; operace čtení zůstávají dostupné.",
+    "tools.llm_api.label": "LLM API",
+    "tools.llm_api.help": "Nabídněte tento nástroj konverzačním agentům Home Assistant prostřednictvím LLM API. Projeví se při další zprávě agenta; není vyžadován restart.",
+    "tools.aria.llm_api": "{title} zpřístupněno LLM API konverzačního agenta",
+    "tools.aria.enabled": "{title} povoleno",
+    "tools.aria.pinned": "{title} připnuto",
+    "tools.aria.security_gated": "{title} zabezpečeno",
+    "tools.states.enabled": "povoleno",
+    "tools.states.pinned": "připnuto",
+    "tools.states.security_gated": "zabezpečeno",
+    "tools.security.enable_first": "Nejprve povolte zásady zabezpečení nástrojů v konfiguraci aplikace (doplňku).",
+    "tools.summary.total": "{count} celkem",
+    "tools.summary.enabled": "{count} povoleno",
+    "tools.summary.pinned": "{count} připnuto",
+    "tools.summary.disabled": "{count} zakázáno",
+    "tools.read_only.save_failed": "Změna režimu pouze pro čtení se neuložila. Server stále používá předchozí hodnotu.",
+    "backup.fields.enable_auto_backup.label": "Automatické zálohování úprav",
+    "backup.fields.enable_auto_backup.help": "Pořiďte snímek před každým zabaleným zápisem nebo destruktivním voláním nástroje.",
+    "backup.fields.auto_backup_throttle_minutes.label": "Omezení (minuty)",
+    "backup.fields.auto_backup_throttle_minutes.help": "Omezení na entitu. 0 = každý zápis; N > 0 = maximálně jedna záloha za N minut. Rozsah 0–1440.",
+    "backup.fields.auto_backup_retain_per_entity.label": "Zachovat na entitu",
+    "backup.fields.auto_backup_retain_per_entity.help": "Maximální počet snímků uchovávaných na entitu (1–10000). Starší se postupně odstraňují.",
+    "backup.fields.auto_backup_dir.label": "Přepsání adresáře záloh",
+    "backup.fields.auto_backup_dir.help": "Ponechte prázdné pro použití výchozího adresáře; jinak zadejte absolutní cestu.",
+    "backup.fields.auto_backup_calendar_lookahead_days.label": "Předstih kalendáře (dny)",
+    "backup.fields.auto_backup_calendar_lookahead_days.help": "Jak daleko dopředu se mají dotazovat události kalendáře pro snímky před úpravou. Rozsah 1–365.",
+    "backup.fields.enable_snapshot_delete.label": "Povolit smazání snímků",
+    "backup.fields.enable_snapshot_delete.help": "Povolit ha_manage_backup mazat úplné snímky HA, přičemž plánované, nejnovější a příliš mladé snímky zůstanou chráněny.",
+    "backup.fields.snapshot_delete_min_age_days.label": "Minimální stáří snímku pro smazání (dny)",
+    "backup.fields.snapshot_delete_min_age_days.help": "Snímek musí být před smazáním alespoň takto starý. Rozsah 0–365.",
+    "backup.origins.addon": "Synchronizováno se Supervisor. Po uložení je vyžadován restart.",
+    "backup.origins.file": "Uloženo lokálně; projeví se okamžitě.",
+    "backup.origins.default": "Používá se výchozí; první uložení vytvoří lokální soubor pro přepsání.",
+    "backup.errors.load_settings": "Nepodařilo se načíst nastavení zálohování.",
+    "backup.errors.unavailable": "Nastavení zálohování nedostupné.",
+    "backup.errors.load_list": "Chyba při načítání záloh",
+    "backup.errors.load_one": "Nepodařilo se načíst zálohu „{name}“: {message}",
+    "backup.errors.diff": "Nepodařilo se porovnat zálohu „{name}“: {message}",
+    "backup.errors.restore": "Obnovení „{name}“ selhalo: {message}",
+    "backup.errors.restore_detail": "Obnovení selhalo: {detail}",
+    "backup.errors.delete": "Smazání „{name}“ selhalo: {message}",
+    "backup.errors.delete_detail": "Smazání selhalo: {detail}",
+    "backup.errors.bulk_delete": "Hromadné smazání selhalo: {detail}",
+    "backup.state.status": "Stav",
+    "backup.state.throttle": "Omezení",
+    "backup.state.retain": "Zachovat na entitu",
+    "backup.state.directory": "Adresář",
+    "backup.state.total": "Celkem",
+    "backup.empty": "Zatím žádné zálohy. Povolte automatické zálohování a upravte entitu, abyste ji vytvořili.",
+    "backup.modal.view": "Zobrazit: {name}",
+    "backup.modal.diff": "Rozdíly: {name}",
+    "backup.identical": "(identické)",
+    "backup.confirm.restore": "Obnovit {name}?\n\nTím se přepíše aktuální stav entity. Nejprve se provede bezpečnostní záloha.",
+    "backup.confirm.delete": "Smazat {name}? Tuto akci nelze vrátit zpět.",
+    "backup.restored": "Obnoveno. Bezpečnostní záloha: {name}",
+    "backup.bulk.prompt_days": "Smazat zálohy starší než N dní (ponechte prázdné pro použití pouze aktuálních filtrů):",
+    "backup.bulk.filter_required": "Nastavte alespoň jeden filtr (Doména, Entita nebo stáří ve dnech).",
+    "backup.bulk.confirm": "Smazat všechny zálohy odpovídající: {filters}?",
+    "backup.bulk.deleted": "Smazáno {count} záloh",
+    "filesystem.custom.title": "Vlastní adresáře souborového systému (pokročilé)",
+    "filesystem.custom.help": "Další adresáře (jeden na řádek), do kterých mohou souborové nástroje <strong>číst a zapisovat</strong>. Podporovány jsou relativní cesty konfigurace a povolené sourozenecké svazky HAOS. Projeví se okamžitě.",
+    "filesystem.custom.blocked": "Vždy blokováno: {paths}, procházení cest (<code>..</code>) a absolutní cesty mimo povolené svazky HAOS.",
+    "filesystem.custom.enable_first": "Povolte beta funkce a nástroje souborového systému výše pro úpravy.",
+    "filesystem.custom.unavailable": "Vlastní adresáře jsou momentálně nedostupné.",
+    "filesystem.custom.save": "Uložit adresáře",
+    "filesystem.custom.saved_rejected": "Uloženo. Zamítnuto (blokováno nebo neplatné): {paths}",
+    "origins.env_locked": "Nastaveno přes proměnnou prostředí; zrušte ji pro úpravy zde.",
+    "origins.addon_synced": "Synchronizováno s kartou Konfigurace aplikace (doplňku). Po uložení je vyžadován restart.",
+    "origins.env_var_unset": "Nastaveno přes proměnnou prostředí {variable}; zrušte ji pro úpravy zde.",
+    "origins.beta_legacy_bridge": "Automaticky povoleno v režimu legacy aplikace (doplňku). Nastavte <code>enable_beta_features</code> explicitně v Konfiguraci, abyste převzali kontrolu. (proměnná prostředí: {variable})",
+    "origins.addon_runtime": "Nastaveno běhovým prostředím aplikace (doplňku) spravovaným Supervisor; nelze zde změnit. (proměnná prostředí: {variable})",
+    "origins.display_only": "Pouze zobrazení. Upravte pomocí proměnné prostředí nebo nastavení aplikace (doplňku).",
+    "features.errors.network": "Příznaky funkcí nedostupné (chyba sítě při přístupu k /api/settings/features).",
+    "features.errors.http": "Příznaky funkcí nedostupné (HTTP {status}).",
+    "features.errors.json": "Odpověď příznaků funkcí nebyla platný JSON.",
+    "advanced.errors.network": "Pokročilá nastavení nedostupná (chyba sítě při přístupu k /api/settings/advanced).",
+    "advanced.errors.http": "Pokročilá nastavení nedostupná (HTTP {status}).",
+    "advanced.errors.json": "Odpověď pokročilých nastavení nebyla platný JSON.",
+    "advanced.sidecar.stdio_only": "Dostupné pouze v režimu stdio. Tento HTTP server nemá žádný sidecar uživatelského rozhraní nastavení k připnutí.",
+    "advanced.enable_dev_mode.confirm": "⚠ Povolit režim vývojáře?\n\nPo restartu budou skryté vývojářské nástroje zpřístupněny připojeným AI agentům. Povolte pouze pro vývoj a testování.",
+    "advanced.dev_tools_security_policy_access.confirm": "⚠ Povolit vývojářským nástrojům měnit bezpečnostní zásady?\n\nZatímco je režim vývojáře zapnutý, připojení AI agenti budou moci přepisovat bezpečnostní zásady nástrojů, přidávat nebo odebírat brány schválení pro jednotlivé nástroje a schvalovat nebo zamítat čekající schválení – včetně jejich vlastních řízených volání. Povolte pouze při testování zásad.",
+    "advanced.code_mode_saved_tools_path.addon_locked": "Pevně zakódováno na <code>/data/saved_tools.json</code> v režimu aplikace (doplňku), aby uložené nástroje přežily aktualizace.",
+    "advanced.code_mode_saved_tools_path.blank_warning": "Pokud je prázdné, vlastní nástroje jsou uchovávány pouze v paměti a ztraceny po restartu.",
+    "policies.errors.conflict": "{operation} selhalo: zásada byla upravena na jiné kartě nebo v jiné relaci. Znovu načtěte a znovu použijte své změny.",
+    "policies.errors.load": "Nepodařilo se načíst zásadu: {status}",
+    "policies.errors.reach_server": "Nepodařilo se dosáhnout serveru: {message}",
+    "policies.errors.corrupt_suffix": " (tool_policy.json se zdá být poškozený; upravte nebo smažte jej na svazku /data aplikace (doplňku))",
+    "policies.errors.load_detail": "Nepodařilo se načíst zásadu: {detail}",
+    "policies.errors.update_tool": "Nepodařilo se aktualizovat bezpečnostní zásadu nástroje: {message}",
+    "policies.errors.remove_rule": "Nepodařilo se odstranit pravidlo: {message}",
+    "policies.errors.master_save": "Změna bezpečnostních zásad nástrojů se neuložila. Server stále obsahuje předchozí hodnotu.",
+    "policies.errors.manage_tool_save": "Změna nástroje pro úpravu zásad se neuložila. Server stále obsahuje předchozí hodnotu.",
+    "policies.operations.sync_gated": "Synchronizovat přepínač brány",
+    "policies.operations.save_rule": "Uložit pravidlo",
+    "policies.operations.save_global": "Uložit globální nastavení",
+    "policies.predicate.invalid": "(neplatné)",
     "policies.operators.exists": "existuje",
     "policies.operators.exists_long": "existuje (jakákoli hodnota)",
     "policies.operators.eq": "rovná se",
@@ -18,9 +322,525 @@
     "policies.operators.regex": "odpovídá regulárnímu výrazu",
     "policies.operators.gt": "je větší než",
     "policies.operators.lt": "je menší než",
+    "policies.card.no_conditions": "(žádné podmínky, pravidlo odpovídá každému volání tohoto nástroje)",
+    "policies.card.always_row": "(vždy – řídí každé volání tohoto nástroje)",
+    "policies.card.and_join": " A ",
+    "policies.card.remove_title": "Odebrat ze zásady",
+    "policies.card.conditions_intro": "Vyžadovat schválení, když se shoduje JAKÁKOLI podmínka (žádné podmínky = vždy vyžadovat schválení):",
+    "policies.card.add_condition": "+ Přidat podmínku",
+    "policies.card.argument": "Argument:",
+    "policies.card.argument_placeholder": "např. args.color_temp",
+    "policies.card.match_when": "Shodovat, když:",
+    "policies.card.value": "Hodnota:",
+    "policies.card.save_condition": "Uložit podmínku",
+    "policies.card.remember_for": "Zapamatovat si schválení na:",
+    "policies.card.minutes_single": "minut (0 = jednorázové)",
+    "policies.card.confirm_remove": "Odebrat „{tool}“ z bezpečnostní zásady?",
+    "policies.editor.any_argument_title": "Porovnat každý argument volání s touto podmínkou.",
+    "policies.editor.any_argument": "(jakýkoli argument)",
+    "policies.editor.other_path": "(jiné, zadejte cestu)",
+    "policies.editor.value_source_http": "Načtení zdroje hodnot selhalo (HTTP {status}); přechod na volný text",
+    "policies.editor.value_source_error": "Načtení zdroje hodnot selhalo ({message}); přechod na volný text",
+    "policies.editor.schema_http": "Načtení schématu nástroje selhalo (HTTP {status}); přechod na volný text",
+    "policies.editor.schema_error": "Načtení schématu nástroje selhalo ({message}); přechod na volný text",
+    "policies.editor.hint.exists": "Ponechte prázdné, aby se řídilo přítomností argumentu bez ohledu na hodnotu.",
+    "policies.editor.hint.list": "Vyberte jednu nebo více hodnot, nebo zadejte seznam JSON. Ponechte prázdné, aby se řídilo jakoukoli hodnotou.",
+    "policies.editor.hint.regex": "Regulární výraz, proti kterému se má argument porovnat.",
+    "policies.editor.hint.contains": "Podřetězec nebo položka seznamu. Ponechte prázdné, aby se řídilo jakoukoli hodnotou.",
+    "policies.editor.hint.number": "Číslo, proti kterému se má porovnat.",
+    "policies.editor.hint.equals": "Hodnota, které se argument musí rovnat. Ponechte prázdné, aby se řídilo jakoukoli hodnotou.",
+    "policies.editor.loading_choices": "Načítání možností…",
+    "policies.editor.pick_value": "(vyberte hodnotu)",
+    "policies.editor.placeholder.blank": "obvykle se nechává prázdné",
+    "policies.editor.validation.pick_one_or_more": "vyberte alespoň jednu hodnotu",
+    "policies.editor.validation.pick_value": "vyberte hodnotu",
+    "policies.editor.validation.value_required": "hodnota je vyžadována pro op={operator}",
+    "policies.editor.validation.empty_list": "prázdný seznam pro op={operator}",
+    "policies.editor.validation.argument_required": "argument je vyžadován",
+    "policies.pending.offline": "Ztracen kontakt se serverem ({message}). Opakuji pokus.",
+    "policies.pending.disabled": "Bezpečnostní zásady nástrojů jsou vypnuté. Zapněte je a restartujte aplikaci (doplněk), abyste povolili řízení.",
+    "policies.pending.unavailable": "Živé schvalování nedostupné. Zkontrolujte protokol aplikace (doplňku).",
+    "policies.pending.expires": "Vyprší: {time}",
     "policies.pending.already_decided": "Toto schválení již bylo {decision}, pravděpodobně z jiné karty nebo relace.",
     "policies.pending.decision.approved": "schváleno",
     "policies.pending.decision.denied": "zamítnuto",
-    "visibility.errors.conflict": "Konfigurace byla změněna na jiné kartě nebo v jiné relaci. Znovu načtěte stránku a poté znovu použijte své změny."
+    "policies.pending.invalid_token": "Tento schvalovací token již není platný (již spotřebován nebo vypršel).",
+    "policies.pending.action_failed": "Akce schválení selhala: {detail}",
+    "visibility.errors.reach_server": "Nepodařilo se dosáhnout serveru: {message}",
+    "visibility.errors.corrupt_suffix": " (entity_visibility.json se zdá být poškozený; upravte nebo smažte jej na svazku /data aplikace (doplňku))",
+    "visibility.errors.load_detail": "Nepodařilo se načíst konfiguraci viditelnosti: {detail}",
+    "visibility.errors.conflict": "Konfigurace byla změněna na jiné kartě nebo v jiné relaci. Znovu načtěte stránku a poté znovu použijte své změny.",
+    "advanced.homeassistant_url.label": "URL adresa Home Assistant",
+    "advanced.homeassistant_url.help": "Pouze zobrazení. Nastaveno přes HOMEASSISTANT_URL nebo spravováno aplikací (doplňkem).",
+    "advanced.homeassistant_token.label": "Token Home Assistant",
+    "advanced.homeassistant_token.help": "Pouze zobrazení. Nastaveno přes HOMEASSISTANT_TOKEN. Zde maskováno z bezpečnostních důvodů.",
+    "advanced.timeout.label": "Časový limit požadavku HA (s)",
+    "advanced.timeout.help": "HTTP časový limit pro každý požadavek. Rozsah 1–600. Vyžadován restart.",
+    "advanced.max_retries.label": "Max. opakování požadavku HA",
+    "advanced.max_retries.help": "Rozpočet opakování pro každé selhané volání REST. Rozsah 0–20. Vyžadován restart.",
+    "advanced.verify_ssl.label": "Ověřit SSL certifikáty",
+    "advanced.verify_ssl.help": "Zakažte ověřování TLS pouze na důvěryhodných sítích. Vyžadován restart.",
+    "advanced.fuzzy_threshold.label": "Prahová hodnota fuzzy vyhledávání",
+    "advanced.fuzzy_threshold.help": "Nižší hodnoty umožňují volnější shodu entit. Rozsah 0–100.",
+    "advanced.automation_config_time_budget.label": "Časový rozpočet konfigurace automatizace (s)",
+    "advanced.automation_config_time_budget.help": "Maximální čas, který hluboké vyhledávání stráví načítáním konfigurací automatizace. Rozsah 1–600. Vyžadován restart.",
+    "advanced.script_config_time_budget.label": "Časový rozpočet konfigurace skriptu (s)",
+    "advanced.script_config_time_budget.help": "Maximální čas, který hluboké vyhledávání stráví načítáním konfigurací skriptů. Rozsah 1–600. Vyžadován restart.",
+    "advanced.scene_config_time_budget.label": "Časový rozpočet konfigurace scény (s)",
+    "advanced.scene_config_time_budget.help": "Maximální čas, který hluboké vyhledávání stráví načítáním konfigurací scén. Rozsah 1–600. Vyžadován restart.",
+    "advanced.individual_config_timeout.label": "Časový limit načítání konfigurace na požadavek (s)",
+    "advanced.individual_config_timeout.help": "Časový limit pro každé načtení konfigurace automatizace/skriptu/scény. Rozsah 1–600. Vyžadován restart.",
+    "advanced.individual_fetch_batch_size.label": "Velikost dávky načítání konfigurace",
+    "advanced.individual_fetch_batch_size.help": "Souběžné načítání konfigurací podle ID. Snižte směrem k 1 na sériových HA serverech. Rozsah 1–100. Vyžadován restart.",
+    "advanced.backup_hint.label": "Úroveň nápovědy k zálohování",
+    "advanced.backup_hint.help": "Určuje, jak silně je LLM vyzváno k vytvoření úplného snímku HA před rizikovými zápisy.",
+    "advanced.backup_hint.choices.strong": "Silná",
+    "advanced.backup_hint.choices.normal": "Normální",
+    "advanced.backup_hint.choices.weak": "Slabá",
+    "advanced.backup_hint.choices.auto": "Automatická",
+    "advanced.dashboard_screenshot_engine_url.label": "URL adresa enginu pro snímky obrazovky panelu",
+    "advanced.dashboard_screenshot_engine_url.help": "Základní URL enginu pro snímky obrazovky. Ponechte prázdné pro automatické zjišťování Supervisor. Platí okamžitě.",
+    "advanced.enable_websocket.label": "Povolit WebSocket",
+    "advanced.enable_websocket.help": "Monitorování stavu WebSocket. Zakázání se vrátí k dotazování a zhoršuje funkčnost mnoha nástrojů. Vyžadován restart.",
+    "advanced.enabled_tool_modules.label": "Povolené moduly nástrojů",
+    "advanced.enabled_tool_modules.help": "Názvy modulů oddělené čárkami, nebo 'all'. Vyžadován restart.",
+    "advanced.enable_dashboard_partial_tools.label": "Nástroje pro částečnou aktualizaci panelu",
+    "advanced.enable_dashboard_partial_tools.help": "Tokenově efektivní nástroje pro částečnou aktualizaci panelu. Zakažte pro klienty s programovým použitím nástrojů.",
+    "advanced.mcp_server_name.label": "Název serveru MCP",
+    "advanced.mcp_server_name.help": "Hlášeno v MCP handshake. Vyžadován restart.",
+    "advanced.mcp_server_version.label": "Verze serveru MCP",
+    "advanced.mcp_server_version.help": "Výchozí je verze balíčku. Přepsání může zmást klienty. Vyžadován restart.",
+    "advanced.environment.label": "Prostředí",
+    "advanced.environment.help": "vývojové nebo produkční. Ovlivňuje podrobnost protokolování. Vyžaduje restart.",
+    "advanced.log_level.label": "Úroveň protokolu",
+    "advanced.log_level.help": "DEBUG/INFO/WARNING/ERROR/CRITICAL. Vyžaduje restart.",
+    "advanced.debug.label": "Režim ladění",
+    "advanced.debug.help": "Podrobné protokolování požadavků. Může odhalit citlivá data. Vyžaduje restart.",
+    "advanced.code_mode_max_duration.label": "Maximální doba trvání režimu kódu (s)",
+    "advanced.code_mode_max_duration.help": "Rozpočet reálného času na jedno spuštění sandboxu. Rozsah 1–300. Vyžaduje restart.",
+    "advanced.code_mode_max_memory.label": "Maximální paměť režimu kódu (bajty)",
+    "advanced.code_mode_max_memory.help": "Limit paměti na jedno spuštění sandboxu. Rozsah 1–256 MB. Vyžaduje restart.",
+    "advanced.code_mode_max_recursion.label": "Maximální rekurze režimu kódu",
+    "advanced.code_mode_max_recursion.help": "Limit hloubky rekurze na jedno spuštění sandboxu. Vyžaduje restart.",
+    "advanced.code_mode_max_invocations.label": "Maximální počet volání režimu kódu",
+    "advanced.code_mode_max_invocations.help": "Limit volání API/nástrojů na jedno spuštění sandboxu. Vyžaduje restart.",
+    "advanced.code_mode_saved_tools_path.label": "Cesta k uloženým nástrojům",
+    "advanced.code_mode_saved_tools_path.help": "Soubor JSON používaný k uchování vlastních nástrojů napříč restarty. Vyžaduje restart.",
+    "advanced.extra_yaml_write_keys.label": "Další klíče pro zápis YAML",
+    "advanced.extra_yaml_write_keys.help": "Klíče nejvyšší úrovně oddělené čárkami, které ha_config_set_yaml může zapisovat navíc k vestavěným, pro integrace s prioritou YAML v této instalaci (např. alert2). Klíče, které předefinují vlastní hranici důvěry Home Assistant, nelze nikdy přidat a jsou ignorovány. Vyžaduje vlastní komponentu 1.2.4 nebo novější.",
+    "advanced.sidecar_pin_port.label": "Port sidecaru uživatelského rozhraní nastavení",
+    "advanced.sidecar_pin_port.help": "0 vybere volný port při prvním spuštění a ponechá jej pro pozdější restarty; 1024–65535 připne preferovaný port (pokud je obsazen, vrátí se k volnému). Vyžaduje restart.",
+    "advanced.enable_dev_mode.label": "Režim vývojáře",
+    "advanced.enable_dev_mode.help": "⚠ Registruje skryté nástroje, které mohou měnit nastavení a nahradit běžící server. Pouze pro vývoj a testování. Vyžaduje restart.",
+    "advanced.dev_tools_security_policy_access.label": "Přístup k bezpečnostním zásadám vývojářských nástrojů",
+    "advanced.dev_tools_security_policy_access.help": "⚠ Zatímco je zapnutý režim vývojáře, umožňuje vývojářským nástrojům přepisovat bezpečnostní zásady nástrojů, přidávat nebo odebírat brány schválení pro jednotlivé nástroje a schvalovat nebo zamítat čekající schválení vaším jménem — agent AI může přijímat svá vlastní řízená volání. Pouze pro testování zásad. Projeví se bez restartu.",
+    "addon.backup_hint.name": "Úroveň návrhu snímku celé HA (pro LLM)",
+    "addon.backup_hint.description": "Upravuje znění nápovědy, kterou LLM vidí v popisu nástroje\n`ha_manage_backup(scope='snapshot')` pro to, kdy navrhnout úplnou zálohu Home Assistant tarballu před rizikovými operacemi\n(např. hromadné mazání zařízení). Ovlivňuje POUZE tuto jednu větu výzvy směřující k LLM.\n\nPro automatické snímky automatizací / skriptů / pomocníků /\natd. pro každou úpravu použijte samostatný přepínač **Povolit automatické zálohování úprav** níže.",
+    "addon.secret_path.name": "Přepsání tajné cesty",
+    "addon.secret_path.description": "Volitelná vlastní HTTP cesta pro server MCP. Ponechte prázdné pro použití automaticky generované zabezpečené cesty.\n",
+    "addon.enable_security_policy_tool.name": "Povolit agentům AI upravovat bezpečnostní zásady nástrojů",
+    "addon.enable_security_policy_tool.description": "Registruje nástroj ha_manage_security_policy, který umožňuje připojeným agentům AI číst a přepisovat bezpečnostní zásady nástrojů — včetně odstranění bran schválení. Ve výchozím nastavení vypnuto. Nezávisle na možnosti „Zásady zabezpečení nástrojů“ výše: toto řídí, kdo může pravidla upravovat, nikoli zda jsou vynucována. Nástroj nemůže vidět ani rozhodovat o čekajících schváleních. Chcete-li zachovat lidskou kontrolu, zablokujte nástroj před jeho povolením: zapněte „security gated“ pro „Manage Security Policy“ na kartě Nástroje ve webovém uživatelském rozhraní. Vyžaduje restart, aby se projevilo.",
+    "addon.enable_auto_backup.name": "Povolit automatické zálohování úprav",
+    "addon.enable_auto_backup.description": "Pořídí snímek pro každou entitu před každým zabaleným zápisem/destruktivním voláním nástroje MCP (automatizace, skript, scéna, pomocník, dashboard, zdroj dashboardu, štítek, kategorie, skupina, zóna, oblast, kalendář, úkol, entita, zařízení, integrace a související nástroje pro odebrání/smazání). Omezení automatické zálohy určuje, jak často se to děje: 0 (výchozí) zachytí při každém takovém volání, N>0 maximálně jeden snímek za N minut na entitu. Snímky jsou uloženy jako soubory YAML pod /data/ha_mcp_backups/ (přepsání přes HAMCP_BACKUP_DIR) a jsou uvedeny, obnoveny nebo smazány přes kartu Zálohy ve webovém uživatelském rozhraní nastavení nebo přes ha_manage_backup(scope='edits', ...). Pro tyto domény je zachycení nejlepším možným úsilím — selhání zaznamená VAROVÁNÍ a zápis pokračuje. Nástroje pro soubory a raw-YAML jsou výjimkou: ha_write_file, ha_delete_file a ha_config_set_yaml považují snímek za předpoklad, takže zápis přes ně je odmítnut, pokud je tato možnost vypnuta, a neúspěšné zachycení jej blokuje. Ve výchozím nastavení zapnuto; zrušení zaškrtnutí se odhlásí od zachycení nejlepším úsilím a vyřadí s nimi nástroje pro soubory a raw-YAML z provozu. Vyžaduje restart, aby se projevilo.",
+    "addon.auto_backup_throttle_minutes.name": "Omezení automatické zálohy (minuty)",
+    "addon.auto_backup_throttle_minutes.description": "Okno omezení pro každou entitu. 0 (výchozí) zachytí snímek při každém zabaleném zápisu. N>0 zachytí maximálně jeden snímek za N minut na entitu. Rozsah 0–1440.",
+    "addon.auto_backup_retain_per_entity.name": "Uchovávání automatických záloh (na entitu)",
+    "addon.auto_backup_retain_per_entity.description": "Maximální počet snímků uchovávaných na entitu. Starší snímky nad tento limit jsou při každém úspěšném zachycení vyřazeny. Výchozí 100, rozsah 1–10000.",
+    "addon.enable_snapshot_delete.name": "Povolit smazání snímků",
+    "addon.enable_snapshot_delete.description": "Umožňuje ha_manage_backup mazat úplné HA snapshot tarbally (scope='snapshot', action='delete'). Ve výchozím nastavení vypnuto — snímek může být posledním bodem obnovy po chybné změně, takže zde musí člověk souhlasit. I když je zapnuto, plánované zálohy, nejnovější zbývající snímek a cokoli mladšího než níže uvedený věkový limit zůstávají chráněny.",
+    "addon.snapshot_delete_min_age_days.name": "Minimální stáří snímku pro smazání (dny)",
+    "addon.snapshot_delete_min_age_days.description": "Snímek musí být alespoň takto starý, než může být smazán. Rozsah 0–365; 0 zakáže dolní hranici (ochrany nejnovějšího snímku a plánované zálohy stále platí). Výchozí 7.",
+    "addon.disabled_tools.name": "Zakázané nástroje (oddělené čárkami)",
+    "addon.disabled_tools.description": "Nástroje zde uvedené jsou vynuceně vypnuty a uzamčeny ve webovém uživatelském rozhraní Nastavení (karta Nástroje) — nelze je tam znovu povolit, aniž byste nejprve zrušili toto nastavení. Malá sada povinných nástrojů (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) nelze zakázat a zůstávají spuštěny, i když jsou zde uvedeny. ha_get_skill_guide lze zakázat pouze, když je vypnut režim přísných osvědčených postupů (enable_strict_mandatory_bps). Názvy nástrojů oddělené čárkami (např. ha_call_event,ha_eval_template).",
+    "addon.pinned_tools.name": "Připnuté nástroje (oddělené čárkami)",
+    "addon.pinned_tools.description": "Nástroje zde uvedené jsou uzamčeny jako připnuté — zobrazují se v horní části karty Nástroje a nelze je odepnout z webového uživatelského rozhraní Nastavení, aniž byste nejprve zrušili toto nastavení. Užitečné v kombinaci s vyhledáváním nástrojů. Názvy nástrojů oddělené čárkami.",
+    "addon.verify_ssl.name": "Ověřit certifikát TLS",
+    "addon.verify_ssl.description": "Ověří certifikát TLS serveru Home Assistant. Doplněk se připojuje přes proxy Supervisor, takže to obvykle nemá žádný účinek a mělo by zůstat povoleno. Zakázat pouze v případě, že jste doplněk překonfigurovali tak, aby komunikoval s HA přes veřejný HTTPS hostname s vlastnoručně podepsaným certifikátem nebo neshodou hostname. Zakázání oslabuje zabezpečení přenosu — ponechte zapnuto, pokud víte, že to potřebujete. Vyžaduje restart, aby se projevilo.",
+    "addon_stable.enable_tool_search.description": "Nahradí úplný katalog nástrojů vyhledáváním. Snižuje nečinný kontext přibližně o 90 %, na asi 5K tokenů. ⚠️ NEPOVOLUJTE toto v klientech s vlastním vestavěným vyhledáváním nástrojů / odloženými nástroji (claude.ai, Claude Desktop, Claude Code) — dvě vrstvy vyhledávání se střetávají a vestavěné vyhledávání nástrojů klienta je v takovém případě lepší volbou; ponechte toto vypnuté. Zda jsou nástroje odloženy, závisí na kombinaci vašeho klienta a modelu: použijte toto, když vaše nastavení načítá celý katalog předem — modely bez nativních odložených nástrojů (např. Gemini, lokální modely kompatibilní s OpenAI, Claude Haiku), klienti, kteří vkládají všechna schémata nástrojů bez ohledu na model (např. GitHub Copilot CLI), nebo menší kontextová okna. Některé modely Codex a ChatGPT také zahrnují odložené nástroje — zkontrolujte přímo svého klienta/model, abyste potvrdili jeho funkce a zbytečně toto nenechali povolené. Nástroje jsou nalezeny pomocí ha_search_tools a spouštěny pomocí kategorizovaných proxy (čtení/zápis/mazání). Vyžaduje restart doplňku, aby se změny projevily — poté se znovu připojte nebo obnovte server MCP ve vašem AI klientovi, aby znovu načetl seznam nástrojů. Samotný restart doplňku NEobnoví seznam nástrojů uložený v mezipaměti klienta; toto platí po změně jakéhokoli nastavení zde."
+  },
+  "tools": {
+    "ha_bulk_control": {
+      "title": "Hromadné ovládání",
+      "description": "Ovládejte více zařízení s podporou hromadných operací a sledováním přes WebSocket."
+    },
+    "ha_call_event": {
+      "title": "Vyvolat událost",
+      "description": "Spustit vlastní událost na sběrnici událostí Home Assistant."
+    },
+    "ha_call_service": {
+      "title": "Vyvolat službu",
+      "description": "Spouštět služby Home Assistant pro ovládání entit a spouštění automatizací."
+    },
+    "ha_config_delete_dashboard": {
+      "title": "Smazat panel",
+      "description": "Úplně smazat panel v režimu úložiště."
+    },
+    "ha_config_delete_dashboard_resource": {
+      "title": "Smazat zdroj panelu",
+      "description": "Smazat zdroj panelu."
+    },
+    "ha_config_get_automation": {
+      "title": "Získat konfiguraci automatizace",
+      "description": "Načíst konfiguraci automatizace Home Assistant."
+    },
+    "ha_config_get_calendar_events": {
+      "title": "Získat události kalendáře",
+      "description": "Načíst události kalendáře z entity kalendáře."
+    },
+    "ha_config_get_category": {
+      "title": "Získat kategorii",
+      "description": "Získat informace o kategorii – vypsat všechny kategorie pro daný rozsah nebo získat konkrétní podle ID."
+    },
+    "ha_config_get_dashboard": {
+      "title": "Získat panel",
+      "description": "Získat informace o panelu – vypsat všechny panely, získat konfiguraci nebo vyhledat karty."
+    },
+    "ha_config_get_label": {
+      "title": "Získat štítek",
+      "description": "Získat informace o štítku – vypsat všechny štítky nebo získat konkrétní podle ID."
+    },
+    "ha_config_get_scene": {
+      "title": "Získat konfiguraci scény",
+      "description": "Načíst konfiguraci scény Home Assistant."
+    },
+    "ha_config_get_script": {
+      "title": "Získat konfiguraci skriptu",
+      "description": "Načíst konfiguraci skriptu Home Assistant."
+    },
+    "ha_config_get_yaml": {
+      "title": "Přečíst fragment konfigurace YAML",
+      "description": "Přečíst fragment YAML pod klíčem v konfiguračním souboru nebo zjistit, který soubor jej definuje."
+    },
+    "ha_config_list_dashboard_resources": {
+      "title": "Vypsat zdroje panelu",
+      "description": "Vypsat zdroje panelu Lovelace (vlastní karty, témata, CSS/JS)."
+    },
+    "ha_config_list_groups": {
+      "title": "Vypsat skupiny",
+      "description": "Vypsat skupiny entit Home Assistant s jejich členskými entitami."
+    },
+    "ha_config_list_helpers": {
+      "title": "Vypsat pomocníky",
+      "description": "Vypsat pomocníky Home Assistant určitého typu s jejich konfiguracemi."
+    },
+    "ha_config_remove_automation": {
+      "title": "Odebrat automatizaci",
+      "description": "Smazat automatizaci Home Assistant."
+    },
+    "ha_config_remove_calendar_event": {
+      "title": "Odebrat událost kalendáře",
+      "description": "Smazat událost z kalendáře."
+    },
+    "ha_config_remove_category": {
+      "title": "Odebrat kategorii",
+      "description": "Smazat kategorii Home Assistant."
+    },
+    "ha_config_remove_group": {
+      "title": "Odebrat skupinu",
+      "description": "Odebrat skupinu entit Home Assistant založenou na službě pomocí služby group.remove."
+    },
+    "ha_config_remove_label": {
+      "title": "Odebrat štítek",
+      "description": "Smazat štítek Home Assistant."
+    },
+    "ha_config_remove_scene": {
+      "title": "Odebrat scénu",
+      "description": "Smazat scénu Home Assistant."
+    },
+    "ha_config_remove_script": {
+      "title": "Odebrat skript",
+      "description": "Smazat skript Home Assistant."
+    },
+    "ha_config_set_automation": {
+      "title": "Vytvořit nebo aktualizovat automatizaci",
+      "description": "Vytvořit nebo aktualizovat automatizaci Home Assistant."
+    },
+    "ha_config_set_calendar_event": {
+      "title": "Vytvořit nebo aktualizovat událost kalendáře",
+      "description": "Vytvořit novou událost v kalendáři."
+    },
+    "ha_config_set_category": {
+      "title": "Vytvořit nebo aktualizovat kategorii",
+      "description": "Vytvořit nebo aktualizovat kategorii Home Assistant."
+    },
+    "ha_config_set_dashboard": {
+      "title": "Vytvořit nebo aktualizovat panel",
+      "description": "Vytvořit nebo aktualizovat panel Home Assistant."
+    },
+    "ha_config_set_dashboard_resource": {
+      "title": "Nastavit zdroj panelu",
+      "description": "Vytvořit nebo aktualizovat zdroj panelu (inline kód nebo externí URL)."
+    },
+    "ha_config_set_group": {
+      "title": "Vytvořit nebo aktualizovat skupinu",
+      "description": "Vytvořit nebo aktualizovat skupinu entit Home Assistant založenou na službě pomocí služby group.set."
+    },
+    "ha_config_set_helper": {
+      "title": "Vytvořit nebo aktualizovat pomocníka",
+      "description": "Vytvořit nebo aktualizovat pomocné entity Home Assistant a podpoložky konfigurace"
+    },
+    "ha_config_set_label": {
+      "title": "Vytvořit nebo aktualizovat štítek",
+      "description": "Vytvořit nebo aktualizovat štítek Home Assistant."
+    },
+    "ha_config_set_scene": {
+      "title": "Vytvořit nebo aktualizovat scénu",
+      "description": "Vytvořit nebo aktualizovat scénu Home Assistant."
+    },
+    "ha_config_set_script": {
+      "title": "Vytvořit nebo aktualizovat skript",
+      "description": "Vytvořit nebo aktualizovat skript Home Assistant."
+    },
+    "ha_config_set_yaml": {
+      "title": "Nastavit konfiguraci YAML",
+      "description": "Přidat, nahradit nebo odebrat klíče nejvyšší úrovně v souborech configuration.yaml nebo balíčků."
+    },
+    "ha_delete_file": {
+      "title": "Smazat soubor",
+      "description": "Smazat soubor z povolených adresářů."
+    },
+    "ha_dev_manage_server": {
+      "title": "Spravovat server MCP (vývoj)",
+      "description": "Spravovat samotný běžící server ha-mcp (režim vývojáře)."
+    },
+    "ha_dev_manage_settings": {
+      "title": "Spravovat nastavení serveru (vývoj)",
+      "description": "Spravovat nastavení serveru ha-mcp a rozhraní Nástroje/Zásady/Zálohy (režim vývojáře)."
+    },
+    "ha_eval_template": {
+      "title": "Vyhodnotit šablonu",
+      "description": "Vyhodnotit šablony Jinja2 pomocí šablonovacího enginu Home Assistant."
+    },
+    "ha_get_addon": {
+      "title": "Získat doplňky",
+      "description": "Získat doplňky Home Assistant – vypsat nainstalované, dostupné nebo získat podrobnosti o jednom."
+    },
+    "ha_get_automation_traces": {
+      "title": "Získat trasování automatizací",
+      "description": "Načíst trasování spuštění pro automatizace a skripty k ladění problémů."
+    },
+    "ha_get_blueprint": {
+      "title": "Získat blueprint",
+      "description": "Získat informace o blueprintu – vypsat všechny blueprinty nebo získat podrobnosti o konkrétním."
+    },
+    "ha_get_camera_image": {
+      "title": "Získat obraz z kamery",
+      "description": "Načíst snímek obrazu z entity kamery Home Assistant."
+    },
+    "ha_get_dashboard_screenshot": {
+      "title": "Získat snímek panelu",
+      "description": "Získat vykreslené obrázky z pohledu panelu Lovelace Home Assistant."
+    },
+    "ha_get_device": {
+      "title": "Získat zařízení (vč. Zigbee/ZHA/Z2M, Z-Wave a Matter)",
+      "description": "Získat informace o zařízení s paginací, včetně zařízení Zigbee (ZHA/Z2M) a Z-Wave JS."
+    },
+    "ha_get_entity": {
+      "title": "Získat entitu",
+      "description": "Získat informace z registru entit pro jednu nebo více entit."
+    },
+    "ha_get_entity_exposure": {
+      "title": "Získat expozici entity",
+      "description": "Získat nastavení expozice entity – vypsat všechna nebo získat nastavení pro konkrétní entitu."
+    },
+    "ha_get_hacs_info": {
+      "title": "Získat informace o HACS",
+      "description": "Získat data HACS (Home Assistant Community Store) — prohledat obchod nebo načíst podrobnosti o repozitáři."
+    },
+    "ha_get_history": {
+      "title": "Získat historii nebo statistiky entity",
+      "description": "Načíst historická data z rekordéru Home Assistant."
+    },
+    "ha_get_integration": {
+      "title": "Získat integraci",
+      "description": "Získat informace o integraci (konfigurační položce) s paginací."
+    },
+    "ha_get_logs": {
+      "title": "Získat protokoly",
+      "description": "Získat protokoly Home Assistant z různých zdrojů."
+    },
+    "ha_get_operation_status": {
+      "title": "Získat stav operace",
+      "description": "Získat stav jedné nebo více operací zařízení s ověřením v reálném čase přes WebSocket."
+    },
+    "ha_get_overview": {
+      "title": "Získat přehled systému",
+      "description": "Získat přehled systému přátelský k AI s inteligentní kategorizací."
+    },
+    "ha_get_state": {
+      "title": "Získat stav entity",
+      "description": "Získat aktuální stav, stav a atributy jedné nebo více entit (světla, spínače, senzory, klima, žaluzie, zámky, fa"
+    },
+    "ha_get_system_health": {
+      "title": "Získat stav systému (vč. diagnostiky ZHA/Z-Wave/integrace)",
+      "description": "Získat stav systému Home Assistant, včetně Zigbee (ZHA), Z-Wave JS a diagnostických výpisů pro jednotlivé integrace."
+    },
+    "ha_get_todo": {
+      "title": "Získat úkoly",
+      "description": "Získat seznamy úkolů nebo položky – vypsat všechny seznamy úkolů nebo získat položky z konkrétního seznamu."
+    },
+    "ha_get_zone": {
+      "title": "Získat zónu",
+      "description": "Získat informace o zóně – vypsat všechny zóny nebo získat podrobnosti o konkrétní."
+    },
+    "ha_import_blueprint": {
+      "title": "Importovat blueprint",
+      "description": "Importovat blueprint z URL."
+    },
+    "ha_list_files": {
+      "title": "Vypsat soubory",
+      "description": "Vypsat soubory v adresáři v rámci konfigurace Home Assistant."
+    },
+    "ha_list_floors_areas": {
+      "title": "Vypsat patra a oblasti",
+      "description": "Vypsat patra seřazená vzestupně podle úrovně, každé s vnořenými přiřazenými oblastmi, plus oblasti bez patra."
+    },
+    "ha_list_services": {
+      "title": "Vypsat dostupné služby",
+      "description": "Seznam dostupných služeb Home Assistant s volitelným stránkováním a řízením detailů."
+    },
+    "ha_manage_addon": {
+      "title": "Spravovat doplněk",
+      "description": "Spravovat doplněk Home Assistant — aktualizovat jeho konfiguraci nebo volat jeho interní API."
+    },
+    "ha_manage_backup": {
+      "title": "Spravovat zálohy",
+      "description": "Polymorfní nástroj pro zálohování. Viz popis nástroje pro směrovací matici."
+    },
+    "ha_manage_custom_tool": {
+      "title": "Vlastní nástroj",
+      "description": "Vytvořit a spustit vlastní nástroj v sandboxu, nebo spravovat uložené vlastní nástroje (režim kódu)."
+    },
+    "ha_manage_energy_prefs": {
+      "title": "Spravovat předvolby energetického panelu",
+      "description": "Spravovat předvolby energetického panelu Home Assistant."
+    },
+    "ha_manage_hacs": {
+      "title": "Spravovat HACS",
+      "description": "Spravovat HACS (Home Assistant Community Store) — instalovat/aktualizovat, odebrat, přidat vlastní repozitáře nebo obnovit repozitář v"
+    },
+    "ha_manage_pipeline": {
+      "title": "Spravovat asistentskou pipeline",
+      "description": "Spravovat asistentské pipeline Home Assistant."
+    },
+    "ha_manage_radio": {
+      "title": "Spravovat rádia (Z-Wave / Zigbee / Matter / Thread)",
+      "description": "Spravovat rádia Home Assistant — Z-Wave, Zigbee, Matter a Thread."
+    },
+    "ha_manage_security_policy": {
+      "title": "Spravovat bezpečnostní politiku",
+      "description": "Číst a přepisovat bezpečnostní politiku nástroje, která podmiňuje volání nástrojů s vysokým rizikem schválením uživatelem."
+    },
+    "ha_manage_theme": {
+      "title": "Spravovat témata frontend",
+      "description": "Spravovat témata frontend Home Assistant."
+    },
+    "ha_manage_updates": {
+      "title": "Spravovat aktualizace",
+      "description": "Spravovat aktualizace Home Assistant — seznam, číst detaily, hromadná instalace, přeskočit nebo zrušit přeskočení."
+    },
+    "ha_read_file": {
+      "title": "Číst soubor",
+      "description": "Číst soubor z konfiguračního adresáře Home Assistant."
+    },
+    "ha_reload_core": {
+      "title": "Znovu načíst základní komponenty",
+      "description": "Znovu načíst konfiguraci Home Assistant bez úplného restartu."
+    },
+    "ha_remove_area_or_floor": {
+      "title": "Odebrat oblast nebo patro",
+      "description": "Odebrat oblast nebo patro Home Assistant."
+    },
+    "ha_remove_device": {
+      "title": "Odebrat zařízení",
+      "description": "Odebrat osamocené zařízení z registru zařízení Home Assistant."
+    },
+    "ha_remove_entity": {
+      "title": "Odebrat entitu",
+      "description": "Odebrat jednu nebo více entit z registru entit Home Assistant."
+    },
+    "ha_remove_helpers_integrations": {
+      "title": "Odebrat pomocníka nebo integraci",
+      "description": "Odebrat položku konfigurace pomocníka nebo integrace Home Assistant."
+    },
+    "ha_remove_todo_item": {
+      "title": "Odebrat položku úkolu",
+      "description": "Odebrat položku ze seznamu úkolů Home Assistant."
+    },
+    "ha_remove_zone": {
+      "title": "Odebrat zónu",
+      "description": "Odebrat zónu Home Assistant."
+    },
+    "ha_report_issue": {
+      "title": "Nahlásit problém nebo zpětnou vazbu",
+      "description": "Získat diagnostické informace a šablony pro podávání zpráv o problémech nebo zpětné vazby."
+    },
+    "ha_restart": {
+      "title": "Restartovat Home Assistant",
+      "description": "Restartovat Home Assistant."
+    },
+    "ha_search": {
+      "title": "Hledat",
+      "description": "Hledat entity (světla, senzory, vypínače, klima atd.) podle názvu, domény nebo oblasti — A uvnitř automatizace/skriptu/ů"
+    },
+    "ha_set_area_or_floor": {
+      "title": "Vytvořit nebo aktualizovat oblast nebo patro",
+      "description": "Vytvořit nebo aktualizovat oblast nebo patro Home Assistant."
+    },
+    "ha_set_device": {
+      "title": "Nastavit zařízení",
+      "description": "Aktualizovat vlastnosti zařízení, jako je název, oblast, stav zakázání nebo štítky."
+    },
+    "ha_set_entity": {
+      "title": "Nastavit entitu",
+      "description": "Aktualizovat vlastnosti entity v registru entit."
+    },
+    "ha_set_integration": {
+      "title": "Nastavit integraci",
+      "description": "Spravovat integraci (položku konfigurace): povolit/zakázat, přidat nebo aktualizovat možnosti."
+    },
+    "ha_set_todo_item": {
+      "title": "Nastavit položku úkolu",
+      "description": "Vytvořit nebo aktualizovat položku úkolu v Home Assistant."
+    },
+    "ha_set_zone": {
+      "title": "Nastavit zónu",
+      "description": "Vytvořit nebo aktualizovat zónu Home Assistant."
+    },
+    "ha_write_file": {
+      "title": "Zapsat soubor",
+      "description": "Zapsat soubor do povolených adresářů v konfiguraci Home Assistant."
+    }
+  },
+  "tool_groups": {
+    "Add-ons": "Doplňky",
+    "Areas & Floors": "Oblasti a patra",
+    "Assist": "Asistent",
+    "Automations": "Automatizace",
+    "Blueprints": "Předlohy",
+    "Calendar": "Kalendář",
+    "Camera": "Kamera",
+    "Dashboard": "Panel",
+    "Dashboards": "Panely",
+    "Developer": "Vývojář",
+    "Device Registry": "Registr zařízení",
+    "Energy": "Energie",
+    "Entity Registry": "Registr entit",
+    "Files": "Soubory",
+    "Groups": "Skupiny",
+    "HACS": "HACS",
+    "Helper Entities": "Pomocné entity",
+    "History & Statistics": "Historie a statistiky",
+    "Integrations": "Integrace",
+    "Labels & Categories": "Štítky a kategorie",
+    "Matter": "Matter",
+    "Scenes": "Scény",
+    "Scripts": "Skripty",
+    "Search & Discovery": "Vyhledávání a objevování",
+    "Service & Device Control": "Ovládání služeb a zařízení",
+    "System": "Systém",
+    "Todo Lists": "Seznamy úkolů",
+    "Utilities": "Nástroje",
+    "Zones": "Zóny"
   }
 }

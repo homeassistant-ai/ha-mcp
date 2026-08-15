@@ -4,262 +4,276 @@
 # addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
   backup_hint:
-    name: Full-HA snapshot suggestion level (LLM-facing)
-    description: 'Tunes the wording of the hint the LLM sees in the
+    name: Úroveň návrhu snímku celé HA (pro LLM)
+    description: 'Upravuje znění nápovědy, kterou LLM vidí v popisu nástroje
 
-      `ha_manage_backup(scope=''snapshot'')` tool description for when to
+      `ha_manage_backup(scope=''snapshot'')` pro to, kdy navrhnout úplnou zálohu Home
+      Assistant tarballu před rizikovými operacemi
 
-      suggest a full Home Assistant tarball backup before risky operations
-
-      (e.g. mass device deletes). Affects ONLY this one LLM-facing prompt
-
-      sentence.
+      (např. hromadné mazání zařízení). Ovlivňuje POUZE tuto jednu větu výzvy směřující
+      k LLM.
 
 
-      For per-edit automatic snapshots of automations / scripts / helpers /
+      Pro automatické snímky automatizací / skriptů / pomocníků /
 
-      etc., use the separate **Enable auto-backup of edits** toggle below.'
+      atd. pro každou úpravu použijte samostatný přepínač **Povolit automatické zálohování
+      úprav** níže.'
   secret_path:
-    name: Secret path override
-    description: 'Optional custom HTTP path for the MCP server. Leave empty to use
-      the auto-generated secure path.
+    name: Přepsání tajné cesty
+    description: 'Volitelná vlastní HTTP cesta pro server MCP. Ponechte prázdné pro
+      použití automaticky generované zabezpečené cesty.
 
       '
   enable_tool_search:
-    name: Enable tool search
-    description: 'Replace the full tool catalog with search-based discovery. Reduces
-      idle context by roughly 90%, to about 5K tokens. ⚠️ Do NOT enable this in clients
-      with their own built-in tool search / deferred tools (claude.ai, Claude Desktop,
-      Claude Code) — the two search layers conflict, and the client''s built-in tool
-      search is the better choice there; leave this off. Whether tools are deferred
-      depends on your client and model combination: use this when your setup loads
-      the full catalog up front — models without native deferred tools (e.g. Gemini,
-      OpenAI-compatible local models, Claude Haiku), clients that inline all tool
-      schemas regardless of model (e.g. GitHub Copilot CLI), or smaller context windows.
-      Some Codex models and ChatGPT include deferred tools too — check your client/model
-      directly to confirm its features so you don''t leave this enabled unnecessarily.
-      Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete).
-      Requires restart to take effect.'
+    name: Povolit vyhledávání nástrojů
+    description: 'Nahradí celý katalog nástrojů vyhledáváním. Snižuje nečinný kontext
+      přibližně o 90 %, na zhruba 5K tokenů. ⚠️ NEPOVOLUJTE toto v klientech s vlastním
+      vestavěným vyhledáváním nástrojů / odloženými nástroji (claude.ai, Claude Desktop,
+      Claude Code) — dvě vrstvy vyhledávání se střetávají a vestavěné vyhledávání
+      nástrojů klienta je tam lepší volbou; nechte to vypnuté. Zda jsou nástroje odložené,
+      závisí na kombinaci vašeho klienta a modelu: použijte toto, když vaše nastavení
+      načítá celý katalog předem — modely bez nativních odložených nástrojů (např.
+      Gemini, lokální modely kompatibilní s OpenAI, Claude Haiku), klienti, kteří
+      vkládají všechna schémata nástrojů bez ohledu na model (např. GitHub Copilot
+      CLI), nebo menší kontextová okna. Některé modely Codex a ChatGPT také zahrnují
+      odložené nástroje — zkontrolujte přímo svého klienta/model, abyste potvrdili
+      jeho funkce a nenechali to zbytečně povolené. Nástroje jsou nalezeny pomocí
+      ha_search_tools a spouštěny prostřednictvím kategorizovaných proxy (čtení/zápis/mazání).
+      Vyžaduje restart, aby se projevilo.'
   enable_tool_security_policies:
-    name: Enable Tool Security Policies (advanced)
-    description: Gate high-stakes tool calls (lock/alarm control, automation writes,
-      etc.) behind user approval. When a guarded tool is called, the agent tells the
-      user to open the Tool Security Policies tab in the web UI and click Approve
-      before the call proceeds. Per-tool rules with optional argument conditions are
-      configured in the Tool Security Policies tab. Off by default. Requires restart
-      to take effect.
+    name: Povolit zásady zabezpečení nástrojů (pokročilé)
+    description: Podmiňuje vysoce rizikové volání nástrojů (ovládání zámků/alarmů,
+      zápisy automatizací atd.) schválením uživatelem. Když je volán chráněný nástroj,
+      agent řekne uživateli, aby otevřel záložku Zásady zabezpečení nástrojů ve webovém
+      rozhraní a klikl na Schválit, než volání pokračuje. Pravidla pro jednotlivé
+      nástroje s volitelnými podmínkami argumentů se konfigurují na záložce Zásady
+      zabezpečení nástrojů. Ve výchozím nastavení vypnuto. Vyžaduje restart, aby se
+      projevilo.
   enable_security_policy_tool:
-    name: Let AI agents edit tool security policies
-    description: 'Registers the ha_manage_security_policy tool, which lets connected
-      AI agents read and rewrite the tool security policies — including removing approval
-      gates. Off by default. Independent of the Tool Security Policies option above:
-      this controls who can edit the rules, not whether they are enforced. The tool
-      cannot see or decide pending approvals. To keep a human in the loop, gate the
-      tool before enabling it: switch on "security gated" for Manage Security Policy
-      in the Tools tab of the web UI. Requires restart to take effect.'
+    name: Povolit agentům AI upravovat bezpečnostní zásady nástrojů
+    description: 'Registruje nástroj ha_manage_security_policy, který umožňuje připojeným
+      agentům AI číst a přepisovat bezpečnostní zásady nástrojů — včetně odstranění
+      bran schválení. Ve výchozím nastavení vypnuto. Nezávisle na možnosti „Zásady
+      zabezpečení nástrojů“ výše: toto řídí, kdo může pravidla upravovat, nikoli zda
+      jsou vynucována. Nástroj nemůže vidět ani rozhodovat o čekajících schváleních.
+      Chcete-li zachovat lidskou kontrolu, zablokujte nástroj před jeho povolením:
+      zapněte „security gated“ pro „Manage Security Policy“ na kartě Nástroje ve webovém
+      uživatelském rozhraní. Vyžaduje restart, aby se projevilo.'
   read_only_mode:
-    name: Read Only Mode
-    description: Toggles all write tools off, and removes ability for tools to make
-      any write or destructive calls. Mixed read/write tools (backups, add-ons, energy
-      preferences, voice pipelines, and code mode when enabled) stay available with
-      their write operations blocked. Same toggle as the web UI Tools tab. Off by
-      default. Requires restart to take effect.
+    name: Režim pouze pro čtení
+    description: Vypne všechny nástroje pro zápis a odebere nástrojům možnost provádět
+      jakékoli zápisové nebo destruktivní volání. Smíšené nástroje pro čtení/zápis
+      (zálohy, doplňky, preference energie, hlasové pipeline a režim kódu, pokud je
+      povolen) zůstanou dostupné s blokovanými operacemi zápisu. Stejný přepínač jako
+      na záložce Nástroje ve webovém rozhraní. Ve výchozím nastavení vypnuto. Vyžaduje
+      restart, aby se projevilo.
   redact_secrets:
-    name: Redact Secrets
-    description: Redacts secrets from tool responses before they reach the AI assistant.
-      Add-on options and integration fields marked as passwords are replaced with
-      a set/empty marker (so "is this credential configured?" stays answerable), and
-      other tool responses are scrubbed of secret values the server has already seen
-      (values shorter than 6 characters are skipped, since replacing tiny fragments
-      would corrupt unrelated output). Fields not marked as passwords by their schema
-      cannot be detected. Off by default.
+    name: Redigovat tajemství
+    description: Rediguje tajemství z odpovědí nástrojů, než se dostanou k AI asistentovi.
+      Možnosti doplňků a integrační pole označené jako hesla jsou nahrazeny značkou
+      nastaveno/prázdné (takže otázka „je tento pověřovací údaj nakonfigurován?“ zůstane
+      zodpověditelná) a další odpovědi nástrojů jsou očištěny od tajných hodnot, které
+      server již viděl (hodnoty kratší než 6 znaků jsou přeskočeny, protože nahrazení
+      malých fragmentů by poškodilo nesouvisející výstup). Pole, která nejsou schématem
+      označena jako hesla, nelze detekovat. Ve výchozím nastavení vypnuto.
   enable_beta_features:
-    name: Enable beta features (master)
-    description: ⚠ DANGER — these tools can PERMANENTLY DAMAGE your Home Assistant
-      installation. They write to your YAML config, your filesystem, install custom
-      components, run arbitrary sandboxed Python, and edit tool docstrings the AI
-      sees. There is no warranty and no support guarantee — you enable them at your
-      OWN RISK. Take a Home Assistant backup before turning this on, and never enable
-      in production without one. Master gate for the experimental sub-flags below;
-      sub-flags are ignored at runtime while this master is off, even when explicitly
-      set to true. The same toggle is also surfaced in the web settings UI under "Beta
-      features (dangerous)" — either surface reflects the other on restart.
+    name: Povolit beta funkce (hlavní)
+    description: ⚠ NEBEZPEČÍ — tyto nástroje mohou TRVALE POŠKODIT vaši instalaci
+      Home Assistant. Zapisují do vaší YAML konfigurace, vašeho souborového systému,
+      instalují vlastní komponenty, spouštějí libovolný Python v sandboxu a upravují
+      docstringy nástrojů, které AI vidí. Neexistuje žádná záruka ani garance podpory
+      — povolujete je na VLASTNÍ RIZIKO. Před zapnutím si vytvořte zálohu Home Assistant
+      a nikdy je nepovolujte v produkčním prostředí bez ní. Hlavní přepínač pro experimentální
+      pod-příznaky níže; pod-příznaky jsou za běhu ignorovány, pokud je tento hlavní
+      přepínač vypnutý, i když jsou explicitně nastaveny na true. Stejný přepínač
+      je také zobrazen v uživatelském rozhraní webového nastavení pod „Beta funkce
+      (nebezpečné)“ — obě rozhraní se po restartu vzájemně synchronizují.
   enable_yaml_config_editing:
-    name: Enable YAML config editing (beta)
-    description: Beta feature. Allows AI assistants to add, replace, or remove top-level
-      keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed
-      (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant,
-      http, and recorder are blocked. Each edit validates YAML syntax, runs a config
-      check, and creates an automatic backup. Changes to most keys require a full
-      HA restart to take effect. See docs/beta.md for known limitations. Dedicated
-      tools (automations, scripts, scenes, helpers, template sensors) should be preferred
-      when available. REQUIRES the master "Enable beta features" toggle above (and
-      in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless
-      of its value here.
+    name: Povolit úpravy YAML konfigurace (beta)
+    description: Beta funkce. Umožňuje AI asistentům přidávat, nahrazovat nebo odstraňovat
+      klíče nejvyšší úrovně v configuration.yaml a packages/*.yaml. Povoleny jsou
+      pouze klíče na bílé listině (např. template, sensor, command_line, mqtt, knx);
+      základní klíče jako homeassistant, http a recorder jsou blokovány. Každá úprava
+      ověřuje syntaxi YAML, spouští kontrolu konfigurace a vytváří automatickou zálohu.
+      Změny většiny klíčů vyžadují úplný restart HA, aby se projevily. Viz docs/beta.md
+      pro známá omezení. Pokud jsou k dispozici, měly by být preferovány vyhrazené
+      nástroje (automatizace, skripty, scény, pomocníci, šablonové senzory). VYŽADUJE,
+      aby byl hlavní přepínač „Povolit beta funkce“ výše (a ve webovém rozhraní) zapnutý
+      — jinak je tento podřízený příznak za běhu ignorován bez ohledu na jeho zdejší
+      hodnotu.
   enable_yaml_packages_automation:
-    name: Allow automation in packages/*.yaml
-    description: Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts
-      yaml_path='automation' inside packages/*.yaml. When off, the call is rejected
-      both client-side and server-side. The storage-mode tool (ha_config_set_automation)
-      is unaffected. Default OFF; only takes effect when "Enable YAML config editing"
-      above is also on.
+    name: Povolit automatizaci v packages/*.yaml
+    description: Podpřepínač úprav konfigurace YAML. Když je zapnuto, ha_config_set_yaml
+      přijímá yaml_path='automation' uvnitř packages/*.yaml. Když je vypnuto, volání
+      je odmítnuto jak na straně klienta, tak na straně serveru. Nástroj v režimu
+      úložiště (ha_config_set_automation) není ovlivněn. Výchozí stav je VYPNUTO;
+      platí pouze, když je zapnuto také "Enable YAML config editing" výše.
   enable_yaml_packages_script:
-    name: Allow script in packages/*.yaml
-    description: Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts
-      yaml_path='script' inside packages/*.yaml. When off, the call is rejected both
-      client-side and server-side. The storage-mode tool (ha_config_set_script) is
-      unaffected. Default OFF; only takes effect when "Enable YAML config editing"
-      above is also on.
+    name: Povolit skript v packages/*.yaml
+    description: Podpřepínač úprav konfigurace YAML. Když je zapnuto, ha_config_set_yaml
+      přijímá yaml_path='script' uvnitř packages/*.yaml. Když je vypnuto, volání je
+      odmítnuto jak na straně klienta, tak na straně serveru. Nástroj v režimu úložiště
+      (ha_config_set_script) není ovlivněn. Výchozí stav VYPNUTO; platí pouze tehdy,
+      když je zapnuto i výše uvedené "Povolit úpravy konfigurace YAML".
   enable_yaml_packages_scene:
-    name: Allow scene in packages/*.yaml
-    description: Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts
-      yaml_path='scene' inside packages/*.yaml. When off, the call is rejected both
-      client-side and server-side. The storage-mode tool (ha_config_set_scene) is
-      unaffected. Default OFF; only takes effect when "Enable YAML config editing"
-      above is also on.
+    name: Povolit scénu v packages/*.yaml
+    description: Podpřepínač úpravy konfigurace YAML. Když je zapnuto, ha_config_set_yaml
+      přijímá yaml_path='scene' uvnitř packages/*.yaml. Když je vypnuto, volání je
+      odmítnuto jak na straně klienta, tak na straně serveru. Nástroj v režimu úložiště
+      (ha_config_set_scene) není ovlivněn. Výchozí stav VYPNUTO; platí pouze tehdy,
+      když je také zapnuto „Povolit úpravy konfigurace YAML“ výše.
   enable_yaml_edit_confirm:
-    name: Require confirmation for YAML edits (diff preview)
-    description: 'Sub-toggle of YAML config editing, ON by default (recommended).
-      The first ha_config_set_yaml call returns a unified diff of exactly what would
-      change on disk plus a confirm token and writes nothing; the edit only lands
-      when the call is repeated with that token. Exists so unintended changes outside
-      the requested edit are caught before they reach disk (issue #1720). Turn off
-      only to save one round-trip per edit.'
+    name: Vyžadovat potvrzení pro úpravy YAML (náhled rozdílů)
+    description: 'Podpřepínač úprav konfigurace YAML, VE VÝCHOZÍM NASTAVENÍ ZAPNUTO
+      (doporučeno). První volání ha_config_set_yaml vrátí sjednocený rozdíl přesně
+      toho, co by se změnilo na disku, plus potvrzovací token a nic nezapíše; úprava
+      se uloží pouze tehdy, když je volání zopakováno s tímto tokenem. Existuje proto,
+      aby se nezáměrné změny mimo požadovanou úpravu zachytily dříve, než se dostanou
+      na disk (problém #1720). Vypněte pouze pro úsporu jedné zpáteční cesty na úpravu.'
   enable_code_mode:
-    name: Enable custom tool sandbox (beta)
-    description: Beta feature. Enables the ha_manage_custom_tool tool, which lets
-      AI assistants create, run, save, and delete custom Python code in a secure sandbox
-      when no built-in tool can handle the request. Code runs in an isolated interpreter
-      with no filesystem or arbitrary network access. Sandbox code can hit the HA
-      REST API (api_get/api_post), send WebSocket commands (ws_send), call existing
-      MCP tools (call_tool), or remove a saved tool (delete_saved_tool). Saved tools
-      persist to /data/saved_tools.json by default so they survive add-on restarts,
-      and are visible to any client that can connect. See docs/beta.md for known limitations.
-      Requires restart to take effect. REQUIRES the master "Enable beta features"
-      toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored
-      at runtime regardless of its value here.
+    name: Povolit sandbox vlastních nástrojů (beta)
+    description: Beta funkce. Povoluje nástroj ha_manage_custom_tool, který umožňuje
+      AI asistentům vytvářet, spouštět, ukládat a mazat vlastní kód Pythonu v zabezpečeném
+      sandboxu, když žádný vestavěný nástroj nedokáže požadavek zpracovat. Kód běží
+      v izolovaném interpretu bez přístupu k souborovému systému nebo libovolnému
+      síťovému přístupu. Kód v sandboxu může přistupovat k HA REST API (api_get/api_post),
+      posílat WebSocket příkazy (ws_send), volat existující nástroje MCP (call_tool)
+      nebo odstranit uložený nástroj (delete_saved_tool). Uložené nástroje se ve výchozím
+      nastavení ukládají do /data/saved_tools.json, takže přežijí restarty doplňku
+      a jsou viditelné pro každého klienta, který se může připojit. Známá omezení
+      naleznete v docs/beta.md. Vyžaduje restart, aby se projevilo. VYŽADUJE, aby
+      byl zapnut hlavní přepínač „Enable beta features“ výše (a ve webovém rozhraní)
+      – jinak je tento podřízený příznak za běhu ignorován bez ohledu na jeho hodnotu
+      zde.
   enable_lite_docstrings:
-    name: Enable lite tool docstrings (beta)
-    description: 'Beta feature. Replaces the docstrings on a handful of heavy ha-mcp
-      tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml)
-      with shorter variants that defer schema and example detail to the ha_get_skill_guide
-      tool (or its skill:// resource). WARNING: this reduces idle token usage, but
-      may degrade LLM performance — the trimmed descriptions rely on the LLM actually
-      calling the skill tool or reading the skill resource for detail, which is not
-      guaranteed (some models will skip the extra tool call and end up with less guidance
-      than they had before). Best paired with a client that supports MCP resources
-      or with enable_tool_search. Requires restart to take effect. REQUIRES the master
-      "Enable beta features" toggle above (and in the web UI) to be on — otherwise
-      this sub-flag is ignored at runtime regardless of its value here.'
+    name: Povolit zjednodušené docstringy nástrojů (beta)
+    description: 'Beta funkce. Nahrazuje docstringy u několika náročných nástrojů
+      ha-mcp (automations, scripts, scenes, helpers, dashboards, ha_call_service,
+      ha_config_set_yaml) kratšími variantami, které odkládají podrobnosti o schématu
+      a příkladech na nástroj ha_get_skill_guide (nebo jeho skill:// resource). UPOZORNĚNÍ:
+      toto snižuje využití tokenů v nečinnosti, ale může snížit výkon LLM — zkrácené
+      popisy spoléhají na to, že LLM skutečně zavolá nástroj skill nebo přečte skill
+      resource pro podrobnosti, což není zaručeno (některé modely přeskočí dodatečné
+      volání nástroje a skončí s menším vedením, než měly dříve). Nejlépe se kombinuje
+      s klientem, který podporuje MCP resources nebo s enable_tool_search. Vyžaduje
+      restart, aby se projevilo. VYŽADUJE, aby byl hlavní přepínač „Enable beta features“
+      výše (a ve web UI) zapnutý — jinak je tento podřízený příznak za runtime ignorován
+      bez ohledu na jeho hodnotu zde.'
   enable_mandatory_bps:
-    name: Attach best-practice skills on writes
-    description: 'Master switch for the write-tool skill content delivery feature
-      (issue #1182). When enabled (default), the six config write tools (automations,
-      scripts, scenes, helpers, dashboards, raw YAML) attach the canonical Home Assistant
-      best-practice reference files under `skill_content` on every successful write,
-      plus auto-embed any reference sections cited by best-practice warnings. Each
-      tool also exposes a per-call `MandatoryBPS` parameter the agent can set to false
-      on subsequent calls once it has the content. When this master switch is off,
-      NO skill_content goes out regardless of the per-call parameter or BP warnings.
-      Recommended ON as the first choice; disable only for models with very small
-      context windows. Turning this off may degrade write accuracy. Requires restart
-      to take effect.'
+    name: Připojit dovednosti osvědčených postupů při zápisu
+    description: 'Hlavní přepínač pro funkci doručování obsahu dovedností nástrojů
+      pro zápis (problém #1182). Pokud je povoleno (výchozí), šest konfiguračních
+      nástrojů pro zápis (automatizace, skripty, scény, pomocníci, řídicí panely,
+      čistý YAML) připojí kanonické referenční soubory osvědčených postupů Home Assistant
+      pod `skill_content` při každém úspěšném zápisu, plus automaticky vloží jakékoli
+      referenční sekce citované varováními o osvědčených postupech. Každý nástroj
+      také zpřístupňuje parametr `MandatoryBPS` pro každé volání, který může agent
+      nastavit na false při následných voláních, jakmile má obsah. Když je tento hlavní
+      přepínač vypnutý, ŽÁDNÝ `skill_content` není odeslán bez ohledu na parametr
+      pro každé volání nebo varování BP. Doporučeno ZAPNUTO jako první volba; vypněte
+      pouze pro modely s velmi malými kontextovými okny. Vypnutí této funkce může
+      snížit přesnost zápisu. Vyžaduje restart, aby se projevilo.'
   enable_strict_mandatory_bps:
-    name: Strict best-practices mode
-    description: 'Strict mode: prevents the client from using the tool until it can
-      prove that it read the best practices. While on, the six best-practice write
-      tools (automations, scripts, scenes, helpers, dashboards, raw YAML) are blocked
-      and return an error directing the client to read the best-practices skill via
-      ha_get_skill_guide and pass back the acknowledgment key it obtains there. While
-      on, the ha_get_skill_guide tool is locked enabled — it is the only publisher
-      of the acknowledgment key. Child of the "Attach best-practice skills on writes"
-      option above and inert while that parent is off. Requires restart to take effect.'
+    name: Přísný režim osvědčených postupů
+    description: 'Přísný režim: zabraňuje klientovi používat nástroj, dokud neprokáže,
+      že si přečetl osvědčené postupy. Pokud je zapnuto, šest nástrojů pro zápis osvědčených
+      postupů (automatizace, skripty, scény, pomocníci, řídicí panely, čistý YAML)
+      je blokováno a vrátí chybu, která klientovi nařídí přečíst si dovednost osvědčených
+      postupů pomocí ha_get_skill_guide a vrátit potvrzovací klíč, který tam získá.
+      Pokud je zapnuto, nástroj ha_get_skill_guide je uzamčen jako povolený — je jediným
+      vydavatelem potvrzovacího klíče. Je podřízeno výše uvedené možnosti „Připojit
+      dovednosti osvědčených postupů při zápisu“ a je neaktivní, pokud je tato nadřazená
+      možnost vypnuta. Vyžaduje restart, aby se projevilo.'
   enable_filesystem_tools:
-    name: Enable filesystem tools (beta)
-    description: 'Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write
-      access to your Home Assistant filesystem. WARNING: This gives the MCP server
-      sensitive direct file access to your system. Only enable if you trust the AI
-      assistant with file operations. Requires restart to take effect. REQUIRES the
-      master "Enable beta features" toggle above (and in the web UI) to be on — otherwise
-      this sub-flag is ignored at runtime regardless of its value here.'
+    name: Povolit nástroje souborového systému (beta)
+    description: 'Nastaví HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Povoluje přímý přístup
+      pro čtení/zápis souborů do vašeho souborového systému Home Assistant. VAROVÁNÍ:
+      Tímto získá MCP server citlivý přímý přístup k souborům ve vašem systému. Povolte
+      pouze v případě, že důvěřujete AI asistentovi s operacemi se soubory. Vyžaduje
+      restart, aby se změny projevily. VYŽADUJE, aby byl zapnut hlavní přepínač „Enable
+      beta features“ výše (a ve webovém rozhraní) — jinak je tento podřízený příznak
+      za běhu ignorován bez ohledu na jeho hodnotu zde.'
   enable_dashboard_screenshot:
-    name: Enable dashboard screenshot mode (beta)
-    description: Beta feature — disabled by default. Adds the ha_get_dashboard_screenshot
-      tool plus include_screenshot / return_screenshot options on the dashboard get/set
-      tools, so AI assistants can inspect one or more responsive Lovelace images (e.g.
-      to verify a dashboard they just created). Supports stable named views, mobile/tablet/desktop
-      batches, and PNG/JPEG/WebP/BMP output. Rendering runs in a separate, opt-in
-      engine — balloob's "Puppet" add-on (headless Chromium) — which you install once
-      (add balloob's add-on repository, then install "Puppet") and give a long-lived
-      access token; on Docker/Container deployments you run that engine as a sidecar
-      and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is installed unless
-      you both enable this and install the engine. Requires restart to take effect.
-      REQUIRES the master "Enable beta features" toggle above (and in the web UI)
-      to be on — otherwise this sub-flag is ignored at runtime regardless of its value
-      here.
+    name: Povolit režim snímání obrazovky dashboardu (beta)
+    description: Beta funkce — ve výchozím nastavení zakázáno. Přidává nástroj ha_get_dashboard_screenshot
+      a možnosti include_screenshot / return_screenshot k nástrojům pro získání/nastavení
+      panelu, takže asistenti AI mohou kontrolovat jeden nebo více responzivních obrázků
+      Lovelace (např. k ověření panelu, který právě vytvořili). Podporuje stabilní
+      pojmenované pohledy, dávky pro mobilní zařízení/tablety/desktopy a výstup PNG/JPEG/WebP/BMP.
+      Vykreslování probíhá v samostatném, volitelném enginu — doplňku „Puppet“ od
+      ballooba (headless Chromium) — který nainstalujete jednou (přidáte repozitář
+      doplňků ballooba, poté nainstalujete „Puppet“) a udělíte mu dlouhodobý přístupový
+      token; v nasazeních Docker/Container spustíte tento engine jako sidecar a nastavíte
+      HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nic náročného se nenainstaluje, pokud
+      tuto funkci nepovolíte a nenainstalujete engine. Vyžaduje restart, aby se projevilo.
+      VYŽADUJE, aby byl zapnut hlavní přepínač „Enable beta features“ výše (a ve webovém
+      rozhraní) — jinak je tento podřízený příznak za běhu ignorován bez ohledu na
+      jeho hodnotu zde.
   enable_auto_backup:
-    name: Enable auto-backup of edits
-    description: 'Captures a per-entity snapshot before every wrapped write/destructive
-      MCP tool call (automation, script, scene, helper, dashboard, dashboard resource,
-      label, category, group, zone, area, calendar, todo, entity, device, integration,
-      and sibling remove/delete tools). The auto-backup throttle bounds how often
-      that happens: 0 (default) captures on every such call, N>0 at most one snapshot
-      per N minutes per entity. Snapshots are saved as YAML files under /data/ha_mcp_backups/
-      (override via HAMCP_BACKUP_DIR) and listed, restored, or deleted via the Backups
-      tab in the web settings UI or via ha_manage_backup(scope=''edits'', ...). For
-      those domains the capture is best-effort — a failure logs a WARNING and the
-      write proceeds. The file and raw-YAML tools are the exception: ha_write_file,
-      ha_delete_file and ha_config_set_yaml treat the snapshot as a precondition,
-      so a write through them is refused while this is off, and a failed capture blocks
-      it. On by default; unchecking opts out of the best-effort captures and takes
-      the file and raw-YAML tools out of service with them. Requires restart to take
-      effect.'
+    name: Povolit automatické zálohování úprav
+    description: 'Pořídí snímek pro každou entitu před každým zabaleným zápisem/destruktivním
+      voláním nástroje MCP (automatizace, skript, scéna, pomocník, dashboard, zdroj
+      dashboardu, štítek, kategorie, skupina, zóna, oblast, kalendář, úkol, entita,
+      zařízení, integrace a související nástroje pro odebrání/smazání). Omezení automatické
+      zálohy určuje, jak často se to děje: 0 (výchozí) zachytí při každém takovém
+      volání, N>0 maximálně jeden snímek za N minut na entitu. Snímky jsou uloženy
+      jako soubory YAML pod /data/ha_mcp_backups/ (přepsání přes HAMCP_BACKUP_DIR)
+      a jsou uvedeny, obnoveny nebo smazány přes kartu Zálohy ve webovém uživatelském
+      rozhraní nastavení nebo přes ha_manage_backup(scope=''edits'', ...). Pro tyto
+      domény je zachycení nejlepším možným úsilím — selhání zaznamená VAROVÁNÍ a zápis
+      pokračuje. Nástroje pro soubory a raw-YAML jsou výjimkou: ha_write_file, ha_delete_file
+      a ha_config_set_yaml považují snímek za předpoklad, takže zápis přes ně je odmítnut,
+      pokud je tato možnost vypnuta, a neúspěšné zachycení jej blokuje. Ve výchozím
+      nastavení zapnuto; zrušení zaškrtnutí se odhlásí od zachycení nejlepším úsilím
+      a vyřadí s nimi nástroje pro soubory a raw-YAML z provozu. Vyžaduje restart,
+      aby se projevilo.'
   auto_backup_throttle_minutes:
-    name: Auto-backup throttle (minutes)
-    description: Per-entity throttle window. 0 (default) captures a snapshot on every
-      wrapped write. N>0 captures at most one snapshot per N minutes per entity. Range
+    name: Omezení automatické zálohy (minuty)
+    description: Okno omezení pro každou entitu. 0 (výchozí) zachytí snímek při každém
+      zabaleném zápisu. N>0 zachytí maximálně jeden snímek za N minut na entitu. Rozsah
       0–1440.
   auto_backup_retain_per_entity:
-    name: Auto-backup retention (per entity)
-    description: Maximum number of snapshots kept per entity. Older snapshots beyond
-      this cap are rotated out on each successful capture. Default 100, range 1–10000.
+    name: Uchovávání automatických záloh (na entitu)
+    description: Maximální počet snímků uchovávaných na entitu. Starší snímky nad
+      tento limit jsou při každém úspěšném zachycení vyřazeny. Výchozí 100, rozsah
+      1–10000.
   enable_snapshot_delete:
-    name: Allow snapshot deletion
-    description: Lets ha_manage_backup delete full HA snapshot tarballs (scope='snapshot',
-      action='delete'). Off by default — a snapshot may be the last recovery point
-      after a mistaken change, so a human must opt in here. Even when on, scheduled
-      backups, the newest remaining snapshot, and anything younger than the age floor
-      below stay protected.
+    name: Povolit smazání snímků
+    description: Umožňuje ha_manage_backup mazat úplné HA snapshot tarbally (scope='snapshot',
+      action='delete'). Ve výchozím nastavení vypnuto — snímek může být posledním
+      bodem obnovy po chybné změně, takže zde musí člověk souhlasit. I když je zapnuto,
+      plánované zálohy, nejnovější zbývající snímek a cokoli mladšího než níže uvedený
+      věkový limit zůstávají chráněny.
   snapshot_delete_min_age_days:
-    name: Minimum snapshot age to delete (days)
-    description: A snapshot must be at least this old before it can be deleted. Range
-      0–365; 0 disables the floor (the newest-snapshot and scheduled-backup protections
-      still apply). Default 7.
+    name: Minimální stáří snímku pro smazání (dny)
+    description: Snímek musí být alespoň takto starý, než může být smazán. Rozsah
+      0–365; 0 zakáže dolní hranici (ochrany nejnovějšího snímku a plánované zálohy
+      stále platí). Výchozí 7.
   tool_search_max_results:
-    name: Tool search max results
-    description: 'Maximum number of tools returned by ha_search_tools when tool search
-      is enabled. Lower values (2-3) save context tokens but may miss relevant tools.
-      Range: 2-10. Requires restart.'
+    name: Max. výsledků vyhledávání nástrojů
+    description: 'Maximální počet nástrojů vrácených ha_search_tools, když je povoleno
+      vyhledávání nástrojů. Nižší hodnoty (2-3) šetří kontextové tokeny, ale mohou
+      přehlédnout relevantní nástroje. Rozsah: 2-10. Vyžaduje restart.'
   disabled_tools:
-    name: Disabled tools (comma-separated)
-    description: Tools listed here are forced off and locked in the web Settings UI
-      (Tools tab) — they cannot be re-enabled there without unsetting this option
-      first. A small set of mandatory tools (ha_search, ha_get_overview, ha_get_state,
-      ha_report_issue, ha_manage_backup) cannot be disabled and keep running even
-      if listed here. ha_get_skill_guide can be disabled only while strict best-practices
-      mode (enable_strict_mandatory_bps) is off. Comma-separated tool names (e.g.
-      ha_call_event,ha_eval_template).
+    name: Zakázané nástroje (oddělené čárkami)
+    description: Nástroje zde uvedené jsou vynuceně vypnuty a uzamčeny ve webovém
+      uživatelském rozhraní Nastavení (karta Nástroje) — nelze je tam znovu povolit,
+      aniž byste nejprve zrušili toto nastavení. Malá sada povinných nástrojů (ha_search,
+      ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) nelze zakázat
+      a zůstávají spuštěny, i když jsou zde uvedeny. ha_get_skill_guide lze zakázat
+      pouze, když je vypnut režim přísných osvědčených postupů (enable_strict_mandatory_bps).
+      Názvy nástrojů oddělené čárkami (např. ha_call_event,ha_eval_template).
   pinned_tools:
-    name: Pinned tools (comma-separated)
-    description: Tools listed here are locked pinned — they appear at the top of the
-      Tools tab and cannot be unpinned from the web Settings UI without unsetting
-      this option first. Useful in combination with Tool Search. Comma-separated tool
-      names.
+    name: Připnuté nástroje (oddělené čárkami)
+    description: Nástroje zde uvedené jsou uzamčeny jako připnuté — zobrazují se v
+      horní části karty Nástroje a nelze je odepnout z webového uživatelského rozhraní
+      Nastavení, aniž byste nejprve zrušili toto nastavení. Užitečné v kombinaci s
+      vyhledáváním nástrojů. Názvy nástrojů oddělené čárkami.
   verify_ssl:
-    name: Verify TLS certificate
-    description: Verify the Home Assistant server's TLS certificate. The add-on connects
-      via the Supervisor proxy, so this normally has no effect and should stay enabled.
-      Disable only if you've reconfigured the add-on to talk to HA over a public HTTPS
-      hostname with a self-signed certificate or hostname mismatch. Disabling weakens
-      transport security — leave on unless you know you need it. Requires restart
-      to take effect.
+    name: Ověřit certifikát TLS
+    description: Ověří certifikát TLS serveru Home Assistant. Doplněk se připojuje
+      přes proxy Supervisor, takže to obvykle nemá žádný účinek a mělo by zůstat povoleno.
+      Zakázat pouze v případě, že jste doplněk překonfigurovali tak, aby komunikoval
+      s HA přes veřejný HTTPS hostname s vlastnoručně podepsaným certifikátem nebo
+      neshodou hostname. Zakázání oslabuje zabezpečení přenosu — ponechte zapnuto,
+      pokud víte, že to potřebujete. Vyžaduje restart, aby se projevilo.

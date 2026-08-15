@@ -108,7 +108,14 @@
     },
     "legacy_oauth_restart": {
       "title": "Rekomencu Home Assistant por apliki la ŝanĝon de hereda OAuth",
-      "description": "La hereda OAuth-aŭtentiga reĝimo registras siajn proprajn retajn finpunktojn /authorize kaj /token, kiujn Home Assistant povas ligi aŭ liberigi nur kiam ĝi plene rekomencas — ĉu vi ĵus ŝaltis ĉi tiun reĝimon, malŝaltis ĝin, aŭ ŝanĝis ĝian Klientan ID/Sekreton. Rekomencu Home Assistant (Agordoj - Sistemo - Rekomenci) por apliki la ŝanĝon; ĝis tiam la antaŭa konduto restas valida."
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Rekomencu Home Assistant?",
+            "description": "Sendi ĉi tiun formularon rekomencos Home Assistant kaj aplikos la ŝanĝon de legacy OAuth.\n\nAlklaku **Sendu** por rekomenci nun."
+          }
+        }
+      }
     }
   },
   "selector": {
