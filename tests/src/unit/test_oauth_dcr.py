@@ -229,6 +229,25 @@ async def test_register_rejects_oversized_body(dcr_view_client_factory):
     assert (await resp.json())["error"] == "invalid_client_metadata"
 
 
+async def test_register_reassembles_a_chunked_body(dcr_view_client_factory):
+    """#2219 review round 3: a fragmented body must be read to EOF — a single
+    StreamReader.read() can return early and truncate the document."""
+    client = await dcr_view_client_factory(dcr_key=KEY)
+    body = b'{"redirect_uris": ["https://a.example/cb"], "client_name": "x"}'
+
+    async def chunked():
+        for i in range(0, len(body), 7):
+            yield body[i : i + 7]
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/register",
+        data=chunked(),
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert resp.status == 201
+
+
 async def test_register_rejects_plain_invalid_json(dcr_view_client_factory):
     """The ordinary malformed-JSON arm still answers the same 400."""
     client = await dcr_view_client_factory(dcr_key=KEY)
