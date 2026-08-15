@@ -75,11 +75,17 @@ def _hass(oauth, mode: str, *, dcr_key: bytes | None = KEY):
     return SimpleNamespace(data={oauth.DOMAIN: data}, http=SimpleNamespace())
 
 
-def _reader(raw: bytes):
-    """An async .read(limit) returning at most ``limit`` bytes of ``raw``."""
+def _reader(raw: bytes, *, chunk: int | None = None):
+    """An async .read(limit) over ``raw``; ``chunk`` fragments it like a real
+    StreamReader, which may return early before EOF."""
+    pos = 0
 
     async def read(limit):
-        return raw[:limit]
+        nonlocal pos
+        take = min(limit, chunk) if chunk else limit
+        out = raw[pos : pos + take]
+        pos += len(out)
+        return out
 
     return read
 
@@ -87,10 +93,7 @@ def _reader(raw: bytes):
 def _raw_request(raw: bytes):
     """A request whose bounded .content.read() yields ``raw``."""
 
-    async def read(limit):
-        return raw[:limit]
-
-    return SimpleNamespace(content=SimpleNamespace(read=read))
+    return SimpleNamespace(content=SimpleNamespace(read=_reader(raw)))
 
 
 def _json_request(body):
@@ -695,6 +698,18 @@ async def test_dcr_register_rejects_deeply_nested_json(oauth_stack):
 
     assert response.status == 400
     assert response.json_body["error"] == "invalid_client_metadata"
+
+
+async def test_dcr_register_reassembles_a_chunked_body(oauth_stack):
+    """#2219 review round 3: a fragmented body must be read to EOF — a single
+    StreamReader.read() can return early and truncate the document."""
+    oauth, dcr = oauth_stack.oauth, oauth_stack.dcr
+    body = json.dumps({"redirect_uris": ["https://a.example/cb"]}).encode()
+
+    request = SimpleNamespace(content=SimpleNamespace(read=_reader(body, chunk=7)))
+    response = await dcr.DcrRegisterView(_hass(oauth, oauth.MODE_HA_AUTH)).post(request)
+
+    assert response.status == 201
 
 
 async def test_dcr_register_rejects_oversized_body(oauth_stack):

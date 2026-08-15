@@ -165,6 +165,25 @@ def _active_grant_types(hass: HomeAssistant, redirect_uris: list[str]) -> list[s
     return ["authorization_code"]
 
 
+async def _read_capped_body(request: web.Request) -> bytes | None:
+    """The request body, or None when it exceeds ``MAX_DCR_BODY_BYTES``.
+
+    Reads to EOF rather than taking one ``StreamReader.read(n)``: that call
+    may return a short chunk before EOF on a fragmented body, which would
+    parse a truncated document (#2219 review round 3).
+    """
+    chunks: list[bytes] = []
+    remaining = MAX_DCR_BODY_BYTES + 1
+    while remaining > 0:
+        chunk = await request.content.read(remaining)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    raw = b"".join(chunks)
+    return None if len(raw) > MAX_DCR_BODY_BYTES else raw
+
+
 def _dcr_error(error: str, description: str) -> web.Response:
     """Return an RFC 7591 registration error response."""
     return web.json_response(
@@ -190,8 +209,8 @@ class DcrRegisterView(HomeAssistantView):
         key = _active_dcr_key(self._hass)
         if key is None:
             return web.json_response({"error": "not_found"}, status=404)
-        raw = await request.content.read(MAX_DCR_BODY_BYTES + 1)
-        if len(raw) > MAX_DCR_BODY_BYTES:
+        raw = await _read_capped_body(request)
+        if raw is None:
             return _dcr_error("invalid_client_metadata", "body is too large")
         try:
             body: Any = json.loads(raw)
