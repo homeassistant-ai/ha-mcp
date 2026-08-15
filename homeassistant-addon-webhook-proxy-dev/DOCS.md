@@ -74,6 +74,7 @@ automatically on the next clean start.
 | `mcp_server_url` | Full MCP server URL override (auto-detects if blank) | `""` |
 | `mcp_port` | MCP server port used during auto-discovery | `9583` |
 | `enable_oauth` | **Beta.** Require OAuth 2.1 on the webhook URL | `false` |
+| `oauth_mode` | **Beta.** Bearer-protection mode: `ha_auth` or `legacy` | unset |
 | `oauth_client_id` | OAuth Client ID (auto-generated if blank) | `""` |
 | `oauth_client_secret` | OAuth Client Secret (auto-generated if blank) | `""` |
 | `regenerate_oauth_creds` | One-shot: wipe stored OAuth creds and generate fresh ones on next start | `false` |
@@ -129,10 +130,11 @@ The old webhook ID is not retained anywhere on disk after the file is deleted, a
 
 #### Enable OAuth (Beta) for stronger protection
 
-If you want a real auth layer on top of the URL secret, turn on **Enable OAuth (Beta)**. It is OFF by default; leaving it off keeps the webhook working exactly as before with no auth check.
+If you want a real auth layer on top of the URL secret, turn on **Enable OAuth (Beta)**. It is OFF by default; leaving it off keeps the webhook working with no auth check. The proxy still serves a none-mode OAuth compatibility surface so clients that insist on OAuth discovery can connect, but its token is cosmetic and grants no access by itself.
 
-There are two modes, chosen with the **OAuth Mode (Beta)** option:
+The proxy has three live OAuth behaviors. When OAuth protection is enabled, choose one of the two protected modes with **OAuth Mode (Beta)**:
 
+- **None mode (OAuth protection off)** — the secret webhook URL remains the only credential. OAuth discovery, stateless registration, and an invisible public-PKCE exchange are available for client compatibility, but the resulting token is not checked by the webhook.
 - **`ha_auth` (recommended, the default for a first-time enable)** — Home Assistant itself is the authorization server. You sign in with your Home Assistant account and **leave the connector's OAuth fields blank**. No Client ID or Client Secret, works with any hostname/URL, and no Home Assistant restart is needed to enable or disable it.
 - **`legacy` (deprecated)** — the previous flow, where the add-on generates a Client ID + Secret you paste into the connector.
 
@@ -147,7 +149,7 @@ There are two modes, chosen with the **OAuth Mode (Beta)** option:
    - **Claude.ai:** if its UI insists on a Client Secret, any value works — Home Assistant ignores it.
 5. **Revoking access:** open your Home Assistant profile and remove the session/refresh token for the connector (Settings → your user → Security). No add-on action needed.
 
-Why this mode is host-agnostic: the add-on serves the OAuth discovery documents itself, so they work on any hostname even when Home Assistant's own metadata would not (e.g. an external URL mismatch). All the actual OAuth protocol steps are Home Assistant core's own `/auth/authorize` + `/auth/token`.
+Why this mode is host-agnostic: the add-on serves the OAuth discovery and protocol endpoints itself, so they work on any hostname even when Home Assistant's own metadata would not. Its scoped handlers translate validated CIMD or DCR client identities, then redirect or relay into Home Assistant core for the actual login and token issuance.
 
 ##### Legacy mode (client id + secret)
 
@@ -176,20 +178,29 @@ The generated values are persisted at `/data/oauth_creds.json` inside the addon,
 2. **Get fresh random values via the UI** (no filesystem access needed): turn on **Regenerate OAuth Credentials on Next Start** in the addon configuration, save, restart. The addon wipes the stored creds, generates a fresh pair, prints them in the log, and flips the regenerate toggle back to off. Update your MCP client to match.
 3. **Get fresh random values manually:** stop the addon, delete `/data/oauth_creds.json` (e.g. via SSH/Terminal addon), start the addon. Equivalent to option 2 but requires filesystem access.
 
-**To disable OAuth (either mode):** set **Enable OAuth (Beta)** back to off and restart the addon. The webhook returns to plain unauthenticated behavior — the URL works as before with no token required.
+**To disable OAuth protection:** set **Enable OAuth (Beta)** back to off and restart the addon. The webhook returns to unauthenticated URL-as-secret behavior. The none-mode compatibility endpoints remain available, but their cosmetic token is not required by the webhook.
 
-**Endpoints exposed when enabled:**
+**OAuth endpoints:**
 
-Both modes serve the discovery documents from the add-on's own host, so they work on any hostname:
+All three behaviors advertise proxy-owned endpoints under `/api/mcp_proxy_dev/oauth`, so a cached client configuration remains on the proxy across mode switches:
 
-- `/.../api/webhook/<id>` — MCP webhook (now bearer-protected)
-- `/.../api/mcp_proxy_dev/oauth/protected-resource` — RFC 9728 metadata
-- `/.../api/mcp_proxy_dev/oauth/authorization-server` — RFC 8414 metadata (contents differ per mode)
+- `/api/mcp_proxy_dev/oauth/protected-resource` — RFC 9728 protected-resource metadata
+- `/api/mcp_proxy_dev/oauth/authorization-server` — RFC 8414 authorization-server metadata
+- `/api/mcp_proxy_dev/oauth/authorize` — mode-dispatched authorization endpoint
+- `/api/mcp_proxy_dev/oauth/token` — mode-dispatched token endpoint
+- `/api/mcp_proxy_dev/oauth/register` — stateless DCR endpoint, advertised in `ha_auth` and none mode
 
-The authorize/token endpoints depend on the mode:
+The same authorize/token URLs behave according to the active mode:
 
-- **`ha_auth`:** Home Assistant core's own `/auth/authorize` + `/auth/token`. The add-on registers no root routes and needs no HA restart.
-- **`legacy`:** the add-on's own `/.../authorize` (consent screen) + `/.../token` at the host root, where Claude.ai expects them.
+- **None mode:** accepts any valid HTTPS or RFC 8252 loopback redirect, auto-approves without a page, and issues a cosmetic token. DCR registrations advertise only the authorization-code grant.
+- **`ha_auth`:** validates CIMD or signed DCR identities before sending the browser/token exchange into Home Assistant core. DCR advertises refresh only when the registered redirects have one reproducible web origin.
+- **`legacy`:** serves the existing consent and credentialed token flow on the scoped URLs. The host-root `/authorize` and `/token` routes remain compatibility aliases but are not advertised; legacy does not advertise DCR.
+
+**Hosted Claude environment requirements:** Hosted Claude surfaces reach your server from Anthropic's backend, not from your browser. Three environment rules apply that no server-side setting can work around:
+
+1. **Port 443 only (hosted Claude connectors).** The connector URL must use standard HTTPS with no explicit port. Anthropic's backend only connects on port 443, so `https://ha.example.com:8123/...` is not reachable from hosted Claude connectors — put a reverse proxy or port-forward on 443 in front and keep 8123 internal.
+2. **Allowlist Anthropic's egress range.** Backend traffic originates from `160.79.104.0/21`. A WAF, geo-block, or bot filter (Cloudflare "AI crawl" rules included) that blocks that range breaks registration, token exchange, and the post-OAuth handshake even though your browser works fine.
+3. **Answer fast.** Claude waits at most 10 seconds for discovery, registration, and token responses (30 for refresh) per [Anthropic's connector authentication documentation](https://claude.com/docs/connectors/building/authentication). Slow reverse proxies or cold paths cause intermittent connection failures.
 
 **Notes (legacy mode):**
 
@@ -197,28 +208,28 @@ The authorize/token endpoints depend on the mode:
 - Rotating the Client ID invalidates all outstanding tokens (the client_id is part of the token's signed payload).
 - The signing key is generated once and persisted at `/config/.mcp_proxy_dev_oauth_secret`. Delete that file to invalidate every token in one shot.
 
-**Beta status:** OAuth is Beta in both modes; the URL-as-secret mode (default) is the stable, documented path. `ha_auth` delegates all protocol steps to Home Assistant's own OAuth (validated live against claude.ai); `legacy` is implemented against the [MCP 2025-06-18 spec](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization). Real-world MCP-client coverage varies, so treat OAuth as opt-in until tested with your client, and report problems on GitHub.
+**Beta status:** OAuth protection is Beta in both protected modes; the URL-as-secret mode (default) is the stable, documented path. `ha_auth` delegates authentication and token issuance to Home Assistant's own OAuth (validated live against claude.ai); `legacy` is implemented against the [MCP 2025-06-18 spec](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization). Real-world MCP-client coverage varies, so treat OAuth as opt-in until tested with your client, and report problems on GitHub.
 
-### End-to-end flow (what happens when Claude.ai connects)
+### Legacy end-to-end flow (what happens when Claude.ai connects)
 
 When OAuth is enabled and you paste the webhook URL + Client ID + Client Secret into Claude.ai's connector setup, here's what happens after you click **Connect** on the connector:
 
-1. **Claude.ai's browser session** is redirected to `https://<your-host>/authorize?response_type=code&client_id=...&redirect_uri=...&code_challenge=...&code_challenge_method=S256&state=...&resource=https://<your-host>/api/webhook/<id>`.
+1. **Claude.ai's browser session** is redirected to `https://<your-host>/api/mcp_proxy_dev/oauth/authorize?response_type=code&client_id=...&redirect_uri=...&code_challenge=...&code_challenge_method=S256&state=...&resource=https://<your-host>/api/webhook/<id>`.
 2. The addon serves a **consent page** (Allow / Deny) showing the redirect destination so you can verify it's Claude.ai's callback URL before proceeding.
 3. You click **Allow** → the addon issues a one-time auth code and redirects the browser back to Claude.ai's callback (`redirect_uri`).
-4. Claude.ai's backend exchanges the auth code at `https://<your-host>/token` using the configured Client ID and Client Secret (Basic auth or form body) plus the PKCE `code_verifier`. The addon validates all of these, then issues:
+4. Claude.ai's backend exchanges the auth code at `https://<your-host>/api/mcp_proxy_dev/oauth/token` using the configured Client ID and Client Secret (Basic auth or form body) plus the PKCE `code_verifier`. The addon validates all of these, then issues:
    - An **access token** (1-hour HMAC-signed bearer)
    - A **refresh token** (30-day HMAC-signed bearer)
 5. Claude.ai stores the tokens. From then on, every MCP request includes `Authorization: Bearer <access-token>`. The webhook handler validates the bearer; expired tokens are refreshed automatically using the refresh token.
 
-### Threat model and the role of the Client Secret
+### Legacy threat model and the role of the Client Secret
 
-The `/authorize` consent page is reachable without being logged into Home Assistant or Nabu Casa. **This is intentional and matches how mainstream OAuth servers work** — the consent page must be reachable by the browser session being redirected from the OAuth client (Claude.ai), which has no Home Assistant credentials of its own.
+The scoped `/api/mcp_proxy_dev/oauth/authorize` consent page is reachable without being logged into Home Assistant or Nabu Casa. **This is intentional and matches how mainstream OAuth servers work** — the consent page must be reachable by the browser session being redirected from the OAuth client (Claude.ai), which has no Home Assistant credentials of its own.
 
 What stops an attacker who can reach the consent page from gaining access:
 
 - Clicking **Allow** on a maliciously-crafted authorize URL only mints a one-time auth code bound to the attacker's `redirect_uri` and PKCE `code_challenge`.
-- That code is **useless without the OAuth Client Secret**, which is required at the `/token` endpoint to complete the exchange.
+- That code is **useless without the OAuth Client Secret**, which is required at the scoped `/api/mcp_proxy_dev/oauth/token` endpoint to complete the exchange.
 - PKCE binds the code to the original `code_verifier`, which only the legitimate client (Claude.ai) generated.
 
 **This means: the OAuth Client Secret is the actual security boundary.** Treat it like a password.
