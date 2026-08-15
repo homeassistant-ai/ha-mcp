@@ -44,7 +44,6 @@ _RECONFIGURE_SUCCESS_REASONS = frozenset(
         "reconfigure_successful",
     }
 )
-FLOW_ABORTED_BEFORE_APPLY = "flow_aborted_before_apply"
 
 
 class _FlowType(StrEnum):
@@ -54,6 +53,46 @@ class _FlowType(StrEnum):
     MENU = "menu"
     ABORT = "abort"
     CREATE_ENTRY = "create_entry"
+
+
+class ReconfigureStatus(StrEnum):
+    """Outcome vocabulary for the ``ha_set_integration`` reconfigure mode.
+
+    Ordered by how far the request got. Everything from ``APPLIED_*`` onward
+    means Home Assistant committed the change, so a caller must not blindly
+    retry those.
+    """
+
+    #: Read-only preflight: validated, nothing started.
+    PREVIEW = "preview"
+    #: A confirmation was required and none was supplied.
+    CONFIRMATION_REQUIRED = "confirmation_required"
+    #: The supplied confirm_token no longer matches the entry's state.
+    STALE_PREFLIGHT = "stale_preflight"
+    #: The flow was aborted before any value reached Home Assistant.
+    FLOW_ABORTED_BEFORE_APPLY = "flow_aborted_before_apply"
+    #: Home Assistant rejected the change; nothing was committed.
+    APPLY_FAILED = "apply_failed"
+    #: Committed, but the flow never consumed every supplied value.
+    APPLIED_BUT_INCOMPLETE = "applied_but_incomplete"
+    #: Committed, and the entry no longer carries the identity it had.
+    APPLIED_IDENTITY_MISMATCH = "applied_identity_mismatch"
+    #: Committed, identity intact, and the entry reloaded cleanly.
+    APPLIED_AND_VERIFIED = "applied_and_verified"
+    #: Committed, but the result could not be fully verified.
+    APPLIED_BUT_UNVERIFIED = "applied_but_unverified"
+
+
+#: Statuses that mean Home Assistant already committed the change. Callers use
+#: this to decide whether aborting a flow or retrying is still safe.
+POST_COMMIT_STATUSES = frozenset(
+    {
+        ReconfigureStatus.APPLIED_BUT_INCOMPLETE,
+        ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
+        ReconfigureStatus.APPLIED_AND_VERIFIED,
+        ReconfigureStatus.APPLIED_BUT_UNVERIFIED,
+    }
+)
 
 
 def _parse_flow_api_error(
@@ -241,8 +280,14 @@ async def _raise_flow_api_error(
 
     For 400/422 responses, parses ``response_data`` for field-level info
     via ``_parse_flow_api_error``. When the body is unstructured (no
-    ``errors`` map), attaches the helper's ``data_schema`` (if it can be
-    fetched) so the caller has actionable information.
+    ``errors`` map), attaches a ``data_schema`` so the caller has actionable
+    information.
+
+    ``is_reconfigure`` changes two things. The schema comes from the live
+    reconfigure step rather than a fresh introspection flow (``helper_type``
+    carries the integration domain there and reaches no schema fetch), and
+    the prose names the integration instead of a helper, because this path
+    also serves ``ha_set_integration(reconfigure=True)``.
 
     Always raises ``ToolError`` — never returns.
     """
@@ -289,7 +334,14 @@ async def _raise_flow_api_error(
         # Structured field errors — tell the caller which fields failed.
         context["field_errors"] = field_errors
         readable = ", ".join(f"{k}: {v}" for k, v in field_errors.items())
-        message = f"Helper validation failed — {readable}"
+        subject = (
+            f"{helper_type} reconfigure validation"
+            if is_reconfigure and helper_type
+            else "Reconfigure validation"
+            if is_reconfigure
+            else "Helper validation"
+        )
+        message = f"{subject} failed — {readable}"
         suggestions.append(
             "Fix the field(s) listed in 'field_errors' and retry the call."
         )
@@ -302,8 +354,15 @@ async def _raise_flow_api_error(
             context["data_schema"] = schema
     else:
         # Unstructured — attach the data_schema so the LLM has something to use.
+        subject = (
+            f"{helper_type} reconfigure"
+            if is_reconfigure and helper_type
+            else "reconfigure"
+            if is_reconfigure
+            else helper_type or "flow"
+        )
         message = (
-            f"Home Assistant rejected the {helper_type or 'flow'} request "
+            f"Home Assistant rejected the {subject} request "
             f"({status_code}): {parsed['message']}"
         )
         if schema is not None:
@@ -314,7 +373,7 @@ async def _raise_flow_api_error(
             )
 
     if is_reconfigure:
-        context["status"] = "apply_failed"
+        context["status"] = ReconfigureStatus.APPLY_FAILED
 
     raise_tool_error(
         create_error_response(
@@ -363,7 +422,7 @@ async def _submit_step(
                     ],
                     context={
                         "flow_id": flow_id,
-                        "status": "applied_but_unverified",
+                        "status": ReconfigureStatus.APPLIED_BUT_UNVERIFIED,
                         "submitted_keys": sorted(payload),
                         "details": current_step,
                     },
@@ -425,7 +484,7 @@ def _flow_failure_context(
 ) -> dict[str, Any]:
     context: dict[str, Any] = {"flow_id": flow_id, "details": current_step}
     if is_reconfigure:
-        context["status"] = "apply_failed"
+        context["status"] = ReconfigureStatus.APPLY_FAILED
     return context
 
 
@@ -455,14 +514,16 @@ def _raise_flow_abort(
 
 
 def _unconsumed_reconfigure_keys(
-    config: dict[str, Any],
     ignored_config_keys: set[str],
     remaining_config: dict[str, Any],
 ) -> list[str]:
-    """List caller keys that a reconfigure flow never consumed."""
-    return sorted(
-        ignored_config_keys | {key for key in remaining_config if key in config}
-    )
+    """List caller keys that a reconfigure flow never consumed.
+
+    ``remaining_config`` starts as a copy of the caller's config and is only
+    ever popped from, or reassigned at a key it already holds, so every key
+    still in it is a caller key.
+    """
+    return sorted(ignored_config_keys | set(remaining_config))
 
 
 def _reconfigure_success_response(
@@ -474,6 +535,10 @@ def _reconfigure_success_response(
 ) -> dict[str, Any]:
     """Build the common successful reconfigure response."""
     response: dict[str, Any] = {
+        # Past tense, matching the "created" this walker's sibling emits. Only
+        # set_config_subentry reads this; the ha_set_integration reconfigure
+        # surface builds its own response and reports operation "reconfigure"
+        # on both the preview and the applied leg.
         "success": True,
         "operation": "reconfigured",
         "flow_result": current_step,
@@ -489,7 +554,6 @@ def _reconfigure_abort_result(
     *,
     is_reconfigure: bool,
     flow_id: str,
-    config: dict[str, Any],
     ignored_config_keys: set[str],
     remaining_config: dict[str, Any],
     reuse_state: _ReuseState,
@@ -500,9 +564,7 @@ def _reconfigure_abort_result(
         or current_step.get("reason") not in _RECONFIGURE_SUCCESS_REASONS
     ):
         return None
-    unresolved = _unconsumed_reconfigure_keys(
-        config, ignored_config_keys, remaining_config
-    )
+    unresolved = _unconsumed_reconfigure_keys(ignored_config_keys, remaining_config)
     if unresolved:
         raise_tool_error(
             create_error_response(
@@ -516,7 +578,7 @@ def _reconfigure_abort_result(
                 ],
                 context={
                     "flow_id": flow_id,
-                    "status": "applied_but_incomplete",
+                    "status": ReconfigureStatus.APPLIED_BUT_INCOMPLETE,
                     "unconsumed_config_keys": unresolved,
                     "details": current_step,
                 },
@@ -535,7 +597,6 @@ def _handle_abort_step(
     current_step: dict[str, Any],
     *,
     is_reconfigure: bool,
-    config: dict[str, Any],
     ignored_config_keys: set[str],
     remaining_config: dict[str, Any],
     reuse_state: _ReuseState,
@@ -545,7 +606,6 @@ def _handle_abort_step(
         current_step,
         is_reconfigure=is_reconfigure,
         flow_id=flow_id,
-        config=config,
         ignored_config_keys=ignored_config_keys,
         remaining_config=remaining_config,
         reuse_state=reuse_state,
@@ -564,7 +624,12 @@ def _flow_form_payload(
     ignored_config_keys: set[str],
     reuse_state: _ReuseState,
 ) -> tuple[dict[str, Any], bool]:
-    """Build one generic flow form payload and report consumed caller keys."""
+    """Build one generic flow form payload.
+
+    Returns the payload and whether the step consumed at least one caller key
+    — not which ones; ``remaining_config`` and ``ignored_config_keys`` carry
+    that.
+    """
     consumed_form_keys: set[str] = set()
     form_data = _auto_confirm_form_payload(current_step)
     if form_data is None:
@@ -604,7 +669,7 @@ def _handle_flow_create_entry(
                 ],
                 context={
                     "flow_id": flow_id,
-                    "status": "applied_but_unverified",
+                    "status": ReconfigureStatus.APPLIED_BUT_UNVERIFIED,
                     "details": current_step,
                 },
             )
@@ -661,15 +726,25 @@ async def _handle_flow_steps(
             client.submit_config_flow_step (create). Pass
             client.submit_options_flow_step for options (update) flows.
         helper_type: Optional helper type (e.g. ``"statistics"``). When
-            provided, surfaces the helper's data_schema in error context
-            for unstructured HA 4xx responses so the caller can react.
-        is_reconfigure: Whether this is the official reconfigure flow. In this
-            mode, ``create_entry`` is rejected as ``applied_but_unverified``;
-            a ``reconfigure_successful`` abort returns ``operation``
-            ``"reconfigured"``.
+            provided outside reconfigure mode, surfaces the helper's
+            data_schema in error context for unstructured HA 4xx responses so
+            the caller can react. Under ``is_reconfigure`` no schema is
+            fetched (the live step already carries the right one) and the
+            value is used only to name the integration in error prose.
+        is_reconfigure: Whether this is the official reconfigure flow — the
+            same mode HA uses for reauth, so both ``reconfigure_successful``
+            and ``reauth_successful`` count as its success aborts. In this
+            mode ``create_entry`` is rejected as
+            ``ReconfigureStatus.APPLIED_BUT_UNVERIFIED``, and a success abort
+            is a success only when the flow consumed EVERY supplied config
+            key — any leftover raises
+            ``ReconfigureStatus.APPLIED_BUT_INCOMPLETE``, because Home
+            Assistant has already committed whatever it did consume.
 
     Returns:
-        ``{"success": True, "entry": result}`` on success, plus ``warnings``
+        ``{"success": True, "entry": result}`` for a normal flow, or
+        ``{"success": True, "operation": "reconfigure", "flow_result":
+        result}`` under ``is_reconfigure``. Both carry ``warnings``
         when SOME caller-supplied config keys were not declared by any flow
         step, or when a key had to be resubmitted to a later step that
         redeclared it. When the flow presented at least one form step and NONE
@@ -713,7 +788,6 @@ async def _handle_flow_steps(
                 flow_id,
                 current_step,
                 is_reconfigure=is_reconfigure,
-                config=config,
                 ignored_config_keys=ignored_config_keys,
                 remaining_config=remaining_config,
                 reuse_state=reuse_state,
@@ -810,9 +884,19 @@ async def _handle_flow_steps(
             context={
                 "flow_id": flow_id,
                 "max_steps": max_steps,
-                "flow_budget_exhausted": True,
                 "consumed_menu_selections": consumed_menu_selections,
-                **({"status": FLOW_ABORTED_BEFORE_APPLY} if is_reconfigure else {}),
+                # Reconfigure-only keys: the reconfigure caller reads both to
+                # decide whether to abort the pending flow. Adding them to
+                # every flow's error shape would change the public contract of
+                # the add-integration, options and helper paths for nothing.
+                **(
+                    {
+                        "flow_budget_exhausted": True,
+                        "status": ReconfigureStatus.FLOW_ABORTED_BEFORE_APPLY,
+                    }
+                    if is_reconfigure
+                    else {}
+                ),
             },
         )
     )
@@ -840,7 +924,7 @@ def _handle_subentry_create_entry(
                 ],
                 context={
                     "flow_id": flow_id,
-                    "status": "applied_but_unverified",
+                    "status": ReconfigureStatus.APPLIED_BUT_UNVERIFIED,
                     "details": current_step,
                 },
             )
@@ -861,7 +945,6 @@ def _handle_subentry_abort(
     current_step: dict[str, Any],
     *,
     is_reconfigure: bool,
-    config: dict[str, Any],
     ignored_config_keys: set[str],
     remaining_config: dict[str, Any],
     reuse_state: _ReuseState,
@@ -872,7 +955,6 @@ def _handle_subentry_abort(
         current_step,
         is_reconfigure=is_reconfigure,
         flow_id=flow_id,
-        config=config,
         ignored_config_keys=ignored_config_keys,
         remaining_config=remaining_config,
         reuse_state=reuse_state,
@@ -903,6 +985,16 @@ async def _handle_config_subentry_flow_steps(
     were not declared by any flow step, or when a key was resubmitted to a
     later step that redeclared it. Fields redeclared by a later step are filled
     on the same terms as :func:`_handle_flow_steps`.
+
+    ``is_reconfigure`` (set by ``set_config_subentry`` whenever a
+    ``subentry_id`` is supplied) tightens that contract to match the
+    integration reconfigure path: a success abort that left ANY supplied key
+    unconsumed raises ``ReconfigureStatus.APPLIED_BUT_INCOMPLETE`` instead of
+    returning success plus a warning. Home Assistant has already committed
+    the keys it did consume, so a partial apply reported as success would
+    read as "done" to an agent. This is a behaviour change for
+    ``ha_config_set_helper(helper_type="config_subentry", subentry_id=...)``
+    callers who previously relied on the warning.
     """
     remaining_config = dict(config)
     current_step = initial_step
@@ -931,7 +1023,6 @@ async def _handle_config_subentry_flow_steps(
                 flow_id,
                 current_step,
                 is_reconfigure=is_reconfigure,
-                config=config,
                 ignored_config_keys=ignored_config_keys,
                 remaining_config=remaining_config,
                 reuse_state=reuse_state,
@@ -1018,9 +1109,19 @@ async def _handle_config_subentry_flow_steps(
             context={
                 "flow_id": flow_id,
                 "max_steps": max_steps,
-                "flow_budget_exhausted": True,
                 "consumed_menu_selections": consumed_menu_selections,
-                **({"status": FLOW_ABORTED_BEFORE_APPLY} if is_reconfigure else {}),
+                # Reconfigure-only keys: the reconfigure caller reads both to
+                # decide whether to abort the pending flow. Adding them to
+                # every flow's error shape would change the public contract of
+                # the add-integration, options and helper paths for nothing.
+                **(
+                    {
+                        "flow_budget_exhausted": True,
+                        "status": ReconfigureStatus.FLOW_ABORTED_BEFORE_APPLY,
+                    }
+                    if is_reconfigure
+                    else {}
+                ),
             },
         )
     )

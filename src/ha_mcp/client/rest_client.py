@@ -1458,7 +1458,9 @@ class HomeAssistantClient:
             entry_id: Config entry ID
 
         Returns:
-            Full config entry data
+            Home Assistant's config-entry fragment (``ConfigEntry.as_json_fragment``):
+            identity, state and capability flags. It carries NO ``data`` key, so the
+            entry's connection settings and credentials are not in it.
 
         Raises:
             HomeAssistantAPIError: If entry not found or API error
