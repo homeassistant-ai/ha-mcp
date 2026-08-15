@@ -272,3 +272,12 @@ async def test_register_ha_auth_omits_refresh_when_identity_is_not_reproducible(
 
     assert resp.status == 201
     assert (await resp.json())["grant_types"] == ["authorization_code"]
+
+
+def test_canonical_origin_url_rebrackets_ipv6():
+    """#2213 review: IPv6 origins round-trip through normalize + canonicalize."""
+    origin = oauth_dcr.normalized_origin("https://[2001:db8::1]/cb")
+    assert origin == ("https", "2001:db8::1", 443)
+    assert oauth_dcr.canonical_origin_url(origin) == "https://[2001:db8::1]"
+    non_default = oauth_dcr.normalized_origin("https://[2001:db8::1]:8443/cb")
+    assert oauth_dcr.canonical_origin_url(non_default) == "https://[2001:db8::1]:8443"

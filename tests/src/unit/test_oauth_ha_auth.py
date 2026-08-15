@@ -584,3 +584,41 @@ async def test_resolve_mixed_default_port_registration_translates():
         session=None, dcr_key=KEY, client_id=cid, redirect_uri="https://h.example/a"
     )
     assert out == "https://h.example"
+
+
+def test_canonical_origins_rebracket_ipv6():
+    """#2213 review: urlparse().hostname strips IPv6 brackets — the canonical
+    origin must restore them or the translated client_id is not a valid URL."""
+    assert origin_client_id("https://[2001:db8::1]/cb") == "https://[2001:db8::1]"
+    assert (
+        origin_client_id("https://[2001:db8::1]:8443/cb")
+        == "https://[2001:db8::1]:8443"
+    )
+    assert (
+        stable_translation_origin(
+            ["https://[2001:db8::1]/a", "https://[2001:db8::1]:443/b"]
+        )
+        == "https://[2001:db8::1]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_mixed_registration_loopback_authorize_diverges_from_refresh():
+    """Documented caveat pinned: a mixed-registration client authorizing via
+    its loopback redirect translates to the runtime loopback origin, while the
+    redirect_uri-less refresh leg re-derives the stable web origin — such
+    clients re-authorize rather than refresh (see _translation_for)."""
+    client_id = mint_client_id(
+        KEY, ["http://localhost/callback", "https://a.example/cb"]
+    )
+    authorize_id = await resolve_forward_client_id(
+        session=None,
+        dcr_key=KEY,
+        client_id=client_id,
+        redirect_uri="http://localhost:5000/callback",
+    )
+    refresh_id = await oauth_ha_auth.translated_client_id_for_refresh(
+        session=None, dcr_key=KEY, client_id=client_id
+    )
+    assert authorize_id == "http://localhost:5000"
+    assert refresh_id == "https://a.example"

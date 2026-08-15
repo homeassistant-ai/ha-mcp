@@ -117,11 +117,17 @@ def normalized_origin(uri: str) -> tuple[str, str, int] | None:
 
 
 def canonical_origin_url(origin: tuple[str, str, int]) -> str:
-    """URL form of a normalized origin, omitting the scheme-default port."""
+    """URL form of a normalized origin, omitting the scheme-default port.
+
+    IPv6 hosts are re-bracketed: ``urlparse().hostname`` strips the brackets,
+    and an unbracketed colon-bearing host is not a valid URL authority (the
+    translated client_id would be rejected downstream).
+    """
     scheme, host, port = origin
+    url_host = f"[{host}]" if ":" in host else host
     if _DEFAULT_PORTS.get(scheme) == port:
-        return f"{scheme}://{host}"
-    return f"{scheme}://{host}:{port}"
+        return f"{scheme}://{url_host}"
+    return f"{scheme}://{url_host}:{port}"
 
 
 def _non_loopback_origins(redirect_uris: list[str]) -> set[tuple[str, str, int]]:
