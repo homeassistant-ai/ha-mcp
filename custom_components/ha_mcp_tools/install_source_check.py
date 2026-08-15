@@ -4,7 +4,7 @@ Before the dedicated HACS mirror (``homeassistant-ai/ha-mcp-integration``)
 existed, the README told users to add the MAIN ``ha-mcp`` server repository as
 a HACS custom repository. Those installs still work — HACS downloads the repo
 snapshot at the release tag, which contains this component — but HACS shows
-the SERVER's version numbers (``7.x``) and the server/add-on release notes in
+the SERVER's version numbers (``the server's``) and the server/add-on release notes in
 the update dialog, as if the component were the server itself. HACS has no
 repository-migration mechanism, so this population stays confused forever
 unless the component itself detects the legacy source and points them at the

@@ -34,19 +34,34 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import logging
 import socket
 import time
+from enum import Enum
 from urllib.parse import ParseResult, urlparse, urlunparse
 
 import aiohttp
 from homeassistant.core import HomeAssistant
 
-from .oauth_dcr import canonical_origin_url, client_redirect_uris, normalized_origin
+from .oauth_dcr import (
+    _refresh_identity_is_reproducible,
+    canonical_origin_url,
+    client_redirect_uris,
+    normalized_origin,
+)
 from .oauth_legacy import _is_loopback_host, _is_valid_redirect_uri
+
+_LOGGER = logging.getLogger(__name__)
 
 # CIMD fetch limits (mirrors core PR #176286's hardening + the 00-draft rules).
 CIMD_MAX_BYTES = 10 * 1024
 CIMD_FETCH_TIMEOUT = aiohttp.ClientTimeout(total=5)
+CIMD_RESOLVE_TIMEOUT = 5.0
+# One deadline over the WHOLE lookup (resolution + every per-address fetch
+# attempt): without it, a hostname resolving to many routable-but-unresponsive
+# addresses costs resolve + N x fetch timeouts and an anonymous caller can
+# park the small CIMD pool for the sum (#2217 review).
+CIMD_TOTAL_LOOKUP_TIMEOUT = 12.0
 CIMD_CACHE_TTL = 300.0
 # Failed lookups cache too (#2213 review round 2) — briefly, so an anonymous
 # caller cannot force a fresh resolution+fetch per request, while a transient
@@ -54,9 +69,10 @@ CIMD_CACHE_TTL = 300.0
 CIMD_NEGATIVE_TTL = 60.0
 _CIMD_CACHE_MAX = 64
 _ALLOWED_SCHEMES = ("https",)
-# client_id URL -> (expires_monotonic, redirect_uris). The -00 draft forbids
-# caching fetch errors and invalid documents, so negative entries never live
-# here.
+# client_id URL -> (expires_monotonic, redirect_uris). Draft -00 section 4.4.3
+# forbids caching error responses and invalid documents; both return with
+# reached=True before any cache write. Unreachable-host and resolution outcomes
+# are outside section 4.4.3 and are negative-cached for CIMD_NEGATIVE_TTL.
 _cimd_cache: dict[str, tuple[float, list[str] | None]] = {}
 
 
@@ -104,9 +120,13 @@ async def _resolve_public_addresses(hostname: str, port: int) -> list[str]:
                 family=socket.AF_UNSPEC,
                 type=socket.SOCK_STREAM,
             ),
-            timeout=5.0,
+            timeout=CIMD_RESOLVE_TIMEOUT,
         )
-    except (OSError, TimeoutError):
+    except (OSError, ValueError, TimeoutError):
+        # ValueError: getaddrinfo raises UnicodeEncodeError (a ValueError) for
+        # hostname labels over 63 chars — attacker-reachable on this anonymous
+        # view, and NOT an OSError (#2217 review, verified).
+        _LOGGER.debug("CIMD lookup: resolution failed for %s", hostname)
         return []
     addresses = {str(sockaddr[0]) for *_, sockaddr in infos}
     if not addresses:
@@ -230,23 +250,17 @@ def stable_translation_origin(registered: list[str]) -> str | None:
 def _translation_for(registered: list[str], client_id: str, redirect_uri: str) -> str:
     """Translate a registered redirect to the URL-shaped identity core accepts.
 
-    Web redirects use the one stable origin the refresh leg can reproduce.
-    Loopback redirects use the runtime origin including its ephemeral port.
-    Anything else passes through unchanged (core stays the authority).
+    One rule (#2217 review — the former web/loopback split collapsed to
+    identical arms): a redirect that matches the registered list translates to
+    the PRESENTED redirect's origin — for web redirects that keeps multi-origin
+    registrations consistent across the authorize and code legs (both carry
+    ``redirect_uri``), and for loopback redirects it is the runtime origin
+    including the RFC 8252 ephemeral port. Unregistered redirects pass through
+    unchanged (core stays the authority).
     """
     if not redirect_matches(registered, redirect_uri):
         return client_id
-    redirect_origin = origin_client_id(redirect_uri)
-    parsed_redirect = urlparse(redirect_uri)
-    if parsed_redirect.hostname and _is_loopback_host(parsed_redirect.hostname):
-        # A signed DCR blob is not URL-shaped, so core rejects it before login.
-        # The runtime loopback origin is URL-shaped and exactly matches the
-        # presented redirect (including its RFC 8252 ephemeral port).
-        return redirect_origin
-    stable = stable_translation_origin(registered)
-    if stable is not None and redirect_origin == stable:
-        return stable
-    return client_id
+    return origin_client_id(redirect_uri)
 
 
 async def fetch_cimd_redirects(
@@ -279,7 +293,25 @@ async def fetch_cimd_redirects(
     if cached is not None and cached[0] > now:
         return cached[1]
 
-    addresses = await _resolve_public_addresses(parsed.hostname, parsed.port or 443)
+    try:
+        async with asyncio.timeout(CIMD_TOTAL_LOOKUP_TIMEOUT):
+            return await _lookup_cimd(session, client_id, parsed, now)
+    except TimeoutError:
+        _LOGGER.debug("CIMD lookup: total deadline exceeded for %s", client_id)
+        _cache_cimd(client_id, now, None)
+        return None
+
+
+async def _lookup_cimd(
+    session: aiohttp.ClientSession,
+    client_id: str,
+    parsed: ParseResult,
+    now: float,
+) -> list[str] | None:
+    """Resolve and fetch under the caller's total deadline; cache the outcome."""
+    addresses = await _resolve_public_addresses(
+        parsed.hostname or "", parsed.port or 443
+    )
     for address in addresses:
         reached, result = await _fetch_pinned_cimd(session, client_id, parsed, address)
         if not reached:
@@ -290,12 +322,14 @@ async def fetch_cimd_redirects(
             # INVALID document: deliberately NOT cached — a client that fixes
             # its metadata recovers on the next request (pinned by
             # test_invalid_cimd_is_not_negative_cached).
+            _LOGGER.debug("CIMD lookup: document at %s failed validation", client_id)
             return None
         _cache_cimd(client_id, now, result)
         return result
     # Resolution failed or no address answered: negative-cache THIS — the view
     # is anonymous, and only-success caching would let each request for a dead
     # hostname pay (and inflict) a fresh resolution (#2213 review round 2).
+    _LOGGER.debug("CIMD lookup: no reachable address for %s", client_id)
     _cache_cimd(client_id, now, None)
     return None
 
@@ -303,11 +337,14 @@ async def fetch_cimd_redirects(
 def _cache_cimd(client_id: str, now: float, result: list[str] | None) -> None:
     """Cache a lookup outcome, evicting expired entries then the oldest.
 
-    Negative outcomes get the short ``CIMD_NEGATIVE_TTL``. Eviction never
-    wholesale-clears: dropping every live client's entry because one more
-    unique client_id arrived would hand an anonymous caller a lever over other
-    clients' cache hits (#2213 review round 2).
+    Negative outcomes get the short ``CIMD_NEGATIVE_TTL``. Eviction drops
+    expired entries first, then the least-recently-written; re-caching pops
+    the key first so a hot client is not evicted from its original insertion
+    slot. Anonymous churn can still cycle the 64 slots — that costs 64 unique
+    requests per live entry, a rate bound rather than an absolute guarantee
+    (#2217 review).
     """
+    _cimd_cache.pop(client_id, None)
     if len(_cimd_cache) >= _CIMD_CACHE_MAX:
         for key in [k for k, (exp, _) in _cimd_cache.items() if exp <= now]:
             del _cimd_cache[key]
@@ -321,7 +358,9 @@ def _parse_cimd(raw: bytes, client_id: str) -> list[str] | None:
     """Strict-parse a CIMD body; None unless every MUST holds."""
     try:
         doc = json.loads(raw.decode("utf-8"), parse_constant=_reject_json_constant)
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        # RecursionError: json.loads on ~5000 nested arrays fits inside the
+        # 10 KiB cap and is a RuntimeError, not ValueError (#2217, verified).
         return None
     if (
         not isinstance(doc, dict)
@@ -378,34 +417,46 @@ async def resolve_forward_client_id(
     return client_id
 
 
+class RefreshDisposition(Enum):
+    """Outcomes of refresh-identity derivation that carry no origin string.
+
+    ``PASSTHROUGH`` — forward the client_id unchanged (unmanaged identity, or
+    a same-origin identity the authorize leg also forwarded untranslated).
+    ``UNREPRODUCIBLE`` — a VERIFIED registration (DCR blob or fetched CIMD
+    document) whose refresh identity cannot be re-derived without the
+    redirect_uri; the caller must answer ``invalid_grant`` locally instead of
+    relaying a guaranteed core failure into its failed-login accounting
+    (#2217 review — previously only DCR blobs got that answer, so CIMD
+    identities of the same shape were 307'd into core on every token expiry).
+    """
+
+    PASSTHROUGH = "passthrough"
+    UNREPRODUCIBLE = "unreproducible"
+
+
 async def translated_client_id_for_refresh(
     session: aiohttp.ClientSession | None,
     dcr_key: bytes | None,
     client_id: str,
-) -> str | None:
-    """Translated client_id for the redirect_uri-less refresh grant, or None.
+) -> str | RefreshDisposition:
+    """Refresh-leg identity: a translated origin, or a disposition.
 
     Must agree with what the authorize/code legs presented to core, or core
     rejects the refresh (the token is bound to the client_id it was minted
     under). The legs agree by construction:
 
+    * Unmanaged identities (no DCR blob, no fetchable document) →
+      ``PASSTHROUGH`` — core stays the authority. A transient CIMD fetch
+      failure lands here too (logged by the fetch path); erring toward
+      ``UNREPRODUCIBLE`` would force re-auth on working same-origin clients.
     * Same-origin identities (client_id origin == stable origin — claude.ai's
-      hosted surfaces) took the fast path untranslated → None here.
-    * Cross-origin identities with one stable web origin (Gemini Spark-class)
-      were translated to that origin on every leg → return it here.
-    * Loopback identities use their runtime origin (including the ephemeral
-      port) for authorization/code exchange. That value cannot be reproduced
-      on the redirect-less refresh leg, so None here makes core reject refresh
-      and the client re-authorize rather than forwarding a mismatched identity.
-    * Identities with several web origins were never translated → None here.
-
-    Known caveat, documented not hidden: an identity whose registration mixes
-    ONE stable web origin with loopback entries and that authorized via a
-    loopback redirect used the runtime loopback origin on the code leg but
-    translates to the web origin here — that refresh fails and the client
-    re-authorizes. No observed client has that shape; fixing it would require
-    remembering which redirect each token used, i.e. server-side state this
-    design deliberately avoids.
+      hosted surfaces) took the authorize fast path untranslated →
+      ``PASSTHROUGH``, compared through the shared canonical origin form.
+    * Cross-origin identities with exactly one web origin and no loopback
+      entries were translated to that origin on every leg → return it.
+    * Everything else that is VERIFIED — multiple web origins (Gemini
+      Spark-class), loopback-only (Claude Code-class), or hybrid — cannot be
+      re-derived without the redirect: ``UNREPRODUCIBLE``.
     """
     registered: list[str] | None = None
     if dcr_key is not None:
@@ -415,13 +466,18 @@ async def translated_client_id_for_refresh(
         if parsed.scheme == "https" and session is not None:
             registered = await fetch_cimd_redirects(session, client_id)
     if not registered:
-        return None
+        return RefreshDisposition.PASSTHROUGH
+    if not _refresh_identity_is_reproducible(registered):
+        return RefreshDisposition.UNREPRODUCIBLE
+    # Reproducible ⇒ exactly one web origin ⇒ stable_translation_origin cannot
+    # return None (canonical_origin_url is one-to-one over normalized origins).
     stable = stable_translation_origin(registered)
-    if stable is None:
-        return None
-    parsed = urlparse(client_id)
-    if f"{parsed.scheme}://{parsed.netloc}" == stable:
-        return None
+    assert stable is not None
+    # Canonical comparison (#2217 review): the raw-netloc form diverged from
+    # the fast path whenever a registered redirect carried an explicit
+    # scheme-default port.
+    if origin_client_id(client_id) == stable:
+        return RefreshDisposition.PASSTHROUGH
     return stable
 
 

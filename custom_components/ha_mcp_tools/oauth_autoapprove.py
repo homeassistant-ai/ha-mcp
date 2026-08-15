@@ -289,14 +289,10 @@ class AutoApproveAuthorizeView(HomeAssistantView):
             params["client_id"] = forward_id
         import yarl
 
-        from .mcp_webhook import _build_base_url
-
-        # Request-host-derived base is correct HERE (unlike the token forward):
-        # this is a BROWSER redirect back through the origin the user is
-        # already on, not a server-side request.
-        target = yarl.URL(f"{_build_base_url(request)}/auth/authorize").with_query(
-            params
-        )
+        # Keep the browser hop relative, matching the token leg. Browsers cannot
+        # be made to send X-Forwarded-Host, so this is consistency rather than a
+        # vulnerability fix.
+        target = yarl.URL("/auth/authorize").with_query(params)
         return web.Response(status=302, headers={"Location": str(target)})
 
     async def post(self, request: web.Request) -> web.Response:
@@ -376,63 +372,65 @@ class AutoApproveTokenView(HomeAssistantView):
         counters, trusted_networks refresh validation, and last_used_ip all key
         on request.remote — #2213 review). Only translated identities (the body
         must be rewritten) are forwarded server-side; the translation matches
-        the authorize leg, and the redirect_uri-less refresh grant re-derives
-        web-origin translations from the registered list (ephemeral loopback
-        clients re-authorize).
+        the authorize leg. A refresh carrying a redirect_uri translates from
+        that redirect like any other leg; a redirect-less refresh re-derives
+        the translation from the registered list, and verified identities with
+        no reproducible origin get a local invalid_grant (re-authorize).
         """
         from multidict import MultiDict
 
         from .oauth_dcr import CFG_DCR_SIGNING_KEY
         from .oauth_ha_auth import (
+            RefreshDisposition,
             core_token_base_url,
             resolve_forward_client_id,
             translated_client_id_for_refresh,
         )
 
         form = MultiDict(await request.post())
+        grant_type = str(form.get("grant_type", ""))
         client_id = str(form.get("client_id", ""))
         redirect_uri = str(form.get("redirect_uri", ""))
         forward_id = client_id
         if client_id:
-            if redirect_uri:
+            if grant_type == "refresh_token" and not redirect_uri:
+                # refresh_token grant without a redirect_uri on the wire —
+                # re-derive the translation from the registered list alone.
+                translated = await translated_client_id_for_refresh(
+                    cfg.get(CFG_CIMD_SESSION),
+                    cfg.get(CFG_DCR_SIGNING_KEY),
+                    client_id,
+                )
+                if translated is RefreshDisposition.UNREPRODUCIBLE:
+                    # Coupled to oauth_dcr registration semantics: a VERIFIED
+                    # identity (DCR blob or fetched CIMD document — #2217
+                    # review closed the CIMD half of this guard) whose
+                    # registration has no single reproducible web origin must
+                    # not advertise refresh_token, because this guard rejects
+                    # its redirect-less refresh locally. The token was bound
+                    # to an origin we cannot re-derive; answering here avoids
+                    # a guaranteed failure in core's failed-login accounting.
+                    return _json_error(
+                        "invalid_grant",
+                        400,
+                        "re-authorize: this client's registration has no "
+                        "single reproducible web origin, so a refresh "
+                        "without redirect_uri is unavailable",
+                    )
+                if translated is not RefreshDisposition.PASSTHROUGH:
+                    forward_id = translated
+            else:
+                # Authorization-code exchanges — and refreshes that DO carry a
+                # redirect_uri — use the presented redirect, exactly like the
+                # authorize leg (this is what keeps multi-origin identities
+                # refreshable). With no redirect_uri, validation leaves the
+                # client_id untouched for core to reject authoritatively.
                 forward_id = await resolve_forward_client_id(
                     cfg.get(CFG_CIMD_SESSION),
                     cfg.get(CFG_DCR_SIGNING_KEY),
                     client_id,
                     redirect_uri,
                 )
-            else:
-                # refresh_token grant: no redirect_uri on the wire — re-derive
-                # the translation from the registered list alone.
-                translated = await translated_client_id_for_refresh(
-                    cfg.get(CFG_CIMD_SESSION),
-                    cfg.get(CFG_DCR_SIGNING_KEY),
-                    client_id,
-                )
-                if translated is not None:
-                    forward_id = translated
-                else:
-                    from .oauth_dcr import client_redirect_uris
-
-                    dcr_key = cfg.get(CFG_DCR_SIGNING_KEY)
-                    if (
-                        dcr_key is not None
-                        and client_redirect_uris(dcr_key, client_id) is not None
-                    ):
-                        # A verifiable DCR identity with NO stable web origin
-                        # (loopback-only registration): the refresh is doomed —
-                        # the token was bound to the ephemeral loopback origin
-                        # we cannot re-derive. Answer here instead of 307ing a
-                        # guaranteed failure into core, whose @log_invalid_auth
-                        # would notify and count it as a failed login (#2213
-                        # review round 2). The client re-authorizes.
-                        return _json_error(
-                            "invalid_grant",
-                            400,
-                            "re-authorize: loopback-registered clients cannot "
-                            "refresh (the token is bound to an ephemeral "
-                            "loopback origin)",
-                        )
         if forward_id == client_id:
             # No body rewrite needed, so don't proxy: 307 the client into
             # core's own /auth/token on the same public origin it just used.

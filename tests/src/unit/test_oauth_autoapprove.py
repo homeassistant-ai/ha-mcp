@@ -622,7 +622,9 @@ async def test_scoped_authorize_redirects_into_core_when_ha_auth_live(
     # unencoded inside query values (RFC 3986 permits them in the query).
     from urllib.parse import parse_qs, urlparse
 
-    location = urlparse(resp.headers["Location"])
+    location_header = resp.headers["Location"]
+    assert location_header.startswith("/auth/authorize?")
+    location = urlparse(location_header)
     assert location.path == "/auth/authorize"
     query = parse_qs(location.query)
     # Same-origin fast path: client_id passes through untranslated, and every
@@ -748,6 +750,37 @@ async def test_ha_auth_refresh_forwards_translated_client_id(
     assert call["data"]["grant_type"] == "refresh_token"
     assert call["data"]["refresh_token"] == "refresh-1"
     assert call["data"]["client_id"] == "https://a.example"
+
+
+async def test_ha_auth_authorization_code_without_redirect_uses_default_path(
+    unified_view_client_factory, monkeypatch
+):
+    """Do not mistake a malformed code exchange for a refresh grant."""
+    session = _CoreTokenSession()
+    dcr_key = b"d" * 32
+    client_id = oauth_dcr.mint_client_id(dcr_key, ["https://a.example/cb"])
+    monkeypatch.setattr(
+        oauth_ha_auth,
+        "core_token_base_url",
+        lambda _hass: "https://core.example",
+    )
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=dcr_key
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": "code-1",
+            "client_id": client_id,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 307
+    assert resp.headers["Location"] == "/auth/token"
+    assert session.calls == []
 
 
 async def test_ha_auth_token_timeout_returns_temporarily_unavailable(
@@ -983,3 +1016,175 @@ async def test_ha_auth_refresh_loopback_only_dcr_client_gets_invalid_grant(
     assert resp.status == 400
     assert (await resp.json())["error"] == "invalid_grant"
     assert session.calls == []  # never reached core
+
+
+async def test_ha_auth_refresh_multi_origin_dcr_client_gets_invalid_grant(
+    unified_view_client_factory,
+):
+    """Reject Spark refresh locally when its request origin cannot be re-derived."""
+    session = _CoreTokenSession()
+    dcr_key = b"d" * 32
+    client_id = oauth_dcr.mint_client_id(
+        dcr_key,
+        [
+            "https://oauth-redirect.googleusercontent.com/r/ha-mcp",
+            "https://oauth-redirect-sandbox.googleusercontent.com/r/ha-mcp",
+        ],
+    )
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=dcr_key
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": "refresh-1",
+            "client_id": client_id,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 400
+    assert await resp.json() == {
+        "error": "invalid_grant",
+        "error_description": "re-authorize: this client's registration has no "
+        "single reproducible web origin, so a refresh without redirect_uri "
+        "is unavailable",
+    }
+    assert session.calls == []  # never reached core
+
+
+async def test_ha_auth_refresh_hybrid_registration_gets_local_invalid_grant(
+    unified_view_client_factory,
+):
+    """#2217 review: a hybrid (web + loopback) registration refresh answers
+    invalid_grant locally — the derivation returns UNREPRODUCIBLE; core is
+    never contacted with a possibly mismatched identity."""
+    session = _CoreTokenSession()
+    dcr_key = b"d" * 32
+    client_id = oauth_dcr.mint_client_id(
+        dcr_key, ["http://localhost/callback", "https://a.example/cb"]
+    )
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=dcr_key
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": "refresh-1",
+            "client_id": client_id,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "invalid_grant"
+    assert session.calls == []
+
+
+async def test_ha_auth_refresh_multi_origin_cimd_client_gets_invalid_grant(
+    unified_view_client_factory, monkeypatch
+):
+    """#2217 review sweep (the consensus defect): a VERIFIED CIMD identity
+    with no reproducible origin answers invalid_grant locally, exactly like
+    the equivalent DCR blob — previously only blobs hit the guard, so these
+    refreshes were 307'd into core's failed-login accounting on every token
+    expiry."""
+
+    async def fetch_redirects(_session, _client_id):
+        return [
+            "https://oauth-redirect.googleusercontent.com/r/ha-mcp",
+            "https://oauth-redirect-sandbox.googleusercontent.com/r/ha-mcp",
+        ]
+
+    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+    session = _CoreTokenSession()
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, cimd_session=object()
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": "refresh-1",
+            "client_id": "https://spark.example/client-metadata.json",
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "invalid_grant"
+    assert session.calls == []  # never reached core
+
+
+async def test_ha_auth_refresh_with_redirect_uri_translates_like_authorize(
+    unified_view_client_factory, monkeypatch
+):
+    """A refresh that DOES carry a redirect_uri translates from it exactly
+    like the authorize/code legs — this is what keeps multi-origin clients
+    refreshable even though the redirect-less derivation cannot pick an
+    origin for them."""
+    session = _CoreTokenSession()
+    dcr_key = b"d" * 32
+    monkeypatch.setattr(
+        oauth_ha_auth,
+        "core_token_base_url",
+        lambda _hass: "https://core.example",
+    )
+    redirect = "https://oauth-redirect.googleusercontent.com/r/ha-mcp"
+    client_id = oauth_dcr.mint_client_id(
+        dcr_key,
+        [redirect, "https://oauth-redirect-sandbox.googleusercontent.com/r/ha-mcp"],
+    )
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=dcr_key
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": "refresh-1",
+            "client_id": client_id,
+            "redirect_uri": redirect,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 200
+    assert len(session.calls) == 1
+    assert (
+        session.calls[0]["data"]["client_id"]
+        == "https://oauth-redirect.googleusercontent.com"
+    )
+
+
+async def test_ha_auth_refresh_uses_isolated_cimd_session(
+    unified_view_client_factory, monkeypatch
+):
+    """The refresh leg resolves CIMD metadata outside the forwarding pool too
+    (token-leg twin of the authorize-leg pin)."""
+    relay_session = _CoreTokenSession()
+    cimd_session = object()
+    deriver = AsyncMock(return_value=oauth_ha_auth.RefreshDisposition.PASSTHROUGH)
+    monkeypatch.setattr(oauth_ha_auth, "translated_client_id_for_refresh", deriver)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=relay_session, cimd_session=cimd_session
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": "refresh-1",
+            "client_id": CLAUDE_CLIENT_ID,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 307
+    assert deriver.await_args.args[0] is cimd_session
