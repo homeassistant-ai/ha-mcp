@@ -246,10 +246,13 @@ async def test_explicit_default_port_translates_on_both_legs(oauth_stack, monkey
     assert refresh_id == "https://claude.ai"
 
 
-async def test_uppercase_host_passes_through_on_both_legs(oauth_stack, monkeypatch):
-    """#2219 review: hostnames are case-insensitive (RFC 4343) — an
-    uppercase-host same-origin pair takes the fast path on authorize AND
-    passes through on refresh."""
+async def test_same_case_uppercase_pair_passes_through_on_both_legs(
+    oauth_stack, monkeypatch
+):
+    """#2219 review: an all-uppercase pair is equal under core's raw netloc
+    rule, so authorize passes it through — and refresh matches the client_id
+    against the REGISTERED redirects raw, not the lowercased canonical
+    origin, so it passes through too."""
     indirect = oauth_stack.indirect
     redirects = AsyncMock(return_value=["https://CLAUDE.AI/api/mcp/auth_callback"])
     monkeypatch.setattr(indirect, "fetch_cimd_redirects", redirects)
@@ -267,6 +270,29 @@ async def test_uppercase_host_passes_through_on_both_legs(oauth_stack, monkeypat
 
     assert authorize_id == client_id
     assert refresh_id is indirect.RefreshDisposition.PASSTHROUGH
+
+
+async def test_case_mismatched_pair_translates_on_both_legs(oauth_stack, monkeypatch):
+    """#2219 review, second round: a pair differing only in host casing must
+    miss the fast path — core's raw comparison would reject it untranslated —
+    and take the validated translation on both legs."""
+    indirect = oauth_stack.indirect
+    redirects = AsyncMock(return_value=["https://claude.ai/api/mcp/auth_callback"])
+    monkeypatch.setattr(indirect, "fetch_cimd_redirects", redirects)
+    client_id = "https://CLAUDE.AI/oauth/client.json"
+
+    authorize_id = await indirect.resolve_forward_client_id(
+        session=object(),
+        dcr_key=None,
+        client_id=client_id,
+        redirect_uri="https://claude.ai/api/mcp/auth_callback",
+    )
+    refresh_id = await indirect.translated_client_id_for_refresh(
+        object(), None, client_id
+    )
+
+    assert authorize_id == "https://claude.ai"
+    assert refresh_id == "https://claude.ai"
 
 
 async def test_symmetric_explicit_port_passes_through_on_both_legs(

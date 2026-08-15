@@ -288,12 +288,13 @@ async def resolve_forward_client_id(
     # path must pass such identities through for core to reject, not 500.
     parsed_client = urlparse(client_id)
     parsed_redirect = urlparse(redirect_uri)
-    # Netlocs casefold: hostnames are case-insensitive (RFC 4343), and the
-    # refresh leg reconstructs this comparison against the lowercased
-    # canonical origin (#2219 review).
+    # RAW, case-sensitive netloc equality — the same comparison core's own
+    # IndieAuth rule applies to what we forward (#2219 review, second round):
+    # a pair differing only in host casing must MISS this fast path so it
+    # takes the validated translation to an origin core accepts.
     if parsed_client.scheme in ("http", "https") and (
-        (parsed_client.scheme, parsed_client.netloc.lower())
-        == (parsed_redirect.scheme, parsed_redirect.netloc.lower())
+        (parsed_client.scheme, parsed_client.netloc)
+        == (parsed_redirect.scheme, parsed_redirect.netloc)
     ):
         return client_id
 
@@ -340,14 +341,14 @@ async def translated_client_id_for_refresh(
     # netloc against the PRESENTED redirect's, so refresh reconstructs it
     # against the registered redirects (reproducible ⇒ all web, one canonical
     # origin — but their RAW netlocs may still differ from the client_id's by
-    # an explicit default port, where the fast path missed and the token was
-    # minted under the TRANSLATED origin). Netlocs casefold because hostnames
-    # are case-insensitive (RFC 4343).
+    # an explicit default port or by host casing, where the fast path missed
+    # and the token was minted under the TRANSLATED origin). Raw and
+    # case-sensitive, exactly like the fast path itself.
     parsed = urlparse(client_id)
-    client_origin = (parsed.scheme, parsed.netloc.lower())
+    client_origin = (parsed.scheme, parsed.netloc)
     for uri in registered:
         parsed_redirect = urlparse(uri)
-        if (parsed_redirect.scheme, parsed_redirect.netloc.lower()) == client_origin:
+        if (parsed_redirect.scheme, parsed_redirect.netloc) == client_origin:
             return RefreshDisposition.PASSTHROUGH
     return stable
 
