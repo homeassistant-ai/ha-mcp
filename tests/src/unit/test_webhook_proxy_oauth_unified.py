@@ -254,22 +254,28 @@ async def test_same_case_uppercase_pair_passes_through_on_both_legs(
     against the REGISTERED redirects raw, not the lowercased canonical
     origin, so it passes through too."""
     indirect = oauth_stack.indirect
+    session = object()
     redirects = AsyncMock(return_value=["https://CLAUDE.AI/api/mcp/auth_callback"])
     monkeypatch.setattr(indirect, "fetch_cimd_redirects", redirects)
     client_id = "https://CLAUDE.AI/oauth/client.json"
 
     authorize_id = await indirect.resolve_forward_client_id(
-        session=object(),
+        session=session,
         dcr_key=None,
         client_id=client_id,
         redirect_uri="https://CLAUDE.AI/api/mcp/auth_callback",
     )
+    # The fast path decided authorize — no lookup.
+    redirects.assert_not_awaited()
     refresh_id = await indirect.translated_client_id_for_refresh(
-        object(), None, client_id
+        session, None, client_id
     )
 
     assert authorize_id == client_id
     assert refresh_id is indirect.RefreshDisposition.PASSTHROUGH
+    # Refresh DID fetch and matched the registered redirect — the passthrough
+    # is the comparison's verdict, not a skipped lookup.
+    redirects.assert_awaited_once_with(session, client_id)
 
 
 async def test_case_mismatched_pair_translates_on_both_legs(oauth_stack, monkeypatch):
