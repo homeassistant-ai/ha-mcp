@@ -295,6 +295,64 @@ async def test_refresh_unverified_identity_passes_through(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_symmetric_explicit_port_passes_through_on_both_legs(monkeypatch):
+    """#2219 review: when the client_id AND the registered redirect both
+    carry the same explicit default port, the authorize fast path fires (raw
+    netlocs equal) and the token is bound to the full client_id — so refresh
+    must pass through, not translate to the canonicalized origin."""
+
+    async def fetch_redirects(_session, _client_id):
+        return ["https://claude.ai:443/api/mcp/auth_callback"]
+
+    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+    client_id = "https://claude.ai:443/oauth/client.json"
+
+    authorize_id = await resolve_forward_client_id(
+        session=object(),
+        dcr_key=None,
+        client_id=client_id,
+        redirect_uri="https://claude.ai:443/api/mcp/auth_callback",
+    )
+    refresh_id = await oauth_ha_auth.translated_client_id_for_refresh(
+        session=object(),
+        dcr_key=None,
+        client_id=client_id,
+    )
+
+    assert authorize_id == client_id
+    assert refresh_id is oauth_ha_auth.RefreshDisposition.PASSTHROUGH
+
+
+@pytest.mark.asyncio
+async def test_uppercase_host_passes_through_on_both_legs(monkeypatch):
+    """#2219 review: hostnames are case-insensitive (RFC 4343), so an
+    uppercase-host same-origin pair takes the fast path on authorize AND
+    passes through on refresh — the raw comparison alone would translate the
+    refresh leg to the lowercased canonical origin and mismatch the token."""
+
+    async def fetch_redirects(_session, _client_id):
+        return ["https://CLAUDE.AI/api/mcp/auth_callback"]
+
+    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+    client_id = "https://CLAUDE.AI/oauth/client.json"
+
+    authorize_id = await resolve_forward_client_id(
+        session=object(),
+        dcr_key=None,
+        client_id=client_id,
+        redirect_uri="https://CLAUDE.AI/api/mcp/auth_callback",
+    )
+    refresh_id = await oauth_ha_auth.translated_client_id_for_refresh(
+        session=object(),
+        dcr_key=None,
+        client_id=client_id,
+    )
+
+    assert authorize_id == client_id
+    assert refresh_id is oauth_ha_auth.RefreshDisposition.PASSTHROUGH
+
+
+@pytest.mark.asyncio
 async def test_explicit_default_port_translates_on_both_legs(monkeypatch):
     """#2218 review (reverting #2217's canonical comparison): a client_id
     with an explicit scheme-default port misses the raw-netloc authorize fast
