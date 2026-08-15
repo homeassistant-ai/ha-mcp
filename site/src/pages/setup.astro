@@ -241,7 +241,7 @@ const clientsData = [
     "order": 20,
     "beta": true,
     "httpNote": "Requires HTTPS - Remote deployment required",
-    "clientNote": "Custom connected apps are OAuth-only. Only the HA-MCP Server component's legacy OAuth mode currently works with Spark — see the steps below.",
+    "clientNote": "Custom connected apps are OAuth-only. As of component 2.0.0, Spark can register automatically in Home Assistant sign-in or secret-URL mode (live verification in progress); legacy OAuth with pasted credentials remains the verified path — see the steps below.",
   },
   {
     "id": "hermes",
@@ -2573,7 +2573,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
           </ol>
           <div class="bg-purple-900/20 border border-purple-700/50 rounded-lg p-3 mt-3">
             <p class="text-purple-300 text-sm font-medium">Why legacy OAuth mode</p>
-            <p class="text-purple-200/80 text-xs mt-1"><strong>legacy</strong> is currently the only OAuth mode that works with Spark. Spark's custom connected apps use a cross-origin redirect URI (a Client ID Metadata Document), and Home Assistant core's native OAuth doesn't fetch those yet — see <a href="https://github.com/home-assistant/core/issues/176282" class="text-purple-300 hover:underline" target="_blank" rel="noopener noreferrer">home-assistant/core#176282</a> (fix pending in <a href="https://github.com/home-assistant/core/pull/176286" class="text-purple-300 hover:underline" target="_blank" rel="noopener noreferrer">#176286</a>). This page will switch to recommending the native mode for Spark once that lands. See the <a href="${base}/faq#google-spark-oauth" class="text-purple-300 hover:underline">FAQ</a> for details.</p>
+            <p class="text-purple-200/80 text-xs mt-1"><strong>legacy</strong> with pasted credentials is the verified path for Spark. As of component 2.0.0 the component accepts Spark's automatic registration (its two-origin redirect set) and validates its Client ID Metadata Document itself, so <strong>Home Assistant sign-in</strong> and <strong>secret-URL</strong> modes are expected to connect without any pasted credentials — live verification is in progress, and this page will lead with that path once confirmed. One limitation either way: Spark-shaped registrations cannot refresh and re-authorize when tokens expire. See the <a href="${base}/faq#google-spark-oauth" class="text-purple-300 hover:underline">FAQ</a> for details.</p>
           </div>
         </div>` : legacyMethodNotice('Gemini Spark');
       } else if (state.client.id === 'raycast') {
