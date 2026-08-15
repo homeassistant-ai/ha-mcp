@@ -8,7 +8,9 @@ import logging
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ..utilities.assertions import assert_mcp_success, safe_call_tool
+from ha_mcp.tools.error_log_parsing import _DEFAULT_TOP_N
+
+from ..utilities.assertions import MCPAssertions, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +28,8 @@ async def test_logbook_basic(mcp_client):
     """Test basic logbook retrieval with default parameters."""
     logger.info("Testing basic logbook retrieval")
 
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {"hours_back": 1},
-    )
-
-    raw_data = assert_mcp_success(result, "Basic logbook retrieval")
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success("ha_get_logs", {"hours_back": 1})
     data = get_logbook_data(raw_data)
 
     # Verify response structure
@@ -57,12 +55,10 @@ async def test_logbook_with_custom_limit(mcp_client):
     """Test logbook retrieval with custom limit."""
     logger.info("Testing logbook with custom limit")
 
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {"hours_back": 1, "limit": 10},
-    )
-
-    raw_data = assert_mcp_success(result, "Logbook with custom limit")
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success(
+            "ha_get_logs", {"hours_back": 1, "limit": 10}
+        )
     data = get_logbook_data(raw_data)
 
     # Verify custom limit is applied
@@ -79,12 +75,11 @@ async def test_logbook_limit_capped_at_maximum(mcp_client):
     """Test that logbook limit is capped at maximum (500)."""
     logger.info("Testing logbook limit cap at maximum")
 
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {"hours_back": 1, "limit": 1000},  # Request more than maximum
-    )
-
-    raw_data = assert_mcp_success(result, "Logbook with excessive limit")
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success(
+            "ha_get_logs",
+            {"hours_back": 1, "limit": 1000},  # Request more than maximum
+        )
     data = get_logbook_data(raw_data)
 
     # Verify limit is capped at 500
@@ -217,11 +212,10 @@ async def test_logbook_entity_filter(mcp_client):
     """Test logbook filtering by entity_id."""
     logger.info("Testing logbook entity filter")
 
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {"hours_back": 24, "entity_id": "sun.sun", "limit": 50},
-    )
-    raw_data = assert_mcp_success(result, "Logbook entity filter")
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success(
+            "ha_get_logs", {"hours_back": 24, "entity_id": "sun.sun", "limit": 50}
+        )
     data = get_logbook_data(raw_data)
 
     # Verify entity filter is recorded in response
@@ -291,16 +285,15 @@ async def test_logbook_empty_result(mcp_client):
     """Test logbook with non-existent entity returns empty success."""
     logger.info("Testing logbook with non-existent entity")
 
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {
-            "hours_back": 1,
-            "entity_id": "sensor.nonexistent_entity_xyz_12345",
-            "limit": 10,
-        },
-    )
-
-    raw_data = assert_mcp_success(result, "Logbook empty result")
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success(
+            "ha_get_logs",
+            {
+                "hours_back": 1,
+                "entity_id": "sensor.nonexistent_entity_xyz_12345",
+                "limit": 10,
+            },
+        )
     data = get_logbook_data(raw_data)
 
     # Empty results are a valid success — not an error
@@ -322,12 +315,8 @@ async def test_logs_system_source(mcp_client):
     """Test system log retrieval via source='system'."""
     logger.info("Testing system log source")
 
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {"source": "system"},
-    )
-
-    raw_data = assert_mcp_success(result, "System log retrieval")
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success("ha_get_logs", {"source": "system"})
     data = get_logbook_data(raw_data)
 
     assert data["success"] is True
@@ -345,12 +334,10 @@ async def test_logs_system_source_with_level_filter(mcp_client):
     """Test system log filtering by severity level."""
     logger.info("Testing system log with level filter")
 
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {"source": "system", "level": "ERROR"},
-    )
-
-    raw_data = assert_mcp_success(result, "System log with level filter")
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success(
+            "ha_get_logs", {"source": "system", "level": "ERROR"}
+        )
     data = get_logbook_data(raw_data)
 
     assert data["success"] is True
@@ -376,12 +363,10 @@ async def test_logs_error_log_source(mcp_client):
     """
     logger.info("Testing error_log source")
 
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {"source": "error_log", "limit": 20},
-    )
-
-    raw_data = assert_mcp_success(result, "Error log retrieval")
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success(
+            "ha_get_logs", {"source": "error_log", "limit": 20}
+        )
     data = get_logbook_data(raw_data)
 
     assert data["success"] is True
@@ -486,12 +471,8 @@ async def test_logs_default_source_is_logbook(mcp_client):
     """Test that default source (no source param) returns logbook data."""
     logger.info("Testing default source is logbook")
 
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {"hours_back": 1},
-    )
-
-    raw_data = assert_mcp_success(result, "Default source logbook")
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success("ha_get_logs", {"hours_back": 1})
     data = get_logbook_data(raw_data)
 
     assert data["success"] is True
@@ -507,12 +488,10 @@ async def test_logs_system_source_with_search(mcp_client):
     """Test system log search filtering."""
     logger.info("Testing system log with search filter")
 
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {"source": "system", "search": "homeassistant"},
-    )
-
-    raw_data = assert_mcp_success(result, "System log with search")
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success(
+            "ha_get_logs", {"source": "system", "search": "homeassistant"}
+        )
     data = get_logbook_data(raw_data)
 
     assert data["success"] is True
@@ -535,12 +514,10 @@ async def test_logs_error_log_with_level_filter(mcp_client):
     """
     logger.info("Testing error_log with level filter")
 
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {"source": "error_log", "level": "WARNING"},
-    )
-
-    raw_data = assert_mcp_success(result, "Error log with level filter")
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success(
+            "ha_get_logs", {"source": "error_log", "level": "WARNING"}
+        )
     data = get_logbook_data(raw_data)
 
     assert data["success"] is True
@@ -555,16 +532,68 @@ async def test_logs_error_log_with_level_filter(mcp_client):
 
 
 @pytest.mark.asyncio
+async def test_logs_error_log_structured_parses_real_log(mcp_client):
+    """structured=True must actually parse a REAL log, not just return a shape.
+
+    The unit fixtures imitate the plain ``home-assistant.log`` file, which only
+    container/pip installs read. This test runs the parser over whatever the
+    live instance actually serves, so a format the regex cannot match fails
+    loudly here instead of returning ``success: true, top_issues: []`` — a
+    false all-clear — on an instance whose log is full of errors. Runs on every
+    tier, so the in-addon lane covers the ANSI-wrapped journald format.
+    """
+    logger.info("Testing error_log structured summary against a live log")
+
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success(
+            "ha_get_logs",
+            {"source": "error_log", "structured": True},
+        )
+    data = get_logbook_data(raw_data)
+
+    assert data["success"] is True
+    assert data.get("source") == "error_log"
+    assert data.get("structured") is True
+    assert "top_issues" in data, "Structured mode must return top_issues"
+    assert "by_component" in data, "Structured mode must return by_component"
+    assert "log" not in data, "Structured mode replaces the raw text"
+
+    summary = data["summary"]
+    if summary["total_raw_lines"] == 0:
+        pytest.skip("Live instance served an empty error log — nothing to parse")
+
+    # The load-bearing assertion: lines arrived AND the parser understood them.
+    assert summary["matched_lines"] > 0, (
+        "Parsed nothing from a non-empty live log "
+        f"({summary['unparseable_lines']} of {summary['total_raw_lines']} "
+        f"unparseable) — the log format drifted: {data.get('warnings')}"
+    )
+    # Bounded output is the whole premise of this mode. Asserted against the
+    # default rather than against showing_top_n, which is min(top_n, issues)
+    # and therefore holds by construction.
+    assert len(data["top_issues"]) <= _DEFAULT_TOP_N
+    # Every input line lands in exactly one bucket.
+    assert (
+        summary["blank_lines"] + summary["unparseable_lines"] + summary["matched_lines"]
+        == summary["total_raw_lines"]
+    )
+
+    logger.info(
+        f"Parsed {summary['parsed_entries']} of {summary['total_raw_lines']} "
+        f"lines into {summary['unique_issues']} unique issues across "
+        f"{summary['components_affected']} components"
+    )
+
+
+@pytest.mark.asyncio
 async def test_logs_logbook_with_search(mcp_client):
     """Test logbook source with search keyword filtering."""
     logger.info("Testing logbook with search filter")
 
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {"source": "logbook", "hours_back": 24, "search": "sun"},
-    )
-
-    raw_data = assert_mcp_success(result, "Logbook with search")
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success(
+            "ha_get_logs", {"source": "logbook", "hours_back": 24, "search": "sun"}
+        )
     data = get_logbook_data(raw_data)
 
     assert data["success"] is True
@@ -580,8 +609,8 @@ async def test_logs_logbook_with_search(mcp_client):
 @pytest.mark.asyncio
 async def test_logs_logger_source_basic(mcp_client):
     """ha_get_logs(source='logger') returns per-integration log levels."""
-    result = await mcp_client.call_tool("ha_get_logs", {"source": "logger"})
-    raw_data = assert_mcp_success(result, "Logger source retrieval")
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success("ha_get_logs", {"source": "logger"})
     data = get_logbook_data(raw_data)
 
     assert data["success"] is True
@@ -617,11 +646,10 @@ async def test_logs_logger_source_reflects_set_level(mcp_client):
     )
 
     try:
-        result = await mcp_client.call_tool(
-            "ha_get_logs",
-            {"source": "logger", "search": target_domain},
-        )
-        raw_data = assert_mcp_success(result, "Logger source with search filter")
+        async with MCPAssertions(mcp_client) as mcp:
+            raw_data = await mcp.call_tool_success(
+                "ha_get_logs", {"source": "logger", "search": target_domain}
+            )
         data = get_logbook_data(raw_data)
 
         assert data.get("source") == "logger"
@@ -647,11 +675,11 @@ async def test_logs_logger_source_reflects_set_level(mcp_client):
 @pytest.mark.asyncio
 async def test_logs_logger_search_empty_result(mcp_client):
     """Unknown search string returns 0 loggers but still succeeds."""
-    result = await mcp_client.call_tool(
-        "ha_get_logs",
-        {"source": "logger", "search": "nonexistent_xyz_integration_12345"},
-    )
-    raw_data = assert_mcp_success(result, "Logger source with empty search")
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success(
+            "ha_get_logs",
+            {"source": "logger", "search": "nonexistent_xyz_integration_12345"},
+        )
     data = get_logbook_data(raw_data)
 
     assert data["success"] is True

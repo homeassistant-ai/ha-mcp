@@ -40,16 +40,19 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
 import requests
 from haos_runtime import (
     HA_MCP_SERVER_ENTRY_ID,
+    HA_MCP_SERVER_PORT,
+    HA_MCP_SERVER_SECRET_PATH,
     HA_MCP_SERVER_WEBHOOK_ID,
     enable_config_entry,
     read_embedded_staging_status,
+    ssh_exec,
 )
 
 from ..utilities.streamable_http import parse_mcp_response
@@ -71,7 +74,7 @@ _READY_POLL_S = 5
 pytestmark = [
     pytest.mark.slow,
     pytest.mark.haos_only,
-    # These 3 tests enable the baked entry and drive the webhook per-test. On the
+    # These tests enable the baked entry and drive the webhook per-test. On the
     # haos_embedded lane the session backend already enables the entry ONCE and
     # runs the whole suite through the in-process server, so running them there
     # would double-enable the entry and race that backend — skip. They stay the
@@ -281,3 +284,181 @@ class TestEmbeddedServerOnHaos:
                 f"external haos lane should have no add-on running, but "
                 f"addon_mcp_url={info.get('addon_mcp_url')!r}"
             )
+
+
+# A self-restart reinstalls nothing (warm start) but does tear the worker down
+# and set the entry back up; on a loaded QEMU guest that is seconds, not the
+# multi-minute first bring-up.
+_RESTART_RECOVER_TIMEOUT_S = 180
+_RESTART_POLL_S = 3
+_WS_RECV_TIMEOUT_S = 30
+
+
+def _entry_states_while(
+    base_url: str,
+    token: str,
+    entry_id: str,
+    trigger: Callable[[], None],
+    timeout: float,
+) -> list[str]:
+    """Record ``entry_id``'s state transitions while ``trigger`` runs.
+
+    Subscribes BEFORE triggering and reads the event stream rather than
+    polling: the restart endpoint answers ~1s before the reload is even
+    dispatched, so a poll started on that response reads the stale
+    pre-restart ``loaded`` and cannot tell a real reload from no reload at
+    all. HA dispatches ``SIGNAL_CONFIG_ENTRY_CHANGED`` on every state
+    assignment, so the stream catches transitions no sampling interval can
+    guarantee to see.
+
+    Returns the states observed, in order, stopping once the entry is back to
+    ``loaded`` or the timeout expires (the wedge never returns, so the caller
+    sees where it stopped).
+    """
+    ws = _subscribe_to_config_entries(base_url, token)
+    try:
+        trigger()
+        return _collect_entry_states(ws, entry_id, time.monotonic() + timeout)
+    finally:
+        ws.close()
+
+
+def _subscribe_to_config_entries(base_url: str, token: str) -> Any:
+    """Authenticated WS with ``config_entries/subscribe`` live and drained."""
+    import websockets.sync.client
+
+    ws_url = (
+        base_url.replace("http://", "ws://").replace("https://", "wss://")
+        + "/api/websocket"
+    )
+    ws = websockets.sync.client.connect(ws_url, max_size=None, open_timeout=30)
+    # Every recv is bounded: the sync client blocks forever by default, so a HA
+    # that accepts the socket and then goes quiet would hang the run until the
+    # module timeout killed it with nothing useful to show.
+    try:
+        first = json.loads(ws.recv(timeout=_WS_RECV_TIMEOUT_S))
+        if first.get("type") != "auth_required":
+            raise RuntimeError(f"WS handshake: expected auth_required, got {first!r}")
+        ws.send(json.dumps({"type": "auth", "access_token": token}))
+        auth = json.loads(ws.recv(timeout=_WS_RECV_TIMEOUT_S))
+        if auth.get("type") != "auth_ok":
+            raise RuntimeError(f"WS auth rejected: {auth}")
+
+        ws.send(json.dumps({"id": 1, "type": "config_entries/subscribe"}))
+        # The command result, then a snapshot of every current entry (each
+        # carrying type=null), both land before any change event — drain them so
+        # the caller only sees transitions its trigger caused.
+        deadline = time.monotonic() + _WS_RECV_TIMEOUT_S
+        while time.monotonic() < deadline:
+            msg = json.loads(ws.recv(timeout=deadline - time.monotonic()))
+            if msg.get("type") == "event" and any(
+                item.get("type") is None for item in msg.get("event", [])
+            ):
+                return ws
+        raise AssertionError(
+            "config_entries/subscribe never sent its entry snapshot within "
+            f"{_WS_RECV_TIMEOUT_S}s"
+        )
+    except BaseException:
+        ws.close()
+        raise
+
+
+def _collect_entry_states(ws: Any, entry_id: str, deadline: float) -> list[str]:
+    """``entry_id``'s successive states until it is loaded or time runs out."""
+    observed: list[str] = []
+    while time.monotonic() < deadline:
+        try:
+            msg = json.loads(ws.recv(timeout=deadline - time.monotonic()))
+        except TimeoutError:
+            break
+        for item in msg.get("event", []) if msg.get("type") == "event" else []:
+            entry = item.get("entry") or {}
+            state = entry.get("state")
+            if entry.get("entry_id") != entry_id or not state:
+                continue
+            if not observed or observed[-1] != state:
+                observed.append(state)
+        if observed and observed[-1] == "loaded":
+            break
+    return observed
+
+
+class TestEmbeddedSelfRestartOnHaos:
+    def test_self_restart_leaves_the_entry_loaded(
+        self, embedded_server: tuple[str, str | None, dict[str, Any]]
+    ) -> None:
+        """The settings-UI Restart button must not strand its own entry.
+
+        Regression: the restart dispatched the reload over the client the
+        reload then destroys, and HA cancels that unshielded handler on the
+        disconnect — stranding the entry in ``UNLOAD_IN_PROGRESS``, which
+        nothing but a Home Assistant restart clears. Needs no developer mode;
+        ``/api/settings/restart`` is the ordinary Restart button.
+        """
+        base_url, _session_id, info = embedded_server
+        token = info["token"]
+
+        # From inside the VM: settings routes live under the secret path on the
+        # server's own port, not behind the webhook (MCP traffic only).
+        restart_url = (
+            f"http://127.0.0.1:{HA_MCP_SERVER_PORT}"
+            f"{HA_MCP_SERVER_SECRET_PATH}/api/settings/restart"
+        )
+
+        def _press_restart() -> None:
+            result = ssh_exec(
+                [
+                    "curl",
+                    "-s",
+                    "-o",
+                    "/dev/null",
+                    "-w",
+                    "%{http_code}",
+                    "-X",
+                    "POST",
+                    restart_url,
+                ],
+                timeout=60,
+            )
+            assert result.stdout.strip().endswith("200"), (
+                f"settings restart endpoint returned {result.stdout!r} "
+                f"(stderr={result.stderr!r})"
+            )
+
+        states = _entry_states_while(
+            base_url,
+            token,
+            HA_MCP_SERVER_ENTRY_ID,
+            _press_restart,
+            _RESTART_RECOVER_TIMEOUT_S,
+        )
+
+        # Both halves matter: without the first, a test that never triggered a
+        # reload passes; without the second, the wedge passes.
+        assert states, (
+            "the Restart button produced no config-entry state change at all — "
+            "the reload was never dispatched, so this asserted nothing"
+        )
+        assert states[-1] == "loaded", (
+            f"{HA_MCP_SERVER_ENTRY_ID} went {states} and did not return to "
+            f"loaded within {_RESTART_RECOVER_TIMEOUT_S}s; ending in "
+            f"'unload_in_progress' means the reload cancelled itself mid-unload "
+            f"and only a Home Assistant restart can recover the server"
+        )
+
+        # `loaded` precedes the listener binding, so poll for MCP separately.
+        ready_deadline = time.monotonic() + _RESTART_RECOVER_TIMEOUT_S
+        ready = False
+        while time.monotonic() < ready_deadline:
+            try:
+                ready, _ = _initialize(base_url)
+            except requests.exceptions.RequestException:
+                ready = False
+            if ready:
+                break
+            time.sleep(_RESTART_POLL_S)
+        assert ready, (
+            "the entry is loaded but the in-process server never answered MCP "
+            f"within {_RESTART_RECOVER_TIMEOUT_S}s of the self-restart"
+        )

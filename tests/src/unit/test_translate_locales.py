@@ -47,6 +47,17 @@ _TRANSLATED_LOCALES = sorted(
     for path in _SETTINGS_LOCALES.glob("*.json")
     if path.stem != "en" and json.loads(path.read_text("utf-8")).get("messages")
 )
+# The other authored surface samples its own catalog, never the settings one
+# (`_surface_catalogs`), so it needs its own list. Read the production constant
+# rather than rebuilding the path: a catalog this list misses is a catalog the
+# check below silently never runs on. An empty catalog is excluded for the same
+# reason as above — AGENTS.md § Translations lets a component catalog start
+# empty, and there is no wording in one to sample.
+_COMPONENT_LOCALES = sorted(
+    path.stem
+    for path in translate_locales.COMPONENT_DIR.glob("*.json")
+    if path.stem != "en" and _flatten(json.loads(path.read_text("utf-8")))
+)
 
 
 _SAMPLE_ENGLISH = {
@@ -64,6 +75,25 @@ def _item(section: str = "messages", english: str = "Hello {name}") -> WorkItem:
 class TestValidate:
     def test_accepts_a_plain_translation(self) -> None:
         assert _validate(_item(english="Hello"), "Hallo") is None
+
+    def test_refuses_a_swapped_number_and_accepts_a_spelled_out_one(self) -> None:
+        """The engine asks the narrow question, and the corpus says which.
+
+        Across the 6751 shipped pairs every number difference is one-sided —
+        Russian writes "the 5 experimental sub-flags" in words, Chinese keeps
+        a clause the English rendering cuts — and none is a swap. Comparing
+        full multisets here would refuse those two correct strings on every
+        run and leave their keys to be planned again tomorrow; comparing
+        nothing let a swapped number land as a backfilled key, where the
+        merge gate reports it and holds the whole tree back. A swap is wrong
+        in every language, so that is what this refuses.
+        """
+        assert _validate(_item(english="Range 1-600."), "Bereich 1-900.") is not None
+        assert (
+            _validate(_item(english="keeps 30 entries"), "behaelt 50 Eintraege")
+            is not None
+        )
+        assert _validate(_item(english="Range 1-600."), "Bereich 1-600.") is None
 
     def test_rejects_empty_and_non_string(self) -> None:
         assert _validate(_item(), "") is not None
@@ -94,6 +124,46 @@ class TestValidate:
             is None
         )
 
+    def test_rejects_output_the_merge_gate_would_refuse(self) -> None:
+        """The engine must not produce what the parity gate later refuses.
+
+        A dropped identifier that is accepted here lands as a backfilled key,
+        and no later run re-queues it: from then on the merge-time arm goes
+        red every day, the push is held back whole, and the run re-spends its
+        quota planning work it cannot land. One rejection and one retry costs
+        a single string instead. The first three cases below are the faults
+        #2180 repaired by hand; the fourth is the unit contradiction the same
+        arm reports.
+        """
+        for english, bad in (
+            ("See docs/beta.md for limits.", "Siehe die Beta-Dokumentation."),
+            ("Set enable_tool_search to true.", "Aktiviere die Werkzeugsuche."),
+            ("roughly 90% less", "etwa 46K weniger"),
+            ("limit is 1-256 MB", "Grenze ist 1-256 GB"),
+        ):
+            assert _validate(_item(english=english), bad) is not None, (
+                f"the engine accepted {bad!r} for {english!r}, which the "
+                "merge-time literal-parity check refuses"
+            )
+
+    def test_accepts_a_number_the_translation_spells_out(self) -> None:
+        """The one arm the engine deliberately does not run.
+
+        Both tolerances the merge-time check carries are number-count
+        tolerances: Russian writes "the 5 experimental sub-flags" in words,
+        Chinese keeps a clause the English rendering cuts. Comparing number
+        multisets here would refuse correct output on every run, retry once,
+        and leave the key to be planned again tomorrow — the stall the call
+        above exists to prevent, moved one step upstream.
+        """
+        assert (
+            _validate(
+                _item(english="the 5 experimental sub-flags"),
+                "die fuenf experimentellen Unterschalter",
+            )
+            is None
+        )
+
     def test_markup_rules_apply_only_to_messages(self) -> None:
         # Tool and component strings render through escapeHtml / HA core, so
         # the settings-UI markup allowlist deliberately does not gate them.
@@ -105,6 +175,97 @@ class TestValidate:
         wrong = 'siehe <a href="#" data-panel-link="backups">Tools</a>'
         assert _validate(_item(english=english), ok) is None
         assert _validate(_item(english=english), wrong) is not None
+
+
+class TestHardcodedOptionLabels:
+    """Python hardcodes a handful of on-screen names — selector labels and the
+    titles of the config entries themselves — so Home Assistant shows them in
+    English whatever the reader's language is. A catalog that localises one
+    sends the reader looking for something that is not on the screen: the
+    failure that stopped a whole sync run, since the engine only had a prose
+    rule telling it not to."""
+
+    def test_the_name_set_is_read_from_the_source(self) -> None:
+        # Without this the check degrades silently: an empty name set accepts
+        # every translation and still reports a clean run. Both kinds are
+        # asserted because either regex can stop matching on its own.
+        names = translate_locales._hardcoded_ui_names()
+        assert names, "no on-screen names found — the sources were restructured"
+        assert any(name.startswith("Local network") for name in names), (
+            "no selector label found — check the config flow's selector syntax"
+        )
+        assert "HA-MCP File & YAML Tools" in names, (
+            "no config-entry title found — check the *_ENTRY_TITLE constants"
+        )
+
+    def test_rejects_a_localised_hardcoded_label(self) -> None:
+        english = 'Local/LAN (when Network access is "Local network"): {url}'
+        localised = 'Lokaal/LAN (wanneer Netwerktoegang "Lokaal netwerk" is): {url}'
+        kept = 'Lokaal/LAN (wanneer Netwerktoegang "Local network" is): {url}'
+        assert _validate(_item(section="component", english=english), localised)
+        assert _validate(_item(section="component", english=english), kept) is None
+
+    def test_reads_the_label_through_typographic_quotes(self) -> None:
+        # Shipped English already quotes both ways, so which mark an author
+        # reached for must not decide whether the label is protected.
+        english = "Local/LAN (when Network access is “Local network”): {url}"
+        localised = 'Lokaal/LAN (wanneer Netwerktoegang "Lokaal netwerk" is): {url}'
+        assert _validate(_item(section="component", english=english), localised)
+
+    def test_rejects_a_localised_entry_title(self) -> None:
+        # The exact string the 2026-08-08 nl fill shipped: the reader is sent
+        # to an entry whose title the integration hardcodes, under a name that
+        # entry never has.
+        english = (
+            'Not installed — press "Add entry" on this integration\'s page and '
+            'choose "HA-MCP File & YAML Tools" to add it'
+        )
+        localised = (
+            'Niet geïnstalleerd — druk op "Item toevoegen" op de pagina van deze '
+            'integratie en kies "HA-MCP Bestands- & YAML-tools" om deze toe te voegen'
+        )
+        kept = (
+            'Niet geïnstalleerd — druk op "Item toevoegen" op de pagina van deze '
+            'integratie en kies "HA-MCP File & YAML Tools" om deze toe te voegen'
+        )
+        assert _validate(_item(section="component", english=english), localised)
+        assert _validate(_item(section="component", english=english), kept) is None
+
+    def test_rejects_a_localised_name_in_single_quotes(self) -> None:
+        # Shipped English at options.step.init.data_description.enable_llm_api
+        # spells this one with apostrophes rather than double quotes. Single
+        # quotes are matched against the known names instead of being paired
+        # like the other marks: the apostrophe in "integration's" is the same
+        # character, so pairing on it shifts every quote in such a sentence —
+        # measured on the shipped catalogs, pairing loses a live violation.
+        english = "agents can select 'HA-MCP Server' under Control Home Assistant"
+        localised = "agenten kunnen 'HA-MCP Servidor' kiezen onder Bediening"
+        kept = "agenten kunnen 'HA-MCP Server' kiezen onder Bediening"
+        assert _validate(_item(section="component", english=english), localised)
+        assert _validate(_item(section="component", english=english), kept) is None
+
+    def test_apostrophes_do_not_hide_a_double_quoted_name(self) -> None:
+        # The regression the obvious repair would have caused: this English
+        # carries an apostrophe before the quoted title.
+        english = (
+            'press "Add entry" on this integration\'s page and choose '
+            '"HA-MCP File & YAML Tools" to add it'
+        )
+        localised = 'druk op "Item toevoegen" en kies "HA-MCP Bestands-tools"'
+        assert _validate(_item(section="component", english=english), localised)
+
+    def test_leaves_other_quoted_text_translatable(self) -> None:
+        # "Add entry" is Home Assistant's own button: HA translates it, so
+        # every shipped catalog translates the quote too. Only labels the
+        # config flow hardcodes are pinned to English.
+        english = 'Not installed — press "Add entry" on this integration\'s page'
+        assert (
+            _validate(
+                _item(section="component", english=english),
+                'Nicht installiert — klicke auf "Eintrag hinzufügen"',
+            )
+            is None
+        )
 
 
 class TestChunk:
@@ -147,6 +308,23 @@ class TestStyleSamples:
         translated = {"long": "…", "neutral": "…"}
         assert translate_locales._style_sample_keys(_SAMPLE_ENGLISH, translated) == [
             "long"
+        ]
+
+    @pytest.mark.parametrize("blank", ["", " ", "\n\t "])
+    def test_skips_keys_whose_translation_is_blank(self, blank: str) -> None:
+        """A blank value is a present key with nothing in it, and this sampler
+        is where one still turns up: `_validate_string_map` rejects it at load,
+        but this script reads the catalogs with `json.loads` instead, and the
+        parity ceilings count a key untranslated only when it equals the English
+        or is missing, so `""` reads there as translated. Sampled, it spends one
+        of three slots on a pair whose target side is empty — and a catalog
+        whose register rests on one key would hand the engine that and nothing
+        else. Whitespace counts as blank: it renders the same.
+        """
+        translated = dict.fromkeys(_SAMPLE_ENGLISH, "…") | {"short": blank}
+        assert translate_locales._style_sample_keys(_SAMPLE_ENGLISH, translated) == [
+            "middle",
+            "long",
         ]
 
     def test_no_addressing_source_yields_no_samples(self) -> None:
@@ -208,6 +386,97 @@ class TestStyleSamples:
         assert all(
             translate_locales._SECOND_PERSON_RE.search(english[key]) for key in keys
         ), f"{locale}.json samples {keys} do not address the reader"
+
+    @pytest.mark.parametrize("locale", _TRANSLATED_LOCALES)
+    def test_settings_samples_survive_their_own_anchor_being_queued(
+        self, locale: str
+    ) -> None:
+        """The production caller excludes what the run is about to rewrite.
+
+        ``_prompt`` hands ``queued_keys`` to ``_style_samples``, and
+        ``_style_sample_keys`` drops those from the candidates -- so a catalog
+        whose only reader-addressing key is itself queued for retranslation
+        sends a request with neither a tone sample nor the register rule, both
+        of which are guarded on ``if samples``. The two tests above pass the
+        default empty ``exclude``, which is the one call production never
+        makes, so they cannot see it.
+
+        One anchor short of the sample count is enough to be safe here: losing
+        any single candidate still leaves one to imitate.
+        """
+        english = json.loads((_SETTINGS_LOCALES / "en.json").read_text("utf-8"))[
+            "messages"
+        ]
+        translated = json.loads(
+            (_SETTINGS_LOCALES / f"{locale}.json").read_text("utf-8")
+        ).get("messages", {})
+        for queued in translate_locales._style_sample_keys(english, translated):
+            assert translate_locales._style_sample_keys(
+                english, translated, frozenset({queued})
+            ), (
+                f"{locale}.json falls back to no style sample at all once "
+                f"{queued!r} is queued for retranslation, which is exactly the "
+                "run that would have needed one"
+            )
+
+    def test_the_component_catalogs_are_discovered(self) -> None:
+        """Same glob guard as above, for the other authored surface."""
+        assert _COMPONENT_LOCALES, "no component catalogs found to check samples for"
+
+    @pytest.mark.parametrize("locale", _COMPONENT_LOCALES)
+    def test_every_shipped_component_catalog_gets_reader_addressing_samples(
+        self, locale: str
+    ) -> None:
+        """The component surface carries the same guarantee and less margin.
+
+        A settings catalog samples from hundreds of keys, so one English string
+        losing its second person costs it one candidate. A component catalog
+        starts empty and is filled a key at a time, so early on the whole
+        surface can rest on a single shared key — today `eo` is exactly that,
+        one key, while every other shipped catalog carries all 93. Lose the
+        addressing there and the engine is told nothing about
+        how this language addresses its reader and falls back to its own
+        register for every later string, and the only trace is a line on
+        stderr inside an unattended workflow run. Goes through
+        ``_surface_catalogs`` on purpose: that it reads the component catalog
+        rather than the settings one is the property at issue.
+        """
+        english, translated = translate_locales._surface_catalogs(locale, "component")
+        keys = translate_locales._style_sample_keys(english, translated)
+
+        assert keys, (
+            f"component {locale}.json yields no style sample, so the engine "
+            "gets no signal about how this catalog addresses its reader"
+        )
+        assert all(
+            translate_locales._SECOND_PERSON_RE.search(english[key]) for key in keys
+        ), f"component {locale}.json samples {keys} do not address the reader"
+
+    @pytest.mark.parametrize("locale", _COMPONENT_LOCALES)
+    def test_component_samples_survive_their_own_anchor_being_queued(
+        self, locale: str
+    ) -> None:
+        """The settings property, on the surface that has less to spare.
+
+        The exclusion is the same one production applies, and so is the
+        consequence: a component request whose only reader-addressing key is
+        queued goes out with neither tone sample nor register rule. What
+        differs is the margin. A settings catalog draws its candidates from
+        453 English messages, so the surface only loses its last one by a
+        rewording of the English; a component catalog is filled a key at a
+        time and can hold its whole register on the one key that arrived
+        first. That is the case where the run this guards is likeliest to
+        happen -- rewording that key is what queues it.
+        """
+        english, translated = translate_locales._surface_catalogs(locale, "component")
+        for queued in translate_locales._style_sample_keys(english, translated):
+            assert translate_locales._style_sample_keys(
+                english, translated, frozenset({queued})
+            ), (
+                f"component {locale}.json falls back to no style sample at all "
+                f"once {queued!r} is queued for retranslation, which is exactly "
+                "the run that would have needed one"
+            )
 
 
 class TestPromptRegisterRule:

@@ -1,0 +1,276 @@
+---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/eo.json (keys addon.*, features.*,
+# addon_dev.*); regenerate with: python scripts/generate_locales.py
+configuration:
+  backup_hint:
+    name: Nivelo de sugesto por plena HA-momentfoto (por LLM)
+    description: 'Agordas la vortumon de la sugesto, kiun la LLM vidas en la
+
+      `ha_manage_backup(scope=''snapshot'')` ilpriskribo pri kiam
+
+      sugesti plenan Home Assistant tarball-sekurkopion antaŭ riskaj operacioj
+
+      (ekz. amasa forigo de aparatoj). Influas NUR ĉi tiun unu LLM-alfrontan promptan
+
+      frazon.
+
+
+      Por aŭtomataj momentfotoj por ĉiu redakto de aŭtomatigoj / skriptoj / helpiloj
+      /
+
+      ktp., uzu la apartan ŝaltilon **Ebligi aŭtomatan sekurkopion de redaktoj** sube.'
+  secret_path:
+    name: Anstataŭigo de sekreta vojo
+    description: 'Laŭvola kutima HTTP-vojo por la MCP-servilo. Lasu malplena por uzi
+      la aŭtomate generitan sekuran vojon.
+
+      '
+  enable_tool_search:
+    name: Ebligi ilo-serĉon
+    description: 'Anstataŭigi la plenan ilo-katalogon per serĉ-bazita malkovro. Reduktas
+      neaktivan kuntekston je proksimume 90%, al ĉirkaŭ 5K ĵetonoj. ⚠️ NE ebligu ĉi
+      tion en klientoj kun sia propra enkonstruita ilo-serĉo / prokrastitaj iloj (claude.ai,
+      Claude Desktop, Claude Code) — la du serĉtavoloj konfliktas, kaj la enkonstruita
+      ilo-serĉo de la kliento estas la pli bona elekto tie; lasu ĉi tion malŝaltita.
+      Ĉu iloj estas prokrastitaj dependas de via kliento kaj modelo-kombino: uzu ĉi
+      tion kiam via agordo ŝarĝas la plenan katalogon antaŭe — modeloj sen denaskaj
+      prokrastitaj iloj (ekz. Gemini, OpenAI-kongruaj lokaj modeloj, Claude Haiku),
+      klientoj kiuj enlinigas ĉiujn ilo-skemojn sendepende de modelo (ekz. GitHub
+      Copilot CLI), aŭ pli malgrandaj kuntekstaj fenestroj. Iuj Codex-modeloj kaj
+      ChatGPT ankaŭ inkluzivas prokrastitajn ilojn — kontrolu vian klienton/modelon
+      rekte por konfirmi ĝiajn funkciojn, por ke vi ne lasu ĉi tion ebligita senbezone.
+      Iloj estas trovitaj per ha_search_tools kaj ekzekutitaj per kategoriigitaj prokuriloj
+      (legi/skribi/forigi). Postulas restartigon por ekvalidi.'
+  enable_tool_security_policies:
+    name: Ebligi Ilo-Sekurecajn Politikojn (altnivela)
+    description: Gardu alt-riskajn ilo-vokojn (seruro/alarmo-kontrolo, aŭtomatigo-skriboj,
+      ktp.) malantaŭ uzant-aprobo. Kiam gardita ilo estas vokita, la agento diras
+      al la uzanto malfermi la langeton Ilo-Sekurecaj Politikoj en la TTT-UI kaj klaki
+      Aprobi antaŭ ol la voko daŭras. Reguloj por ĉiu ilo kun laŭvolaj argumentaj
+      kondiĉoj estas agorditaj en la langeto Ilo-Sekurecaj Politikoj. Malŝaltita defaŭlte.
+      Postulas restartigon por ekvalidi.
+  enable_security_policy_tool:
+    name: Permesi al AI-agentoj redakti ilajn sekurecajn politikojn
+    description: 'Registras la ilon ha_manage_security_policy, kiu permesas al konektitaj
+      AI-agentoj legi kaj reverki la ilajn sekurecajn politikojn — inkluzive de forigo
+      de aprobo-pordoj. Malŝaltita defaŭlte. Sendepende de la opcio ''Iloj Sekurecaj
+      Politikoj'' supre: ĉi tio regas, kiu povas redakti la regulojn, ne ĉu ili estas
+      plenumitaj. La ilo ne povas vidi aŭ decidi atendajn aprobojn. Por konservi homon
+      en la procezo, pordigu la ilon antaŭ ol ebligi ĝin: ŝaltu "sekurece pordigita"
+      por ''Administri Sekurecan Politikon'' en la langeto ''Iloj'' de la reta UI.
+      Postulas restartigon por efektiviĝi.'
+  read_only_mode:
+    name: Nur-lega Reĝimo
+    description: Malŝaltas ĉiujn skribajn ilojn, kaj forigas la kapablon de iloj fari
+      iujn ajn skribajn aŭ detruajn vokojn. Miksitaj legaj/skribaj iloj (rezervoj,
+      aldonaĵoj, energiaj preferoj, voĉaj duktoj, kaj koda reĝimo kiam ebligita) restas
+      disponeblaj kun iliaj skribaj operacioj blokitaj. Sama ŝaltilo kiel la langeto
+      Iloj de la TTT-UI. Malŝaltita defaŭlte. Postulas restartigon por ekvalidi.
+  redact_secrets:
+    name: Redakti Sekretojn
+    description: Redaktas sekretojn el ilo-respondoj antaŭ ol ili atingas la AI-asistanton.
+      Aldonaĵaj opcioj kaj integriĝaj kampoj markitaj kiel pasvortoj estas anstataŭigitaj
+      per agordita/malplena markilo (tiel „ĉu ĉi tiu akreditaĵo estas agordita?” restas
+      respondinda), kaj aliaj ilo-respondoj estas purigitaj de sekretaj valoroj, kiujn
+      la servilo jam vidis (valoroj pli mallongaj ol 6 signoj estas preterlasitaj,
+      ĉar anstataŭigi etajn fragmentojn koruptus nerilatan eliron). Kampoj ne markitaj
+      kiel pasvortoj per ilia skemo ne povas esti detektitaj. Malŝaltita defaŭlte.
+  enable_beta_features:
+    name: Ebligi beta-funkciojn (majstra)
+    description: ⚠ DANĜERO — ĉi tiuj iloj povas PERMANENTE DAMAĜI vian Home Assistant-instalaĵon.
+      Ili skribas al via YAML-agordo, via dosiersistemo, instalas kutimajn komponantojn,
+      rulas arbitran sandbokseitan Python-kodon, kaj redaktas ilajn dokumentŝnurojn,
+      kiujn la AI vidas. Ne ekzistas garantio kaj neniu subtena promeso — vi ebligas
+      ilin je via PROPRIA RISKO. Faru sekurkopion de Home Assistant antaŭ ol ŝalti
+      ĉi tion, kaj neniam ebligu en produktado sen unu. Ĉefa pordo por la eksperimentaj
+      sub-flagoj sube; sub-flagoj estas ignoritaj dum rultempo dum ĉi tiu ĉefa estas
+      malŝaltita, eĉ kiam eksplicite agordita al true. La sama ŝaltilo ankaŭ aperas
+      en la retaj agordoj sub "Beta features (dangerous)" — ambaŭ surfacoj reflektas
+      unu la alian post restartigo.
+  enable_yaml_config_editing:
+    name: Ebligi redaktadon de YAML-agordo (beta)
+    description: Beta-funkcio. Permesas al AI-asistantoj aldoni, anstataŭigi, aŭ forigi
+      ĉefnivelajn ŝlosilojn en configuration.yaml kaj packages/*.yaml. Nur blanklistigitaj
+      ŝlosiloj estas permesitaj (ekz., template, sensor, command_line, mqtt, knx);
+      kernaj ŝlosiloj kiel homeassistant, http, kaj recorder estas blokitaj. Ĉiu redakto
+      validigas YAML-sintakson, rulas agordan kontrolon, kaj kreas aŭtomatan sekurkopion.
+      Ŝanĝoj al plej multaj ŝlosiloj postulas plenan HA-restartigon por ekvalidi.
+      Vidu docs/beta.md por konataj limigoj. Dedikataj iloj (automations, scripts,
+      scenes, helpers, template sensors) estu preferataj kiam disponeblaj. POSTULAS
+      ke la ĉefa ŝaltilo "Enable beta features" supre (kaj en la reta UI) estu ŝaltita
+      — alie ĉi tiu sub-flago estas ignorita dum rultempo sendepende de ĝia valoro
+      ĉi tie.
+  enable_yaml_packages_automation:
+    name: Permesi aŭtomatigon en packages/*.yaml
+    description: Sub-ŝaltilo de redaktado de YAML-agordo. Kiam ŝaltita, ha_config_set_yaml
+      akceptas yaml_path='automation' ene de packages/*.yaml. Kiam malŝaltita, la
+      voko estas malakceptita kaj klient-flanke kaj servil-flanke. La ilo en stokada
+      reĝimo (ha_config_set_automation) estas netuŝita. Defaŭlte MALŜALTITA; efikas
+      nur kiam "Ebligi redaktadon de YAML-agordo" supre estas ankaŭ ŝaltita.
+  enable_yaml_packages_script:
+    name: Permesi skripton en packages/*.yaml
+    description: Sub-ŝaltilo de redaktado de YAML-agordo. Kiam ŝaltita, ha_config_set_yaml
+      akceptas yaml_path='script' ene de packages/*.yaml. Kiam malŝaltita, la voko
+      estas malakceptita kaj klient-flanke kaj servil-flanke. La ilo en stokada reĝimo
+      (ha_config_set_script) estas netuŝita. Defaŭlte MALŜALTITA; efikas nur kiam
+      "Ebligi redaktadon de YAML-agordo" supre estas ankaŭ ŝaltita.
+  enable_yaml_packages_scene:
+    name: Permesi scenon en packages/*.yaml
+    description: Sub-ŝaltilo de redaktado de YAML-agordo. Kiam ŝaltita, ha_config_set_yaml
+      akceptas yaml_path='scene' ene de packages/*.yaml. Kiam malŝaltita, la voko
+      estas malakceptita kaj klient-flanke kaj servil-flanke. La ilo en stokada reĝimo
+      (ha_config_set_scene) estas netuŝita. Defaŭlte MALŜALTITA; efikas nur kiam "Ebligi
+      redaktadon de YAML-agordo" supre estas ankaŭ ŝaltita.
+  enable_yaml_edit_confirm:
+    name: Postuli konfirmon por YAML-redaktoj (diferenca antaŭvido)
+    description: 'Sub-ŝaltilo de redaktado de YAML-agordo, defaŭlte ŜALTITA (rekomendita).
+      La unua voko de ha_config_set_yaml redonas unuigitan diferencon de ĝuste kio
+      ŝanĝiĝus sur disko plus konfirman ĵetonon kaj skribas nenion; la redakto nur
+      realiĝas kiam la voko estas ripetita kun tiu ĵetono. Ekzistas por ke neintencitaj
+      ŝanĝoj ekster la petita redakto estu kaptitaj antaŭ ol ili atingas diskon (issue
+      #1720). Malŝaltu nur por ŝpari unu rondveturon per redakto.'
+  enable_code_mode:
+    name: Ebligi kutiman ilon sandbokson (beta)
+    description: Beta-funkcio. Ebligas la ilon ha_manage_custom_tool, kiu permesas
+      al AI-asistantoj krei, ruli, konservi, kaj forigi kutiman Python-kodon en sekura
+      sandbokso kiam neniu enkonstruita ilo povas trakti la peton. Kodo rulas en izolita
+      interpretilo sen dosiersistemo aŭ arbitra reta aliro. Sandboksa kodo povas atingi
+      la HA REST API (api_get/api_post), sendi WebSocket-komandojn (ws_send), voki
+      ekzistantajn MCP-ilojn (call_tool), aŭ forigi konservitan ilon (delete_saved_tool).
+      Konservitaj iloj persistas al /data/saved_tools.json defaŭlte, do ili postvivas
+      aldonaĵajn restartigojn, kaj estas videblaj al iu ajn kliento, kiu povas konekti.
+      Vidu docs/beta.md por konataj limigoj. Postulas restartigon por ekvalidi. POSTULAS
+      ke la ĉefa ŝaltilo "Enable beta features" supre (kaj en la reta UI) estu ŝaltita
+      — alie ĉi tiu sub-flago estas ignorita dum rultempo sendepende de ĝia valoro
+      ĉi tie.
+  enable_lite_docstrings:
+    name: Ebligi malpezajn ilajn dokumentŝnurojn (beta)
+    description: 'Beta-funkcio. Anstataŭigas la dokumentŝnurojn de kelkaj pezaj ha-mcp-iloj
+      (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml)
+      per pli mallongaj variantoj, kiuj prokrastas skemon kaj ekzemplajn detalojn
+      al la ilo ha_get_skill_guide (aŭ ĝia skill://-rimedo). AVERTO: ĉi tio reduktas
+      neaktivan ĵeton-uzon, sed povas malbonigi LLM-rendimenton — la tonditaj priskriboj
+      dependas de la LLM efektive vokanta la kapablan ilon aŭ leganta la kapablan
+      rimedon por detaloj, kio ne estas garantiita (iuj modeloj preterlasos la ekstran
+      ilvokon kaj finos kun malpli da gvidado ol ili havis antaŭe). Plej bone parigita
+      kun kliento, kiu subtenas MCP-rimedojn aŭ kun enable_tool_search. Postulas restartigon
+      por ekvalidi. POSTULAS ke la ĉefa ŝaltilo "Enable beta features" supre (kaj
+      en la reta UI) estu ŝaltita — alie ĉi tiu sub-flago estas ignorita dum rultempo
+      sendepende de ĝia valoro ĉi tie.'
+  enable_mandatory_bps:
+    name: Aligi plejbonajn praktikajn kapablojn ĉe skriboj
+    description: 'Majstra ŝaltilo por la funkcio de liverado de enhavo de skrib-ila
+      kapablo (problemo #1182). Kiam ebligita (defaŭlte), la ses agordaj skrib-iloj
+      (aŭtomatigoj, skriptoj, scenoj, helpiloj, paneloj, kruda YAML) aligas la kanonikajn
+      Home Assistant plejbonajn praktikajn referencajn dosierojn sub `skill_content`
+      ĉe ĉiu sukcesa skribo, plus aŭtomate enigas iujn ajn referencajn sekciojn cititajn
+      de plejbonaj praktikaj avertoj. Ĉiu ilo ankaŭ eksponas por-vokan `MandatoryBPS`
+      parametron, kiun la agento povas agordi al false ĉe postaj vokoj post kiam ĝi
+      havas la enhavon. Kiam ĉi tiu majstra ŝaltilo estas malŝaltita, NENIU skill_content
+      eliras sendepende de la por-voka parametro aŭ BP-avertoj. Rekomendita ŜALTITA
+      kiel la unua elekto; malŝaltu nur por modeloj kun tre malgrandaj kuntekstaj
+      fenestroj. Malŝalti ĉi tion povas malbonigi skriban precizecon. Postulas restartigon
+      por ekvalidi.'
+  enable_strict_mandatory_bps:
+    name: Strikta plejbonaj-praktikoj reĝimo
+    description: 'Strikta reĝimo: malhelpas la klienton uzi la ilon ĝis ĝi povas pruvi,
+      ke ĝi legis la plejbonajn praktikojn. Dum ŝaltita, la ses plejbonaj-praktikaj
+      skrib-iloj (aŭtomatigoj, skriptoj, scenoj, helpiloj, paneloj, kruda YAML) estas
+      blokitaj kaj redonas eraron direktante la klienton legi la plejbonajn-praktikajn
+      kapablojn per ha_get_skill_guide kaj resendi la agnoskan ŝlosilon, kiun ĝi akiras
+      tie. Dum ŝaltita, la ilo ha_get_skill_guide estas ŝlosita ebligita — ĝi estas
+      la sola eldonanto de la agnoska ŝlosilo. Infano de la opcio „Aligi plejbonajn
+      praktikajn kapablojn ĉe skriboj” supre kaj inerta dum tiu gepatro estas malŝaltita.
+      Postulas restartigon por ekvalidi.'
+  enable_filesystem_tools:
+    name: Ebligi dosiersistemajn ilojn (beta)
+    description: 'Agordas HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Ebligas rektan dosier-leg/skriban
+      aliron al via Home Assistant-dosiersistemo. AVERTO: Ĉi tio donas al la MCP-servilo
+      senteman rektan dosier-aliron al via sistemo. Ebligu nur se vi fidas la AI-asistanton
+      kun dosieroperacioj. Postulas restartigon por ekvalidi. POSTULAS ke la ĉefa
+      ŝaltilo "Enable beta features" supre (kaj en la reta UI) estu ŝaltita — alie
+      ĉi tiu sub-flago estas ignorita dum rultempo sendepende de ĝia valoro ĉi tie.'
+  enable_dashboard_screenshot:
+    name: Ebligi panelan ekrankaptan reĝimon (beta)
+    description: Beta-funkcio — malŝaltita defaŭlte. Aldonas la ilon ha_get_dashboard_screenshot
+      plus la opciojn include_screenshot / return_screenshot al la iloj de panelo
+      get/set, tiel ke AI-asistantoj povas inspekti unu aŭ plurajn respondemajn Lovelace-bildojn
+      (ekz. por kontroli panelon, kiun ili ĵus kreis). Subtenas stabilajn nomitajn
+      vidojn, moveblajn/tabulkomputilajn/labortablajn arojn, kaj PNG/JPEG/WebP/BMP-eligon.
+      Bildigo funkcias en aparta, laŭvola motoro — la aldonaĵo "Puppet" de balloob
+      (senkapa Chromium) — kiun vi instalas unufoje (aldonu la deponejon de aldonaĵoj
+      de balloob, poste instalu "Puppet") kaj donas longdaŭran alirĵetonon; ĉe Docker/Container-deplojoj
+      vi rulas tiun motoron kiel flankveturilon kaj agordas HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
+      Nenio peza estas instalita krom se vi kaj ebligas ĉi tion kaj instalas la motoron.
+      Postulas restartigon por ekvalidi. POSTULAS, ke la ĉefa ŝaltilo "Ebligi beta-funkciojn"
+      supre (kaj en la reta UI) estu ŝaltita — alie ĉi tiu sub-flago estas ignorita
+      dum rultempo sendepende de ĝia valoro ĉi tie.
+  enable_auto_backup:
+    name: Ebligi aŭtomatan sekurkopion de redaktoj
+    description: 'Kaptas momentfoton por ĉiu ento antaŭ ĉiu ĉirkaŭvolvita skriba/detrua
+      MCP-ilvoko (aŭtomatigo, skripto, sceno, helpilo, panelo, panelresurso, etikedo,
+      kategorio, grupo, zono, areo, kalendaro, farendaĵo, ento, aparato, integriĝo,
+      kaj parencaj forigaj/detruaj iloj). La aŭtomata sekurkopia limigo difinas kiom
+      ofte tio okazas: 0 (defaŭlte) kaptas ĉe ĉiu tia voko, N>0 maksimume unu momentfoton
+      po N minutoj por ĉiu ento. Momentfotoj estas konservitaj kiel YAML-dosieroj
+      sub /data/ha_mcp_backups/ (anstataŭigebla per HAMCP_BACKUP_DIR) kaj listigitaj,
+      restarigitaj, aŭ forigitaj per la langeto ''Sekurkopioj'' en la reta agorda
+      UI aŭ per ha_manage_backup(scope=''edits'', ...). Por tiuj domajnoj la kapto
+      estas plejbone klopoda — malsukceso registras AVERTON kaj la skribo daŭras.
+      La dosieraj kaj krud-YAML-iloj estas la escepto: ha_write_file, ha_delete_file
+      kaj ha_config_set_yaml traktas la momentfoton kiel antaŭkondiĉon, do skribo
+      tra ili estas rifuzita dum ĉi tio estas malŝaltita, kaj malsukcesa kapto blokas
+      ĝin. Defaŭlte ŝaltita; malmarkado malaktivigas la plejbone klopodajn kaptojn
+      kaj malfunkciigas la dosierajn kaj krud-YAML-ilojn kun ili. Postulas restartigon
+      por efektiviĝi.'
+  auto_backup_throttle_minutes:
+    name: Aŭtomata sekurkopia limigo (minutoj)
+    description: Limiga fenestro por ĉiu ento. 0 (defaŭlte) kaptas momentfoton ĉe
+      ĉiu ĉirkaŭvolvita skribo. N>0 kaptas maksimume unu momentfoton po N minutoj
+      por ĉiu ento. Gamo 0–1440.
+  auto_backup_retain_per_entity:
+    name: Aŭtomata sekurkopia reteno (por ĉiu ento)
+    description: Maksimuma nombro de momentfotoj konservitaj por ĉiu ento. Pli malnovaj
+      momentfotoj preter ĉi tiu limo estas forigitaj ĉe ĉiu sukcesa kapto. Defaŭlte
+      100, gamo 1–10000.
+  enable_snapshot_delete:
+    name: Permesi forigon de momentfotoj
+    description: Permesas al ha_manage_backup forigi plenajn HA-momentfotajn tarball-ojn
+      (scope='snapshot', action='delete'). Malŝaltita defaŭlte — momentfoto povas
+      esti la lasta reakira punkto post erara ŝanĝo, do homo devas elekti ĉi tie.
+      Eĉ kiam ŝaltita, planitaj sekurkopioj, la plej nova restanta momentfoto, kaj
+      io ajn pli juna ol la suba aĝlimo restas protektitaj.
+  snapshot_delete_min_age_days:
+    name: Minimuma aĝo de momentfoto por forigo (tagoj)
+    description: Momentfoto devas esti almenaŭ tiom aĝa antaŭ ol ĝi povas esti forigita.
+      Gamo 0–365; 0 malaktivigas la limon (la protektoj de la plej nova momentfoto
+      kaj planitaj sekurkopioj ankoraŭ validas). Defaŭlte 7.
+  tool_search_max_results:
+    name: Maksimumaj rezultoj de ilo-serĉo
+    description: 'Maksimuma nombro de iloj redonitaj de ha_search_tools kiam ilo-serĉo
+      estas ebligita. Pli malaltaj valoroj (2-3) ŝparas kuntekstajn ĵetonojn sed povas
+      maltrafi gravajn ilojn. Gamo: 2-10. Postulas restartigon.'
+  disabled_tools:
+    name: Malaktivigitaj iloj (disigitaj per komoj)
+    description: Iloj listigitaj ĉi tie estas devige malŝaltitaj kaj ŝlositaj en la
+      reta Agorda UI (langeto 'Iloj') — ili ne povas esti re-ebligitaj tie sen unue
+      malaktivigi ĉi tiun opcion. Malgranda aro de devigaj iloj (ha_search, ha_get_overview,
+      ha_get_state, ha_report_issue, ha_manage_backup) ne povas esti malaktivigitaj
+      kaj daŭre funkcias eĉ se listigitaj ĉi tie. ha_get_skill_guide povas esti malaktivigita
+      nur dum la strikta plejbonaj praktikoj reĝimo (enable_strict_mandatory_bps)
+      estas malŝaltita. Ilnomoj disigitaj per komoj (ekz. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Fiksitaj iloj (disigitaj per komoj)
+    description: Iloj listigitaj ĉi tie estas ŝlositaj fiksitaj — ili aperas ĉe la
+      supro de la langeto 'Iloj' kaj ne povas esti malfiksitaj de la reta Agorda UI
+      sen unue malaktivigi ĉi tiun opcion. Utila kombine kun 'Ilo-Serĉo'. Ilnomoj
+      disigitaj per komoj.
+  verify_ssl:
+    name: Kontroli TLS-atestilon
+    description: Kontroli la TLS-atestilon de la Home Assistant servilo. La aldonaĵo
+      konektas per la Supervisor prokurilo, do ĉi tio normale ne havas efikon kaj
+      devus resti ebligita. Malaktivigu nur se vi rekonfiguraciis la aldonaĵon por
+      komuniki kun HA per publika HTTPS-gastignomo kun memsubskribita atestilo aŭ
+      gastignoma malkongruo. Malaktivigo malfortigas transportan sekurecon — lasu
+      ŝaltita krom se vi scias, ke vi bezonas ĝin. Postulas restartigon por efektiviĝi.

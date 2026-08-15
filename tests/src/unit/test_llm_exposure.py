@@ -41,6 +41,7 @@ class TestDefaults:
             ("ha_restart", set(), False),
             ("ha_reload_core", set(), False),
             ("ha_manage_backup", set(), False),
+            ("ha_manage_security_policy", {"System"}, False),
         ],
     )
     def test_default_policy(self, name, tags, expected):

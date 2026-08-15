@@ -604,6 +604,30 @@ class TestSetEntityNegativeInputs:
         assert not data.get("success", False)
         assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
 
+    async def test_set_entity_invalid_area_id_rejected(self, mcp_client) -> None:
+        """Rejects unknown areas instead of creating a dangling assignment."""
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_set_entity",
+            {"entity_id": "light.test", "area_id": "unknown_area_id"},
+        )
+
+        assert not data.get("success", False)
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert data["area_id"] == "unknown_area_id"
+
+    async def test_set_entity_invalid_label_rejected(self, mcp_client) -> None:
+        """Rejects unknown labels instead of creating a dangling assignment."""
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_set_entity",
+            {"entity_id": "light.test", "labels": ["unknown_label_id"]},
+        )
+
+        assert not data.get("success", False)
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert data["unknown_labels"] == ["unknown_label_id"]
+
     async def test_set_entity_automation_disable_rejected(self, mcp_client) -> None:
         """Rejects registry-disabling an automation entity.
 

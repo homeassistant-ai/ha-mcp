@@ -1,161 +1,168 @@
 {
-    "config": {
-        "step": {
-            "user": {
-                "title": "HA-MCP 自定义组件",
-                "description": "选择要添加的内容。**HA-MCP 服务器**在 Home Assistant 内部运行完整的 ha-mcp 服务器，并通过 Home Assistant Webhook 对外提供服务——这是大多数用户需要的安装方式。它是一个独立的服务器，可完全取代其他所有安装方式（插件、Docker、uvx/PyPI、stdio）；如果运行它，就不要再同时运行其中任何一种。**HA-MCP 文件与 YAML 工具**添加特权文件和 YAML 编辑服务，仅在您启用 ha-mcp 的可选文件/YAML 工具时才需要。如果您的 ha-mcp 服务器已在别处运行（插件、Docker、uvx），则不需要服务器条目——只添加这个文件与 YAML 条目，并且仅在您使用这些工具时才添加。它适用于所有服务器类型，随时可以后续添加。",
-                "menu_options": {
-                    "server": "HA-MCP 服务器（推荐）",
-                    "tools": "HA-MCP 文件与 YAML 工具（可选）"
-                }
-            },
-            "tools": {
-                "title": "HA-MCP 文件与 YAML 工具",
-                "description": "设置特权文件和 YAML 配置服务。仅在您启用 ha-mcp 的可选文件/YAML 编辑工具（功能开关，默认关闭）时才需要——这适用于所有服务器类型，包括进程内的 HA-MCP 服务器。您可以随时添加或移除此条目。"
-            },
-            "server": {
-                "title": "HA-MCP 服务器",
-                "description": "这会在 Home Assistant 内部运行完整的 ha-mcp 服务器，并通过 Home Assistant Webhook 远程提供服务（可经由 Nabu Casa 或任意反向代理访问）。它是一个独立的服务器，可完全取代插件、Docker、uvx/PyPI 和 stdio 安装方式——不要与其他 ha-mcp 服务器同时运行。选择**提交**以启动它；启动后可在集成选项中更改端口、绑定方式和身份验证。"
-            }
-        },
-        "abort": {
-            "already_configured": "此条目已配置。",
-            "unsupported_home_assistant": "进程内 HA-MCP 服务器需要 Home Assistant {required} 或更高版本，但此实例运行的是 {installed}。您仍可将本组件的 HA-MCP File & YAML Tools 条目与以插件或 Docker 容器方式运行的外部 ha-mcp 服务器搭配使用。"
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA-MCP 自定义组件",
+        "description": "选择要添加的内容。**HA-MCP 服务器**在 Home Assistant 内部运行完整的 ha-mcp 服务器，并通过 Home Assistant Webhook 对外提供服务——这是大多数用户需要的安装方式。它是一个独立的服务器，可完全取代其他所有安装方式（插件、Docker、uvx/PyPI、stdio）；如果运行它，就不要再同时运行其中任何一种。**HA-MCP 文件与 YAML 工具**添加特权文件和 YAML 编辑服务，仅在您启用 ha-mcp 的可选文件/YAML 工具时才需要。如果您的 ha-mcp 服务器已在别处运行（插件、Docker、uvx），则不需要服务器条目——只添加这个文件与 YAML 条目，并且仅在您使用这些工具时才添加。它适用于所有服务器类型，随时可以后续添加。",
+        "menu_options": {
+          "server": "HA-MCP 服务器（推荐）",
+          "tools": "HA-MCP 文件与 YAML 工具（可选）"
         }
+      },
+      "tools": {
+        "title": "HA-MCP 文件与 YAML 工具",
+        "description": "设置特权文件和 YAML 配置服务。仅在您启用 ha-mcp 的可选文件/YAML 编辑工具（功能开关，默认关闭）时才需要——这适用于所有服务器类型，包括进程内的 HA-MCP 服务器。您可以随时添加或移除此条目。"
+      },
+      "server": {
+        "title": "HA-MCP 服务器",
+        "description": "这会在 Home Assistant 内部运行完整的 ha-mcp 服务器，并通过 Home Assistant Webhook 远程提供服务（可经由 Nabu Casa 或任意反向代理访问）。它是一个独立的服务器，可完全取代插件、Docker、uvx/PyPI 和 stdio 安装方式——不要与其他 ha-mcp 服务器同时运行。选择**提交**以启动它；启动后可在集成选项中更改端口、绑定方式和身份验证。"
+      }
     },
-    "options": {
-        "step": {
-            "tools_info": {
-                "title": "HA-MCP 文件与 YAML 工具",
-                "description": "配置 ha-mcp 可选文件/YAML 工具所使用的特权文件和 YAML 编辑服务。这些设置也会出现在 ha-mcp 服务器自身的设置界面中，并实时生效，无需重启。不可覆盖的拒绝底线仍会阻止敏感路径（例如 .storage）和信任边界键（homeassistant、http、frontend、lovelace）。",
-                "data": {
-                    "allowed_dirs": "额外的文件目录",
-                    "extra_yaml_keys": "额外的 YAML 可写键"
-                },
-                "data_description": {
-                    "allowed_dirs": "相对于配置目录的目录，每个目录都授予读写权限（例如 pyscript）。路径穿越以及配置目录之外的条目会被丢弃。",
-                    "extra_yaml_keys": "除内置键外，ha_config_set_yaml 还可写入的顶层键，适用于本安装中以 YAML 为主的集成（例如 alert2）。信任边界键会被丢弃。"
-                }
-            },
-            "init": {
-                "title": "HA-MCP 服务器",
-                "description": "配置 HA-MCP 服务器。{panel_hint}此处的更改在保存时应用。\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
-                "data": {
-                    "channel": "发布通道",
-                    "auto_update": "服务器自动更新",
-                    "server_port": "MCP 服务器监听端口",
-                    "bind_host": "网络访问",
-                    "webhook_auth": "身份验证模式",
-                    "oauth_client_id_override": "旧版 OAuth：自定义 Client ID（可选）",
-                    "oauth_client_secret_override": "旧版 OAuth：自定义 Client Secret（可选）",
-                    "oauth_regenerate": "旧版 OAuth：立即重新生成 Client ID/Secret",
-                    "pip_spec": "开发者：ha-mcp 软件包覆盖",
-                    "server_url": "Home Assistant URL（高级）",
-                    "external_url": "外部 URL（可选）",
-                    "webhook_id_override": "自定义 Webhook 密钥（可选）",
-                    "secret_path_override": "自定义直连路径（可选）",
-                    "regenerate_secrets": "立即重新生成连接密钥",
-                    "enable_webhook": "通过 Webhook 远程访问",
-                    "enable_llm_api": "对话智能体 LLM API",
-                    "llm_api_exposure": "对话智能体工具暴露方式",
-                    "enable_startup_notification": "启动通知",
-                    "enable_sidebar_panel": "侧边栏设置面板"
-                },
-                "data_description": {
-                    "channel": "稳定版安装最新的稳定发行版；开发版安装最新的开发构建。启用自动更新后，重新加载或重启以及定期检查都会安装所选通道的最新构建。下方的开发者软件包覆盖优先级更高，并会禁用自动更新。",
-                    "auto_update": "启用时，所选通道的最新发行版会自动安装——在重新加载或重启时，以及通过定期检查。关闭时，服务器会保持当前已安装的版本，直到您重新启用此项。它仅控制 ha-mcp 服务器软件包；HA-MCP 自定义组件自身的更新仍通过 HACS 进行。",
-                    "server_port": "此服务器监听的端口。ha-mcp 插件使用 9583，因此这里默认为 9584，以便两者并存——如果您不运行该插件，任何空闲端口都可以。",
-                    "bind_host": "谁可以直接连接到 MCP 服务器端口。默认值与插件一致：可在本地网络中访问，并以密钥路径作为凭据。选择 loopback 则仅允许来自 Home Assistant 所在主机的连接——无论哪种方式，Webhook URL 和侧边栏面板都能正常工作。",
-                    "webhook_auth": "MCP 客户端在 Webhook URL 上如何证明自己的身份。使用密钥 URL 时，链接本身就是凭据。使用 Home Assistant 登录时，claude.ai 等客户端会以 Home Assistant 管理员账户登录（OAuth）。使用旧版 OAuth 时，此集成会签发自己的 Client ID 和 Secret，供需要它们的客户端（例如 Google Gemini Spark）粘贴使用——开启或关闭该模式需要重启 Home Assistant。",
-                    "oauth_client_id_override": "替换自动生成的旧版 OAuth Client ID。留空则保留当前值。仅在身份验证模式设为旧版 OAuth 时使用。",
-                    "oauth_client_secret_override": "替换自动生成的旧版 OAuth Client Secret。留空则保留当前值。仅在身份验证模式设为旧版 OAuth 时使用。",
-                    "oauth_regenerate": "一次性操作：为旧版 OAuth 模式生成新的 Client ID 和 Secret。它只有在修复提示所要求的 Home Assistant 重启之后才会生效——在您重启之前，原有的 Client ID 和 Secret 仍然有效，新的尚未启用。同时会清空上面两个覆盖字段。",
-                    "pip_spec": "请留空。仅用于测试特定的 ha-mcp 构建（例如固定到某个预发行版）；它会覆盖发布通道，并在清空之前禁用自动更新。",
-                    "server_url": "进程内服务器用于访问您的 Home Assistant 的 URL（通常就是此实例本身）。留空则根据此实例的端口和 SSL 设置推导；仅在服务器需要走其他路由时才设置。",
-                    "external_url": "作为主要连接 URL 显示——当 Home Assistant 位于您自己的域名或反向代理之后时使用。请输入包含协议在内的完整基础地址。它必须直接指向 Home Assistant——在浏览器中打开它应能到达您的 HA 登录页面——并且不能包含 :8123 之类的端口（任何端口都不行），否则远程 MCP 客户端将无法访问。留空则自动使用 Nabu Casa / 本地地址。",
-                    "webhook_id_override": "替换连接 URL（/api/webhook/...）中随机生成的 Webhook 密钥。该 URL 就是凭据——请使用足够长、难以猜测的值。留空则保留当前值。",
-                    "secret_path_override": "替换在服务器端口上用于直连的随机路径。规则相同：该路径就是凭据。留空则保留当前值。",
-                    "regenerate_secrets": "一次性操作：生成新的随机 Webhook 密钥和直连路径，并立即使旧的连接 URL 失效。同时会清空上面两个覆盖字段。",
-                    "enable_webhook": "关闭以进入仅本地模式：完全不注册 Home Assistant Webhook，因此任何一方——包括 Nabu Casa——都无法通过 Home Assistant 访问服务器。服务器端口直连和侧边栏面板仍可继续使用。",
-                    "enable_llm_api": "向 Home Assistant 对话智能体（OpenAI、Google、Ollama 等）提供完整工具集：启用后，智能体可在“控制 Home Assistant”下选择“HA-MCP Server”，并在 Assist 聊天和语音中使用这些工具。启用只是让它可供选择——在您为某个智能体选中它之前，不会暴露任何内容。使用指南：{llm_api_docs_url}",
-                    "llm_api_exposure": "提供给对话智能体的工具集形态。工具搜索（默认）可让智能体的上下文保持精简：一个包含固定工具以及搜索/执行元工具的紧凑 API。完整目录会直接列出每个已暴露的工具——更适合大上下文模型。两者会将二者并列注册，让每个智能体在“控制 Home Assistant”下各自选择。按工具的暴露设置在 HA-MCP 设置面板中管理；详情：{llm_api_docs_url}",
-                    "enable_startup_notification": "每次服务器启动时显示通知，指向仅管理员可见的设置界面。关闭则静默启动——连接 URL 仍会出现在 Home Assistant 日志中。",
-                    "enable_sidebar_panel": "在侧边栏中显示 HA-MCP 设置面板（仅管理员）。关闭则移除侧边栏条目——服务器选项仍可在此界面中使用。"
-                }
-            }
-        }
-    },
-    "issues": {
-        "server_start_failed": {
-            "title": "HA-MCP 进程内服务器启动失败",
-            "description": "无法在 Home Assistant 内部启动 HA-MCP 进程内服务器：\n\n{detail}\n\n请检查 Home Assistant 日志，然后重新加载该集成（或先修复根本问题再重新加载）以重试。"
-        },
-        "server_package_install_failed": {
-            "title": "无法安装 HA-MCP 进程内服务器软件包",
-            "description": "为进程内服务器安装 ha-mcp 软件包失败：\n\n{detail}\n\n请解决上述兼容性或安装问题，然后重新加载该集成以重试。"
-        },
-        "component_outdated": {
-            "title": "请通过 HACS 更新 HA-MCP 自定义组件",
-            "description": "已安装的 ha-mcp 服务器需要 HA-MCP 自定义组件 {required} 或更高版本，但您的版本是 {installed}。请通过 HACS 更新组件（打开 HA-MCP 自定义组件条目；如果尚未显示更新，请使用“Update information”），然后重启 Home Assistant。在此期间服务器仍会继续运行，但在组件更新之前，某些较新的功能可能无法使用。"
-        },
-        "server_update_held": {
-            "title": "HA-MCP 服务器更新正在等待组件更新",
-            "description": "ha-mcp 服务器 {latest} 已可用，但该发行版同时更新了 HA-MCP 自定义组件（更新至 {shipped}；您正在运行 {running}）。为避免启动一个当前组件从未测试过的服务器版本，服务器自动更新将暂缓，直到组件完成更新。\n\n请通过 HACS 更新组件（打开 HA-MCP 自定义组件条目；如果尚未显示更新，请使用“Update information”），然后重启 Home Assistant——之后服务器更新会自动安装。若仍要立即安装服务器更新，请在 HA-MCP 服务器更新实体上点击“安装”。"
-        },
-        "legacy_hacs_source": {
-            "title": "组件安装自旧版仓库",
-            "description": "HACS 为此组件跟踪的是 ha-mcp 服务器主仓库，因此 HACS 在此显示的是服务器的版本号（7.x）和服务器的发行说明，而不是组件自身的（1.x）。更新仍然可用，但会一直被这样错误标注。修复方法：从 HACS 中移除此仓库（您的集成设置和配置项会保留），将 homeassistant-ai/ha-mcp-integration 添加为自定义仓库，从中重新安装组件，然后重启 Home Assistant。"
-        },
-        "legacy_oauth_restart": {
-            "title": "请重启 Home Assistant 以应用旧版 OAuth 更改",
-            "description": "旧版 OAuth 身份验证模式会注册自己的 /authorize 和 /token 网页端点，而 Home Assistant 只有在完全重启时才能绑定或释放它们——无论您是刚刚开启该模式、关闭它，还是更改了它的 Client ID/Secret。请重启 Home Assistant（设置 - 系统 - 重启）以应用更改；在此之前仍保持先前的行为。"
-        }
-    },
-    "selector": {
-        "server_channel": {
-            "options": {
-                "stable": "稳定版（推荐）",
-                "dev": "开发版（最新构建）"
-            }
-        },
-        "server_webhook_auth": {
-            "options": {
-                "none": "密钥 Webhook URL（默认）",
-                "ha_auth": "使用 Home Assistant 登录（OAuth）",
-                "legacy": "旧版 OAuth（Client ID/Secret，适用于 Google Gemini Spark）"
-            }
-        },
-        "llm_api_exposure": {
-            "options": {
-                "tool_search": "工具搜索（紧凑，默认）",
-                "full": "完整目录",
-                "both": "两者（按智能体选择）"
-            }
-        }
-    },
-    "entity": {
-        "update": {
-            "server_update": {
-                "name": "更新"
-            }
-        }
-    },
-    "common": {
-        "connect_direct_access": "从 Home Assistant 所在主机直接访问：{url}",
-        "connect_local_lan": "本地/局域网（当网络访问为“Local network”时）：{url}",
-        "connect_remote_url": "远程连接 URL：{url}",
-        "connect_urls_label": "连接 URL：",
-        "connect_urls_pending": "服务器启动后，连接 URL 将显示在此处（以及 Home Assistant 日志中）。",
-        "connect_webhook_disabled": "通过 Webhook 远程访问已关闭（仅本地模式）。",
-        "oauth_creds_pending": "服务器启动后，Client ID 和 Client Secret 将显示在此处。",
-        "oauth_not_serving": "旧版 OAuth 尚未启用这些凭据——请在 Home Assistant 提示时重启以激活它们。",
-        "oauth_select_legacy_mode": "将上面的身份验证模式设为旧版 OAuth 并保存，以生成 Client ID 和 Client Secret。",
-        "panel_hint": "打开 [HA-MCP 设置面板](/ha-mcp) 以管理工具和服务器设置。",
-        "tools_module_installed": "Beta/高级文件与 YAML 工具模块（可选）：已安装",
-        "tools_module_not_installed": "Beta/高级文件与 YAML 工具模块（可选）：未安装——请在此集成页面上点击“添加条目”并选择“HA-MCP File & YAML Tools”",
-        "tools_module_not_loaded": "Beta/高级文件与 YAML 工具模块（可选）：已安装但未加载——请在此集成页面上启用或重新加载“HA-MCP File & YAML Tools”条目",
-        "version_line": "组件 {component_version} - 服务器 ha-mcp {server_version}（{channel} 通道）",
-        "version_not_installed": "尚未安装",
-        "version_unknown": "未知"
+    "abort": {
+      "already_configured": "此条目已配置。",
+      "unsupported_home_assistant": "进程内 HA-MCP 服务器需要 Home Assistant {required} 或更高版本，但此实例运行的是 {installed}。您仍可将本组件的 HA-MCP File & YAML Tools 条目与以插件或 Docker 容器方式运行的外部 ha-mcp 服务器搭配使用。"
     }
+  },
+  "options": {
+    "step": {
+      "tools_info": {
+        "title": "HA-MCP 文件与 YAML 工具",
+        "description": "配置 ha-mcp 可选文件/YAML 工具所使用的特权文件和 YAML 编辑服务。这些设置也会出现在 ha-mcp 服务器自身的设置界面中，并实时生效，无需重启。不可覆盖的拒绝底线仍会阻止敏感路径（例如 .storage）和信任边界键（homeassistant、http、frontend、lovelace）。",
+        "data": {
+          "allowed_dirs": "额外的文件目录",
+          "extra_yaml_keys": "额外的 YAML 可写键"
+        },
+        "data_description": {
+          "allowed_dirs": "相对于配置目录的目录，每个目录都授予读写权限（例如 pyscript）。路径穿越以及配置目录之外的条目会被丢弃。",
+          "extra_yaml_keys": "除内置键外，ha_config_set_yaml 还可写入的顶层键，适用于本安装中以 YAML 为主的集成（例如 alert2）。信任边界键会被丢弃。"
+        }
+      },
+      "init": {
+        "title": "HA-MCP 服务器",
+        "description": "配置 HA-MCP 服务器。{panel_hint}此处的更改在保存时应用。\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
+        "data": {
+          "channel": "发布通道",
+          "auto_update": "服务器自动更新",
+          "server_port": "MCP 服务器监听端口",
+          "bind_host": "网络访问",
+          "webhook_auth": "身份验证模式",
+          "oauth_client_id_override": "旧版 OAuth：自定义 Client ID（可选）",
+          "oauth_client_secret_override": "旧版 OAuth：自定义 Client Secret（可选）",
+          "oauth_regenerate": "旧版 OAuth：立即重新生成 Client ID/Secret",
+          "pip_spec": "开发者：ha-mcp 软件包覆盖",
+          "server_url": "Home Assistant URL（高级）",
+          "external_url": "外部 URL（可选）",
+          "webhook_id_override": "自定义 Webhook 密钥（可选）",
+          "secret_path_override": "自定义直连路径（可选）",
+          "regenerate_secrets": "立即重新生成连接密钥",
+          "enable_webhook": "通过 Webhook 远程访问",
+          "enable_llm_api": "对话智能体 LLM API",
+          "llm_api_exposure": "对话智能体工具暴露方式",
+          "enable_startup_notification": "启动通知",
+          "enable_sidebar_panel": "侧边栏设置面板"
+        },
+        "data_description": {
+          "channel": "稳定版安装最新的稳定发行版；开发版安装最新的开发构建。启用自动更新后，重新加载或重启以及定期检查都会安装所选通道的最新构建。下方的开发者软件包覆盖优先级更高，并会禁用自动更新。",
+          "auto_update": "启用时，所选通道的最新发行版会自动安装——在重新加载或重启时，以及通过定期检查。关闭时，服务器会保持当前已安装的版本，直到您重新启用此项。它仅控制 ha-mcp 服务器软件包；HA-MCP 自定义组件自身的更新仍通过 HACS 进行。",
+          "server_port": "此服务器监听的端口。ha-mcp 插件使用 9583，因此这里默认为 9584，以便两者并存——如果您不运行该插件，任何空闲端口都可以。",
+          "bind_host": "谁可以直接连接到 MCP 服务器端口。默认值与插件一致：可在本地网络中访问，并以密钥路径作为凭据。选择 loopback 则仅允许来自 Home Assistant 所在主机的连接——无论哪种方式，Webhook URL 和侧边栏面板都能正常工作。",
+          "webhook_auth": "MCP 客户端在 Webhook URL 上如何证明自己的身份。使用密钥 URL 时，链接本身就是凭据。使用 Home Assistant 登录时，claude.ai 等客户端会以 Home Assistant 管理员账户登录（OAuth）。使用旧版 OAuth 时，此集成会签发自己的 Client ID 和 Secret，供需要它们的客户端（例如 Google Gemini Spark）粘贴使用——开启或关闭该模式需要重启 Home Assistant。",
+          "oauth_client_id_override": "替换自动生成的旧版 OAuth Client ID。留空则保留当前值。仅在身份验证模式设为旧版 OAuth 时使用。",
+          "oauth_client_secret_override": "替换自动生成的旧版 OAuth Client Secret。留空则保留当前值。仅在身份验证模式设为旧版 OAuth 时使用。",
+          "oauth_regenerate": "一次性操作：为旧版 OAuth 模式生成新的 Client ID 和 Secret。它只有在修复提示所要求的 Home Assistant 重启之后才会生效——在您重启之前，原有的 Client ID 和 Secret 仍然有效，新的尚未启用。同时会清空上面两个覆盖字段。",
+          "pip_spec": "请留空。仅用于测试特定的 ha-mcp 构建（例如固定到某个预发行版）；它会覆盖发布通道，并在清空之前禁用自动更新。",
+          "server_url": "进程内服务器用于访问您的 Home Assistant 的 URL（通常就是此实例本身）。留空则根据此实例的端口和 SSL 设置推导；仅在服务器需要走其他路由时才设置。",
+          "external_url": "作为主要连接 URL 显示——当 Home Assistant 位于您自己的域名或反向代理之后时使用。请输入包含协议在内的完整基础地址。它必须直接指向 Home Assistant——在浏览器中打开它应能到达您的 HA 登录页面——并且不能包含 :8123 之类的端口（任何端口都不行），否则远程 MCP 客户端将无法访问。留空则自动使用 Nabu Casa / 本地地址。",
+          "webhook_id_override": "替换连接 URL（/api/webhook/...）中随机生成的 Webhook 密钥。该 URL 就是凭据——请使用足够长、难以猜测的值。留空则保留当前值。",
+          "secret_path_override": "替换在服务器端口上用于直连的随机路径。规则相同：该路径就是凭据。留空则保留当前值。",
+          "regenerate_secrets": "一次性操作：生成新的随机 Webhook 密钥和直连路径，并立即使旧的连接 URL 失效。同时会清空上面两个覆盖字段。",
+          "enable_webhook": "关闭以进入仅本地模式：完全不注册 Home Assistant Webhook，因此任何一方——包括 Nabu Casa——都无法通过 Home Assistant 访问服务器。服务器端口直连和侧边栏面板仍可继续使用。",
+          "enable_llm_api": "向 Home Assistant 对话智能体（OpenAI、Google、Ollama 等）提供完整工具集：启用后，智能体可在“控制 Home Assistant”下选择“HA-MCP Server”，并在 Assist 聊天和语音中使用这些工具。启用只是让它可供选择——在您为某个智能体选中它之前，不会暴露任何内容。使用指南：{llm_api_docs_url}",
+          "llm_api_exposure": "提供给对话智能体的工具集形态。工具搜索（默认）可让智能体的上下文保持精简：一个包含固定工具以及搜索/执行元工具的紧凑 API。完整目录会直接列出每个已暴露的工具——更适合大上下文模型。两者会将二者并列注册，让每个智能体在“控制 Home Assistant”下各自选择。按工具的暴露设置在 HA-MCP 设置面板中管理；详情：{llm_api_docs_url}",
+          "enable_startup_notification": "每次服务器启动时显示通知，指向仅管理员可见的设置界面。关闭则静默启动——连接 URL 仍会出现在 Home Assistant 日志中。",
+          "enable_sidebar_panel": "在侧边栏中显示 HA-MCP 设置面板（仅管理员）。关闭则移除侧边栏条目——服务器选项仍可在此界面中使用。"
+        }
+      }
+    }
+  },
+  "issues": {
+    "server_start_failed": {
+      "title": "HA-MCP 进程内服务器启动失败",
+      "description": "无法在 Home Assistant 内部启动 HA-MCP 进程内服务器：\n\n{detail}\n\n请检查 Home Assistant 日志，然后重新加载该集成（或先修复根本问题再重新加载）以重试。"
+    },
+    "server_package_install_failed": {
+      "title": "无法安装 HA-MCP 进程内服务器软件包",
+      "description": "为进程内服务器安装 ha-mcp 软件包失败：\n\n{detail}\n\n请解决上述兼容性或安装问题，然后重新加载该集成以重试。"
+    },
+    "component_outdated": {
+      "title": "请通过 HACS 更新 HA-MCP 自定义组件",
+      "description": "已安装的 ha-mcp 服务器需要 HA-MCP 自定义组件 {required} 或更高版本，但您的版本是 {installed}。请通过 HACS 更新组件（打开 HA-MCP 自定义组件条目；如果尚未显示更新，请使用“Update information”），然后重启 Home Assistant。在此期间服务器仍会继续运行，但在组件更新之前，某些较新的功能可能无法使用。"
+    },
+    "server_update_held": {
+      "title": "HA-MCP 服务器更新正在等待组件更新",
+      "description": "ha-mcp 服务器 {latest} 已可用，但该发行版同时更新了 HA-MCP 自定义组件（更新至 {shipped}；您正在运行 {running}）。为避免启动一个当前组件从未测试过的服务器版本，服务器自动更新将暂缓，直到组件完成更新。\n\n请通过 HACS 更新组件（打开 HA-MCP 自定义组件条目；如果尚未显示更新，请使用“Update information”），然后重启 Home Assistant——之后服务器更新会自动安装。若仍要立即安装服务器更新，请在 HA-MCP 服务器更新实体上点击“安装”。"
+    },
+    "legacy_hacs_source": {
+      "title": "组件安装自旧版仓库",
+      "description": "HACS 为此组件跟踪的是 ha-mcp 服务器主仓库，因此 HACS 在此显示的是服务器的版本号（7.x）和服务器的发行说明，而不是组件自身的（1.x）。更新仍然可用，但会一直被这样错误标注。修复方法：从 HACS 中移除此仓库（您的集成设置和配置项会保留），将 homeassistant-ai/ha-mcp-integration 添加为自定义仓库，从中重新安装组件，然后重启 Home Assistant。"
+    },
+    "legacy_oauth_restart": {
+      "title": "请重启 Home Assistant 以应用旧版 OAuth 更改",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "重启 Home Assistant？",
+            "description": "提交此表单将重启 Home Assistant 并应用旧版 OAuth 更改。\n\n点击 **提交** 立即重启。"
+          }
+        }
+      }
+    }
+  },
+  "selector": {
+    "server_channel": {
+      "options": {
+        "stable": "稳定版（推荐）",
+        "dev": "开发版（最新构建）"
+      }
+    },
+    "server_webhook_auth": {
+      "options": {
+        "none": "密钥 Webhook URL（默认）",
+        "ha_auth": "使用 Home Assistant 登录（OAuth）",
+        "legacy": "旧版 OAuth（Client ID/Secret，适用于 Google Gemini Spark）"
+      }
+    },
+    "llm_api_exposure": {
+      "options": {
+        "tool_search": "工具搜索（紧凑，默认）",
+        "full": "完整目录",
+        "both": "两者（按智能体选择）"
+      }
+    }
+  },
+  "entity": {
+    "update": {
+      "server_update": {
+        "name": "更新"
+      }
+    }
+  },
+  "common": {
+    "connect_direct_access": "从 Home Assistant 所在主机直接访问：{url}",
+    "connect_local_lan": "本地/局域网（当网络访问为“Local network”时）：{url}",
+    "connect_remote_url": "远程连接 URL：{url}",
+    "connect_urls_label": "连接 URL：",
+    "connect_urls_pending": "服务器启动后，连接 URL 将显示在此处（以及 Home Assistant 日志中）。",
+    "connect_webhook_disabled": "通过 Webhook 远程访问已关闭（仅本地模式）。",
+    "oauth_creds_pending": "服务器启动后，Client ID 和 Client Secret 将显示在此处。",
+    "oauth_not_serving": "旧版 OAuth 尚未启用这些凭据——请在 Home Assistant 提示时重启以激活它们。",
+    "oauth_select_legacy_mode": "将上面的身份验证模式设为旧版 OAuth 并保存，以生成 Client ID 和 Client Secret。",
+    "panel_hint": "打开 [HA-MCP 设置面板](/ha-mcp) 以管理工具和服务器设置。",
+    "tools_module_installed": "Beta/高级文件与 YAML 工具模块（可选）：已安装",
+    "tools_module_not_installed": "Beta/高级文件与 YAML 工具模块（可选）：未安装——请在此集成页面上点击“添加条目”并选择“HA-MCP File & YAML Tools”",
+    "tools_module_not_loaded": "Beta/高级文件与 YAML 工具模块（可选）：已安装但未加载——请在此集成页面上启用或重新加载“HA-MCP File & YAML Tools”条目",
+    "version_line": "组件 {component_version} - 服务器 ha-mcp {server_version}（{channel} 通道）",
+    "version_not_installed": "尚未安装",
+    "version_unknown": "未知"
+  }
 }

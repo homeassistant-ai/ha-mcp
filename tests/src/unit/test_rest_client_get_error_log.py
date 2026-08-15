@@ -25,7 +25,9 @@ import httpx
 import pytest
 
 from ha_mcp.client.rest_client import (
+    _ERROR_LOG_LINES,
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
     HomeAssistantClient,
     HomeAssistantConnectionError,
 )
@@ -108,10 +110,27 @@ async def test_is_supervised_fails_open_on_ha_api_error(client):
 
 
 @pytest.mark.asyncio
+async def test_is_supervised_propagates_auth_error(client):
+    """A 401 on the probe must NOT fail open — it is a verdict, not a glitch.
+
+    Failing open here sends a Supervised install down the Container
+    branch to ``/api/error_log``, a route HA Core never registers under
+    ``SUPERVISOR``. The 401 would come back as a 404, and the caller
+    would answer a dead token with "check your connection".
+    """
+    client._request = AsyncMock(side_effect=HomeAssistantAuthError("401 Unauthorized"))
+    with pytest.raises(HomeAssistantAuthError):
+        await client._is_supervised_install()
+    # Nothing definitive was learned about the install class, so the next
+    # call with a working token must still be able to probe.
+    assert client._supervised_detected is None
+
+
+@pytest.mark.asyncio
 async def test_is_supervised_propagates_runtime_bugs(client):
     """Programming errors (TypeError, etc.) must NOT be swallowed by fail-open.
 
-    Narrow-except contract: only catch HTTP/transport/auth layer errors;
+    Narrow-except contract: only catch HTTP/transport layer errors;
     runtime bugs like ``TypeError`` from a misshaped mock or
     ``AttributeError`` from a misuse signal real issues and must surface
     loudly.
@@ -147,7 +166,13 @@ async def test_is_supervised_handles_unexpected_response_shape(client):
 
 @pytest.mark.asyncio
 async def test_get_error_log_addon_branch(client):
-    """Addon (`is_running_in_addon()` True) → `_supervisor_logs_get('core')`."""
+    """Addon (`is_running_in_addon()` True) → `_supervisor_logs_get('core')`.
+
+    The explicit ``lines=`` is load-bearing: without it Supervisor applies its
+    100-line default, so the add-on saw a ~100-line log where the in-process
+    server saw ~18k on the same instance. Pinned to the same window the
+    supervised-external branch requests below.
+    """
     client._supervisor_logs_get = AsyncMock(return_value="addon-log-content")
     client._request = AsyncMock()
     client._raw_request = AsyncMock()
@@ -156,7 +181,8 @@ async def test_get_error_log_addon_branch(client):
         result = await client.get_error_log()
 
     assert result == "addon-log-content"
-    client._supervisor_logs_get.assert_awaited_once_with("core")
+    client._supervisor_logs_get.assert_awaited_once_with("core", lines=_ERROR_LOG_LINES)
+    assert _ERROR_LOG_LINES > 100, "must exceed Supervisor's default window"
     # Must NOT have touched the external-branch paths.
     client._request.assert_not_called()
     client._raw_request.assert_not_called()
@@ -210,6 +236,29 @@ async def test_get_error_log_container_external_branch(client):
     client._raw_request.assert_awaited_once_with(
         "GET", "/error_log", headers={"Accept": "text/plain"}
     )
+    client._supervisor_logs_get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_error_log_probe_401_never_reaches_the_container_branch(client):
+    """A dead token surfaces as an auth error, not as a 404 from /error_log.
+
+    This is the whole chain the probe's fail-open used to break: an
+    external client against HAOS with an expired LLAT would fail the
+    probe, be classified Container, and request the one route that
+    install class does not serve.
+    """
+    client._request = AsyncMock(side_effect=HomeAssistantAuthError("401 Unauthorized"))
+    client._raw_request = AsyncMock()
+    client._supervisor_logs_get = AsyncMock()
+
+    with (
+        patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False),
+        pytest.raises(HomeAssistantAuthError),
+    ):
+        await client.get_error_log()
+
+    client._raw_request.assert_not_called()
     client._supervisor_logs_get.assert_not_called()
 
 

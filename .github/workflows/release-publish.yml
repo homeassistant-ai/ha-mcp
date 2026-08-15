@@ -24,8 +24,9 @@ jobs:
       release_tag: ${{ steps.version.outputs.release_tag }}
       should_publish: ${{ steps.version.outputs.should_publish }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           ref: master
           fetch-depth: 0
 
@@ -83,18 +84,20 @@ jobs:
           # pushes follow-up housekeeping commits to master (changelog sync,
           # addon version bump — all `[skip ci]`). HEAD != tag in that case,
           # but the release IS current. Mirror semver-release.yml's check-changes
-          # logic: block only if there are releasable (feat/fix/perf) commits
+          # logic: block only if there are releasable commits
           # on master since the tag that would have produced a new version.
-          RELEASABLE=$(git log "$LATEST_TAG..HEAD" --oneline \
-            --grep='^feat' --grep='^fix' --grep='^perf' || true)
+          RELEASABLE=$(git log "$LATEST_TAG..HEAD" --oneline -E \
+            --grep='^(feat|fix|perf|refactor)(\(.+\))?!?:' \
+            --grep='^[a-z]+(\(.+\))?!:' \
+            --grep='^BREAKING[ -]CHANGE:' || true)
 
           if [ -n "$RELEASABLE" ]; then
             if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-              echo "::notice::Manual dispatch: unreleased feat/fix/perf commits exist on master since $LATEST_TAG. Forcing republish of $LATEST_TAG from the tag ref (master HEAD $HEAD_SHA is being ignored)."
+              echo "::notice::Manual dispatch: unreleased commits exist on master since $LATEST_TAG. Forcing republish of $LATEST_TAG from the tag ref (master HEAD $HEAD_SHA is being ignored)."
               echo "## Release Publish — forced republish" >> "$GITHUB_STEP_SUMMARY"
               echo "Building \`$LATEST_TAG\` ($TAG_SHA); unreleased commits on master were ignored." >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "::notice::Unreleased feat/fix/perf commits exist on master since $LATEST_TAG; no new release to publish — skipping."
+              echo "::notice::Unreleased commits exist on master since $LATEST_TAG; no new release to publish — skipping."
               echo "should_publish=false" >> "$GITHUB_OUTPUT"
               echo "## Release Publish skipped" >> "$GITHUB_STEP_SUMMARY"
               echo "master has releasable commits since the latest stable tag \`$LATEST_TAG\` but no new tag was cut, so republishing \`$LATEST_TAG\` would be misleading." >> "$GITHUB_STEP_SUMMARY"
@@ -125,8 +128,9 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
           # Required for the bundled skills (resources/skills-vendor is a
@@ -160,8 +164,9 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
           # Required for the bundled skills (resources/skills-vendor is a
@@ -225,9 +230,10 @@ jobs:
           echo "PyPI publish conclusion: ${{ needs.publish_pypi.result }}"
           echo "Docker publish conclusion: ${{ needs.publish_docker.result }}"
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
         with:
+          persist-credentials: false
           ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
 
@@ -264,12 +270,15 @@ jobs:
             --oci-image "$IMAGE"
           cat server.json
 
+      - name: Install uv
+        if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
       - name: Validate server manifest
         if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
         run: |
           set -euo pipefail
-          python -m pip install --quiet jsonschema
-          python scripts/validate_server_manifest.py server.json
+          uv run --frozen python scripts/validate_server_manifest.py server.json
 
       - name: Login to MCP Registry
         if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}

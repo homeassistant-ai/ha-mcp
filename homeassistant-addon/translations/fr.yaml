@@ -64,6 +64,17 @@ configuration:
       que l'appel ne continue. Les règles par outil avec conditions d'argument optionnelles
       sont configurées dans l'onglet Politiques de sécurité des outils. Désactivé
       par défaut. Nécessite un redémarrage pour prendre effet.
+  enable_security_policy_tool:
+    name: Permettre aux agents IA de modifier les politiques de sécurité des outils
+    description: 'Enregistre l''outil ha_manage_security_policy, qui permet aux agents
+      IA connectés de lire et de réécrire les politiques de sécurité des outils —
+      y compris la suppression des portes d''approbation. Désactivé par défaut. Indépendant
+      de l''option Politiques de sécurité des outils ci-dessus : ceci contrôle qui
+      peut modifier les règles, et non si elles sont appliquées. L''outil ne peut
+      pas voir ou décider des approbations en attente. Pour garder un humain dans
+      la boucle, soumettez l''outil à une approbation avant de l''activer : activez
+      « soumis à la sécurité » pour Gérer la politique de sécurité dans l''onglet
+      Outils de l''interface web. Nécessite un redémarrage pour prendre effet.'
   read_only_mode:
     name: Mode lecture seule
     description: Désactive tous les outils d'écriture et supprime la capacité des
@@ -72,6 +83,17 @@ configuration:
       vocaux et mode code lorsqu'il est activé) restent disponibles avec leurs opérations
       d'écriture bloquées. Même bouton que l'onglet Outils de l'interface Web. Désactivé
       par défaut. Nécessite un redémarrage pour prendre effet.
+  redact_secrets:
+    name: Masquer les secrets
+    description: Masque les secrets des réponses des outils avant qu'ils n'atteignent
+      l'assistant IA. Les options d'add-on et les champs d'intégration marqués comme
+      mots de passe sont remplacés par un marqueur défini/vide (afin que la question
+      « cette information d'identification est-elle configurée ? » reste répondable),
+      et les autres réponses des outils sont nettoyées des valeurs secrètes que le
+      serveur a déjà vues (les valeurs de moins de 6 caractères sont ignorées, car
+      le remplacement de petits fragments corromprait la sortie non liée). Les champs
+      non marqués comme mots de passe par leur schéma ne peuvent pas être détectés.
+      Désactivé par défaut.
   enable_mandatory_bps:
     name: Attacher les compétences de bonnes pratiques aux écritures
     description: 'Interrupteur principal pour la fonction de livraison de contenu
@@ -118,16 +140,23 @@ configuration:
       la recherche d'outils. Noms d'outils séparés par des virgules.
   enable_auto_backup:
     name: Activer la sauvegarde automatique des modifications
-    description: Capture un instantané par entité avant chaque appel d'outil MCP d'écriture/destructeur
-      encapsulé (automatisation, script, scène, assistant, tableau de bord, étiquette,
-      catégorie, groupe, zone, zone géographique, calendrier, todo, entité, intégration
-      et outils de suppression/suppression associés). Les instantanés sont stockés
-      sous forme de fichiers YAML dans /data/ha_mcp_backups/ (remplacement via HAMCP_BACKUP_DIR)
-      et listés, restaurés ou supprimés via l'onglet Sauvegardes dans l'interface
-      Web des paramètres ou via ha_manage_backup(scope='edits', ...). Au mieux — les
-      erreurs enregistrent un WARNING mais ne bloquent jamais l'écriture sous-jacente.
-      Activé par défaut ; décochez pour désactiver. Nécessite un redémarrage pour
-      prendre effet.
+    description: 'Capture un instantané par entité avant chaque appel d''outil MCP
+      d''écriture/destructif encapsulé (automation, script, scene, helper, dashboard,
+      ressource de dashboard, label, category, group, zone, area, calendar, todo,
+      entity, device, integration, et les outils de suppression/effacement associés).
+      La limitation de la sauvegarde automatique détermine la fréquence de ces captures
+      : 0 (par défaut) capture à chaque appel de ce type, N>0 au maximum un instantané
+      toutes les N minutes par entité. Les instantanés sont enregistrés en tant que
+      fichiers YAML sous /data/ha_mcp_backups/ (à remplacer via HAMCP_BACKUP_DIR)
+      et peuvent être listés, restaurés ou supprimés via l''onglet Backups dans l''interface
+      utilisateur des paramètres web ou via ha_manage_backup(scope=''edits'', ...).
+      Pour ces domaines, la capture est faite au mieux — un échec enregistre un WARNING
+      et l''écriture se poursuit. Les outils de fichier et raw-YAML sont l''exception
+      : ha_write_file, ha_delete_file et ha_config_set_yaml traitent l''instantané
+      comme une précondition, donc une écriture via ces outils est refusée si cette
+      option est désactivée, et une capture échouée la bloque. Activé par défaut ;
+      désactiver cette option annule les captures au mieux et désactive les outils
+      de fichier et raw-YAML avec elles. Nécessite un redémarrage pour prendre effet.'
   auto_backup_throttle_minutes:
     name: Limitation de la sauvegarde automatique (minutes)
     description: Fenêtre de limitation par entité. 0 (par défaut) capture un instantané

@@ -1,0 +1,182 @@
+---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/pl.json (keys addon.*, features.*,
+# addon_stable.*); regenerate with: python scripts/generate_locales.py
+configuration:
+  backup_hint:
+    name: Poziom sugestii pełnej migawki HA (dla LLM)
+    description: 'Dostosowuje sformułowanie podpowiedzi, którą LLM widzi w opisie
+      narzędzia `ha_manage_backup(scope=''snapshot'')`, dotyczącej tego, kiedy sugerować
+      pełną kopię zapasową Home Assistant w formacie tarball przed ryzykownymi operacjami
+      (np. masowe usuwanie urządzeń). Wpływa TYLKO na to jedno zdanie podpowiedzi
+      skierowane do LLM.
+
+
+      W przypadku automatycznych migawek automatyzacji / skryptów / pomocników / itp.
+      dla każdej edycji, użyj oddzielnego przełącznika **Włącz automatyczne tworzenie
+      kopii zapasowych edycji** poniżej.'
+  secret_path:
+    name: Nadpisanie tajnej ścieżki
+    description: 'Opcjonalna niestandardowa ścieżka HTTP dla serwera MCP. Pozostaw
+      puste, aby użyć automatycznie generowanej bezpiecznej ścieżki.
+
+      '
+  enable_tool_search:
+    name: Włącz wyszukiwanie narzędzi
+    description: 'Zastąp pełny katalog narzędzi odkrywaniem opartym na wyszukiwaniu.
+      Zmniejsza bezczynny kontekst o około 90%, do około 5 tys. tokenów. ⚠️ NIE włączaj
+      tej opcji w klientach z własnym wbudowanym wyszukiwaniem narzędzi / odroczonymi
+      narzędziami (claude.ai, Claude Desktop, Claude Code) — dwie warstwy wyszukiwania
+      kolidują ze sobą, a wbudowane wyszukiwanie narzędzi klienta jest tam lepszym
+      wyborem; pozostaw tę opcję wyłączoną. To, czy narzędzia są odroczone, zależy
+      od kombinacji klienta i modelu: użyj tej opcji, gdy Twoja konfiguracja ładuje
+      cały katalog z góry — modele bez natywnych odroczonych narzędzi (np. Gemini,
+      lokalne modele kompatybilne z OpenAI, Claude Haiku), klienci, którzy włączają
+      wszystkie schematy narzędzi niezależnie od modelu (np. GitHub Copilot CLI),
+      lub mniejsze okna kontekstowe. Niektóre modele Codex i ChatGPT również zawierają
+      odroczone narzędzia — sprawdź bezpośrednio swojego klienta/model, aby potwierdzić
+      jego funkcje, aby nie pozostawiać tej opcji włączonej niepotrzebnie. Narzędzia
+      są znajdowane za pomocą ha_search_tools i wykonywane za pośrednictwem skategoryzowanych
+      proxy (odczyt/zapis/usuwanie). Wymaga ponownego uruchomienia dodatku, aby zmiany
+      weszły w życie — następnie ponownie połącz się lub odśwież serwer MCP w swoim
+      kliencie AI, aby ponownie załadował listę narzędzi. Samo ponowne uruchomienie
+      dodatku NIE odświeża buforowanej listy narzędzi klienta; dotyczy to każdej zmiany
+      ustawienia tutaj.'
+  tool_search_max_results:
+    name: Maksymalna liczba wyników wyszukiwania narzędzi
+    description: 'Maksymalna liczba narzędzi zwracanych przez ha_search_tools, gdy
+      wyszukiwanie narzędzi jest włączone. Niższe wartości (2-3) oszczędzają tokeny
+      kontekstu, ale mogą pominąć istotne narzędzia. Zakres: 2-10. Wymaga ponownego
+      uruchomienia.'
+  enable_tool_security_policies:
+    name: Włącz zasady bezpieczeństwa narzędzi (zaawansowane)
+    description: Zabezpiecz wywołania narzędzi wysokiego ryzyka (kontrola zamków/alarmów,
+      zapisy automatyzacji itp.) za zgodą użytkownika. Gdy wywoływane jest zabezpieczone
+      narzędzie, agent informuje użytkownika, aby otworzył zakładkę „Zasady bezpieczeństwa
+      narzędzi” w interfejsie sieciowym i kliknął „Zatwierdź”, zanim wywołanie zostanie
+      wykonane. Reguły dla poszczególnych narzędzi z opcjonalnymi warunkami argumentów
+      są konfigurowane w zakładce „Zasady bezpieczeństwa narzędzi”. Domyślnie wyłączone.
+      Wymaga ponownego uruchomienia, aby zmiany weszły w życie.
+  enable_security_policy_tool:
+    name: Zezwól agentom AI na edycję zasad bezpieczeństwa narzędzi
+    description: 'Rejestruje narzędzie ha_manage_security_policy, które pozwala połączonym
+      agentom AI czytać i przepisywać polityki bezpieczeństwa narzędzi — w tym usuwanie
+      bramek zatwierdzeń. Domyślnie wyłączone. Niezależnie od opcji Polityki bezpieczeństwa
+      narzędzi powyżej: to kontroluje, kto może edytować zasady, a nie to, czy są
+      one egzekwowane. Narzędzie nie może widzieć ani decydować o oczekujących zatwierdzeniach.
+      Aby utrzymać człowieka w pętli, ustaw bramkę dla narzędzia przed jego włączeniem:
+      włącz „security gated” dla Manage Security Policy w zakładce Narzędzia interfejsu
+      webowego. Wymaga ponownego uruchomienia, aby zmiany weszły w życie.'
+  read_only_mode:
+    name: Tryb tylko do odczytu
+    description: Wyłącza wszystkie narzędzia do zapisu i usuwa możliwość wykonywania
+      przez narzędzia jakichkolwiek operacji zapisu lub destrukcyjnych wywołań. Narzędzia
+      mieszane do odczytu/zapisu (kopie zapasowe, dodatki, preferencje energetyczne,
+      potoki głosowe i tryb kodu, gdy jest włączony) pozostają dostępne, ale ich operacje
+      zapisu są zablokowane. Ten sam przełącznik co w zakładce „Narzędzia” interfejsu
+      sieciowego. Domyślnie wyłączone. Wymaga ponownego uruchomienia, aby zmiany weszły
+      w życie.
+  redact_secrets:
+    name: Redaguj sekrety
+    description: Redaguje sekrety z odpowiedzi narzędzi, zanim dotrą one do asystenta
+      AI. Opcje dodatków i pola integracji oznaczone jako hasła są zastępowane znacznikiem
+      „ustawione/puste” (aby pytanie „czy te dane uwierzytelniające są skonfigurowane?”
+      pozostało możliwe do odpowiedzi), a inne odpowiedzi narzędzi są oczyszczane
+      z wartości tajnych, które serwer już widział (wartości krótsze niż 6 znaków
+      są pomijane, ponieważ zastąpienie małych fragmentów mogłoby uszkodzić niezwiązane
+      z nimi dane wyjściowe). Pola nieoznaczone jako hasła w ich schemacie nie mogą
+      zostać wykryte. Domyślnie wyłączone.
+  enable_mandatory_bps:
+    name: Dołącz umiejętności najlepszych praktyk przy zapisach
+    description: 'Główny przełącznik funkcji dostarczania treści umiejętności narzędzi
+      do zapisu (problem #1182). Gdy włączone (domyślnie), sześć narzędzi do zapisu
+      konfiguracji (automatyzacje, skrypty, sceny, pomocnicy, panele, surowy YAML)
+      dołącza kanoniczne pliki referencyjne najlepszych praktyk Home Assistant w sekcji
+      `skill_content` przy każdym udanym zapisie, plus automatycznie osadza wszelkie
+      sekcje referencyjne cytowane w ostrzeżeniach dotyczących najlepszych praktyk.
+      Każde narzędzie udostępnia również parametr `MandatoryBPS` dla każdego wywołania,
+      który agent może ustawić na „fałsz” w kolejnych wywołaniach, gdy już posiada
+      treść. Gdy ten główny przełącznik jest wyłączony, ŻADNA treść `skill_content`
+      nie jest wysyłana, niezależnie od parametru dla każdego wywołania lub ostrzeżeń
+      BP. Zalecane WŁĄCZONE jako pierwszy wybór; wyłącz tylko dla modeli z bardzo
+      małymi oknami kontekstowymi. Wyłączenie tej opcji może obniżyć dokładność zapisu.
+      Wymaga ponownego uruchomienia, aby zmiany weszły w życie.'
+  enable_strict_mandatory_bps:
+    name: Tryb ścisłych najlepszych praktyk
+    description: 'Tryb ścisły: uniemożliwia klientowi korzystanie z narzędzia, dopóki
+      nie udowodni, że zapoznał się z najlepszymi praktykami. Gdy włączony, sześć
+      narzędzi do zapisu najlepszych praktyk (automatyzacje, skrypty, sceny, pomocnicy,
+      panele, surowy YAML) jest blokowanych i zwraca błąd, nakazując klientowi zapoznanie
+      się z umiejętnościami najlepszych praktyk za pomocą ha_get_skill_guide i przekazanie
+      z powrotem klucza potwierdzenia, który tam uzyska. Gdy włączony, narzędzie ha_get_skill_guide
+      jest zablokowane i włączone — jest jedynym wydawcą klucza potwierdzenia. Opcja
+      podrzędna opcji „Dołącz umiejętności najlepszych praktyk przy zapisach” powyżej
+      i nieaktywna, gdy opcja nadrzędna jest wyłączona. Wymaga ponownego uruchomienia,
+      aby zmiany weszły w życie.'
+  disabled_tools:
+    name: Wyłączone narzędzia (oddzielone przecinkami)
+    description: Narzędzia wymienione tutaj są wymuszone na wyłączone i zablokowane
+      w interfejsie użytkownika Ustawień (zakładka Tools) — nie można ich ponownie
+      włączyć bez wcześniejszego wyłączenia tej opcji. Niewielki zestaw obowiązkowych
+      narzędzi (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      nie może zostać wyłączony i działa nadal, nawet jeśli jest tutaj wymieniony.
+      ha_get_skill_guide może zostać wyłączony tylko wtedy, gdy tryb ścisłych najlepszych
+      praktyk (enable_strict_mandatory_bps) jest wyłączony. Nazwy narzędzi oddzielone
+      przecinkami (np. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Przypięte narzędzia (oddzielone przecinkami)
+    description: Narzędzia wymienione tutaj są zablokowane jako przypięte — pojawiają
+      się na górze zakładki „Narzędzia” i nie można ich odpiąć z interfejsu ustawień
+      sieciowych bez wcześniejszego usunięcia tej opcji. Przydatne w połączeniu z
+      wyszukiwaniem narzędzi. Nazwy narzędzi oddzielone przecinkami.
+  enable_auto_backup:
+    name: Włącz automatyczne tworzenie kopii zapasowych zmian
+    description: 'Tworzy migawkę dla każdej encji przed każdym wywołaniem narzędzia
+      MCP do zapisu/destrukcyjnego (automatyzacja, skrypt, scena, pomocnik, pulpit
+      nawigacyjny, zasób pulpitu nawigacyjnego, etykieta, kategoria, grupa, strefa,
+      obszar, kalendarz, zadanie, encja, urządzenie, integracja oraz pokrewne narzędzia
+      do usuwania/kasowania). Ogranicznik automatycznej kopii zapasowej określa, jak
+      często to się dzieje: 0 (domyślnie) tworzy migawkę przy każdym takim wywołaniu,
+      N>0 co najwyżej jedną migawkę na N minut na encję. Migawki są zapisywane jako
+      pliki YAML w katalogu /data/ha_mcp_backups/ (można zmienić za pomocą HAMCP_BACKUP_DIR)
+      i są wyświetlane, przywracane lub usuwane za pośrednictwem zakładki Kopie zapasowe
+      w interfejsie ustawień sieciowych lub za pomocą ha_manage_backup(scope=''edits'',
+      ...). Dla tych domen przechwytywanie jest typu "best-effort" (najlepszych starań)
+      — niepowodzenie loguje OSTRZEŻENIE, a zapis jest kontynuowany. Narzędzia do
+      plików i surowego YAML są wyjątkiem: ha_write_file, ha_delete_file i ha_config_set_yaml
+      traktują migawkę jako warunek wstępny, więc zapis za ich pośrednictwem jest
+      odrzucany, gdy ta opcja jest wyłączona, a nieudane przechwycenie go blokuje.
+      Domyślnie włączone; odznaczenie wyłącza przechwytywanie typu "best-effort" i
+      wyłącza z użytku narzędzia do plików i surowego YAML. Wymaga ponownego uruchomienia,
+      aby zmiany weszły w życie.'
+  auto_backup_throttle_minutes:
+    name: Ograniczenie automatycznej kopii zapasowej (minuty)
+    description: Okno ograniczenia dla każdej encji. 0 (domyślnie) tworzy migawkę
+      przy każdym opakowanym zapisie. N>0 tworzy co najwyżej jedną migawkę na N minut
+      dla każdej encji. Zakres 0–1440.
+  auto_backup_retain_per_entity:
+    name: Przechowywanie automatycznych kopii zapasowych (na encję)
+    description: Maksymalna liczba migawek przechowywanych dla każdej encji. Starsze
+      migawki przekraczające ten limit są usuwane przy każdym udanym przechwyceniu.
+      Domyślnie 100, zakres 1–10000.
+  enable_snapshot_delete:
+    name: Zezwól na usuwanie migawek
+    description: Pozwala ha_manage_backup usuwać pełne archiwa migawek HA (scope='snapshot',
+      action='delete'). Domyślnie wyłączone — migawka może być ostatnim punktem odzyskiwania
+      po błędnej zmianie, dlatego człowiek musi wyrazić na to zgodę. Nawet gdy jest
+      włączone, zaplanowane kopie zapasowe, najnowsza pozostała migawka i wszystko
+      młodsze niż dolna granica wieku poniżej pozostają chronione.
+  snapshot_delete_min_age_days:
+    name: Minimalny wiek migawki do usunięcia (dni)
+    description: Migawka musi być co najmniej tak stara, zanim będzie mogła zostać
+      usunięta. Zakres 0–365; 0 wyłącza limit (ochrona najnowszej migawki i zaplanowanych
+      kopii zapasowych nadal obowiązuje). Domyślnie 7.
+  verify_ssl:
+    name: Weryfikuj certyfikat TLS
+    description: Weryfikuje certyfikat TLS serwera Home Assistant. Dodatek łączy się
+      przez proxy Supervisor, więc normalnie nie ma to wpływu i powinno pozostać włączone.
+      Wyłącz tylko, jeśli ponownie skonfigurowałeś dodatek, aby komunikował się z
+      HA przez publiczną nazwę hosta HTTPS z certyfikatem z podpisem własnym lub niezgodnością
+      nazwy hosta. Wyłączenie osłabia bezpieczeństwo transportu — pozostaw włączone,
+      chyba że wiesz, że tego potrzebujesz. Wymaga ponownego uruchomienia, aby zmiany
+      weszły w życie.

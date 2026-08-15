@@ -29,7 +29,24 @@ and merge: the post-merge `locale-sync.yml` workflow machine-fills every string
 over its next daily runs. The component catalog may start as an empty object;
 this one needs `meta` (`native_name`, `dir`) plus the handful of `messages`
 keys the ungated checks below demand — a `meta`-only catalog is red in PR CI.
-To fill them in your own PR instead, run
+Two things that list will not lead you to: `policies.operators.exists_long` is
+the condition editor's own dropdown label rather than a `PredicateOp` member,
+so no check asks for it and a catalog without it reads English there until the
+sync fills it; and because each surface samples its own catalog for the address
+register the engine imitates, a component catalog left at a key or two rests
+entirely on whichever of them addresses the reader —
+`test_every_shipped_component_catalog_gets_reader_addressing_samples` pins that
+one. Leaving that catalog empty is fine, but the moment you author anything in
+it, at least two keys must be ones whose English addresses the reader in the
+second person, and each must carry a non-empty translation — a key left blank is
+skipped like a missing one rather than sampled empty. Most component strings do
+not address the reader, so starting at the top of the file leaves the catalog
+anchorless and that check red until you add ones that do. Two rather than one
+because the run likeliest to need the register is the one that rewords such a
+key: that queues it, and a queued key is dropped from the candidates, so a
+surface resting on a single anchor loses its register in exactly that run —
+`test_component_samples_survive_their_own_anchor_being_queued` pins the
+survival. To fill them in your own PR instead, run
 `scripts/translate_locales.py` yourself and review its output like any
 other diff. Also add the new code to the locale list in the repository-root
 `AGENTS.md`
@@ -49,13 +66,19 @@ or constructed — needs no pipeline change.
   rejected when the catalog loads.
 - `messages`: interface labels, help text, notices, and runtime messages. Keys
   may be omitted — English is the per-key fallback at runtime — but see the
-  share limit below before leaving a catalog half-finished.
+  share limit below before leaving a catalog half-finished. Omitting is the
+  only way to say "not translated yet": a key that is present but blank is
+  rejected when the catalog loads, because the runtime resolves by key
+  presence, so an empty value would win over English and render as nothing.
 - `tool_groups`: one entry per renderable MCP tool tag, keyed by the English
-  tag. Not optional, and exact: no key more and none fewer.
+  tag. Not optional, and exact: no key more and none fewer. Blank is rejected
+  here too, but dropping the key is not the escape hatch it is for `messages` —
+  the exact key set forbids that. A heading you have not translated yet keeps
+  the English tag as its value.
 - `tools`: `title` and `description` per tool, keyed by the stable MCP tool
   name. The key set is not optional and exact in the same way; either field on
   its own may be left out, but a missing one counts as untranslated against the
-  share limit below.
+  share limit below. Blank is rejected here too, for the same reason.
 
 Keep the keys and `{placeholders}` unchanged in every section.
 

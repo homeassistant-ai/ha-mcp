@@ -2,6 +2,8 @@
 reviews:
   auto_review:
     drafts: true
+    base_branches:
+      - ".*"
     # Drafts here iterate push -> CI -> fix, which blows past the default
     # 5-commit pause and leaves the PR silently unreviewed. 0 disables the
     # pause so review keeps running until it stops finding anything.

@@ -1259,6 +1259,20 @@ class TestHacsActionValidation:
         tools._client.send_websocket_message.assert_not_called()
 
     @pytest.mark.parametrize("bad", [None, "", "   "])
+    async def test_manage_hacs_update_information_rejects_empty_repository_id(
+        self, tools, bad
+    ):
+        # ``update_information`` shares the download/remove up-front guard:
+        # an empty id must fail before the HACS availability check or any
+        # WS round-trip, not fall through ``_resolve_hacs_repo_id`` into a
+        # lookup miss.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="update_information", repository_id=bad)
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "repository_id"' in str(excinfo.value), str(excinfo.value)
+        tools._client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.parametrize("bad", [None, "", "   "])
     async def test_get_hacs_info_requires_repository_id(self, tools, bad):
         # ``info`` has nothing to act on without a repository_id — the
         # dispatcher must reject None / empty / whitespace before any HACS

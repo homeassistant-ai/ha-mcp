@@ -292,6 +292,12 @@ class HomeAssistantWebSocketClient:
         # or None. Surfaced by callers so the agent sees *why* a WebSocket
         # connection failed instead of an opaque "Failed to connect" string.
         self._last_connect_error: str | None = None
+        # The exception object itself, so the connection manager can
+        # re-raise an auth failure AS an auth failure instead of collapsing
+        # every connect miss into HomeAssistantConnectionError (issue #2159
+        # review: an expired token must classify as AUTH_*, and the reason
+        # otherwise survives only inside the message string).
+        self._last_connect_exception: Exception | None = None
 
         # Parse URL to get WebSocket endpoint
         parsed = urlparse(self.base_url)
@@ -317,6 +323,7 @@ class HomeAssistantWebSocketClient:
             logger.info(f"Connecting to Home Assistant WebSocket: {self.ws_url}")
             self._state.reset_connection()
             self._last_connect_error = None
+            self._last_connect_exception = None
 
             # Only configure an SSLContext for wss://; ws:// (Supervisor
             # proxy) doesn't use TLS and gets ssl=None.
@@ -383,6 +390,7 @@ class HomeAssistantWebSocketClient:
 
         except Exception as e:
             self._last_connect_error = f"{type(e).__name__}: {e}"
+            self._last_connect_exception = e
             if _is_ssl_error(e) and self.verify_ssl:
                 logger.error(
                     "WebSocket TLS verification failed for %s: %s. "
@@ -1037,6 +1045,16 @@ class HomeAssistantWebSocketClient:
         """
         return self._last_connect_error
 
+    @property
+    def last_connect_exception(self) -> Exception | None:
+        """The exception the most recent ``connect()`` attempt failed with.
+
+        Lets the connection manager preserve the failure class — an
+        ``HomeAssistantAuthError`` re-raises as an auth error rather than
+        being collapsed into ``HomeAssistantConnectionError``.
+        """
+        return self._last_connect_exception
+
 
 MAX_POOL_SIZE = 50
 
@@ -1295,6 +1313,13 @@ class WebSocketManager:
                 # keeps a non-str (e.g. a MagicMock in tests) from polluting
                 # the message with a repr.
                 detail = f": {reason}" if isinstance(reason, str) else ""
+                # An auth failure must classify as an auth failure — the
+                # collapsed connection error buries the cause in the message
+                # string and callers misreport it as connection guidance.
+                if isinstance(client.last_connect_exception, HomeAssistantAuthError):
+                    raise HomeAssistantAuthError(
+                        "WebSocket authentication failed" + detail
+                    )
                 raise HomeAssistantConnectionError(
                     "Failed to connect to Home Assistant WebSocket" + detail
                 )

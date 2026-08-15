@@ -75,3 +75,13 @@ template:
         device_class: temperature
         state_class: measurement
         unit_of_measurement: "°C"
+      # mold_indicator's flow requires a humidity source alongside the two
+      # temperature ones. HA's EntitySelector validates only the entity_id
+      # shape, so a temperature sensor would be accepted here and then log
+      # "unsupported unit" and hold the helper at unknown forever.
+      - name: demo Humidity
+        unique_id: e2e_demo_humidity
+        state: "{{ 45.0 }}"
+        device_class: humidity
+        state_class: measurement
+        unit_of_measurement: "%"

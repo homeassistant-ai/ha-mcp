@@ -503,15 +503,31 @@ def _setup_logging(log_level_str: str, force: bool = True) -> None:
     of the sweep ``force`` performs (which removes *and closes* every root
     handler) so ``ha_report_issue`` keeps its startup diagnostics.
     """
+    log_level = getattr(logging, log_level_str)
+
+    import fastmcp
+
     from ha_mcp.utils.usage_logger import preserve_startup_collector
 
     with preserve_startup_collector():
         logging.basicConfig(
-            level=getattr(logging, log_level_str),
+            level=log_level,
             format="%(asctime)s %(name)s %(levelname)s: %(message)s",
             datefmt=_LOG_DATE_FORMAT,
             force=force,
         )
+
+    fastmcp_logger = logging.getLogger("fastmcp")
+    if fastmcp.settings.log_enabled:
+        # FastMCP configures its own handler and disables propagation, so the root
+        # level above does not control its OIDC diagnostics. Preserve that handler
+        # and formatting while honoring ha-mcp's LOG_LEVEL setting.
+        fastmcp_logger.setLevel(log_level)
+    else:
+        # FastMCP deliberately leaves its logger unconfigured when logging is
+        # disabled. Prevent that NOTSET namespace from inheriting our root handler.
+        fastmcp_logger.setLevel(logging.CRITICAL + 1)
+
     logging.getLogger("mcp.server.streamable_http").addFilter(
         StatelessSessionLogFilter()
     )
@@ -1159,7 +1175,7 @@ def _oidc_verify_id_token_enabled() -> bool:
 
     Off by default: FastMCP's OIDCProxy verifies the access token as a JWT,
     which works for providers like Authentik and Keycloak. Providers that
-    issue opaque access tokens (Google always; Auth0 without an API
+    issue opaque access tokens (such as Authelia, or Auth0 without an API
     audience) need ``verify_id_token=True`` so FastMCP verifies the ID token
     instead.
     """
@@ -1599,7 +1615,7 @@ def main_oidc() -> None:
     """Run server with OIDC authentication over HTTP.
 
     This mode enables authentication via an external OIDC provider
-    (Authentik, Keycloak, Auth0, Google, etc.). All authenticated users
+    (Authentik, Keycloak, Auth0, etc.). All authenticated users
     share the same Home Assistant instance via the configured credentials.
 
     Unlike OAuth mode which collects per-user HA credentials via a consent form,
@@ -1621,7 +1637,7 @@ def main_oidc() -> None:
       patterns accepted from dynamically-registered clients. Strongly recommended for
       internet-facing deployments.
     - OIDC_VERIFY_ID_TOKEN (optional, default: false): Set true for providers that issue
-      opaque access tokens (e.g. Google, or Auth0 without an API audience).
+      opaque access tokens (e.g. Authelia, or Auth0 without an API audience).
     - OIDC_AUDIENCE (optional): Expected `aud` claim for IdP-issued access tokens.
       Without it (and with OIDC_VERIFY_ID_TOKEN off), FastMCP's JWT verifier checks
       issuer, signature, and expiry but not audience. With OIDC_VERIFY_ID_TOKEN=true,
@@ -1638,6 +1654,8 @@ def main_oidc() -> None:
     - HA_MCP_DISABLE_SETTINGS_UI (optional): set truthy to not serve the
       settings UI at all
     - LOG_LEVEL (optional, default: INFO)
+    - FASTMCP_LOG_ENABLED (optional, default: true): Set false to suppress
+      FastMCP framework logs while leaving ha-mcp logs at LOG_LEVEL.
     """
     # Configure logging for OIDC mode (force=True needed since logging may already be configured)
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -1723,8 +1741,7 @@ async def _run_oidc_server(
         port: Port to listen on
         path: MCP endpoint path
     """
-    from fastmcp.server.auth.oidc_proxy import OIDCProxy
-
+    from ha_mcp.auth.oidc_compat import HaMcpOIDCProxy
     from ha_mcp.server import HomeAssistantSmartMCPServer
     from ha_mcp.transport_security import ensure_host_origin_guard_default_off
 
@@ -1742,6 +1759,11 @@ async def _run_oidc_server(
         # IdP (Authentik, Keycloak, etc.) -- unlike `False`, this does not
         # log a security warning at startup that consent is disabled.
         "require_authorization_consent": "external",
+        # This entrypoint provides OIDC, so request the protocol-level scope
+        # that makes upstream providers return an ID token. FastMCP also
+        # advertises this scope through protected resource metadata so MCP
+        # clients include it in the authorization flow.
+        "required_scopes": ["openid"],
         # Preserve `or None`: an empty-but-set env var must not bypass
         # FastMCP's derive-from-client-secret default for jwt_signing_key.
         "jwt_signing_key": os.getenv("OIDC_JWT_SIGNING_KEY") or None,
@@ -1765,7 +1787,8 @@ async def _run_oidc_server(
         proxy_kwargs["audience"] = audience
 
     # Create OIDC auth provider — auto-discovers endpoints from config_url
-    auth = OIDCProxy(**proxy_kwargs)
+    auth = HaMcpOIDCProxy(**proxy_kwargs)
+    auth.setup_scope_compatibility()
 
     # Standard server with shared credentials (no proxy client needed)
     global _server

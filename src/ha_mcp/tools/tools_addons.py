@@ -29,6 +29,14 @@ from ..errors import (
     create_error_response,
     create_validation_error,
 )
+from ..redaction import (
+    collect_addon_secret_values,
+    redact_addon_options,
+    redaction_enabled,
+    register_known_secret_values,
+    sentinel_option_keys,
+    sentinel_replacement,
+)
 from ..utils.python_sandbox import (
     PythonSandboxError,
     format_sandbox_error,
@@ -585,7 +593,39 @@ async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, An
     addon = response["result"] if isinstance(response["result"], dict) else {}
     result: dict[str, Any] = {"success": True, "addon": addon}
 
-    log_level = _extract_addon_log_level(addon)
+    if redaction_enabled():
+        options = addon.get("options")
+        schema = addon.get("schema")
+        if isinstance(options, dict) and options:
+            if isinstance(schema, list) and schema:
+                register_known_secret_values(
+                    collect_addon_secret_values(options, schema)
+                )
+                result["addon"] = {
+                    **addon,
+                    "options": redact_addon_options(options, schema),
+                }
+            else:
+                # No readable schema (absent, malformed, or empty) — the
+                # password fields cannot be told apart, so fail closed like
+                # the integration surface does rather than passing raw
+                # options through.
+                result["addon"] = {
+                    **addon,
+                    "options": {
+                        key: sentinel_replacement(value)
+                        for key, value in options.items()
+                    },
+                }
+                result.setdefault("warnings", []).append(
+                    f"redact_secrets: no options schema readable for '{slug}' — "
+                    "every option value was redacted conservatively (the "
+                    "password fields cannot be told apart without the schema)"
+                )
+
+    # Extracted AFTER redaction so an add-on that schema-marks log_level as
+    # a password surfaces the sentinel here, never the live value.
+    log_level = _extract_addon_log_level(result["addon"])
     if log_level is not None:
         result["log_level"] = log_level
 
@@ -2038,6 +2078,29 @@ class AddOnTools:
             )
         )
 
+    @staticmethod
+    def _reject_sentinel_options(options: dict[str, Any]) -> None:
+        """Reject redaction sentinels before any merge/write (#2157).
+
+        A caller round-tripping a redacted ha_get_addon read must not
+        overwrite a live credential with the placeholder string. Omitting
+        the key keeps the current value (writes merge server-side). Active
+        regardless of the redact_secrets toggle: a sentinel captured while
+        redaction was on must not overwrite a credential after the operator
+        turns it off.
+        """
+        sentinel_keys = sentinel_option_keys(options)
+        if sentinel_keys:
+            raise_tool_error(
+                create_validation_error(
+                    "options contains redaction placeholder values for: "
+                    f"{', '.join(sentinel_keys)}. These came from a "
+                    "redacted read, not real values — omit these keys to "
+                    "keep the current values, or submit the real value.",
+                    parameter="options",
+                )
+            )
+
     async def _execute_config_mode(
         self,
         slug: str,
@@ -2045,6 +2108,7 @@ class AddOnTools:
     ) -> dict[str, Any]:
         ignored_fields: list[str] = []
         if "options" in config_data:
+            self._reject_sentinel_options(config_data["options"])
             info_result = await _supervisor_api_call(
                 self._client, f"/addons/{slug}/info"
             )
@@ -2064,6 +2128,19 @@ class AddOnTools:
             # merging makes that transparent.
             current_options: dict = addon_info.get("options") or {}
             merged_options = _merge_options(current_options, config_data["options"])
+
+            # Both the live current options and the merged result are
+            # password-bearing; remember them for the global known-value
+            # scrub (this path fetches info directly, bypassing
+            # get_addon_info's harvesting). The merged copy carries any
+            # password the caller is submitting right now — without it a
+            # freshly written secret stays unknown to the scrub until some
+            # later read harvests it.
+            if redaction_enabled() and isinstance(addon_info.get("schema"), list):
+                register_known_secret_values(
+                    collect_addon_secret_values(current_options, addon_info["schema"])
+                    | collect_addon_secret_values(merged_options, addon_info["schema"])
+                )
 
             # Pre-write schema check: identify fields not in the add-on's schema.
             # Supervisor silently drops unknown fields on write; surfacing them

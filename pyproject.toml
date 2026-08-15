@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ha-mcp"
-version = "8.1.1"
+version = "8.2.0"
 description = "Home Assistant MCP Server - Complete control of Home Assistant through MCP"
 readme = "README.md"
 # Upper bound widened to <3.15 so the package installs on Home Assistant's
@@ -28,7 +28,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp==3.4.5",
+    "fastmcp==3.4.6",
     "httpx[socks]==0.28.1",
     "pydantic==2.13.4",
     "python-dotenv==1.2.2",
@@ -211,7 +211,7 @@ ignore = [
 "tests/**/*" = ["E501", "B011"]
 # Temporary: the equivalent PLC0207/PLR5501 fixes landed in
 # homeassistant-addon-webhook-proxy-dev/ only, per the dev-first/promote-only
-# flow (allow-stable-edit is for stable-only hotfixes, not routine sweeps —
+# flow (allow-stable-edit is for exceptional stable-only repairs, not routine sweeps —
 # see homeassistant-addon-webhook-proxy/AGENTS.md "Dev-first, promote-only").
 # The -dev entries name where a reset-dev-from-stable run puts those same two
 # stable files (start.py stays put, mcp_proxy/ is renamed to mcp_proxy_dev/),
@@ -281,6 +281,9 @@ dev = [
     "httpx2>=2.4.0",
     "mypy>=1.17.0",
     "openai>=1.0.0",
+    "jsonschema>=4.25.1",
+    "pyinstaller>=6.0.0",
+    "pynacl>=1.6.0",
     "psutil>=7.0.0",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.1.0",

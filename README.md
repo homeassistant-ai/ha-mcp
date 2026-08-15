@@ -8,7 +8,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <img src="https://img.shields.io/badge/tools-87-blue" alt="95+ Tools">
+    <img src="https://img.shields.io/badge/tools-88-blue" alt="95+ Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE.md"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -85,7 +85,7 @@ These run the server outside Home Assistant — useful for **Container** / **Cor
 - **Docker (HTTP server):** run `ghcr.io/homeassistant-ai/ha-mcp` in HTTP mode, pointed at your Home Assistant URL and a long-lived token, and connect your client to its secret URL. See the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) for the full command and per-client config.
 - **PyPI / uvx (HTTP server):** run the published `ha-mcp` package with `uvx ha-mcp@latest` (or pip) as a streamable-HTTP server the same way. Details in the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/).
 - **Local stdio (not recommended):** runs ha-mcp on your own machine over stdio. The one-command installers in the **Demo server** section below use this path; the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) covers connecting it to your own Home Assistant.
-- **OIDC authentication:** gate remote access behind an external identity provider (Authentik, Keycloak, Auth0, Google, etc.) instead of a secret URL — all authenticated users share the server's Home Assistant credentials. See [OIDC Mode](docs/oidc.md).
+- **OIDC authentication:** gate remote access behind an external identity provider (Authentik, Keycloak, Auth0, etc.) instead of a secret URL — all authenticated users share the server's Home Assistant credentials. See [OIDC Mode](docs/oidc.md).
 
   > ⚠️ **stdio has known transport issues.** The stdio transport has connection problems that streamable HTTP does not ([#1713](https://github.com/homeassistant-ai/ha-mcp/issues/1713)). It is recommended only for demo/testing tinkering — for a real setup, use the custom component or an HTTP method above.
 
@@ -215,7 +215,7 @@ Spend less time configuring, more time enjoying your smart home.
 <details>
 <!-- TOOLS_TABLE_START -->
 
-<summary><b>Complete Tool List (87 tools)</b></summary>
+<summary><b>Complete Tool List (88 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
@@ -244,7 +244,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Scripts** | `ha_config_get_script`, `ha_config_remove_script`, `ha_config_set_script` |
 | **Search & Discovery** | `ha_get_overview`, `ha_get_state`, `ha_search` |
 | **Service & Device Control** | `ha_bulk_control`, `ha_call_event`, `ha_call_service`, `ha_get_operation_status`, `ha_list_services` |
-| **System** | `ha_config_get_yaml` *(beta)*, `ha_config_set_yaml` *(beta)*, `ha_manage_backup`, `ha_manage_custom_tool` *(beta)*, `ha_manage_theme`, `ha_manage_updates`, `ha_reload_core`, `ha_restart` |
+| **System** | `ha_config_get_yaml` *(beta)*, `ha_config_set_yaml` *(beta)*, `ha_manage_backup`, `ha_manage_custom_tool` *(beta)*, `ha_manage_security_policy`, `ha_manage_theme`, `ha_manage_updates`, `ha_reload_core`, `ha_restart` |
 | **Todo Lists** | `ha_get_todo`, `ha_remove_todo_item`, `ha_set_todo_item` |
 | **Utilities** | `ha_eval_template`, `ha_report_issue` |
 | **Zones** | `ha_get_zone`, `ha_remove_zone`, `ha_set_zone` |

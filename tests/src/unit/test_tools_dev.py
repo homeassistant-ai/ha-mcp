@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastmcp.exceptions import ToolError
 
@@ -244,6 +246,7 @@ def _mock_client(entries=None, flows=None):
     client.abort_options_flow = AsyncMock(return_value={})
     client.submit_options_flow_step = AsyncMock(return_value={"type": "create_entry"})
     client._request = AsyncMock(return_value={})
+    client.call_service = AsyncMock(return_value=[])
     return client
 
 
@@ -574,9 +577,88 @@ class TestManageServer:
             "note": result["data"]["note"],
         }
         await _drain_background_tasks()
-        client._request.assert_awaited_once_with(
-            "POST", "/config/config_entries/entry/server-e/reload"
+        client.call_service.assert_awaited_once_with(
+            "homeassistant", "reload_config_entry", {"entry_id": "server-e"}
         )
+
+    async def test_restart_embedded_reload_is_cancellation_safe(self, monkeypatch):
+        """The self-reload must go through the SHIELDED services endpoint.
+
+        Regression: POSTing to ``/config/config_entries/entry/{id}/reload``
+        wedged the entry permanently. That handler is unshielded and aiohttp
+        runs with ``handler_cancellation=True``, so when the unload killed
+        the client sending the request, ``async_reload`` was cancelled after
+        the state became ``UNLOAD_IN_PROGRESS`` but before the unload
+        finished — non-recoverable short of restarting Home Assistant.
+        """
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setattr(tools_dev, "_SELF_ACTION_FLUSH_DELAY_S", 0)
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        await DevTools(client).ha_dev_manage_server(action="restart")
+        await _drain_background_tasks()
+
+        client.call_service.assert_awaited_once_with(
+            "homeassistant", "reload_config_entry", {"entry_id": "server-e"}
+        )
+        # The unshielded config-entries endpoint must never be used for a
+        # self-reload, whatever else the tool touched.
+        for call in client._request.await_args_list:
+            assert "/config/config_entries/entry/" not in str(call)
+
+    async def test_self_reload_disconnect_is_not_logged_as_a_failure(
+        self, monkeypatch, caplog
+    ):
+        """Losing the reply is how a SUCCESSFUL self-restart ends.
+
+        The reload stops the worker thread owning this HTTP client, so the
+        shielded service call finishes without us and the response never
+        arrives. Logging that at ERROR ("Deferred config-entry reload
+        failed") describes a reload that actually worked as broken.
+        """
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setattr(tools_dev, "_SELF_ACTION_FLUSH_DELAY_S", 0)
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        lost_reply = RuntimeError("HTTP error")
+        lost_reply.__cause__ = httpx.ReadError("peer went away")
+        client.call_service = AsyncMock(side_effect=lost_reply)
+
+        await DevTools(client).ha_dev_manage_server(action="restart")
+        with caplog.at_level(logging.INFO, logger="ha_mcp.tools.tools_dev"):
+            await _drain_background_tasks()
+
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+        # WARNING specifically: HA surfaces this package at WARNING and above,
+        # so an INFO line would make a successful restart look like silence.
+        dispatched = [r for r in caplog.records if "tore down this" in r.message]
+        assert [r.levelno for r in dispatched] == [logging.WARNING]
+
+    async def test_self_reload_connect_failure_still_logs_an_error(
+        self, monkeypatch, caplog
+    ):
+        """A reload that never reached HA must stay loud.
+
+        Guards the fix above from swallowing real failures: on a connect
+        error the service call may never have been dispatched, so the
+        server can be left un-reloaded with nobody informed.
+        """
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setattr(tools_dev, "_SELF_ACTION_FLUSH_DELAY_S", 0)
+        client = _mock_client(
+            entries=[{"entry_id": "server-e"}], flows=[dict(_SERVER_FLOW)]
+        )
+        never_sent = RuntimeError("Failed to connect to Home Assistant")
+        never_sent.__cause__ = httpx.ConnectError("refused")
+        client.call_service = AsyncMock(side_effect=never_sent)
+
+        await DevTools(client).ha_dev_manage_server(action="restart")
+        with caplog.at_level(logging.INFO, logger="ha_mcp.tools.tools_dev"):
+            await _drain_background_tasks()
+
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR]
 
     async def test_restart_addon_schedules_supervisor_restart(self, monkeypatch):
         monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
@@ -1052,12 +1134,42 @@ class TestManagePolicy:
             )
 
     async def test_set_policy_invalid_schema_rejected(self, dev_tools):
-        # wait_seconds must be < approval_ttl_minutes * 60.
+        # wait_seconds must be < approval_ttl_minutes * 60. ``rules`` is
+        # required (see test_set_policy_without_rules_rejected) so the
+        # payload must carry it to reach schema validation at all.
         with pytest.raises(ToolError, match="schema validation"):
             await dev_tools.ha_dev_manage_settings(
                 action="set_policy",
-                policy={"wait_seconds": 599, "approval_ttl_minutes": 1},
+                policy={"wait_seconds": 599, "approval_ttl_minutes": 1, "rules": []},
             )
+
+    async def test_set_policy_without_rules_rejected(self, dev_tools):
+        """set_policy replaces the WHOLE document, so an omitted 'rules'
+        would silently delete every approval gate — both surfaces refuse
+        it (#2148 review)."""
+        await dev_tools.ha_dev_manage_settings(
+            action="set_policy",
+            policy={"rules": [{"tool_name": "ha_call_service"}], "version": 0},
+        )
+        with pytest.raises(ToolError, match="'rules' is missing") as exc:
+            await dev_tools.ha_dev_manage_settings(
+                action="set_policy", policy={"wait_seconds": 45}
+            )
+        assert "ha_dev_manage_settings('get_policy')" in str(exc.value)
+        got = await dev_tools.ha_dev_manage_settings(action="get_policy")
+        assert got["data"]["policy"]["rules"][0]["tool_name"] == "ha_call_service"
+
+    async def test_set_policy_warns_about_removed_rules(self, dev_tools):
+        await dev_tools.ha_dev_manage_settings(
+            action="set_policy",
+            policy={"rules": [{"tool_name": "ha_call_service"}], "version": 0},
+        )
+        result = await dev_tools.ha_dev_manage_settings(
+            action="set_policy", policy={"rules": [], "version": 1}
+        )
+        removed = [w for w in result["warnings"] if "removed 1 existing rule" in w]
+        assert removed, result["warnings"]
+        assert "ha_call_service" in removed[0]
 
     async def test_set_policy_requires_object(self, dev_tools):
         with pytest.raises(ToolError, match="'policy'"):
@@ -1458,6 +1570,24 @@ class TestSecurityPolicyAccessGuard:
                 action="set", setting="enable_tool_security_policies", value=False
             )
 
+    async def test_policy_tool_flag_refused_without_access(self):
+        # Enabling the flag registers ha_manage_security_policy after the
+        # next restart — a shorter route to dropping gates than set_policy.
+        with pytest.raises(ToolError, match="enable_security_policy_tool"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set", setting="enable_security_policy_tool", value=True
+            )
+
+    @pytest.mark.usefixtures("_policy_access_on")
+    async def test_policy_tool_flag_refused_even_with_access(self):
+        # Unconditional, like the access toggle itself: exposing the
+        # policy-rewriting tool is a human decision made on the Tool
+        # Security Policies tab, never a dev-tools write.
+        with pytest.raises(ToolError, match="enable_security_policy_tool"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set", setting="enable_security_policy_tool", value=True
+            )
+
     @pytest.mark.usefixtures("_policy_access_on")
     async def test_policy_engine_toggle_allowed_with_access(self):
         result = await DevTools(MagicMock()).ha_dev_manage_settings(
@@ -1562,6 +1692,9 @@ class TestSecurityPolicyAccessGuard:
         assert toggle["editable"] is False
         assert toggle["locked_reason"] == "web_ui_or_env_only"
         assert toggle["value"] is False
+        tool_flag = rows["enable_security_policy_tool"]
+        assert tool_flag["editable"] is False
+        assert tool_flag["locked_reason"] == "web_ui_or_env_only"
 
     async def test_list_unlocks_engine_row_with_access(self):
         # Access granted via the override file (the web-UI path): the
@@ -1582,6 +1715,10 @@ class TestSecurityPolicyAccessGuard:
         assert toggle["editable"] is False
         assert toggle["locked_reason"] == "web_ui_or_env_only"
         assert toggle["value"] is True
+        # The policy-tool flag stays locked even with access granted.
+        tool_flag = rows["enable_security_policy_tool"]
+        assert tool_flag["editable"] is False
+        assert tool_flag["locked_reason"] == "web_ui_or_env_only"
 
     async def test_env_pinned_engine_row_keeps_env_story(self, monkeypatch):
         # An env-pinned row is refused by the pin before the guard would

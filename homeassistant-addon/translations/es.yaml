@@ -65,6 +65,17 @@ configuration:
       con condiciones opcionales sobre los argumentos, se configuran en esa misma
       pestaña. Desactivado de forma predeterminada. Requiere reiniciar para que surta
       efecto.
+  enable_security_policy_tool:
+    name: Permitir que los agentes de IA editen las políticas de seguridad de la herramienta
+    description: 'Registra la herramienta ha_manage_security_policy, que permite a
+      los agentes de IA conectados leer y reescribir las políticas de seguridad de
+      la herramienta — incluyendo la eliminación de las puertas de aprobación. Desactivado
+      por defecto. Independiente de la opción Políticas de seguridad de la herramienta
+      de arriba: esto controla quién puede editar las reglas, no si se aplican. La
+      herramienta no puede ver ni decidir aprobaciones pendientes. Para mantener a
+      un humano en el bucle, protege la herramienta antes de habilitarla: activa "security
+      gated" para Manage Security Policy en la pestaña Herramientas de la interfaz
+      de usuario web. Requiere un reinicio para que surta efecto.'
   read_only_mode:
     name: Modo de solo lectura
     description: Desactiva todas las herramientas de escritura y les retira la capacidad
@@ -74,6 +85,16 @@ configuration:
       sus operaciones de escritura bloqueadas. Es la misma opción que la de la pestaña
       Herramientas de la interfaz web. Desactivado de forma predeterminada. Requiere
       reiniciar para que surta efecto.
+  redact_secrets:
+    name: Redactar secretos
+    description: Redacta secretos de las respuestas de las herramientas antes de que
+      lleguen al asistente de IA. Las opciones del complemento y los campos de integración
+      marcados como contraseñas se reemplazan con un marcador de establecido/vacío
+      (para que "¿está configurada esta credencial?" siga siendo respondible), y otras
+      respuestas de herramientas se limpian de valores secretos que el servidor ya
+      ha visto (los valores de menos de 6 caracteres se omiten, ya que reemplazar
+      fragmentos pequeños corrompería la salida no relacionada). Los campos no marcados
+      como contraseñas por su esquema no pueden ser detectados. Desactivado por defecto.
   enable_mandatory_bps:
     name: Adjuntar skills de buenas prácticas en las escrituras
     description: 'Interruptor principal de la entrega de contenido de skills en las
@@ -120,16 +141,25 @@ configuration:
       por comas.'
   enable_auto_backup:
     name: Activar copia de seguridad automática de las ediciones
-    description: 'Captura una instantánea por entidad antes de cada llamada a una
-      herramienta MCP de escritura o destructiva cubierta (automatización, script,
-      escena, auxiliar, panel, etiqueta, categoría, grupo, zona, área, calendario,
-      tareas pendientes, entidad, integración y las herramientas hermanas de eliminación).
-      Las instantáneas se guardan como archivos YAML en /data/ha_mcp_backups/ (se
-      puede cambiar con HAMCP_BACKUP_DIR) y se listan, restauran o eliminan desde
-      la pestaña Copias de seguridad de la interfaz web de ajustes o mediante ha_manage_backup(scope=''edits'',
-      ...). Funciona en la medida de lo posible: los fallos registran un WARNING pero
-      nunca bloquean la escritura subyacente. Activado de forma predeterminada; desmárcalo
-      para excluirte. Requiere reiniciar para que surta efecto.'
+    description: 'Captura una instantánea por entidad antes de cada llamada envuelta
+      de herramienta MCP de escritura/destructiva (automatización, script, escena,
+      asistente, panel, recurso de panel, etiqueta, categoría, grupo, zona, área,
+      calendario, tarea, entidad, dispositivo, integración y herramientas de eliminación/borrado
+      de elementos relacionados). El límite de frecuencia de la copia de seguridad
+      automática establece la frecuencia con la que esto ocurre: 0 (predeterminado)
+      captura en cada llamada de este tipo, N>0 como máximo una instantánea cada N
+      minutos por entidad. Las instantáneas se guardan como archivos YAML en /data/ha_mcp_backups/
+      (anular mediante HAMCP_BACKUP_DIR) y se listan, restauran o eliminan a través
+      de la pestaña "Copias de seguridad" en la interfaz de usuario de configuración
+      web o mediante ha_manage_backup(scope=''edits'', ...). Para esos dominios, la
+      captura es de "mejor esfuerzo" — un fallo registra una ADVERTENCIA y la escritura
+      procede. Las herramientas de archivo y YAML sin procesar son la excepción: ha_write_file,
+      ha_delete_file y ha_config_set_yaml tratan la instantánea como una condición
+      previa, por lo que una escritura a través de ellas se rechaza mientras esto
+      está desactivado, y una captura fallida la bloquea. Activado por defecto; desmarcar
+      desactiva las capturas de "mejor esfuerzo" y deja fuera de servicio las herramientas
+      de archivo y YAML sin procesar con ellas. Requiere un reinicio para que surta
+      efecto.'
   auto_backup_throttle_minutes:
     name: Limitación de la copia automática (minutos)
     description: Ventana de limitación por entidad. 0 (predeterminado) captura una

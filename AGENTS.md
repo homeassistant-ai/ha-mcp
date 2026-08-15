@@ -317,21 +317,13 @@ The following phrases are red flags that you're making a scope decision unilater
 
 **Code-review bot suggestions** (Codex, CodeRabbit, Copilot non-blocking nits): apply inline or dismiss. Never spawn a follow-up issue from a bot suggestion unless the user explicitly confirms it's a large, out-of-scope change. See `.gemini/styleguide.md` § *Non-Blocking Suggestions and Scope* for the bot-side rule.
 
-### Hotfix Process (Critical Bugs Only)
+### Urgent Release Process
 
-Hotfix = critical production bug in current stable release. Regular fix = bug after latest stable, or non-critical.
-
-**Hotfix branches MUST be based on `stable` tag.** Always verify the buggy code exists in stable first — if not, use `git checkout -b fix/description master` instead.
-
-```bash
-git fetch --tags --force
-git show stable:path/to/file.py | grep "buggy_code"  # verify code exists in stable
-git checkout -b hotfix/description stable
-# fix, commit, then:
-gh pr create --draft --base master
-```
-
-On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, syncs CHANGELOG to addon, updates `stable` tag (after changelog sync), and builds binaries.
+Critical fixes follow the normal development flow: branch from `master`, merge
+the fix to `master`, then manually dispatch `semver-release.yml` from `master`.
+Use its `force` input only when a release is required without a releasable
+`feat`, `fix`, `perf`, `refactor`, breaking `!`, or `BREAKING CHANGE` commit
+since the previous stable tag.
 
 ### Test Coverage Requirements
 
@@ -357,9 +349,8 @@ On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, sy
 | `e2e-tests.yml` | PR to master | Full E2E tests (~3 min) |
 | `publish-dev.yml` | Push to master | Dev release `.devN` |
 | `notify-dev-channel.yml` | Push to master (src/) | Comment on PRs/issues with dev testing instructions |
-| `semver-release.yml` | Biweekly Wed 10:00 UTC | Stable release (cuts version tag + GitHub release) |
+| `semver-release.yml` | Biweekly Wed 10:00 UTC or manual dispatch | Stable release (cuts version tag + GitHub release) |
 | `release-publish.yml` | After SemVer Release (`workflow_run`) or manual dispatch | Publish stable Docker image (`:latest` + `:stable` + semver) + MCP registry |
-| `hotfix-release.yml` | Hotfix PR merged | Immediate patch release |
 | `build-binary.yml` | Release | Linux/macOS/Windows binaries |
 | `addon-publish.yml` | Release | HA add-on update |
 | `sync-tool-docs.yml` | Push to master (`src/ha_mcp/tools/`, `scripts/extract_tools.py`) | Regenerate `tools.json`, README, DOCS.md |
@@ -754,8 +745,8 @@ are different projections of the one store, and cross-surface wording
 identity holds by construction.
 
 A language ships on all four surfaces or not at all —
-`tests/src/unit/test_locale_parity.py` enforces it. One Home Assistant language
-code (`de`, `es`, `fr`, `it`, `ru`, `zh-Hans`) names every file:
+`tests/src/unit/test_locale_parity.py` enforces it. The same Home Assistant
+language code (`cs`, `de`, `eo`, `es`, `fr`, `it`, `nl`, `pl`, `ru`, `sv`, `zh-Hans`) names every file:
 `src/ha_mcp/settings_ui/locales/<code>.json`,
 `custom_components/ha_mcp_tools/translations/<code>.json`, and
 `homeassistant-addon{,-dev}/translations/<code>.yaml`.
@@ -773,6 +764,19 @@ spells the backend literal counts as untranslated), so does
 into, and at least one translated key must have English that addresses the
 reader in the second person, which is where `scripts/translate_locales.py`
 reads the catalog's address register.
+`policies.operators.exists_long` is the trap in that list: the condition editor
+renders it as its own dropdown label, but it is UI-only rather than a
+`PredicateOp` member, so no enum-derived check asks for it and a catalog
+without it reads English there until the sync fills it. Each surface reads that
+register from its own catalog, so a component catalog left at a key or two
+rests on whichever of them addresses the reader — losing it costs the engine
+the register for every later string of that language and says so only on
+stderr, which is why
+`test_every_shipped_component_catalog_gets_reader_addressing_samples` pins it.
+Author two such keys rather than one: a run that rewords one of them queues it,
+and queued keys are dropped from the sample candidates, so a surface resting on
+a single anchor is anchorless in precisely the run that rewrites it —
+`test_component_samples_survive_their_own_anchor_being_queued` pins that.
 `src/ha_mcp/settings_ui/locales/README.md` names the tests — including the one
 that skips locally until `tests/js/` has its npm dependencies.
 
@@ -826,6 +830,21 @@ key parity cannot see a string whose meaning changed: #1993 flipped a policy
 string from ALL-match to ANY-match and left the Chinese text asserting the
 opposite. `python scripts/update_locale_baseline.py` repins it manually after
 a hand-translation pass.
+
+**A catalog that lands after a reword is never queued for the keys it missed.**
+The pin moves when the English does, so a language whose PR was open across
+that reword merges with the older wording already translated, and the sync sees
+a hash that matches: no plan, no correction, indefinitely. Nothing else catches
+it either — key parity sees a value and the share ceiling sees a translated
+one. When a locale PR spans an English change, diff the affected keys against
+that surface's own English before merging — `en.json` for `messages`, the tool
+definitions for `tools` (`en.json` ships that section empty), and
+`custom_components/ha_mcp_tools/strings.json` for the component catalog.
+Numbers and code-ish literals are the cheap tell, since a reword usually moves
+one, and `test_translations_keep_english_numbers_and_identifiers` checks
+exactly that across all three. Repinning is not the repair — it
+writes the same hash and queues nothing. Deleting the stale value is: the
+planner treats a missing key as work for that locale alone.
 
 **A tool docstring is one of those English strings.** `en.json` ships `tools`
 empty, so the English a `tools` entry translates is read from the tool

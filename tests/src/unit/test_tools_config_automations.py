@@ -14,9 +14,11 @@ succeeds, falling back to the raw input otherwise — same
 canonical-with-fallback semantic as scenes/dashboards.
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_config_automations import (
     AutomationConfigTools,
@@ -486,3 +488,98 @@ class TestStripRedundantIdentifierEcho:
         assert _strip_redundant_identifier_echo(
             result, extra_excludes=("success",)
         ) == {"unique_id": "y"}
+
+
+class TestSetAutomationCategoryValidation:
+    """A category that does not exist must not reach the automation.
+
+    ``apply_entity_category`` runs after the upsert and HA accepts any category
+    ID, so an unvalidated typo used to leave the automation created with a
+    dangling category reference (issue #2159). Validation happens at tool entry
+    so nothing is written when the category is wrong.
+    """
+
+    @pytest.fixture
+    def canonical_config(self):
+        return {
+            "alias": "Morning Routine",
+            "trigger": [{"platform": "time", "at": "07:00:00"}],
+            "action": [
+                {"service": "light.turn_on", "target": {"entity_id": "light.bedroom"}}
+            ],
+        }
+
+    @staticmethod
+    def _ws_handler(*category_ids):
+        """Answer the category-registry preflight; ack everything else."""
+
+        async def handler(msg):
+            if msg.get("type") == "config/category_registry/list":
+                return {
+                    "success": True,
+                    "result": [{"category_id": cid} for cid in category_ids],
+                }
+            return {"success": True, "result": {"categories": {}}}
+
+        return handler
+
+    async def test_unknown_category_param_rejected_before_upsert(
+        self, tools, mock_client, canonical_config
+    ):
+        mock_client.send_websocket_message.side_effect = self._ws_handler("lighting")
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_automation(
+                config=canonical_config, category="ghost_category", wait=False
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert error_data["category"] == "ghost_category"
+        assert error_data["scope"] == "automation"
+        mock_client.upsert_automation_config.assert_not_called()
+
+    async def test_unknown_category_in_config_rejected_before_upsert(
+        self, tools, mock_client, canonical_config
+    ):
+        """The config dict is the second category source — it needs the same gate."""
+        mock_client.send_websocket_message.side_effect = self._ws_handler("lighting")
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_config_set_automation(
+                config={**canonical_config, "category": "ghost_category"}, wait=False
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        mock_client.upsert_automation_config.assert_not_called()
+
+    async def test_unknown_category_rejected_on_python_transform(
+        self, transform_tools, mock_client
+    ):
+        """The transform path applies a category too — and must gate it too."""
+        mock_client.send_websocket_message.side_effect = self._ws_handler("lighting")
+
+        with pytest.raises(ToolError) as exc_info:
+            await transform_tools.ha_config_set_automation(
+                identifier="abc123unique",
+                python_transform="config['mode'] = 'single'",
+                config_hash="prior_hash",
+                category="ghost_category",
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        mock_client.upsert_automation_config.assert_not_called()
+
+    async def test_existing_category_proceeds(
+        self, tools, mock_client, canonical_config
+    ):
+        mock_client.send_websocket_message.side_effect = self._ws_handler("lighting")
+
+        result = await tools.ha_config_set_automation(
+            config=canonical_config, category="lighting", wait=False
+        )
+
+        assert result["success"] is True
+        mock_client.upsert_automation_config.assert_called_once()

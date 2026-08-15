@@ -108,7 +108,14 @@
         },
         "legacy_oauth_restart": {
             "title": "Restart Home Assistant to apply the legacy OAuth change",
-            "description": "The legacy OAuth authentication mode registers its own /authorize and /token web endpoints, which Home Assistant can only bind or release when it fully restarts - whether you just turned this mode on, turned it off, or changed its Client ID/Secret. Restart Home Assistant (Settings - System - Restart) to apply the change; until then the previous behavior stays in effect."
+            "fix_flow": {
+                "step": {
+                    "confirm": {
+                        "title": "Restart Home Assistant?",
+                        "description": "Submitting this form will restart Home Assistant and apply the legacy OAuth change.\n\nClick **Submit** to restart now."
+                    }
+                }
+            }
         }
     },
     "selector": {

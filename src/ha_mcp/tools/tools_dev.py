@@ -16,6 +16,7 @@ import logging
 import sys
 from typing import Annotated, Any, Literal
 
+import httpx
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
@@ -28,6 +29,7 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
+from ..policy.editing import PolicyCaller
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -107,6 +109,10 @@ _REMOVE = object()
 # type-mismatch error.
 _COERCE_MISS = object()
 
+# How the shared policy-editing helpers spell this tool's own actions when
+# they build user-facing messages.
+_POLICY_CALLER = PolicyCaller("ha_dev_manage_settings", "get_policy", "set_policy")
+
 
 def is_dev_mode_enabled() -> bool:
     """Check if developer mode is enabled.
@@ -170,7 +176,8 @@ def _apply_policy_guard_row_locks(fname: str, row: dict[str, Any]) -> None:
     Without this, agents reading the matrix to choose writable settings
     see ``editable: true`` on rows whose set/reset the guards refuse:
     ``enable_tool_security_policies`` while access is off, and
-    ``dev_tools_security_policy_access`` always (web UI / env var only).
+    ``dev_tools_security_policy_access`` plus
+    ``enable_security_policy_tool`` always (web UI / env var only).
     A row that is ALREADY non-editable (env-pinned) keeps its plain env
     story: the pin refuses the write before these guards would, and
     stamping a policy reason there would misdirect the fix toward the
@@ -187,6 +194,10 @@ def _apply_policy_guard_row_locks(fname: str, row: dict[str, Any]) -> None:
             row["editable"] = False
             row["locked_reason"] = "web_ui_or_env_only"
         row["value"] = _security_policy_access_enabled()
+    elif fname == "enable_security_policy_tool":
+        if row["editable"]:
+            row["editable"] = False
+            row["locked_reason"] = "web_ui_or_env_only"
 
 
 def _require_security_policy_access(operation: str) -> None:
@@ -218,14 +229,34 @@ def _require_security_policy_access(operation: str) -> None:
 
 
 def _guard_security_policy_setting(setting: str) -> None:
-    """Gate set/reset of the two settings that define the dev tools' leash.
+    """Gate set/reset of the settings that define the dev tools' leash.
 
     ``dev_tools_security_policy_access`` is refused unconditionally — even
     with access ON — so the agent can neither grant itself policy access
     nor revoke it; that toggle belongs to the web settings UI and the env
-    var alone. ``enable_tool_security_policies`` is the whole gating
-    engine's master switch, so writing it needs access.
+    var alone. ``enable_security_policy_tool`` gets the same unconditional
+    refusal: it registers ha_manage_security_policy, which can rewrite the
+    policies gating the agent, and its toggle belongs to the Tool Security
+    Policies tab (issue #2148) — a dev-tools write would reach the same
+    end state as unbuckling the leash, one restart later.
+    ``enable_tool_security_policies`` is the whole gating engine's master
+    switch, so writing it needs access.
     """
+    if setting == "enable_security_policy_tool":
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+                "'enable_security_policy_tool' cannot be changed by dev "
+                "tools: it registers ha_manage_security_policy, which can "
+                "rewrite the tool security policies gating the agent.",
+                context={"setting": setting},
+                suggestions=[
+                    "Change it in the web settings UI (Tool Security "
+                    "Policies tab) or via the ENABLE_SECURITY_POLICY_TOOL "
+                    "env var.",
+                ],
+            )
+        )
     if setting == "dev_tools_security_policy_access":
         raise_tool_error(
             create_error_response(
@@ -449,17 +480,36 @@ def schedule_deferred_entry_reload(client: Any, entry_id: str) -> None:
     very worker answering the current request, so it must not run until the
     response has flushed. Failures can only be logged — there is no caller
     left to answer.
+
+    Uses the ``homeassistant.reload_config_entry`` service, NOT
+    ``POST /config/config_entries/entry/{id}/reload``: only the services
+    handler shields the call. HA runs aiohttp with
+    ``handler_cancellation=True``, and the reload kills the client sending
+    this request, so on the unshielded route it cancelled itself mid-unload
+    and stranded the entry in ``UNLOAD_IN_PROGRESS`` until HA restarted.
     """
 
     async def _reload() -> None:
         await asyncio.sleep(_SELF_ACTION_FLUSH_DELAY_S)
         try:
-            await client._request(
-                "POST", f"/config/config_entries/entry/{entry_id}/reload"
+            await client.call_service(
+                "homeassistant", "reload_config_entry", {"entry_id": entry_id}
             )
             logger.info("Deferred reload of entry %s requested", entry_id)
-        except Exception:
-            logger.exception("Deferred config-entry reload failed")
+        except Exception as exc:
+            # A lost reply means the request reached HA and the shielded reload
+            # then killed this client — the expected end of a self-restart, not
+            # a failure. A connect error or timeout may never have dispatched,
+            # so those stay loud. WARNING, not INFO: HA surfaces this package
+            # at WARNING and above, so INFO here would log nothing at all.
+            if isinstance(exc.__cause__, httpx.ReadError | httpx.RemoteProtocolError):
+                logger.warning(
+                    "Deferred reload of entry %s dispatched; it tore down this "
+                    "connection before the reply arrived (expected)",
+                    entry_id,
+                )
+            else:
+                logger.exception("Deferred config-entry reload failed")
 
     _spawn_background(_reload())
 
@@ -1196,24 +1246,12 @@ class DevTools:
         # (held on the loop while the file I/O runs in the worker thread);
         # the worker additionally takes the cross-process file lock so the
         # stdio sidecar's handlers can't interleave from another process.
-        from ..utils.config_write_lock import get_config_write_lock
+        from ..utils.config_write_lock import get_config_write_lock, run_with_file_lock
 
         async with get_config_write_lock():
             return await asyncio.to_thread(
-                self._with_file_lock, self._write_tool_all, tool, state, llm_api, gated
+                run_with_file_lock, self._write_tool_all, tool, state, llm_api, gated
             )
-
-    @staticmethod
-    def _with_file_lock(fn: Any, /, *args: Any) -> Any:
-        """Run ``fn(*args)`` holding the cross-process config file lock.
-
-        Thread-side companion of ``config_write_guard()``: callers hold the
-        asyncio lock on the loop, so the file lock never nests in-process.
-        """
-        from ..utils.config_write_lock import config_file_lock
-
-        with config_file_lock():
-            return fn(*args)
 
     def _write_tool_all(
         self, tool: str, state: str | None, llm_api: bool | None, gated: bool | None
@@ -1493,34 +1531,16 @@ class DevTools:
             queue.clear_remember_cache()
 
     # ----- Tool security policies -----
+    #
+    # The read/write path itself lives in ``policy.editing`` because
+    # ha_manage_security_policy (issue #2148) drives the same document;
+    # only the action names in the error messages differ per caller.
 
     async def _get_policy(self) -> dict[str, Any]:
         """Return the full tool-security policy."""
-        from ..config import get_global_settings
-        from ..policy.persistence import load_policy
-        from ..utils.data_paths import get_data_dir
+        from ..policy.editing import get_policy
 
-        try:
-            policy = load_policy(get_data_dir())
-        except ValueError as exc:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.CONFIG_INVALID,
-                    f"tool_policy.json is invalid: {exc}",
-                    suggestions=["Inspect or delete the file, then retry"],
-                )
-            )
-        return {
-            "success": True,
-            "data": {
-                "policy": policy.model_dump(mode="json"),
-                "policies_enabled": (
-                    get_global_settings().enable_tool_security_policies
-                ),
-                "policies_live": getattr(self._server, "approval_queue", None)
-                is not None,
-            },
-        }
+        return await get_policy(self._server)
 
     async def _apply_set_policy(
         self, policy: dict[str, Any] | None, expected_version: int | None
@@ -1528,105 +1548,9 @@ class DevTools:
         """Write the full tool-security policy (validated, version-guarded)."""
         _require_security_policy_access("rewrite the tool security policy")
 
-        from pydantic import ValidationError
+        from ..policy.editing import set_policy
 
-        from ..policy.model import Policy
-        from ..utils.config_write_lock import get_config_write_lock
-
-        if not isinstance(policy, dict):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER,
-                    "'policy' (a policy object) is required for action='set_policy'",
-                    suggestions=[
-                        "Call ha_dev_manage_settings('get_policy') for the shape"
-                    ],
-                )
-            )
-        try:
-            new_policy = Policy.model_validate(policy)
-        except (ValidationError, ValueError) as exc:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"policy failed schema validation: {exc}",
-                )
-            )
-        # Compare against the COERCED model version so a JSON string "3" matches
-        # the on-disk int 3; ``"version" in policy`` distinguishes an omitted
-        # version (no concurrency check) from an explicit one.
-        expected = (
-            expected_version
-            if expected_version is not None
-            else (new_policy.version if "version" in policy else None)
-        )
-        # Serialize the load-check-save against the web PUT handler + set_tool
-        # (asyncio lock) and other processes (file lock, in the thread).
-        async with get_config_write_lock():
-            return await asyncio.to_thread(
-                self._with_file_lock, self._commit_policy, new_policy, expected
-            )
-
-    def _commit_policy(self, new_policy: Any, expected: int | None) -> dict[str, Any]:
-        """Load current policy, version-check against ``expected``, save, report.
-
-        MUST run while holding ``get_config_write_lock()`` (called via
-        ``asyncio.to_thread`` from ``_apply_set_policy``).
-        """
-        from ..config import get_global_settings
-        from ..policy.persistence import load_policy, save_policy
-        from ..utils.data_paths import get_data_dir
-
-        data_dir = get_data_dir()
-        try:
-            current = load_policy(data_dir)
-        except ValueError as exc:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.CONFIG_INVALID,
-                    f"existing tool_policy.json is invalid: {exc}",
-                    suggestions=["Inspect or delete the file, then retry"],
-                )
-            )
-        warnings: list[str] = []
-        if expected is not None and expected != current.version:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "policy version mismatch — reload with get_policy before saving",
-                    context={
-                        "current_version": current.version,
-                        "current_policy": current.model_dump(mode="json"),
-                    },
-                )
-            )
-        if expected is None:
-            warnings.append(
-                "No version supplied; wrote without an optimistic-concurrency check."
-            )
-        # Rebase onto the on-disk version so save_policy bumps to current+1.
-        save_policy(
-            data_dir, new_policy.model_copy(update={"version": current.version})
-        )
-        rules_changed = current.rules != new_policy.rules
-        if rules_changed:
-            self._clear_remember_cache()
-        # Same "won't enforce" signal set_tool(gated=True) gives, so authoring
-        # rules while the engine is off doesn't look like a live gate.
-        if new_policy.rules and not get_global_settings().enable_tool_security_policies:
-            warnings.append(
-                "Tool security policies are disabled "
-                "(enable_tool_security_policies=false); these rules are stored "
-                "but won't enforce until policies are enabled and the server "
-                "restarts."
-            )
-        result: dict[str, Any] = {
-            "success": True,
-            "data": {"version": current.version + 1, "rules_changed": rules_changed},
-        }
-        if warnings:
-            result["warnings"] = warnings
-        return result
+        return await set_policy(policy, expected_version, _POLICY_CALLER, self._server)
 
     # ----- Auto-backup config -----
 
