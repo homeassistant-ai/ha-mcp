@@ -68,7 +68,14 @@ async def _config_entry_rows(client: Any, **query: Any) -> list[dict[str, Any]] 
     if not component_supports(caps, "config_entries"):
         return None
     try:
-        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            # verify_ssl keys the client pool, so omitting it hands back a
+            # DIFFERENT pooled client than the capability probe used and a
+            # self-signed setup fails the read after passing detection.
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
         raw = await ws.send_command(WS_CONFIG_ENTRIES, **query)
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):
@@ -83,7 +90,10 @@ async def _config_entry_rows(client: Any, **query: Any) -> list[dict[str, Any]] 
     entries = result.get("entries") if isinstance(result, dict) else None
     if not isinstance(entries, list):
         return None
-    return [row for row in entries if isinstance(row, dict)]
+    if any(not isinstance(row, dict) for row in entries):
+        logger.debug("%s returned a malformed row", WS_CONFIG_ENTRIES)
+        return None
+    return list(entries)
 
 
 async def fetch_domain_unique_ids(client: Any, domain: str) -> dict[str, str] | None:
@@ -94,27 +104,45 @@ async def fetch_domain_unique_ids(client: Any, domain: str) -> dict[str, str] | 
     none — so without this the scan can only ever compare entry_ids and must
     not claim it checked unique_ids.
 
-    Entries whose ``unique_id`` is absent (an older component) or genuinely
-    ``None`` are omitted, so a present key always means a real value.
+    A genuinely ``None`` ``unique_id`` is the ONLY value omitted from the map,
+    so a present key always means a real value. Anything malformed returns
+    ``None`` for the whole map instead: the duplicate scan reads a returned map
+    as a COMPLETED check, so an incomplete one could drop the very duplicate
+    row it exists to catch.
     """
     rows = await _config_entry_rows(client, domain=domain)
     if rows is None:
         return None
-    if any("unique_id" not in row for row in rows):
-        # An older component: the field is missing wholesale, so the map would
-        # silently under-report rather than be incomplete for a known reason.
-        logger.debug(
-            "%s rows for domain %s predate the unique_id field",
-            WS_CONFIG_ENTRIES,
-            domain,
-        )
-        return None
-    return {
-        row["entry_id"]: row["unique_id"]
-        for row in rows
-        if isinstance(row.get("entry_id"), str)
-        and isinstance(row.get("unique_id"), str)
-    }
+    mapping: dict[str, str] = {}
+    for row in rows:
+        if "unique_id" not in row:
+            # An older component: the field is missing wholesale.
+            logger.debug(
+                "%s rows for domain %s predate the unique_id field",
+                WS_CONFIG_ENTRIES,
+                domain,
+            )
+            return None
+        entry_id = row.get("entry_id")
+        unique_id = row["unique_id"]
+        if not isinstance(entry_id, str) or (
+            unique_id is not None and not isinstance(unique_id, str)
+        ):
+            # A partial map would be read as a COMPLETED scan by the duplicate
+            # check, so a malformed duplicate row could be dropped and let
+            # verification pass. Incomplete must be indistinguishable from
+            # unreadable.
+            logger.debug(
+                "%s returned a malformed row for domain %s; map unusable",
+                WS_CONFIG_ENTRIES,
+                domain,
+            )
+            return None
+        # unique_id None is a valid answer (the entry has none) and is the one
+        # value legitimately omitted from the map.
+        if unique_id is not None:
+            mapping[entry_id] = unique_id
+    return mapping
 
 
 async def fetch_config_entry_unique_id(client: Any, entry_id: str) -> EntryUniqueId:
@@ -130,7 +158,14 @@ async def fetch_config_entry_unique_id(client: Any, entry_id: str) -> EntryUniqu
     if not component_supports(caps, "config_entries"):
         return UNKNOWN_UNIQUE_ID
     try:
-        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            # verify_ssl keys the client pool, so omitting it hands back a
+            # DIFFERENT pooled client than the capability probe used and a
+            # self-signed setup fails the read after passing detection.
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
         raw = await ws.send_command(WS_CONFIG_ENTRIES, entry_id=entry_id)
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):

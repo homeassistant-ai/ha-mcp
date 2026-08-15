@@ -20,13 +20,16 @@ before adding a gate:
 |---|---|
 | `haos_only` | HAOS backends only (`HAOS_TEST_IMAGE_PATH` set). **Auto-applied** to everything under `src/e2e/haos_only/` — no marker needed there |
 | `container_only` | the testcontainer backend only (includes the container-embedded lane) |
-| `external_only` | HAOS external mode only — skips wherever the server is out-of-process (inaddon / embedded), because those cannot be reconfigured via test-process env, monkeypatch, or an in-process mock |
+| `external_only` | anywhere the server-under-test runs IN the pytest process: plain testcontainer and HAOS external. Skips inaddon, container-embedded and HAOS-embedded, which cannot be reconfigured via test-process env / monkeypatch or reach an in-process mock. The name is historical — it does NOT mean "HAOS external only" |
 | `inaddon_only` | HAOS inaddon mode only (`HAOS_TEST_MODE=inaddon`), where `is_running_in_addon()` paths are live |
 | `not_on_embedded` / `not_on_haos_embedded` | everywhere except that lane, for tests the lane's own session backend already covers |
 
 Pick the marker by what the test *needs*, not by where it happens to pass:
 `external_only` is about needing an in-process server you can reconfigure,
-`inaddon_only` about needing the addon's supervisor context.
+`inaddon_only` about needing the addon's supervisor context. Read the skip
+expressions, not the summary docstring — `external_only`'s name has misled
+before (#1375 found 14 supervisor-mock tests silently skipping on every
+testcontainer run).
 
 **Two different things share the `ha_mcp_tools` name — don't conflate them:**
 

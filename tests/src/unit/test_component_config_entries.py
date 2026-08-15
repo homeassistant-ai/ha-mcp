@@ -205,3 +205,91 @@ async def test_unknown_on_any_transport_failure(
     monkeypatch.setattr(mod, "is_unknown_command", lambda e: False)
 
     assert await fetch_config_entry_unique_id(client, "e1") == UNKNOWN_UNIQUE_ID
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verify_ssl", [False, True, None])
+async def test_the_client_tls_override_reaches_the_pooled_client(
+    client: Any, monkeypatch: pytest.MonkeyPatch, verify_ssl: bool | None
+) -> None:
+    """verify_ssl keys the client pool, so it must match the capability probe.
+
+    The probe forwards `client.verify_ssl`; a read that omits it gets a
+    DIFFERENT pooled client, so a self-signed setup passes detection and then
+    fails the read — degrading identity verification for no real reason.
+    """
+    client.verify_ssl = verify_ssl
+    monkeypatch.setattr(mod, "get_component_caps", AsyncMock(return_value={}))
+    monkeypatch.setattr(mod, "component_supports", lambda caps, name: True)
+    ws = MagicMock()
+    ws.send_command = AsyncMock(
+        return_value={"result": {"entries": [{"entry_id": "e1", "unique_id": "u"}]}}
+    )
+    factory = AsyncMock(return_value=ws)
+    monkeypatch.setattr(mod, "get_websocket_client", factory)
+
+    await fetch_config_entry_unique_id(client, "e1")
+
+    assert factory.await_args.kwargs["verify_ssl"] is verify_ssl
+
+
+@pytest.mark.asyncio
+async def test_domain_map_returns_the_unique_ids_for_the_domain(
+    client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _arrange(
+        monkeypatch,
+        send=AsyncMock(
+            return_value={
+                "result": {
+                    "entries": [
+                        {"entry_id": "a", "unique_id": "u-a"},
+                        {"entry_id": "b", "unique_id": "u-b"},
+                        # A genuinely absent unique_id is the ONE valid omission.
+                        {"entry_id": "c", "unique_id": None},
+                    ]
+                }
+            }
+        ),
+    )
+
+    assert await mod.fetch_domain_unique_ids(client, "shelly") == {
+        "a": "u-a",
+        "b": "u-b",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entries",
+    [
+        pytest.param(["not-a-dict"], id="non_dict_row"),
+        pytest.param([{"entry_id": 7, "unique_id": "u"}], id="non_string_entry_id"),
+        pytest.param([{"entry_id": "a", "unique_id": 7}], id="non_string_unique_id"),
+        pytest.param([{"entry_id": "a"}], id="row_predating_the_field"),
+        pytest.param(
+            [{"entry_id": "a", "unique_id": "u"}, {"entry_id": "b"}],
+            id="one_good_one_pre_field",
+        ),
+    ],
+)
+async def test_domain_map_is_unusable_rather_than_incomplete(
+    client: Any, monkeypatch: pytest.MonkeyPatch, entries: Any
+) -> None:
+    """A partial map would be read as a COMPLETED duplicate scan.
+
+    Dropping a malformed row could drop the very duplicate the scan exists to
+    catch, so incomplete must be indistinguishable from unreadable.
+    """
+    _arrange(monkeypatch, send=AsyncMock(return_value={"result": {"entries": entries}}))
+
+    assert await mod.fetch_domain_unique_ids(client, "shelly") is None
+
+
+@pytest.mark.asyncio
+async def test_domain_map_is_none_without_the_capability(
+    client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _arrange(monkeypatch, supported=False)
+
+    assert await mod.fetch_domain_unique_ids(client, "shelly") is None
