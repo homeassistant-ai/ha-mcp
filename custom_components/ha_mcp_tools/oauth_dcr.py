@@ -229,7 +229,9 @@ class DcrRegisterView(HomeAssistantView):
             return web.json_response({"error": "not_found"}, status=404)
         try:
             body: Any = await request.json()
-        except ValueError:
+        except (ValueError, RecursionError):
+            # RecursionError: json.loads on a deeply nested body (#2218
+            # review) — malformed metadata, not a server error.
             return _dcr_error("invalid_client_metadata", "body must be JSON")
         if not isinstance(body, dict):
             return _dcr_error("invalid_client_metadata", "body must be an object")

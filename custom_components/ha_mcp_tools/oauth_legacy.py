@@ -810,8 +810,17 @@ async def handle_legacy_authorize_post(
 
 def _extract_client_creds(
     request: web.Request, form: dict
-) -> tuple[str | None, str | None]:
-    """Pull client_id/secret from Basic auth header OR form body."""
+) -> list[tuple[str | None, str | None]]:
+    """Candidate client_id/secret pairs from Basic auth OR the form body.
+
+    RFC 6749 §2.3.1: client_secret_basic values are form-urlencoded before
+    base64, so the decoded candidate applies unquote_PLUS ("+" means space in
+    that encoding). Many clients skip the encoding step, though, and custom
+    credential overrides may contain a literal "+" or "%XX" that decoding
+    would mangle (#2218 review, mirrored from the proxy) — so the raw split
+    is offered as a second candidate and either may authenticate. Both are
+    no-ops for the generated credentials (URL-safe alphabets).
+    """
     header = request.headers.get("Authorization", "")
     if header.lower().startswith("basic "):
         try:
@@ -819,20 +828,17 @@ def _extract_client_creds(
                 "utf-8"
             )
         except (ValueError, UnicodeDecodeError, binascii.Error):
-            return None, None
-        if ":" in decoded:
-            cid, _, sec = decoded.partition(":")
-            # RFC 6749 §2.3.1: client_secret_basic values are
-            # application/x-www-form-urlencoded before base64, so decode
-            # them back with unquote_PLUS ("+" means space in that
-            # encoding — plain unquote would leave it literal). A no-op for
-            # the generated credentials (URL-safe alphabets, nothing to
-            # decode) but required for custom overrides containing reserved
-            # characters — matches the form-body path below, which aiohttp
-            # also form-decodes ("+" → space).
-            return unquote_plus(cid), unquote_plus(sec)
-        return None, None
-    return form.get("client_id"), form.get("client_secret")
+            return []
+        if ":" not in decoded:
+            return []
+        cid, _, sec = decoded.partition(":")
+        candidates: list[tuple[str | None, str | None]] = [
+            (unquote_plus(cid), unquote_plus(sec))
+        ]
+        if (cid, sec) != candidates[0]:
+            candidates.append((cid, sec))
+        return candidates
+    return [(form.get("client_id"), form.get("client_secret"))]
 
 
 async def _handle_authorization_code(
@@ -876,8 +882,11 @@ async def handle_legacy_token_post(
 ) -> web.Response:
     """Token endpoint body (shared by the root and scoped routes)."""
     form = dict(await request.post())
-    client_id, client_secret = _extract_client_creds(request, form)
-    if not provider.authenticate_client(client_id, client_secret):
+    candidates = _extract_client_creds(request, form)
+    if not any(
+        provider.authenticate_client(client_id, client_secret)
+        for client_id, client_secret in candidates
+    ):
         return _json_error(
             "invalid_client",
             401,

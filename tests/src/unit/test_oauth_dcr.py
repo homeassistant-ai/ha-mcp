@@ -177,6 +177,22 @@ async def test_register_rejects_bad_redirects(dcr_view_client_factory):
         assert resp.status == 400, bad
 
 
+async def test_register_rejects_deeply_nested_json_body(dcr_view_client_factory):
+    """#2218 review (mirrored from the proxy): json.loads raises
+    RecursionError on a deeply nested body — malformed metadata answers 400,
+    never a 500."""
+    client = await dcr_view_client_factory(dcr_key=KEY)
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/register",
+        data="[" * 100000 + "]" * 100000,
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "invalid_client_metadata"
+
+
 async def test_register_accepts_google_multi_origin_client(dcr_view_client_factory):
     """Accept Spark's two redirects but omit its unavailable refresh grant."""
     client = await dcr_view_client_factory(dcr_key=KEY, resource_server=object())

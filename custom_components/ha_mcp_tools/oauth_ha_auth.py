@@ -451,7 +451,8 @@ async def translated_client_id_for_refresh(
       ``UNREPRODUCIBLE`` would force re-auth on working same-origin clients.
     * Same-origin identities (client_id origin == stable origin — claude.ai's
       hosted surfaces) took the authorize fast path untranslated →
-      ``PASSTHROUGH``, compared through the shared canonical origin form.
+      ``PASSTHROUGH``, compared with the SAME raw-netloc rule as that fast
+      path.
     * Cross-origin identities with exactly one web origin and no loopback
       entries were translated to that origin on every leg → return it.
     * Everything else that is VERIFIED — multiple web origins (Gemini
@@ -473,10 +474,16 @@ async def translated_client_id_for_refresh(
     # return None (canonical_origin_url is one-to-one over normalized origins).
     stable = stable_translation_origin(registered)
     assert stable is not None
-    # Canonical comparison (#2217 review): the raw-netloc form diverged from
-    # the fast path whenever a registered redirect carried an explicit
-    # scheme-default port.
-    if origin_client_id(client_id) == stable:
+    # RAW netloc comparison, deliberately matching the authorize fast path
+    # (#2218 review — reverting #2217's canonical form): passthrough is only
+    # consistent when authorize ALSO forwarded the full client_id, and that
+    # fast path compares raw netlocs. A client_id carrying an explicit
+    # scheme-default port missed the fast path, so its token was minted under
+    # the TRANSLATED origin — a canonical comparison here passed the raw
+    # client_id through and guaranteed the core rejection this derivation
+    # exists to avoid.
+    parsed = urlparse(client_id)
+    if f"{parsed.scheme}://{parsed.netloc}" == stable:
         return RefreshDisposition.PASSTHROUGH
     return stable
 
