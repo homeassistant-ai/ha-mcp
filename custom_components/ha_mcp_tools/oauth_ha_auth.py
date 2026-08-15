@@ -7,9 +7,10 @@ browser into core, and ``{OAUTH_BASE}/token`` forwards the exchange
 server-side. Two problems this kills:
 
 * **Cached-endpoint stickiness.** A client that cached our advertised
-  endpoints keeps working after ANY auth-mode switch, because the endpoints it
-  cached are ours and dispatch per request — it can no longer end up wedged on
-  core's ``/auth/*`` (the un-retractable cache this replaces).
+  endpoints keeps reaching component-owned routes after an auth-mode switch,
+  because those routes dispatch per request — it can no longer end up wedged
+  on core's ``/auth/*`` (the un-retractable cache this replaces). A switch to a
+  mode with different credentials can still require the client to re-authorize.
 * **Cross-origin CIMD clients.** Core advertises CIMD but never fetches the
   document (core issue #176282), so clients whose redirect is not same-origin
   with their URL client_id die with "Invalid redirect URI". We validate the
@@ -23,17 +24,19 @@ connects today), so rewriting a VALIDATED cross-origin identity into that shape
 authorizes nothing a client could not already claim by presenting the
 redirect-origin as its client_id directly. Anything that fails validation is
 forwarded UNCHANGED and core's own checks apply. The CIMD fetch itself is the
-only outbound request: https-only, no redirects, 10 KiB cap, 5 s timeout,
-loopback/IP-literal hosts refused (SSRF floor per the MCP security
-considerations page).
+only outbound request: https-only, no redirects, 10 KiB cap, 5 s timeout, and
+DNS pinned to pre-validated globally routable addresses (SSRF floor per the MCP
+security considerations page).
 """
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
+import socket
 import time
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse, urlunparse
 
 import aiohttp
 from homeassistant.core import HomeAssistant
@@ -47,8 +50,103 @@ CIMD_FETCH_TIMEOUT = aiohttp.ClientTimeout(total=5)
 CIMD_CACHE_TTL = 300.0
 _CIMD_CACHE_MAX = 64
 _ALLOWED_SCHEMES = ("https",)
-# client_id URL -> (expires_monotonic, redirect_uris | None)
-_cimd_cache: dict[str, tuple[float, list[str] | None]] = {}
+# client_id URL -> (expires_monotonic, redirect_uris). The -00 draft forbids
+# caching fetch errors and invalid documents, so negative entries never live
+# here.
+_cimd_cache: dict[str, tuple[float, list[str]]] = {}
+
+
+def _reject_json_constant(constant: str) -> None:
+    """Reject NaN/Infinity, which RFC 8259 JSON does not permit."""
+    raise ValueError(f"Invalid JSON constant: {constant}")
+
+
+def _valid_cimd_client_id(client_id: str) -> bool:
+    """Return whether ``client_id`` satisfies the -00 URL-shape MUSTs."""
+    try:
+        parsed = urlparse(client_id)
+        _ = parsed.port  # urlparse defers port validation until access.
+    except ValueError:
+        return False
+    return (
+        parsed.scheme in _ALLOWED_SCHEMES
+        and bool(parsed.hostname)
+        and bool(parsed.path)
+        and parsed.path != "/"
+        and "#" not in client_id
+        and parsed.username is None
+        and parsed.password is None
+        and not any(segment in (".", "..") for segment in parsed.path.split("/"))
+    )
+
+
+async def _resolve_public_addresses(hostname: str, port: int) -> list[str]:
+    """Resolve once and return addresses only when every answer is public.
+
+    Rejecting the entire RRset when any answer is special-use prevents a host
+    from mixing a public address with a private/loopback target. The returned
+    addresses are used directly for the connection, pinning the fetch to this
+    validated resolution instead of allowing a second DNS lookup to rebind it.
+    """
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            hostname,
+            port,
+            family=socket.AF_UNSPEC,
+            type=socket.SOCK_STREAM,
+        )
+    except OSError:
+        return []
+    addresses = {str(sockaddr[0]) for *_, sockaddr in infos}
+    if not addresses:
+        return []
+    try:
+        if any(not ipaddress.ip_address(address).is_global for address in addresses):
+            return []
+    except ValueError:
+        return []
+    return sorted(addresses)
+
+
+def _pinned_url(parsed: ParseResult, address: str) -> str:
+    """Replace a parsed URL's host with a validated numeric address."""
+    host = f"[{address}]" if ":" in address else address
+    netloc = f"{host}:{parsed.port}" if parsed.port is not None else host
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
+async def _fetch_pinned_cimd(
+    session: aiohttp.ClientSession,
+    client_id: str,
+    parsed: ParseResult,
+    address: str,
+) -> tuple[bool, list[str] | None]:
+    """Fetch one pinned address; report whether the server was reached.
+
+    False lets a dual-stack caller try another validated address after a
+    transport failure. Any HTTP or document-validation response is definitive
+    and returns True so a different address cannot override it.
+    """
+    try:
+        async with session.get(
+            _pinned_url(parsed, address),
+            allow_redirects=False,
+            timeout=CIMD_FETCH_TIMEOUT,
+            headers={"Host": parsed.netloc},
+            # Preserve TLS SNI and certificate verification for the original
+            # hostname while connecting to the pinned address.
+            server_hostname=parsed.hostname if parsed.scheme == "https" else None,
+        ) as resp:
+            if resp.status != 200:
+                return True, None
+            raw = bytearray()
+            async for chunk in resp.content.iter_chunked(1024):
+                raw.extend(chunk)
+                if len(raw) > CIMD_MAX_BYTES:
+                    return True, None
+            return True, _parse_cimd(bytes(raw), client_id)
+    except (TimeoutError, aiohttp.ClientError):
+        return False, None
 
 
 def origin_client_id(redirect_uri: str) -> str:
@@ -78,6 +176,8 @@ def redirect_matches(registered: list[str], redirect_uri: str) -> bool:
             and _is_loopback_host(reg.hostname)
             and reg.hostname == req.hostname
             and reg.path == req.path
+            and reg.params == req.params
+            and reg.query == req.query
         ):
             return True
     return False
@@ -88,9 +188,9 @@ def stable_translation_origin(registered: list[str]) -> str | None:
 
     None when there is no such origin (no web redirects, or several distinct
     ones). Loopback redirects are excluded because their runtime origin embeds
-    an ephemeral port (RFC 8252) — no origin derived from them is reproducible
-    on the redirect_uri-less refresh leg, so identities whose only redirects
-    are loopback are never translated (passthrough; core decides).
+    an ephemeral port (RFC 8252) — they are translated from the presented
+    redirect on the authorize/code legs, but cannot be re-derived here for the
+    redirect_uri-less refresh leg.
     """
     origins: set[str] = set()
     for uri in registered:
@@ -104,16 +204,23 @@ def stable_translation_origin(registered: list[str]) -> str | None:
 
 
 def _translation_for(registered: list[str], client_id: str, redirect_uri: str) -> str:
-    """Translate iff the presented redirect is registered AND lands on the
-    stable origin — the one derivation the refresh leg can reproduce from the
-    registered list alone. Anything else passes through unchanged (core's own
-    validation stays the authority)."""
+    """Translate a registered redirect to the URL-shaped identity core accepts.
+
+    Web redirects use the one stable origin the refresh leg can reproduce.
+    Loopback redirects use the runtime origin including its ephemeral port.
+    Anything else passes through unchanged (core stays the authority).
+    """
+    if not redirect_matches(registered, redirect_uri):
+        return client_id
+    redirect_origin = origin_client_id(redirect_uri)
+    parsed_redirect = urlparse(redirect_uri)
+    if parsed_redirect.hostname and _is_loopback_host(parsed_redirect.hostname):
+        # A signed DCR blob is not URL-shaped, so core rejects it before login.
+        # The runtime loopback origin is URL-shaped and exactly matches the
+        # presented redirect (including its RFC 8252 ephemeral port).
+        return redirect_origin
     stable = stable_translation_origin(registered)
-    if (
-        stable is not None
-        and redirect_matches(registered, redirect_uri)
-        and origin_client_id(redirect_uri) == stable
-    ):
+    if stable is not None and redirect_origin == stable:
         return stable
     return client_id
 
@@ -130,17 +237,11 @@ async def fetch_cimd_redirects(
     UTF-8 JSON object, document ``client_id`` must round-trip exactly, and
     ``redirect_uris`` must be a list of strings.
     """
-    parsed = urlparse(client_id)
-    if (
-        parsed.scheme not in _ALLOWED_SCHEMES
-        or not parsed.hostname
-        or parsed.fragment
-        or not parsed.path
-        or parsed.path == "/"
-    ):
+    if not _valid_cimd_client_id(client_id):
         return None
-    # SSRF floor: never fetch loopback or IP-literal hosts. (DNS-rebinding is
-    # outside SECURITY.md's local-network trust model.)
+    parsed = urlparse(client_id)
+    assert parsed.hostname is not None  # established by _valid_cimd_client_id
+    # Never fetch loopback or IP-literal client identifiers.
     if _is_loopback_host(parsed.hostname):
         return None
     try:
@@ -154,31 +255,38 @@ async def fetch_cimd_redirects(
     if cached is not None and cached[0] > now:
         return cached[1]
 
-    result: list[str] | None = None
-    try:
-        async with session.get(
-            client_id, allow_redirects=False, timeout=CIMD_FETCH_TIMEOUT
-        ) as resp:
-            if resp.status == 200:
-                raw = await resp.content.read(CIMD_MAX_BYTES + 1)
-                if len(raw) <= CIMD_MAX_BYTES:
-                    result = _parse_cimd(raw, client_id)
-    except (TimeoutError, aiohttp.ClientError, UnicodeDecodeError):
-        result = None
-
-    if len(_cimd_cache) >= _CIMD_CACHE_MAX:
-        _cimd_cache.clear()
-    _cimd_cache[client_id] = (now + CIMD_CACHE_TTL, result)
-    return result
+    addresses = await _resolve_public_addresses(parsed.hostname, parsed.port or 443)
+    for address in addresses:
+        reached, result = await _fetch_pinned_cimd(session, client_id, parsed, address)
+        if not reached:
+            # A dual-stack hostname may have one temporarily unreachable
+            # address. Try the other address from the same pinned public RRset.
+            continue
+        if result is None:
+            return None
+        if len(_cimd_cache) >= _CIMD_CACHE_MAX:
+            _cimd_cache.clear()
+        _cimd_cache[client_id] = (now + CIMD_CACHE_TTL, result)
+        return result
+    return None
 
 
 def _parse_cimd(raw: bytes, client_id: str) -> list[str] | None:
     """Strict-parse a CIMD body; None unless every MUST holds."""
     try:
-        doc = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        doc = json.loads(raw.decode("utf-8"), parse_constant=_reject_json_constant)
+    except (UnicodeDecodeError, ValueError):
         return None
-    if not isinstance(doc, dict) or doc.get("client_id") != client_id:
+    if (
+        not isinstance(doc, dict)
+        or doc.get("client_id") != client_id
+        or not isinstance(doc.get("client_name"), str)
+        or not doc["client_name"].strip()
+        or "client_secret" in doc
+        or "client_secret_expires_at" in doc
+        or doc.get("token_endpoint_auth_method")
+        in ("client_secret_basic", "client_secret_jwt", "client_secret_post")
+    ):
         return None
     uris = doc.get("redirect_uris")
     if not isinstance(uris, list) or not uris:
@@ -239,15 +347,19 @@ async def translated_client_id_for_refresh(
       hosted surfaces) took the fast path untranslated → None here.
     * Cross-origin identities with one stable web origin (Gemini Spark-class)
       were translated to that origin on every leg → return it here.
-    * Identities with no stable origin (loopback-only, or several web origins)
-      were never translated → None here.
+    * Loopback identities use their runtime origin (including the ephemeral
+      port) for authorization/code exchange. That value cannot be reproduced
+      on the redirect-less refresh leg, so None here makes core reject refresh
+      and the client re-authorize rather than forwarding a mismatched identity.
+    * Identities with several web origins were never translated → None here.
 
     Known caveat, documented not hidden: an identity whose registration mixes
     ONE stable web origin with loopback entries and that authorized via a
-    loopback redirect was passed through on the code leg but translates here —
-    that refresh fails and the client re-authorizes. No observed client has
-    that shape; fixing it would require remembering which redirect each token
-    used, i.e. server-side state this design deliberately avoids.
+    loopback redirect used the runtime loopback origin on the code leg but
+    translates to the web origin here — that refresh fails and the client
+    re-authorizes. No observed client has that shape; fixing it would require
+    remembering which redirect each token used, i.e. server-side state this
+    design deliberately avoids.
     """
     registered: list[str] | None = None
     if dcr_key is not None:
@@ -285,8 +397,17 @@ def core_token_base_url(hass: HomeAssistant) -> str:
     try:
         # str() wrapper: hass typing stubs leave get_url as Any in this
         # environment (mypy no-any-return).
-        return str(get_url(hass, prefer_external=True, allow_cloud=True)).rstrip("/")
+        return str(
+            get_url(
+                hass,
+                prefer_external=False,
+                allow_cloud=False,
+                require_ssl=True,
+            )
+        ).rstrip("/")
     except NoURLAvailableError:
-        # No configured URL with TLS on: best-effort loopback — the forward
-        # fails loudly (503) rather than trusting caller-supplied headers.
-        return f"http://127.0.0.1:{getattr(api, 'port', 8123)}"
+        # Preserve the listener's TLS scheme. Certificate verification may
+        # still reject a loopback hostname, but that fails loudly (503) rather
+        # than leaking the token request in clear text or trusting caller
+        # supplied headers.
+        return f"https://127.0.0.1:{getattr(api, 'port', 8123)}"

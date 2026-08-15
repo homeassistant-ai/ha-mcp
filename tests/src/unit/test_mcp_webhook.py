@@ -26,6 +26,7 @@ from ._embedded_stubs import FakeSession, FakeUpstream, install, make_request
 install()
 
 import custom_components.ha_mcp_tools.mcp_webhook as mw  # noqa: E402
+from custom_components.ha_mcp_tools import oauth_legacy  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_DCR_SIGNING_KEY,
     DATA_WEBHOOK,
@@ -1187,6 +1188,21 @@ class TestRegisterWebhook:
             and record.name == mw.__name__
             and "legacy OAuth will serve only" in record.getMessage()
             for record in caplog.records
+        )
+        assert not any(
+            record.levelname == "ERROR" and record.name == oauth_legacy.__name__
+            for record in caplog.records
+        )
+
+        await mw.async_unregister_webhook(hass)
+        assert (
+            oauth_legacy.legacy_credentials_active(
+                hass,
+                "cid",
+                "secret",
+                signing_key,
+            )
+            is False
         )
 
     async def test_switched_away_from_legacy_flags_restart(self, monkeypatch):

@@ -174,7 +174,7 @@ def _validate_autoapprove_authorize(params: Any) -> web.Response | None:
         return _json_error("unsupported_response_type", 400)
     if params.get("code_challenge_method", "") != "S256":
         return _json_error("invalid_request", 400, "code_challenge_method must be S256")
-    if not _PKCE_CHALLENGE_RE.match(params.get("code_challenge", "")):
+    if not _PKCE_CHALLENGE_RE.fullmatch(params.get("code_challenge", "")):
         return _json_error(
             "invalid_request", 400, "invalid code_challenge (43-char base64url)"
         )
@@ -366,10 +366,10 @@ class AutoApproveTokenView(HomeAssistantView):
     ) -> web.Response:
         """Forward the token exchange to core's /auth/token (server-side).
 
-        client_id gets the same deterministic translation as the authorize leg
-        (core bound the code to the translated id). The refresh grant carries no
-        redirect_uri, so translation for DCR/CIMD identities re-derives from the
-        registered list's first entry.
+        client_id gets the same translation as the authorize leg (core bound
+        the code to the translated id). The refresh grant carries no
+        redirect_uri, so web-origin DCR/CIMD translations are re-derived from
+        the registered list; ephemeral loopback clients re-authorize.
         """
         from multidict import MultiDict
 

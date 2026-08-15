@@ -69,6 +69,7 @@ from .oauth_legacy import (
     LegacyOAuthRouteConflict,
     bind_legacy_views,
     build_unbound_legacy_provider,
+    clear_scoped_legacy_credentials,
 )
 
 if TYPE_CHECKING:
@@ -815,6 +816,10 @@ async def async_register_webhook(
         raise ValueError(f"Unknown webhook auth mode: {auth_mode!r}")
 
     webhook_id: str = entry.data[DATA_WEBHOOK_ID]
+    # The scoped-only provider is held in this registration's cfg and stops
+    # serving on every reload/unload. Its top-level credential fingerprint must
+    # follow that lifetime rather than surviving a switch away from legacy.
+    clear_scoped_legacy_credentials(hass)
     # Reload-safe and off-means-off: clear any leftover registration from a
     # crashed unload before (re)registering — or before storing a local-only
     # config (async_unregister is a no-op pop when nothing is registered).
@@ -863,6 +868,7 @@ async def async_register_webhook(
                 async_unregister(hass, webhook_id)
             with suppress(Exception):
                 await session.close()
+            clear_scoped_legacy_credentials(hass)
             raise
 
     # A PRIOR registration this HA session may still own the legacy root views
@@ -887,6 +893,7 @@ async def async_unregister_webhook(hass: HomeAssistant) -> None:
     restarts); they 404 while their mode is not live (see ``active_auth_mode``
     / ``LegacyOAuthProvider.is_active``).
     """
+    clear_scoped_legacy_credentials(hass)
     domain_data = hass.data.get(DOMAIN)
     if not isinstance(domain_data, dict):
         return

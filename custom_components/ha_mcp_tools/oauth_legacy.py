@@ -86,8 +86,8 @@ PKCE_VERIFIER_MIN = 43
 PKCE_VERIFIER_MAX = 128
 # SHA-256 → 32 bytes → 43 base64url chars (no padding).
 PKCE_S256_CHALLENGE_LEN = 43
-_PKCE_VERIFIER_RE = re.compile(r"^[A-Za-z0-9._~-]+$")
-_PKCE_CHALLENGE_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
+_PKCE_VERIFIER_RE = re.compile(r"[A-Za-z0-9._~-]+")
+_PKCE_CHALLENGE_RE = re.compile(r"[A-Za-z0-9_-]{43}")
 
 # Pending-code dict cap. An attacker spamming /authorize with valid params
 # could grow the dict between the prune passes that run on each issuance.
@@ -200,14 +200,6 @@ def bind_legacy_views(
 
     owner = hass.data.get(OAUTH_ROUTE_OWNER_KEY)
     if owner is not None and owner != _DOMAIN:
-        _LOGGER.error(
-            "HA-MCP: cannot enable legacy OAuth mode -- the Webhook Proxy "
-            "add-on ('%s') already owns the root /authorize and /token routes "
-            "in this Home Assistant instance, and Home Assistant cannot "
-            "release them until it restarts. Stop that add-on and restart "
-            "Home Assistant, then enable legacy mode again.",
-            owner,
-        )
         raise LegacyOAuthRouteConflict(owner)
 
     bound_provider = hass.data.get(_LEGACY_PROVIDER_KEY)
@@ -273,6 +265,11 @@ def build_unbound_legacy_provider(
         signing_key=key_bytes,
         active_mode_getter=lambda: _live_auth_mode(hass),
     )
+
+
+def clear_scoped_legacy_credentials(hass: HomeAssistant) -> None:
+    """Forget credentials when no scoped-only legacy provider is live."""
+    hass.data.pop(_LEGACY_SCOPED_FP_KEY, None)
 
 
 def legacy_credentials_active(
@@ -499,7 +496,7 @@ class PKCECodeStore:
         # rejected explicitly rather than silently hashing junk.
         if not (PKCE_VERIFIER_MIN <= len(code_verifier) <= PKCE_VERIFIER_MAX):
             return False
-        if not _PKCE_VERIFIER_RE.match(code_verifier):
+        if not _PKCE_VERIFIER_RE.fullmatch(code_verifier):
             return False
         entry = self._codes.pop(code, None)
         if entry is None:
@@ -662,7 +659,7 @@ class LegacyOAuthProvider:
             return _text_error(400, "unsupported_response_type")
         if code_challenge_method != "S256":
             return _text_error(400, "invalid code_challenge_method (S256 required)")
-        if not _PKCE_CHALLENGE_RE.match(code_challenge):
+        if not _PKCE_CHALLENGE_RE.fullmatch(code_challenge):
             return _text_error(
                 400, "invalid code_challenge (must be 43-char base64url)"
             )

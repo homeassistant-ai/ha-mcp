@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -40,6 +41,7 @@ def test_redirect_matches_loopback_port_agnostic():
     assert redirect_matches(registered, "http://localhost:61264/callback")
     assert redirect_matches(registered, "http://127.0.0.1:3118/callback")
     assert not redirect_matches(registered, "http://localhost:61264/other")
+    assert not redirect_matches(registered, "http://localhost:61264/callback?next=1")
     assert not redirect_matches(registered, "http://evil.example:80/callback")
 
 
@@ -76,6 +78,21 @@ async def test_resolve_dcr_blob_translates_to_redirect_origin():
         redirect_uri="https://claude.ai/api/mcp/auth_callback",
     )
     assert out == "https://claude.ai"
+
+
+@pytest.mark.asyncio
+async def test_resolve_loopback_only_dcr_uses_runtime_origin():
+    """Give core a URL-shaped identity for a loopback-only DCR client."""
+    cid = mint_client_id(KEY, ["http://localhost/callback"])
+
+    out = await resolve_forward_client_id(
+        session=None,
+        dcr_key=KEY,
+        client_id=cid,
+        redirect_uri="http://localhost:61264/callback",
+    )
+
+    assert out == "http://localhost:61264"
 
 
 @pytest.mark.asyncio
@@ -218,7 +235,10 @@ def test_core_token_base_url_uses_configured_https_url(monkeypatch):
     class NoURLAvailableError(Exception):
         pass
 
-    def configured_url(_hass, **_kwargs):
+    kwargs = {}
+
+    def configured_url(_hass, **call_kwargs):
+        kwargs.update(call_kwargs)
         return "https://ha.example"
 
     network = ModuleType("homeassistant.helpers.network")
@@ -230,6 +250,11 @@ def test_core_token_base_url_uses_configured_https_url(monkeypatch):
     )
 
     assert oauth_ha_auth.core_token_base_url(hass) == "https://ha.example"
+    assert kwargs == {
+        "prefer_external": False,
+        "allow_cloud": False,
+        "require_ssl": True,
+    }
 
 
 def test_core_token_base_url_falls_back_when_no_url_available(monkeypatch):
@@ -249,7 +274,7 @@ def test_core_token_base_url_falls_back_when_no_url_available(monkeypatch):
         config=SimpleNamespace(api=SimpleNamespace(use_ssl=True, port=9443))
     )
 
-    assert oauth_ha_auth.core_token_base_url(hass) == "http://127.0.0.1:9443"
+    assert oauth_ha_auth.core_token_base_url(hass) == "https://127.0.0.1:9443"
 
 
 def _module_is(name: str, root: str) -> bool:
@@ -311,6 +336,7 @@ async def test_fetch_cimd_valid_document(aiohttp_client_factory, monkeypatch):
     doc_url, session = await aiohttp_client_factory(
         body={
             "client_id": "PLACEHOLDER_SELF",
+            "client_name": "Test client",
             "redirect_uris": ["https://g.example/cb"],
         },
         status=200,
@@ -318,6 +344,11 @@ async def test_fetch_cimd_valid_document(aiohttp_client_factory, monkeypatch):
     )
     monkeypatch.setattr(oauth_ha_auth, "_ALLOWED_SCHEMES", ("http", "https"))
     monkeypatch.setattr(oauth_ha_auth, "_is_loopback_host", lambda _host: False)
+    monkeypatch.setattr(
+        oauth_ha_auth,
+        "_resolve_public_addresses",
+        lambda _host, _port: _async_result(["127.0.0.1"]),
+    )
 
     oauth_ha_auth._cimd_cache.clear()
     uris = await oauth_ha_auth.fetch_cimd_redirects(session, doc_url)
@@ -332,6 +363,7 @@ async def test_fetch_cimd_rejects_mismatched_client_id(
     doc_url, session = await aiohttp_client_factory(
         body={
             "client_id": "https://other.example/x",
+            "client_name": "Test client",
             "redirect_uris": ["https://g.example/cb"],
         },
         status=200,
@@ -339,9 +371,15 @@ async def test_fetch_cimd_rejects_mismatched_client_id(
     )
     monkeypatch.setattr(oauth_ha_auth, "_ALLOWED_SCHEMES", ("http", "https"))
     monkeypatch.setattr(oauth_ha_auth, "_is_loopback_host", lambda _host: False)
+    monkeypatch.setattr(
+        oauth_ha_auth,
+        "_resolve_public_addresses",
+        lambda _host, _port: _async_result(["127.0.0.1"]),
+    )
 
     oauth_ha_auth._cimd_cache.clear()
     assert await oauth_ha_auth.fetch_cimd_redirects(session, doc_url) is None
+    assert doc_url not in oauth_ha_auth._cimd_cache
 
 
 @pytest.mark.asyncio
@@ -353,3 +391,169 @@ async def test_fetch_cimd_refuses_ip_literal_and_loopback():
         is None
     )
     assert await oauth_ha_auth.fetch_cimd_redirects(None, "https://h.example/") is None
+
+
+async def _async_result(value):
+    """Return a value from an async monkeypatch."""
+    return value
+
+
+@pytest.mark.parametrize(
+    "client_id",
+    [
+        "https://user@example.com/client.json",
+        "https://example.com/a/../client.json",
+        "https://example.com/client.json#",
+        "https://example.com:bad/client.json",
+    ],
+)
+def test_cimd_client_id_rejects_forbidden_url_shapes(client_id):
+    """Enforce the -00 username, dot-segment, fragment, and port MUSTs."""
+    assert oauth_ha_auth._valid_cimd_client_id(client_id) is False
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {},
+        {"client_secret": "secret"},
+        {"client_secret_expires_at": 0},
+        {"token_endpoint_auth_method": "client_secret_basic"},
+        {"token_endpoint_auth_method": "client_secret_jwt"},
+        {"token_endpoint_auth_method": "client_secret_post"},
+    ],
+)
+def test_parse_cimd_requires_name_and_forbids_shared_secrets(extra):
+    """Enforce MCP's client_name and the -00 shared-secret prohibitions."""
+    client_id = "https://client.example/client.json"
+    document = {
+        "client_id": client_id,
+        "redirect_uris": ["https://client.example/callback"],
+        **extra,
+    }
+    if extra:
+        document["client_name"] = "Client"
+
+    assert oauth_ha_auth._parse_cimd(json.dumps(document).encode(), client_id) is None
+
+
+def test_parse_cimd_rejects_nonstandard_json_constants():
+    """Reject NaN even though Python's JSON decoder accepts it by default."""
+    client_id = "https://client.example/client.json"
+    raw = (
+        b'{"client_id":"https://client.example/client.json",'
+        b'"client_name":"Client","redirect_uris":["https://client.example/cb"],'
+        b'"logo_uri":NaN}'
+    )
+
+    assert oauth_ha_auth._parse_cimd(raw, client_id) is None
+
+
+class _ChunkedContent:
+    """A stream whose one-shot read omits later chunks (the reviewed failure)."""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    async def read(self, _limit):
+        return self._chunks[0]
+
+    async def iter_chunked(self, _size):
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _FetchResponse:
+    status = 200
+
+    def __init__(self, chunks):
+        self.content = _ChunkedContent(chunks)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+
+class _FetchSession:
+    def __init__(self, responses):
+        self._responses = responses
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return self._responses.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_fetch_cimd_reads_entire_stream_before_accepting(monkeypatch):
+    """Reject trailing bytes beyond the cap even when read(n) returns early."""
+    client_id = "https://client.example/client.json"
+    valid_prefix = json.dumps(
+        {
+            "client_id": client_id,
+            "client_name": "Client",
+            "redirect_uris": ["https://client.example/cb"],
+        }
+    ).encode()
+    session = _FetchSession(
+        [_FetchResponse([valid_prefix, b" " * oauth_ha_auth.CIMD_MAX_BYTES])]
+    )
+    monkeypatch.setattr(
+        oauth_ha_auth,
+        "_resolve_public_addresses",
+        lambda _host, _port: _async_result(["93.184.216.34"]),
+    )
+    oauth_ha_auth._cimd_cache.clear()
+
+    assert await oauth_ha_auth.fetch_cimd_redirects(session, client_id) is None
+    assert client_id not in oauth_ha_auth._cimd_cache
+
+
+@pytest.mark.asyncio
+async def test_invalid_cimd_is_not_negative_cached(monkeypatch):
+    """A corrected document is retried immediately after an invalid response."""
+    client_id = "https://client.example/client.json"
+    invalid = json.dumps(
+        {
+            "client_id": client_id,
+            "redirect_uris": ["https://client.example/cb"],
+        }
+    ).encode()
+    valid = json.dumps(
+        {
+            "client_id": client_id,
+            "client_name": "Client",
+            "redirect_uris": ["https://client.example/cb"],
+        }
+    ).encode()
+    session = _FetchSession([_FetchResponse([invalid]), _FetchResponse([valid])])
+    monkeypatch.setattr(
+        oauth_ha_auth,
+        "_resolve_public_addresses",
+        lambda _host, _port: _async_result(["93.184.216.34"]),
+    )
+    oauth_ha_auth._cimd_cache.clear()
+
+    assert await oauth_ha_auth.fetch_cimd_redirects(session, client_id) is None
+    assert await oauth_ha_auth.fetch_cimd_redirects(session, client_id) == [
+        "https://client.example/cb"
+    ]
+    assert len(session.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_dns_rrset_with_private_answer_is_rejected(monkeypatch):
+    """Fail closed when a hostname mixes public and private DNS answers."""
+
+    class Loop:
+        async def getaddrinfo(self, *_args, **_kwargs):
+            return [
+                (2, 1, 6, "", ("93.184.216.34", 443)),
+                (2, 1, 6, "", ("192.168.1.10", 443)),
+            ]
+
+    monkeypatch.setattr(oauth_ha_auth.asyncio, "get_running_loop", Loop)
+
+    assert await oauth_ha_auth._resolve_public_addresses("client.example", 443) == []

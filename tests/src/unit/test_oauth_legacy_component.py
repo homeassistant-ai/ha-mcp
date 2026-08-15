@@ -329,6 +329,12 @@ class TestPKCECodes:
         code = provider.issue_code(REDIRECT_URI, _challenge_for(verifier))
         assert provider.consume_code(code, REDIRECT_URI, verifier) is False
 
+    def test_verifier_with_trailing_newline_rejected(self):
+        provider = _make_provider()
+        verifier = "a" * 43 + "\n"
+        code = provider.issue_code(REDIRECT_URI, _challenge_for(verifier))
+        assert provider.consume_code(code, REDIRECT_URI, verifier) is False
+
     def test_verifier_over_max_length_rejected(self):
         # RFC 7636 §4.1 caps the verifier at 128 chars; one over must be
         # rejected on length before any hashing.
@@ -558,6 +564,13 @@ class TestAuthorizeViewGet:
         response = await view.get(request)
         assert response.status == 400
         assert "code_challenge" in response.text
+
+    async def test_rejects_code_challenge_with_trailing_newline(self):
+        provider = _make_provider()
+        view = oauth_legacy.AuthorizeView(provider)
+        request = _make_get_request(_authorize_query(code_challenge="a" * 43 + "\n"))
+        response = await view.get(request)
+        assert response.status == 400
 
     async def test_consent_page_shows_redirect_domain_and_escapes_it(self):
         provider = _make_provider()
@@ -1047,6 +1060,30 @@ class TestLegacyCredentialsActive:
                 hass,
                 CLIENT_ID,
                 "different-secret",
+                key,
+            )
+            is False
+        )
+
+    def test_clear_scoped_credentials_removes_stale_identity(self):
+        """An unloaded scoped provider must no longer expose its credentials."""
+        hass = _make_hass()
+        hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "mcp_proxy_dev"
+        key = secrets.token_bytes(32)
+        oauth_legacy.build_unbound_legacy_provider(
+            hass,
+            CLIENT_ID,
+            CLIENT_SECRET,
+            key,
+        )
+
+        oauth_legacy.clear_scoped_legacy_credentials(hass)
+
+        assert (
+            oauth_legacy.legacy_credentials_active(
+                hass,
+                CLIENT_ID,
+                CLIENT_SECRET,
                 key,
             )
             is False

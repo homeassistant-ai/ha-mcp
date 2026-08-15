@@ -380,6 +380,14 @@ class TestAuthorizeView:
         )
         assert resp.status == 400
 
+    async def test_code_challenge_with_trailing_newline_rejected(self):
+        hass = _live_hass()
+        view = aa.AutoApproveAuthorizeView(hass)
+        resp = await view.get(
+            _get_request(_authorize_query(code_challenge="a" * 43 + "\n"))
+        )
+        assert resp.status == 400
+
     async def test_code_store_at_capacity_redirects_temporarily_unavailable(self):
         provider = aa.AutoApproveProvider()
         provider.issue_code = lambda *a, **k: None  # type: ignore[method-assign]

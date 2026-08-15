@@ -279,7 +279,7 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "py/clear-text-logging-sensitive-data",
         "custom_components/ha_mcp_tools/mcp_webhook.py",
         "as clear text",
-        "",
+        "OAUTH_BASE,",
         "False positive: the legacy route-conflict warning logs the route-owner "
         "domain string from hass.data plus the OAUTH_BASE public URL-path "
         "constant. CodeQL's name-based classification treats the oauth-named "
