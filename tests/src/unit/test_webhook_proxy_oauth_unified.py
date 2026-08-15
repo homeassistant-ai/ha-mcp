@@ -8,6 +8,7 @@ import types
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -53,10 +54,12 @@ def oauth_stack(monkeypatch):
     monkeypatch.setattr(oauth, "_backend_alive", _backend_alive)
     dcr = _load_submodule(monkeypatch, package_name, "oauth_dcr")
     indirect = _load_submodule(monkeypatch, package_name, "oauth_indirect")
+    autoapprove = _load_submodule(monkeypatch, package_name, "oauth_autoapprove")
     return SimpleNamespace(
         oauth=oauth,
         dcr=dcr,
         indirect=indirect,
+        autoapprove=autoapprove,
         package_name=package_name,
     )
 
@@ -73,6 +76,17 @@ def _hass(oauth, mode: str, *, dcr_key: bytes | None = KEY):
 
 def _json_request(body):
     return SimpleNamespace(json=AsyncMock(return_value=body))
+
+
+def _oauth_request(*, query=None, form=None, host="ha.example"):
+    """Build the request surface shared by the unified view tests."""
+    return SimpleNamespace(
+        query=dict(query or {}),
+        headers={"Host": host},
+        scheme="https",
+        path="/api/mcp_proxy_dev/oauth/authorize",
+        post=AsyncMock(return_value=dict(form or {})),
+    )
 
 
 def test_dcr_client_id_round_trips_multiple_redirects(oauth_stack):
@@ -277,3 +291,135 @@ async def test_cimd_unreachable_result_is_negative_cached(oauth_stack, monkeypat
 
     resolve.assert_awaited_once_with("dead.example", 443)
     indirect._cimd_cache.clear()
+
+
+async def test_unified_authorize_dispatches_legacy_handler(
+    oauth_stack, monkeypatch
+):
+    """The scoped authorize route reuses the extracted legacy implementation."""
+    oauth, autoapprove = oauth_stack.oauth, oauth_stack.autoapprove
+    provider = object()
+    hass = _hass(oauth, oauth.MODE_LEGACY)
+    hass.data[oauth.DOMAIN]["oauth"] = provider
+    sentinel = object()
+    handler = AsyncMock(return_value=sentinel)
+    monkeypatch.setattr(autoapprove, "handle_legacy_authorize_get", handler)
+
+    response = await autoapprove.AutoApproveAuthorizeView(hass).get(
+        _oauth_request()
+    )
+
+    assert response is sentinel
+    handler.assert_awaited_once()
+    assert handler.await_args.args[0] is provider
+
+
+async def test_none_mode_autoapproves_any_valid_redirect(oauth_stack):
+    """None mode has no client allowlist after the maintainer decision."""
+    oauth, autoapprove = oauth_stack.oauth, oauth_stack.autoapprove
+    hass = _hass(oauth, oauth.MODE_NONE_AUTOAPPROVE)
+    provider = autoapprove.AutoApproveProvider(hass, "mcp_test", None)
+    hass.data[oauth.DOMAIN][oauth.AUTOAPPROVE_PROVIDER_KEY] = provider
+    redirect_uri = "https://connector.example/oauth/callback"
+
+    response = await autoapprove.AutoApproveAuthorizeView(hass).get(
+        _oauth_request(
+            query={
+                "response_type": "code",
+                "client_id": "https://metadata.example/client.json",
+                "redirect_uri": redirect_uri,
+                "code_challenge": "A" * 43,
+                "code_challenge_method": "S256",
+                "state": "state-1",
+            }
+        )
+    )
+
+    assert response.status == 302
+    location = response.headers["Location"]
+    assert f"{urlparse(location).scheme}://{urlparse(location).netloc}" == (
+        "https://connector.example"
+    )
+    assert parse_qs(urlparse(location).query)["state"] == ["state-1"]
+
+
+async def test_ha_auth_authorize_uses_dedicated_cimd_session(
+    oauth_stack, monkeypatch
+):
+    """Public metadata lookup never borrows the authenticated relay session."""
+    oauth = oauth_stack.oauth
+    autoapprove = oauth_stack.autoapprove
+    indirect = oauth_stack.indirect
+    hass = _hass(oauth, oauth.MODE_HA_AUTH)
+    cimd_session = object()
+    relay_session = object()
+    data = hass.data[oauth.DOMAIN]
+    data[autoapprove.CFG_CIMD_SESSION] = cimd_session
+    data["session"] = relay_session
+    resolver = AsyncMock(return_value="https://callback.example")
+    monkeypatch.setattr(indirect, "resolve_forward_client_id", resolver)
+
+    response = await autoapprove.AutoApproveAuthorizeView(hass).get(
+        _oauth_request(
+            query={
+                "client_id": "https://metadata.example/client.json",
+                "redirect_uri": "https://callback.example/cb",
+            }
+        )
+    )
+
+    assert response.status == 302
+    resolver.assert_awaited_once_with(
+        cimd_session,
+        KEY,
+        "https://metadata.example/client.json",
+        "https://callback.example/cb",
+    )
+    forwarded = parse_qs(urlparse(response.headers["Location"]).query)
+    assert forwarded["client_id"] == ["https://callback.example"]
+
+
+async def test_ha_auth_token_307s_passthrough_identity(oauth_stack):
+    """An unchanged token body stays client-side so core sees the real IP."""
+    oauth, autoapprove = oauth_stack.oauth, oauth_stack.autoapprove
+    hass = _hass(oauth, oauth.MODE_HA_AUTH, dcr_key=None)
+
+    response = await autoapprove.AutoApproveTokenView(hass).post(
+        _oauth_request(
+            form={
+                "grant_type": "authorization_code",
+                "client_id": "https://client.example/metadata.json",
+                "redirect_uri": "https://client.example/callback",
+            }
+        )
+    )
+
+    assert response.status == 307
+    assert response.headers == {
+        "Location": "/auth/token",
+        "Cache-Control": "no-store",
+    }
+
+
+async def test_ha_auth_refresh_rejects_unreproducible_identity_locally(oauth_stack):
+    """A multi-origin refresh never enters core's failed-login accounting."""
+    oauth, dcr, autoapprove = (
+        oauth_stack.oauth,
+        oauth_stack.dcr,
+        oauth_stack.autoapprove,
+    )
+    hass = _hass(oauth, oauth.MODE_HA_AUTH)
+    client_id = dcr.mint_client_id(KEY, GOOGLE_REDIRECT_URIS)
+
+    response = await autoapprove.AutoApproveTokenView(hass).post(
+        _oauth_request(
+            form={
+                "grant_type": "refresh_token",
+                "client_id": client_id,
+                "refresh_token": "opaque",
+            }
+        )
+    )
+
+    assert response.status == 400
+    assert response.json_body["error"] == "invalid_grant"

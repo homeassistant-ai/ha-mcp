@@ -435,6 +435,7 @@ async def _setup_ha_auth_oauth(
     try:
         from .auth_native import ResourceServer
         from .oauth import register_metadata_views
+        from .oauth_autoapprove import register_autoapprove_views
 
         resource_server = ResourceServer(hass, webhook_id, None)
         # Registers the seven discovery-document views at most once per HA
@@ -448,6 +449,7 @@ async def _setup_ha_auth_oauth(
         # and no restart concept — hence oauth_restart_needed stays False and
         # the marker-CLEAR path runs below.
         register_metadata_views(hass, resource_server)
+        register_autoapprove_views(hass)
     except Exception as err:
         _LOGGER.exception(
             "MCP Proxy: failed to initialise ha_auth OAuth (%s)",
@@ -557,6 +559,9 @@ async def _setup_legacy_oauth(
         oauth_restart_needed = _bind_legacy_oauth_views(
             hass, oauth_provider, route_owner, fingerprint
         )
+        from .oauth_autoapprove import register_autoapprove_views
+
+        register_autoapprove_views(hass)
     except ConfigEntryError:
         # The post-await collision re-check above already tore down (webhook
         # unregistered, session closed) — re-raise as-is so the generic

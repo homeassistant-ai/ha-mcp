@@ -31,6 +31,8 @@ WEBHOOK_PROXY_VARIANTS = {
         "config_file": "/config/.mcp_proxy_config.json",
         "inbound_log": "/config/.mcp_proxy_inbound.log",
         "oauth_marker": "/config/.mcp_proxy_oauth_restart_required",
+        "autoapprove_any_redirect": False,
+        "unified_oauth_routes": False,
         "sibling_base": "ha_mcp_webhook_proxy_dev",
         "mutex_id": "mcp_proxy_mutex",
     },
@@ -44,6 +46,8 @@ WEBHOOK_PROXY_VARIANTS = {
         "config_file": "/config/.mcp_proxy_dev_config.json",
         "inbound_log": "/config/.mcp_proxy_dev_inbound.log",
         "oauth_marker": "/config/.mcp_proxy_dev_oauth_restart_required",
+        "autoapprove_any_redirect": True,
+        "unified_oauth_routes": True,
         "sibling_base": "ha_mcp_webhook_proxy",
         "mutex_id": "mcp_proxy_dev_mutex",
     },
@@ -260,8 +264,8 @@ def _import_mcp_proxy(preload_oauth=None):
     component_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
     init_path = os.path.join(component_dir, "__init__.py")
     mod_name = f"mcp_proxy_init_{CURRENT['key']}"
-    sys.modules.pop(mod_name, None)
-    sys.modules.pop(f"{mod_name}.oauth", None)
+    for suffix in ("", ".oauth", ".oauth_autoapprove", ".oauth_dcr", ".oauth_indirect"):
+        sys.modules.pop(f"{mod_name}{suffix}", None)
     spec = importlib.util.spec_from_file_location(
         mod_name,
         init_path,
@@ -373,7 +377,15 @@ def _import_none_autoapprove_stack():
     _install_runtime_stubs()
     component_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
     pkg_name = f"mcp_proxy_init_{CURRENT['key']}"
-    for suffix in ("", ".oauth", ".oauth_autoapprove", ".auth_native", ".repairs"):
+    for suffix in (
+        "",
+        ".oauth",
+        ".oauth_autoapprove",
+        ".oauth_dcr",
+        ".oauth_indirect",
+        ".auth_native",
+        ".repairs",
+    ):
         sys.modules.pop(f"{pkg_name}{suffix}", None)
     init_path = os.path.join(component_dir, "__init__.py")
     init_spec = importlib.util.spec_from_file_location(
@@ -421,7 +433,15 @@ def _import_ha_auth_stack(tmp_secret_dir=None):
     _install_runtime_stubs()
     component_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
     pkg_name = f"mcp_proxy_init_{CURRENT['key']}"
-    for suffix in ("", ".oauth", ".auth_native", ".repairs"):
+    for suffix in (
+        "",
+        ".oauth",
+        ".oauth_autoapprove",
+        ".oauth_dcr",
+        ".oauth_indirect",
+        ".auth_native",
+        ".repairs",
+    ):
         sys.modules.pop(f"{pkg_name}{suffix}", None)
     # Create the package object first so submodules have a parent with __path__.
     init_path = os.path.join(component_dir, "__init__.py")
@@ -4708,7 +4728,7 @@ class TestHaAuthMode:
         assert entry.get("description"), "oauth_mode needs a translation description"
         assert "Beta" in entry["name"]
 
-    # ---- setup registers exactly the 7 metadata views, no root views ----
+    # ---- setup registers discovery and dev unified views, no root views ----
 
     async def test_setup_registers_seven_metadata_views_and_marks_mode(
         self, hass, tmp_path
@@ -4734,8 +4754,13 @@ class TestHaAuthMode:
             f"{CURRENT['oauth_base']}/protected-resource",
             f"{CURRENT['oauth_base']}/authorization-server",
         } | _wellknown_oauth_urls(oauth, "mcp_test")
+        if CURRENT["unified_oauth_routes"]:
+            expected |= {
+                f"{CURRENT['oauth_base']}/authorize",
+                f"{CURRENT['oauth_base']}/token",
+            }
         assert registered == expected
-        assert len(registered) == 7
+        assert len(registered) == (9 if CURRENT["unified_oauth_routes"] else 7)
         # No root /authorize or /token views in ha_auth mode.
         assert "/authorize" not in registered
         assert "/token" not in registered
@@ -4838,7 +4863,7 @@ class TestHaAuthMode:
             hass.http.register_view.reset_mock()
             # A second setup (config-entry reload) must NOT re-register the views.
             await mod.async_setup_entry(hass, MagicMock())
-        assert first == 7
+        assert first == (9 if CURRENT["unified_oauth_routes"] else 7)
         assert hass.http.register_view.call_count == 0
         # The register-once flag lives in oauth.py (a top-level hass.data key),
         # not on the integration package.
@@ -4860,7 +4885,9 @@ class TestHaAuthMode:
             patch.object(mod.aiohttp, "ClientSession", return_value=session),
         ):
             await mod.async_setup_entry(hass, MagicMock())
-            assert hass.http.register_view.call_count == 7
+            assert hass.http.register_view.call_count == (
+                9 if CURRENT["unified_oauth_routes"] else 7
+            )
             flag_key = oauth._METADATA_VIEWS_REGISTERED_KEY
             assert hass.data[flag_key] is True
             await mod.async_unload_entry(hass, MagicMock())
@@ -4905,8 +4932,10 @@ class TestHaAuthMode:
             patch.object(mod, "async_register"),
             patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
         ):
-            await mod.async_setup_entry(hass, MagicMock())  # ha_auth: 7 metadata
-            assert hass.http.register_view.call_count == 7
+            await mod.async_setup_entry(hass, MagicMock())  # ha_auth discovery
+            assert hass.http.register_view.call_count == (
+                9 if CURRENT["unified_oauth_routes"] else 7
+            )
             hass.http.register_view.reset_mock()
             await mod.async_setup_entry(hass, MagicMock())  # legacy: only 2 root
         registered = {
@@ -4935,8 +4964,10 @@ class TestHaAuthMode:
             patch.object(mod, "async_register"),
             patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
         ):
-            await mod.async_setup_entry(hass, MagicMock())  # legacy: 7 + 2 root
-            assert hass.http.register_view.call_count == 9
+            await mod.async_setup_entry(hass, MagicMock())  # legacy views + root
+            assert hass.http.register_view.call_count == (
+                11 if CURRENT["unified_oauth_routes"] else 9
+            )
             hass.http.register_view.reset_mock()
             await mod.async_setup_entry(hass, MagicMock())  # ha_auth: reuse all
         assert hass.http.register_view.call_count == 0
@@ -6203,27 +6234,33 @@ class TestNoneAutoApproveMode:
         assert isinstance(t1, str) and len(t1) >= 20
         assert t1 != t2
 
-    # ---- redirect open-redirect gate (allowlist-only) ----
+    # ---- none-mode redirect policy ----
 
-    def test_redirect_gate_allows_claude_callback_only(self):
+    def test_redirect_gate_matches_flavor_policy(self):
         _mod, _oauth, autoapprove, _an = _import_none_autoapprove_stack()
-        assert autoapprove._is_valid_autoapprove_redirect(self.CLAUDE_REDIRECT) is True
-        # A same-host-different-path or any other https URL is NOT allowlisted.
-        assert (
-            autoapprove._is_valid_autoapprove_redirect("https://claude.ai/evil")
-            is False
-        )
-        assert (
-            autoapprove._is_valid_autoapprove_redirect("https://evil.example/cb")
-            is False
-        )
-        # http (non-https) fails the floor before the allowlist even matters.
-        assert (
-            autoapprove._is_valid_autoapprove_redirect(
-                "http://claude.ai/api/mcp/auth_callback"
+        if CURRENT["autoapprove_any_redirect"]:
+            base = {
+                "response_type": "code",
+                "code_challenge": "A" * 43,
+                "code_challenge_method": "S256",
+            }
+            assert (
+                autoapprove._validate_autoapprove_authorize(
+                    {**base, "redirect_uri": self.CLAUDE_REDIRECT}
+                )
+                is None
             )
-            is False
-        )
+            assert (
+                autoapprove._validate_autoapprove_authorize(
+                    {**base, "redirect_uri": "https://other.example/cb"}
+                )
+                is None
+            )
+        else:
+            assert autoapprove._is_valid_autoapprove_redirect(self.CLAUDE_REDIRECT)
+            assert not autoapprove._is_valid_autoapprove_redirect(
+                "https://other.example/cb"
+            )
 
     # ---- AutoApproveAuthorizeView (GET: issue code, 302, no UI) ----
 
@@ -6304,7 +6341,7 @@ class TestNoneAutoApproveMode:
         assert expected in q
         assert q["iss"] == [advertised]
 
-    async def test_authorize_rejects_non_allowlisted_redirect_with_400(self):
+    async def test_authorize_applies_flavor_redirect_policy(self):
         _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
         hass, _provider = self._none_live_hass(oauth, autoapprove)
         view = autoapprove.AutoApproveAuthorizeView(hass)
@@ -6324,9 +6361,13 @@ class TestNoneAutoApproveMode:
             patch.object(autoapprove.web, "Response") as resp,
         ):
             await view.get(request)
-        # 400 in place — NEVER a 302 to an unvalidated target.
-        assert jr.call_args.kwargs["status"] == 400
-        resp.assert_not_called()
+        if CURRENT["autoapprove_any_redirect"]:
+            resp.assert_called_once()
+            assert resp.call_args.kwargs["status"] == 302
+            jr.assert_not_called()
+        else:
+            assert jr.call_args.kwargs["status"] == 400
+            resp.assert_not_called()
 
     async def test_authorize_rejects_non_s256(self):
         _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
