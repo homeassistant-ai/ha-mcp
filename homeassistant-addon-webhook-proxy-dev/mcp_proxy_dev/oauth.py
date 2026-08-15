@@ -425,6 +425,8 @@ async def _backend_alive(hass: HomeAssistant) -> bool:
         try:
             await writer.wait_closed()
         except OSError:
+            # Best-effort cleanup: the probe connection already succeeded, so
+            # a failure while closing the socket does not change the verdict.
             pass
 
     _backend_alive_cache[key] = (time.monotonic() + _BACKEND_ALIVE_TTL, alive)
