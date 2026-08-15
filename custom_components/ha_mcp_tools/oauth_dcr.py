@@ -144,13 +144,13 @@ def _non_loopback_origins(redirect_uris: list[str]) -> set[tuple[str, str, int]]
 
 
 def _refresh_identity_is_reproducible(redirect_uris: list[str]) -> bool:
-    """Return whether every authorization leg maps to one stable web origin."""
-    if any(
+    """Return whether every callback maps to exactly one stable web origin."""
+    if len(_non_loopback_origins(redirect_uris)) != 1:
+        return False
+    return not any(
         (hostname := urlparse(uri).hostname) is None or _is_loopback_host(hostname)
         for uri in redirect_uris
-    ):
-        return False
-    return len(_non_loopback_origins(redirect_uris)) == 1
+    )
 
 
 def _redirect_uris_error(value: Any) -> tuple[str, str] | None:
@@ -173,11 +173,6 @@ def _redirect_uris_error(value: Any) -> tuple[str, str] | None:
             "redirect_uris must be https URLs or http loopback URLs "
             "(RFC 8252) without fragments",
         )
-    if len(_non_loopback_origins(cast(list[str], value))) > 1:
-        return (
-            "invalid_redirect_uri",
-            "all non-loopback redirect_uris must share one origin",
-        )
     return None
 
 
@@ -187,8 +182,9 @@ def _active_grant_types(hass: HomeAssistant, redirect_uris: list[str]) -> list[s
     none mode's auto-approve token endpoint rejects refresh grants and its AS
     document advertises only ``authorization_code`` — the registration response
     must not promise more. ha_auth forwards to core, but refresh is advertised
-    only when every callback maps to the same reproducible non-loopback identity;
-    an ephemeral loopback origin cannot be reconstructed without server state.
+    only when every callback maps to exactly one reproducible non-loopback
+    origin. Multiple web origins and ephemeral loopback origins cannot be
+    reconstructed for a redirect_uri-less refresh grant without server state.
     """
     domain_data = hass.data.get(DOMAIN)
     cfg = domain_data.get(DATA_WEBHOOK) if isinstance(domain_data, dict) else None

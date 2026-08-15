@@ -24,6 +24,10 @@ from custom_components.ha_mcp_tools.oauth_ha_auth import (  # noqa: E402
 )
 
 KEY = b"k" * 32
+GOOGLE_REDIRECT_URIS = [
+    "https://oauth-redirect.googleusercontent.com/r/ha-mcp",
+    "https://oauth-redirect-sandbox.googleusercontent.com/r/ha-mcp",
+]
 
 
 def test_cimd_timing_constants():
@@ -120,16 +124,30 @@ async def test_resolve_dcr_blob_with_unregistered_redirect_passes_through():
 
 
 @pytest.mark.asyncio
-async def test_resolve_multi_origin_registration_passes_through():
-    """Skip authorization translation when no stable origin exists."""
-    cid = mint_client_id(KEY, ["https://a.example/cb", "https://b.example/cb"])
+@pytest.mark.parametrize(
+    ("redirect_uri", "expected"),
+    [
+        (GOOGLE_REDIRECT_URIS[0], "https://oauth-redirect.googleusercontent.com"),
+        (
+            GOOGLE_REDIRECT_URIS[1],
+            "https://oauth-redirect-sandbox.googleusercontent.com",
+        ),
+    ],
+)
+async def test_resolve_google_multi_origin_registration_uses_presented_origin(
+    redirect_uri, expected
+):
+    """Translate each Spark request to the origin of its matched redirect."""
+    cid = mint_client_id(KEY, GOOGLE_REDIRECT_URIS)
+
     out = await resolve_forward_client_id(
         session=None,
         dcr_key=KEY,
         client_id=cid,
-        redirect_uri="https://b.example/cb",
+        redirect_uri=redirect_uri,
     )
-    assert out == cid  # translation would disagree with the refresh leg — skip it
+
+    assert out == expected
 
 
 @pytest.mark.parametrize(

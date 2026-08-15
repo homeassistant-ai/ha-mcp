@@ -418,9 +418,9 @@ class AutoApproveTokenView(HomeAssistantView):
                         return _json_error(
                             "invalid_grant",
                             400,
-                            "re-authorize: loopback-registered clients cannot "
-                            "refresh (the token is bound to an ephemeral "
-                            "loopback origin)",
+                            "re-authorize: this client's registration has no "
+                            "single web origin to re-derive, so refresh is "
+                            "unavailable",
                         )
             else:
                 # Authorization-code exchanges stay on the default path even

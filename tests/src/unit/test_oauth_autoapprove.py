@@ -1016,3 +1016,39 @@ async def test_ha_auth_refresh_loopback_only_dcr_client_gets_invalid_grant(
     assert resp.status == 400
     assert (await resp.json())["error"] == "invalid_grant"
     assert session.calls == []  # never reached core
+
+
+async def test_ha_auth_refresh_multi_origin_dcr_client_gets_invalid_grant(
+    unified_view_client_factory,
+):
+    """Reject Spark refresh locally when its request origin cannot be re-derived."""
+    session = _CoreTokenSession()
+    dcr_key = b"d" * 32
+    client_id = oauth_dcr.mint_client_id(
+        dcr_key,
+        [
+            "https://oauth-redirect.googleusercontent.com/r/ha-mcp",
+            "https://oauth-redirect-sandbox.googleusercontent.com/r/ha-mcp",
+        ],
+    )
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=dcr_key
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": "refresh-1",
+            "client_id": client_id,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 400
+    assert await resp.json() == {
+        "error": "invalid_grant",
+        "error_description": "re-authorize: this client's registration has no "
+        "single web origin to re-derive, so refresh is unavailable",
+    }
+    assert session.calls == []  # never reached core

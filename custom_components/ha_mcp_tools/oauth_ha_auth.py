@@ -232,9 +232,10 @@ def stable_translation_origin(registered: list[str]) -> str | None:
 def _translation_for(registered: list[str], client_id: str, redirect_uri: str) -> str:
     """Translate a registered redirect to the URL-shaped identity core accepts.
 
-    Web redirects use the one stable origin the refresh leg can reproduce.
+    Web redirects use the presented redirect's origin, so multi-origin
+    registrations translate consistently across the authorize and code legs.
     Loopback redirects use the runtime origin including its ephemeral port.
-    Anything else passes through unchanged (core stays the authority).
+    Unregistered redirects pass through unchanged (core stays the authority).
     """
     if not redirect_matches(registered, redirect_uri):
         return client_id
@@ -245,10 +246,7 @@ def _translation_for(registered: list[str], client_id: str, redirect_uri: str) -
         # The runtime loopback origin is URL-shaped and exactly matches the
         # presented redirect (including its RFC 8252 ephemeral port).
         return redirect_origin
-    stable = stable_translation_origin(registered)
-    if stable is not None and redirect_origin == stable:
-        return stable
-    return client_id
+    return redirect_origin
 
 
 async def fetch_cimd_redirects(
@@ -399,7 +397,9 @@ async def translated_client_id_for_refresh(
       port) for authorization/code exchange. That value cannot be reproduced
       on the redirect-less refresh leg, so None here makes core reject refresh
       and the client re-authorize rather than forwarding a mismatched identity.
-    * Identities with several web origins were never translated → None here.
+    * Identities with several web origins translated from the redirect presented
+      on each authorize/code leg, but no single origin can be re-derived for a
+      refresh → None here.
 
     Known caveat, documented not hidden: an identity whose registration mixes
     ONE stable web origin with loopback entries and that authorized via a

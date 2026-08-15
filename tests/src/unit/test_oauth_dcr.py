@@ -26,6 +26,10 @@ from custom_components.ha_mcp_tools.oauth_dcr import (  # noqa: E402
 
 KEY = b"k" * 32
 OTHER_KEY = b"x" * 32
+GOOGLE_REDIRECT_URIS = [
+    "https://oauth-redirect.googleusercontent.com/r/ha-mcp",
+    "https://oauth-redirect-sandbox.googleusercontent.com/r/ha-mcp",
+]
 
 
 def test_mint_and_verify_round_trip():
@@ -173,22 +177,19 @@ async def test_register_rejects_bad_redirects(dcr_view_client_factory):
         assert resp.status == 400, bad
 
 
-async def test_register_rejects_multiple_web_origins(dcr_view_client_factory):
-    """Reject a signed DCR identity that Core cannot use on any callback."""
+async def test_register_accepts_google_multi_origin_client(dcr_view_client_factory):
+    """Accept Spark's two redirects but omit its unavailable refresh grant."""
     client = await dcr_view_client_factory(dcr_key=KEY, resource_server=object())
 
     resp = await client.post(
         "/api/ha_mcp_tools/oauth/register",
-        json={
-            "redirect_uris": [
-                "https://a.example/cb",
-                "https://b.example/cb",
-            ]
-        },
+        json={"redirect_uris": GOOGLE_REDIRECT_URIS},
     )
 
-    assert resp.status == 400
-    assert (await resp.json())["error"] == "invalid_redirect_uri"
+    assert resp.status == 201
+    data = await resp.json()
+    assert data["grant_types"] == ["authorization_code"]
+    assert client_redirect_uris(KEY, data["client_id"]) == GOOGLE_REDIRECT_URIS
 
 
 async def test_register_preserves_explicit_zero_port_in_web_origin(
@@ -207,8 +208,8 @@ async def test_register_preserves_explicit_zero_port_in_web_origin(
         },
     )
 
-    assert resp.status == 400
-    assert (await resp.json())["error"] == "invalid_redirect_uri"
+    assert resp.status == 201
+    assert (await resp.json())["grant_types"] == ["authorization_code"]
 
 
 async def test_register_none_mode_advertises_authorization_code_only(
