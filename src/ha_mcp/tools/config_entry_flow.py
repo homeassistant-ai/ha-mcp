@@ -41,6 +41,7 @@ from ..client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
+from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from ..redaction import sentinel_option_keys
 from .component_config_entries import (
@@ -89,6 +90,10 @@ _TRANSIENT_RECONFIGURE_STATES = frozenset({"not_loaded", "setup_in_progress"})
 # reload does real I/O, so the budget has to outlast a slow probe.
 _VERIFICATION_ATTEMPTS = 5
 _VERIFICATION_BACKOFF_SECONDS = (0.25, 0.5, 1.0, 2.0)
+#: Wall-clock budget for observing the post-commit reload settle.
+_RELOAD_SETTLE_TIMEOUT = 20.0
+_ENTRY_SUBSCRIBE_TIMEOUT = 10.0
+WS_CONFIG_ENTRIES_SUBSCRIBE = "config_entries/subscribe"
 
 
 @dataclass
@@ -1396,6 +1401,71 @@ async def _validate_reconfigure_identity_and_duplicates(
     return before_identity, cross_domain_warnings(related.cross_domain)
 
 
+async def _subscribe_entry_changes(client: Any) -> tuple[Any, Any] | None:
+    """Open a config-entry change stream, or ``None`` if unavailable.
+
+    Home Assistant dispatches ``SIGNAL_CONFIG_ENTRY_CHANGED`` from
+    ``ConfigEntry._async_set_state``, so ``config_entries/subscribe`` pushes
+    EVERY state transition with the full entry fragment. Subscribing before
+    the flow starts is what makes the post-commit reload observable instead of
+    sampled: the queue is registered before the frame is sent, so no
+    transition between the commit and our first read can be missed.
+    """
+    try:
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
+        sub_id, queue = await ws.subscribe_command(
+            WS_CONFIG_ENTRIES_SUBSCRIBE, timeout=_ENTRY_SUBSCRIBE_TIMEOUT
+        )
+    except Exception as exc:
+        # Degrade to polling rather than failing the reconfigure; the caller
+        # records which mechanism actually ran.
+        logger.warning(
+            "%s unavailable (%r); falling back to polled verification",
+            WS_CONFIG_ENTRIES_SUBSCRIBE,
+            exc,
+        )
+        return None
+    return ws, (sub_id, queue)
+
+
+async def _observe_reload_settled(
+    queue: Any, entry_id: str, *, timeout: float = _RELOAD_SETTLE_TIMEOUT
+) -> dict[str, Any] | None:
+    """Consume entry-change events until this entry reaches a settled state.
+
+    Returns the settled entry fragment, or ``None`` if the budget expired
+    without one. Because the subscription predates the flow, an event seen
+    here is evidence the reload actually reached that state — unlike a poll,
+    which can sample the pre-reload ``loaded`` and mistake it for the result.
+    """
+    deadline = asyncio.get_running_loop().time() + timeout
+    settled: dict[str, Any] | None = None
+    while True:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return settled
+        try:
+            message = await asyncio.wait_for(queue.get(), timeout=remaining)
+        except TimeoutError:
+            return settled
+        for item in message.get("event") or []:
+            if not isinstance(item, dict):
+                continue
+            entry = item.get("entry")
+            if not isinstance(entry, dict) or entry.get("entry_id") != entry_id:
+                continue
+            if _is_transient_reconfigure_state(entry):
+                # The reload is under way; keep reading for its outcome.
+                settled = None
+                continue
+            settled = entry
+            return settled
+
+
 async def _run_reconfigure_flow(
     client: Any,
     *,
@@ -1471,13 +1541,18 @@ async def _verify_reconfigure_result(
     before_identity: ReconfigureIdentity,
     expected_identity: dict[str, Any],
     rollback_metadata: dict[str, Any],
+    observed_entry: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
     """Read back and verify the committed config entry with bounded retries.
 
     Home Assistant schedules the post-reconfigure reload rather than awaiting
-    it, so the first read-back routinely catches the entry mid-reload. Retry
-    while the state is transitional before settling the verification, or a
-    reconfigure that worked reports as unverified.
+    it, so a poll can catch the entry either mid-reload OR still in its
+    pre-reload state. ``observed_entry`` is the settled fragment seen on the
+    change subscription that was opened BEFORE the flow — when present it is
+    authoritative for the operational state, because an event proves the
+    reload reached that state, whereas a poll cannot tell a finished reload
+    from one that has not started. The retry loop below remains the fallback
+    for when no subscription could be opened.
     """
     after: dict[str, Any] | None = None
     verification: dict[str, Any] | None = None
@@ -1490,6 +1565,10 @@ async def _verify_reconfigure_result(
             after_identity = await _collect_reconfigure_identity(
                 client, current_after, entry_id
             )
+            if observed_entry is not None:
+                # Trust the observed state over the polled one; the identity
+                # reads still come from the registries below.
+                current_after = {**current_after, **observed_entry}
             current_verification, current_warnings = await _verify_reconfigured_entry(
                 client,
                 before,
@@ -1503,7 +1582,11 @@ async def _verify_reconfigure_result(
             after = current_after
             verification = current_verification
             warnings = current_warnings
-            if _is_transient_reconfigure_state(current_after) and not is_last_attempt:
+            if (
+                observed_entry is None
+                and _is_transient_reconfigure_state(current_after)
+                and not is_last_attempt
+            ):
                 logger.info(
                     "Reconfigure verification observed transient state %s; retrying",
                     current_after.get("state"),
@@ -1678,13 +1761,35 @@ async def reconfigure_config_entry(
 
     rollback_metadata = build_reconfigure_rollback_metadata(entry_id, domain)
 
-    _, result = await _run_reconfigure_flow(
-        client,
-        domain=domain,
-        entry_id=entry_id,
-        flow_config=flow_config,
-        rollback_metadata=rollback_metadata,
-    )
+    # Subscribe BEFORE the flow: HA queues the post-commit reload with
+    # async_create_task and returns, so a read-back can land either mid-reload
+    # or before it starts. Only a stream opened ahead of the commit can tell a
+    # finished reload from one that has not begun.
+    subscription = await _subscribe_entry_changes(client)
+    observed_entry: dict[str, Any] | None = None
+    try:
+        _, result = await _run_reconfigure_flow(
+            client,
+            domain=domain,
+            entry_id=entry_id,
+            flow_config=flow_config,
+            rollback_metadata=rollback_metadata,
+        )
+        if subscription is not None:
+            _, (_, queue) = subscription
+            observed_entry = await _observe_reload_settled(queue, entry_id)
+    finally:
+        if subscription is not None:
+            ws, (sub_id, _) = subscription
+            try:
+                # Shielded so a cancelled caller cannot abort the HA-side
+                # teardown mid-flight and leak the subscription.
+                await asyncio.shield(ws.unsubscribe_command(sub_id))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Failed to unsubscribe entry changes: %r", exc)
+
     after, verification, related_warnings = await _verify_reconfigure_result(
         client,
         before=before,
@@ -1693,6 +1798,12 @@ async def reconfigure_config_entry(
         before_identity=prepared.identity,
         expected_identity=prepared.expected_identity,
         rollback_metadata=rollback_metadata,
+        observed_entry=observed_entry,
+    )
+    # Say which mechanism produced the operational state, so a caller can tell
+    # an observed reload from a polled sample.
+    verification["operational_state_source"] = (
+        "observed" if observed_entry is not None else "polled"
     )
 
     verified = (

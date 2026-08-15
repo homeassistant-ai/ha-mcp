@@ -255,7 +255,11 @@ async def _backup_prep_via_component(
     if not component_supports(caps, "backup_prep"):
         return None
     try:
-        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
         raw = await ws.send_command(WS_BACKUP_PREP)
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):

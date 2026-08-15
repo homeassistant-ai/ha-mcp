@@ -880,7 +880,11 @@ async def _dashboards_via_component(
     if query is not None:
         kwargs["query"] = query
     try:
-        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
         raw = await ws.send_command(WS_DASHBOARDS, **kwargs)
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):

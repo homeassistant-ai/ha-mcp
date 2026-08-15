@@ -307,7 +307,11 @@ async def _fetch_services_list_via_component(
     if domain is not None:
         kwargs["domain"] = domain
     try:
-        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
         raw = await ws.send_command(WS_SERVICES_LIST, **kwargs)
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):

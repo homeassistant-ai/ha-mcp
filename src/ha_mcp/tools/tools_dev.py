@@ -324,7 +324,11 @@ async def _fetch_server_entry_via_component(client: Any) -> dict[str, Any] | Non
     if not component_supports(caps, "server_entry"):
         return None
     try:
-        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
         raw = await ws.send_command(WS_SERVER_ENTRY)
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):

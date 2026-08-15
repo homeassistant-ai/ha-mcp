@@ -14,7 +14,7 @@ import logging
 from enum import StrEnum
 from typing import Any, NoReturn
 
-from ..client.rest_client import HomeAssistantAPIError
+from ..client.rest_client import _NO_ANSWER_ERRORS, HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
 from ..redaction import redact_flow_schema, redaction_enabled
 from .config_entry_flow_form import (
@@ -411,12 +411,33 @@ async def _submit_step(
                 is_reconfigure=is_reconfigure,
             )
         raise
-    except TimeoutError:
+    except (TimeoutError, *_NO_ANSWER_ERRORS) as no_answer:
+        # Every class here is evidence that NO ANSWER came back — see
+        # _NO_ANSWER_ERRORS in rest_client.py — as opposed to Home Assistant
+        # answering with a rejection (which the 400/422 branch above handles).
+        # The submit is the call that probes, commits and reloads, so losing
+        # the answer to it is precisely the applied_but_unverified ambiguity:
+        # HA may already have committed.
+        #
+        # Widening beyond TimeoutError matters because rest_client funnels
+        # EVERY httpx transport failure (ConnectError, TimeoutException,
+        # HTTPError) into HomeAssistantConnectionError, so an ordinary
+        # connection reset after the POST reached HA took the old re-raise
+        # path: it reached the caller with no status at all, and the generic
+        # handler upstream aborted a flow that may have committed. A caller
+        # reads a bare connection error as "nothing happened" and retries.
+        #
+        # Carrying the post-commit status also suppresses that abort, since
+        # _run_reconfigure_flow gates it on POST_COMMIT_STATUSES.
         if is_reconfigure:
             raise_tool_error(
                 create_error_response(
-                    ErrorCode.TIMEOUT_OPERATION,
-                    "Reconfigure flow submission timed out; the change may have been applied",
+                    ErrorCode.TIMEOUT_OPERATION
+                    if isinstance(no_answer, TimeoutError)
+                    else ErrorCode.SERVICE_CALL_FAILED,
+                    "Reconfigure flow submission got no answer from Home "
+                    f"Assistant ({type(no_answer).__name__}); the change may "
+                    "have been applied",
                     suggestions=[
                         "Do not retry automatically. Inspect the config entry in Home Assistant before attempting rollback."
                     ],

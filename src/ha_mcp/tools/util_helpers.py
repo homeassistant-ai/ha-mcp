@@ -921,7 +921,11 @@ async def _get_waiter_ws_client(client: Any) -> Any:
     if not (isinstance(base_url, str) and isinstance(token, str)):
         return None
     try:
-        ws_client = await get_websocket_client(url=base_url, token=token)
+        ws_client = await get_websocket_client(
+            url=base_url,
+            token=token,
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
     except HomeAssistantAuthError:
         # Auth failures must reach the caller — a bad token should surface
         # as a real error, not as a 10s "timed out" via REST fallback.

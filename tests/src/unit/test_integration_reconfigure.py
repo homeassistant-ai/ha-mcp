@@ -12,6 +12,7 @@ from fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantClient,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools import config_entry_flow
@@ -74,6 +75,21 @@ def _legacy_registry_reads(monkeypatch: pytest.MonkeyPatch) -> None:
         config_entry_flow, "fetch_domain_unique_ids", _domain_unique_ids
     )
 
+    async def _subscribe(client: Any) -> Any:
+        # None = no change stream, so the suite keeps exercising the polled
+        # fallback by default. Tests that care set _test_entry_events.
+        events = getattr(client, "_test_entry_events", None)
+        if events is None:
+            return None
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        for ev in events:
+            queue.put_nowait(ev)
+        ws = MagicMock()
+        ws.unsubscribe_command = AsyncMock()
+        return ws, (1, queue)
+
+    monkeypatch.setattr(config_entry_flow, "_subscribe_entry_changes", _subscribe)
+
 
 _UNSET = object()
 
@@ -112,6 +128,10 @@ def reconfigure_client(
     # entry_id -> unique_id for the domain, used by the duplicate scan. HA's
     # own config-entry rows carry no unique_id, so the scan can only compare
     # them through the component; None models an install without it.
+    # MagicMock auto-creates attributes, so this must be set explicitly or
+    # getattr(...) returns a truthy child mock and every test would take the
+    # subscription path.
+    client._test_entry_events = None
     client._test_domain_unique_ids = (
         ({} if unique_id_known else None)
         if domain_unique_ids is _UNSET
@@ -285,6 +305,8 @@ async def test_reconfigure_preserves_entry_and_submits_host_and_port(
         "identity_verification": "complete",
         "duplicate_scan": "unique_id_and_shared_device",
         "cross_domain_related_entries": [],
+        # No change stream in this double, so the state was polled.
+        "operational_state_source": "polled",
     }
     client.start_reconfigure_flow.assert_awaited_once_with("shelly", "entry-123")
     client.submit_config_flow_step.assert_awaited_once_with(
@@ -760,7 +782,7 @@ async def test_reconfigure_submit_timeout_is_applied_but_unverified(
     payload = json.loads(str(exc_info.value))
     assert payload["status"] == "applied_but_unverified"
     assert payload["rollback"]["manual_required"] is True
-    assert "timed out" in payload["error"]["message"]
+    assert "no answer" in payload["error"]["message"]
     client.abort_config_flow.assert_not_awaited()
 
 
@@ -2985,3 +3007,302 @@ async def test_a_disabled_entry_reconfigures_to_verified() -> None:
 
     assert result["verification"]["operational_state_verified"] is True
     assert result["status"] == ReconfigureStatus.APPLIED_AND_VERIFIED
+
+
+# === Patch76 review: the submit path's no-answer failures ===
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "no_answer",
+    [
+        pytest.param(TimeoutError(), id="asyncio_timeout"),
+        pytest.param(
+            HomeAssistantConnectionError("connection reset"), id="connection_reset"
+        ),
+        pytest.param(
+            HomeAssistantCommandTimeout("ws stopped answering"), id="ws_timeout"
+        ),
+        pytest.param(ConnectionResetError("peer reset"), id="oserror"),
+    ],
+)
+async def test_losing_the_submit_answer_is_applied_but_unverified(
+    reconfig_entry: dict[str, object], no_answer: Exception
+) -> None:
+    """Every no-answer class carries the post-commit status and skips the abort.
+
+    The submit is the call that probes, commits and reloads, so losing its
+    answer is exactly the applied_but_unverified ambiguity. rest_client funnels
+    every httpx transport failure into HomeAssistantConnectionError, so a plain
+    connection reset after the POST reached HA takes this path — it used to
+    escape with no status at all, and the generic handler upstream aborted a
+    flow that may already have committed. A caller reads a bare connection
+    error as "nothing happened" and retries.
+    """
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-no-answer",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(side_effect=no_answer)
+    client.abort_config_flow = AsyncMock()
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client, "entry-123", config={"host": "192.0.2.183"}
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
+    assert payload["rollback"]["manual_required"] is True
+    # Never abort a flow Home Assistant may already have committed.
+    client.abort_config_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_post_commit_same_domain_device_sharing_blocks() -> None:
+    """The POST-COMMIT half of the shared-device guard, not just the preflight.
+
+    Both halves exist; only the preflight one was pinned, so a mutation of
+    this branch left the suite green.
+    """
+    entry = {
+        "entry_id": "primary",
+        "domain": "shelly",
+        "state": "loaded",
+        "supports_reconfigure": True,
+    }
+    twin = {"entry_id": "twin", "domain": "shelly", "state": "loaded"}
+    # Clean before the flow; the sibling appears on the device only afterwards.
+    client = reconfigure_client(
+        entity_rows=[
+            {
+                "entity_id": "switch.a",
+                "config_entry_id": "primary",
+                "device_id": "dev-1",
+            }
+        ]
+    )
+    client.list_device_registry = AsyncMock(
+        side_effect=[
+            [
+                {
+                    "id": "dev-1",
+                    "config_entries": ["primary"],
+                    "connections": [],
+                    "identifiers": [],
+                }
+            ],
+            [
+                {
+                    "id": "dev-1",
+                    "config_entries": ["primary", "twin"],
+                    "connections": [],
+                    "identifiers": [],
+                }
+            ],
+        ]
+    )
+    client.get_config_entry = AsyncMock(return_value=entry)
+    client.list_config_entries = AsyncMock(return_value=[entry, twin])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-post-dup",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(client, "primary", config={"host": "192.0.2.60"})
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == ReconfigureStatus.APPLIED_IDENTITY_MISMATCH
+    assert "same domain" in payload["error"]["message"].lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("after_entry_id", "after_domain", "expected"),
+    [
+        pytest.param("other-entry", "shelly", "entry_id", id="wrong_entry_id_only"),
+        pytest.param("entry-123", "tasmota", "domain", id="wrong_domain_only"),
+    ],
+)
+async def test_each_arm_of_the_entry_identity_guard_fires_alone(
+    reconfig_entry: dict[str, object],
+    after_entry_id: str,
+    after_domain: str,
+    expected: str,
+) -> None:
+    """Both disjuncts are load-bearing.
+
+    Changing the `or` to `and` left the suite green, because no test exercised
+    a wrong domain alone or a wrong entry_id alone.
+    """
+    after = {**reconfig_entry, "entry_id": after_entry_id, "domain": after_domain}
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, after])
+    client.list_config_entries = AsyncMock(return_value=[after])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-identity-arm",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client, "entry-123", config={"host": "192.0.2.61"}
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == ReconfigureStatus.APPLIED_IDENTITY_MISMATCH
+    assert "could not be verified" in payload["error"]["message"]
+    assert expected  # both arms reach the same guard, by design
+
+
+# === Patch76's question: the read-back can also land BEFORE the reload ===
+
+
+@pytest.mark.asyncio
+async def test_a_stale_pre_reload_read_cannot_settle_as_verified(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """A poll can sample the pre-reload `loaded` and mistake it for the result.
+
+    HA queues the reload with async_create_task and returns, so the entry can
+    still be sitting in its old `loaded` state when the read-back lands. The
+    change stream is opened BEFORE the flow, so what it reports is the state
+    the reload actually reached — here `setup_retry`, which the poll never saw.
+    """
+    client = reconfigure_client()
+    # Every poll returns the stale pre-reload `loaded`.
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    client._test_entry_events = [
+        {
+            "id": 1,
+            "type": "event",
+            "event": [
+                {
+                    "type": "updated",
+                    "entry": {**reconfig_entry, "state": "setup_in_progress"},
+                }
+            ],
+        },
+        {
+            "id": 1,
+            "type": "event",
+            "event": [
+                {
+                    "type": "updated",
+                    "entry": {**reconfig_entry, "state": "setup_retry"},
+                }
+            ],
+        },
+    ]
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-stale-read",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "entry-123", config={"host": "192.0.2.70"}
+    )
+
+    verification = result["verification"]
+    assert verification["operational_state_source"] == "observed"
+    # The observed outcome wins over the stale poll.
+    assert verification["entry_state"] == "setup_retry"
+    assert verification["operational_state_verified"] is False
+    assert result["status"] == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
+
+
+@pytest.mark.asyncio
+async def test_an_observed_clean_reload_verifies(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """A reload observed reaching `loaded` is the fully verified outcome."""
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    client._test_entry_events = [
+        {
+            "id": 1,
+            "type": "event",
+            "event": [
+                {
+                    "type": "updated",
+                    "entry": {**reconfig_entry, "state": "setup_in_progress"},
+                }
+            ],
+        },
+        {
+            "id": 1,
+            "type": "event",
+            "event": [
+                {"type": "updated", "entry": {**reconfig_entry, "state": "loaded"}}
+            ],
+        },
+    ]
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-observed-ok",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "entry-123", config={"host": "192.0.2.71"}
+    )
+
+    assert result["verification"]["operational_state_source"] == "observed"
+    assert result["status"] == ReconfigureStatus.APPLIED_AND_VERIFIED
+
+
+@pytest.mark.asyncio
+async def test_without_a_change_stream_the_source_is_reported_as_polled(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """Degrading to polling is fine, but the caller must be able to tell."""
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-polled",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "entry-123", config={"host": "192.0.2.72"}
+    )
+
+    assert result["verification"]["operational_state_source"] == "polled"
