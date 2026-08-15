@@ -91,7 +91,7 @@ async def fetch_config_entry_unique_id(client: Any, entry_id: str) -> EntryUniqu
         )
         return UNKNOWN_UNIQUE_ID
 
-    result = raw.get("result")
+    result = raw.get("result") if isinstance(raw, dict) else None
     entries = result.get("entries") if isinstance(result, dict) else None
     if not isinstance(entries, list) or not entries:
         logger.debug(
@@ -110,5 +110,25 @@ async def fetch_config_entry_unique_id(client: Any, entry_id: str) -> EntryUniqu
             entry_id,
         )
         return UNKNOWN_UNIQUE_ID
+    if row.get("entry_id") != entry_id:
+        # Reading another entry's anchor would be worse than reading none.
+        logger.debug(
+            "%s answered for %r when %r was asked; unique_id unavailable",
+            WS_CONFIG_ENTRIES,
+            row.get("entry_id"),
+            entry_id,
+        )
+        return UNKNOWN_UNIQUE_ID
     value = row["unique_id"]
-    return EntryUniqueId(known=True, value=value if isinstance(value, str) else None)
+    if value is not None and not isinstance(value, str):
+        # Malformed is unknown, NOT known-absent: silently turning junk into
+        # "this entry has no unique_id" is the exact conflation this type
+        # exists to prevent.
+        logger.debug(
+            "%s returned a non-string unique_id (%r) for %s; unique_id unavailable",
+            WS_CONFIG_ENTRIES,
+            value,
+            entry_id,
+        )
+        return UNKNOWN_UNIQUE_ID
+    return EntryUniqueId(known=True, value=value)
