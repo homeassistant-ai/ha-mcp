@@ -37,6 +37,7 @@ import json
 import logging
 import socket
 import time
+from enum import Enum
 from urllib.parse import ParseResult, urlparse, urlunparse
 
 import aiohttp
@@ -249,21 +250,17 @@ def stable_translation_origin(registered: list[str]) -> str | None:
 def _translation_for(registered: list[str], client_id: str, redirect_uri: str) -> str:
     """Translate a registered redirect to the URL-shaped identity core accepts.
 
-    Web redirects use the presented redirect's origin, so multi-origin
-    registrations translate consistently across the authorize and code legs.
-    Loopback redirects use the runtime origin including its ephemeral port.
-    Unregistered redirects pass through unchanged (core stays the authority).
+    One rule (#2217 review — the former web/loopback split collapsed to
+    identical arms): a redirect that matches the registered list translates to
+    the PRESENTED redirect's origin — for web redirects that keeps multi-origin
+    registrations consistent across the authorize and code legs (both carry
+    ``redirect_uri``), and for loopback redirects it is the runtime origin
+    including the RFC 8252 ephemeral port. Unregistered redirects pass through
+    unchanged (core stays the authority).
     """
     if not redirect_matches(registered, redirect_uri):
         return client_id
-    redirect_origin = origin_client_id(redirect_uri)
-    parsed_redirect = urlparse(redirect_uri)
-    if parsed_redirect.hostname and _is_loopback_host(parsed_redirect.hostname):
-        # A signed DCR blob is not URL-shaped, so core rejects it before login.
-        # The runtime loopback origin is URL-shaped and exactly matches the
-        # presented redirect (including its RFC 8252 ephemeral port).
-        return redirect_origin
-    return redirect_origin
+    return origin_client_id(redirect_uri)
 
 
 async def fetch_cimd_redirects(
@@ -420,29 +417,46 @@ async def resolve_forward_client_id(
     return client_id
 
 
+class RefreshDisposition(Enum):
+    """Outcomes of refresh-identity derivation that carry no origin string.
+
+    ``PASSTHROUGH`` — forward the client_id unchanged (unmanaged identity, or
+    a same-origin identity the authorize leg also forwarded untranslated).
+    ``UNREPRODUCIBLE`` — a VERIFIED registration (DCR blob or fetched CIMD
+    document) whose refresh identity cannot be re-derived without the
+    redirect_uri; the caller must answer ``invalid_grant`` locally instead of
+    relaying a guaranteed core failure into its failed-login accounting
+    (#2217 review — previously only DCR blobs got that answer, so CIMD
+    identities of the same shape were 307'd into core on every token expiry).
+    """
+
+    PASSTHROUGH = "passthrough"
+    UNREPRODUCIBLE = "unreproducible"
+
+
 async def translated_client_id_for_refresh(
     session: aiohttp.ClientSession | None,
     dcr_key: bytes | None,
     client_id: str,
-) -> str | None:
-    """Translated client_id for the redirect_uri-less refresh grant, or None.
+) -> str | RefreshDisposition:
+    """Refresh-leg identity: a translated origin, or a disposition.
 
     Must agree with what the authorize/code legs presented to core, or core
     rejects the refresh (the token is bound to the client_id it was minted
     under). The legs agree by construction:
 
+    * Unmanaged identities (no DCR blob, no fetchable document) →
+      ``PASSTHROUGH`` — core stays the authority. A transient CIMD fetch
+      failure lands here too (logged by the fetch path); erring toward
+      ``UNREPRODUCIBLE`` would force re-auth on working same-origin clients.
     * Same-origin identities (client_id origin == stable origin — claude.ai's
-      hosted surfaces) took the fast path untranslated → None here.
-    * Cross-origin identities with one stable web origin (Gemini Spark-class)
-      were translated to that origin on every leg → return it here.
-    * Loopback identities use their runtime origin (including the ephemeral
-      port) for authorization/code exchange. That value cannot be reproduced
-      on the redirect-less refresh leg, so None here makes core reject refresh
-      and the client re-authorize rather than forwarding a mismatched identity.
-    * Identities with several web origins translated from the redirect presented
-      on each authorize/code leg, but no single origin can be re-derived for a
-      refresh → None here.
-
+      hosted surfaces) took the authorize fast path untranslated →
+      ``PASSTHROUGH``, compared through the shared canonical origin form.
+    * Cross-origin identities with exactly one web origin and no loopback
+      entries were translated to that origin on every leg → return it.
+    * Everything else that is VERIFIED — multiple web origins (Gemini
+      Spark-class), loopback-only (Claude Code-class), or hybrid — cannot be
+      re-derived without the redirect: ``UNREPRODUCIBLE``.
     """
     registered: list[str] | None = None
     if dcr_key is not None:
@@ -452,23 +466,18 @@ async def translated_client_id_for_refresh(
         if parsed.scheme == "https" and session is not None:
             registered = await fetch_cimd_redirects(session, client_id)
     if not registered:
-        return None
-    # Aligned with the registration contract (#2217 review): refresh identity
-    # derivation uses the SAME rule as _refresh_identity_is_reproducible —
-    # exactly one web origin and no loopback entries. A hybrid registration
-    # (web + loopback) may have authorized via the loopback redirect, and the
-    # server keeps no record of which redirect a token used; deriving the web
-    # origin here would forward a mismatched identity into core's failed-login
-    # accounting. Such registrations are advertised authorization_code-only,
-    # so the local invalid_grant re-authorize path is the honest answer.
+        return RefreshDisposition.PASSTHROUGH
     if not _refresh_identity_is_reproducible(registered):
-        return None
+        return RefreshDisposition.UNREPRODUCIBLE
+    # Reproducible ⇒ exactly one web origin ⇒ stable_translation_origin cannot
+    # return None (canonical_origin_url is one-to-one over normalized origins).
     stable = stable_translation_origin(registered)
-    if stable is None:
-        return None
-    parsed = urlparse(client_id)
-    if f"{parsed.scheme}://{parsed.netloc}" == stable:
-        return None
+    assert stable is not None
+    # Canonical comparison (#2217 review): the raw-netloc form diverged from
+    # the fast path whenever a registered redirect carried an explicit
+    # scheme-default port.
+    if origin_client_id(client_id) == stable:
+        return RefreshDisposition.PASSTHROUGH
     return stable
 
 

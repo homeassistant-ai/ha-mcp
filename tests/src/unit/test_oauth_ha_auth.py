@@ -192,8 +192,8 @@ async def test_refresh_translates_single_origin_dcr_client():
     ],
 )
 @pytest.mark.asyncio
-async def test_refresh_skips_dcr_clients_without_stable_origin(redirect_uris):
-    """Leave multi-origin and loopback-only DCR identities untranslated."""
+async def test_refresh_marks_dcr_clients_without_stable_origin(redirect_uris):
+    """Multi-origin and loopback-only DCR identities are UNREPRODUCIBLE."""
     client_id = mint_client_id(KEY, redirect_uris)
 
     translated = await oauth_ha_auth.translated_client_id_for_refresh(
@@ -202,7 +202,7 @@ async def test_refresh_skips_dcr_clients_without_stable_origin(redirect_uris):
         client_id=client_id,
     )
 
-    assert translated is None
+    assert translated is oauth_ha_auth.RefreshDisposition.UNREPRODUCIBLE
 
 
 @pytest.mark.asyncio
@@ -220,11 +220,103 @@ async def test_refresh_same_origin_cimd_client_passes_through(monkeypatch):
         client_id="https://claude.ai/oauth/mcp-oauth-client-metadata",
     )
 
-    assert translated is None
+    assert translated is oauth_ha_auth.RefreshDisposition.PASSTHROUGH
+
+
+@pytest.mark.parametrize(
+    "redirects",
+    [
+        # Gemini Spark-class: several distinct web origins.
+        [
+            "https://oauth-redirect.googleusercontent.com/r/prod",
+            "https://oauth-redirect-sandbox.googleusercontent.com/r/sandbox",
+        ],
+        # Claude Code-class: loopback-only callbacks.
+        ["http://localhost/callback", "http://127.0.0.1/callback"],
+        # Hybrid: web + loopback.
+        ["https://a.example/cb", "http://localhost/callback"],
+    ],
+)
+@pytest.mark.asyncio
+async def test_refresh_marks_cimd_clients_without_stable_origin(monkeypatch, redirects):
+    """#2217 review sweep: VERIFIED CIMD identities with no reproducible
+    origin are UNREPRODUCIBLE, exactly like the equivalent DCR blobs —
+    previously they fell through to None/passthrough and were 307'd into a
+    guaranteed core failure on every token expiry."""
+
+    async def fetch_redirects(_session, _client_id):
+        return redirects
+
+    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+
+    translated = await oauth_ha_auth.translated_client_id_for_refresh(
+        session=object(),
+        dcr_key=None,
+        client_id="https://spark.example/client-metadata.json",
+    )
+
+    assert translated is oauth_ha_auth.RefreshDisposition.UNREPRODUCIBLE
 
 
 @pytest.mark.asyncio
-async def test_mixed_registration_refresh_derivation_returns_none():
+async def test_refresh_translates_cross_origin_cimd_client(monkeypatch):
+    """A CIMD identity with one stable web origin re-derives it on refresh."""
+
+    async def fetch_redirects(_session, _client_id):
+        return ["https://cb.example/callback"]
+
+    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+
+    translated = await oauth_ha_auth.translated_client_id_for_refresh(
+        session=object(),
+        dcr_key=None,
+        client_id="https://client.example/metadata.json",
+    )
+
+    assert translated == "https://cb.example"
+
+
+@pytest.mark.asyncio
+async def test_refresh_unverified_identity_passes_through(monkeypatch):
+    """No DCR blob and no fetchable document → core stays the authority."""
+
+    async def fetch_redirects(_session, _client_id):
+        return None
+
+    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+
+    translated = await oauth_ha_auth.translated_client_id_for_refresh(
+        session=object(),
+        dcr_key=None,
+        client_id="https://unknown.example/metadata.json",
+    )
+
+    assert translated is oauth_ha_auth.RefreshDisposition.PASSTHROUGH
+
+
+@pytest.mark.asyncio
+async def test_refresh_same_origin_comparison_is_canonical(monkeypatch):
+    """#2217 review sweep: the same-origin fast-path comparison uses the
+    canonical origin form — a client_id with an explicit scheme-default port
+    is still same-origin with its redirect (the raw-netloc comparison used to
+    diverge from the authorize leg here)."""
+
+    async def fetch_redirects(_session, _client_id):
+        return ["https://claude.ai/api/mcp/auth_callback"]
+
+    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+
+    translated = await oauth_ha_auth.translated_client_id_for_refresh(
+        session=object(),
+        dcr_key=None,
+        client_id="https://claude.ai:443/oauth/mcp-oauth-client-metadata",
+    )
+
+    assert translated is oauth_ha_auth.RefreshDisposition.PASSTHROUGH
+
+
+@pytest.mark.asyncio
+async def test_mixed_registration_refresh_derivation_is_unreproducible():
     """#2217 review: hybrid (web + loopback) registrations never derive a
     refresh identity — the server cannot know which redirect the token used,
     and the registration is advertised authorization_code-only. Authorize via
@@ -247,7 +339,8 @@ async def test_mixed_registration_refresh_derivation_returns_none():
     )
 
     assert authorize_id == "https://a.example"
-    assert refresh_id is None  # aligned with _refresh_identity_is_reproducible
+    # aligned with _refresh_identity_is_reproducible
+    assert refresh_id is oauth_ha_auth.RefreshDisposition.UNREPRODUCIBLE
 
 
 def test_core_token_base_url_uses_plain_http_loopback_port():
@@ -665,7 +758,7 @@ async def test_mixed_registration_loopback_authorize_refresh_stays_local():
         session=None, dcr_key=KEY, client_id=client_id
     )
     assert authorize_id == "http://localhost:5000"
-    assert refresh_id is None
+    assert refresh_id is oauth_ha_auth.RefreshDisposition.UNREPRODUCIBLE
 
 
 @pytest.mark.asyncio
