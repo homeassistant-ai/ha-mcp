@@ -29,6 +29,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -116,6 +117,7 @@ PKCE_VERIFIER_MAX = 128
 PKCE_S256_CHALLENGE_LEN = 43
 _PKCE_VERIFIER_RE = re.compile(r"^[A-Za-z0-9._~-]+$")
 _PKCE_CHALLENGE_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
+_LOOPBACK_HOSTNAMES = frozenset({"localhost"})
 
 # Pending-code dict cap. An attacker spamming /authorize with valid params
 # could grow the dict between the prune passes that run on each issuance.
@@ -282,20 +284,31 @@ def load_or_create_secret() -> bytes:
     return new_secret
 
 
+def _is_loopback_host(hostname: str) -> bool:
+    """Return whether RFC 8252 permits the host on a plain-http callback."""
+    if hostname in _LOOPBACK_HOSTNAMES:
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
 def _is_valid_redirect_uri(redirect_uri: str) -> bool:
-    """Spec-floor validation for OAuth redirect_uri: must be an https:// URL
-    with a non-empty host and no fragment. Single-tenant addon — we don't
-    maintain a per-client allowlist, but reject the obvious bad shapes that
-    would let an attacker direct the auth flow to an empty/malformed URL."""
+    """Validate an HTTPS callback or RFC 8252 plain-HTTP loopback callback."""
     if not redirect_uri:
         return False
     try:
         parsed = urlparse(redirect_uri)
+        _ = parsed.port
     except ValueError:
         return False
-    if parsed.scheme != "https":
-        return False
     if not parsed.hostname:
+        return False
+    if parsed.scheme == "http":
+        if not _is_loopback_host(parsed.hostname):
+            return False
+    elif parsed.scheme != "https":
         return False
     # Fragments are not allowed in OAuth redirect URIs (RFC 6749 §3.1.2).
     return not parsed.fragment
