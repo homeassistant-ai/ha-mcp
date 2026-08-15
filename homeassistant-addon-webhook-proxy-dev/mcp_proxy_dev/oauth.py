@@ -413,7 +413,7 @@ async def _addon_alive(hass: HomeAssistant) -> bool:
     now = time.monotonic()
     if _addon_alive_cache is not None and _addon_alive_cache[0] > now:
         return _addon_alive_cache[1]
-    alive = await hass.async_add_executor_job(_heartbeat_fresh)
+    alive = bool(await hass.async_add_executor_job(_heartbeat_fresh))
     _addon_alive_cache = (time.monotonic() + _ADDON_ALIVE_TTL, alive)
     return alive
 
