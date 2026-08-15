@@ -26,7 +26,9 @@ from ._embedded_stubs import FakeSession, FakeUpstream, install, make_request
 install()
 
 import custom_components.ha_mcp_tools.mcp_webhook as mw  # noqa: E402
+from custom_components.ha_mcp_tools import oauth_legacy  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
+    DATA_DCR_SIGNING_KEY,
     DATA_WEBHOOK,
     DATA_WEBHOOK_ID,
     DOMAIN,
@@ -631,13 +633,18 @@ class TestDiscoveryViews:
     def test_authorization_server_document_shape(self):
         doc = mw._authorization_server_document("https://x.nabu.casa")
         assert doc["issuer"] == f"https://x.nabu.casa{OAUTH_BASE}"
-        assert doc["authorization_endpoint"] == "https://x.nabu.casa/auth/authorize"
-        assert doc["token_endpoint"] == "https://x.nabu.casa/auth/token"
+        assert (
+            doc["authorization_endpoint"]
+            == f"https://x.nabu.casa{OAUTH_BASE}/authorize"
+        )
+        assert doc["token_endpoint"] == f"https://x.nabu.casa{OAUTH_BASE}/token"
         assert doc["response_types_supported"] == ["code"]
         assert doc["code_challenge_methods_supported"] == ["S256"]
         assert doc["token_endpoint_auth_methods_supported"] == ["none"]
         assert doc["client_id_metadata_document_supported"] is True
-        assert "registration_endpoint" not in doc
+        assert (
+            doc["registration_endpoint"] == f"https://x.nabu.casa{OAUTH_BASE}/register"
+        )
 
     async def test_protected_resource_view_payload_when_live(self):
         hass = _live_hass()
@@ -663,7 +670,10 @@ class TestDiscoveryViews:
         view = mw._AuthorizationServerMetadataView(hass)
         resp = await view.get(make_request(headers={"Host": "abc.ui.nabu.casa"}))
         assert resp.status == 200
-        assert resp.json_body["token_endpoint"] == "https://abc.ui.nabu.casa/auth/token"
+        assert (
+            resp.json_body["token_endpoint"]
+            == f"https://abc.ui.nabu.casa{OAUTH_BASE}/token"
+        )
 
     async def test_authorization_server_view_404_when_entry_unloaded(self):
         hass = _make_hass()  # no DOMAIN data at all
@@ -681,9 +691,9 @@ class TestDiscoveryViews:
         assert resp.status == 200
         doc = resp.json_body
         assert doc["authorization_endpoint"] == (
-            f"https://abc.ui.nabu.casa{mw.AUTHORIZE_PATH}"
+            f"https://abc.ui.nabu.casa{OAUTH_BASE}/authorize"
         )
-        assert doc["token_endpoint"] == f"https://abc.ui.nabu.casa{mw.TOKEN_PATH}"
+        assert doc["token_endpoint"] == (f"https://abc.ui.nabu.casa{OAUTH_BASE}/token")
         assert doc["code_challenge_methods_supported"] == ["S256"]
         assert set(doc["token_endpoint_auth_methods_supported"]) == {
             "client_secret_basic",
@@ -835,7 +845,7 @@ class TestNoneModeDiscovery:
             f"https://abc.ui.nabu.casa{OAUTH_BASE}/authorize"
         )
 
-        # Flip to ha_auth: HA-core-pointing document.
+        # Flip to ha_auth: the same component-owned endpoints remain advertised.
         hass.data[DOMAIN][DATA_WEBHOOK] = {
             "webhook_id": WEBHOOK_ID,
             "auth_mode": WEBHOOK_AUTH_HA,
@@ -846,7 +856,7 @@ class TestNoneModeDiscovery:
         ha_doc = (await view.get(request)).json_body
         assert (
             ha_doc["authorization_endpoint"]
-            == "https://abc.ui.nabu.casa/auth/authorize"
+            == f"https://abc.ui.nabu.casa{OAUTH_BASE}/authorize"
         )
 
         # Flip back to none: auto-approve document again.
@@ -916,10 +926,52 @@ class TestRegisterWebhook:
         # Reload-safe: clears any stale registration before (re)registering.
         mw.async_unregister.assert_called_once_with(hass, WEBHOOK_ID)
 
+    @pytest.mark.parametrize(
+        ("auth_mode", "carries_dcr_signing_key"),
+        [
+            (WEBHOOK_AUTH_NONE, True),
+            (WEBHOOK_AUTH_HA, True),
+            (WEBHOOK_AUTH_LEGACY, False),
+        ],
+    )
+    async def test_register_webhook_stores_dcr_signing_key_by_auth_mode(
+        self, monkeypatch, auth_mode, carries_dcr_signing_key
+    ):
+        """none and ha_auth cfgs carry the DCR signing key; legacy does not."""
+        hass = _register_hass()
+        entry = _entry()
+        entry.data[DATA_DCR_SIGNING_KEY] = "ab" * 32
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
+
+        legacy_kwargs = {}
+        if auth_mode == WEBHOOK_AUTH_LEGACY:
+            hass.is_running = False
+            legacy_kwargs = {
+                "oauth_client_id": "cid",
+                "oauth_client_secret": "secret",
+                "oauth_signing_key": secrets.token_hex(32),
+            }
+        await mw.async_register_webhook(
+            hass,
+            entry,
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=auth_mode,
+            dcr_signing_key=entry.data.get(DATA_DCR_SIGNING_KEY),
+            **legacy_kwargs,
+        )
+
+        cfg = hass.data[DOMAIN][DATA_WEBHOOK]
+        if carries_dcr_signing_key:
+            assert cfg[mw.CFG_DCR_SIGNING_KEY] == bytes.fromhex("ab" * 32)
+        else:
+            assert cfg[mw.CFG_DCR_SIGNING_KEY] is None
+
     async def test_none_auth_binds_discovery_and_autoapprove_views(self, monkeypatch):
         # #1969: none mode now serves our corrected discovery + the auto-approve
-        # authorization server, so it binds the 7 discovery views AND the 2
-        # auto-approve views and registers an AutoApproveProvider in cfg.
+        # authorization server, so it binds the 7 discovery views, the 2
+        # unified OAuth views, and the DCR view, then registers an
+        # AutoApproveProvider in cfg.
         hass = _register_hass()
         monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
         assert mw._OAUTH_VIEWS_REGISTERED_KEY not in hass.data
@@ -936,8 +988,8 @@ class TestRegisterWebhook:
         assert isinstance(cfg[mw.CFG_AUTOAPPROVE_PROVIDER], mw.AutoApproveProvider)
         assert cfg["resource_server"] is None
         assert cfg["oauth_provider"] is None
-        # 7 discovery views + 2 auto-approve views.
-        assert hass.http.register_view.call_count == 9
+        # 7 discovery views + 2 unified OAuth views + 1 DCR view.
+        assert hass.http.register_view.call_count == 10
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
 
     async def test_none_ha_auth_none_switch_reuses_bound_views(self, monkeypatch):
@@ -954,7 +1006,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_NONE,
         )
-        assert hass.http.register_view.call_count == 9
+        assert hass.http.register_view.call_count == 10
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
         await mw.async_unregister_webhook(hass)
 
@@ -967,7 +1019,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_HA,
         )
-        assert hass.http.register_view.call_count == 9
+        assert hass.http.register_view.call_count == 10
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_HA
         await mw.async_unregister_webhook(hass)
 
@@ -979,7 +1031,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_NONE,
         )
-        assert hass.http.register_view.call_count == 9
+        assert hass.http.register_view.call_count == 10
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
 
     async def test_ha_auth_registers_resource_server_and_views(self, monkeypatch):
@@ -999,14 +1051,51 @@ class TestRegisterWebhook:
 
         cfg = hass.data[DOMAIN][DATA_WEBHOOK]
         assert isinstance(cfg["resource_server"], mw.ResourceServer)
-        # Seven discovery views were bound on hass.http.
-        assert hass.http.register_view.call_count == 7
+        # Seven discovery + two unified OAuth + one DCR view were bound.
+        assert hass.http.register_view.call_count == 10
         assert hass.data.get(mw._OAUTH_VIEWS_REGISTERED_KEY) is True
+
+    async def test_ha_auth_isolates_cimd_fetches_from_forwarding(self, monkeypatch):
+        """Give anonymous metadata fetches their own capacity-limited pool."""
+        hass = _register_hass()
+        relay_session = FakeSession()
+        cimd_session = FakeSession()
+        sessions = iter((relay_session, cimd_session))
+        connector_calls = []
+
+        monkeypatch.setattr(
+            mw.aiohttp,
+            "ClientSession",
+            lambda **_kwargs: next(sessions),
+        )
+
+        def connector(**kwargs):
+            connector_calls.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        monkeypatch.setattr(mw.aiohttp, "TCPConnector", connector)
+
+        await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_HA,
+        )
+
+        cfg = hass.data[DOMAIN][DATA_WEBHOOK]
+        assert cfg["session"] is relay_session
+        assert cfg["cimd_session"] is cimd_session
+        assert connector_calls == [{"limit": 4}]
+
+        await mw.async_unregister_webhook(hass)
+        assert relay_session.closed is True
+        assert cimd_session.closed is True
 
     async def test_ha_auth_re_enable_reuses_bound_views(self, monkeypatch):
         # aiohttp cannot unregister a bound view; the once-per-session guard
         # lives at a TOP-LEVEL hass.data key precisely so a none->ha_auth->
-        # none->ha_auth cycle re-USES the 7 views instead of re-binding them
+        # none->ha_auth cycle re-USES the 10 views instead of re-binding them
         # (which raises and takes the whole bring-up down). Review finding:
         # only the first registration was tested.
         hass = _register_hass()
@@ -1019,7 +1108,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_HA,
         )
-        assert hass.http.register_view.call_count == 7
+        assert hass.http.register_view.call_count == 10
         await mw.async_unregister_webhook(hass)
 
         # Second enable in the same HA session: no new bindings, no raise.
@@ -1030,7 +1119,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_HA,
         )
-        assert hass.http.register_view.call_count == 7
+        assert hass.http.register_view.call_count == 10
         assert isinstance(
             hass.data[DOMAIN][DATA_WEBHOOK]["resource_server"], mw.ResourceServer
         )
@@ -1090,32 +1179,68 @@ class TestRegisterWebhook:
         cfg = hass.data[DOMAIN][DATA_WEBHOOK]
         assert isinstance(cfg["oauth_provider"], LegacyOAuthProvider)
         assert cfg["resource_server"] is None
-        # 7 discovery views + the 2 root /authorize + /token views.
-        assert hass.http.register_view.call_count == 9
+        # 7 discovery + 2 unified scoped + 2 root legacy views.
+        assert hass.http.register_view.call_count == 11
         assert hass.data.get(OAUTH_ROUTE_OWNER_KEY) == DOMAIN
         assert restart_needed is False
 
-    async def test_legacy_route_conflict_becomes_value_error(self, monkeypatch):
-        # The webhook-proxy add-on already owns the root routes → surfaced as a
-        # ValueError so bring-up files a repair, not a silently-shadowed binding.
+    async def test_legacy_route_conflict_uses_scoped_provider(
+        self, monkeypatch, caplog
+    ):
+        """Keep legacy mode live on scoped routes when a foreign owner holds root."""
+        # The webhook-proxy add-on already owns the root routes. Setup still
+        # succeeds with an unbound provider because the unified scoped routes
+        # carry legacy mode; only metadata-ignoring root guesses hit the add-on.
         hass = _register_hass()
         hass.data[OAUTH_ROUTE_OWNER_KEY] = "webhook_proxy"
         fake_session = FakeSession()
         monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: fake_session)
+        signing_key = secrets.token_hex(32)
+        real_build = mw.build_unbound_legacy_provider
+        build_unbound = MagicMock(wraps=real_build)
+        monkeypatch.setattr(mw, "build_unbound_legacy_provider", build_unbound)
 
-        with pytest.raises(ValueError, match="already"):
-            await mw.async_register_webhook(
+        restart_needed = await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_LEGACY,
+            oauth_client_id="cid",
+            oauth_client_secret="secret",
+            oauth_signing_key=signing_key,
+        )
+
+        build_unbound.assert_called_once_with(hass, "cid", "secret", signing_key)
+        cfg = hass.data[DOMAIN][DATA_WEBHOOK]
+        assert isinstance(cfg["oauth_provider"], LegacyOAuthProvider)
+        assert cfg["oauth_provider"].is_active() is True
+        assert fake_session.closed is False
+        assert restart_needed is False
+        assert hass.data[OAUTH_ROUTE_OWNER_KEY] == "webhook_proxy"
+        # Only metadata + unified scoped views bind; root remains add-on-owned.
+        assert hass.http.register_view.call_count == 9
+        assert any(
+            record.levelname == "WARNING"
+            and record.name == mw.__name__
+            and "legacy OAuth will serve only" in record.getMessage()
+            for record in caplog.records
+        )
+        assert not any(
+            record.levelname == "ERROR" and record.name == oauth_legacy.__name__
+            for record in caplog.records
+        )
+
+        await mw.async_unregister_webhook(hass)
+        assert (
+            oauth_legacy.legacy_credentials_active(
                 hass,
-                _entry(),
-                port=9584,
-                secret_path="/private_x",
-                auth_mode=WEBHOOK_AUTH_LEGACY,
-                oauth_client_id="cid",
-                oauth_client_secret="secret",
-                oauth_signing_key=secrets.token_hex(32),
+                "cid",
+                "secret",
+                signing_key,
             )
-        assert fake_session.closed is True
-        assert DATA_WEBHOOK not in hass.data.get(DOMAIN, {})
+            is False
+        )
 
     async def test_switched_away_from_legacy_flags_restart(self, monkeypatch):
         # Legacy root views are still bound from a prior registration; this
@@ -1220,6 +1345,28 @@ class TestRegisterWebhook:
         # discovery views 404 per request.
         assert cfg.get(mw.CFG_AUTOAPPROVE_PROVIDER) is None
         assert mw.active_auth_mode(hass) is None
+
+    async def test_none_mode_invalid_dcr_key_leaves_oauth_surface_inactive(
+        self, monkeypatch
+    ):
+        """Fail open with both none-mode OAuth markers unset for an invalid key."""
+        hass = _register_hass()
+        fake_session = FakeSession()
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: fake_session)
+
+        await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_NONE,
+            dcr_signing_key="zz",
+        )
+
+        cfg = hass.data[DOMAIN][DATA_WEBHOOK]
+        assert cfg.get(mw.CFG_AUTOAPPROVE_PROVIDER) is None
+        assert cfg.get(mw.CFG_DCR_SIGNING_KEY) is None
+        assert fake_session.closed is False
 
     async def test_partial_metadata_bind_leaves_guard_flag_unset(self):
         # #1978 (Codex P2): the discovery-views "bound" flag must mean the FULL

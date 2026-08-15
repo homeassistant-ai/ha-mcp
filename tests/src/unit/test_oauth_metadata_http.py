@@ -249,3 +249,39 @@ async def test_metadata_endpoint_rejects_non_get(oauth_app, discovery_path):
         f"POST {discovery_path} returned {resp.status_code}, expected 405 "
         "(discovery routes should allow only GET/OPTIONS)"
     )
+
+
+def test_as_documents_pin_the_claude_cimd_selection_contract():
+    """Claude picks CIMD only when BOTH flags are present (Anthropic connector
+    docs, 2026-08); every bearer-capable AS document must keep them, and every
+    advertised endpoint must live under OAUTH_BASE (never core's /auth/*, never
+    the root alias) so a client cache formed in any mode survives any switch."""
+    # Component modules need the lightweight HA/aiohttp fakes used by the
+    # existing embedded-component unit tests. Import them locally so the real
+    # FastMCP/aiohttp setup above remains intact for this file's HTTP tests.
+    from ._embedded_stubs import install
+
+    install()
+
+    from custom_components.ha_mcp_tools import mcp_webhook
+    from custom_components.ha_mcp_tools.const import OAUTH_BASE
+
+    base = "https://ha.example"
+    ha_auth_doc = mcp_webhook._authorization_server_document(base)
+    none_doc = mcp_webhook._none_mode_authorization_server_document(base)
+    legacy_doc = mcp_webhook._legacy_authorization_server_document(base)
+
+    for doc in (ha_auth_doc, none_doc):
+        assert doc["client_id_metadata_document_supported"] is True
+        assert "none" in doc["token_endpoint_auth_methods_supported"]
+        assert doc["registration_endpoint"] == f"{base}{OAUTH_BASE}/register"
+
+    for doc in (ha_auth_doc, none_doc, legacy_doc):
+        assert doc["authorization_endpoint"] == f"{base}{OAUTH_BASE}/authorize"
+        assert doc["token_endpoint"] == f"{base}{OAUTH_BASE}/token"
+        assert doc["code_challenge_methods_supported"] == ["S256"]
+        assert doc["issuer"] == f"{base}{OAUTH_BASE}"
+
+    # Legacy remains a pasted-credential AS: no DCR, confidential methods.
+    assert "registration_endpoint" not in legacy_doc
+    assert "client_secret_basic" in legacy_doc["token_endpoint_auth_methods_supported"]
