@@ -24,6 +24,7 @@ without a server-side store, so the integration survives restarts.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
@@ -369,6 +370,53 @@ def _active_oauth_mode(provider: object) -> str | None:
     return domain_data.get("oauth_mode")
 
 
+# hass.data persists after the add-on stops, so bound OAuth views must also
+# verify that the forwarding backend is reachable. Cache by target host/port to
+# avoid opening a TCP connection for every discovery or token request.
+_BACKEND_ALIVE_TTL = 15.0
+_backend_alive_cache: dict[str, tuple[float, bool]] = {}
+
+
+async def _backend_alive(hass: HomeAssistant) -> bool:
+    """Return whether the add-on's forwarding target accepts TCP connections."""
+    domain_data = hass.data.get(DOMAIN)
+    if not isinstance(domain_data, dict):
+        return False
+    target_url = domain_data.get("target_url", "")
+    if not isinstance(target_url, str):
+        return False
+    try:
+        parsed = urlparse(target_url)
+        port = parsed.port
+    except ValueError:
+        return False
+    if not parsed.hostname or port is None or port == 0:
+        return False
+
+    key = f"{parsed.hostname}:{port}"
+    now = time.monotonic()
+    cached = _backend_alive_cache.get(key)
+    if cached is not None and cached[0] > now:
+        return cached[1]
+
+    try:
+        _reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(parsed.hostname, port), 1.0
+        )
+    except (TimeoutError, OSError):
+        alive = False
+    else:
+        alive = True
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except OSError:
+            pass
+
+    _backend_alive_cache[key] = (time.monotonic() + _BACKEND_ALIVE_TTL, alive)
+    return alive
+
+
 def _active_provider(bound_provider: MetadataProvider) -> MetadataProvider:
     """Return the provider whose base-URL policy is active right now.
 
@@ -681,6 +729,9 @@ class ProtectedResourceMetadataView(HomeAssistantView):
         self._provider = provider
 
     async def get(self, request: web.Request) -> web.Response:
+        hass = getattr(self._provider, "_hass", None)
+        if hass is None or not await _backend_alive(hass):
+            return _json_not_found()
         # The protected-resource document has the same shape in every OAuth
         # mode; 404 when no mode is live (entry unloaded / OAuth off) so a
         # stale-bound view acts like an unregistered route. URLs are built via
@@ -721,6 +772,9 @@ class AuthorizationServerMetadataView(HomeAssistantView):
         self._provider = provider
 
     async def get(self, request: web.Request) -> web.Response:
+        hass = getattr(self._provider, "_hass", None)
+        if hass is None or not await _backend_alive(hass):
+            return _json_not_found()
         mode = _active_oauth_mode(self._provider)
         if mode is None:
             # No mode is live (entry unloaded / OAuth off) but HA can't drop
@@ -853,6 +907,8 @@ class AuthorizeView(HomeAssistantView):
         )
 
     async def get(self, request: web.Request) -> web.Response:
+        if not await _backend_alive(self._provider._hass):
+            return _json_not_found()
         if _active_oauth_mode(self._provider) != MODE_LEGACY:
             # Serve ONLY when legacy is the live mode. Both ha_auth (HA core is
             # the authorization server on its own /auth/authorize; this bare
@@ -912,6 +968,8 @@ class AuthorizeView(HomeAssistantView):
         return web.Response(text=html, content_type="text/html")
 
     async def post(self, request: web.Request) -> web.Response:
+        if not await _backend_alive(self._provider._hass):
+            return _json_not_found()
         if _active_oauth_mode(self._provider) != MODE_LEGACY:
             # Serve ONLY when legacy is live (see the GET defense above): ha_auth
             # (HA core is the authorization server on its own /auth/authorize;
@@ -1022,6 +1080,8 @@ class TokenView(HomeAssistantView):
         return form.get("client_id"), form.get("client_secret")
 
     async def post(self, request: web.Request) -> web.Response:
+        if not await _backend_alive(self._provider._hass):
+            return _json_not_found()
         if _active_oauth_mode(self._provider) != MODE_LEGACY:
             # Serve ONLY when legacy is live. Both ha_auth (HA core is the
             # authorization server on its own /auth/token; this bare /token is

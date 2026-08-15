@@ -63,6 +63,7 @@ from .oauth import (
     DOMAIN,
     OAUTH_BASE,
     PKCECodeStore,
+    _backend_alive,
     _build_base_url,
     _is_valid_redirect_uri,
 )
@@ -277,6 +278,8 @@ class AutoApproveAuthorizeView(HomeAssistantView):
 
     async def get(self, request: web.Request) -> web.Response:
         """Auto-approve the authorization request or reject with a 400/404."""
+        if not await _backend_alive(self._hass):
+            return _json_not_found()
         provider = _active_autoapprove_provider(self._hass)
         if provider is None:
             return _json_not_found()
@@ -343,6 +346,8 @@ class AutoApproveTokenView(HomeAssistantView):
 
     async def post(self, request: web.Request) -> web.Response:
         """Exchange a PKCE authorization code for an opaque access token."""
+        if not await _backend_alive(self._hass):
+            return _json_not_found()
         provider = _active_autoapprove_provider(self._hass)
         if provider is None:
             return _json_not_found()

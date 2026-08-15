@@ -292,6 +292,12 @@ def _import_oauth(tmp_secret_dir=None):
     mod = importlib.util.module_from_spec(spec)
     sys.modules[mod_name] = mod
     spec.loader.exec_module(mod)
+    if hasattr(mod, "_backend_alive"):
+
+        async def _backend_alive(_hass):
+            return True
+
+        mod._backend_alive = _backend_alive
     if tmp_secret_dir is not None:
         mod.SECRET_FILE = Path(tmp_secret_dir) / ".mcp_proxy_oauth_secret"
     return mod
@@ -393,6 +399,12 @@ def _load_pkg_submodule(pkg_name, component_dir, sub):
     m = importlib.util.module_from_spec(spec)
     sys.modules[name] = m
     spec.loader.exec_module(m)
+    if sub == "oauth" and hasattr(m, "_backend_alive"):
+
+        async def _backend_alive(_hass):
+            return True
+
+        m._backend_alive = _backend_alive
     return m
 
 
