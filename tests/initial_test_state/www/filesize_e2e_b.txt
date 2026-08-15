@@ -1,0 +1,1 @@
+ha-mcp reconfigure e2e target B — a different size

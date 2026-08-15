@@ -1233,8 +1233,6 @@ class TestRedeclaredFieldReuse:
         run in between from writing the same value ten times.
         """
 
-        from fastmcp.exceptions import ToolError
-
         repeated: dict[str, Any] = {
             "type": "form",
             "flow_id": "flow-2057",
@@ -1803,8 +1801,6 @@ class TestAllKeysIgnoredIsAnError:
 
     async def test_all_supplied_keys_ignored_raises(self) -> None:
 
-        from fastmcp.exceptions import ToolError
-
         final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
         submit_fn = AsyncMock(side_effect=[final_entry])
         initial_step = {
@@ -1857,8 +1853,6 @@ class TestAllKeysIgnoredIsAnError:
 
     async def test_seeded_section_defaults_do_not_count_as_consumed_keys(self) -> None:
 
-        from fastmcp.exceptions import ToolError
-
         final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
         submit_fn = AsyncMock(side_effect=[final_entry])
         initial_step = {
@@ -1891,8 +1885,6 @@ class TestAllKeysIgnoredIsAnError:
 
     async def test_step_owned_submission_does_not_count_as_consumed_keys(self) -> None:
         """A step's own suggestion fills a form but applies nothing the caller asked for."""
-
-        from fastmcp.exceptions import ToolError
 
         final_entry = {"type": "create_entry", "result": {"entry_id": "e1"}}
         later_step = {
@@ -2116,8 +2108,6 @@ class TestCyclicMenuFlows:
     async def test_re_encountered_menu_error_explains_list_syntax(self) -> None:
         """The revisit error must not claim no selection was supplied."""
 
-        from fastmcp.exceptions import ToolError
-
         submit_fn = AsyncMock(side_effect=[_main_params_form(), _cyclic_menu_step()])
 
         with pytest.raises(ToolError) as exc_info:
@@ -2145,8 +2135,6 @@ class TestCyclicMenuFlows:
 
     async def test_exhausted_error_example_uses_the_callers_key(self) -> None:
         """A group_type caller sees a group_type example, not next_step_id."""
-
-        from fastmcp.exceptions import ToolError
 
         submit_fn = AsyncMock(side_effect=[_main_params_form(), _cyclic_menu_step()])
 
@@ -2188,8 +2176,6 @@ class TestCyclicMenuFlows:
 
     async def test_first_menu_without_selection_keeps_original_error(self) -> None:
 
-        from fastmcp.exceptions import ToolError
-
         with pytest.raises(ToolError) as exc_info:
             await _handle_flow_steps(
                 client=None,
@@ -2203,8 +2189,6 @@ class TestCyclicMenuFlows:
         assert body["error"]["message"].startswith("Menu step requires a selection")
 
     async def test_empty_selection_list_is_treated_as_missing(self) -> None:
-
-        from fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError) as exc_info:
             await _handle_flow_steps(
@@ -2344,8 +2328,6 @@ class TestCyclicMenuFlows:
     async def test_falsy_list_element_raises_distinct_validation_error(self) -> None:
         """A falsy element is a malformed call, not an exhausted list."""
 
-        from fastmcp.exceptions import ToolError
-
         with pytest.raises(ToolError) as exc_info:
             await _handle_flow_steps(
                 client=None,
@@ -2363,8 +2345,6 @@ class TestCyclicMenuFlows:
         assert "Menu step requires a selection" not in body["error"]["message"]
 
     async def test_falsy_element_midlist_is_not_reported_as_exhaustion(self) -> None:
-
-        from fastmcp.exceptions import ToolError
 
         submit_fn = AsyncMock(side_effect=[_main_params_form(), _cyclic_menu_step()])
 
@@ -2439,8 +2419,6 @@ class TestCyclicMenuFlows:
     async def test_subentry_walker_exhausted_selections_error(self) -> None:
         """The revisited-menu error exists on the subentry walker too."""
 
-        from fastmcp.exceptions import ToolError
-
         summary_menu = {
             "type": "menu",
             "flow_id": "flow-sub-2116",
@@ -2473,8 +2451,6 @@ class TestCyclicMenuFlows:
 
     async def test_over_budget_timeout_names_consumed_selections(self) -> None:
         """A walk that exhausts its budget says what it consumed on the way."""
-
-        from fastmcp.exceptions import ToolError
 
         form = {
             "type": "form",

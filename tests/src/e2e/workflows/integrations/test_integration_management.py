@@ -4,11 +4,11 @@ E2E tests for integration management tools.
 
 import json
 import logging
-import os
 
 import pytest
 
 from ...utilities.assertions import (
+    MCPAssertions,
     assert_mcp_success,
     safe_call_tool,
 )
@@ -279,47 +279,54 @@ class TestIntegrationManagement:
             f"Stale already_deleted marker leaked into error: {data!r}"
         )
 
+    # The fixture seeds a `filesize` entry (see
+    # tests/initial_test_state/.storage/core.config_entries). It is the only
+    # integration in the harness that implements async_step_reconfigure, and it
+    # commits through async_update_reload_and_abort — the same HA call whose
+    # scheduled reload the verification retry loop has to outlast — so the
+    # confirmed path gets real CI coverage instead of skipping forever.
+    RECONFIGURE_ENTRY_ID = "01KRECONFIGUREE2E000000001"
+    RECONFIGURE_PATH_A = "/config/www/filesize_e2e_a.txt"
+    RECONFIGURE_PATH_B = "/config/www/filesize_e2e_b.txt"
+
+    async def test_reconfigure_target_advertises_supports_reconfigure(self, mcp_client):
+        """ha_get_integration exposes the discovery signal for reconfigure mode."""
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
+            )
+
+        entry = data.get("entry", data)
+        assert entry.get("domain") == "filesize", entry
+        assert entry.get("supports_reconfigure") is True, entry
+
     async def test_reconfigure_preflight_is_read_only(self, mcp_client):
-        """Exercise the live MCP payload without starting a mutating flow."""
-        list_result = await mcp_client.call_tool("ha_get_integration", {})
-        data = assert_mcp_success(list_result, "List reconfigurable integrations")
-        entry = next(
-            (
-                item
-                for item in data.get("entries", [])
-                if item.get("supports_reconfigure")
-            ),
-            None,
-        )
-        if entry is None:
-            pytest.skip("No integration with an official reconfigure flow is available")
+        """The preflight validates and issues a token without touching the entry."""
+        async with MCPAssertions(mcp_client) as mcp:
+            before = await mcp.call_tool_success(
+                "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
+            )
+            result = await mcp.call_tool_success(
+                "ha_set_integration",
+                {
+                    "entry_id": self.RECONFIGURE_ENTRY_ID,
+                    "reconfigure": True,
+                    "config": {"file_path": self.RECONFIGURE_PATH_B},
+                },
+            )
 
-        entry_id = entry["entry_id"]
-        before_result = await mcp_client.call_tool(
-            "ha_get_integration", {"entry_id": entry_id}
-        )
-        before = assert_mcp_success(before_result, "Read reconfigure target")
-        result = await safe_call_tool(
-            mcp_client,
-            "ha_set_integration",
-            {
-                "entry_id": entry_id,
-                "reconfigure": True,
-                "config": {},
-            },
-        )
-        assert result.get("success") is True
-        assert result.get("preview") is True
-        assert result.get("status") == "preview"
-        assert isinstance(result.get("confirm_token"), str)
-        assert result["confirm_token"].startswith("sha256:")
+            assert result.get("status") == "preview", result
+            assert "preview" not in result, result
+            assert result.get("operation") == "reconfigure", result
+            confirm_token = result.get("confirm_token")
+            assert isinstance(confirm_token, str) and confirm_token.startswith(
+                "sha256:"
+            ), result
 
-        after_result = await mcp_client.call_tool(
-            "ha_get_integration", {"entry_id": entry_id}
-        )
-        after = assert_mcp_success(
-            after_result, "Read reconfigure target after preflight"
-        )
+            after = await mcp.call_tool_success(
+                "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
+            )
+
         before_entry = before.get("entry", before)
         after_entry = after.get("entry", after)
         stable_fields = (
@@ -334,46 +341,91 @@ class TestIntegrationManagement:
             field: before_entry.get(field) for field in stable_fields
         }
 
-    async def test_reconfigure_confirmed_opt_in(self, mcp_client):
-        """Run a real reconfigure flow only for an explicitly provisioned E2E target."""
-        entry_id = os.environ.get("HA_RECONFIGURE_E2E_ENTRY_ID")
-        raw_config = os.environ.get("HA_RECONFIGURE_E2E_CONFIG")
-        if not entry_id or not raw_config:
-            pytest.skip(
-                "Set HA_RECONFIGURE_E2E_ENTRY_ID and HA_RECONFIGURE_E2E_CONFIG "
-                "for an explicit confirmed reconfigure E2E target"
+    async def test_reconfigure_rejects_a_stale_token(self, mcp_client):
+        """A token issued for a different target config cannot be replayed."""
+        async with MCPAssertions(mcp_client) as mcp:
+            preview = await mcp.call_tool_success(
+                "ha_set_integration",
+                {
+                    "entry_id": self.RECONFIGURE_ENTRY_ID,
+                    "reconfigure": True,
+                    "config": {"file_path": self.RECONFIGURE_PATH_B},
+                },
             )
-        config = json.loads(raw_config)
-        assert isinstance(config, dict), (
-            "HA_RECONFIGURE_E2E_CONFIG must be a JSON object"
-        )
-        preview = await safe_call_tool(
-            mcp_client,
-            "ha_set_integration",
-            {
-                "entry_id": entry_id,
-                "reconfigure": True,
-                "config": config,
-            },
-        )
-        assert preview.get("success") is True, preview
-        assert preview.get("preview") is True, preview
-        confirm_token = preview.get("confirm_token")
-        assert isinstance(confirm_token, str) and confirm_token.startswith("sha256:")
+            stale = await mcp.call_tool_failure(
+                "ha_set_integration",
+                {
+                    "entry_id": self.RECONFIGURE_ENTRY_ID,
+                    "reconfigure": True,
+                    # A different target config than the token was issued for.
+                    "config": {"file_path": self.RECONFIGURE_PATH_A},
+                    "confirm_token": preview["confirm_token"],
+                },
+            )
 
-        result = await safe_call_tool(
-            mcp_client,
-            "ha_set_integration",
-            {
-                "entry_id": entry_id,
-                "reconfigure": True,
-                "config": config,
-                "confirm": True,
-                "confirm_token": confirm_token,
-            },
-        )
-        assert result.get("success") is True, result
-        assert result.get("status") in {
-            "applied_and_verified",
-            "applied_but_unverified",
-        }
+        assert stale.get("status") == "stale_preflight", stale
+        assert "confirm_token" not in stale, stale
+
+    async def test_reconfigure_confirmed_applies_and_verifies(self, mcp_client):
+        """The confirmed path drives HA's real reconfigure flow end to end.
+
+        Runs last in the class so the entry it mutates is not a dependency of
+        the read-only cases above; it restores the original file_path before
+        returning either way.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            try:
+                preview = await mcp.call_tool_success(
+                    "ha_set_integration",
+                    {
+                        "entry_id": self.RECONFIGURE_ENTRY_ID,
+                        "reconfigure": True,
+                        "config": {"file_path": self.RECONFIGURE_PATH_B},
+                    },
+                )
+                result = await mcp.call_tool_success(
+                    "ha_set_integration",
+                    {
+                        "entry_id": self.RECONFIGURE_ENTRY_ID,
+                        "reconfigure": True,
+                        "config": {"file_path": self.RECONFIGURE_PATH_B},
+                        "confirm_token": preview["confirm_token"],
+                    },
+                )
+
+                assert result.get("operation") == "reconfigure", result
+                # The entry reloads cleanly and keeps its identity, so this is
+                # the fully verified outcome — not the degraded one the reload
+                # race used to produce for a reconfigure that worked.
+                assert result.get("status") == "applied_and_verified", result
+                verification = result.get("verification", {})
+                assert verification.get("entry_state") == "loaded", result
+                assert verification.get("operational_state_verified") is True, result
+                assert verification.get("identity_verification") == "complete", result
+
+                changed = await mcp.call_tool_success(
+                    "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
+                )
+                changed_entry = changed.get("entry", changed)
+                # filesize sets the resolved path as the entry unique_id.
+                assert changed_entry.get("unique_id") == self.RECONFIGURE_PATH_B, (
+                    changed_entry
+                )
+            finally:
+                restore_preview = await mcp.call_tool_success(
+                    "ha_set_integration",
+                    {
+                        "entry_id": self.RECONFIGURE_ENTRY_ID,
+                        "reconfigure": True,
+                        "config": {"file_path": self.RECONFIGURE_PATH_A},
+                    },
+                )
+                await mcp.call_tool_success(
+                    "ha_set_integration",
+                    {
+                        "entry_id": self.RECONFIGURE_ENTRY_ID,
+                        "reconfigure": True,
+                        "config": {"file_path": self.RECONFIGURE_PATH_A},
+                        "confirm_token": restore_preview["confirm_token"],
+                    },
+                )
