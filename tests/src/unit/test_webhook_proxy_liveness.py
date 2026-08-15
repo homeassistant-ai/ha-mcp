@@ -9,9 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-COMPONENT_DIR = (
-    REPO_ROOT / "homeassistant-addon-webhook-proxy-dev" / "mcp_proxy_dev"
-)
+COMPONENT_DIR = REPO_ROOT / "homeassistant-addon-webhook-proxy-dev" / "mcp_proxy_dev"
 
 
 @pytest.fixture
@@ -67,9 +65,7 @@ def _provider(oauth, mode: str):
         {
             "_hass": hass,
             "base_url_for": lambda self, request: "https://ha.example",
-            "authorization_server_url": lambda self, base: (
-                f"{base}{oauth.OAUTH_BASE}"
-            ),
+            "authorization_server_url": lambda self, base: f"{base}{oauth.OAUTH_BASE}",
         },
     )()
 
@@ -81,9 +77,7 @@ async def test_mode_none_when_backend_down(oauth, monkeypatch):
         return False
 
     monkeypatch.setattr(oauth, "_backend_alive", _down)
-    view = oauth.AuthorizationServerMetadataView(
-        _provider(oauth, oauth.MODE_HA_AUTH)
-    )
+    view = oauth.AuthorizationServerMetadataView(_provider(oauth, oauth.MODE_HA_AUTH))
 
     await view.get(MagicMock())
 
@@ -97,9 +91,7 @@ async def test_mode_served_when_backend_up(oauth, monkeypatch):
         return True
 
     monkeypatch.setattr(oauth, "_backend_alive", _up)
-    view = oauth.AuthorizationServerMetadataView(
-        _provider(oauth, oauth.MODE_LEGACY)
-    )
+    view = oauth.AuthorizationServerMetadataView(_provider(oauth, oauth.MODE_LEGACY))
 
     await view.get(MagicMock())
 

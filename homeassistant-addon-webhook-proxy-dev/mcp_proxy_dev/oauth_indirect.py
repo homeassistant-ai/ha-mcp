@@ -223,9 +223,7 @@ async def _lookup_cimd(
         parsed.hostname or "", parsed.port or 443
     )
     for address in addresses:
-        reached, result = await _fetch_pinned_cimd(
-            session, client_id, parsed, address
-        )
+        reached, result = await _fetch_pinned_cimd(session, client_id, parsed, address)
         if not reached:
             continue
         if result is None:
@@ -253,9 +251,7 @@ def _cache_cimd(client_id: str, now: float, result: list[str] | None) -> None:
 def _parse_cimd(raw: bytes, client_id: str) -> list[str] | None:
     """Strictly parse a CIMD body and return its validated redirect URIs."""
     try:
-        document = json.loads(
-            raw.decode("utf-8"), parse_constant=_reject_json_constant
-        )
+        document = json.loads(raw.decode("utf-8"), parse_constant=_reject_json_constant)
     except (UnicodeDecodeError, ValueError, RecursionError):
         return None
     if (

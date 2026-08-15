@@ -17,9 +17,7 @@ from ._embedded_stubs import install
 install()
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-COMPONENT_DIR = (
-    REPO_ROOT / "homeassistant-addon-webhook-proxy-dev" / "mcp_proxy_dev"
-)
+COMPONENT_DIR = REPO_ROOT / "homeassistant-addon-webhook-proxy-dev" / "mcp_proxy_dev"
 KEY = b"k" * 32
 GOOGLE_REDIRECT_URIS = [
     "https://oauth-redirect.googleusercontent.com/r/ha-mcp",
@@ -315,27 +313,19 @@ async def test_as_documents_pin_the_claude_cimd_selection_contract(oauth_stack):
     for doc in (ha_auth_doc, none_doc):
         assert doc["client_id_metadata_document_supported"] is True
         assert "none" in doc["token_endpoint_auth_methods_supported"]
-        assert doc["registration_endpoint"] == (
-            f"{base}{oauth.OAUTH_BASE}/register"
-        )
+        assert doc["registration_endpoint"] == (f"{base}{oauth.OAUTH_BASE}/register")
 
     for doc in (ha_auth_doc, none_doc, legacy_doc):
-        assert doc["authorization_endpoint"] == (
-            f"{base}{oauth.OAUTH_BASE}/authorize"
-        )
+        assert doc["authorization_endpoint"] == (f"{base}{oauth.OAUTH_BASE}/authorize")
         assert doc["token_endpoint"] == f"{base}{oauth.OAUTH_BASE}/token"
         assert doc["code_challenge_methods_supported"] == ["S256"]
         assert doc["issuer"] == f"{base}{oauth.OAUTH_BASE}"
 
     assert "registration_endpoint" not in legacy_doc
-    assert "client_secret_basic" in legacy_doc[
-        "token_endpoint_auth_methods_supported"
-    ]
+    assert "client_secret_basic" in legacy_doc["token_endpoint_auth_methods_supported"]
 
 
-async def test_unified_authorize_dispatches_legacy_handler(
-    oauth_stack, monkeypatch
-):
+async def test_unified_authorize_dispatches_legacy_handler(oauth_stack, monkeypatch):
     """The scoped authorize route reuses the extracted legacy implementation."""
     oauth, autoapprove = oauth_stack.oauth, oauth_stack.autoapprove
     provider = object()
@@ -345,9 +335,7 @@ async def test_unified_authorize_dispatches_legacy_handler(
     handler = AsyncMock(return_value=sentinel)
     monkeypatch.setattr(autoapprove, "handle_legacy_authorize_get", handler)
 
-    response = await autoapprove.AutoApproveAuthorizeView(hass).get(
-        _oauth_request()
-    )
+    response = await autoapprove.AutoApproveAuthorizeView(hass).get(_oauth_request())
 
     assert response is sentinel
     handler.assert_awaited_once()
@@ -383,9 +371,7 @@ async def test_none_mode_autoapproves_any_valid_redirect(oauth_stack):
     assert parse_qs(urlparse(location).query)["state"] == ["state-1"]
 
 
-async def test_ha_auth_authorize_uses_dedicated_cimd_session(
-    oauth_stack, monkeypatch
-):
+async def test_ha_auth_authorize_uses_dedicated_cimd_session(oauth_stack, monkeypatch):
     """Public metadata lookup never borrows the authenticated relay session."""
     oauth = oauth_stack.oauth
     autoapprove = oauth_stack.autoapprove
@@ -510,6 +496,4 @@ async def test_ha_auth_refresh_with_redirect_translates_presented_origin(
 
     assert response.status == 200
     forwarded = relay_session.post.call_args.kwargs["data"]
-    assert forwarded["client_id"] == (
-        "https://oauth-redirect.googleusercontent.com"
-    )
+    assert forwarded["client_id"] == ("https://oauth-redirect.googleusercontent.com")

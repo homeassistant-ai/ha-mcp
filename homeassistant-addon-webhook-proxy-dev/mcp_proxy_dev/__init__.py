@@ -475,9 +475,7 @@ async def _setup_ha_auth_oauth(
         from .oauth_autoapprove import register_autoapprove_views
         from .oauth_dcr import bind_dcr_view
 
-        dcr_signing_key = await hass.async_add_executor_job(
-            load_or_create_dcr_secret
-        )
+        dcr_signing_key = await hass.async_add_executor_job(load_or_create_dcr_secret)
         cimd_session = aiohttp.ClientSession(
             connector=aiohttp.TCPConnector(limit=_CIMD_CONNECTOR_LIMIT)
         )
@@ -665,9 +663,7 @@ async def _setup_none_autoapprove(
         )
         from .oauth_dcr import bind_dcr_view
 
-        dcr_signing_key = await hass.async_add_executor_job(
-            load_or_create_dcr_secret
-        )
+        dcr_signing_key = await hass.async_add_executor_job(load_or_create_dcr_secret)
         # Host-derived base URLs (public_base_url=None), like ha_auth: the same
         # install must work via any external URL.
         provider = AutoApproveProvider(hass, webhook_id, None)

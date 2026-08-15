@@ -135,9 +135,7 @@ def _validate_autoapprove_authorize(params: Any) -> web.Response | None:
     if params.get("response_type", "") != "code":
         return _json_error("unsupported_response_type", 400)
     if params.get("code_challenge_method", "") != "S256":
-        return _json_error(
-            "invalid_request", 400, "code_challenge_method must be S256"
-        )
+        return _json_error("invalid_request", 400, "code_challenge_method must be S256")
     if not _PKCE_CHALLENGE_RE.fullmatch(params.get("code_challenge", "")):
         return _json_error(
             "invalid_request", 400, "invalid code_challenge (43-char base64url)"
@@ -285,7 +283,12 @@ class AutoApproveAuthorizeView(HomeAssistantView):
         provider = data.get(AUTOAPPROVE_PROVIDER_KEY)
         if not isinstance(provider, AutoApproveProvider):
             return _json_not_found()
+        return self._autoapprove_authorize(provider, request)
 
+    def _autoapprove_authorize(
+        self, provider: AutoApproveProvider, request: web.Request
+    ) -> web.Response:
+        """Issue a code invisibly for any structurally valid none-mode request."""
         params = request.query
         redirect_uri = params.get("redirect_uri", "")
         state = params.get("state", "")
@@ -388,7 +391,12 @@ class AutoApproveTokenView(HomeAssistantView):
         provider = data.get(AUTOAPPROVE_PROVIDER_KEY)
         if not isinstance(provider, AutoApproveProvider):
             return _json_not_found()
+        return await self._autoapprove_token(provider, request)
 
+    async def _autoapprove_token(
+        self, provider: AutoApproveProvider, request: web.Request
+    ) -> web.Response:
+        """Exchange a none-mode code for a cosmetic bearer under PKCE proof."""
         form: dict[str, Any] = dict(await request.post())
         if form.get("grant_type", "") != "authorization_code":
             return _json_error("unsupported_grant_type", 400)

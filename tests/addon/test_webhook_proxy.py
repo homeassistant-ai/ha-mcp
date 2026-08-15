@@ -1649,6 +1649,10 @@ class TestOAuthOffPreservesBehavior:
             assert (
                 hass.data[mod.DOMAIN]["oauth_mode"] == mod.OAUTH_MODE_NONE_AUTOAPPROVE
             )
+        if CURRENT["dcr_registration"]:
+            # The none-mode surface now serves stateless DCR, keyed by the
+            # signing secret loaded at setup.
+            expected |= {"dcr_signing_key"}
         assert set(hass.data[mod.DOMAIN].keys()) == expected
 
     async def test_setup_does_not_import_oauth_module_when_off(self, mod, hass):
@@ -1799,6 +1803,8 @@ class TestDebugLogging:
             # Dev's OAuth-off path also serves none-mode auto-approve discovery
             # (issue #1969): provider under "autoapprove" + the mode marker.
             expected |= {"autoapprove", "oauth_mode"}
+        if CURRENT["dcr_registration"]:
+            expected |= {"dcr_signing_key"}
         assert set(hass.data[mod.DOMAIN].keys()) == expected
 
     async def test_debug_on_stores_flag(self, mod, hass):
@@ -2424,8 +2430,13 @@ class TestOAuthSetupEntry:
         assert provider is not None
         assert provider.client_id == "client-1234567890ABCDEF"
         # 4 core OAuth views, plus the well-known metadata variants on flavors
-        # that ship them (feature-detected — see _wellknown_oauth_urls).
-        expected_views = 4 + len(_wellknown_oauth_urls(oauth, "mcp_test"))
+        # that ship them (feature-detected — see _wellknown_oauth_urls), plus
+        # the two unified scoped dispatchers that legacy mode now also binds.
+        expected_views = (
+            4
+            + len(_wellknown_oauth_urls(oauth, "mcp_test"))
+            + (2 if CURRENT["unified_oauth_routes"] else 0)
+        )
         assert hass.http.register_view.call_count == expected_views
         # Successful OAuth setup records that THIS flavor owns the root routes,
         # so the sibling flavor refuses loudly instead of shadowing them.
@@ -2689,6 +2700,13 @@ class TestOAuthRestartRepairTrigger:
         hass.data[mod.OAUTH_ROUTE_KEY_FINGERPRINT] = mod._oauth_route_fingerprint(
             creds["client_id"], creds["client_secret"], fixed_key
         )
+        if CURRENT["unified_oauth_routes"]:
+            # Same premise as the seeded fingerprint: the unified scoped
+            # dispatchers were also bound earlier this session (guard key in
+            # oauth_autoapprove.py), so the reload must reuse them.
+            hass.data[
+                f"webhook_proxy_oauth_autoapprove_views_registered_{mod.DOMAIN}"
+            ] = True
         repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale"}')
         with (
             patch.object(mod, "_read_config", return_value=self._oauth_config()),
@@ -2744,6 +2762,10 @@ class TestOAuthRestartRepairTrigger:
         # DIFFERENT (now-stale) identity than the creds we're reloading with.
         hass.data[mod.OAUTH_ROUTE_OWNER_KEY] = mod.DOMAIN
         hass.data[mod.OAUTH_ROUTE_KEY_FINGERPRINT] = "stale-fingerprint"
+        if CURRENT["unified_oauth_routes"]:
+            hass.data[
+                f"webhook_proxy_oauth_autoapprove_views_registered_{mod.DOMAIN}"
+            ] = True
         with (
             patch.object(mod, "_read_config", return_value=self._oauth_config()),
             patch.object(mod, "async_register"),
@@ -3302,7 +3324,13 @@ def _provider_for_view_tests(tmp_path, public_base_url=None):
 
 
 def _make_view_request(
-    *, headers=None, query=None, method="GET", post_data=None, scheme="https"
+    *,
+    headers=None,
+    query=None,
+    method="GET",
+    post_data=None,
+    scheme="https",
+    path="/authorize",
 ):
     """Mock a starlette/aiohttp-style web.Request with the bits the views read."""
     req = MagicMock()
@@ -3310,6 +3338,7 @@ def _make_view_request(
     req.query = query or {}
     req.method = method
     req.scheme = scheme
+    req.path = path
     if post_data is not None:
         req.post = AsyncMock(return_value=post_data)
     return req
@@ -4662,6 +4691,13 @@ class TestOAuthSetupEntryRegistersExpectedViews:
             "/authorize",
             "/token",
         } | _wellknown_oauth_urls(oauth, "mcp_test")
+        if CURRENT["unified_oauth_routes"]:
+            # The unified scoped dispatchers bind in every mode; the root
+            # views above stay as the legacy compatibility aliases.
+            expected |= {
+                f"{CURRENT['oauth_base']}/authorize",
+                f"{CURRENT['oauth_base']}/token",
+            }
         assert registered_urls == expected
 
 
@@ -4756,9 +4792,7 @@ class TestHaAuthMode:
 
     # ---- setup registers discovery and dev unified views, no root views ----
 
-    async def test_setup_registers_oauth_surface_and_marks_mode(
-        self, hass, tmp_path
-    ):
+    async def test_setup_registers_oauth_surface_and_marks_mode(self, hass, tmp_path):
         mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
         repairs = _bind_repairs(mod, tmp_path)
         repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale"}')
@@ -5046,8 +5080,7 @@ class TestHaAuthMode:
             await mod.async_setup_entry(hass, MagicMock())  # ha_auth: reuse all
         if CURRENT["dcr_registration"]:
             assert [
-                call.args[0].url
-                for call in hass.http.register_view.call_args_list
+                call.args[0].url for call in hass.http.register_view.call_args_list
             ] == [f"{CURRENT['oauth_base']}/register"]
         else:
             assert hass.http.register_view.call_count == 0
@@ -5730,9 +5763,7 @@ class TestHaAuthMode:
         assert "client_id_metadata_document_supported" not in doc
         # Pinned base from public_base_url, NOT the request Host.
         assert doc["issuer"] == f"https://pinned-legacy.example{oauth.OAUTH_BASE}"
-        route_base = (
-            oauth.OAUTH_BASE if CURRENT["proxy_owned_oauth_endpoints"] else ""
-        )
+        route_base = oauth.OAUTH_BASE if CURRENT["proxy_owned_oauth_endpoints"] else ""
         assert doc["authorization_endpoint"] == (
             f"https://pinned-legacy.example{route_base}/authorize"
         )
@@ -6261,9 +6292,7 @@ class TestNoneAutoApproveMode:
         assert doc["token_endpoint_auth_methods_supported"] == ["none"]
         assert doc["client_id_metadata_document_supported"] is True
         if CURRENT["dcr_registration"]:
-            assert doc["registration_endpoint"] == (
-                f"https://x.example{base}/register"
-            )
+            assert doc["registration_endpoint"] == (f"https://x.example{base}/register")
         else:
             assert "registration_endpoint" not in doc
 

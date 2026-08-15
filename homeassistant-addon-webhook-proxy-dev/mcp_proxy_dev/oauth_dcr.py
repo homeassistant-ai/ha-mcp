@@ -44,9 +44,7 @@ def mint_client_id(signing_key: bytes, redirect_uris: list[str]) -> str:
     """Mint a stateless client_id embedding ``redirect_uris``."""
     payload = {"r": redirect_uris, "iat": int(time.time())}
     body = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
-    signature = hmac.new(
-        signing_key, body.encode("ascii"), hashlib.sha256
-    ).digest()
+    signature = hmac.new(signing_key, body.encode("ascii"), hashlib.sha256).digest()
     return f"{_CLIENT_ID_PREFIX}{body}.{_b64url_encode(signature)}"
 
 
@@ -59,9 +57,7 @@ def client_redirect_uris(signing_key: bytes, client_id: str) -> list[str] | None
     if not separator or not body:
         return None
     try:
-        expected = hmac.new(
-            signing_key, body.encode("ascii"), hashlib.sha256
-        ).digest()
+        expected = hmac.new(signing_key, body.encode("ascii"), hashlib.sha256).digest()
         if not hmac.compare_digest(_b64url_decode(signature), expected):
             return None
         payload = json.loads(_b64url_decode(body))
