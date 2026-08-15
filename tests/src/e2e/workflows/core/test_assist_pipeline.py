@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, safe_call_tool
+from ...utilities.assertions import MCPAssertions, assert_mcp_success, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -90,18 +90,18 @@ class TestAssistPipeline:
         """
         logger.info("Testing ha_manage_pipeline process path...")
 
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_manage_pipeline",
-            {
-                "action": "process",
-                "sentence": "zzqx wibble frobnicate the quux",
-            },
-        )
         # No availability guard here: `conversation` ships with default_config,
         # which tests/initial_test_state/configuration.yaml loads, so a failure
         # is the endpoint or this tool regressing, not an absent component.
-        assert data["success"] is True, data
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_manage_pipeline",
+                {
+                    "action": "process",
+                    "sentence": "zzqx wibble frobnicate the quux",
+                },
+            )
+
         assert data["operation"] == "process"
         assert data["response_type"] == "error"
         assert data["error_code"] == "no_intent_match"
