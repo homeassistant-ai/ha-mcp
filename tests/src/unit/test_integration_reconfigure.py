@@ -65,6 +65,18 @@ def _legacy_registry_reads(monkeypatch: pytest.MonkeyPatch) -> None:
         config_entry_flow, "fetch_config_entry_unique_id", _entry_unique_id
     )
 
+    async def _domain_unique_ids(client: Any, domain: str) -> dict[str, str] | None:
+        # None models "no component / unreadable", which must stop the scan
+        # from claiming it compared unique_ids.
+        return getattr(client, "_test_domain_unique_ids", None)
+
+    monkeypatch.setattr(
+        config_entry_flow, "fetch_domain_unique_ids", _domain_unique_ids
+    )
+
+
+_UNSET = object()
+
 
 def reconfigure_client(
     *,
@@ -72,6 +84,7 @@ def reconfigure_client(
     device_rows: list[dict[str, Any]] | None = None,
     unique_id: str | list[str | None] | None = "AA:BB:CC:DD:EE:FF",
     unique_id_known: bool = True,
+    domain_unique_ids: Any = _UNSET,
 ) -> Any:
     """Build a client double whose registry reads behave like the real client.
 
@@ -96,6 +109,14 @@ def reconfigure_client(
         client._test_entry_unique_id = EntryUniqueId(
             known=unique_id_known, value=unique_id if unique_id_known else None
         )
+    # entry_id -> unique_id for the domain, used by the duplicate scan. HA's
+    # own config-entry rows carry no unique_id, so the scan can only compare
+    # them through the component; None models an install without it.
+    client._test_domain_unique_ids = (
+        ({} if unique_id_known else None)
+        if domain_unique_ids is _UNSET
+        else domain_unique_ids
+    )
     return client
 
 
@@ -195,7 +216,7 @@ def test_reconfigure_token_ignores_volatile_entry_state() -> None:
         entry=entry,
         target_config={"host": "192.0.2.170"},
         expected_identity=expected_identity,
-        unique_id=None,
+        identity=ReconfigureIdentity(),
     )
     changed_state = {
         **entry,
@@ -208,7 +229,7 @@ def test_reconfigure_token_ignores_volatile_entry_state() -> None:
             entry=changed_state,
             target_config={"host": "192.0.2.170"},
             expected_identity=expected_identity,
-            unique_id=None,
+            identity=ReconfigureIdentity(),
         )
         == original
     )
@@ -1458,7 +1479,16 @@ async def test_reconfigure_detects_duplicate_identity(
     """Post-flight verification rejects a second entry sharing the identity."""
     duplicate_entry = dict(reconfig_entry)
     duplicate_entry["entry_id"] = "entry-duplicate"
-    client = reconfigure_client()
+    # The duplicate is found through the component's domain map: Home
+    # Assistant's own rows carry no unique_id, so putting one in the mocked
+    # REST row (as this test used to) would pass while production could not
+    # detect the duplicate at all.
+    client = reconfigure_client(
+        domain_unique_ids={
+            "entry-123": "AA:BB:CC:DD:EE:FF",
+            "entry-duplicate": "AA:BB:CC:DD:EE:FF",
+        }
+    )
     client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, reconfig_entry])
     client.list_config_entries = AsyncMock(
         return_value=[reconfig_entry, duplicate_entry]
@@ -2745,3 +2775,213 @@ async def test_expected_unique_id_pins_the_value_against_a_rekey() -> None:
     payload = json.loads(str(exc_info.value))
     assert payload["status"] == ReconfigureStatus.APPLIED_IDENTITY_MISMATCH
     assert "does not match expected unique_id" in payload["error"]["message"]
+
+
+# === Regression coverage for the Codex review findings ===
+
+
+def test_confirm_token_binds_the_discovered_identity() -> None:
+    """The token must cover what the PREVIEW showed, not just typed anchors.
+
+    Most callers supply no expected_* and rely on the preview's discovered
+    identity. If the entry's devices, entities or MACs move between preview
+    and confirm, a token hashing only the caller's empty anchors would stay
+    valid and apply against associations the caller never approved.
+    """
+    entry = {"entry_id": "e1", "domain": "shelly", "title": "Relay"}
+    expected = {"device_id": None, "unique_id": None, "mac": None, "entity_ids": []}
+    target = {"host": "192.0.2.1"}
+
+    before = _reconfigure_preflight_token(
+        entry=entry,
+        target_config=target,
+        expected_identity=expected,
+        identity=ReconfigureIdentity(
+            device_ids=["dev-1"], entity_ids=["switch.a"], macs=["AABBCC001122"]
+        ),
+    )
+    moved_device = _reconfigure_preflight_token(
+        entry=entry,
+        target_config=target,
+        expected_identity=expected,
+        identity=ReconfigureIdentity(
+            device_ids=["dev-2"], entity_ids=["switch.a"], macs=["AABBCC001122"]
+        ),
+    )
+    moved_entities = _reconfigure_preflight_token(
+        entry=entry,
+        target_config=target,
+        expected_identity=expected,
+        identity=ReconfigureIdentity(
+            device_ids=["dev-1"], entity_ids=["switch.b"], macs=["AABBCC001122"]
+        ),
+    )
+    moved_macs = _reconfigure_preflight_token(
+        entry=entry,
+        target_config=target,
+        expected_identity=expected,
+        identity=ReconfigureIdentity(
+            device_ids=["dev-1"], entity_ids=["switch.a"], macs=["AABBCC334455"]
+        ),
+    )
+
+    assert len({before, moved_device, moved_entities, moved_macs}) == 4
+
+
+@pytest.mark.asyncio
+async def test_unreadable_unique_id_after_commit_does_not_pass_a_pinned_anchor() -> (
+    None
+):
+    """A pinned anchor we cannot re-read post-commit is unchecked, not passed.
+
+    The device and entity sets being unchanged must not let the result claim
+    identity_verification complete when expected_unique_id was never verified
+    against the applied state.
+    """
+    entry = {
+        "entry_id": "anchor-lost",
+        "domain": "shelly",
+        "state": "loaded",
+        "supports_reconfigure": True,
+    }
+    client = reconfigure_client(
+        entity_rows=[
+            {
+                "entity_id": "switch.a",
+                "config_entry_id": "anchor-lost",
+                "device_id": "dev-1",
+            }
+        ],
+        device_rows=[
+            {
+                "id": "dev-1",
+                "config_entries": ["anchor-lost"],
+                "connections": [],
+                "identifiers": [],
+            }
+        ],
+    )
+    # Readable before the flow, unreadable after (component/transport dropped).
+    client._test_entry_unique_id = [
+        EntryUniqueId(known=True, value="AA:BB:CC:DD:EE:FF"),
+        UNKNOWN_UNIQUE_ID,
+    ]
+    client.get_config_entry = AsyncMock(return_value=entry)
+    client.list_config_entries = AsyncMock(return_value=[entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-anchor-lost",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client,
+        "anchor-lost",
+        config={"host": "192.0.2.40"},
+        expected_unique_id="AA:BB:CC:DD:EE:FF",
+    )
+
+    verification = result["verification"]
+    assert verification["unique_id_verification"] == "anchor_unverifiable_after_change"
+    assert verification["identity_verification"] == "partial"
+    assert result["status"] == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
+
+
+@pytest.mark.asyncio
+async def test_duplicate_scan_does_not_claim_unique_ids_it_cannot_read() -> None:
+    """Without the component the scan compares entry_ids only, and says so."""
+    entry = {
+        "entry_id": "solo",
+        "domain": "shelly",
+        "state": "loaded",
+        "supports_reconfigure": True,
+    }
+    client = reconfigure_client(
+        entity_rows=[
+            {"entity_id": "switch.a", "config_entry_id": "solo", "device_id": "dev-1"}
+        ],
+        device_rows=[
+            {
+                "id": "dev-1",
+                "config_entries": ["solo"],
+                "connections": [],
+                "identifiers": [],
+            }
+        ],
+        domain_unique_ids=None,
+    )
+    client.get_config_entry = AsyncMock(return_value=entry)
+    client.list_config_entries = AsyncMock(return_value=[entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-solo",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "solo", config={"host": "192.0.2.41"}
+    )
+
+    assert result["verification"]["duplicate_scan"] == "shared_device_only"
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_entry_reconfigures_to_verified() -> None:
+    """not_loaded is a disabled entry's TERMINAL state, not a failure.
+
+    Demanding "loaded" reported every disabled entry's clean reconfigure as
+    unverified.
+    """
+    entry = {
+        "entry_id": "disabled-entry",
+        "domain": "shelly",
+        "state": "not_loaded",
+        "disabled_by": "user",
+        "supports_reconfigure": True,
+    }
+    client = reconfigure_client(
+        entity_rows=[
+            {
+                "entity_id": "switch.a",
+                "config_entry_id": "disabled-entry",
+                "device_id": "dev-1",
+            }
+        ],
+        device_rows=[
+            {
+                "id": "dev-1",
+                "config_entries": ["disabled-entry"],
+                "connections": [],
+                "identifiers": [],
+            }
+        ],
+    )
+    client.get_config_entry = AsyncMock(return_value=entry)
+    client.list_config_entries = AsyncMock(return_value=[entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-disabled",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "disabled-entry", config={"host": "192.0.2.42"}
+    )
+
+    assert result["verification"]["operational_state_verified"] is True
+    assert result["status"] == ReconfigureStatus.APPLIED_AND_VERIFIED

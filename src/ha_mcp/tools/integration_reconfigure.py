@@ -22,6 +22,7 @@ from ..utils.config_hash import compute_config_hash
 from .auto_backup import with_auto_backup
 from .config_entry_flow import (
     PreparedReconfigure,
+    ReconfigureIdentity,
     build_reconfigure_rollback_metadata,
     prepare_reconfigure_request,
     reconfigure_config_entry,
@@ -86,16 +87,24 @@ def _reconfigure_preflight_token(
     entry: dict[str, Any],
     target_config: dict[str, Any],
     expected_identity: dict[str, Any],
-    unique_id: str | None,
+    identity: ReconfigureIdentity,
 ) -> str:
     """Bind confirmation to stable entry identity and requested values.
 
     This is an unkeyed content hash — an optimistic lock, not a cryptographic
     binding. It exists so a confirmation cannot apply against state the caller
-    was never shown. Runtime state and error fields are deliberately excluded:
-    Home Assistant changes them while an entry reloads, and an offline device
-    flapping between ``setup_retry`` and ``setup_in_progress`` would otherwise
-    make every confirmation stale with no way forward.
+    was never shown.
+
+    It covers the DISCOVERED identity, not just the anchors the caller typed.
+    Most callers supply no ``expected_*`` at all and rely on what the preview
+    showed them; if the entry's devices, entities or MACs move between preview
+    and confirm, hashing only the caller's (empty) anchors would leave the
+    token valid and apply against associations the caller never approved.
+
+    Runtime state and error fields are deliberately excluded: Home Assistant
+    changes them while an entry reloads, and an offline device flapping
+    between ``setup_retry`` and ``setup_in_progress`` would otherwise make
+    every confirmation stale with no way forward.
     """
     payload = {
         "entry_id": entry.get("entry_id"),
@@ -103,10 +112,15 @@ def _reconfigure_preflight_token(
         # From the collected identity, not the entry: Home Assistant's
         # config-entry fragment has no unique_id, so entry.get would hash a
         # constant None and the token would not bind to it at all.
-        "unique_id": unique_id,
+        "unique_id": identity.unique_id,
+        "unique_id_known": identity.unique_id_known,
         "title": entry.get("title"),
         "target_config": target_config,
         "expected_identity": expected_identity,
+        # The identity the preview SHOWED the caller.
+        "discovered_device_ids": identity.device_ids,
+        "discovered_entity_ids": identity.entity_ids,
+        "discovered_macs": identity.macs,
     }
     return f"sha256:{compute_config_hash(payload)}"
 
@@ -226,7 +240,7 @@ class ReconfigureRunner:
                 entry=prepared.entry,
                 target_config=prepared.flow_config,
                 expected_identity=prepared.expected_identity,
-                unique_id=prepared.identity.unique_id,
+                identity=prepared.identity,
             )
             if confirm_token is None:
                 return _reconfigure_preview_response(

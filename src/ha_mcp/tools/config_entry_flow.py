@@ -43,7 +43,10 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_error_response
 from ..redaction import sentinel_option_keys
-from .component_config_entries import fetch_config_entry_unique_id
+from .component_config_entries import (
+    fetch_config_entry_unique_id,
+    fetch_domain_unique_ids,
+)
 from .component_devices import fetch_device_list_via_component
 from .component_registry_lookup import fetch_entities_for_config_entry_via_component
 from .config_entry_flow_form import _extract_schema_field_names
@@ -939,6 +942,7 @@ def _build_reconfigure_verification(
     expected_identity: dict[str, Any],
     scanned_unique_id: bool,
     unique_id_comparable: bool,
+    unique_id_anchor_unverifiable: bool,
     cross_domain_related: list[str],
 ) -> dict[str, Any]:
     """Summarise what the post-commit read-back could and could not confirm.
@@ -971,14 +975,21 @@ def _build_reconfigure_verification(
 
     return {
         "entry_state": after.get("state"),
-        "operational_state_verified": after.get("state") == "loaded",
+        # A disabled entry's terminal state is not_loaded, not loaded —
+        # _is_transient_reconfigure_state already treats it as settled, so
+        # demanding "loaded" here would report every disabled entry's clean
+        # reconfigure as unverified.
+        "operational_state_verified": after.get("state") == "loaded"
+        or bool(after.get("disabled_by") and after.get("state") == "not_loaded"),
         # None, not True: without a readable unique_id nothing was compared,
         # and reporting "preserved" for two unknowns is a false assurance.
         "unique_id_preserved": (
             before_unique_id == after_unique_id if unique_id_comparable else None
         ),
         "unique_id_verification": (
-            (
+            "anchor_unverifiable_after_change"
+            if unique_id_anchor_unverifiable
+            else (
                 "changed_during_change"
                 if before_unique_id is not None
                 and after_unique_id is not None
@@ -1004,6 +1015,11 @@ def _build_reconfigure_verification(
                 device_identity_verified
                 and entity_identity_verified
                 and mac_identity_verified
+                # A caller who pinned expected_unique_id and whose post-commit
+                # read failed has NOT had that anchor checked. Reporting
+                # "complete" off the device/entity sets alone would pass a
+                # verification the caller explicitly asked for and we skipped.
+                and not unique_id_anchor_unverifiable
             )
             else "partial"
         ),
@@ -1078,19 +1094,39 @@ async def _verify_reconfigured_entry(
     unique_id_comparable = (
         before_identity.unique_id_known and after_identity.unique_id_known
     )
+    # An anchor the caller pinned but that we can no longer read post-commit is
+    # an unchecked anchor, not a passed one.
+    unique_id_anchor_unverifiable = (
+        expected_identity.get("unique_id") is not None
+        and not after_identity.unique_id_known
+    )
     before_unique_id = before_identity.unique_id if unique_id_comparable else None
     after_unique_id = after_identity.unique_id if unique_id_comparable else None
     identity_unique_ids = {
         value for value in (before_unique_id, after_unique_id) if value is not None
     }
+    # Home Assistant's config-entry rows carry no unique_id, so comparing
+    # entry["unique_id"] against them would never match and the scan would
+    # claim a check it never made. One component read maps the whole domain.
+    domain_unique_ids = (
+        await fetch_domain_unique_ids(client, domain) if identity_unique_ids else None
+    )
+
+    def _shares_identity(candidate: dict[str, Any]) -> bool:
+        candidate_id = candidate.get("entry_id")
+        if candidate_id == entry_id:
+            return True
+        if domain_unique_ids is None or not isinstance(candidate_id, str):
+            return False
+        candidate_unique_id = domain_unique_ids.get(candidate_id)
+        return candidate_unique_id is not None and (
+            candidate_unique_id in identity_unique_ids
+        )
+
     same_identity_entries = [
         entry
         for entry in entries
-        if entry.get("domain") == domain
-        and (
-            entry.get("entry_id") == entry_id
-            or entry.get("unique_id") in identity_unique_ids
-        )
+        if entry.get("domain") == domain and _shares_identity(entry)
     ]
     if len(same_identity_entries) != 1:
         raise_tool_error(
@@ -1119,8 +1155,10 @@ async def _verify_reconfigured_entry(
         before_identity=before_identity,
         after_identity=after_identity,
         expected_identity=expected_identity,
-        scanned_unique_id=bool(identity_unique_ids),
+        # Only claim a unique_id scan when one actually ran.
+        scanned_unique_id=bool(identity_unique_ids) and domain_unique_ids is not None,
         unique_id_comparable=unique_id_comparable,
+        unique_id_anchor_unverifiable=unique_id_anchor_unverifiable,
         cross_domain_related=after_related.cross_domain,
     )
     return verification, cross_domain_warnings(after_related.cross_domain)
