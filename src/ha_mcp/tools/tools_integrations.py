@@ -1711,6 +1711,10 @@ class IntegrationTools:
             "entry_id": entry.get("entry_id"),
             "domain": entry.get("domain"),
             "title": entry.get("title"),
+            # The discovery route for ha_set_integration's expected_unique_id:
+            # without it a caller has no way to read the anchor it is meant to
+            # assert. None is meaningful here — plenty of entries have none.
+            "unique_id": entry.get("unique_id"),
             "state": entry.get("state"),
             "source": entry.get("source"),
             "supports_options": entry.get("supports_options", False),

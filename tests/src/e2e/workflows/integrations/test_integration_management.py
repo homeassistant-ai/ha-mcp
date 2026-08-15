@@ -306,6 +306,8 @@ class TestIntegrationManagement:
             before = await mcp.call_tool_success(
                 "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
             )
+            # Preview only — nothing is submitted to HA, so the target path
+            # does not have to differ from the current one here.
             result = await mcp.call_tool_success(
                 "ha_set_integration",
                 {
@@ -369,18 +371,32 @@ class TestIntegrationManagement:
     async def test_reconfigure_confirmed_applies_and_verifies(self, mcp_client):
         """The confirmed path drives HA's real reconfigure flow end to end.
 
-        Runs last in the class so the entry it mutates is not a dependency of
-        the read-only cases above; it restores the original file_path before
-        returning either way.
+        Targets whichever of the two paths the entry is NOT currently on, and
+        restores the starting one in a `finally`. filesize's reconfigure step
+        calls `_abort_if_unique_id_configured()`, which does not exclude the
+        entry being reconfigured (core `config_entries.py`), so reconfiguring
+        to the path it already holds aborts with `already_configured` — this
+        test must not assume a starting path or an ordering.
         """
         async with MCPAssertions(mcp_client) as mcp:
+            current = await mcp.call_tool_success(
+                "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
+            )
+            # filesize titles the entry with the file's basename and sets the
+            # resolved path as its unique_id, so both follow the change.
+            start_path = (current.get("entry", current) or {}).get("unique_id")
+            target = (
+                self.RECONFIGURE_PATH_A
+                if start_path == self.RECONFIGURE_PATH_B
+                else self.RECONFIGURE_PATH_B
+            )
             try:
                 preview = await mcp.call_tool_success(
                     "ha_set_integration",
                     {
                         "entry_id": self.RECONFIGURE_ENTRY_ID,
                         "reconfigure": True,
-                        "config": {"file_path": self.RECONFIGURE_PATH_B},
+                        "config": {"file_path": target},
                     },
                 )
                 result = await mcp.call_tool_success(
@@ -388,7 +404,7 @@ class TestIntegrationManagement:
                     {
                         "entry_id": self.RECONFIGURE_ENTRY_ID,
                         "reconfigure": True,
-                        "config": {"file_path": self.RECONFIGURE_PATH_B},
+                        "config": {"file_path": target},
                         "confirm_token": preview["confirm_token"],
                     },
                 )
@@ -407,25 +423,26 @@ class TestIntegrationManagement:
                     "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
                 )
                 changed_entry = changed.get("entry", changed)
-                # filesize sets the resolved path as the entry unique_id.
-                assert changed_entry.get("unique_id") == self.RECONFIGURE_PATH_B, (
+                assert changed_entry.get("unique_id") == target, changed_entry
+                assert changed_entry.get("title") == target.rsplit("/", 1)[-1], (
                     changed_entry
                 )
             finally:
-                restore_preview = await mcp.call_tool_success(
-                    "ha_set_integration",
-                    {
-                        "entry_id": self.RECONFIGURE_ENTRY_ID,
-                        "reconfigure": True,
-                        "config": {"file_path": self.RECONFIGURE_PATH_A},
-                    },
-                )
-                await mcp.call_tool_success(
-                    "ha_set_integration",
-                    {
-                        "entry_id": self.RECONFIGURE_ENTRY_ID,
-                        "reconfigure": True,
-                        "config": {"file_path": self.RECONFIGURE_PATH_A},
-                        "confirm_token": restore_preview["confirm_token"],
-                    },
-                )
+                if start_path in (self.RECONFIGURE_PATH_A, self.RECONFIGURE_PATH_B):
+                    restore_preview = await mcp.call_tool_success(
+                        "ha_set_integration",
+                        {
+                            "entry_id": self.RECONFIGURE_ENTRY_ID,
+                            "reconfigure": True,
+                            "config": {"file_path": start_path},
+                        },
+                    )
+                    await mcp.call_tool_success(
+                        "ha_set_integration",
+                        {
+                            "entry_id": self.RECONFIGURE_ENTRY_ID,
+                            "reconfigure": True,
+                            "config": {"file_path": start_path},
+                            "confirm_token": restore_preview["confirm_token"],
+                        },
+                    )
