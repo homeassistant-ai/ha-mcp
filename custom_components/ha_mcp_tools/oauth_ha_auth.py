@@ -57,7 +57,7 @@ _ALLOWED_SCHEMES = ("https",)
 # client_id URL -> (expires_monotonic, redirect_uris). The -00 draft forbids
 # caching fetch errors and invalid documents, so negative entries never live
 # here.
-_cimd_cache: dict[str, tuple[float, list[str]]] = {}
+_cimd_cache: dict[str, tuple[float, list[str] | None]] = {}
 
 
 def _reject_json_constant(constant: str) -> None:
