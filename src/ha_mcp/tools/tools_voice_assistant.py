@@ -472,11 +472,26 @@ class VoiceAssistantTools:
         result = await self._client._request(
             "POST", "/conversation/process", json=payload
         )
-        if not isinstance(result, dict):
-            result = {}
-        response = result.get("response")
+        response = result.get("response") if isinstance(result, dict) else None
         if not isinstance(response, dict):
-            response = {}
+            # An empty or malformed 2xx body arrives here as {} — the client
+            # normalizes a JSON decode failure that way — and carrying on would
+            # report success with a null response_type and no speech.
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Unexpected Assist conversation response",
+                    context={
+                        "action": "process",
+                        "pipeline_id": pipeline_id,
+                        "agent_id": agent_id,
+                    },
+                    suggestions=[
+                        "Check that the conversation agent is loaded and responding",
+                        "Use ha_get_logs to see what /conversation/process returned",
+                    ],
+                )
+            )
         data = response.get("data")
         if not isinstance(data, dict):
             data = {}
@@ -510,7 +525,10 @@ class VoiceAssistantTools:
         name="ha_manage_pipeline",
         tags={"Assist"},
         annotations={
-            "openWorldHint": False,
+            # action='process' answers with whatever the conversation agent
+            # says, and that agent can be a cloud LLM, so the tool carries
+            # externally-authored content back to the client.
+            "openWorldHint": True,
             "destructiveHint": True,
             "idempotentHint": False,
             "readOnlyHint": False,
@@ -687,17 +705,17 @@ class VoiceAssistantTools:
         action='set_preferred' to choose the preferred pipeline, and
         action='process' to run a sentence through Assist.
 
-        action='process' takes the same path a voice command takes, so a matched
-        intent executes: it turns on the light rather than reporting that it
-        would. Its result carries response_type ('action_done', 'query_answer'
-        or 'error') and, on an error, error_code such as 'no_intent_match' —
-        Assist declining a sentence is an answer, not a tool failure, so inspect
-        those fields rather than expecting a raised error. Use ha_call_service
-        to act on an entity directly; use this to test what Assist itself
-        understands. pipeline_id borrows a pipeline's conversation agent and
-        language, but the sentence still goes to the agent directly, so sentence
-        triggers and prefer_local_intents — which only a full pipeline run
-        applies — do not take effect.
+        action='process' sends the sentence straight to Assist's conversation
+        agent, so a matched intent executes: it turns on the light rather than
+        reporting that it would. Its result carries response_type
+        ('action_done', 'query_answer' or 'error') and, on an error, error_code
+        such as 'no_intent_match' — Assist declining a sentence is an answer,
+        not a tool failure, so inspect those fields rather than expecting a
+        raised error. Use ha_call_service to act on an entity directly; use
+        this to test what Assist itself understands. pipeline_id borrows a
+        pipeline's conversation agent and language, but the sentence still goes
+        to the agent directly, so sentence triggers and prefer_local_intents —
+        which only a full pipeline run applies — do not take effect.
 
         EXAMPLES:
         - List pipelines: ha_manage_pipeline(action="list")

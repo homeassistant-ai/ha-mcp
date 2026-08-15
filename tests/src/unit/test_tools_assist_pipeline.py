@@ -761,6 +761,26 @@ async def test_process_reports_an_unmatched_sentence_without_raising(tools):
     assert result["service_calls"] == {"success": [], "failed": []}
 
 
+@pytest.mark.parametrize("body", [{}, {"response": "not a mapping"}, []])
+async def test_process_rejects_a_malformed_conversation_response(tools, body):
+    """A body without a response envelope fails instead of reporting success.
+
+    The three bodies are the guard's structural cases: no envelope at all
+    (``{}``, which is what ``_request`` normalizes an empty or undecodable 2xx
+    body to), an envelope that is not a mapping, and a non-mapping body.
+    """
+    tools._client._request.return_value = body
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_manage_pipeline(
+            action="process", sentence="turn on the kitchen light"
+        )
+
+    error_data = json.loads(str(exc_info.value))
+    assert error_data["success"] is False
+    assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
+
+
 async def test_process_keeps_the_sentence_out_of_error_payloads(tools):
     """A transport failure must not echo the utterance back."""
     tools._client._request.side_effect = RuntimeError("upstream said no")

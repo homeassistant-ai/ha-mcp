@@ -98,9 +98,10 @@ class TestAssistPipeline:
                 "sentence": "zzqx wibble frobnicate the quux",
             },
         )
-        if data.get("success") is not True:
-            pytest.skip(f"Assist conversation API unavailable: {data}")
-
+        # No availability guard here: `conversation` ships with default_config,
+        # which tests/initial_test_state/configuration.yaml loads, so a failure
+        # is the endpoint or this tool regressing, not an absent component.
+        assert data["success"] is True, data
         assert data["operation"] == "process"
         assert data["response_type"] == "error"
         assert data["error_code"] == "no_intent_match"
