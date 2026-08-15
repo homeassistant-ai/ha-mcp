@@ -426,6 +426,17 @@ class TestIntegrationManagement:
                 assert verification.get("entry_state") == "loaded", result
                 assert verification.get("operational_state_verified") is True, result
                 assert verification.get("identity_verification") == "complete", result
+                # filesize keys its entry on the file path, so a path change
+                # re-keys the unique_id through
+                # async_update_reload_and_abort(unique_id=...). That is a
+                # legitimate re-key, reported rather than refused — and it is
+                # only observable because the harness installs ha_mcp_tools
+                # (conftest copies the component in), which is the sole source
+                # of a config entry's unique_id.
+                assert (
+                    verification.get("unique_id_verification")
+                    == "changed_during_change"
+                ), result
 
                 changed = await mcp.call_tool_success(
                     "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}

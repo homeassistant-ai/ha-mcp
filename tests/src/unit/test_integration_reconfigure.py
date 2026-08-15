@@ -70,7 +70,7 @@ def reconfigure_client(
     *,
     entity_rows: list[dict[str, Any]] | None = None,
     device_rows: list[dict[str, Any]] | None = None,
-    unique_id: str | None | list[str | None] = "AA:BB:CC:DD:EE:FF",
+    unique_id: str | list[str | None] | None = "AA:BB:CC:DD:EE:FF",
     unique_id_known: bool = True,
 ) -> Any:
     """Build a client double whose registry reads behave like the real client.
@@ -808,10 +808,9 @@ async def test_reconfigure_verification_failure_includes_rollback(
     reconfig_entry: dict[str, object],
 ) -> None:
     """Post-commit identity failures retain the operator rollback path."""
-    after = {**reconfig_entry, "unique_id": "DIFFERENT-AFTER-APPLY"}
-    client = reconfigure_client(
-        unique_id=["AA:BB:CC:DD:EE:FF", "DIFFERENT-AFTER-APPLY"]
-    )
+    # A CLEARED unique_id is the real violation — a re-key is legitimate.
+    after = {key: value for key, value in reconfig_entry.items() if key != "unique_id"}
+    client = reconfigure_client(unique_id=["AA:BB:CC:DD:EE:FF", None])
     client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, after])
     client.list_config_entries = AsyncMock(return_value=[after])
     client.start_reconfigure_flow = AsyncMock(
@@ -1396,7 +1395,7 @@ async def test_reconfigure_rejects_cleared_unique_id_after_commit(
         )
 
     payload = json.loads(str(exc_info.value))
-    assert "changed the original entry unique_id" in payload["error"]["message"]
+    assert "cleared the entry unique_id" in payload["error"]["message"]
     assert payload["status"] == ReconfigureStatus.APPLIED_IDENTITY_MISMATCH
 
 
@@ -2673,3 +2672,76 @@ async def test_component_reporting_no_unique_id_is_distinct_from_unreadable() ->
     assert verification["unique_id_verification"] == "absent"
     assert verification["unique_id_preserved"] is True
     assert result["status"] == ReconfigureStatus.APPLIED_AND_VERIFIED
+
+
+@pytest.mark.asyncio
+async def test_a_legitimate_unique_id_rekey_is_reported_not_refused() -> None:
+    """An integration may re-key on reconfigure; that is not a violation.
+
+    `filesize` sets its unique_id to the file path, so reconfiguring the path
+    changes it via async_update_reload_and_abort(unique_id=...). Losing the
+    unique_id is the duplicate hazard; changing it is not.
+    """
+    entry = {
+        "entry_id": "rekey-entry",
+        "domain": "filesize",
+        "state": "loaded",
+        "supports_reconfigure": True,
+    }
+    client = reconfigure_client(unique_id=["/config/www/a.txt", "/config/www/b.txt"])
+    client.get_config_entry = AsyncMock(return_value=entry)
+    client.list_config_entries = AsyncMock(return_value=[entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-rekey",
+            "type": "form",
+            "data_schema": [{"name": "file_path", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "rekey-entry", config={"file_path": "/config/www/b.txt"}
+    )
+
+    assert result["status"] == ReconfigureStatus.APPLIED_AND_VERIFIED
+    assert result["verification"]["unique_id_verification"] == "changed_during_change"
+    assert result["verification"]["unique_id_preserved"] is False
+
+
+@pytest.mark.asyncio
+async def test_expected_unique_id_pins_the_value_against_a_rekey() -> None:
+    """A caller who needs the unique_id held says so, and it is enforced."""
+    entry = {
+        "entry_id": "rekey-entry",
+        "domain": "filesize",
+        "state": "loaded",
+        "supports_reconfigure": True,
+    }
+    client = reconfigure_client(unique_id=["/config/www/a.txt", "/config/www/b.txt"])
+    client.get_config_entry = AsyncMock(return_value=entry)
+    client.list_config_entries = AsyncMock(return_value=[entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-rekey-pinned",
+            "type": "form",
+            "data_schema": [{"name": "file_path", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client,
+            "rekey-entry",
+            config={"file_path": "/config/www/b.txt"},
+            expected_unique_id="/config/www/a.txt",
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == ReconfigureStatus.APPLIED_IDENTITY_MISMATCH
+    assert "does not match expected unique_id" in payload["error"]["message"]

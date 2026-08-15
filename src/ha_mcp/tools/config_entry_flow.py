@@ -831,13 +831,17 @@ def _verify_reconfigure_identity_fields(
 ) -> None:
     """Verify the identity anchors that must survive a reconfigure flow.
 
-    Only the before-vs-after guards live here, plus the one ``expected_*``
-    check they do not already imply. ``prepare_reconfigure_request`` has
-    already proved ``expected == before`` for unique_id, device_id and
-    entity_ids, and the matching guard below proves ``after == before``, so an
-    expected-vs-after check on those three could never fire. ``expected_mac``
-    is different: the pre-flow comparison ran against the BEFORE MACs, so
-    comparing it to the after MACs is a real check.
+    ``prepare_reconfigure_request`` has already proved ``expected == before``
+    for device_id and entity_ids, and the guards below prove ``after ==
+    before`` for them, so an expected-vs-after check on those two could never
+    fire and is deliberately absent.
+
+    unique_id and MAC are different, and both checks below are reachable.
+    unique_id may legitimately change (an integration re-keying on
+    reconfigure), so only LOSING it raises on its own and
+    ``expected_unique_id`` is what pins the value. ``expected_mac``'s pre-flow
+    comparison ran against the BEFORE MACs, so comparing it to the after MACs
+    is a real check.
     """
     # Read from the identity objects: Home Assistant's config-entry fragment
     # has no unique_id, so before/after would both be None here forever and
@@ -845,14 +849,31 @@ def _verify_reconfigure_identity_fields(
     comparable = before_identity.unique_id_known and after_identity.unique_id_known
     before_unique_id = before_identity.unique_id if comparable else None
     after_unique_id = after_identity.unique_id if comparable else None
+    # LOSING a unique_id is the hazard: the entry becomes indistinguishable to
+    # HA's discovery, which then creates a duplicate. CHANGING it is not — an
+    # integration may legitimately re-key on reconfigure via
+    # async_update_reload_and_abort(unique_id=...); `filesize` does exactly
+    # that, since its unique_id is the file path being reconfigured. A caller
+    # who needs the value pinned says so with expected_unique_id, checked next.
+    if comparable and before_unique_id is not None and after_unique_id is None:
+        _raise_identity_mismatch(
+            entry_id,
+            "Reconfigure flow cleared the entry unique_id, which lets the next "
+            "discovery create a duplicate entry",
+            before=before_identity,
+            after=after_identity,
+            expected=expected_identity,
+            status=ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
+        )
+    expected_unique_id = expected_identity.get("unique_id")
     if (
-        comparable
-        and before_unique_id is not None
-        and after_unique_id != before_unique_id
+        expected_unique_id is not None
+        and comparable
+        and after_unique_id != expected_unique_id
     ):
         _raise_identity_mismatch(
             entry_id,
-            "Reconfigure flow changed the original entry unique_id",
+            "Reconfigure result does not match expected unique_id",
             before=before_identity,
             after=after_identity,
             expected=expected_identity,
@@ -957,8 +978,14 @@ def _build_reconfigure_verification(
             before_unique_id == after_unique_id if unique_id_comparable else None
         ),
         "unique_id_verification": (
-            _verification_state(
-                before_unique_id is not None, after_unique_id is not None
+            (
+                "changed_during_change"
+                if before_unique_id is not None
+                and after_unique_id is not None
+                and before_unique_id != after_unique_id
+                else _verification_state(
+                    before_unique_id is not None, after_unique_id is not None
+                )
             )
             if unique_id_comparable
             # Home Assistant does not expose unique_id; only the ha_mcp_tools
