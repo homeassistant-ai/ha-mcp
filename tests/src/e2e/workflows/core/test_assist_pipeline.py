@@ -81,3 +81,38 @@ class TestAssistPipeline:
         assert set_data["operation"] == "updated"
         assert set_data["pipeline_id"] == preferred
         assert set_data["pipeline"]["name"] == pipeline["name"]
+
+    async def test_process_reports_an_unmatched_sentence(self, mcp_client):
+        """A sentence Assist cannot match answers with an error response type.
+
+        Deliberately unmatchable: the process action executes matched intents,
+        so a sentence that reaches an intent would change device state.
+        """
+        logger.info("Testing ha_manage_pipeline process path...")
+
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_manage_pipeline",
+            {
+                "action": "process",
+                "sentence": "zzqx wibble frobnicate the quux",
+            },
+        )
+        if data.get("success") is not True:
+            pytest.skip(f"Assist conversation API unavailable: {data}")
+
+        assert data["operation"] == "process"
+        assert data["response_type"] == "error"
+        assert data["error_code"] == "no_intent_match"
+        assert data["service_calls"] == {"success": [], "failed": []}
+
+    async def test_process_requires_a_sentence(self, mcp_client):
+        """process without a sentence is rejected before HA is contacted."""
+        logger.info("Testing ha_manage_pipeline process validation...")
+
+        data = await safe_call_tool(
+            mcp_client, "ha_manage_pipeline", {"action": "process"}
+        )
+
+        assert data["success"] is False
+        assert data["error"]["code"] == "VALIDATION_MISSING_PARAMETER"

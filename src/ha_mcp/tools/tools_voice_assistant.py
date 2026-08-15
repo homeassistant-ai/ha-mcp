@@ -61,7 +61,12 @@ _EXPOSURE_ENRICHMENT_KEYS = (
     "state",
 )
 
-PipelineAction = Literal["list", "get", "create", "update", "set_preferred"]
+PipelineAction = Literal["list", "get", "create", "update", "set_preferred", "process"]
+
+# HA's MATCH_ALL sentinel. A pipeline driven by an LLM accepts every language and
+# stores "*" as its conversation_language, which is not a language a conversation
+# agent can recognise intents in.
+_MATCH_ALL_LANGUAGE = "*"
 
 # Mirrors HA Core's assist_pipeline/pipeline.py pipeline create/update schema.
 _PIPELINE_FIELDS = (
@@ -130,8 +135,8 @@ class VoiceAssistantTools:
 
         return result.get("result")
 
-    async def _get_pipeline_for_write(self, pipeline_id: str | None) -> dict[str, Any]:
-        """Fetch a pipeline for create/update merge operations."""
+    async def _get_pipeline(self, pipeline_id: str | None) -> dict[str, Any]:
+        """Fetch one pipeline, or the preferred one when no ID is given."""
         message: dict[str, Any] = {"type": "assist_pipeline/pipeline/get"}
         if pipeline_id is not None:
             message["pipeline_id"] = pipeline_id
@@ -346,7 +351,7 @@ class VoiceAssistantTools:
             )
 
         source_pipeline_id = pipeline_id if action == "update" else base_pipeline_id
-        pipeline = await self._get_pipeline_for_write(source_pipeline_id)
+        pipeline = await self._get_pipeline(source_pipeline_id)
         payload = _drop_pipeline_id(pipeline)
         payload.update(updates)
 
@@ -394,6 +399,113 @@ class VoiceAssistantTools:
             ),
         }
 
+    @staticmethod
+    def _pipeline_intent_language(pipeline: dict[str, Any]) -> str | None:
+        """Resolve the language a pipeline recognises intents in.
+
+        Mirrors HA Core's own fallback for ``conversation_language == "*"``
+        (``assist_pipeline/pipeline.py``): the STT and TTS languages come first
+        because they may be more specific (``zh-CN`` rather than ``zh``).
+        """
+        language = pipeline.get("conversation_language")
+        if isinstance(language, str) and language != _MATCH_ALL_LANGUAGE:
+            return language
+        for field in ("stt_language", "tts_language", "language"):
+            value = pipeline.get(field)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    @staticmethod
+    def _speech_text(response: dict[str, Any]) -> str | None:
+        """Extract the plain-text reply from an HA conversation response."""
+        speech = response.get("speech")
+        if not isinstance(speech, dict):
+            return None
+        plain = speech.get("plain")
+        if not isinstance(plain, dict):
+            return None
+        text = plain.get("speech")
+        return text if isinstance(text, str) else None
+
+    async def _process_sentence(
+        self,
+        *,
+        sentence: str | None,
+        language: str | None,
+        conversation_id: str | None,
+        agent_id: str | None,
+        pipeline_id: str | None,
+    ) -> dict[str, Any]:
+        """Run a sentence through HA's conversation agent."""
+        if sentence is None or not sentence.strip():
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "action='process' requires a non-empty sentence",
+                    context={"action": "process"},
+                    suggestions=[
+                        "Pass the command to run, e.g. "
+                        "sentence='turn on the kitchen light'."
+                    ],
+                )
+            )
+
+        if pipeline_id is not None:
+            pipeline = await self._get_pipeline(pipeline_id)
+            if agent_id is None:
+                engine = pipeline.get("conversation_engine")
+                agent_id = engine if isinstance(engine, str) else None
+            if language is None:
+                language = self._pipeline_intent_language(pipeline)
+
+        payload: dict[str, Any] = {"text": sentence} | {
+            field: value
+            for field, value in (
+                ("language", language),
+                ("conversation_id", conversation_id),
+                ("agent_id", agent_id),
+            )
+            if value is not None
+        }
+
+        result = await self._client._request(
+            "POST", "/conversation/process", json=payload
+        )
+        if not isinstance(result, dict):
+            result = {}
+        response = result.get("response")
+        if not isinstance(response, dict):
+            response = {}
+        data = response.get("data")
+        if not isinstance(data, dict):
+            data = {}
+
+        response_type = response.get("response_type")
+        speech = self._speech_text(response)
+        return {
+            "success": True,
+            "operation": "process",
+            "pipeline_id": pipeline_id,
+            "agent_id": agent_id,
+            "response_type": response_type,
+            "speech": speech,
+            "language": response.get("language") or language,
+            "conversation_id": result.get("conversation_id"),
+            "continue_conversation": result.get("continue_conversation", False),
+            # Every target the intent resolved. HA dropped this key in 2026.4;
+            # on newer cores the split success/failed lists below carry the same
+            # target dicts.
+            "targets": data.get("targets", []),
+            "service_calls": {
+                "success": data.get("success", []),
+                "failed": data.get("failed", []),
+            },
+            "error_code": data.get("code") if response_type == "error" else None,
+            "message": speech
+            or f"Assist responded with {response_type or 'no response type'}",
+        }
+
     @tool(
         name="ha_manage_pipeline",
         tags={"Assist"},
@@ -412,7 +524,8 @@ class VoiceAssistantTools:
             PipelineAction,
             Field(
                 description=(
-                    "Pipeline operation: list, get, create, update, or set_preferred."
+                    "Pipeline operation: list, get, create, update, set_preferred, "
+                    "or process."
                 ),
             ),
         ],
@@ -420,7 +533,40 @@ class VoiceAssistantTools:
             str | None,
             Field(
                 description=(
-                    "Assist pipeline ID. Required for get, update, and set_preferred."
+                    "Assist pipeline ID. Required for get, update, and set_preferred. "
+                    "Optional for process, where it selects the conversation agent and "
+                    "language that pipeline is configured with."
+                ),
+                default=None,
+            ),
+        ] = None,
+        sentence: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Natural-language command to run through Assist. Required when "
+                    "action='process'. A matched intent executes."
+                ),
+                default=None,
+            ),
+        ] = None,
+        conversation_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "For process only, the conversation to continue. Returned in the "
+                    "response so follow-up sentences keep their context."
+                ),
+                default=None,
+            ),
+        ] = None,
+        agent_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "For process only, the conversation agent entity ID to answer, "
+                    "e.g. 'conversation.home_assistant'. Overrides the agent taken "
+                    "from pipeline_id; omit both for the default agent."
                 ),
                 default=None,
             ),
@@ -457,7 +603,13 @@ class VoiceAssistantTools:
         ] = None,
         language: Annotated[
             str | None,
-            Field(description="Pipeline language, e.g. 'en'.", default=None),
+            Field(
+                description=(
+                    "Pipeline language, e.g. 'en'. For process, the language to "
+                    "recognise the sentence in."
+                ),
+                default=None,
+            ),
         ] = None,
         stt_engine: Annotated[
             str | None,
@@ -532,7 +684,20 @@ class VoiceAssistantTools:
 
         Use action='list' to discover pipeline IDs, action='get' to inspect one
         pipeline, action='create' or action='update' to write pipeline settings,
-        and action='set_preferred' to choose the preferred pipeline.
+        action='set_preferred' to choose the preferred pipeline, and
+        action='process' to run a sentence through Assist.
+
+        action='process' takes the same path a voice command takes, so a matched
+        intent executes: it turns on the light rather than reporting that it
+        would. Its result carries response_type ('action_done', 'query_answer'
+        or 'error') and, on an error, error_code such as 'no_intent_match' —
+        Assist declining a sentence is an answer, not a tool failure, so inspect
+        those fields rather than expecting a raised error. Use ha_call_service
+        to act on an entity directly; use this to test what Assist itself
+        understands. pipeline_id borrows a pipeline's conversation agent and
+        language, but the sentence still goes to the agent directly, so sentence
+        triggers and prefer_local_intents — which only a full pipeline run
+        applies — do not take effect.
 
         EXAMPLES:
         - List pipelines: ha_manage_pipeline(action="list")
@@ -558,6 +723,20 @@ class VoiceAssistantTools:
               action="set_preferred",
               pipeline_id="preferred",
           )
+        - Run a sentence: ha_manage_pipeline(
+              action="process",
+              sentence="turn on the kitchen light",
+          )
+        - Run it through one pipeline's agent: ha_manage_pipeline(
+              action="process",
+              sentence="turn on the kitchen light",
+              pipeline_id="preferred",
+          )
+        - Continue a conversation: ha_manage_pipeline(
+              action="process",
+              sentence="and the hallway?",
+              conversation_id="<id from the previous response>",
+          )
 
         Empty string clears nullable STT/TTS/wake-word fields. Non-nullable
         fields such as name, language, conversation_language, and
@@ -572,6 +751,15 @@ class VoiceAssistantTools:
 
             if action == "set_preferred":
                 return await self._set_preferred_pipeline(pipeline_id)
+
+            if action == "process":
+                return await self._process_sentence(
+                    sentence=sentence,
+                    language=language,
+                    conversation_id=conversation_id,
+                    agent_id=agent_id,
+                    pipeline_id=pipeline_id,
+                )
 
             updates = self._pipeline_updates(
                 conversation_engine=conversation_engine,

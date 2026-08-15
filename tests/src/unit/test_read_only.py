@@ -186,6 +186,7 @@ class TestExemptionRules:
             ({"action": "create", "name": "x"}, False),
             ({"action": "update", "pipeline_id": "p1"}, False),
             ({"action": "set_preferred", "pipeline_id": "p1"}, False),
+            ({"action": "process", "sentence": "turn on the light"}, False),
             ({}, False),
         ],
     )
@@ -716,6 +717,12 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         # Extra set_preferred write, but it only fires on create/update,
         # which the action check blocks.
         "make_preferred",
+        # action='process' runs a sentence through Assist, where a matched
+        # intent executes; the action check blocks it, and these three only
+        # shape that already-blocked call.
+        "sentence",
+        "conversation_id",
+        "agent_id",
     },
     "ha_manage_custom_tool": {
         # (The FastMCP-injected ``ctx`` Context is excluded by

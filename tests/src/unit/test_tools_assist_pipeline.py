@@ -30,11 +30,35 @@ def _pipeline(**overrides):
     return pipeline
 
 
+def _conversation_result(**overrides):
+    """Build an HA ``/conversation/process`` response body."""
+    result = {
+        "response": {
+            "speech": {"plain": {"speech": "Turned on the light", "extra_data": None}},
+            "card": {},
+            "language": "en",
+            "response_type": "action_done",
+            "data": {
+                "targets": [],
+                "success": [
+                    {"name": "Kitchen light", "type": "entity", "id": "light.kitchen"}
+                ],
+                "failed": [],
+            },
+        },
+        "conversation_id": "01JABCDEF",
+        "continue_conversation": False,
+    }
+    result.update(overrides)
+    return result
+
+
 @pytest.fixture
 def mock_client():
     """Create a mock Home Assistant client."""
     client = MagicMock()
     client.send_websocket_message = AsyncMock()
+    client._request = AsyncMock()
     return client
 
 
@@ -576,3 +600,177 @@ async def test_get_assist_pipeline_maps_unexpected_exception(tools):
     assert error_data["success"] is False
     assert error_data["error"]["code"] == "INTERNAL_ERROR"
     assert "network down" in error_data["error"]["details"]
+
+
+async def test_process_sends_sentence_and_normalizes_response(tools):
+    """action='process' posts the sentence and flattens HA's answer."""
+    tools._client._request.return_value = _conversation_result()
+
+    result = await tools.ha_manage_pipeline(
+        action="process", sentence="turn on the kitchen light"
+    )
+
+    tools._client._request.assert_awaited_once_with(
+        "POST",
+        "/conversation/process",
+        json={"text": "turn on the kitchen light"},
+    )
+    assert result == {
+        "success": True,
+        "operation": "process",
+        "pipeline_id": None,
+        "agent_id": None,
+        "response_type": "action_done",
+        "speech": "Turned on the light",
+        "language": "en",
+        "conversation_id": "01JABCDEF",
+        "continue_conversation": False,
+        "targets": [],
+        "service_calls": {
+            "success": [
+                {"name": "Kitchen light", "type": "entity", "id": "light.kitchen"}
+            ],
+            "failed": [],
+        },
+        "error_code": None,
+        "message": "Turned on the light",
+    }
+
+
+async def test_process_passes_optional_conversation_fields(tools):
+    """language, conversation_id and agent_id reach HA when supplied."""
+    tools._client._request.return_value = _conversation_result()
+
+    await tools.ha_manage_pipeline(
+        action="process",
+        sentence="and the hallway?",
+        language="de",
+        conversation_id="01JPREV",
+        agent_id="conversation.home_assistant",
+    )
+
+    tools._client._request.assert_awaited_once_with(
+        "POST",
+        "/conversation/process",
+        json={
+            "text": "and the hallway?",
+            "language": "de",
+            "conversation_id": "01JPREV",
+            "agent_id": "conversation.home_assistant",
+        },
+    )
+
+
+async def test_process_takes_agent_and_language_from_pipeline(tools):
+    """pipeline_id resolves the agent, and '*' falls back to the STT language."""
+    tools._client.send_websocket_message.return_value = {
+        "success": True,
+        "result": _pipeline(),
+    }
+    tools._client._request.return_value = _conversation_result()
+
+    result = await tools.ha_manage_pipeline(
+        action="process",
+        sentence="turn on the kitchen light",
+        pipeline_id="pipeline_1",
+    )
+
+    tools._client.send_websocket_message.assert_awaited_once_with(
+        {"type": "assist_pipeline/pipeline/get", "pipeline_id": "pipeline_1"}
+    )
+    tools._client._request.assert_awaited_once_with(
+        "POST",
+        "/conversation/process",
+        json={
+            "text": "turn on the kitchen light",
+            "language": "en-US",
+            "agent_id": "conversation.openai_conversation",
+        },
+    )
+    assert result["pipeline_id"] == "pipeline_1"
+    assert result["agent_id"] == "conversation.openai_conversation"
+
+
+async def test_process_uses_pipeline_conversation_language_when_specific(tools):
+    """A pipeline naming a real conversation language wins over STT/TTS."""
+    tools._client.send_websocket_message.return_value = {
+        "success": True,
+        "result": _pipeline(conversation_language="nl"),
+    }
+    tools._client._request.return_value = _conversation_result()
+
+    await tools.ha_manage_pipeline(
+        action="process", sentence="doe het licht aan", pipeline_id="pipeline_1"
+    )
+
+    assert tools._client._request.await_args.kwargs["json"]["language"] == "nl"
+
+
+async def test_process_explicit_arguments_override_the_pipeline(tools):
+    """Explicit agent_id and language are not overwritten by pipeline_id."""
+    tools._client.send_websocket_message.return_value = {
+        "success": True,
+        "result": _pipeline(),
+    }
+    tools._client._request.return_value = _conversation_result()
+
+    await tools.ha_manage_pipeline(
+        action="process",
+        sentence="turn on the kitchen light",
+        pipeline_id="pipeline_1",
+        agent_id="conversation.home_assistant",
+        language="fr",
+    )
+
+    payload = tools._client._request.await_args.kwargs["json"]
+    assert payload["agent_id"] == "conversation.home_assistant"
+    assert payload["language"] == "fr"
+
+
+@pytest.mark.parametrize("sentence", [None, "", "   "])
+async def test_process_requires_a_non_empty_sentence(tools, sentence):
+    """process without a usable sentence fails before any HA call."""
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_manage_pipeline(action="process", sentence=sentence)
+
+    error_data = json.loads(str(exc_info.value))
+    assert error_data["success"] is False
+    assert error_data["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
+    tools._client._request.assert_not_awaited()
+
+
+async def test_process_reports_an_unmatched_sentence_without_raising(tools):
+    """Assist declining a sentence is an answer, not a tool failure."""
+    tools._client._request.return_value = _conversation_result(
+        response={
+            "speech": {"plain": {"speech": "Sorry, I couldn't understand that"}},
+            "card": {},
+            "language": "en",
+            "response_type": "error",
+            "data": {"code": "no_intent_match"},
+        }
+    )
+
+    result = await tools.ha_manage_pipeline(
+        action="process", sentence="make me a sandwich"
+    )
+
+    assert result["success"] is True
+    assert result["response_type"] == "error"
+    assert result["error_code"] == "no_intent_match"
+    assert result["service_calls"] == {"success": [], "failed": []}
+
+
+async def test_process_keeps_the_sentence_out_of_error_payloads(tools):
+    """A transport failure must not echo the utterance back."""
+    tools._client._request.side_effect = RuntimeError("upstream said no")
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_manage_pipeline(
+            action="process", sentence="unlock the front door for Alex"
+        )
+
+    raw = str(exc_info.value)
+    assert "Alex" not in raw
+    error_data = json.loads(raw)
+    assert error_data["error"]["code"] == "INTERNAL_ERROR"
