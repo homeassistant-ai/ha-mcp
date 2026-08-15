@@ -224,8 +224,11 @@ async def test_refresh_same_origin_cimd_client_passes_through(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mixed_registration_authorize_and_refresh_use_web_origin():
-    """Use the same web origin on authorize and refresh for a mixed DCR client."""
+async def test_mixed_registration_refresh_derivation_returns_none():
+    """#2217 review: hybrid (web + loopback) registrations never derive a
+    refresh identity — the server cannot know which redirect the token used,
+    and the registration is advertised authorization_code-only. Authorize via
+    the web redirect still translates normally."""
     client_id = mint_client_id(
         KEY,
         ["http://localhost/callback", "https://a.example/cb"],
@@ -244,7 +247,7 @@ async def test_mixed_registration_authorize_and_refresh_use_web_origin():
     )
 
     assert authorize_id == "https://a.example"
-    assert refresh_id == authorize_id
+    assert refresh_id is None  # aligned with _refresh_identity_is_reproducible
 
 
 def test_core_token_base_url_uses_plain_http_loopback_port():
@@ -644,11 +647,11 @@ def test_canonical_origins_rebracket_ipv6():
 
 
 @pytest.mark.asyncio
-async def test_mixed_registration_loopback_authorize_diverges_from_refresh():
-    """Documented caveat pinned: a mixed-registration client authorizing via
-    its loopback redirect translates to the runtime loopback origin, while the
-    redirect_uri-less refresh leg re-derives the stable web origin — such
-    clients re-authorize rather than refresh (see _translation_for)."""
+async def test_mixed_registration_loopback_authorize_refresh_stays_local():
+    """#2217 review: the former caveat is closed — a hybrid client that
+    authorized via its loopback redirect gets NO derived refresh identity
+    (previously the web origin was derived and a mismatched identity was
+    forwarded into core's failed-login accounting)."""
     client_id = mint_client_id(
         KEY, ["http://localhost/callback", "https://a.example/cb"]
     )
@@ -662,7 +665,7 @@ async def test_mixed_registration_loopback_authorize_diverges_from_refresh():
         session=None, dcr_key=KEY, client_id=client_id
     )
     assert authorize_id == "http://localhost:5000"
-    assert refresh_id == "https://a.example"
+    assert refresh_id is None
 
 
 @pytest.mark.asyncio

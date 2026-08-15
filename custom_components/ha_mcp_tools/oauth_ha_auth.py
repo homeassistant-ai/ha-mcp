@@ -41,7 +41,12 @@ from urllib.parse import ParseResult, urlparse, urlunparse
 import aiohttp
 from homeassistant.core import HomeAssistant
 
-from .oauth_dcr import canonical_origin_url, client_redirect_uris, normalized_origin
+from .oauth_dcr import (
+    _refresh_identity_is_reproducible,
+    canonical_origin_url,
+    client_redirect_uris,
+    normalized_origin,
+)
 from .oauth_legacy import _is_loopback_host, _is_valid_redirect_uri
 
 # CIMD fetch limits (mirrors core PR #176286's hardening + the 00-draft rules).
@@ -401,13 +406,6 @@ async def translated_client_id_for_refresh(
       on each authorize/code leg, but no single origin can be re-derived for a
       refresh → None here.
 
-    Known caveat, documented not hidden: an identity whose registration mixes
-    ONE stable web origin with loopback entries and that authorized via a
-    loopback redirect used the runtime loopback origin on the code leg but
-    translates to the web origin here — that refresh fails and the client
-    re-authorizes. No observed client has that shape; fixing it would require
-    remembering which redirect each token used, i.e. server-side state this
-    design deliberately avoids.
     """
     registered: list[str] | None = None
     if dcr_key is not None:
@@ -417,6 +415,16 @@ async def translated_client_id_for_refresh(
         if parsed.scheme == "https" and session is not None:
             registered = await fetch_cimd_redirects(session, client_id)
     if not registered:
+        return None
+    # Aligned with the registration contract (#2217 review): refresh identity
+    # derivation uses the SAME rule as _refresh_identity_is_reproducible —
+    # exactly one web origin and no loopback entries. A hybrid registration
+    # (web + loopback) may have authorized via the loopback redirect, and the
+    # server keeps no record of which redirect a token used; deriving the web
+    # origin here would forward a mismatched identity into core's failed-login
+    # accounting. Such registrations are advertised authorization_code-only,
+    # so the local invalid_grant re-authorize path is the honest answer.
+    if not _refresh_identity_is_reproducible(registered):
         return None
     stable = stable_translation_origin(registered)
     if stable is None:
