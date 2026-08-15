@@ -411,6 +411,28 @@ class AutoApproveTokenView(HomeAssistantView):
                 )
                 if translated is not None:
                     forward_id = translated
+                else:
+                    from .oauth_dcr import client_redirect_uris
+
+                    dcr_key = cfg.get(CFG_DCR_SIGNING_KEY)
+                    if (
+                        dcr_key is not None
+                        and client_redirect_uris(dcr_key, client_id) is not None
+                    ):
+                        # A verifiable DCR identity with NO stable web origin
+                        # (loopback-only registration): the refresh is doomed —
+                        # the token was bound to the ephemeral loopback origin
+                        # we cannot re-derive. Answer here instead of 307ing a
+                        # guaranteed failure into core, whose @log_invalid_auth
+                        # would notify and count it as a failed login (#2213
+                        # review round 2). The client re-authorizes.
+                        return _json_error(
+                            "invalid_grant",
+                            400,
+                            "re-authorize: loopback-registered clients cannot "
+                            "refresh (the token is bound to an ephemeral "
+                            "loopback origin)",
+                        )
         if forward_id == client_id:
             # No body rewrite needed, so don't proxy: 307 the client into
             # core's own /auth/token on the same public origin it just used.
@@ -422,12 +444,16 @@ class AutoApproveTokenView(HomeAssistantView):
             # preserve method+body, but a 308 is cacheable by default and
             # could teach the client a core URL that outlives a later
             # auth-mode switch — the exact stickiness this PR removes.
-            from .mcp_webhook import _build_base_url
-
+            # RELATIVE Location (#2213 review round 2): an absolute target
+            # would be derived from unvalidated forwarded headers, turning a
+            # header a peer controls into the URL the client POSTS the grant
+            # to. A relative reference resolves against the origin the client
+            # actually used and keeps header derivation out of the credential
+            # path entirely (RFC 9110 permits relative Location).
             return web.Response(
                 status=307,
                 headers={
-                    "Location": f"{_build_base_url(request)}/auth/token",
+                    "Location": "/auth/token",
                     "Cache-Control": "no-store",
                 },
             )

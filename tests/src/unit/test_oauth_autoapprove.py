@@ -812,7 +812,9 @@ async def test_ha_auth_token_untranslated_redirects_to_core(
     )
 
     assert resp.status == 307
-    assert resp.headers["Location"].endswith("/auth/token")
+    # RELATIVE reference pinned (#2213 review round 2): an absolute target
+    # would put forwarded-header derivation in the credential path.
+    assert resp.headers["Location"] == "/auth/token"
     assert resp.headers["Cache-Control"] == "no-store"
     assert session.calls == []  # nothing proxied
 
@@ -835,7 +837,7 @@ async def test_ha_auth_refresh_untranslated_redirects_to_core(
     )
 
     assert resp.status == 307
-    assert resp.headers["Location"].endswith("/auth/token")
+    assert resp.headers["Location"] == "/auth/token"
     assert session.calls == []
 
 
@@ -950,3 +952,34 @@ async def test_none_mode_malformed_redirect_still_400s(unified_view_client_facto
         + "&redirect_uri=https%3A%2F%2Fevil.example%2Fcb%23frag",
     )
     assert resp.status == 400
+
+
+async def test_ha_auth_refresh_loopback_only_dcr_client_gets_invalid_grant(
+    unified_view_client_factory,
+):
+    """A loopback-only DCR identity cannot refresh (the token is bound to an
+    ephemeral loopback origin) — answer invalid_grant HERE instead of 307ing a
+    guaranteed failure into core's failed-login accounting (#2213 review
+    round 2)."""
+    session = _CoreTokenSession()
+    dcr_key = b"d" * 32
+    client_id = oauth_dcr.mint_client_id(
+        dcr_key, ["http://localhost/callback", "http://127.0.0.1/callback"]
+    )
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=dcr_key
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": "refresh-1",
+            "client_id": client_id,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "invalid_grant"
+    assert session.calls == []  # never reached core

@@ -622,3 +622,36 @@ async def test_mixed_registration_loopback_authorize_diverges_from_refresh():
     )
     assert authorize_id == "http://localhost:5000"
     assert refresh_id == "https://a.example"
+
+
+@pytest.mark.asyncio
+async def test_cimd_negative_results_are_cached(monkeypatch):
+    """Failed lookups cache briefly so an anonymous caller cannot force a
+    fresh resolution per request (#2213 review round 2)."""
+    calls = []
+
+    async def no_addresses(hostname, port):
+        calls.append(hostname)
+        return []
+
+    monkeypatch.setattr(oauth_ha_auth, "_resolve_public_addresses", no_addresses)
+    oauth_ha_auth._cimd_cache.clear()
+    url = "https://dead.example/client.json"
+    assert await oauth_ha_auth.fetch_cimd_redirects(object(), url) is None
+    assert await oauth_ha_auth.fetch_cimd_redirects(object(), url) is None
+    assert calls == ["dead.example"]  # second call served from negative cache
+    oauth_ha_auth._cimd_cache.clear()
+
+
+def test_cimd_cache_evicts_oldest_not_wholesale():
+    """At capacity the oldest entry goes, never the whole cache (#2213 r2)."""
+    oauth_ha_auth._cimd_cache.clear()
+    now = 1000.0
+    for i in range(oauth_ha_auth._CIMD_CACHE_MAX):
+        oauth_ha_auth._cache_cimd(f"https://h{i}.example/c.json", now, ["https://x/cb"])
+    oauth_ha_auth._cache_cimd("https://new.example/c.json", now, ["https://x/cb"])
+    assert len(oauth_ha_auth._cimd_cache) == oauth_ha_auth._CIMD_CACHE_MAX
+    assert "https://h0.example/c.json" not in oauth_ha_auth._cimd_cache  # oldest out
+    assert "https://h1.example/c.json" in oauth_ha_auth._cimd_cache  # rest retained
+    assert "https://new.example/c.json" in oauth_ha_auth._cimd_cache
+    oauth_ha_auth._cimd_cache.clear()

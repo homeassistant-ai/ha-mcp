@@ -48,6 +48,10 @@ from .oauth_legacy import _is_loopback_host, _is_valid_redirect_uri
 CIMD_MAX_BYTES = 10 * 1024
 CIMD_FETCH_TIMEOUT = aiohttp.ClientTimeout(total=5)
 CIMD_CACHE_TTL = 300.0
+# Failed lookups cache too (#2213 review round 2) — briefly, so an anonymous
+# caller cannot force a fresh resolution+fetch per request, while a transient
+# failure still recovers quickly.
+CIMD_NEGATIVE_TTL = 60.0
 _CIMD_CACHE_MAX = 64
 _ALLOWED_SCHEMES = ("https",)
 # client_id URL -> (expires_monotonic, redirect_uris). The -00 draft forbids
@@ -89,13 +93,20 @@ async def _resolve_public_addresses(hostname: str, port: int) -> list[str]:
     validated resolution instead of allowing a second DNS lookup to rebind it.
     """
     try:
-        infos = await asyncio.get_running_loop().getaddrinfo(
-            hostname,
-            port,
-            family=socket.AF_UNSPEC,
-            type=socket.SOCK_STREAM,
+        # Bounded resolution (#2213 review round 2): the view is anonymous and
+        # CIMD_FETCH_TIMEOUT only starts at session.get, so an unbounded
+        # getaddrinfo would let each unique hostname park a worker for the
+        # resolver's own timeout.
+        infos = await asyncio.wait_for(
+            asyncio.get_running_loop().getaddrinfo(
+                hostname,
+                port,
+                family=socket.AF_UNSPEC,
+                type=socket.SOCK_STREAM,
+            ),
+            timeout=5.0,
         )
-    except OSError:
+    except (OSError, TimeoutError):
         return []
     addresses = {str(sockaddr[0]) for *_, sockaddr in infos}
     if not addresses:
@@ -276,12 +287,34 @@ async def fetch_cimd_redirects(
             # address. Try the other address from the same pinned public RRset.
             continue
         if result is None:
+            # INVALID document: deliberately NOT cached — a client that fixes
+            # its metadata recovers on the next request (pinned by
+            # test_invalid_cimd_is_not_negative_cached).
             return None
-        if len(_cimd_cache) >= _CIMD_CACHE_MAX:
-            _cimd_cache.clear()
-        _cimd_cache[client_id] = (now + CIMD_CACHE_TTL, result)
+        _cache_cimd(client_id, now, result)
         return result
+    # Resolution failed or no address answered: negative-cache THIS — the view
+    # is anonymous, and only-success caching would let each request for a dead
+    # hostname pay (and inflict) a fresh resolution (#2213 review round 2).
+    _cache_cimd(client_id, now, None)
     return None
+
+
+def _cache_cimd(client_id: str, now: float, result: list[str] | None) -> None:
+    """Cache a lookup outcome, evicting expired entries then the oldest.
+
+    Negative outcomes get the short ``CIMD_NEGATIVE_TTL``. Eviction never
+    wholesale-clears: dropping every live client's entry because one more
+    unique client_id arrived would hand an anonymous caller a lever over other
+    clients' cache hits (#2213 review round 2).
+    """
+    if len(_cimd_cache) >= _CIMD_CACHE_MAX:
+        for key in [k for k, (exp, _) in _cimd_cache.items() if exp <= now]:
+            del _cimd_cache[key]
+    while len(_cimd_cache) >= _CIMD_CACHE_MAX:
+        del _cimd_cache[next(iter(_cimd_cache))]
+    ttl = CIMD_CACHE_TTL if result is not None else CIMD_NEGATIVE_TTL
+    _cimd_cache[client_id] = (now + ttl, result)
 
 
 def _parse_cimd(raw: bytes, client_id: str) -> list[str] | None:
