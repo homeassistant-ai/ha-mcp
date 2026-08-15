@@ -161,7 +161,18 @@ mode** option in the entry options:
   standard mode above, except the URL is designed to be reached remotely through
   Home Assistant's own remote access (Nabu Casa or a TLS-terminating reverse
   proxy). Any party that has the full webhook URL is a trusted principal; keep
-  the URL secret.
+  the URL secret. **The secret URL is the main and only form of security in
+  this mode.** The mode also serves an OAuth compatibility surface (discovery
+  documents, an anonymous RFC 7591 registration endpoint, and an auto-approve
+  authorization server) purely so OAuth-insisting connector brokers can
+  complete a flow: the tokens it issues are cosmetic — bearers are ignored,
+  the webhook URL remains the only credential. The auto-approve endpoint
+  302-redirects to any spec-valid `redirect_uri` (https, or http loopback per
+  RFC 8252; no fragment), which makes the Home Assistant origin usable as a
+  crafted-link redirector — an accepted trade within this trust model
+  (maintainer decision 2026-08-14, superseding the exact-match callback
+  allowlist that shipped in #1976; the webhook-id protections from that PR are
+  unchanged).
 - **Home Assistant account (`ha_auth`).** Home Assistant Core is the OAuth
   authorization server: the entry serves the discovery documents and
   validates inbound Bearer tokens against Home Assistant's own auth, so access
@@ -172,8 +183,26 @@ mode** option in the entry options:
   system-generated users are rejected. This is distinct from the beta OAuth mode
   below — no bespoke authorization server or self-issued token is involved, and
   revoking the user's Home Assistant token/session revokes access.
+  The component-scoped authorize/token endpoints front Core's own `/auth/*`
+  (a browser redirect and a server-side token forward) so the URLs clients
+  cache are the component's — Core remains the authorization authority and
+  performs its own validation on every request. For URL-shaped client
+  identities Core would reject (cross-origin Client ID Metadata Document
+  clients), the component validates the CIMD document itself per the MCP
+  2026-07-28 requirements (https-only fetch with no redirects, 10 KiB cap,
+  exact `client_id` round-trip, `redirect_uris` match, loopback/IP-literal
+  hosts refused) and forwards a same-origin-shaped client_id. This grants
+  nothing new: Core already accepts any self-asserted redirect-origin
+  client_id, so a validated translation authorizes only what a client could
+  claim directly; anything failing validation is forwarded unchanged. The
+  anonymous registration endpoint mints stateless public-client ids
+  (HMAC-signed, embedding the registered redirect URIs — no server-side
+  registration store); access still requires completing Core's admin login.
 - **Legacy OAuth (`legacy`).** A self-hosted OAuth 2.1 authorization server the
-  component runs at the Home Assistant root (`/authorize` + `/token`), for
+  component serves on its scoped endpoints (`/api/ha_mcp_tools/oauth/authorize`
+  + `/token`, which discovery advertises) and additionally at the Home
+  Assistant root (`/authorize` + `/token`) as an alias for metadata-ignoring
+  clients, for
   OAuth-only MCP clients that HA Core's native OAuth cannot serve (Google Gemini
   Spark's cross-origin Client-ID-Metadata-Document redirect, GitHub Copilot
   CLI's dynamic registration). The credential is a **static `client_id` +
@@ -214,8 +243,10 @@ mode** option in the entry options:
     TLS-terminating reverse proxy), never plaintext over the internet.
   - **Route ownership:** the component and the Webhook Proxy add-on both bind
     the root `/authorize`/`/token`; only one may own them per Home Assistant
-    instance. A cross-integration guard refuses to enable legacy mode (with a
-    repair prompt) rather than clash silently.
+    instance. When the add-on already owns them, the component's legacy mode
+    still enables and serves on its scoped endpoints only, logging a warning —
+    metadata-honoring clients are unaffected; metadata-ignoring clients that
+    guess root paths reach the add-on instead.
 
 The connect notification deliberately carries no secrets: Home Assistant
 shows persistent notifications to every authenticated user, so the webhook
