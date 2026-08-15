@@ -1876,8 +1876,11 @@ class IntegrationTools:
             Field(
                 default=None,
                 description=(
-                    "Requires reconfigure=True. Config-entry unique ID the "
-                    "entry must still carry."
+                    "Requires reconfigure=True, AND the ha_mcp_tools custom "
+                    "component: Home Assistant does not expose a config "
+                    "entry's unique_id over its API. Without the component "
+                    "this is rejected — anchor on expected_device_id, "
+                    "expected_mac or expected_entity_ids instead."
                 ),
             ),
         ] = None,

@@ -86,6 +86,7 @@ def _reconfigure_preflight_token(
     entry: dict[str, Any],
     target_config: dict[str, Any],
     expected_identity: dict[str, Any],
+    unique_id: str | None,
 ) -> str:
     """Bind confirmation to stable entry identity and requested values.
 
@@ -99,7 +100,10 @@ def _reconfigure_preflight_token(
     payload = {
         "entry_id": entry.get("entry_id"),
         "domain": entry.get("domain"),
-        "unique_id": entry.get("unique_id"),
+        # From the collected identity, not the entry: Home Assistant's
+        # config-entry fragment has no unique_id, so entry.get would hash a
+        # constant None and the token would not bind to it at all.
+        "unique_id": unique_id,
         "title": entry.get("title"),
         "target_config": target_config,
         "expected_identity": expected_identity,
@@ -222,6 +226,7 @@ class ReconfigureRunner:
                 entry=prepared.entry,
                 target_config=prepared.flow_config,
                 expected_identity=prepared.expected_identity,
+                unique_id=prepared.identity.unique_id,
             )
             if confirm_token is None:
                 return _reconfigure_preview_response(

@@ -15,6 +15,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools import config_entry_flow
+from ha_mcp.tools.component_config_entries import UNKNOWN_UNIQUE_ID, EntryUniqueId
 from ha_mcp.tools.config_entry_flow import (
     PreparedReconfigure,
     ReconfigureIdentity,
@@ -49,11 +50,28 @@ def _legacy_registry_reads(monkeypatch: pytest.MonkeyPatch) -> None:
         AsyncMock(return_value=None),
     )
 
+    async def _entry_unique_id(client: Any, entry_id: str) -> EntryUniqueId:
+        value = getattr(client, "_test_entry_unique_id", UNKNOWN_UNIQUE_ID)
+        if isinstance(value, list):
+            # Successive reads (before the flow, then after) — the last entry
+            # repeats for the verification retries.
+            return value.pop(0) if len(value) > 1 else value[0]
+        return value
+
+    # Home Assistant's config-entry fragment has no unique_id, so the value can
+    # only come from the ha_mcp_tools component. The doubles carry it per
+    # client, defaulting to "component installed" — see reconfigure_client.
+    monkeypatch.setattr(
+        config_entry_flow, "fetch_config_entry_unique_id", _entry_unique_id
+    )
+
 
 def reconfigure_client(
     *,
     entity_rows: list[dict[str, Any]] | None = None,
     device_rows: list[dict[str, Any]] | None = None,
+    unique_id: str | None | list[str | None] = "AA:BB:CC:DD:EE:FF",
+    unique_id_known: bool = True,
 ) -> Any:
     """Build a client double whose registry reads behave like the real client.
 
@@ -67,6 +85,17 @@ def reconfigure_client(
     client = MagicMock()
     client.list_entity_registry = AsyncMock(return_value=list(entity_rows or []))
     client.list_device_registry = AsyncMock(return_value=list(device_rows or []))
+    # Defaults to a component install reporting the fixture entry's unique_id.
+    # Pass unique_id_known=False for an add-on / Docker / PyPI install with no
+    # custom component, where the value is simply unreadable.
+    if isinstance(unique_id, list):
+        client._test_entry_unique_id = [
+            EntryUniqueId(known=True, value=item) for item in unique_id
+        ]
+    else:
+        client._test_entry_unique_id = EntryUniqueId(
+            known=unique_id_known, value=unique_id if unique_id_known else None
+        )
     return client
 
 
@@ -166,6 +195,7 @@ def test_reconfigure_token_ignores_volatile_entry_state() -> None:
         entry=entry,
         target_config={"host": "192.0.2.170"},
         expected_identity=expected_identity,
+        unique_id=None,
     )
     changed_state = {
         **entry,
@@ -178,6 +208,7 @@ def test_reconfigure_token_ignores_volatile_entry_state() -> None:
             entry=changed_state,
             target_config={"host": "192.0.2.170"},
             expected_identity=expected_identity,
+            unique_id=None,
         )
         == original
     )
@@ -778,7 +809,9 @@ async def test_reconfigure_verification_failure_includes_rollback(
 ) -> None:
     """Post-commit identity failures retain the operator rollback path."""
     after = {**reconfig_entry, "unique_id": "DIFFERENT-AFTER-APPLY"}
-    client = reconfigure_client()
+    client = reconfigure_client(
+        unique_id=["AA:BB:CC:DD:EE:FF", "DIFFERENT-AFTER-APPLY"]
+    )
     client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, after])
     client.list_config_entries = AsyncMock(return_value=[after])
     client.start_reconfigure_flow = AsyncMock(
@@ -1227,7 +1260,11 @@ async def test_reconfigure_rejects_expected_mac_mismatch_before_flow(
 
 @pytest.mark.asyncio
 async def test_reconfigure_rejects_entry_without_identity_before_flow() -> None:
-    """An offline entry without an anchor is rejected before mutation."""
+    """An offline entry without an anchor is rejected before mutation.
+
+    No custom component, so the entry's unique_id is unreadable — the normal
+    state on an add-on / Docker / PyPI install.
+    """
     before = {
         "entry_id": "offline-entry",
         "domain": "shelly",
@@ -1239,7 +1276,7 @@ async def test_reconfigure_rejects_entry_without_identity_before_flow() -> None:
         "state": "loaded",
         "unique_id": "new-device-identity",
     }
-    client = reconfigure_client()
+    client = reconfigure_client(unique_id_known=False)
     client.get_config_entry = AsyncMock(side_effect=[before, after])
     client.list_entity_registry = AsyncMock(
         side_effect=[
@@ -1290,17 +1327,19 @@ async def test_reconfigure_rejects_entry_without_identity_before_flow() -> None:
 
 @pytest.mark.asyncio
 async def test_reconfigure_rejects_entry_without_identity_anchor_before_flow() -> None:
-    """A bare config entry must not reach the mutating flow without an anchor."""
+    """A bare config entry must not reach the mutating flow without an anchor.
+
+    An MQTT-style entry has no device or entity rows, and without the custom
+    component its unique_id cannot be read either — so nothing anchors it.
+    """
     entry = {
         "entry_id": "unanchored-entry",
         "domain": "mqtt",
         "state": "loaded",
         "supports_reconfigure": True,
     }
-    client = reconfigure_client()
+    client = reconfigure_client(unique_id_known=False)
     client.get_config_entry = AsyncMock(return_value=entry)
-    client.list_entity_registry = AsyncMock(return_value=[])
-    client.list_device_registry = AsyncMock(return_value=[])
     client.list_config_entries = AsyncMock(return_value=[entry])
     client.start_reconfigure_flow = AsyncMock(
         return_value={
@@ -1329,9 +1368,13 @@ async def test_reconfigure_rejects_entry_without_identity_anchor_before_flow() -
 async def test_reconfigure_rejects_cleared_unique_id_after_commit(
     reconfig_entry: dict[str, object],
 ) -> None:
-    """A post-flow missing identifier is an identity change, not a soft warning."""
+    """A post-flow missing identifier is an identity change, not a soft warning.
+
+    The component still answers after the flow — it reports the entry now has
+    no unique_id, which is a real loss, not an unreadable value.
+    """
     after = {key: value for key, value in reconfig_entry.items() if key != "unique_id"}
-    client = reconfigure_client()
+    client = reconfigure_client(unique_id=["AA:BB:CC:DD:EE:FF", None])
     client.get_config_entry = AsyncMock(side_effect=[reconfig_entry, after])
     client.list_config_entries = AsyncMock(return_value=[after])
     client.start_reconfigure_flow = AsyncMock(
@@ -2479,3 +2522,154 @@ async def test_non_ascii_confirm_token_is_rejected_not_an_internal_error(
     assert payload["status"] == ReconfigureStatus.STALE_PREFLIGHT
     assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     client.start_reconfigure_flow.assert_not_awaited()
+
+
+# === unique_id: component installs vs add-on / Docker / PyPI installs ===
+#
+# Home Assistant withholds a config entry's unique_id from every one of its
+# endpoints (ConfigEntry.as_json_fragment has no such key, and the REST list,
+# config_entries/get and get_single all serialize that fragment). Only the
+# ha_mcp_tools custom component, which holds the live ConfigEntry, can supply
+# it — so the value has three states and the code must not conflate them.
+
+
+@pytest.mark.asyncio
+async def test_expected_unique_id_is_rejected_without_the_component(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """Without the component the anchor is refused, naming the real reason.
+
+    The failure must not read as "the entry has no unique_id" — nothing could
+    read it. An operator on the add-on needs to know which anchors do work.
+    """
+    client = reconfigure_client(unique_id_known=False)
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.start_reconfigure_flow = AsyncMock()
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client,
+            "entry-123",
+            config={"host": "192.0.2.30"},
+            expected_unique_id="AA:BB:CC:DD:EE:FF",
+        )
+
+    message = json.loads(str(exc_info.value))["error"]["message"]
+    assert "ha_mcp_tools" in message
+    assert "expected_device_id" in message
+    client.start_reconfigure_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_verification_reports_unique_id_unavailable_without_the_component() -> (
+    None
+):
+    """A non-component install must not claim the unique_id was preserved.
+
+    before == after == None is two unknowns, not evidence of preservation.
+    """
+    entry = {
+        "entry_id": "addon-entry",
+        "domain": "shelly",
+        "state": "loaded",
+        "supports_reconfigure": True,
+    }
+    client = reconfigure_client(
+        unique_id_known=False,
+        entity_rows=[
+            {
+                "entity_id": "switch.addon",
+                "config_entry_id": "addon-entry",
+                "device_id": "device-addon",
+            }
+        ],
+        device_rows=[
+            {
+                "id": "device-addon",
+                "config_entries": ["addon-entry"],
+                "connections": [],
+                "identifiers": [],
+            }
+        ],
+    )
+    client.get_config_entry = AsyncMock(return_value=entry)
+    client.list_config_entries = AsyncMock(return_value=[entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-addon",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "addon-entry", config={"host": "192.0.2.31"}
+    )
+
+    verification = result["verification"]
+    assert verification["unique_id_verification"] == "unavailable_without_component"
+    assert verification["unique_id_preserved"] is None
+    assert verification["duplicate_scan"] == "shared_device_only"
+    # The device and entity anchors still verify, so the apply is still fully
+    # verified — losing unique_id must not degrade the whole outcome.
+    assert verification["identity_verification"] == "complete"
+    assert result["status"] == ReconfigureStatus.APPLIED_AND_VERIFIED
+
+
+@pytest.mark.asyncio
+async def test_component_reporting_no_unique_id_is_distinct_from_unreadable() -> None:
+    """An MQTT-style entry genuinely without one is known-absent, not unknown.
+
+    known=True with value None means the component answered and the entry has
+    no unique_id — the duplicate scan and the guards can trust that.
+    """
+    entry = {
+        "entry_id": "mqtt-entry",
+        "domain": "mqtt",
+        "state": "loaded",
+        "supports_reconfigure": True,
+    }
+    client = reconfigure_client(
+        unique_id=None,
+        entity_rows=[
+            {
+                "entity_id": "sensor.mqtt",
+                "config_entry_id": "mqtt-entry",
+                "device_id": "device-mqtt",
+            }
+        ],
+        device_rows=[
+            {
+                "id": "device-mqtt",
+                "config_entries": ["mqtt-entry"],
+                "connections": [],
+                "identifiers": [],
+            }
+        ],
+    )
+    client.get_config_entry = AsyncMock(return_value=entry)
+    client.list_config_entries = AsyncMock(return_value=[entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-mqtt",
+            "type": "form",
+            "data_schema": [{"name": "broker", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "mqtt-entry", config={"broker": "mosquitto"}
+    )
+
+    verification = result["verification"]
+    # Compared, and both sides were absent — that IS preservation, unlike the
+    # unreadable case above.
+    assert verification["unique_id_verification"] == "absent"
+    assert verification["unique_id_preserved"] is True
+    assert result["status"] == ReconfigureStatus.APPLIED_AND_VERIFIED

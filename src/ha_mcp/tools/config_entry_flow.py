@@ -43,6 +43,7 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_error_response
 from ..redaction import sentinel_option_keys
+from .component_config_entries import fetch_config_entry_unique_id
 from .component_devices import fetch_device_list_via_component
 from .component_registry_lookup import fetch_entities_for_config_entry_via_component
 from .config_entry_flow_form import _extract_schema_field_names
@@ -97,6 +98,12 @@ class ReconfigureIdentity:
     """
 
     unique_id: str | None = None
+    #: False when nothing could read the entry's unique_id — no custom
+    #: component, or one predating the field. Home Assistant's own API never
+    #: exposes it (``as_json_fragment`` omits it), so on an add-on / Docker /
+    #: PyPI install without the component this is the normal state, and
+    #: ``unique_id`` being None means "unknown", NOT "the entry has none".
+    unique_id_known: bool = False
     device_ids: list[str] = field(default_factory=list)
     entity_ids: list[str] = field(default_factory=list)
     macs: list[str] = field(default_factory=list)
@@ -245,6 +252,7 @@ async def _collect_reconfigure_identity(
     """Collect registry identity without requiring the physical device online."""
     entity_rows = await _entry_entity_rows(client, entry_id)
     device_rows = await _device_registry_rows(client, entry_id)
+    entry_unique_id = await fetch_config_entry_unique_id(client, entry_id)
 
     entity_ids = sorted(
         row["entity_id"] for row in entity_rows if isinstance(row.get("entity_id"), str)
@@ -269,7 +277,8 @@ async def _collect_reconfigure_identity(
         )
 
     return ReconfigureIdentity(
-        unique_id=entry.get("unique_id"),
+        unique_id=entry_unique_id.value,
+        unique_id_known=entry_unique_id.known,
         device_ids=sorted(device_ids),
         entity_ids=entity_ids,
         macs=_device_hardware_ids(matching_device_rows),
@@ -422,7 +431,7 @@ def _has_reconfigure_identity_anchor(
 ) -> bool:
     """Return whether preflight has stable or caller-supplied identity evidence."""
     return bool(
-        identity.unique_id
+        (identity.unique_id if identity.unique_id_known else None)
         or identity.device_ids
         or identity.entity_ids
         or identity.macs
@@ -830,9 +839,17 @@ def _verify_reconfigure_identity_fields(
     is different: the pre-flow comparison ran against the BEFORE MACs, so
     comparing it to the after MACs is a real check.
     """
-    before_unique_id = before.get("unique_id")
-    after_unique_id = after.get("unique_id")
-    if before_unique_id is not None and after_unique_id != before_unique_id:
+    # Read from the identity objects: Home Assistant's config-entry fragment
+    # has no unique_id, so before/after would both be None here forever and
+    # this guard would never fire.
+    comparable = before_identity.unique_id_known and after_identity.unique_id_known
+    before_unique_id = before_identity.unique_id if comparable else None
+    after_unique_id = after_identity.unique_id if comparable else None
+    if (
+        comparable
+        and before_unique_id is not None
+        and after_unique_id != before_unique_id
+    ):
         _raise_identity_mismatch(
             entry_id,
             "Reconfigure flow changed the original entry unique_id",
@@ -900,6 +917,7 @@ def _build_reconfigure_verification(
     after_identity: ReconfigureIdentity,
     expected_identity: dict[str, Any],
     scanned_unique_id: bool,
+    unique_id_comparable: bool,
     cross_domain_related: list[str],
 ) -> dict[str, Any]:
     """Summarise what the post-commit read-back could and could not confirm.
@@ -933,10 +951,19 @@ def _build_reconfigure_verification(
     return {
         "entry_state": after.get("state"),
         "operational_state_verified": after.get("state") == "loaded",
-        "unique_id_preserved": before_unique_id == after_unique_id,
-        "unique_id_verification": _verification_state(
-            before_unique_id is not None,
-            after_unique_id is not None,
+        # None, not True: without a readable unique_id nothing was compared,
+        # and reporting "preserved" for two unknowns is a false assurance.
+        "unique_id_preserved": (
+            before_unique_id == after_unique_id if unique_id_comparable else None
+        ),
+        "unique_id_verification": (
+            _verification_state(
+                before_unique_id is not None, after_unique_id is not None
+            )
+            if unique_id_comparable
+            # Home Assistant does not expose unique_id; only the ha_mcp_tools
+            # custom component can supply it.
+            else "unavailable_without_component"
         ),
         "device_id_verification": _verification_state(
             bool(before_device_ids), bool(after_device_ids)
@@ -1021,8 +1048,11 @@ async def _verify_reconfigured_entry(
             status=ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
         )
 
-    before_unique_id = before.get("unique_id")
-    after_unique_id = after.get("unique_id")
+    unique_id_comparable = (
+        before_identity.unique_id_known and after_identity.unique_id_known
+    )
+    before_unique_id = before_identity.unique_id if unique_id_comparable else None
+    after_unique_id = after_identity.unique_id if unique_id_comparable else None
     identity_unique_ids = {
         value for value in (before_unique_id, after_unique_id) if value is not None
     }
@@ -1063,6 +1093,7 @@ async def _verify_reconfigured_entry(
         after_identity=after_identity,
         expected_identity=expected_identity,
         scanned_unique_id=bool(identity_unique_ids),
+        unique_id_comparable=unique_id_comparable,
         cross_domain_related=after_related.cross_domain,
     )
     return verification, cross_domain_warnings(after_related.cross_domain)
@@ -1160,8 +1191,11 @@ async def prepare_reconfigure_request(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 "Cannot safely reconfigure an entry without an identity anchor",
                 suggestions=[
-                    "Provide expected_device_id, expected_unique_id, expected_mac, "
-                    "or expected_entity_ids, or choose an entry with stable registry identity."
+                    "Provide expected_device_id, expected_mac or "
+                    "expected_entity_ids, or choose an entry with stable "
+                    "registry identity. (expected_unique_id needs the "
+                    "ha_mcp_tools custom component: Home Assistant does not "
+                    "expose a config entry's unique_id.)"
                 ],
                 context={
                     "entry_id": validated_entry_id,
@@ -1210,7 +1244,12 @@ async def _validate_reconfigure_identity_and_duplicates(
         ),
         (
             expected_identity.get("unique_id"),
-            [entry["unique_id"]] if entry.get("unique_id") is not None else [],
+            (
+                [before_identity.unique_id]
+                if before_identity.unique_id_known
+                and before_identity.unique_id is not None
+                else []
+            ),
             "unique_id",
             "The entry does not match expected unique_id before reconfigure",
         ),
@@ -1227,6 +1266,25 @@ async def _validate_reconfigure_identity_and_duplicates(
             "The entry does not match expected entity_ids before reconfigure",
         ),
     )
+    if (
+        expected_identity.get("unique_id") is not None
+        and not before_identity.unique_id_known
+    ):
+        # Not a mismatch — nothing could read the value. Home Assistant omits
+        # unique_id from every config-entry endpoint, so only the ha_mcp_tools
+        # custom component can supply it. Say that, rather than letting the
+        # generic "registries report none" below imply the entry has none.
+        _raise_identity_mismatch(
+            entry_id,
+            "Cannot verify expected_unique_id: Home Assistant does not expose a "
+            "config entry's unique_id, and the ha_mcp_tools custom component "
+            "(which does) is not installed or is too old. Anchor on "
+            "expected_device_id, expected_mac or expected_entity_ids instead, "
+            "or install/update the component.",
+            before=before_identity,
+            after=before_identity,
+            expected=expected_identity,
+        )
     for expected, available, key, message in checks:
         if expected is None:
             continue
