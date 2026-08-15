@@ -59,6 +59,7 @@ from .const import (
 )
 from .oauth_autoapprove import (
     CFG_AUTOAPPROVE_PROVIDER,
+    CFG_CIMD_SESSION,
     AutoApproveProvider,
     bind_autoapprove_views,
 )
@@ -110,6 +111,11 @@ _ALLOWED_CONTENT_TYPES = ("application/json", "text/event-stream", "text/plain")
 # (not just the TCP connect ``sock_connect`` bounds), so a pool exhausted by
 # long-lived streams fails a new request in 30 s instead of hanging it forever.
 _CLIENT_TIMEOUT = aiohttp.ClientTimeout(connect=30, sock_connect=10, sock_read=300)
+
+# Anonymous CIMD lookups get a separate, deliberately small connection pool.
+# The relay session may hold long-lived SSE connections; public metadata fetches
+# must never consume that authenticated forwarding capacity.
+_CIMD_CONNECTOR_LIMIT = 4
 
 # TOP-LEVEL hass.data flag recording that the ha_auth discovery views are bound
 # for this HA session. Deliberately NOT under DOMAIN so it survives
@@ -827,11 +833,23 @@ async def async_register_webhook(
     async_unregister(hass, webhook_id)
     target_url = f"http://127.0.0.1:{port}{secret_path}"
     session = aiohttp.ClientSession(timeout=_CLIENT_TIMEOUT)
+    cimd_session: aiohttp.ClientSession | None = None
+    if register_endpoint and auth_mode == WEBHOOK_AUTH_HA:
+        try:
+            cimd_session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(limit=_CIMD_CONNECTOR_LIMIT)
+            )
+        except Exception:
+            # Creating the isolated pool is part of fail-closed ha_auth setup.
+            # Do not leak the already-open relay session if it fails.
+            await session.close()
+            raise
 
     cfg: dict[str, Any] = {
         "webhook_id": webhook_id,
         "target_url": target_url,
         "session": session,
+        CFG_CIMD_SESSION: cimd_session,
         "auth_mode": auth_mode,
         "resource_server": None,
         "oauth_provider": None,
@@ -868,6 +886,9 @@ async def async_register_webhook(
                 async_unregister(hass, webhook_id)
             with suppress(Exception):
                 await session.close()
+            if cimd_session is not None:
+                with suppress(Exception):
+                    await cimd_session.close()
             clear_scoped_legacy_credentials(hass)
             raise
 
@@ -906,3 +927,6 @@ async def async_unregister_webhook(hass: HomeAssistant) -> None:
     session = cfg.get("session")
     if session is not None:
         await session.close()
+    cimd_session = cfg.get(CFG_CIMD_SESSION)
+    if cimd_session is not None:
+        await cimd_session.close()

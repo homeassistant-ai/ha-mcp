@@ -173,6 +173,24 @@ async def test_register_rejects_bad_redirects(dcr_view_client_factory):
         assert resp.status == 400, bad
 
 
+async def test_register_rejects_multiple_web_origins(dcr_view_client_factory):
+    """Reject a signed DCR identity that Core cannot use on any callback."""
+    client = await dcr_view_client_factory(dcr_key=KEY, resource_server=object())
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/register",
+        json={
+            "redirect_uris": [
+                "https://a.example/cb",
+                "https://b.example/cb",
+            ]
+        },
+    )
+
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "invalid_redirect_uri"
+
+
 async def test_register_none_mode_advertises_authorization_code_only(
     dcr_view_client_factory,
 ):
@@ -208,3 +226,29 @@ async def test_register_ha_auth_advertises_refresh_token(dcr_view_client_factory
         "authorization_code",
         "refresh_token",
     ]
+
+
+@pytest.mark.parametrize(
+    "redirect_uris",
+    [
+        ["http://127.0.0.1/callback"],
+        ["https://a.example/cb", "http://localhost/callback"],
+    ],
+)
+async def test_register_ha_auth_omits_refresh_when_identity_is_not_reproducible(
+    dcr_view_client_factory,
+    redirect_uris,
+):
+    """Do not promise refresh when a loopback authorization may be selected."""
+    client = await dcr_view_client_factory(
+        dcr_key=KEY,
+        resource_server=object(),
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/register",
+        json={"redirect_uris": redirect_uris},
+    )
+
+    assert resp.status == 201
+    assert (await resp.json())["grant_types"] == ["authorization_code"]

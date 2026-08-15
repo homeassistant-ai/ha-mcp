@@ -1055,6 +1055,43 @@ class TestRegisterWebhook:
         assert hass.http.register_view.call_count == 10
         assert hass.data.get(mw._OAUTH_VIEWS_REGISTERED_KEY) is True
 
+    async def test_ha_auth_isolates_cimd_fetches_from_forwarding(self, monkeypatch):
+        """Give anonymous metadata fetches their own capacity-limited pool."""
+        hass = _register_hass()
+        relay_session = FakeSession()
+        cimd_session = FakeSession()
+        sessions = iter((relay_session, cimd_session))
+        connector_calls = []
+
+        monkeypatch.setattr(
+            mw.aiohttp,
+            "ClientSession",
+            lambda **_kwargs: next(sessions),
+        )
+
+        def connector(**kwargs):
+            connector_calls.append(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        monkeypatch.setattr(mw.aiohttp, "TCPConnector", connector)
+
+        await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_HA,
+        )
+
+        cfg = hass.data[DOMAIN][DATA_WEBHOOK]
+        assert cfg["session"] is relay_session
+        assert cfg["cimd_session"] is cimd_session
+        assert connector_calls == [{"limit": 4}]
+
+        await mw.async_unregister_webhook(hass)
+        assert relay_session.closed is True
+        assert cimd_session.closed is True
+
     async def test_ha_auth_re_enable_reuses_bound_views(self, monkeypatch):
         # aiohttp cannot unregister a bound view; the once-per-session guard
         # lives at a TOP-LEVEL hass.data key precisely so a none->ha_auth->

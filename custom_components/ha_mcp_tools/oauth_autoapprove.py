@@ -70,6 +70,11 @@ if TYPE_CHECKING:
 # mode (mirrors the "resource_server"/"oauth_provider" presence keys).
 CFG_AUTOAPPROVE_PROVIDER = "autoapprove_provider"
 
+# Dedicated aiohttp session for anonymous CIMD fetches in ha_auth mode.
+# Keeping it separate from the relay session prevents slow public metadata
+# endpoints from consuming the pool used by authenticated MCP forwarding.
+CFG_CIMD_SESSION = "cimd_session"
+
 # TOP-LEVEL hass.data flag recording that the two unified scoped views are bound
 # for this HA session. Not under DOMAIN so it survives async_unload_entry's
 # teardown — aiohttp cannot unregister a bound view until HA restarts, so the
@@ -274,7 +279,7 @@ class AutoApproveAuthorizeView(HomeAssistantView):
         client_id = params.get("client_id", "")
         redirect_uri = params.get("redirect_uri", "")
         forward_id = await resolve_forward_client_id(
-            cfg.get("session"),
+            cfg.get(CFG_CIMD_SESSION),
             cfg.get(CFG_DCR_SIGNING_KEY),
             client_id,
             redirect_uri,
@@ -386,7 +391,7 @@ class AutoApproveTokenView(HomeAssistantView):
         if client_id:
             if redirect_uri:
                 forward_id = await resolve_forward_client_id(
-                    cfg.get("session"),
+                    cfg.get(CFG_CIMD_SESSION),
                     cfg.get(CFG_DCR_SIGNING_KEY),
                     client_id,
                     redirect_uri,
@@ -398,7 +403,9 @@ class AutoApproveTokenView(HomeAssistantView):
                 # refresh_token grant: no redirect_uri on the wire — re-derive
                 # the translation from the registered list alone.
                 translated = await translated_client_id_for_refresh(
-                    cfg.get("session"), cfg.get(CFG_DCR_SIGNING_KEY), client_id
+                    cfg.get(CFG_CIMD_SESSION),
+                    cfg.get(CFG_DCR_SIGNING_KEY),
+                    client_id,
                 )
                 if translated is not None:
                     form.popall("client_id", None)

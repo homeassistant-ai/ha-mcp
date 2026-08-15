@@ -170,6 +170,7 @@ def _mode_cfg(
     mode: str,
     *,
     session: object | None = None,
+    cimd_session: object | None = None,
     dcr_key: bytes | None = None,
 ) -> dict[str, object | None]:
     """Webhook cfg dict seeding exactly one live-mode marker (mirrors
@@ -187,6 +188,7 @@ def _mode_cfg(
         return {
             "resource_server": object(),
             "session": session,
+            "cimd_session": cimd_session,
             oauth_dcr.CFG_DCR_SIGNING_KEY: dcr_key,
         }
     if mode == "none":
@@ -231,9 +233,15 @@ async def unified_view_client_factory():
             *,
             mode: str,
             session: object | None = None,
+            cimd_session: object | None = None,
             dcr_key: bytes | None = None,
         ):
-            cfg = _mode_cfg(mode, session=session, dcr_key=dcr_key)
+            cfg = _mode_cfg(
+                mode,
+                session=session,
+                cimd_session=cimd_session,
+                dcr_key=dcr_key,
+            )
 
             app = aiohttp_web.Application()
             hass = SimpleNamespace(
@@ -623,6 +631,31 @@ async def test_scoped_authorize_redirects_into_core_when_ha_auth_live(
     assert query["state"] == ["xyz"]
     assert query["redirect_uri"] == ["https://claude.ai/api/mcp/auth_callback"]
     assert query["code_challenge_method"] == ["S256"]
+
+
+async def test_ha_auth_authorize_uses_isolated_cimd_session(
+    unified_view_client_factory, monkeypatch
+):
+    """Resolve public client metadata outside the webhook forwarding pool."""
+    relay_session = object()
+    cimd_session = object()
+    resolver = AsyncMock(return_value="https://claude.ai")
+    monkeypatch.setattr(oauth_ha_auth, "resolve_forward_client_id", resolver)
+    client = await unified_view_client_factory(
+        mode="ha_auth",
+        session=relay_session,
+        cimd_session=cimd_session,
+    )
+
+    resp = await client.get(
+        "/api/ha_mcp_tools/oauth/authorize"
+        "?response_type=code&client_id=https%3A%2F%2Fclaude.ai"
+        "&redirect_uri=https%3A%2F%2Fclaude.ai%2Fapi%2Fmcp%2Fauth_callback",
+        allow_redirects=False,
+    )
+
+    assert resp.status == 302
+    assert resolver.await_args.args[0] is cimd_session
 
 
 async def test_ha_auth_authorize_preserves_repeated_resource_parameters(

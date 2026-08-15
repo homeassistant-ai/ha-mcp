@@ -20,7 +20,8 @@ import hashlib
 import hmac
 import json
 import time
-from typing import Any
+from typing import Any, cast
+from urllib.parse import urlparse
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
@@ -30,6 +31,7 @@ from .const import DATA_WEBHOOK, DOMAIN, OAUTH_BASE
 from .oauth_legacy import (
     _b64url_decode,
     _b64url_encode,
+    _is_loopback_host,
     _is_valid_redirect_uri,
 )
 
@@ -94,17 +96,71 @@ def _active_dcr_key(hass: HomeAssistant) -> bytes | None:
     return key if isinstance(key, bytes) else None
 
 
-def _active_grant_types(hass: HomeAssistant) -> list[str]:
+def _non_loopback_origins(redirect_uris: list[str]) -> set[tuple[str, str, int]]:
+    """Return normalized web origins represented by validated redirects."""
+    origins: set[tuple[str, str, int]] = set()
+    for uri in redirect_uris:
+        parsed = urlparse(uri)
+        if parsed.hostname is None or _is_loopback_host(parsed.hostname):
+            continue
+        origins.add((parsed.scheme, parsed.hostname, parsed.port or 443))
+    return origins
+
+
+def _refresh_identity_is_reproducible(redirect_uris: list[str]) -> bool:
+    """Return whether every authorization leg maps to one stable web origin."""
+    if any(
+        (hostname := urlparse(uri).hostname) is None or _is_loopback_host(hostname)
+        for uri in redirect_uris
+    ):
+        return False
+    return len(_non_loopback_origins(redirect_uris)) == 1
+
+
+def _redirect_uris_error(value: Any) -> tuple[str, str] | None:
+    """Return an RFC 7591 error for invalid redirect metadata, if any."""
+    if not isinstance(value, list) or not value:
+        return "invalid_redirect_uri", "redirect_uris must be a non-empty array"
+    if len(value) > MAX_REDIRECT_URIS:
+        return (
+            "invalid_redirect_uri",
+            f"at most {MAX_REDIRECT_URIS} redirect_uris are accepted",
+        )
+    if any(
+        not isinstance(uri, str)
+        or len(uri) > MAX_REDIRECT_URI_LEN
+        or not _is_valid_redirect_uri(uri)
+        for uri in value
+    ):
+        return (
+            "invalid_redirect_uri",
+            "redirect_uris must be https URLs or http loopback URLs "
+            "(RFC 8252) without fragments",
+        )
+    if len(_non_loopback_origins(cast(list[str], value))) > 1:
+        return (
+            "invalid_redirect_uri",
+            "all non-loopback redirect_uris must share one origin",
+        )
+    return None
+
+
+def _active_grant_types(hass: HomeAssistant, redirect_uris: list[str]) -> list[str]:
     """Grant types the ACTIVE mode actually implements (RFC 7591 honesty).
 
     none mode's auto-approve token endpoint rejects refresh grants and its AS
     document advertises only ``authorization_code`` — the registration response
-    must not promise more (#2213 review). ha_auth forwards to core, which
-    serves refresh.
+    must not promise more. ha_auth forwards to core, but refresh is advertised
+    only when every callback maps to the same reproducible non-loopback identity;
+    an ephemeral loopback origin cannot be reconstructed without server state.
     """
     domain_data = hass.data.get(DOMAIN)
     cfg = domain_data.get(DATA_WEBHOOK) if isinstance(domain_data, dict) else None
-    if isinstance(cfg, dict) and cfg.get("resource_server") is not None:
+    if (
+        isinstance(cfg, dict)
+        and cfg.get("resource_server") is not None
+        and _refresh_identity_is_reproducible(redirect_uris)
+    ):
         return ["authorization_code", "refresh_token"]
     return ["authorization_code"]
 
@@ -146,27 +202,10 @@ class DcrRegisterView(HomeAssistantView):
         if not isinstance(body, dict):
             return _dcr_error("invalid_client_metadata", "body must be an object")
 
-        uris = body.get("redirect_uris")
-        if not isinstance(uris, list) or not uris:
-            return _dcr_error(
-                "invalid_redirect_uri", "redirect_uris must be a non-empty array"
-            )
-        if len(uris) > MAX_REDIRECT_URIS:
-            return _dcr_error(
-                "invalid_redirect_uri",
-                f"at most {MAX_REDIRECT_URIS} redirect_uris are accepted",
-            )
-        for uri in uris:
-            if (
-                not isinstance(uri, str)
-                or len(uri) > MAX_REDIRECT_URI_LEN
-                or not _is_valid_redirect_uri(uri)
-            ):
-                return _dcr_error(
-                    "invalid_redirect_uri",
-                    "redirect_uris must be https URLs or http loopback URLs "
-                    "(RFC 8252) without fragments",
-                )
+        raw_uris = body.get("redirect_uris")
+        if error := _redirect_uris_error(raw_uris):
+            return _dcr_error(*error)
+        uris = cast(list[str], raw_uris)
 
         client_id = mint_client_id(key, uris)
         response: dict[str, Any] = {
@@ -174,7 +213,7 @@ class DcrRegisterView(HomeAssistantView):
             "client_id_issued_at": int(time.time()),
             "redirect_uris": uris,
             "token_endpoint_auth_method": "none",
-            "grant_types": _active_grant_types(self._hass),
+            "grant_types": _active_grant_types(self._hass, uris),
             "response_types": ["code"],
         }
         # Echo benign metadata the client sent (RFC 7591 §3.2.1 lets the AS
