@@ -382,13 +382,21 @@ class TestIntegrationManagement:
             current = await mcp.call_tool_success(
                 "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
             )
-            # filesize titles the entry with the file's basename and sets the
-            # resolved path as its unique_id, so both follow the change.
-            start_path = (current.get("entry", current) or {}).get("unique_id")
+            # `title` is the observable: filesize names the entry after the
+            # file's basename and retitles it on reconfigure. The entry's
+            # unique_id would be the more direct signal, but Home Assistant
+            # does not expose it — `ConfigEntry.as_json_fragment` omits it, and
+            # every config-entry endpoint serializes through that fragment.
+            start_title = (current.get("entry", current) or {}).get("title")
             target = (
                 self.RECONFIGURE_PATH_A
-                if start_path == self.RECONFIGURE_PATH_B
+                if start_title == self.RECONFIGURE_PATH_B.rsplit("/", 1)[-1]
                 else self.RECONFIGURE_PATH_B
+            )
+            start_path = (
+                self.RECONFIGURE_PATH_B
+                if target == self.RECONFIGURE_PATH_A
+                else self.RECONFIGURE_PATH_A
             )
             try:
                 preview = await mcp.call_tool_success(
@@ -423,12 +431,11 @@ class TestIntegrationManagement:
                     "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
                 )
                 changed_entry = changed.get("entry", changed)
-                assert changed_entry.get("unique_id") == target, changed_entry
                 assert changed_entry.get("title") == target.rsplit("/", 1)[-1], (
                     changed_entry
                 )
             finally:
-                if start_path in (self.RECONFIGURE_PATH_A, self.RECONFIGURE_PATH_B):
+                if start_path != target:
                     restore_preview = await mcp.call_tool_success(
                         "ha_set_integration",
                         {

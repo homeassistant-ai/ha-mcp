@@ -2209,39 +2209,3 @@ class TestSetIntegrationModes:
                 "disabled_by": None,
             }
         )
-
-
-class TestFormatEntryDiscoveryFields:
-    """Fields ha_get_integration must expose for ha_set_integration's guards."""
-
-    def test_format_entry_exposes_the_reconfigure_discovery_fields(self) -> None:
-        """supports_reconfigure and unique_id are the two anchors a caller needs.
-
-        `supports_reconfigure` says whether reconfigure=True is even legal for
-        the entry, and `unique_id` is the value `expected_unique_id` asserts —
-        without it that parameter has no discovery route.
-        """
-        formatted = IntegrationTools._format_entry(
-            {
-                "entry_id": "abc",
-                "domain": "shelly",
-                "title": "Relay",
-                "state": "loaded",
-                "source": "user",
-                "unique_id": "AA:BB:CC:DD:EE:FF",
-                "supports_reconfigure": True,
-            },
-            include_opts=False,
-        )
-
-        assert formatted["unique_id"] == "AA:BB:CC:DD:EE:FF"
-        assert formatted["supports_reconfigure"] is True
-
-    def test_format_entry_reports_a_missing_unique_id_as_none(self) -> None:
-        """An entry without a unique_id (e.g. MQTT) reports None, not absent."""
-        formatted = IntegrationTools._format_entry(
-            {"entry_id": "abc", "domain": "mqtt"}, include_opts=False
-        )
-
-        assert "unique_id" in formatted
-        assert formatted["unique_id"] is None
