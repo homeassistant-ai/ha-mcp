@@ -743,7 +743,7 @@ async def _handle_flow_steps(
 
     Returns:
         ``{"success": True, "entry": result}`` for a normal flow, or
-        ``{"success": True, "operation": "reconfigure", "flow_result":
+        ``{"success": True, "operation": "reconfigured", "flow_result":
         result}`` under ``is_reconfigure``. Both carry ``warnings``
         when SOME caller-supplied config keys were not declared by any flow
         step, or when a key had to be resubmitted to a later step that

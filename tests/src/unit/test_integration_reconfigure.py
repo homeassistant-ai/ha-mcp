@@ -2452,3 +2452,30 @@ async def test_confirm_token_is_bound_to_the_supplied_identity_anchors() -> None
     payload = json.loads(str(exc_info.value))
     assert payload["status"] == ReconfigureStatus.STALE_PREFLIGHT
     client.start_reconfigure_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_non_ascii_confirm_token_is_rejected_not_an_internal_error(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """A junk token lands on stale_preflight, not INTERNAL_ERROR.
+
+    hmac.compare_digest raises TypeError on a non-ASCII str operand, which the
+    outer handler would have re-mapped to an internal error.
+    """
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.start_reconfigure_flow = AsyncMock()
+
+    with pytest.raises(ToolError) as exc_info:
+        await IntegrationTools(client).ha_set_integration(
+            entry_id="entry-123",
+            reconfigure=True,
+            config={"host": "192.0.2.171"},
+            confirm_token="sha256:café–ünïcode",
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == ReconfigureStatus.STALE_PREFLIGHT
+    assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    client.start_reconfigure_flow.assert_not_awaited()

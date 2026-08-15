@@ -234,7 +234,13 @@ class ReconfigureRunner:
                     confirm_token=current_confirm_token,
                     warnings=prepared.warnings,
                 )
-            if not hmac.compare_digest(confirm_token, current_confirm_token):
+            # Compare as bytes: hmac.compare_digest raises TypeError on a
+            # non-ASCII str operand, and a caller's junk token must land on
+            # the stale-preflight rejection, not an INTERNAL_ERROR.
+            if not hmac.compare_digest(
+                confirm_token.encode("utf-8", "surrogatepass"),
+                current_confirm_token.encode("utf-8", "surrogatepass"),
+            ):
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
