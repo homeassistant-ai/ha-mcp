@@ -246,6 +246,64 @@ async def test_explicit_default_port_translates_on_both_legs(oauth_stack, monkey
     assert refresh_id == "https://claude.ai"
 
 
+async def test_uppercase_host_passes_through_on_both_legs(oauth_stack, monkeypatch):
+    """#2219 review: hostnames are case-insensitive (RFC 4343) — an
+    uppercase-host same-origin pair takes the fast path on authorize AND
+    passes through on refresh."""
+    indirect = oauth_stack.indirect
+    redirects = AsyncMock(return_value=["https://CLAUDE.AI/api/mcp/auth_callback"])
+    monkeypatch.setattr(indirect, "fetch_cimd_redirects", redirects)
+    client_id = "https://CLAUDE.AI/oauth/client.json"
+
+    authorize_id = await indirect.resolve_forward_client_id(
+        session=object(),
+        dcr_key=None,
+        client_id=client_id,
+        redirect_uri="https://CLAUDE.AI/api/mcp/auth_callback",
+    )
+    refresh_id = await indirect.translated_client_id_for_refresh(
+        object(), None, client_id
+    )
+
+    assert authorize_id == client_id
+    assert refresh_id is indirect.RefreshDisposition.PASSTHROUGH
+
+
+async def test_symmetric_explicit_port_passes_through_on_both_legs(
+    oauth_stack, monkeypatch
+):
+    """#2219 review: when the client_id AND the registered redirect both
+    carry the same explicit default port, the authorize fast path fires (raw
+    netlocs equal) and the token is bound to the full client_id — so refresh
+    must pass through, not translate to the canonicalized origin."""
+    indirect = oauth_stack.indirect
+    redirects = AsyncMock(return_value=["https://claude.ai:443/api/mcp/auth_callback"])
+    monkeypatch.setattr(indirect, "fetch_cimd_redirects", redirects)
+    client_id = "https://claude.ai:443/oauth/client.json"
+
+    authorize_id = await indirect.resolve_forward_client_id(
+        session=object(),
+        dcr_key=None,
+        client_id=client_id,
+        redirect_uri="https://claude.ai:443/api/mcp/auth_callback",
+    )
+    refresh_id = await indirect.translated_client_id_for_refresh(
+        object(), None, client_id
+    )
+
+    assert authorize_id == client_id
+    assert refresh_id is indirect.RefreshDisposition.PASSTHROUGH
+
+
+def test_redirect_validator_rejects_yarl_unserializable_authority(oauth_stack):
+    """#2218 review: urlparse accepts a backslash-before-@ authority that
+    yarl later rejects in _redirect_with — the validator must 400 it up
+    front, never let it 500 on an unauthenticated view."""
+    assert not oauth_stack.oauth._is_valid_redirect_uri(
+        "https://client.example\\@evil.example/cb"
+    )
+
+
 async def test_portless_same_origin_client_passes_through_on_both_legs(
     oauth_stack, monkeypatch
 ):

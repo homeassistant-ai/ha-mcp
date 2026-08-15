@@ -357,6 +357,21 @@ def _ha_auth_supported() -> bool:
     )
 
 
+def test_heartbeat_touch_precedes_oauth_enforcement():
+    """#2218 review: main() must touch the heartbeat BEFORE the fail-closed
+    stale-code probe — that probe hits a heartbeat-gated OAuth view, and the
+    clean-shutdown path deletes the file, so probing first would misread
+    every fresh start as stale code and enter restart recovery. Applies to
+    flavors that ship the heartbeat gate (feature-detected)."""
+    for variant in WEBHOOK_PROXY_VARIANTS.values():
+        start_src = Path(variant["addon_dir"], "start.py").read_text()
+        if "HEARTBEAT_FILE" not in start_src:
+            continue  # flavor predates the heartbeat gate
+        touch = start_src.index("HEARTBEAT_FILE.touch()")
+        enforce = start_src.index("_enforce_oauth_or_disable(enable_oauth)")
+        assert touch < enforce, variant["key"]
+
+
 def _none_autoapprove_supported() -> bool:
     """Feature-detect whether the CURRENT flavor ships none-mode auto-approve
     discovery (its `oauth_autoapprove.py` module, issue #1969). The stable

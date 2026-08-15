@@ -1890,6 +1890,15 @@ def main() -> int:
 
     _install_integration_and_handle_restart()
 
+    # The integration's OAuth views serve only while the heartbeat is fresh,
+    # and the stale-code probe below hits one of those views — touch it BEFORE
+    # enforcement, or every clean start (the shutdown deleted the file) would
+    # misread the freshly loaded integration as stale and enter restart
+    # recovery (#2218 review).
+    try:
+        HEARTBEAT_FILE.touch()
+    except OSError as e:
+        log_error(f"Could not touch heartbeat file ({type(e).__name__}): {e}")
     _enforce_oauth_or_disable(enable_oauth)
 
     _log_startup_urls(

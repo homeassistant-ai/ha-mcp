@@ -288,9 +288,12 @@ async def resolve_forward_client_id(
     # path must pass such identities through for core to reject, not 500.
     parsed_client = urlparse(client_id)
     parsed_redirect = urlparse(redirect_uri)
+    # Netlocs casefold: hostnames are case-insensitive (RFC 4343), and the
+    # refresh leg reconstructs this comparison against the lowercased
+    # canonical origin (#2219 review).
     if parsed_client.scheme in ("http", "https") and (
-        (parsed_client.scheme, parsed_client.netloc)
-        == (parsed_redirect.scheme, parsed_redirect.netloc)
+        (parsed_client.scheme, parsed_client.netloc.lower())
+        == (parsed_redirect.scheme, parsed_redirect.netloc.lower())
     ):
         return client_id
 
@@ -332,16 +335,20 @@ async def translated_client_id_for_refresh(
         return RefreshDisposition.UNREPRODUCIBLE
     stable = stable_translation_origin(registered)
     assert stable is not None
-    # RAW netloc comparison, deliberately mirroring the authorize fast path
-    # (#2218 review): passthrough is only consistent when authorize ALSO
-    # passed the full client_id through, and that fast path compares raw
-    # netlocs. A client_id with an explicit scheme-default port missed the
-    # fast path, so its token was minted under the TRANSLATED origin — a
-    # canonical comparison here would pass the raw client_id through and
-    # guarantee the core rejection this derivation exists to avoid.
+    # Passthrough exactly when the authorize fast path COULD have fired
+    # (#2218/#2219 reviews): that fast path compares the client_id's raw
+    # netloc against the PRESENTED redirect's, so refresh reconstructs it
+    # against the registered redirects (reproducible ⇒ all web, one canonical
+    # origin — but their RAW netlocs may still differ from the client_id's by
+    # an explicit default port, where the fast path missed and the token was
+    # minted under the TRANSLATED origin). Netlocs casefold because hostnames
+    # are case-insensitive (RFC 4343).
     parsed = urlparse(client_id)
-    if f"{parsed.scheme}://{parsed.netloc}" == stable:
-        return RefreshDisposition.PASSTHROUGH
+    client_origin = (parsed.scheme, parsed.netloc.lower())
+    for uri in registered:
+        parsed_redirect = urlparse(uri)
+        if (parsed_redirect.scheme, parsed_redirect.netloc.lower()) == client_origin:
+            return RefreshDisposition.PASSTHROUGH
     return stable
 
 

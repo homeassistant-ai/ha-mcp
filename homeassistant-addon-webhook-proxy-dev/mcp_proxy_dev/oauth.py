@@ -118,6 +118,11 @@ _PKCE_VERIFIER_RE = re.compile(r"^[A-Za-z0-9._~-]+$")
 _PKCE_CHALLENGE_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _LOOPBACK_HOSTNAMES = frozenset({"localhost"})
 
+# RFC 3986 §3.2 authority charset (unreserved / pct-encoded / sub-delims /
+# ':' '@' and IPv6 brackets). Anything outside it (a backslash, a space, raw
+# unicode) is an illegal authority that downstream URL builders may reject.
+_AUTHORITY_CHARS_RE = re.compile(r"[A-Za-z0-9._~%!$&'()*+,;=:@\[\]-]*")
+
 # Pending-code dict cap. An attacker spamming /authorize with valid params
 # could grow the dict between the prune passes that run on each issuance.
 # 1000 codes is well past anything legitimate (5-min TTL, single-tenant).
@@ -303,6 +308,13 @@ def _is_valid_redirect_uri(redirect_uri: str) -> bool:
     except ValueError:
         return False
     if not parsed.hostname:
+        return False
+    if not _AUTHORITY_CHARS_RE.fullmatch(parsed.netloc):
+        # urlparse and yarl split authorities differently (e.g. a backslash
+        # before '@', which urlparse tolerates and yarl rejects per RFC 3986).
+        # Every accepted redirect later flows through yarl in _redirect_with,
+        # so an RFC 3986-illegal authority must 400 HERE, never 500 there
+        # (#2218 review — same contract as the .port access above).
         return False
     if parsed.scheme == "http":
         if not _is_loopback_host(parsed.hostname):
