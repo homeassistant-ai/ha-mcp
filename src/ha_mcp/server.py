@@ -821,7 +821,9 @@ class HomeAssistantSmartMCPServer:
             'mean "search failed", not "no results" — see `partial_reason` '
             "(also mirrored into `warnings`). Do not treat a partial response as "
             "complete.\n\n"
-            "For parameters, schema, and examples, see ha_get_skill_guide."
+            "For what to do with what you find — native-first patterns, "
+            "entity_id over device_id, impact analysis before renaming — see "
+            "ha_get_skill_guide."
         ),
         # ha_manage_backup: 4571 -> 1295 chars, a 72% reduction. All figures
         # in this map are dedented characters — the size actually advertised
@@ -833,9 +835,16 @@ class HomeAssistantSmartMCPServer:
         # the safety content below is kept inline. The routing matrix STAYS —
         # the `action` parameter's own Field description says "Valid (scope,
         # action) combinations are listed in the tool description", so
-        # trimming it away would leave that pointer aimed at nothing. What
-        # defers to the skill guide is the eleven worked examples and the
-        # recovery-layer judgment (which layer fits which failure).
+        # trimming it away would leave that pointer aimed at nothing.
+        #
+        # This entry DEFERS NOTHING — it carries no ha_get_skill_guide
+        # pointer, and its destination is "self-contained". The skill pack
+        # has no backup reference yet (homeassistant-ai/skills#76 adds one),
+        # and advertising a file the pinned submodule does not contain is the
+        # exact dead-end this map exists to prevent. What the eleven worked
+        # examples covered is call syntax, which the input schema already
+        # carries; the judgment they illustrated moves in with the pointer,
+        # in the same commit that bumps the pin.
         #
         # destructiveHint is set on this tool, so the lite text keeps every
         # irreversibility marker inline rather than deferring it: the
@@ -864,10 +873,7 @@ class HomeAssistantSmartMCPServer:
             "Use `edits` to undo a recent agent edit to an "
             "automation/script/scene/dashboard/helper; use `snapshot` for "
             "system-wide recovery and before irreversible operations. "
-            "{backup_hint_text}\n\n"
-            "For worked examples and which recovery layer fits which "
-            "failure, see ha_get_skill_guide "
-            "(`references/backups.md`)."
+            "{backup_hint_text}"
         ),
         # ha_report_issue: 2045 -> 712 chars, a 65% reduction. Same dedented
         # basis as above; the raw indented docstring is 2351 chars, which is
@@ -909,9 +915,20 @@ class HomeAssistantSmartMCPServer:
     # tests/src/unit/test_lite_docstrings.py can resolve it against the
     # vendored skill pack.
     #
-    # Values are either a path inside the home-assistant-best-practices
-    # skill, or "tool-response:<field>" when the guidance ships in the
-    # tool's own response instead.
+    # Three legal value forms, each with a matching check in the tests:
+    #
+    #   "references/<file>.md" / "SKILL.md"
+    #       A path inside the home-assistant-best-practices skill. Must
+    #       resolve against the VENDORED pack, and the lite text must carry
+    #       a ha_get_skill_guide pointer to reach it.
+    #   "tool-response:<field>"
+    #       The guidance ships in the tool's own response instead. The field
+    #       must actually be returned, and the lite text must name it.
+    #   "self-contained"
+    #       The entry defers nothing. The lite text must carry NO
+    #       ha_get_skill_guide pointer and name no reference file, so an
+    #       entry cannot quietly re-acquire a pointer to content that isn't
+    #       vendored — which is what "self-contained" exists to prevent.
     _LITE_DOCSTRING_DESTINATIONS: ClassVar[dict[str, str]] = {
         "ha_config_get_automation": "references/automation-patterns.md",
         "ha_config_set_automation": "references/automation-patterns.md",
@@ -925,12 +942,13 @@ class HomeAssistantSmartMCPServer:
         "ha_config_set_dashboard": "references/dashboard-guide.md",
         "ha_call_service": "references/domain-docs.md",
         "ha_config_set_yaml": "references/yaml-only-integrations.md",
-        # Weakest of the fifteen: the skill pack has no search reference, so
-        # this resolves to the routing workflow rather than to the
-        # "parameters, schema, and examples" the lite text promises. Mapped
-        # to what exists rather than left undeclared; see the #2153 thread.
+        # The skill pack has no search reference, so this lands on the
+        # decision workflow. The lite text was reworded to promise what
+        # SKILL.md actually holds (what to do with the results) instead of
+        # "parameters, schema, and examples", which it never had — the
+        # parameters ship in the input schema regardless.
         "ha_search": "SKILL.md",
-        "ha_manage_backup": "references/backups.md",
+        "ha_manage_backup": "self-contained",
         "ha_report_issue": "tool-response:instructions",
     }
 

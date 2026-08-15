@@ -1968,7 +1968,7 @@ const FEATURE_META = {
   },
   enable_lite_docstrings: {
     label: "Enable lite tool docstrings (beta)",
-    help: "Beta feature. Replaces the docstrings on 15 heavy ha-mcp tools (ha_config_get_automation, ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). One exception: ha_report_issue defers to the instructions field of its own response instead. Tuning the Backup-hint setting still applies in lite mode. WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
+    help: "Beta feature. Replaces the docstrings on 15 heavy ha-mcp tools (ha_config_get_automation, ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). Two exceptions: ha_report_issue defers to the instructions field of its own response, and ha_manage_backup defers nothing at all — its trimmed text stays self-contained until the bundled skill pack ships a backup reference. Tuning the Backup-hint setting still applies in lite mode. WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
   enable_dashboard_screenshot: {
     label: "Enable dashboard screenshot mode (beta)",
@@ -2474,7 +2474,14 @@ async function saveFeatureFlag(fieldName, value) {
     });
   } catch (e) {
     updateStatus(t('errors.save_failed_detail', {message: e.message}, 'Save failed: ' + e.message), false, true);
-    return false;
+    // null, not false: the request was never answered, so we do NOT know
+    // whether it landed. `!saved` still holds for callers that only care
+    // about "didn't succeed"; the toggle handlers check for null and
+    // re-read before asserting which value the server has. An `!resp.ok`
+    // below stays `false` — there the server answered, so the previous
+    // value is confirmed and a re-read would only turn a known state
+    // into an unknown one.
+    return null;
   }
   let data = null;
   try { data = await resp.json(); } catch (_e) {
@@ -3537,15 +3544,44 @@ document.getElementById('policy-master-toggle').addEventListener('change', async
   const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
   const saved = await saveFeatureFlag('enable_tool_security_policies', e.target.checked);
   if (!saved) {
-    // Save definitely failed — the server still has the old value.
-    // Revert the checkbox and surface the failure (set the status AFTER
-    // the revert so it isn't clobbered).
-    e.target.checked = previous;
-    updateStatus(t(
-      'policies.errors.master_save',
-      {},
-      'Tool Security Policies change did not save. The server still has the previous value'
-    ), false, true);
+    // A false return is NOT proof the server kept the old value. It covers
+    // two different situations: an HTTP error (the server answered, so the
+    // old value stands) and a rejected fetch, where the POST can have been
+    // applied and only its response lost. Reverting on the second one puts
+    // the switch back to a state the server no longer has, under a message
+    // asserting exactly that. Re-read first, and only revert when the
+    // readback actually shows the old value.
+    // Only the rejected-fetch case (null) is ambiguous; an HTTP error is a
+    // definite no and reverts immediately, keeping the switch retryable.
+    if (saved === false) {
+      e.target.checked = previous;
+      paintPolicyGlobalToggles();
+      render();
+      updateStatus(t('policies.errors.master_save', {},
+        'Tool Security Policies change did not save. The server still has the previous value'), false, true);
+      return;
+    }
+    await loadPolicyState();
+    let msg, ok = false;
+    if (policyState.enabledKnown && policyState.enabled === previous) {
+      e.target.checked = previous;
+      msg = t('policies.errors.master_save', {},
+        'Tool Security Policies change did not save. The server still has the previous value');
+    } else if (policyState.enabledKnown) {
+      // The write landed; only the response was lost. Leave the switch
+      // where the server actually is.
+      e.target.checked = policyState.enabled;
+      msg = t('status.saved_restart', {}, 'Saved. Restart required.');
+      ok = true;
+    } else {
+      // Neither value confirmed — say so rather than claiming either.
+      msg = t('policies.global.unknown', {},
+        'Could not read server settings. The two switches below are shown as unknown');
+    }
+    // Paint before the status line so the repaint can't clobber it.
+    paintPolicyGlobalToggles();
+    render();
+    updateStatus(msg, ok, !ok);
     return;
   }
   // Re-read the truth from the server. If that read can't confirm, fall
@@ -3562,6 +3598,9 @@ document.getElementById('policy-master-toggle').addEventListener('change', async
     }
   }
   paintPolicyGlobalToggles();
+  // render() reads policyState for the per-tool security-gate treatment, so
+  // the rows go stale unless it runs after the flag settles.
+  render();
 });
 
 // Policy-editing tool toggle (enable_security_policy_tool) — same
@@ -3572,15 +3611,40 @@ document.getElementById('policy-manage-tool-toggle').addEventListener('change', 
   const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
   const saved = await saveFeatureFlag('enable_security_policy_tool', e.target.checked);
   if (!saved) {
-    // Save definitely failed — the server still has the old value.
-    // Revert the checkbox and surface the failure (set the status AFTER
-    // the revert so it isn't clobbered).
-    e.target.checked = previous;
-    updateStatus(t(
-      'policies.errors.manage_tool_save',
-      {},
-      'Policy-editing tool change did not save. The server still has the previous value'
-    ), false, true);
+    // A false return is NOT proof the server kept the old value. It covers
+    // two different situations: an HTTP error (the server answered, so the
+    // old value stands) and a rejected fetch, where the POST can have been
+    // applied and only its response lost. Reverting on the second one puts
+    // the switch back to a state the server no longer has, under a message
+    // asserting exactly that. Re-read first, and only revert when the
+    // readback actually shows the old value.
+    // Only the rejected-fetch case (null) is ambiguous; an HTTP error is a
+    // definite no and reverts immediately, keeping the switch retryable.
+    if (saved === false) {
+      e.target.checked = previous;
+      paintPolicyGlobalToggles();
+      render();
+      updateStatus(t('policies.errors.manage_tool_save', {},
+        'Policy-editing tool change did not save. The server still has the previous value'), false, true);
+      return;
+    }
+    await loadPolicyState();
+    let msg, ok = false;
+    if (policyState.manageToolKnown && policyState.manageToolEnabled === previous) {
+      e.target.checked = previous;
+      msg = t('policies.errors.manage_tool_save', {},
+        'Policy-editing tool change did not save. The server still has the previous value');
+    } else if (policyState.manageToolKnown) {
+      e.target.checked = policyState.manageToolEnabled;
+      msg = t('status.saved_restart', {}, 'Saved. Restart required.');
+      ok = true;
+    } else {
+      msg = t('policies.global.unknown', {},
+        'Could not read server settings. The two switches below are shown as unknown');
+    }
+    paintPolicyGlobalToggles();
+    render();
+    updateStatus(msg, ok, !ok);
     return;
   }
   // Same confirm-then-fall-back order as the master toggle above.
@@ -3593,6 +3657,9 @@ document.getElementById('policy-manage-tool-toggle').addEventListener('change', 
     }
   }
   paintPolicyGlobalToggles();
+  // render() reads policyState for the per-tool security-gate treatment, so
+  // the rows go stale unless it runs after the flag settles.
+  render();
 });
 
 // Read Only Mode toggle (Tools tab, above the search box) — same flag
@@ -3602,17 +3669,40 @@ document.getElementById('read-only-mode-toggle').addEventListener('change', asyn
   const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
   const saved = await saveFeatureFlag('read_only_mode', e.target.checked);
   if (!saved) {
-    // Save definitely failed — the server still has the previous value.
-    // Revert the checkbox and leave readOnlyState.enabled untouched (do
-    // NOT write an unconfirmed value). Set the status AFTER the revert
-    // so the revert's render/sync can't clobber the message.
-    e.target.checked = previous;
+    // A false return is NOT proof the server kept the old value. It covers
+    // two different situations: an HTTP error (the server answered, so the
+    // old value stands) and a rejected fetch, where the POST can have been
+    // applied and only its response lost. Reverting on the second one puts
+    // the switch back to a state the server no longer has, under a message
+    // asserting exactly that. Re-read first, and only revert when the
+    // readback actually shows the old value.
+    // Only the rejected-fetch case (null) is ambiguous; an HTTP error is a
+    // definite no and reverts immediately, keeping the switch retryable.
+    if (saved === false) {
+      e.target.checked = previous;
+      syncReadOnlyToggle();
+      render();
+      updateStatus(t('tools.read_only.save_failed', {},
+        'Read Only Mode change did not save. The server still has the previous value'), false, true);
+      return;
+    }
+    await loadPolicyState();
+    let msg, ok = false;
+    if (readOnlyState.enabledKnown && readOnlyState.enabled === previous) {
+      e.target.checked = previous;
+      msg = t('tools.read_only.save_failed', {},
+        'Read Only Mode change did not save. The server still has the previous value');
+    } else if (readOnlyState.enabledKnown) {
+      e.target.checked = readOnlyState.enabled;
+      msg = t('status.saved_restart', {}, 'Saved. Restart required.');
+      ok = true;
+    } else {
+      msg = t('tools.read_only.unknown', {},
+        'Could not read server settings. Read Only Mode status unknown');
+    }
+    syncReadOnlyToggle();
     render();
-    updateStatus(t(
-      'tools.read_only.save_failed',
-      {},
-      'Read Only Mode change did not save. The server still has the previous value'
-    ), false, true);
+    updateStatus(msg, ok, !ok);
     return;
   }
   // Re-read the truth from the server; if that read couldn't confirm,

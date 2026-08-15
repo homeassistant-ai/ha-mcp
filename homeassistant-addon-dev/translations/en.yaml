@@ -145,16 +145,18 @@ configuration:
       ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard,
       ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup,
       ha_report_issue) with shorter variants that defer schema and example detail
-      to the ha_get_skill_guide tool (or its skill:// resource). One exception: ha_report_issue
-      defers to the instructions field of its own response instead. Tuning the Backup-hint
-      setting still applies in lite mode. WARNING: this reduces idle token usage,
-      but may degrade LLM performance — the trimmed descriptions rely on the LLM actually
-      calling the skill tool or reading the skill resource for detail, which is not
-      guaranteed (some models will skip the extra tool call and end up with less guidance
-      than they had before). Best paired with a client that supports MCP resources
-      or with enable_tool_search. Requires restart to take effect. REQUIRES the master
-      "Enable beta features" toggle above (and in the web UI) to be on — otherwise
-      this sub-flag is ignored at runtime regardless of its value here.'
+      to the ha_get_skill_guide tool (or its skill:// resource). Two exceptions: ha_report_issue
+      defers to the instructions field of its own response, and ha_manage_backup defers
+      nothing at all — its trimmed text stays self-contained until the bundled skill
+      pack ships a backup reference. Tuning the Backup-hint setting still applies
+      in lite mode. WARNING: this reduces idle token usage, but may degrade LLM performance
+      — the trimmed descriptions rely on the LLM actually calling the skill tool or
+      reading the skill resource for detail, which is not guaranteed (some models
+      will skip the extra tool call and end up with less guidance than they had before).
+      Best paired with a client that supports MCP resources or with enable_tool_search.
+      Requires restart to take effect. REQUIRES the master "Enable beta features"
+      toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored
+      at runtime regardless of its value here.'
   enable_mandatory_bps:
     name: Attach best-practice skills on writes
     description: 'Master switch for the write-tool skill content delivery feature

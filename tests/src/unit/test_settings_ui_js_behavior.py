@@ -1392,6 +1392,103 @@ class TestPolicyTabFlow:
         assert 'data-indeterminate="false"' in m.group(0), m.group(0)
         assert 'data-disabled="false"' in m.group(0), m.group(0)
 
+    def test_lost_response_that_landed_does_not_revert(
+        self, settings_script: str
+    ) -> None:
+        """A rejected fetch is not proof the write failed.
+
+        ``saveFeatureFlag`` returns a falsy value for two different things:
+        an HTTP error, where the server answered and the previous value
+        stands, and a rejected ``fetch``, where the POST can have been
+        applied and only its response lost. Reverting on the second one
+        snaps the switch back to a value the server no longer holds, under
+        a message asserting exactly that. Here the write DID land, so the
+        re-read shows it on and the switch must stay on.
+        """
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "responses": [
+                        _OFF_FLAG_RESPONSE,  # 1-2: the two init reads
+                        _OFF_FLAG_RESPONSE,
+                        _OFF_FLAG_RESPONSE,  # 3: the explicit sync below
+                        # 4: the save POST — applied, but the response is lost
+                        {"throw": "NetworkError when attempting to fetch"},
+                        # 5: the re-read shows the server DID take it
+                        {
+                            "status": 200,
+                            "json": {
+                                "flags": {
+                                    "enable_security_policy_tool": {"value": True}
+                                }
+                            },
+                        },
+                    ]
+                },
+            },
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              await window.syncPolicyGlobalToggles();
+              const cb = document.getElementById('policy-manage-tool-toggle');
+              cb.checked = true;
+              cb.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 100));
+              const probe = document.createElement('div');
+              probe.id = '__lost_response_probe';
+              probe.dataset.checked = String(cb.checked);
+              document.body.appendChild(probe);
+            """,
+        )
+        m = re.search(r'<div[^>]*id="__lost_response_probe"[^>]*>', result.dom)
+        assert m is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        assert 'data-checked="true"' in m.group(0), (
+            "the write landed and the re-read confirms it — reverting here "
+            f"would contradict the server: {m.group(0)}"
+        )
+
+    def test_lost_response_that_did_not_land_still_reverts(
+        self, settings_script: str
+    ) -> None:
+        """Same ambiguous failure, opposite outcome.
+
+        The re-read shows the server still on the previous value, which is
+        the only evidence that justifies reverting — so it reverts.
+        """
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "responses": [
+                        _OFF_FLAG_RESPONSE,
+                        _OFF_FLAG_RESPONSE,
+                        _OFF_FLAG_RESPONSE,
+                        {"throw": "NetworkError when attempting to fetch"},
+                        _OFF_FLAG_RESPONSE,  # re-read: never landed
+                    ]
+                },
+            },
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              await window.syncPolicyGlobalToggles();
+              const cb = document.getElementById('policy-manage-tool-toggle');
+              cb.checked = true;
+              cb.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 100));
+              const probe = document.createElement('div');
+              probe.id = '__lost_response_revert_probe';
+              probe.dataset.checked = String(cb.checked);
+              document.body.appendChild(probe);
+            """,
+        )
+        m = re.search(r'<div[^>]*id="__lost_response_revert_probe"[^>]*>', result.dom)
+        assert m is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        assert 'data-checked="false"' in m.group(0), m.group(0)
+
     def test_unconfirmed_save_keeps_the_applied_value(
         self, settings_script: str
     ) -> None:

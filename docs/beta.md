@@ -129,7 +129,15 @@ Replaces the docstrings on 15 heavy ha-mcp tools (`ha_config_get_automation`, `h
 
 Both lists above are checked against `_LITE_DOCSTRINGS` by `test_documented_tool_lists_cover_every_mapped_tool`, so a tool added to the mapping without a docs update fails CI rather than drifting silently.
 
-**Where the deferred detail lives.** Each mapped tool declares its destination in `_LITE_DOCSTRING_DESTINATIONS` (`src/ha_mcp/server.py`), and `test_every_lite_destination_resolves` reads that file out of the bundled skill pack — a lite description cannot defer to guide content that does not exist. One tool is the exception: `ha_report_issue` defers to the `instructions` field of its own response rather than to the skill guide, because issue reporting is ha-mcp product meta and the skill pack's CONTRIBUTING forbids coupling skill content to specific MCP tool names.
+**Where the deferred detail lives.** Each mapped tool declares its destination in `_LITE_DOCSTRING_DESTINATIONS` (`src/ha_mcp/server.py`), in one of three forms, each with a matching test:
+
+| Destination | Meaning | Enforced by |
+|---|---|---|
+| `references/<file>.md`, `SKILL.md` | A file in the bundled skill pack. The lite text carries a `ha_get_skill_guide` pointer to reach it. | `test_every_lite_destination_resolves` reads the file out of the **vendored** pack — a description cannot defer to guide content that is not shipped. |
+| `tool-response:<field>` | The guidance ships in the tool's own response. Used by `ha_report_issue`, because issue reporting is ha-mcp product meta and the skill pack's CONTRIBUTING forbids coupling skill content to specific MCP tool names. | The field must actually be returned, and the lite text must name it. |
+| `self-contained` | The entry defers nothing — the trimmed text carries everything it needs. Used by `ha_manage_backup` until the skill pack ships a backup reference. | The lite text must carry **no** `ha_get_skill_guide` pointer and name no reference file, so an entry cannot quietly start advertising content the pinned submodule does not contain. |
+
+There is no exemption list: every entry is checked against the form it declares.
 
 **`BACKUP_HINT` still applies.** `ha_manage_backup`'s lite description interpolates the same `BACKUP_HINT`-derived sentence (strong/normal/weak) that its full description does, so tuning that setting is not silently cancelled by turning lite mode on.
 

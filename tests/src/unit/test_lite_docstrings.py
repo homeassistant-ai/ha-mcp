@@ -46,15 +46,8 @@ import extract_tools  # noqa: E402
 _SKILL_NAME = "home-assistant-best-practices"
 _PLACEHOLDER_RE = re.compile(r"\{[a-z_]+\}")
 _TOOL_RESPONSE_PREFIX = "tool-response:"
-
-# Destinations that do NOT exist at the currently pinned skills-vendor
-# commit because the content is still in review upstream. Each entry must
-# name the upstream PR. test_pending_destinations_are_still_pending FAILS
-# once a listed destination resolves, which is the reminder to bump the
-# submodule pin and empty this list — a pending entry cannot be forgotten.
-_DESTINATIONS_PENDING_UPSTREAM: dict[str, str] = {
-    "references/backups.md": "homeassistant-ai/skills#76",
-}
+_SELF_CONTAINED = "self-contained"
+_REFERENCE_FILE_RE = re.compile(r"references/[\w.-]+\.md")
 
 # Prose copies of the lite-mapped tool list. Hand-maintained in three
 # places (plus the mapping itself), which is what let ha_search drift out
@@ -334,13 +327,25 @@ class TestLiteDocstringsMappingInvariants:
           tool that serves it.
         * ``tool-response:<field>`` → must name ``<field>`` instead, and
           must NOT send the reader to the skill guide for the content.
+        * ``self-contained`` → must carry NO pointer at all. An entry that
+          defers nothing cannot be allowed to quietly re-acquire a
+          ``ha_get_skill_guide`` pointer or name a reference file, because
+          that is how a description starts advertising content the pinned
+          submodule does not contain.
         """
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
         offenders: list[str] = []
         for name, lite in HomeAssistantSmartMCPServer._LITE_DOCSTRINGS.items():
             dest = HomeAssistantSmartMCPServer._LITE_DOCSTRING_DESTINATIONS[name]
-            if dest.startswith(_TOOL_RESPONSE_PREFIX):
+            if dest == _SELF_CONTAINED:
+                if "ha_get_skill_guide" in lite or _REFERENCE_FILE_RE.search(lite):
+                    offenders.append(
+                        f"{name}: declared self-contained but the description "
+                        "still points somewhere — either vendor the "
+                        "destination and declare it, or drop the pointer"
+                    )
+            elif dest.startswith(_TOOL_RESPONSE_PREFIX):
                 field = dest[len(_TOOL_RESPONSE_PREFIX) :]
                 if f"`{field}`" not in lite:
                     offenders.append(
@@ -449,8 +454,8 @@ class TestLiteDocstringsKeysAndDestinations:
     def test_every_lite_destination_resolves(self) -> None:
         """The design promise, checked at the destination end.
 
-        ``test_every_lite_description_references_skill`` asserts the
-        pointer STRING is present; it cannot tell whether the guide holds
+        ``test_every_lite_description_names_its_own_destination`` asserts
+        the pointer STRING is present; it cannot tell whether the guide holds
         anything on the subject. An entry deferring to content that does
         not exist is worse than the documented trade-off ("the LLM might
         skip the extra call"), because a compliant agent that does follow
@@ -474,7 +479,10 @@ class TestLiteDocstringsKeysAndDestinations:
                     )
                 continue
 
-            if dest in _DESTINATIONS_PENDING_UPSTREAM:
+            if dest == _SELF_CONTAINED:
+                # Nothing to resolve: the entry advertises no destination.
+                # test_every_lite_description_names_its_own_destination is
+                # what holds it to that.
                 continue
 
             resolved = skill_loader.resolve_skill_files(skills_dir, _SKILL_NAME, [dest])
@@ -487,30 +495,6 @@ class TestLiteDocstringsKeysAndDestinations:
         assert not failures, (
             "Lite deferral destinations that do not resolve:\n"
             + "\n".join(f"  - {f}" for f in failures)
-        )
-
-    def test_pending_destinations_are_still_pending(self) -> None:
-        """Self-cleaning guard on ``_DESTINATIONS_PENDING_UPSTREAM``.
-
-        A pending destination is a dead pointer that CI tolerates because
-        the content is in review upstream. The moment a submodule pin bump
-        lands it, this fails — which is the reminder to delete the entry so
-        the destination goes back under
-        ``test_every_lite_destination_resolves``.
-        """
-        skills_dir = _require_vendored_skills()
-        landed = [
-            f"{dest} (was pending {pr})"
-            for dest, pr in _DESTINATIONS_PENDING_UPSTREAM.items()
-            if skill_loader.resolve_skill_files(skills_dir, _SKILL_NAME, [dest]).get(
-                dest
-            )
-        ]
-
-        assert not landed, (
-            "These destinations now resolve — remove them from "
-            "_DESTINATIONS_PENDING_UPSTREAM so they are checked normally:\n"
-            + "\n".join(f"  - {entry}" for entry in landed)
         )
 
     def test_named_reference_files_match_the_destination_map(self) -> None:
