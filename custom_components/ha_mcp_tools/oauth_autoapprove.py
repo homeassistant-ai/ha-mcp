@@ -369,12 +369,16 @@ class AutoApproveTokenView(HomeAssistantView):
     async def _ha_auth_token(
         self, cfg: dict[str, Any], request: web.Request
     ) -> web.Response:
-        """Forward the token exchange to core's /auth/token (server-side).
+        """Route the token exchange to core: 307 by default, proxy if translating.
 
-        client_id gets the same translation as the authorize leg (core bound
-        the code to the translated id). The refresh grant carries no
-        redirect_uri, so web-origin DCR/CIMD translations are re-derived from
-        the registered list; ephemeral loopback clients re-authorize.
+        Untranslated identities are 307-redirected to core's own /auth/token so
+        core sees the client's real address (its wrong-login notifications, ban
+        counters, trusted_networks refresh validation, and last_used_ip all key
+        on request.remote — #2213 review). Only translated identities (the body
+        must be rewritten) are forwarded server-side; the translation matches
+        the authorize leg, and the redirect_uri-less refresh grant re-derives
+        web-origin translations from the registered list (ephemeral loopback
+        clients re-authorize).
         """
         from multidict import MultiDict
 
@@ -388,6 +392,7 @@ class AutoApproveTokenView(HomeAssistantView):
         form = MultiDict(await request.post())
         client_id = str(form.get("client_id", ""))
         redirect_uri = str(form.get("redirect_uri", ""))
+        forward_id = client_id
         if client_id:
             if redirect_uri:
                 forward_id = await resolve_forward_client_id(
@@ -396,9 +401,6 @@ class AutoApproveTokenView(HomeAssistantView):
                     client_id,
                     redirect_uri,
                 )
-                if forward_id != client_id:
-                    form.popall("client_id", None)
-                    form["client_id"] = forward_id
             else:
                 # refresh_token grant: no redirect_uri on the wire — re-derive
                 # the translation from the registered list alone.
@@ -408,8 +410,33 @@ class AutoApproveTokenView(HomeAssistantView):
                     client_id,
                 )
                 if translated is not None:
-                    form.popall("client_id", None)
-                    form["client_id"] = translated
+                    forward_id = translated
+        if forward_id == client_id:
+            # No body rewrite needed, so don't proxy: 307 the client into
+            # core's own /auth/token on the same public origin it just used.
+            # Core then observes the CLIENT's address, which it uses for more
+            # than logging (#2213 review by Patch76): process_wrong_login
+            # notifications and login_attempts_threshold ban counters on
+            # failed exchanges, trusted_networks refresh-token validation,
+            # and the profile's last_used_ip. 307 rather than 308: both
+            # preserve method+body, but a 308 is cacheable by default and
+            # could teach the client a core URL that outlives a later
+            # auth-mode switch — the exact stickiness this PR removes.
+            from .mcp_webhook import _build_base_url
+
+            return web.Response(
+                status=307,
+                headers={
+                    "Location": f"{_build_base_url(request)}/auth/token",
+                    "Cache-Control": "no-store",
+                },
+            )
+        # Translated identity (cross-origin CIMD / DCR blob): the body must be
+        # rewritten, so the exchange is forwarded server-side. Core records
+        # this server's address for these rare clients — accepted residual,
+        # noted in the PR.
+        form.popall("client_id", None)
+        form["client_id"] = forward_id
         session = cfg.get("session")
         if session is None:
             return _json_error("temporarily_unavailable", 503)

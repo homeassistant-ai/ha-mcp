@@ -19,6 +19,7 @@ from custom_components.ha_mcp_tools.oauth_ha_auth import (  # noqa: E402
     origin_client_id,
     redirect_matches,
     resolve_forward_client_id,
+    stable_translation_origin,
 )
 
 KEY = b"k" * 32
@@ -557,3 +558,29 @@ async def test_dns_rrset_with_private_answer_is_rejected(monkeypatch):
     monkeypatch.setattr(oauth_ha_auth.asyncio, "get_running_loop", Loop)
 
     assert await oauth_ha_auth._resolve_public_addresses("client.example", 443) == []
+
+
+def test_stable_translation_origin_normalizes_default_ports():
+    """#2213 review (Patch76): https://h/a and https://h:443/b are ONE origin
+    in registration validation AND translation — a registration mixing the two
+    forms must still translate instead of forwarding the raw DCR blob (which
+    core rejects pre-login for having no scheme)."""
+    assert (
+        stable_translation_origin(["https://h.example/a", "https://h.example:443/b"])
+        == "https://h.example"
+    )
+
+
+def test_origin_client_id_omits_scheme_default_port():
+    assert origin_client_id("https://h.example:443/cb") == "https://h.example"
+    assert origin_client_id("https://h.example:8443/cb") == "https://h.example:8443"
+    assert origin_client_id("http://localhost:61264/cb") == "http://localhost:61264"
+
+
+@pytest.mark.asyncio
+async def test_resolve_mixed_default_port_registration_translates():
+    cid = mint_client_id(KEY, ["https://h.example/a", "https://h.example:443/b"])
+    out = await resolve_forward_client_id(
+        session=None, dcr_key=KEY, client_id=cid, redirect_uri="https://h.example/a"
+    )
+    assert out == "https://h.example"

@@ -809,7 +809,7 @@ async def handle_legacy_authorize_post(
 
 
 def _extract_client_creds(
-    provider: LegacyOAuthProvider, request: web.Request, form: dict
+    request: web.Request, form: dict
 ) -> tuple[str | None, str | None]:
     """Pull client_id/secret from Basic auth header OR form body."""
     header = request.headers.get("Authorization", "")
@@ -876,7 +876,7 @@ async def handle_legacy_token_post(
 ) -> web.Response:
     """Token endpoint body (shared by the root and scoped routes)."""
     form = dict(await request.post())
-    client_id, client_secret = _extract_client_creds(provider, request, form)
+    client_id, client_secret = _extract_client_creds(request, form)
     if not provider.authenticate_client(client_id, client_secret):
         return _json_error(
             "invalid_client",

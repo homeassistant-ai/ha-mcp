@@ -96,6 +96,34 @@ def _active_dcr_key(hass: HomeAssistant) -> bytes | None:
     return key if isinstance(key, bytes) else None
 
 
+_DEFAULT_PORTS = {"https": 443, "http": 80}
+
+
+def normalized_origin(uri: str) -> tuple[str, str, int] | None:
+    """(scheme, host, port) origin identity with the scheme default applied.
+
+    The ONE normalizer shared by registration validation and client-id
+    translation (#2213 review by Patch76): ``https://h/a`` and
+    ``https://h:443/b`` are the same origin everywhere, or nowhere.
+    None for unparseable/hostless URIs.
+    """
+    parsed = urlparse(uri)
+    if not parsed.scheme or parsed.hostname is None:
+        return None
+    port = parsed.port
+    if port is None:
+        port = _DEFAULT_PORTS.get(parsed.scheme, 0)
+    return (parsed.scheme, parsed.hostname, port)
+
+
+def canonical_origin_url(origin: tuple[str, str, int]) -> str:
+    """URL form of a normalized origin, omitting the scheme-default port."""
+    scheme, host, port = origin
+    if _DEFAULT_PORTS.get(scheme) == port:
+        return f"{scheme}://{host}"
+    return f"{scheme}://{host}:{port}"
+
+
 def _non_loopback_origins(redirect_uris: list[str]) -> set[tuple[str, str, int]]:
     """Return normalized web origins represented by validated redirects."""
     origins: set[tuple[str, str, int]] = set()
@@ -103,8 +131,9 @@ def _non_loopback_origins(redirect_uris: list[str]) -> set[tuple[str, str, int]]
         parsed = urlparse(uri)
         if parsed.hostname is None or _is_loopback_host(parsed.hostname):
             continue
-        port = parsed.port
-        origins.add((parsed.scheme, parsed.hostname, 443 if port is None else port))
+        origin = normalized_origin(uri)
+        if origin is not None:
+            origins.add(origin)
     return origins
 
 

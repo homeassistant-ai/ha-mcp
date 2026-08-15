@@ -41,7 +41,7 @@ from urllib.parse import ParseResult, urlparse, urlunparse
 import aiohttp
 from homeassistant.core import HomeAssistant
 
-from .oauth_dcr import client_redirect_uris
+from .oauth_dcr import canonical_origin_url, client_redirect_uris, normalized_origin
 from .oauth_legacy import _is_loopback_host, _is_valid_redirect_uri
 
 # CIMD fetch limits (mirrors core PR #176286's hardening + the 00-draft rules).
@@ -150,9 +150,20 @@ async def _fetch_pinned_cimd(
 
 
 def origin_client_id(redirect_uri: str) -> str:
-    """The redirect target's origin, as a URL-shaped client_id core accepts."""
-    parsed = urlparse(redirect_uri)
-    return f"{parsed.scheme}://{parsed.netloc}"
+    """The redirect target's origin, as a URL-shaped client_id core accepts.
+
+    Canonicalized through the shared normalizer (#2213 review by Patch76):
+    scheme-default ports are omitted, so ``https://h:443/cb`` and
+    ``https://h/cb`` yield the same identity here and in DCR registration
+    validation. (Core's own netloc comparison does not normalize — a client
+    that literally presents an explicit default port at authorize still fails
+    there; strictly narrower than the untranslated failure this replaces.)
+    """
+    origin = normalized_origin(redirect_uri)
+    if origin is None:
+        parsed = urlparse(redirect_uri)
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return canonical_origin_url(origin)
 
 
 def redirect_matches(registered: list[str], redirect_uri: str) -> bool:
@@ -197,7 +208,9 @@ def stable_translation_origin(registered: list[str]) -> str | None:
         parsed = urlparse(uri)
         if parsed.hostname is None or _is_loopback_host(parsed.hostname):
             continue
-        origins.add(f"{parsed.scheme}://{parsed.netloc}")
+        origin = normalized_origin(uri)
+        if origin is not None:
+            origins.add(canonical_origin_url(origin))
     if len(origins) == 1:
         return origins.pop()
     return None

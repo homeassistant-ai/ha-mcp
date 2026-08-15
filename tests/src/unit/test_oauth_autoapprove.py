@@ -753,22 +753,90 @@ async def test_ha_auth_refresh_forwards_translated_client_id(
 async def test_ha_auth_token_timeout_returns_temporarily_unavailable(
     unified_view_client_factory, monkeypatch
 ):
-    """Map a core token-forward timeout to OAuth temporarily_unavailable."""
+    """Map a core token-forward timeout to OAuth temporarily_unavailable.
+
+    Uses a TRANSLATED identity — only translated exchanges are forwarded
+    server-side; untranslated ones 307 to core before any session use (see
+    test_ha_auth_token_untranslated_redirects_to_core).
+    """
     session = _CoreTokenSession(error=TimeoutError())
+    dcr_key = b"d" * 32
+    client_id = oauth_dcr.mint_client_id(dcr_key, ["https://a.example/cb"])
     monkeypatch.setattr(
         oauth_ha_auth,
         "core_token_base_url",
         lambda _hass: "https://core.example",
     )
-    client = await unified_view_client_factory(mode="ha_auth", session=session)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=dcr_key
+    )
 
     resp = await client.post(
         "/api/ha_mcp_tools/oauth/token",
-        data={"grant_type": "authorization_code", "code": "code-1"},
+        data={
+            "grant_type": "authorization_code",
+            "code": "code-1",
+            "client_id": client_id,
+            "redirect_uri": "https://a.example/cb",
+        },
     )
 
     assert resp.status == 503
     assert await resp.json() == {"error": "temporarily_unavailable"}
+
+
+async def test_ha_auth_token_untranslated_redirects_to_core(
+    unified_view_client_factory,
+):
+    """Untranslated exchanges 307 to core's /auth/token on the request origin.
+
+    Core must observe the CLIENT's address (#2213 review by Patch76): its
+    wrong-login notifications, ban counters, trusted_networks refresh
+    validation, and last_used_ip all key on request.remote — so the exchange
+    must not be proxied when no body rewrite is needed. 307 (not 308):
+    method+body preserved without the default cacheability that could outlive
+    a later auth-mode switch.
+    """
+    session = _CoreTokenSession()
+    client = await unified_view_client_factory(mode="ha_auth", session=session)
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": "code-1",
+            "client_id": "https://claude.ai",
+            "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 307
+    assert resp.headers["Location"].endswith("/auth/token")
+    assert resp.headers["Cache-Control"] == "no-store"
+    assert session.calls == []  # nothing proxied
+
+
+async def test_ha_auth_refresh_untranslated_redirects_to_core(
+    unified_view_client_factory,
+):
+    """A plain refresh grant (no translatable identity) also 307s to core."""
+    session = _CoreTokenSession()
+    client = await unified_view_client_factory(mode="ha_auth", session=session)
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": "refresh-1",
+            "client_id": "https://claude.ai",
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 307
+    assert resp.headers["Location"].endswith("/auth/token")
+    assert session.calls == []
 
 
 async def test_scoped_authorize_still_autoapproves_in_none_mode(
