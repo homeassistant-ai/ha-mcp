@@ -2362,3 +2362,93 @@ async def test_subentry_reconfigure_rejects_create_entry_result() -> None:
     payload = json.loads(str(exc_info.value))
     assert payload["status"] == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
     assert "instead of updating" in payload["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_confirm_token_is_bound_to_the_requested_config(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """A token issued for one target config cannot apply a different one.
+
+    Mutating the entry title proves the token tracks entry state; this pins
+    the property that actually protects the caller — the token is bound to
+    the change it previewed, so a swapped `config` cannot ride an old token.
+    """
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.start_reconfigure_flow = AsyncMock()
+    tools = IntegrationTools(client)
+
+    preview = await tools.ha_set_integration(
+        entry_id="entry-123",
+        reconfigure=True,
+        config={"host": "192.0.2.171"},
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_set_integration(
+            entry_id="entry-123",
+            reconfigure=True,
+            config={"host": "192.0.2.199"},
+            confirm_token=preview["confirm_token"],
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == ReconfigureStatus.STALE_PREFLIGHT
+    client.start_reconfigure_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_confirm_token_is_bound_to_the_supplied_identity_anchors() -> None:
+    """A token previewed without identity anchors cannot apply with them.
+
+    The anchors change what the confirmed call verifies, so a token issued
+    before they were supplied has not previewed the same operation.
+    """
+    entry = {
+        "entry_id": "anchor-entry",
+        "domain": "shelly",
+        "state": "loaded",
+        "supports_reconfigure": True,
+        "unique_id": "AA:BB:CC:DD:EE:FF",
+    }
+    client = reconfigure_client(
+        entity_rows=[
+            {
+                "entity_id": "switch.anchor",
+                "config_entry_id": "anchor-entry",
+                "device_id": "device-anchor",
+            }
+        ],
+        device_rows=[
+            {
+                "id": "device-anchor",
+                "config_entries": ["anchor-entry"],
+                "connections": [],
+                "identifiers": [],
+            }
+        ],
+    )
+    client.get_config_entry = AsyncMock(return_value=entry)
+    client.list_config_entries = AsyncMock(return_value=[entry])
+    client.start_reconfigure_flow = AsyncMock()
+    tools = IntegrationTools(client)
+
+    preview = await tools.ha_set_integration(
+        entry_id="anchor-entry",
+        reconfigure=True,
+        config={"host": "192.0.2.200"},
+    )
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_set_integration(
+            entry_id="anchor-entry",
+            reconfigure=True,
+            config={"host": "192.0.2.200"},
+            expected_device_id="device-anchor",
+            confirm_token=preview["confirm_token"],
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == ReconfigureStatus.STALE_PREFLIGHT
+    client.start_reconfigure_flow.assert_not_awaited()
