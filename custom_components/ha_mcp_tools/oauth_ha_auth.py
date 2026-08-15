@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import logging
 import socket
 import time
 from urllib.parse import ParseResult, urlparse, urlunparse
@@ -49,10 +50,17 @@ from .oauth_dcr import (
 )
 from .oauth_legacy import _is_loopback_host, _is_valid_redirect_uri
 
+_LOGGER = logging.getLogger(__name__)
+
 # CIMD fetch limits (mirrors core PR #176286's hardening + the 00-draft rules).
 CIMD_MAX_BYTES = 10 * 1024
 CIMD_FETCH_TIMEOUT = aiohttp.ClientTimeout(total=5)
 CIMD_RESOLVE_TIMEOUT = 5.0
+# One deadline over the WHOLE lookup (resolution + every per-address fetch
+# attempt): without it, a hostname resolving to many routable-but-unresponsive
+# addresses costs resolve + N x fetch timeouts and an anonymous caller can
+# park the small CIMD pool for the sum (#2217 review).
+CIMD_TOTAL_LOOKUP_TIMEOUT = 12.0
 CIMD_CACHE_TTL = 300.0
 # Failed lookups cache too (#2213 review round 2) — briefly, so an anonymous
 # caller cannot force a fresh resolution+fetch per request, while a transient
@@ -113,7 +121,11 @@ async def _resolve_public_addresses(hostname: str, port: int) -> list[str]:
             ),
             timeout=CIMD_RESOLVE_TIMEOUT,
         )
-    except (OSError, TimeoutError):
+    except (OSError, ValueError, TimeoutError):
+        # ValueError: getaddrinfo raises UnicodeEncodeError (a ValueError) for
+        # hostname labels over 63 chars — attacker-reachable on this anonymous
+        # view, and NOT an OSError (#2217 review, verified).
+        _LOGGER.debug("CIMD lookup: resolution failed for %s", hostname)
         return []
     addresses = {str(sockaddr[0]) for *_, sockaddr in infos}
     if not addresses:
@@ -284,7 +296,25 @@ async def fetch_cimd_redirects(
     if cached is not None and cached[0] > now:
         return cached[1]
 
-    addresses = await _resolve_public_addresses(parsed.hostname, parsed.port or 443)
+    try:
+        async with asyncio.timeout(CIMD_TOTAL_LOOKUP_TIMEOUT):
+            return await _lookup_cimd(session, client_id, parsed, now)
+    except TimeoutError:
+        _LOGGER.debug("CIMD lookup: total deadline exceeded for %s", client_id)
+        _cache_cimd(client_id, now, None)
+        return None
+
+
+async def _lookup_cimd(
+    session: aiohttp.ClientSession,
+    client_id: str,
+    parsed: ParseResult,
+    now: float,
+) -> list[str] | None:
+    """Resolve and fetch under the caller's total deadline; cache the outcome."""
+    addresses = await _resolve_public_addresses(
+        parsed.hostname or "", parsed.port or 443
+    )
     for address in addresses:
         reached, result = await _fetch_pinned_cimd(session, client_id, parsed, address)
         if not reached:
@@ -295,12 +325,14 @@ async def fetch_cimd_redirects(
             # INVALID document: deliberately NOT cached — a client that fixes
             # its metadata recovers on the next request (pinned by
             # test_invalid_cimd_is_not_negative_cached).
+            _LOGGER.debug("CIMD lookup: document at %s failed validation", client_id)
             return None
         _cache_cimd(client_id, now, result)
         return result
     # Resolution failed or no address answered: negative-cache THIS — the view
     # is anonymous, and only-success caching would let each request for a dead
     # hostname pay (and inflict) a fresh resolution (#2213 review round 2).
+    _LOGGER.debug("CIMD lookup: no reachable address for %s", client_id)
     _cache_cimd(client_id, now, None)
     return None
 
@@ -308,11 +340,14 @@ async def fetch_cimd_redirects(
 def _cache_cimd(client_id: str, now: float, result: list[str] | None) -> None:
     """Cache a lookup outcome, evicting expired entries then the oldest.
 
-    Negative outcomes get the short ``CIMD_NEGATIVE_TTL``. Eviction never
-    wholesale-clears: dropping every live client's entry because one more
-    unique client_id arrived would hand an anonymous caller a lever over other
-    clients' cache hits (#2213 review round 2).
+    Negative outcomes get the short ``CIMD_NEGATIVE_TTL``. Eviction drops
+    expired entries first, then the least-recently-written; re-caching pops
+    the key first so a hot client is not evicted from its original insertion
+    slot. Anonymous churn can still cycle the 64 slots — that costs 64 unique
+    requests per live entry, a rate bound rather than an absolute guarantee
+    (#2217 review).
     """
+    _cimd_cache.pop(client_id, None)
     if len(_cimd_cache) >= _CIMD_CACHE_MAX:
         for key in [k for k, (exp, _) in _cimd_cache.items() if exp <= now]:
             del _cimd_cache[key]
@@ -326,7 +361,9 @@ def _parse_cimd(raw: bytes, client_id: str) -> list[str] | None:
     """Strict-parse a CIMD body; None unless every MUST holds."""
     try:
         doc = json.loads(raw.decode("utf-8"), parse_constant=_reject_json_constant)
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        # RecursionError: json.loads on ~5000 nested arrays fits inside the
+        # 10 KiB cap and is a RuntimeError, not ValueError (#2217, verified).
         return None
     if (
         not isinstance(doc, dict)

@@ -424,7 +424,7 @@ DATA_OAUTH_CLIENT_SECRET = "oauth_client_secret"
 DATA_OAUTH_SIGNING_KEY = "oauth_signing_key"
 # Hex-encoded per-entry HMAC key signing stateless DCR client_ids (RFC 7591
 # compat endpoint). Generated at setup when absent, so entries created before
-# 1.4.0 gain one on their first reload after upgrade.
+# 2.0.0 gain one on their first reload after upgrade.
 DATA_DCR_SIGNING_KEY = "dcr_signing_key"
 DATA_SERVER_USER_ID = "server_user_id"
 DATA_REFRESH_TOKEN_ID = "refresh_token_id"

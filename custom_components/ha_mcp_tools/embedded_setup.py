@@ -126,7 +126,7 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
         # panel proxies through it (#1803); the option gates only the public
         # webhook endpoint. oauth_* args are ignored unless auth_mode is legacy.
         if not entry.data.get(DATA_DCR_SIGNING_KEY):
-            # Upgrade path: entries created before 1.4.0 have no DCR key.
+            # Upgrade path: entries created before 2.0.0 have no DCR key.
             # entry.data must stay JSON-serializable, so store hex.
             hass.config_entries.async_update_entry(
                 entry,
