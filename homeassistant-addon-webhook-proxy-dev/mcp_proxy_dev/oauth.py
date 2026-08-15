@@ -1007,8 +1007,15 @@ async def handle_legacy_authorize_post(
 
 def _extract_client_creds(
     request: web.Request, form: dict
-) -> tuple[str | None, str | None]:
-    """Pull form-decoded client credentials from Basic auth or the form body."""
+) -> list[tuple[str | None, str | None]]:
+    """Candidate client credentials from Basic auth or the form body.
+
+    RFC 6749 §2.3.1 form-urlencodes Basic credentials before base64, but many
+    clients skip that step — and the add-on accepts arbitrary CONFIGURED
+    values (``oauth_client_id``/``oauth_client_secret``), so a raw ``+`` or
+    ``%XX`` in a real credential would be mangled by decoding (#2218 review).
+    Both the decoded and the raw split are offered; either may authenticate.
+    """
     header = request.headers.get("Authorization", "")
     if header.lower().startswith("basic "):
         try:
@@ -1016,12 +1023,17 @@ def _extract_client_creds(
                 "utf-8"
             )
         except (ValueError, UnicodeDecodeError, binascii.Error):
-            return None, None
-        if ":" in decoded:
-            client_id, _, client_secret = decoded.partition(":")
-            return unquote_plus(client_id), unquote_plus(client_secret)
-        return None, None
-    return form.get("client_id"), form.get("client_secret")
+            return []
+        if ":" not in decoded:
+            return []
+        client_id, _, client_secret = decoded.partition(":")
+        candidates: list[tuple[str | None, str | None]] = [
+            (unquote_plus(client_id), unquote_plus(client_secret))
+        ]
+        if (client_id, client_secret) != candidates[0]:
+            candidates.append((client_id, client_secret))
+        return candidates
+    return [(form.get("client_id"), form.get("client_secret"))]
 
 
 async def _handle_authorization_code(
@@ -1065,8 +1077,11 @@ async def handle_legacy_token_post(
 ) -> web.Response:
     """Serve the proxy's legacy token exchange from either token route."""
     form = dict(await request.post())
-    client_id, client_secret = _extract_client_creds(request, form)
-    if not provider.authenticate_client(client_id, client_secret):
+    candidates = _extract_client_creds(request, form)
+    if not any(
+        provider.authenticate_client(client_id, client_secret)
+        for client_id, client_secret in candidates
+    ):
         return _json_error(
             "invalid_client",
             401,

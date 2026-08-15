@@ -3911,6 +3911,39 @@ class TestTokenView:
             == 'Basic realm="MCP Proxy OAuth"'
         )
 
+    async def test_basic_auth_accepts_raw_unencoded_configured_creds(
+        self, setup, tmp_path
+    ):
+        """#2218 review: configured credentials may contain '+' or '%XX'; a
+        naive client sends them un-encoded in Basic auth, and the decoded
+        candidate alone would mangle them (unquote_plus turns '+' into a
+        space). The raw split must authenticate too."""
+        oauth, _provider, _view = setup
+        provider = oauth.OAuthProvider(
+            hass=MagicMock(),
+            client_id="configured-client+id",
+            client_secret="se%41cret+x",
+            webhook_id="mcp_webhook_id_aaaa",
+            signing_key=b"\x00" * 32,
+            public_base_url=None,
+        )
+        view = oauth.TokenView(provider)
+        request = _make_view_request(
+            method="POST",
+            headers={
+                "Authorization": self._basic_header(
+                    "configured-client+id", "se%41cret+x"
+                )
+            },
+            post_data={"grant_type": "unsupported_probe"},
+        )
+
+        with patch.object(oauth.web, "json_response") as resp_ctor:
+            await view.post(request)
+
+        # Authentication succeeded; the probe grant fails AFTER the gate.
+        assert resp_ctor.call_args.args[0]["error"] == "unsupported_grant_type"
+
     async def test_invalid_client_via_form_returns_401(self, setup):
         oauth, provider, view = setup
         request = _make_view_request(
