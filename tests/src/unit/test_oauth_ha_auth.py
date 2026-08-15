@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 import sys
@@ -23,6 +24,13 @@ from custom_components.ha_mcp_tools.oauth_ha_auth import (  # noqa: E402
 )
 
 KEY = b"k" * 32
+
+
+def test_cimd_timing_constants():
+    """Pin the negative-cache and resolver timing bounds."""
+    assert oauth_ha_auth.CIMD_NEGATIVE_TTL == 60.0
+    assert oauth_ha_auth.CIMD_NEGATIVE_TTL < oauth_ha_auth.CIMD_CACHE_TTL
+    assert oauth_ha_auth.CIMD_RESOLVE_TIMEOUT == 5.0
 
 
 def test_redirect_matches_exact():
@@ -555,6 +563,21 @@ async def test_dns_rrset_with_private_answer_is_rejected(monkeypatch):
                 (2, 1, 6, "", ("192.168.1.10", 443)),
             ]
 
+    monkeypatch.setattr(oauth_ha_auth.asyncio, "get_running_loop", Loop)
+
+    assert await oauth_ha_auth._resolve_public_addresses("client.example", 443) == []
+
+
+@pytest.mark.asyncio
+async def test_dns_resolution_timeout_uses_live_constant(monkeypatch):
+    """Apply the configurable resolver bound to each DNS lookup."""
+
+    class Loop:
+        async def getaddrinfo(self, *_args, **_kwargs):
+            await asyncio.sleep(0.1)
+            return [(2, 1, 6, "", ("93.184.216.34", 443))]
+
+    monkeypatch.setattr(oauth_ha_auth, "CIMD_RESOLVE_TIMEOUT", 0.01)
     monkeypatch.setattr(oauth_ha_auth.asyncio, "get_running_loop", Loop)
 
     assert await oauth_ha_auth._resolve_public_addresses("client.example", 443) == []

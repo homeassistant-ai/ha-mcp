@@ -47,6 +47,7 @@ from .oauth_legacy import _is_loopback_host, _is_valid_redirect_uri
 # CIMD fetch limits (mirrors core PR #176286's hardening + the 00-draft rules).
 CIMD_MAX_BYTES = 10 * 1024
 CIMD_FETCH_TIMEOUT = aiohttp.ClientTimeout(total=5)
+CIMD_RESOLVE_TIMEOUT = 5.0
 CIMD_CACHE_TTL = 300.0
 # Failed lookups cache too (#2213 review round 2) — briefly, so an anonymous
 # caller cannot force a fresh resolution+fetch per request, while a transient
@@ -54,9 +55,10 @@ CIMD_CACHE_TTL = 300.0
 CIMD_NEGATIVE_TTL = 60.0
 _CIMD_CACHE_MAX = 64
 _ALLOWED_SCHEMES = ("https",)
-# client_id URL -> (expires_monotonic, redirect_uris). The -00 draft forbids
-# caching fetch errors and invalid documents, so negative entries never live
-# here.
+# client_id URL -> (expires_monotonic, redirect_uris). Draft -00 section 4.4.3
+# forbids caching error responses and invalid documents; both return with
+# reached=True before any cache write. Unreachable-host and resolution outcomes
+# are outside section 4.4.3 and are negative-cached for CIMD_NEGATIVE_TTL.
 _cimd_cache: dict[str, tuple[float, list[str] | None]] = {}
 
 
@@ -104,7 +106,7 @@ async def _resolve_public_addresses(hostname: str, port: int) -> list[str]:
                 family=socket.AF_UNSPEC,
                 type=socket.SOCK_STREAM,
             ),
-            timeout=5.0,
+            timeout=CIMD_RESOLVE_TIMEOUT,
         )
     except (OSError, TimeoutError):
         return []

@@ -622,7 +622,9 @@ async def test_scoped_authorize_redirects_into_core_when_ha_auth_live(
     # unencoded inside query values (RFC 3986 permits them in the query).
     from urllib.parse import parse_qs, urlparse
 
-    location = urlparse(resp.headers["Location"])
+    location_header = resp.headers["Location"]
+    assert location_header.startswith("/auth/authorize?")
+    location = urlparse(location_header)
     assert location.path == "/auth/authorize"
     query = parse_qs(location.query)
     # Same-origin fast path: client_id passes through untranslated, and every
@@ -748,6 +750,37 @@ async def test_ha_auth_refresh_forwards_translated_client_id(
     assert call["data"]["grant_type"] == "refresh_token"
     assert call["data"]["refresh_token"] == "refresh-1"
     assert call["data"]["client_id"] == "https://a.example"
+
+
+async def test_ha_auth_authorization_code_without_redirect_uses_default_path(
+    unified_view_client_factory, monkeypatch
+):
+    """Do not mistake a malformed code exchange for a refresh grant."""
+    session = _CoreTokenSession()
+    dcr_key = b"d" * 32
+    client_id = oauth_dcr.mint_client_id(dcr_key, ["https://a.example/cb"])
+    monkeypatch.setattr(
+        oauth_ha_auth,
+        "core_token_base_url",
+        lambda _hass: "https://core.example",
+    )
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=dcr_key
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": "code-1",
+            "client_id": client_id,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 307
+    assert resp.headers["Location"] == "/auth/token"
+    assert session.calls == []
 
 
 async def test_ha_auth_token_timeout_returns_temporarily_unavailable(
