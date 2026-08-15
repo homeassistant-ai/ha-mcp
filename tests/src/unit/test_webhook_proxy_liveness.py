@@ -122,9 +122,13 @@ def test_heartbeat_fresh_only_for_recent_mtime(oauth, monkeypatch, tmp_path):
     assert oauth._heartbeat_fresh() is False
 
 
-async def test_addon_alive_runs_check_in_executor_and_caches(oauth, monkeypatch):
-    """The mtime stat runs off the event loop and the verdict caches briefly."""
+async def test_addon_alive_caches_only_the_negative_verdict(oauth, monkeypatch):
+    """A positive verdict re-stats every request so a clean shutdown's file
+    deletion takes effect immediately (#2218 review); only the down verdict
+    caches, bounding stat traffic from anonymous requests to a stopped
+    install."""
     calls = []
+    fresh = {"value": True}
 
     async def _executor_job(func):
         calls.append(func)
@@ -132,9 +136,14 @@ async def test_addon_alive_runs_check_in_executor_and_caches(oauth, monkeypatch)
 
     hass = MagicMock()
     hass.async_add_executor_job = _executor_job
-    monkeypatch.setattr(oauth, "_heartbeat_fresh", lambda: True)
-    monkeypatch.setattr(oauth, "_addon_alive_cache", None)
+    monkeypatch.setattr(oauth, "_heartbeat_fresh", lambda: fresh["value"])
+    monkeypatch.setattr(oauth, "_addon_down_until", 0.0)
 
     assert await oauth._addon_alive(hass) is True
-    assert await oauth._addon_alive(hass) is True  # second hit served cached
-    assert len(calls) == 1
+    assert await oauth._addon_alive(hass) is True
+    assert len(calls) == 2  # alive verdicts are never cached
+
+    fresh["value"] = False
+    assert await oauth._addon_alive(hass) is False
+    assert await oauth._addon_alive(hass) is False  # served from the down cache
+    assert len(calls) == 3

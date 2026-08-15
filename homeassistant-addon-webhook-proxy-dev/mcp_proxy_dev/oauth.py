@@ -394,8 +394,13 @@ def _active_oauth_mode(provider: object) -> str | None:
 # file simply goes stale.
 HEARTBEAT_FILE = Path("/config/.mcp_proxy_dev_heartbeat")
 _HEARTBEAT_MAX_AGE = 90.0  # three missed 30-second touches
-_ADDON_ALIVE_TTL = 15.0
-_addon_alive_cache: tuple[float, bool] | None = None
+# Only the NEGATIVE verdict is cached (#2218 review): a clean shutdown deletes
+# the heartbeat file but cannot clear a cache in the integration process, so a
+# cached True would keep the surface serving after the stop. A fresh stat per
+# request while alive is microseconds in the executor; the cache exists so an
+# anonymous flood against a STOPPED install does not stat per request.
+_ADDON_DOWN_TTL = 15.0
+_addon_down_until: float = 0.0
 
 
 def _heartbeat_fresh() -> bool:
@@ -409,12 +414,12 @@ def _heartbeat_fresh() -> bool:
 
 async def _addon_alive(hass: HomeAssistant) -> bool:
     """Return whether the proxy add-on's heartbeat file is fresh."""
-    global _addon_alive_cache
-    now = time.monotonic()
-    if _addon_alive_cache is not None and _addon_alive_cache[0] > now:
-        return _addon_alive_cache[1]
+    global _addon_down_until
+    if time.monotonic() < _addon_down_until:
+        return False
     alive = bool(await hass.async_add_executor_job(_heartbeat_fresh))
-    _addon_alive_cache = (time.monotonic() + _ADDON_ALIVE_TTL, alive)
+    if not alive:
+        _addon_down_until = time.monotonic() + _ADDON_DOWN_TTL
     return alive
 
 
