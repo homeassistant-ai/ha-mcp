@@ -137,7 +137,7 @@ async def test_addon_alive_caches_only_the_negative_verdict(oauth, monkeypatch):
     hass = MagicMock()
     hass.async_add_executor_job = _executor_job
     monkeypatch.setattr(oauth, "_heartbeat_fresh", lambda: fresh["value"])
-    monkeypatch.setattr(oauth, "_addon_down_until", 0.0)
+    monkeypatch.setitem(oauth._addon_down_state, "until", 0.0)
 
     assert await oauth._addon_alive(hass) is True
     assert await oauth._addon_alive(hass) is True

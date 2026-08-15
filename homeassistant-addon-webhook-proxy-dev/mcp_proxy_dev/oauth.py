@@ -400,7 +400,7 @@ _HEARTBEAT_MAX_AGE = 90.0  # three missed 30-second touches
 # request while alive is microseconds in the executor; the cache exists so an
 # anonymous flood against a STOPPED install does not stat per request.
 _ADDON_DOWN_TTL = 15.0
-_addon_down_until: float = 0.0
+_addon_down_state = {"until": 0.0}
 
 
 def _heartbeat_fresh() -> bool:
@@ -414,12 +414,11 @@ def _heartbeat_fresh() -> bool:
 
 async def _addon_alive(hass: HomeAssistant) -> bool:
     """Return whether the proxy add-on's heartbeat file is fresh."""
-    global _addon_down_until
-    if time.monotonic() < _addon_down_until:
+    if time.monotonic() < _addon_down_state["until"]:
         return False
     alive = bool(await hass.async_add_executor_job(_heartbeat_fresh))
     if not alive:
-        _addon_down_until = time.monotonic() + _ADDON_DOWN_TTL
+        _addon_down_state["until"] = time.monotonic() + _ADDON_DOWN_TTL
     return alive
 
 
