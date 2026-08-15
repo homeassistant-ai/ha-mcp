@@ -399,13 +399,16 @@ async def resolve_forward_client_id(
         return client_id
     parsed_client = urlparse(client_id)
     parsed_redirect = urlparse(redirect_uri)
-    # Hostnames are case-insensitive (RFC 4343), so the netloc equality
-    # casefolds — without it an uppercase-host pair passes here while the
-    # refresh leg's comparison sees the lowercased canonical origin and the
-    # two legs derive different identities (#2219 review).
+    # RAW, case-sensitive netloc equality — deliberately the same comparison
+    # core's own IndieAuth rule applies to what we forward (#2219 review,
+    # second round): a pair that differs only in host casing must MISS this
+    # fast path so it takes the validated CIMD translation to an origin core
+    # accepts; passing it through would forward an identity core's raw
+    # comparison rejects. A pair equal under this rule is equally acceptable
+    # to core untranslated.
     if parsed_client.scheme in ("http", "https") and (
-        (parsed_client.scheme, parsed_client.netloc.lower())
-        == (parsed_redirect.scheme, parsed_redirect.netloc.lower())
+        (parsed_client.scheme, parsed_client.netloc)
+        == (parsed_redirect.scheme, parsed_redirect.netloc)
     ):
         return client_id
 
@@ -483,15 +486,15 @@ async def translated_client_id_for_refresh(
     # fast path compares the client_id's raw netloc against the PRESENTED
     # redirect's, so refresh reconstructs it against the registered redirects
     # (reproducible ⇒ all web, one canonical origin — but their RAW netlocs
-    # may still differ from the client_id's by an explicit default port,
-    # where the fast path missed and the token was minted under the
-    # TRANSLATED origin). Netlocs casefold because hostnames are
-    # case-insensitive (RFC 4343).
+    # may still differ from the client_id's by an explicit default port or by
+    # host casing, where the fast path missed and the token was minted under
+    # the TRANSLATED origin). Raw and case-sensitive, exactly like the fast
+    # path itself.
     parsed = urlparse(client_id)
-    client_origin = (parsed.scheme, parsed.netloc.lower())
+    client_origin = (parsed.scheme, parsed.netloc)
     for uri in registered:
         parsed_redirect = urlparse(uri)
-        if (parsed_redirect.scheme, parsed_redirect.netloc.lower()) == client_origin:
+        if (parsed_redirect.scheme, parsed_redirect.netloc) == client_origin:
             return RefreshDisposition.PASSTHROUGH
     return stable
 

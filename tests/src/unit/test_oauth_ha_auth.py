@@ -324,12 +324,41 @@ async def test_symmetric_explicit_port_passes_through_on_both_legs(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_uppercase_host_passes_through_on_both_legs(monkeypatch):
-    """#2219 review: hostnames are case-insensitive (RFC 4343), so a
-    same-origin pair that differs only in host CASING takes the fast path on
-    authorize AND passes through on refresh — a case-sensitive comparison
-    would translate both legs, so the mixed casing here is what makes this
-    test discriminating."""
+async def test_same_case_uppercase_pair_passes_through_on_both_legs(monkeypatch):
+    """#2219 review: an all-uppercase pair is equal under core's raw netloc
+    rule, so authorize passes it through untranslated — and refresh matches
+    the client_id against the REGISTERED redirects (not the canonicalized
+    stable origin, which is lowercased), so it passes through too. This is
+    the case the old stable-origin comparison got wrong."""
+
+    async def fetch_redirects(_session, _client_id):
+        return ["https://CLAUDE.AI/api/mcp/auth_callback"]
+
+    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+    client_id = "https://CLAUDE.AI/oauth/client.json"
+
+    authorize_id = await resolve_forward_client_id(
+        session=object(),
+        dcr_key=None,
+        client_id=client_id,
+        redirect_uri="https://CLAUDE.AI/api/mcp/auth_callback",
+    )
+    refresh_id = await oauth_ha_auth.translated_client_id_for_refresh(
+        session=object(),
+        dcr_key=None,
+        client_id=client_id,
+    )
+
+    assert authorize_id == client_id
+    assert refresh_id is oauth_ha_auth.RefreshDisposition.PASSTHROUGH
+
+
+@pytest.mark.asyncio
+async def test_case_mismatched_pair_translates_on_both_legs(monkeypatch):
+    """#2219 review, second round: a pair differing only in host casing MUST
+    miss the fast path — core's own raw comparison would reject it
+    untranslated — and take the validated translation to the canonical
+    origin, with refresh deriving the same identity."""
 
     async def fetch_redirects(_session, _client_id):
         return ["https://claude.ai/api/mcp/auth_callback"]
@@ -349,8 +378,8 @@ async def test_uppercase_host_passes_through_on_both_legs(monkeypatch):
         client_id=client_id,
     )
 
-    assert authorize_id == client_id
-    assert refresh_id is oauth_ha_auth.RefreshDisposition.PASSTHROUGH
+    assert authorize_id == "https://claude.ai"
+    assert refresh_id == "https://claude.ai"
 
 
 @pytest.mark.asyncio
