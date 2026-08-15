@@ -422,8 +422,8 @@ class TestExtractClientCreds:
         assert oauth_legacy._extract_client_creds(request, {}) == []
 
     def test_percent_encoded_basic_creds_are_decoded(self):
-        # RFC 6749 §2.3.1: client_secret_basic values are percent-encoded before
-        # base64, so a custom credential with reserved characters must decode
+        # RFC 6749 §2.3.1: client_secret_basic values are form-urlencoded
+        # before base64, so a custom credential with reserved characters decodes
         # back (a no-op for the URL-safe generated credentials).
         encoded = base64.b64encode(b"c%40id:p%40ss%2Fword").decode()
         request = MagicMock()
@@ -450,8 +450,10 @@ class TestExtractClientCreds:
         encoded = base64.b64encode(b"client+id:se%41cret+x").decode()
         request = MagicMock()
         request.headers = {"Authorization": f"Basic {encoded}"}
-        candidates = oauth_legacy._extract_client_creds(request, {})
-        assert ("client+id", "se%41cret+x") in candidates
+        assert oauth_legacy._extract_client_creds(request, {}) == [
+            ("client id", "seAcret x"),
+            ("client+id", "se%41cret+x"),
+        ]
 
     def test_url_safe_creds_yield_a_single_candidate(self):
         # Decoding is a no-op for the generated URL-safe credentials, so no
@@ -708,6 +710,57 @@ class TestTokenViewPost:
         response = await view.post(request)
         assert response.status == 404
         assert response.json_body == {"error": "not_found"}
+
+    async def test_basic_auth_authenticates_a_raw_unencoded_secret(self):
+        """#2219 review round 3: the behavior this PR exists for, driven
+        end-to-end. A configured secret containing a literal '+' / '%XX',
+        sent raw by a client that skips RFC 6749 §2.3.1 form-encoding, must
+        authenticate — the decoded candidate alone mangles it."""
+        secret = "se%41cret+x"
+        provider = _make_provider(client_secret=secret)
+        view = oauth_legacy.TokenView(provider)
+        token = base64.b64encode(f"{CLIENT_ID}:{secret}".encode()).decode()
+        request = MagicMock()
+        request.headers = {"Authorization": f"Basic {token}"}
+        request.post = AsyncMock(return_value={"grant_type": "unsupported_probe"})
+
+        response = await view.post(request)
+
+        # Past the client gate: the probe grant fails, not the credentials.
+        assert response.status == 400
+        assert response.json_body["error"] == "unsupported_grant_type"
+
+    async def test_undecodable_form_body_returns_400_not_500(self):
+        """#2219 review round 3: aiohttp raises LookupError (not ValueError)
+        when Content-Type names an unknown charset, so an anonymous caller
+        could turn one header into a 500 + traceback."""
+        provider = _make_provider()
+        view = oauth_legacy.TokenView(provider)
+        request = MagicMock()
+        request.headers = {}
+        request.post = AsyncMock(side_effect=LookupError("unknown encoding: nope"))
+
+        response = await view.post(request)
+
+        assert response.status == 400
+        assert response.json_body["error"] == "invalid_request"
+
+    async def test_non_string_form_credentials_return_401_not_500(self):
+        """#2219 review round 3: request.post() yields str | bytes |
+        FileField; the non-str shapes are truthy, so an unwrapped value would
+        slip past the emptiness guard and raise AttributeError on .encode()."""
+        provider = _make_provider()
+        view = oauth_legacy.TokenView(provider)
+        request = MagicMock()
+        request.headers = {}
+        request.post = AsyncMock(
+            return_value={"client_id": b"bytes-id", "client_secret": b"bytes-secret"}
+        )
+
+        response = await view.post(request)
+
+        assert response.status == 401
+        assert response.json_body["error"] == "invalid_client"
 
     async def test_invalid_client_credentials_returns_401(self):
         provider = _make_provider()

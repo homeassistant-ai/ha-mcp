@@ -359,14 +359,26 @@ async def test_same_case_uppercase_pair_passes_through_on_both_legs(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_case_mismatched_pair_translates_on_both_legs(monkeypatch):
-    """#2219 review, second round: a pair differing only in host casing MUST
-    miss the fast path — core's own raw comparison would reject it
-    untranslated — and take the validated translation to the canonical
-    origin, with refresh deriving the same identity."""
+@pytest.mark.parametrize(
+    "presented_case, registered_case",
+    [("upper", "lower"), ("lower", "lower"), ("lower", "upper")],
+)
+async def test_case_only_differences_pass_through_on_both_legs(
+    monkeypatch, presented_case, registered_case
+):
+    """#2219 review round 3: core's authorize leg lowercases BOTH sides
+    (indieauth._parse_url) while its refresh leg compares byte-exact, so a
+    case-only difference is same-origin to core and the raw client_id is what
+    both of our legs must forward. The registered document's casing is
+    author-written and the presented redirect is client-runtime — they need
+    not agree, and none of these combinations may diverge."""
+    upper = "https://CLAUDE.AI/api/mcp/auth_callback"
+    lower = "https://claude.ai/api/mcp/auth_callback"
+    presented = upper if presented_case == "upper" else lower
+    registered = [upper if registered_case == "upper" else lower]
 
     async def fetch_redirects(_session, _client_id):
-        return ["https://claude.ai/api/mcp/auth_callback"]
+        return registered
 
     monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
     client_id = "https://CLAUDE.AI/oauth/client.json"
@@ -375,7 +387,7 @@ async def test_case_mismatched_pair_translates_on_both_legs(monkeypatch):
         session=object(),
         dcr_key=None,
         client_id=client_id,
-        redirect_uri="https://claude.ai/api/mcp/auth_callback",
+        redirect_uri=presented,
     )
     refresh_id = await oauth_ha_auth.translated_client_id_for_refresh(
         session=object(),
@@ -383,8 +395,30 @@ async def test_case_mismatched_pair_translates_on_both_legs(monkeypatch):
         client_id=client_id,
     )
 
-    assert authorize_id == "https://claude.ai"
-    assert refresh_id == "https://claude.ai"
+    assert authorize_id == client_id
+    assert refresh_id is oauth_ha_auth.RefreshDisposition.PASSTHROUGH
+
+
+@pytest.mark.asyncio
+async def test_mixed_port_shapes_are_unreproducible(monkeypatch):
+    """#2219 review round 3: _refresh_identity_is_reproducible normalizes
+    ports, so these two redirects are ONE canonical origin — but authorize
+    passes the raw client_id through for the port-less one and translates the
+    explicit-port one. Which was presented is unrecorded, so the honest
+    answer is a local invalid_grant, not a coin flip."""
+
+    async def fetch_redirects(_session, _client_id):
+        return ["https://h.example/a", "https://h.example:443/b"]
+
+    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+
+    refresh_id = await oauth_ha_auth.translated_client_id_for_refresh(
+        session=object(),
+        dcr_key=None,
+        client_id="https://h.example/client.json",
+    )
+
+    assert refresh_id is oauth_ha_auth.RefreshDisposition.UNREPRODUCIBLE
 
 
 @pytest.mark.asyncio

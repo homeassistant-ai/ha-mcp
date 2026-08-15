@@ -193,6 +193,56 @@ async def test_register_rejects_deeply_nested_json_body(dcr_view_client_factory)
     assert (await resp.json())["error"] == "invalid_client_metadata"
 
 
+async def test_register_survives_a_bogus_content_type_charset(
+    dcr_view_client_factory,
+):
+    """#2219 review round 3: request.json() decodes via the Content-Type
+    charset and raises LookupError on an unknown one, so a single header
+    used to 500 this anonymous endpoint. Reading the bytes and parsing them
+    as UTF-8 JSON (RFC 8259) ignores the parameter, so a well-formed body
+    registers normally."""
+    client = await dcr_view_client_factory(dcr_key=KEY)
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/register",
+        data=b'{"redirect_uris": ["https://a.example/cb"]}',
+        headers={"Content-Type": "application/json; charset=nope"},
+    )
+
+    assert resp.status == 201
+
+
+async def test_register_rejects_oversized_body(dcr_view_client_factory):
+    """#2219 review round 3: a conforming registration is a few KB, so the
+    read is capped rather than riding HA's 16 MiB client_max_size."""
+    client = await dcr_view_client_factory(dcr_key=KEY)
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/register",
+        data=b'{"redirect_uris": ["https://a.example/cb"], "pad": "'
+        + b"x" * (oauth_dcr.MAX_DCR_BODY_BYTES + 16)
+        + b'"}',
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "invalid_client_metadata"
+
+
+async def test_register_rejects_plain_invalid_json(dcr_view_client_factory):
+    """The ordinary malformed-JSON arm still answers the same 400."""
+    client = await dcr_view_client_factory(dcr_key=KEY)
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/register",
+        data=b"not json at all",
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "invalid_client_metadata"
+
+
 async def test_register_accepts_google_multi_origin_client(dcr_view_client_factory):
     """Accept Spark's two redirects but omit its unavailable refresh grant."""
     client = await dcr_view_client_factory(dcr_key=KEY, resource_server=object())
