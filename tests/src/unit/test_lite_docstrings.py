@@ -503,6 +503,13 @@ class TestLiteDocstringsKeysAndDestinations:
         Two places can state the destination — the prose an LLM reads and
         the map the tests read. If they disagree, one of them is lying to
         somebody.
+
+        NOTE: no entry names a reference file at the moment, so this
+        currently passes vacuously. It is deliberately kept rather than
+        deleted: it arms itself the moment an entry starts citing a file
+        inline, which is exactly what the ``ha_manage_backup`` pin-bump
+        commit will do when it restores that pointer alongside
+        ``references/backups.md``.
         """
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
