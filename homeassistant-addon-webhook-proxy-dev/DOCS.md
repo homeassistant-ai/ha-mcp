@@ -184,7 +184,7 @@ The generated values are persisted at `/data/oauth_creds.json` inside the addon,
 
 All three behaviors advertise proxy-owned endpoints under `/api/mcp_proxy_dev/oauth`, so a cached client configuration remains on the proxy across mode switches:
 
-- `/api/mcp_proxy_dev/oauth/protected-resource` — RFC 9728 protected-resource metadata
+- `/api/mcp_proxy_dev/oauth/protected-resource` — RFC 9728 protected-resource metadata (`legacy` and `ha_auth` only: in none mode this fixed route returns 404, because its metadata would reveal the credential-bearing webhook URL — none-mode clients use the webhook-ID-scoped `.well-known` route instead)
 - `/api/mcp_proxy_dev/oauth/authorization-server` — RFC 8414 authorization-server metadata
 - `/api/mcp_proxy_dev/oauth/authorize` — mode-dispatched authorization endpoint
 - `/api/mcp_proxy_dev/oauth/token` — mode-dispatched token endpoint

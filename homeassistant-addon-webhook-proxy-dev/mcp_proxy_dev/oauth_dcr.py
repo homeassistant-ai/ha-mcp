@@ -25,9 +25,9 @@ from .oauth import (
     DOMAIN,
     MODE_HA_AUTH,
     OAUTH_BASE,
+    _addon_alive,
     _b64url_decode,
     _b64url_encode,
-    _backend_alive,
     _is_loopback_host,
     _is_valid_redirect_uri,
 )
@@ -181,14 +181,16 @@ class DcrRegisterView(HomeAssistantView):
 
     async def post(self, request: web.Request) -> web.Response:
         """Validate redirect metadata and return a signed client_id."""
-        if not await _backend_alive(self._hass):
+        if not await _addon_alive(self._hass):
             return web.json_response({"error": "not_found"}, status=404)
         key = _active_dcr_key(self._hass)
         if key is None:
             return web.json_response({"error": "not_found"}, status=404)
         try:
             body: Any = await request.json()
-        except ValueError:
+        except (ValueError, RecursionError):
+            # RecursionError: json.loads on a deeply nested body (#2218
+            # review) — malformed metadata, not a server error.
             return _dcr_error("invalid_client_metadata", "body must be JSON")
         if not isinstance(body, dict):
             return _dcr_error("invalid_client_metadata", "body must be an object")

@@ -282,13 +282,15 @@ async def resolve_forward_client_id(
     """Return the validated translated identity to present to core."""
     if not client_id or not _is_valid_redirect_uri(redirect_uri):
         return client_id
+    # Raw-netloc comparison exactly like the component (#2218 review): the
+    # client_id is unvalidated here, and normalized_origin() reads
+    # parsed.port, which raises ValueError on a malformed port — the fast
+    # path must pass such identities through for core to reject, not 500.
     parsed_client = urlparse(client_id)
-    client_origin = normalized_origin(client_id)
-    redirect_origin = normalized_origin(redirect_uri)
-    if (
-        parsed_client.scheme in ("http", "https")
-        and client_origin is not None
-        and client_origin == redirect_origin
+    parsed_redirect = urlparse(redirect_uri)
+    if parsed_client.scheme in ("http", "https") and (
+        (parsed_client.scheme, parsed_client.netloc)
+        == (parsed_redirect.scheme, parsed_redirect.netloc)
     ):
         return client_id
 
@@ -330,7 +332,15 @@ async def translated_client_id_for_refresh(
         return RefreshDisposition.UNREPRODUCIBLE
     stable = stable_translation_origin(registered)
     assert stable is not None
-    if origin_client_id(client_id) == stable:
+    # RAW netloc comparison, deliberately mirroring the authorize fast path
+    # (#2218 review): passthrough is only consistent when authorize ALSO
+    # passed the full client_id through, and that fast path compares raw
+    # netlocs. A client_id with an explicit scheme-default port missed the
+    # fast path, so its token was minted under the TRANSLATED origin — a
+    # canonical comparison here would pass the raw client_id through and
+    # guarantee the core rejection this derivation exists to avoid.
+    parsed = urlparse(client_id)
+    if f"{parsed.scheme}://{parsed.netloc}" == stable:
         return RefreshDisposition.PASSTHROUGH
     return stable
 

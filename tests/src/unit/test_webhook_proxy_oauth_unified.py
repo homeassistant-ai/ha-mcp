@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -46,10 +47,10 @@ def oauth_stack(monkeypatch):
 
     oauth = _load_submodule(monkeypatch, package_name, "oauth")
 
-    async def _backend_alive(_hass):
+    async def _addon_alive(_hass):
         return True
 
-    monkeypatch.setattr(oauth, "_backend_alive", _backend_alive)
+    monkeypatch.setattr(oauth, "_addon_alive", _addon_alive)
     dcr = _load_submodule(monkeypatch, package_name, "oauth_dcr")
     indirect = _load_submodule(monkeypatch, package_name, "oauth_indirect")
     autoapprove = _load_submodule(monkeypatch, package_name, "oauth_autoapprove")
@@ -221,21 +222,52 @@ async def test_multi_origin_dcr_uses_presented_redirect_translation(
     assert translated == expected
 
 
-async def test_same_origin_comparison_is_canonical(oauth_stack, monkeypatch):
-    """An explicit default port remains on the no-fetch same-origin path."""
+async def test_explicit_default_port_translates_on_both_legs(oauth_stack, monkeypatch):
+    """#2218 review: a client_id with an explicit scheme-default port misses
+    the raw-netloc fast path, so authorize mints the token under the
+    TRANSLATED origin — and the redirect-less refresh must re-derive that
+    same origin, not pass the raw client_id through. The two legs agree."""
     indirect = oauth_stack.indirect
-    fetch = AsyncMock()
-    monkeypatch.setattr(indirect, "fetch_cimd_redirects", fetch)
+    redirects = AsyncMock(return_value=["https://claude.ai/api/mcp/auth_callback"])
+    monkeypatch.setattr(indirect, "fetch_cimd_redirects", redirects)
+    client_id = "https://claude.ai:443/oauth/client.json"
 
-    translated = await indirect.resolve_forward_client_id(
+    authorize_id = await indirect.resolve_forward_client_id(
         session=object(),
         dcr_key=None,
-        client_id="https://claude.ai:443/oauth/client.json",
+        client_id=client_id,
         redirect_uri="https://claude.ai/api/mcp/auth_callback",
     )
+    refresh_id = await indirect.translated_client_id_for_refresh(
+        object(), None, client_id
+    )
 
-    assert translated == "https://claude.ai:443/oauth/client.json"
-    fetch.assert_not_awaited()
+    assert authorize_id == "https://claude.ai"
+    assert refresh_id == "https://claude.ai"
+
+
+async def test_portless_same_origin_client_passes_through_on_both_legs(
+    oauth_stack, monkeypatch
+):
+    """claude.ai's real shape: raw netlocs match, so authorize forwards the
+    full client_id untranslated and refresh passes through to match."""
+    indirect = oauth_stack.indirect
+    redirects = AsyncMock(return_value=["https://claude.ai/api/mcp/auth_callback"])
+    monkeypatch.setattr(indirect, "fetch_cimd_redirects", redirects)
+    client_id = "https://claude.ai/oauth/client.json"
+
+    authorize_id = await indirect.resolve_forward_client_id(
+        session=object(),
+        dcr_key=None,
+        client_id=client_id,
+        redirect_uri="https://claude.ai/api/mcp/auth_callback",
+    )
+    refresh_id = await indirect.translated_client_id_for_refresh(
+        object(), None, client_id
+    )
+
+    assert authorize_id == client_id
+    assert refresh_id is indirect.RefreshDisposition.PASSTHROUGH
 
 
 async def test_refresh_identity_has_three_variants(oauth_stack, monkeypatch):
@@ -497,3 +529,32 @@ async def test_ha_auth_refresh_with_redirect_translates_presented_origin(
     assert response.status == 200
     forwarded = relay_session.post.call_args.kwargs["data"]
     assert forwarded["client_id"] == ("https://oauth-redirect.googleusercontent.com")
+
+
+async def test_fast_path_passes_through_malformed_port_client_id(oauth_stack):
+    """#2218 review: a client_id with an invalid port must pass through for
+    core to reject — normalized_origin() reads parsed.port, which raises
+    ValueError, so the fast path compares raw netlocs like the component."""
+    resolved = await oauth_stack.indirect.resolve_forward_client_id(
+        None,
+        None,
+        "https://client.example:99999/metadata.json",
+        "https://client.example/cb",
+    )
+
+    assert resolved == "https://client.example:99999/metadata.json"
+
+
+async def test_dcr_register_rejects_deeply_nested_json(oauth_stack):
+    """#2218 review: json.loads raises RecursionError on a deeply nested
+    body — malformed metadata answers 400, never a 500."""
+    oauth, dcr = oauth_stack.oauth, oauth_stack.dcr
+
+    async def _nested_body():
+        return json.loads("[" * 100000 + "]" * 100000)
+
+    request = SimpleNamespace(json=_nested_body)
+    response = await dcr.DcrRegisterView(_hass(oauth, oauth.MODE_HA_AUTH)).post(request)
+
+    assert response.status == 400
+    assert response.json_body["error"] == "invalid_client_metadata"

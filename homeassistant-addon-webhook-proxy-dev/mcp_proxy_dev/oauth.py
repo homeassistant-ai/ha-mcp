@@ -24,7 +24,6 @@ without a server-side store, so the integration survives restarts.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import binascii
 import hashlib
@@ -384,52 +383,38 @@ def _active_oauth_mode(provider: object) -> str | None:
     return domain_data.get("oauth_mode")
 
 
-# hass.data persists after the add-on stops, so bound OAuth views must also
-# verify that the forwarding backend is reachable. Cache by target host/port to
-# avoid opening a TCP connection for every discovery or token request.
-_BACKEND_ALIVE_TTL = 15.0
-_backend_alive_cache: dict[str, tuple[float, bool]] = {}
+# hass.data persists after the add-on stops (and the persisted proxy config
+# re-populates it at HA boot), so bound OAuth views must verify the add-on
+# itself is running. TCP-probing target_url cannot do that (#2218 review):
+# target_url is the INDEPENDENT ha-mcp server add-on, which keeps accepting
+# connections after this proxy add-on stops. The signal is proxy-owned
+# instead: start.py touches HEARTBEAT_FILE every keep-alive iteration (~30 s)
+# and deletes it on clean shutdown, so a fresh mtime means the add-on process
+# is alive right now — including after a crash bypassed cleanup, where the
+# file simply goes stale.
+HEARTBEAT_FILE = Path("/config/.mcp_proxy_dev_heartbeat")
+_HEARTBEAT_MAX_AGE = 90.0  # three missed 30-second touches
+_ADDON_ALIVE_TTL = 15.0
+_addon_alive_cache: tuple[float, bool] | None = None
 
 
-async def _backend_alive(hass: HomeAssistant) -> bool:
-    """Return whether the add-on's forwarding target accepts TCP connections."""
-    domain_data = hass.data.get(DOMAIN)
-    if not isinstance(domain_data, dict):
-        return False
-    target_url = domain_data.get("target_url", "")
-    if not isinstance(target_url, str):
-        return False
+def _heartbeat_fresh() -> bool:
+    """Blocking mtime check — run in the executor."""
     try:
-        parsed = urlparse(target_url)
-        port = parsed.port
-    except ValueError:
+        age = time.time() - HEARTBEAT_FILE.stat().st_mtime
+    except OSError:
         return False
-    if not parsed.hostname or port is None or port == 0:
-        return False
+    return age < _HEARTBEAT_MAX_AGE
 
-    key = f"{parsed.hostname}:{port}"
+
+async def _addon_alive(hass: HomeAssistant) -> bool:
+    """Return whether the proxy add-on's heartbeat file is fresh."""
+    global _addon_alive_cache
     now = time.monotonic()
-    cached = _backend_alive_cache.get(key)
-    if cached is not None and cached[0] > now:
-        return cached[1]
-
-    try:
-        _reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(parsed.hostname, port), 1.0
-        )
-    except (TimeoutError, OSError):
-        alive = False
-    else:
-        alive = True
-        writer.close()
-        try:
-            await writer.wait_closed()
-        except OSError:
-            # Best-effort cleanup: the probe connection already succeeded, so
-            # a failure while closing the socket does not change the verdict.
-            pass
-
-    _backend_alive_cache[key] = (time.monotonic() + _BACKEND_ALIVE_TTL, alive)
+    if _addon_alive_cache is not None and _addon_alive_cache[0] > now:
+        return _addon_alive_cache[1]
+    alive = await hass.async_add_executor_job(_heartbeat_fresh)
+    _addon_alive_cache = (time.monotonic() + _ADDON_ALIVE_TTL, alive)
     return alive
 
 
@@ -517,7 +502,7 @@ class PKCECodeStore:
         # be rejected explicitly rather than silently hashing junk.
         if not (PKCE_VERIFIER_MIN <= len(code_verifier) <= PKCE_VERIFIER_MAX):
             return False
-        if not _PKCE_VERIFIER_RE.match(code_verifier):
+        if not _PKCE_VERIFIER_RE.fullmatch(code_verifier):
             return False
         entry = self._codes.pop(code, None)
         if entry is None:
@@ -730,7 +715,7 @@ class OAuthProvider:
             return _text_error(400, "unsupported_response_type")
         if code_challenge_method != "S256":
             return _text_error(400, "invalid code_challenge_method (S256 required)")
-        if not _PKCE_CHALLENGE_RE.match(code_challenge):
+        if not _PKCE_CHALLENGE_RE.fullmatch(code_challenge):
             return _text_error(
                 400, "invalid code_challenge (must be 43-char base64url)"
             )
@@ -766,7 +751,7 @@ class ProtectedResourceMetadataView(HomeAssistantView):
 
     async def get(self, request: web.Request) -> web.Response:
         hass = getattr(self._provider, "_hass", None)
-        if hass is None or not await _backend_alive(hass):
+        if hass is None or not await _addon_alive(hass):
             return _json_not_found()
         # The protected-resource document has the same shape in every OAuth
         # mode; 404 when no mode is live (entry unloaded / OAuth off) so a
@@ -809,7 +794,7 @@ class AuthorizationServerMetadataView(HomeAssistantView):
 
     async def get(self, request: web.Request) -> web.Response:
         hass = getattr(self._provider, "_hass", None)
-        if hass is None or not await _backend_alive(hass):
+        if hass is None or not await _addon_alive(hass):
             return _json_not_found()
         mode = _active_oauth_mode(self._provider)
         if mode is None:
@@ -1107,7 +1092,7 @@ class AuthorizeView(HomeAssistantView):
         self._provider = provider
 
     async def get(self, request: web.Request) -> web.Response:
-        if not await _backend_alive(self._provider._hass):
+        if not await _addon_alive(self._provider._hass):
             return _json_not_found()
         if _active_oauth_mode(self._provider) != MODE_LEGACY:
             # Serve ONLY when legacy is the live mode. Both ha_auth (HA core is
@@ -1120,7 +1105,7 @@ class AuthorizeView(HomeAssistantView):
         return await handle_legacy_authorize_get(self._provider, request)
 
     async def post(self, request: web.Request) -> web.Response:
-        if not await _backend_alive(self._provider._hass):
+        if not await _addon_alive(self._provider._hass):
             return _json_not_found()
         if _active_oauth_mode(self._provider) != MODE_LEGACY:
             # Serve ONLY when legacy is live (see the GET defense above): ha_auth
@@ -1143,7 +1128,7 @@ class TokenView(HomeAssistantView):
         self._provider = provider
 
     async def post(self, request: web.Request) -> web.Response:
-        if not await _backend_alive(self._provider._hass):
+        if not await _addon_alive(self._provider._hass):
             return _json_not_found()
         if _active_oauth_mode(self._provider) != MODE_LEGACY:
             # Serve ONLY when legacy is live. Both ha_auth (HA core is the

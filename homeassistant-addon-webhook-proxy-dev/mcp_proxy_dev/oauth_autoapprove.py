@@ -52,7 +52,7 @@ from .oauth import (
     MODE_NONE_AUTOAPPROVE,
     OAUTH_BASE,
     PKCECodeStore,
-    _backend_alive,
+    _addon_alive,
     _build_base_url,
     _is_valid_redirect_uri,
     handle_legacy_authorize_get,
@@ -265,7 +265,7 @@ class AutoApproveAuthorizeView(HomeAssistantView):
 
     async def get(self, request: web.Request) -> web.Response:
         """Dispatch an authorization request to the currently active mode."""
-        if not await _backend_alive(self._hass):
+        if not await _addon_alive(self._hass):
             return _json_not_found()
         data = _domain_data(self._hass)
         if data is None:
@@ -342,7 +342,7 @@ class AutoApproveAuthorizeView(HomeAssistantView):
 
     async def post(self, request: web.Request) -> web.Response:
         """Handle legacy consent submissions on the scoped authorize route."""
-        if not await _backend_alive(self._hass):
+        if not await _addon_alive(self._hass):
             return _json_not_found()
         data = _domain_data(self._hass)
         if data is None or data.get("oauth_mode") != MODE_LEGACY:
@@ -373,7 +373,7 @@ class AutoApproveTokenView(HomeAssistantView):
 
     async def post(self, request: web.Request) -> web.Response:
         """Dispatch a token request to the currently active mode."""
-        if not await _backend_alive(self._hass):
+        if not await _addon_alive(self._hass):
             return _json_not_found()
         data = _domain_data(self._hass)
         if data is None:

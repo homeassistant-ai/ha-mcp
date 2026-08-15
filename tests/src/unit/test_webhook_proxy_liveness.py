@@ -1,4 +1,4 @@
-"""A stopped add-on backend must take the dev proxy's OAuth surface dark."""
+"""A stopped proxy add-on must take the dev proxy's OAuth surface dark."""
 
 import importlib.util
 import sys
@@ -70,13 +70,13 @@ def _provider(oauth, mode: str):
     )()
 
 
-async def test_mode_none_when_backend_down(oauth, monkeypatch):
+async def test_mode_none_when_addon_down(oauth, monkeypatch):
     """A bound discovery view behaves like an unregistered route when stopped."""
 
     async def _down(_hass):
         return False
 
-    monkeypatch.setattr(oauth, "_backend_alive", _down)
+    monkeypatch.setattr(oauth, "_addon_alive", _down)
     view = oauth.AuthorizationServerMetadataView(_provider(oauth, oauth.MODE_HA_AUTH))
 
     await view.get(MagicMock())
@@ -84,13 +84,13 @@ async def test_mode_none_when_backend_down(oauth, monkeypatch):
     assert oauth.web.json_response.call_args.kwargs["status"] == 404
 
 
-async def test_mode_served_when_backend_up(oauth, monkeypatch):
-    """The existing mode dispatch still serves while the backend is reachable."""
+async def test_mode_served_when_addon_up(oauth, monkeypatch):
+    """The existing mode dispatch still serves while the heartbeat is fresh."""
 
     async def _up(_hass):
         return True
 
-    monkeypatch.setattr(oauth, "_backend_alive", _up)
+    monkeypatch.setattr(oauth, "_addon_alive", _up)
     view = oauth.AuthorizationServerMetadataView(_provider(oauth, oauth.MODE_LEGACY))
 
     await view.get(MagicMock())
@@ -98,3 +98,43 @@ async def test_mode_served_when_backend_up(oauth, monkeypatch):
     body = oauth.web.json_response.call_args.args[0]
     assert body["issuer"] == "https://ha.example/api/mcp_proxy_dev/oauth"
     assert oauth.web.json_response.call_args.kwargs.get("status") in (None, 200)
+
+
+def test_heartbeat_fresh_only_for_recent_mtime(oauth, monkeypatch, tmp_path):
+    """The liveness signal is the heartbeat file's mtime, not TCP reachability
+    of target_url — that URL is the INDEPENDENT ha-mcp server add-on, which
+    keeps accepting connections after this proxy add-on stops (#2218 review)."""
+    import os
+
+    heartbeat = tmp_path / ".mcp_proxy_dev_heartbeat"
+    monkeypatch.setattr(oauth, "HEARTBEAT_FILE", heartbeat)
+
+    # Missing file (clean shutdown deleted it, or the add-on never ran).
+    assert oauth._heartbeat_fresh() is False
+
+    # Fresh touch — the add-on's keep-alive loop is running.
+    heartbeat.touch()
+    assert oauth._heartbeat_fresh() is True
+
+    # Stale mtime — the add-on crashed without cleanup.
+    stale = heartbeat.stat().st_mtime - (oauth._HEARTBEAT_MAX_AGE + 60)
+    os.utime(heartbeat, (stale, stale))
+    assert oauth._heartbeat_fresh() is False
+
+
+async def test_addon_alive_runs_check_in_executor_and_caches(oauth, monkeypatch):
+    """The mtime stat runs off the event loop and the verdict caches briefly."""
+    calls = []
+
+    async def _executor_job(func):
+        calls.append(func)
+        return func()
+
+    hass = MagicMock()
+    hass.async_add_executor_job = _executor_job
+    monkeypatch.setattr(oauth, "_heartbeat_fresh", lambda: True)
+    monkeypatch.setattr(oauth, "_addon_alive_cache", None)
+
+    assert await oauth._addon_alive(hass) is True
+    assert await oauth._addon_alive(hass) is True  # second hit served cached
+    assert len(calls) == 1

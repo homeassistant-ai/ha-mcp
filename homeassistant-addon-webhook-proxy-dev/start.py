@@ -185,6 +185,11 @@ def _refuse_if_sibling_running() -> bool:
 # not only in Settings -> System -> Logs. Path kept in sync with
 # mcp_proxy_dev/__init__.py:INBOUND_LOG_FILE.
 INBOUND_LOG_FILE = Path("/config/.mcp_proxy_dev_inbound.log")
+# Touched every keep-alive iteration; the bundled integration's OAuth views
+# serve only while this file's mtime is fresh (see mcp_proxy_dev/oauth.py
+# _addon_alive) — the proxy-owned liveness signal that survives a crash where
+# _shutdown_cleanup never ran.
+HEARTBEAT_FILE = Path("/config/.mcp_proxy_dev_heartbeat")
 
 
 def _supervisor_get(path: str) -> dict | None:
@@ -1086,6 +1091,12 @@ def _shutdown_cleanup(reason: str | None) -> None:
     log_info(f"Shutting down (reason: {reason or 'unknown'})...")
     _remove_config_entry()
     try:
+        # Take the OAuth surface dark immediately on a clean stop; a crash
+        # skips this and the integration sees the mtime go stale instead.
+        HEARTBEAT_FILE.unlink(missing_ok=True)
+    except OSError as e:
+        log_error(f"Could not remove heartbeat file ({type(e).__name__}): {e}")
+    try:
         INBOUND_LOG_FILE.unlink(missing_ok=True)
     except OSError as e:
         log_error(f"Could not remove inbound log file ({type(e).__name__}): {e}")
@@ -1791,8 +1802,18 @@ def _keep_alive_loop(
     inbound_tail: dict[str, int] = {"offset": _initial_tail_offset()}
     consecutive_failures = 0
     last_health = 0.0
+    heartbeat_warned = False
     try:
         while True:
+            try:
+                HEARTBEAT_FILE.touch()
+            except OSError as e:
+                if not heartbeat_warned:
+                    heartbeat_warned = True
+                    log_error(
+                        f"Could not touch heartbeat file ({type(e).__name__}): "
+                        f"{e} — the integration's OAuth views will go dark."
+                    )
             if debug_logging:
                 _emit_new_inbound_lines(inbound_tail)
 
