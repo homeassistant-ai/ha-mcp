@@ -325,13 +325,14 @@ async def test_symmetric_explicit_port_passes_through_on_both_legs(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_uppercase_host_passes_through_on_both_legs(monkeypatch):
-    """#2219 review: hostnames are case-insensitive (RFC 4343), so an
-    uppercase-host same-origin pair takes the fast path on authorize AND
-    passes through on refresh — the raw comparison alone would translate the
-    refresh leg to the lowercased canonical origin and mismatch the token."""
+    """#2219 review: hostnames are case-insensitive (RFC 4343), so a
+    same-origin pair that differs only in host CASING takes the fast path on
+    authorize AND passes through on refresh — a case-sensitive comparison
+    would translate both legs, so the mixed casing here is what makes this
+    test discriminating."""
 
     async def fetch_redirects(_session, _client_id):
-        return ["https://CLAUDE.AI/api/mcp/auth_callback"]
+        return ["https://claude.ai/api/mcp/auth_callback"]
 
     monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
     client_id = "https://CLAUDE.AI/oauth/client.json"
@@ -340,7 +341,7 @@ async def test_uppercase_host_passes_through_on_both_legs(monkeypatch):
         session=object(),
         dcr_key=None,
         client_id=client_id,
-        redirect_uri="https://CLAUDE.AI/api/mcp/auth_callback",
+        redirect_uri="https://claude.ai/api/mcp/auth_callback",
     )
     refresh_id = await oauth_ha_auth.translated_client_id_for_refresh(
         session=object(),
