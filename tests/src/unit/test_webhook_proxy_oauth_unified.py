@@ -52,7 +52,13 @@ def oauth_stack(monkeypatch):
 
     monkeypatch.setattr(oauth, "_backend_alive", _backend_alive)
     dcr = _load_submodule(monkeypatch, package_name, "oauth_dcr")
-    return SimpleNamespace(oauth=oauth, dcr=dcr, package_name=package_name)
+    indirect = _load_submodule(monkeypatch, package_name, "oauth_indirect")
+    return SimpleNamespace(
+        oauth=oauth,
+        dcr=dcr,
+        indirect=indirect,
+        package_name=package_name,
+    )
 
 
 def _hass(oauth, mode: str, *, dcr_key: bytes | None = KEY):
@@ -145,3 +151,129 @@ async def test_dcr_rejects_non_loopback_http_redirect(oauth_stack):
 
     assert response.status == 400
     assert response.json_body["error"] == "invalid_redirect_uri"
+
+
+def test_cimd_timing_and_negative_cache_contract(oauth_stack):
+    """Pin the anonymous lookup's resolver, total deadline, and cache bounds."""
+    indirect = oauth_stack.indirect
+
+    assert indirect.CIMD_RESOLVE_TIMEOUT == 5.0
+    assert indirect.CIMD_TOTAL_LOOKUP_TIMEOUT == 12.0
+    assert indirect.CIMD_NEGATIVE_TTL == 60.0
+    assert indirect.CIMD_NEGATIVE_TTL < indirect.CIMD_CACHE_TTL
+
+
+def test_cimd_redirect_matching_includes_loopback_port_variance(oauth_stack):
+    """Non-loopback matches are exact; loopback runtime ports may vary."""
+    indirect = oauth_stack.indirect
+    assert indirect.redirect_matches(
+        ["https://spark.example/cb"], "https://spark.example/cb"
+    )
+    assert not indirect.redirect_matches(
+        ["https://spark.example/cb"], "https://spark.example/other"
+    )
+    assert indirect.redirect_matches(
+        ["http://localhost/callback"], "http://localhost:61264/callback"
+    )
+    assert not indirect.redirect_matches(
+        ["http://localhost/callback"], "http://localhost:61264/other"
+    )
+
+
+@pytest.mark.parametrize(
+    ("redirect_uri", "expected"),
+    [
+        (GOOGLE_REDIRECT_URIS[0], "https://oauth-redirect.googleusercontent.com"),
+        (
+            GOOGLE_REDIRECT_URIS[1],
+            "https://oauth-redirect-sandbox.googleusercontent.com",
+        ),
+    ],
+)
+async def test_multi_origin_dcr_uses_presented_redirect_translation(
+    oauth_stack, redirect_uri, expected
+):
+    """Each authorization leg translates to its matched presented origin."""
+    dcr, indirect = oauth_stack.dcr, oauth_stack.indirect
+    client_id = dcr.mint_client_id(KEY, GOOGLE_REDIRECT_URIS)
+
+    translated = await indirect.resolve_forward_client_id(
+        session=None,
+        dcr_key=KEY,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+    )
+
+    assert translated == expected
+
+
+async def test_same_origin_comparison_is_canonical(oauth_stack, monkeypatch):
+    """An explicit default port remains on the no-fetch same-origin path."""
+    indirect = oauth_stack.indirect
+    fetch = AsyncMock()
+    monkeypatch.setattr(indirect, "fetch_cimd_redirects", fetch)
+
+    translated = await indirect.resolve_forward_client_id(
+        session=object(),
+        dcr_key=None,
+        client_id="https://claude.ai:443/oauth/client.json",
+        redirect_uri="https://claude.ai/api/mcp/auth_callback",
+    )
+
+    assert translated == "https://claude.ai:443/oauth/client.json"
+    fetch.assert_not_awaited()
+
+
+async def test_refresh_identity_has_three_variants(oauth_stack, monkeypatch):
+    """Refresh derives an origin, passes through, or rejects unreproducible IDs."""
+    dcr, indirect = oauth_stack.dcr, oauth_stack.indirect
+    reproducible = dcr.mint_client_id(KEY, ["https://a.example/cb"])
+    multi_origin = dcr.mint_client_id(KEY, GOOGLE_REDIRECT_URIS)
+
+    assert (
+        await indirect.translated_client_id_for_refresh(None, KEY, reproducible)
+        == "https://a.example"
+    )
+    assert (
+        await indirect.translated_client_id_for_refresh(None, KEY, multi_origin)
+        is indirect.RefreshDisposition.UNREPRODUCIBLE
+    )
+
+    monkeypatch.setattr(indirect, "fetch_cimd_redirects", AsyncMock(return_value=None))
+    assert (
+        await indirect.translated_client_id_for_refresh(
+            object(), None, "https://unknown.example/client.json"
+        )
+        is indirect.RefreshDisposition.PASSTHROUGH
+    )
+
+
+async def test_unreproducible_cimd_refresh_is_explicit(oauth_stack, monkeypatch):
+    """Verified CIMD multi-origin identities use UNREPRODUCIBLE too."""
+    indirect = oauth_stack.indirect
+    monkeypatch.setattr(
+        indirect,
+        "fetch_cimd_redirects",
+        AsyncMock(return_value=GOOGLE_REDIRECT_URIS),
+    )
+
+    translated = await indirect.translated_client_id_for_refresh(
+        object(), None, "https://spark.example/client.json"
+    )
+
+    assert translated is indirect.RefreshDisposition.UNREPRODUCIBLE
+
+
+async def test_cimd_unreachable_result_is_negative_cached(oauth_stack, monkeypatch):
+    """Repeated requests for a dead identity do not repeat DNS resolution."""
+    indirect = oauth_stack.indirect
+    resolve = AsyncMock(return_value=[])
+    monkeypatch.setattr(indirect, "_resolve_public_addresses", resolve)
+    indirect._cimd_cache.clear()
+    client_id = "https://dead.example/client.json"
+
+    assert await indirect.fetch_cimd_redirects(object(), client_id) is None
+    assert await indirect.fetch_cimd_redirects(object(), client_id) is None
+
+    resolve.assert_awaited_once_with("dead.example", 443)
+    indirect._cimd_cache.clear()
