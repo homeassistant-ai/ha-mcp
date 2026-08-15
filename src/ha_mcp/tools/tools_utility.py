@@ -21,6 +21,11 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
+from .error_log_parsing import (
+    _DEFAULT_TOP_N,
+    _EMPTY_FETCH_WARNING,
+    _parse_error_log_structured,
+)
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     add_timezone_metadata,
@@ -65,7 +70,7 @@ _LOG_LEVEL_RE = re.compile(
     r"(?:^|\s)(DEBUG|INFO|WARNING|ERROR|CRITICAL)(?:\s|:|\])", re.IGNORECASE
 )
 
-VALID_LOG_LEVELS = ("ERROR", "WARNING", "INFO", "DEBUG")
+VALID_LOG_LEVELS = ("ERROR", "WARNING", "INFO", "DEBUG", "CRITICAL")
 
 
 def _compact_logbook_entries(entries: list[Any]) -> list[dict[str, Any]]:
@@ -90,6 +95,7 @@ class UtilityTools:
         limit: int | None,
         default: int = DEFAULT_LIMIT,
         suggestion_example: str = "50",
+        param_name: str = "limit",
     ) -> int:
         """Validate a limit parameter, raising a structured tool error on failure."""
         effective = limit if limit is not None else default
@@ -97,9 +103,10 @@ class UtilityTools:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"limit must be at least 1, got {effective}",
+                    f"{param_name} must be at least 1, got {effective}",
                     suggestions=[
-                        f"Provide limit as an integer (e.g., {suggestion_example})"
+                        f"Provide {param_name} as an integer "
+                        f"(e.g., {suggestion_example})"
                     ],
                 )
             )
@@ -212,6 +219,8 @@ class UtilityTools:
         level: str | None,
         slug: str | None,
         order: Literal["newest", "oldest"],
+        structured: bool = False,
+        top_n: int | None = None,
     ) -> dict[str, Any]:
         if source == "logbook":
             return await self._get_logbook(
@@ -230,7 +239,12 @@ class UtilityTools:
             )
         if source == "error_log":
             return await self._get_error_log(
-                limit=limit, search=search, level=level, order=order
+                limit=limit,
+                search=search,
+                level=level,
+                order=order,
+                structured=structured,
+                top_n=top_n,
             )
         if source == "logger":
             # logger reports per-integration levels, not time-ordered events;
@@ -259,11 +273,32 @@ class UtilityTools:
         level: str | None,
         slug: str | None,
         order: Literal["newest", "oldest"] = "newest",
+        structured: bool = False,
+        top_n: int | None = None,
     ) -> dict[str, Any]:
         level = self._validate_log_level(level)
         warnings = self._collect_log_warnings(
             source, level, entity_id, end_time, slug, order
         )
+        structured_error_log = structured and source == "error_log"
+        if structured and source != "error_log":
+            warnings.append(
+                "Parameter 'structured' only applies to source='error_log'; "
+                f"ignored for source='{source}'"
+            )
+        if top_n is not None and not structured_error_log:
+            # Name the part that is actually missing. On source='error_log' the
+            # source is already right and `structured` is the omission, so
+            # blaming the source there contradicts the sentence's own opening.
+            reason = (
+                "ignored because structured=False"
+                if source == "error_log"
+                else f"ignored for source='{source}'"
+            )
+            warnings.append(
+                "Parameter 'top_n' only applies to source='error_log' with "
+                f"structured=True; {reason}"
+            )
         self._validate_log_slug(source, slug)
         result = await self._fetch_log_source(
             source,
@@ -277,9 +312,14 @@ class UtilityTools:
             level,
             slug,
             order,
+            structured=structured_error_log,
+            top_n=top_n,
         )
         if warnings:
-            result["warnings"] = warnings
+            # Prepend, don't overwrite: the structured error_log path emits its
+            # own warnings (format drift, ignored limit/order) and clobbering
+            # them would drop the "this is NOT an all-clear" notice.
+            result["warnings"] = warnings + result.get("warnings", [])
         return result
 
     @staticmethod
@@ -600,62 +640,174 @@ class UtilityTools:
             )
             raise  # unreachable: exception_to_structured_error always raises
 
+    def _build_structured_error_log(
+        self,
+        raw_log: str,
+        search: str | None,
+        level: str | None,
+        top_n: int | None,
+        limit: int | None,
+        order: Literal["newest", "oldest"],
+    ) -> dict[str, Any]:
+        """Summarise the raw error log and annotate what shaped the result."""
+        effective_top_n = self._coerce_limit(
+            top_n,
+            default=_DEFAULT_TOP_N,
+            suggestion_example="20",
+            param_name="top_n",
+        )
+        result = _parse_error_log_structured(
+            raw_log,
+            search=search,
+            level=level,
+            top_n=effective_top_n,
+        )
+        # Report the filters that shaped the summary, matching the raw path —
+        # otherwise an empty summary is indistinguishable from a quiet log.
+        structured_filters = {
+            k: v for k, v in (("level", level), ("search", search)) if v
+        }
+        if structured_filters:
+            result["filters_applied"] = structured_filters
+        # `limit`/`order` are accepted for signature compatibility but do nothing
+        # here; say so rather than silently ignoring them, which is the
+        # convention this tool already uses elsewhere.
+        ignored = [
+            name
+            for name, given in (
+                ("limit", limit is not None),
+                ("order", order != "newest"),
+            )
+            if given
+        ]
+        if ignored:
+            # Append: the parser may already have warned about format drift, and
+            # overwriting that would drop the "this is NOT an all-clear" notice.
+            result.setdefault("warnings", []).append(
+                f"Parameter(s) {', '.join(ignored)} do not apply when "
+                "structured=True; the summary ranks the whole fetched window "
+                "by occurrence count. Use top_n to bound the output."
+            )
+        return result
+
+    def _build_raw_error_log(
+        self,
+        raw_log: str,
+        search: str | None,
+        level: str | None,
+        limit: int | None,
+        order: Literal["newest", "oldest"],
+    ) -> dict[str, Any]:
+        """Return the most recent log window, and say when nothing arrived."""
+        # Coerced here rather than before the structured branch: the summary
+        # covers the whole fetched window, so `limit` has no meaning there and
+        # validating it would reject limit=0 for a parameter with no effect.
+        effective_limit = self._coerce_limit(
+            limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
+        )
+        lines = raw_log.splitlines()
+
+        filters_applied: dict[str, str] = {}
+
+        if level:
+
+            def _line_has_level(ln: str, target: str) -> bool:
+                m = _LOG_LEVEL_RE.search(ln)
+                return m is not None and m.group(1).upper() == target
+
+            lines = [ln for ln in lines if _line_has_level(ln, level)]
+            filters_applied["level"] = level
+
+        if search:
+            search_lower = search.lower()
+            lines = [ln for ln in lines if search_lower in ln.lower()]
+            filters_applied["search"] = search
+
+        total_lines = len(lines)
+        # Always take the most-recent window (the tail of the chronological
+        # file); 'order' controls only the display direction of that window.
+        lines = lines[-effective_limit:]
+        if order == "newest":
+            lines = list(reversed(lines))
+
+        data: dict[str, Any] = {
+            "success": True,
+            "source": "error_log",
+            "log": "\n".join(lines),
+            "total_lines": total_lines,
+            "returned_lines": len(lines),
+            "limit": effective_limit,
+            "order": order,
+            "note": "Returned the most recent log lines matching filters",
+        }
+        if filters_applied:
+            data["filters_applied"] = filters_applied
+        # This path must not bless a fetch the structured one refuses to bless:
+        # without the warning, an empty fetch answers with success, an empty
+        # `log` and total_lines 0, which an agent reports to the user as "no
+        # errors in the log". Keyed on the raw text, so this stays an empty
+        # *fetch* — an empty *filter result* is a different thing and stays
+        # distinguishable through `filters_applied`.
+        if not raw_log.strip():
+            data["warnings"] = [
+                f"The fetch returned no log content. {_EMPTY_FETCH_WARNING}"
+            ]
+        return data
+
     async def _get_error_log(
         self,
         limit: int | None = None,
         search: str | None = None,
         level: str | None = None,
         order: Literal["newest", "oldest"] = "newest",
+        structured: bool = False,
+        top_n: int | None = None,
     ) -> dict[str, Any]:
-        """Fetch raw error log text from home-assistant.log."""
-        effective_limit = self._coerce_limit(
-            limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
-        )
+        """Fetch raw error log text (home-assistant.log, or journald).
 
+        Container/pip installs read the plain ``home-assistant.log`` file;
+        Supervisor-backed installs read HA Core's journald stream instead.
+
+        With ``structured=True`` the raw text is collapsed into a counted,
+        component-grouped summary instead (see ``_parse_error_log_structured``);
+        ``limit``/``order`` do not apply in that mode (the summary ranks the
+        whole fetched window by occurrence count rather than returning a
+        positional slice of it), and ``top_n`` bounds it instead.
+        """
         try:
             raw_log = await self._client.get_error_log()
-            lines = raw_log.splitlines() if raw_log else []
 
-            filters_applied: dict[str, str] = {}
+            if structured:
+                return self._build_structured_error_log(
+                    raw_log or "",
+                    search=search,
+                    level=level,
+                    top_n=top_n,
+                    limit=limit,
+                    order=order,
+                )
 
-            if level:
-
-                def _line_has_level(ln: str, target: str) -> bool:
-                    m = _LOG_LEVEL_RE.search(ln)
-                    return m is not None and m.group(1).upper() == target
-
-                lines = [ln for ln in lines if _line_has_level(ln, level)]
-                filters_applied["level"] = level
-
-            if search:
-                search_lower = search.lower()
-                lines = [ln for ln in lines if search_lower in ln.lower()]
-                filters_applied["search"] = search
-
-            total_lines = len(lines)
-            # Always take the most-recent window (the tail of the chronological
-            # file); 'order' controls only the display direction of that window.
-            lines = lines[-effective_limit:]
-            if order == "newest":
-                lines = list(reversed(lines))
-
-            data: dict[str, Any] = {
-                "success": True,
-                "source": "error_log",
-                "log": "\n".join(lines),
-                "total_lines": total_lines,
-                "returned_lines": len(lines),
-                "limit": effective_limit,
-                "order": order,
-                "note": "Returned the most recent log lines matching filters",
-            }
-            if filters_applied:
-                data["filters_applied"] = filters_applied
-
-            return data
+            return self._build_raw_error_log(
+                raw_log or "",
+                search=search,
+                level=level,
+                limit=limit,
+                order=order,
+            )
 
         except ToolError:
             raise
+        except HomeAssistantAuthError as e:
+            # AuthError is a sibling of HomeAssistantAPIError, not a subclass,
+            # so the tuple below never catches it and a 401 would propagate raw
+            # to FastMCP without a structured `code`. All three fetch branches
+            # (addon Supervisor, hassio proxy, /api/error_log) can raise it.
+            exception_to_structured_error(
+                e,
+                context={"source": "error_log"},
+                suggestions=self._addon_auth_error_suggestions(),
+            )
+            raise  # unreachable: exception_to_structured_error always raises
         except (
             HomeAssistantConnectionError,
             HomeAssistantAPIError,
@@ -1192,7 +1344,9 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Sort order for time-ordered sources (logbook, system, "
                     "error_log, supervisor, system_service): 'newest' (default) "
                     "returns most-recent first; 'oldest' returns chronological-"
-                    "first. Ignored for source='logger'."
+                    "first. Ignored for source='logger', and for "
+                    "source='error_log' with structured=True (that summary is "
+                    "ranked by occurrence count, not by time)."
                 )
             ),
         ] = "newest",
@@ -1204,6 +1358,30 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         compact: bool = True,
         # System/error_log-specific
         level: str | None = None,
+        # error_log-specific: structured summary instead of raw text
+        structured: Annotated[
+            bool,
+            Field(
+                description=(
+                    "source='error_log' only. When True, return a deduplicated, "
+                    "component-grouped summary of the log (counted issues sorted "
+                    "by frequency) instead of raw text. Use this on busy "
+                    "instances where the raw log is large enough to exhaust "
+                    "context. Ignored for other sources."
+                )
+            ),
+        ] = False,
+        top_n: Annotated[
+            int | None,
+            Field(
+                ge=1,
+                description=(
+                    f"Max distinct issues to return when structured=True "
+                    f"(default {_DEFAULT_TOP_N}, capped at {MAX_LIMIT}). Bounds "
+                    "the response regardless of log size."
+                ),
+            ),
+        ] = None,
         # Supervisor + system_service-specific (different namespaces)
         slug: str | None = None,
     ) -> dict[str, Any]:
@@ -1213,16 +1391,31 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **Sources:**
         - "logbook" (default): Entity state change history with pagination
         - "system": Structured system log entries (errors, warnings) via system_log/list
-        - "error_log": Raw home-assistant.log text
+        - "error_log": Raw log text (home-assistant.log on container/pip installs; HA Core's journald stream on Supervisor-backed installs)
         - "supervisor": Add-on container logs (requires slug = add-on slug)
         - "system_service": HA-Supervisor-managed system service logs (requires
           slug ∈ {supervisor, host, core, dns, audio, cli, multicast, observer})
         - "logger": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)
 
+        **Prefer source='system' for triage.** It returns HA's own deduplicated
+        system_log entries with counts, first_occurred and full tracebacks; of
+        those only the tracebacks are unrecoverable from the structured
+        error_log summary — they are present in the raw text, so structured=False
+        gets them back. Its counts also run
+        since each error first occurred, while structured error_log counts only
+        what is inside the fetched window (reported as window_start/window_end;
+        Supervisor-backed installs read a capped journald slice). Use error_log
+        with structured=True for entries below system_log's WARNING+ ~50-entry
+        cap, or for the per-component rollup.
+
         **Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')
-        **Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service); ignored for source='logger'. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window.
+        **Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service); ignored for source='logger' and for error_log with structured=True. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window.
         **Logbook params:** hours_back, entity_id, end_time, offset, compact (default True — strips attribute dicts to save context)
-        **System/error_log params:** level (ERROR, WARNING, INFO, DEBUG)
+        **System/error_log params:** level (ERROR, WARNING, INFO, DEBUG, CRITICAL)
+        **error_log params:** structured, top_n. In structured mode `search`
+            matches the message and logger name only, whereas on the raw path it
+            matches the whole line; `limit`/`order` do not apply, and issues are
+            ranked by count, then severity, then recency.
         **Supervisor params:** slug = add-on slug, e.g. "core_mosquitto" (use
             ha_get_addon() to list installed slugs)
         **System-service params:** slug = service name. The slug "supervisor"
@@ -1241,6 +1434,8 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             level=level,
             slug=slug,
             order=order,
+            structured=structured,
+            top_n=top_n,
         )
 
     @mcp.tool(

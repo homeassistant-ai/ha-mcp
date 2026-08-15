@@ -75,14 +75,13 @@ configuration:
     name: Aktivera beta-funktioner (huvud)
     description: ⚠ FARA — dessa verktyg kan PERMANENT SKADA din Home Assistant-installation.
       De skriver till din YAML-konfiguration, ditt filsystem, installerar anpassade
-      komponenter, kör godtycklig sandlådad Python och redigerar verktygsdocstrings
+      komponenter, kör godtycklig sandlådad Python och redigerar verktygsdokumentsträngar
       som AI:n ser. Det finns ingen garanti och ingen supportgaranti — du aktiverar
-      dem på EGEN RISK. Ta en säkerhetskopia av Home Assistant innan du aktiverar
-      detta, och aktivera aldrig i produktion utan en. Huvudbrytare för de 5 experimentella
-      underflaggorna nedan; underflaggor ignoreras vid körning när denna huvudbrytare
-      är avstängd, även om de uttryckligen är inställda på sant. Samma växlingsknapp
-      visas också i webbinställningarna under "Betafunktioner (farligt)" — båda ytorna
-      återspeglar den andra vid omstart.
+      dem på EGEN RISK. Ta en Home Assistant-säkerhetskopia innan du aktiverar detta,
+      och aktivera aldrig i produktion utan en. Huvudgrind för de experimentella underflaggorna
+      nedan; underflaggor ignoreras vid körning när denna huvudgrind är avstängd,
+      även när de uttryckligen är inställda på sant. Samma växling visas också i webbinställningsgränssnittet
+      under "Betafunktioner (farliga)" — båda ytorna återspeglar den andra vid omstart.
   enable_yaml_config_editing:
     name: Aktivera redigering av YAML-konfiguration (beta)
     description: Betafunktion. Tillåter AI-assistenter att lägga till, ersätta eller
@@ -204,15 +203,22 @@ configuration:
       underflagga vid körning oavsett dess värde här.
   enable_auto_backup:
     name: Aktivera automatisk säkerhetskopiering av redigeringar
-    description: Fångar en ögonblicksbild per entitet före varje omslutet skriv-/destruktivt
-      MCP-verktygsanrop (automation, skript, scen, hjälpare, instrumentpanel, etikett,
-      kategori, grupp, zon, område, kalender, att göra, entitet, integration och relaterade
-      borttagnings-/raderingsverktyg). Ögonblicksbilder sparas som YAML-filer under
-      /data/ha_mcp_backups/ (åsidosätts via HAMCP_BACKUP_DIR) och listas, återställs
-      eller raderas via fliken Säkerhetskopior i webbinställningsgränssnittet eller
-      via ha_manage_backup(scope='edits', ...). Bästa möjliga försök – fel loggas
-      som en VARNING men blockerar aldrig den underliggande skrivningen. På som standard;
-      avmarkera för att avaktivera. Kräver omstart för att träda i kraft.
+    description: 'Fångar en ögonblicksbild per entitet före varje omslutet skriv-/destruktivt
+      MCP-verktygsanrop (automation, skript, scen, hjälpare, instrumentpanel, instrumentpanelsresurs,
+      etikett, kategori, grupp, zon, område, kalender, att göra, entitet, enhet, integration
+      och relaterade borttagnings-/raderingsverktyg). Begränsningen för automatisk
+      säkerhetskopiering styr hur ofta detta sker: 0 (standard) fångar vid varje sådant
+      anrop, N>0 högst en ögonblicksbild per N minuter per entitet. Ögonblicksbilder
+      sparas som YAML-filer under /data/ha_mcp_backups/ (åsidosätts via HAMCP_BACKUP_DIR)
+      och listas, återställs eller raderas via fliken Säkerhetskopior i webbinställningsgränssnittet
+      eller via ha_manage_backup(scope=''edits'', ...). För dessa domäner är fångsten
+      ''best-effort'' — ett misslyckande loggar en VARNING och skrivningen fortsätter.
+      Fil- och rå-YAML-verktygen är undantaget: ha_write_file, ha_delete_file och
+      ha_config_set_yaml behandlar ögonblicksbilden som ett förhandsvillkor, så en
+      skrivning genom dem nekas när detta är avstängt, och en misslyckad fångst blockerar
+      den. På som standard; avmarkering avaktiverar ''best-effort''-fångsterna och
+      tar fil- och rå-YAML-verktygen ur bruk med dem. Kräver omstart för att träda
+      i kraft.'
   auto_backup_throttle_minutes:
     name: Begränsning för automatisk säkerhetskopiering (minuter)
     description: Begränsningsfönster per entitet. 0 (standard) tar en ögonblicksbild

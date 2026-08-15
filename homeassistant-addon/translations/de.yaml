@@ -135,14 +135,23 @@ configuration:
       Tool-Namen.
   enable_auto_backup:
     name: Auto-Backup von Bearbeitungen aktivieren
-    description: Erfasst einen Pro-Entität-Snapshot vor jedem umschlossenen Schreib/destruktiven
-      MCP-Tool-Aufruf (Automatisierung, Skript, Szene, Helfer, Dashboard, Label, Kategorie,
-      Gruppe, Zone, Bereich, Kalender, Todo, Entität, Integration und verwandte Remove/Delete-Tools).
-      Snapshots werden als YAML-Dateien unter /data/ha_mcp_backups/ gespeichert (Override
-      via HAMCP_BACKUP_DIR) und über den Backups-Tab im Web-Settings-UI oder via ha_manage_backup(scope='edits',
-      ...) aufgelistet, wiederhergestellt oder gelöscht. Best-Effort – Fehler loggen
-      ein WARNING, blockieren aber nie den zugrunde liegenden Schreibvorgang. Standardmäßig
-      an; Häkchen entfernen, um auszusteigen. Erfordert Neustart, um wirksam zu werden.
+    description: 'Erstellt einen Snapshot pro Entität vor jedem umschlossenen Schreib-/destruktiven
+      MCP-Tool-Aufruf (Automatisierung, Skript, Szene, Helfer, Dashboard, Dashboard-Ressource,
+      Label, Kategorie, Gruppe, Zone, Bereich, Kalender, Todo, Entität, Gerät, Integration
+      und zugehörige Entfernungs-/Lösch-Tools). Die Auto-Backup-Drosselung begrenzt,
+      wie oft dies geschieht: 0 (Standard) erstellt bei jedem solchen Aufruf einen
+      Snapshot, N>0 maximal einen Snapshot pro N Minuten pro Entität. Snapshots werden
+      als YAML-Dateien unter /data/ha_mcp_backups/ (Überschreibung über HAMCP_BACKUP_DIR)
+      gespeichert und können über den Tab „Backups“ in der Web-Einstellungen-UI oder
+      über ha_manage_backup(scope=''edits'', ...) aufgelistet, wiederhergestellt oder
+      gelöscht werden. Für diese Domänen ist die Erfassung ein Best-Effort-Versuch
+      — ein Fehler protokolliert eine WARNING und der Schreibvorgang wird fortgesetzt.
+      Die Datei- und Raw-YAML-Tools sind die Ausnahme: ha_write_file, ha_delete_file
+      und ha_config_set_yaml behandeln den Snapshot als Vorbedingung, sodass ein Schreibvorgang
+      über sie verweigert wird, solange dies deaktiviert ist, und eine fehlgeschlagene
+      Erfassung ihn blockiert. Standardmäßig aktiviert; Deaktivieren meldet sich von
+      den Best-Effort-Erfassungen ab und nimmt die Datei- und Raw-YAML-Tools mit ihnen
+      außer Betrieb. Erfordert einen Neustart, um wirksam zu werden.'
   auto_backup_throttle_minutes:
     name: Auto-Backup-Drosselung (Minuten)
     description: Pro-Entität-Drosselungsfenster. 0 (Standard) erfasst einen Snapshot

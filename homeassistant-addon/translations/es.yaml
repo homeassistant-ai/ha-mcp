@@ -141,16 +141,25 @@ configuration:
       por comas.'
   enable_auto_backup:
     name: Activar copia de seguridad automática de las ediciones
-    description: 'Captura una instantánea por entidad antes de cada llamada a una
-      herramienta MCP de escritura o destructiva cubierta (automatización, script,
-      escena, auxiliar, panel, etiqueta, categoría, grupo, zona, área, calendario,
-      tareas pendientes, entidad, integración y las herramientas hermanas de eliminación).
-      Las instantáneas se guardan como archivos YAML en /data/ha_mcp_backups/ (se
-      puede cambiar con HAMCP_BACKUP_DIR) y se listan, restauran o eliminan desde
-      la pestaña Copias de seguridad de la interfaz web de ajustes o mediante ha_manage_backup(scope=''edits'',
-      ...). Funciona en la medida de lo posible: los fallos registran un WARNING pero
-      nunca bloquean la escritura subyacente. Activado de forma predeterminada; desmárcalo
-      para excluirte. Requiere reiniciar para que surta efecto.'
+    description: 'Captura una instantánea por entidad antes de cada llamada envuelta
+      de herramienta MCP de escritura/destructiva (automatización, script, escena,
+      asistente, panel, recurso de panel, etiqueta, categoría, grupo, zona, área,
+      calendario, tarea, entidad, dispositivo, integración y herramientas de eliminación/borrado
+      de elementos relacionados). El límite de frecuencia de la copia de seguridad
+      automática establece la frecuencia con la que esto ocurre: 0 (predeterminado)
+      captura en cada llamada de este tipo, N>0 como máximo una instantánea cada N
+      minutos por entidad. Las instantáneas se guardan como archivos YAML en /data/ha_mcp_backups/
+      (anular mediante HAMCP_BACKUP_DIR) y se listan, restauran o eliminan a través
+      de la pestaña "Copias de seguridad" en la interfaz de usuario de configuración
+      web o mediante ha_manage_backup(scope=''edits'', ...). Para esos dominios, la
+      captura es de "mejor esfuerzo" — un fallo registra una ADVERTENCIA y la escritura
+      procede. Las herramientas de archivo y YAML sin procesar son la excepción: ha_write_file,
+      ha_delete_file y ha_config_set_yaml tratan la instantánea como una condición
+      previa, por lo que una escritura a través de ellas se rechaza mientras esto
+      está desactivado, y una captura fallida la bloquea. Activado por defecto; desmarcar
+      desactiva las capturas de "mejor esfuerzo" y deja fuera de servicio las herramientas
+      de archivo y YAML sin procesar con ellas. Requiere un reinicio para que surta
+      efecto.'
   auto_backup_throttle_minutes:
     name: Limitación de la copia automática (minutos)
     description: Ventana de limitación por entidad. 0 (predeterminado) captura una

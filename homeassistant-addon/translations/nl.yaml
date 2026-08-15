@@ -137,15 +137,23 @@ configuration:
       Door komma's gescheiden toolnamen.
   enable_auto_backup:
     name: Automatische back-up van bewerkingen inschakelen
-    description: Maakt een snapshot per entiteit vóór elke omwikkelde schrijf-/destructieve
-      MCP-toolaanroep (automatisering, script, scène, helper, dashboard, label, categorie,
-      groep, zone, gebied, kalender, todo, entiteit, integratie en gerelateerde verwijder-/delete-tools).
-      Snapshots worden opgeslagen als YAML-bestanden onder /data/ha_mcp_backups/ (overschrijven
-      via HAMCP_BACKUP_DIR) en kunnen worden weergegeven, hersteld of verwijderd via
-      het tabblad 'Back-ups' in de webinstellingen-UI of via ha_manage_backup(scope='edits',
-      ...). Best-effort — fouten loggen een WAARSCHUWING maar blokkeren nooit de onderliggende
-      schrijfbewerking. Standaard ingeschakeld; deselecteer om af te melden. Vereist
-      herstart om van kracht te worden.
+    description: 'Maakt een per-entiteit momentopname vóór elke omwikkelde schrijf-/destructieve
+      MCP-toolaanroep (automatisering, script, scène, helper, dashboard, dashboardbron,
+      label, categorie, groep, zone, gebied, kalender, todo, entiteit, apparaat, integratie
+      en gerelateerde verwijder-/wis-tools). De auto-back-up beperking bepaalt hoe
+      vaak dat gebeurt: 0 (standaard) maakt een momentopname bij elke dergelijke aanroep,
+      N>0 maximaal één momentopname per N minuten per entiteit. Momentopnamen worden
+      opgeslagen als YAML-bestanden onder /data/ha_mcp_backups/ (overschrijven via
+      HAMCP_BACKUP_DIR) en kunnen worden weergegeven, hersteld of verwijderd via het
+      tabblad Back-ups in de webinstellingen-UI of via ha_manage_backup(scope=''edits'',
+      ...). Voor die domeinen is de momentopname ''best-effort'' — een mislukking
+      logt een WAARSCHUWING en de schrijfbewerking gaat door. De bestand- en ruwe-YAML-tools
+      zijn de uitzondering: ha_write_file, ha_delete_file en ha_config_set_yaml behandelen
+      de momentopname als een voorwaarde, dus een schrijfbewerking via deze tools
+      wordt geweigerd wanneer dit uit staat, en een mislukte momentopname blokkeert
+      deze. Standaard ingeschakeld; uitschakelen annuleert de ''best-effort'' momentopnamen
+      en schakelt de bestand- en ruwe-YAML-tools hiermee uit. Vereist een herstart
+      om van kracht te worden.'
   auto_backup_throttle_minutes:
     name: Automatische back-up vertraging (minuten)
     description: Vertragingsvenster per entiteit. 0 (standaard) maakt een snapshot

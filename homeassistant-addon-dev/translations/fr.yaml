@@ -87,17 +87,18 @@ configuration:
       Désactivé par défaut.
   enable_beta_features:
     name: Activer les fonctionnalités bêta (principal)
-    description: ⚠ DANGER — ces outils peuvent ENDOMMAGER PERMANENTMENT votre installation
+    description: ⚠ DANGER — ces outils peuvent ENDOMMAGER DÉFINITIVEMENT votre installation
       Home Assistant. Ils écrivent dans votre configuration YAML, votre système de
-      fichiers, installent des composants personnalisés, exécutent du Python arbitraire
-      en sandbox et modifient les docstrings d'outils que l'IA voit. Il n'y a aucune
-      garantie et aucune garantie de support — vous les activez à VOS PROPRES RISQUES.
-      Faites une sauvegarde Home Assistant avant d'activer ceci, et ne l'activez jamais
-      en production sans une. Porte principale pour les 5 sous-drapeaux expérimentaux
-      ci-dessous ; les sous-drapeaux sont ignorés à l'exécution lorsque ce principal
-      est désactivé, même lorsqu'ils sont explicitement définis sur true. Le même
-      bouton est également présenté dans l'interface Web des paramètres sous « Fonctionnalités
-      bêta (dangereuses) » — les deux surfaces se reflètent au redémarrage.
+      fichiers, installent des composants personnalisés, exécutent du code Python
+      arbitraire en bac à sable et modifient les docstrings des outils que l'IA voit.
+      Il n'y a aucune garantie ni support — vous les activez À VOS PROPRES RISQUES.
+      Faites une sauvegarde de Home Assistant avant d'activer ceci, et ne l'activez
+      jamais en production sans une. Interrupteur principal pour les sous-indicateurs
+      expérimentaux ci-dessous ; les sous-indicateurs sont ignorés à l'exécution lorsque
+      cet interrupteur principal est désactivé, même s'ils sont explicitement définis
+      sur vrai. Le même interrupteur est également affiché dans l'interface utilisateur
+      des paramètres web sous "Fonctionnalités bêta (dangereuses)" — chaque interface
+      reflète l'autre au redémarrage.
   enable_yaml_config_editing:
     name: Activer l'édition de configuration YAML (bêta)
     description: Fonctionnalité bêta. Permet aux assistants IA d'ajouter, remplacer
@@ -234,16 +235,23 @@ configuration:
       de sa valeur ici.
   enable_auto_backup:
     name: Activer la sauvegarde automatique des modifications
-    description: Capture un instantané par entité avant chaque appel d'outil MCP d'écriture/destructeur
-      encapsulé (automatisation, script, scène, assistant, tableau de bord, étiquette,
-      catégorie, groupe, zone, zone géographique, calendrier, todo, entité, intégration
-      et outils de suppression/suppression associés). Les instantanés sont stockés
-      sous forme de fichiers YAML dans /data/ha_mcp_backups/ (remplacement via HAMCP_BACKUP_DIR)
-      et listés, restaurés ou supprimés via l'onglet Sauvegardes dans l'interface
-      Web des paramètres ou via ha_manage_backup(scope='edits', ...). Au mieux — les
-      erreurs enregistrent un WARNING mais ne bloquent jamais l'écriture sous-jacente.
-      Activé par défaut ; décochez pour désactiver. Nécessite un redémarrage pour
-      prendre effet.
+    description: 'Capture un instantané par entité avant chaque appel d''outil MCP
+      d''écriture/destructif encapsulé (automation, script, scene, helper, dashboard,
+      ressource de dashboard, label, category, group, zone, area, calendar, todo,
+      entity, device, integration, et les outils de suppression/effacement associés).
+      La limitation de la sauvegarde automatique détermine la fréquence de ces captures
+      : 0 (par défaut) capture à chaque appel de ce type, N>0 au maximum un instantané
+      toutes les N minutes par entité. Les instantanés sont enregistrés en tant que
+      fichiers YAML sous /data/ha_mcp_backups/ (à remplacer via HAMCP_BACKUP_DIR)
+      et peuvent être listés, restaurés ou supprimés via l''onglet Backups dans l''interface
+      utilisateur des paramètres web ou via ha_manage_backup(scope=''edits'', ...).
+      Pour ces domaines, la capture est faite au mieux — un échec enregistre un WARNING
+      et l''écriture se poursuit. Les outils de fichier et raw-YAML sont l''exception
+      : ha_write_file, ha_delete_file et ha_config_set_yaml traitent l''instantané
+      comme une précondition, donc une écriture via ces outils est refusée si cette
+      option est désactivée, et une capture échouée la bloque. Activé par défaut ;
+      désactiver cette option annule les captures au mieux et désactive les outils
+      de fichier et raw-YAML avec elles. Nécessite un redémarrage pour prendre effet.'
   auto_backup_throttle_minutes:
     name: Limitation de la sauvegarde automatique (minutes)
     description: Fenêtre de limitation par entité. 0 (par défaut) capture un instantané

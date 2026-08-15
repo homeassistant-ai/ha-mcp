@@ -89,17 +89,17 @@ configuration:
       predefinita.
   enable_beta_features:
     name: Attiva le funzioni beta (principale)
-    description: '⚠ PERICOLO — questi strumenti possono DANNEGGIARE IN MODO PERMANENTE
-      la tua installazione di Home Assistant. Scrivono nella tua configurazione YAML
-      e nel tuo filesystem, installano componenti personalizzati, eseguono codice
-      Python arbitrario in una sandbox e modificano le docstring degli strumenti che
-      l''IA vede. Non c''è alcuna garanzia né alcuna assistenza garantita: li attivi
-      a TUO RISCHIO. Fai un backup di Home Assistant prima di attivare questa opzione
-      e non attivarla mai in produzione senza averne uno. È il controllo principale
-      dei 5 sotto-flag sperimentali qui sotto; mentre è disattivato i sotto-flag vengono
-      ignorati in esecuzione, anche se impostati esplicitamente su true. La stessa
-      opzione compare anche nell''interfaccia web delle impostazioni sotto «Funzioni
-      beta (pericolose)»: ciascuna superficie rispecchia l''altra dopo il riavvio.'
+    description: ⚠ PERICOLO — questi strumenti possono DANNEGGIARE PERMANENTEMENTE
+      la tua installazione di Home Assistant. Scrivono nella tua configurazione YAML,
+      nel tuo filesystem, installano componenti personalizzati, eseguono Python arbitrario
+      in sandbox e modificano le docstring degli strumenti che l'IA vede. Non c'è
+      alcuna garanzia e nessun supporto garantito — li abiliti a TUO RISCHIO. Esegui
+      un backup di Home Assistant prima di attivarli, e non abilitarli mai in produzione
+      senza uno. Interruttore principale per i sotto-flag sperimentali sottostanti;
+      i sotto-flag vengono ignorati a runtime mentre questo interruttore principale
+      è disattivato, anche se esplicitamente impostati su true. Lo stesso interruttore
+      è anche presente nell'interfaccia utente delle impostazioni web sotto "Funzionalità
+      beta (pericolose)" — entrambe le superfici si riflettono a vicenda al riavvio.
   enable_yaml_config_editing:
     name: Attiva la modifica della configurazione YAML (beta)
     description: Funzione beta. Consente agli assistenti di IA di aggiungere, sostituire
@@ -236,16 +236,24 @@ configuration:
       dal valore impostato qui.
   enable_auto_backup:
     name: Attiva il backup automatico delle modifiche
-    description: 'Cattura uno snapshot per entità prima di ogni chiamata coperta a
-      uno strumento MCP di scrittura o distruttivo (automazione, script, scena, helper,
-      dashboard, etichetta, categoria, gruppo, zona, area, calendario, cose da fare,
-      entità, integrazione e i relativi strumenti di rimozione). Gli snapshot vengono
-      salvati come file YAML in /data/ha_mcp_backups/ (modificabile con HAMCP_BACKUP_DIR)
-      e si elencano, ripristinano o eliminano dalla scheda Backup dell''interfaccia
-      web delle impostazioni oppure con ha_manage_backup(scope=''edits'', ...). Funziona
-      secondo il criterio del massimo impegno: gli errori registrano un WARNING ma
-      non bloccano mai la scrittura sottostante. Attivo per impostazione predefinita;
-      togli la spunta per rinunciarvi. Richiede il riavvio per avere effetto.'
+    description: 'Cattura uno snapshot per entità prima di ogni chiamata a strumenti
+      MCP di scrittura/distruttivi (automazione, script, scena, helper, dashboard,
+      risorsa dashboard, etichetta, categoria, gruppo, zona, area, calendario, todo,
+      entità, dispositivo, integrazione e strumenti di rimozione/eliminazione correlati).
+      Il limite di frequenza del backup automatico definisce la frequenza con cui
+      ciò avviene: 0 (predefinito) cattura ad ogni chiamata di questo tipo, N>0 al
+      massimo uno snapshot ogni N minuti per entità. Gli snapshot vengono salvati
+      come file YAML sotto /data/ha_mcp_backups/ (sovrascrivi tramite HAMCP_BACKUP_DIR)
+      e elencati, ripristinati o eliminati tramite la scheda Backups nell''interfaccia
+      utente delle impostazioni web o tramite ha_manage_backup(scope=''edits'', ...).
+      Per questi domini la cattura è al meglio delle possibilità — un fallimento registra
+      un WARNING e la scrittura procede. Gli strumenti per file e YAML grezzo sono
+      l''eccezione: ha_write_file, ha_delete_file e ha_config_set_yaml trattano lo
+      snapshot come una precondizione, quindi una scrittura tramite essi viene rifiutata
+      mentre questo è disattivato, e una cattura fallita la blocca. Attivato per impostazione
+      predefinita; deselezionando si rinuncia alle catture al meglio delle possibilità
+      e si disattivano con esse gli strumenti per file e YAML grezzo. Richiede un
+      riavvio per avere effetto.'
   auto_backup_throttle_minutes:
     name: Limitazione del backup automatico (minuti)
     description: Finestra di limitazione per entità. 0 (impostazione predefinita)

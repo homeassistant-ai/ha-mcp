@@ -4398,6 +4398,7 @@ class HelperConfigTools:
                 "generic_hygrostat",
                 "generic_thermostat",
                 "group",
+                "history_stats",
                 "input_boolean",
                 "input_button",
                 "input_datetime",
@@ -4406,6 +4407,7 @@ class HelperConfigTools:
                 "input_text",
                 "integration",
                 "min_max",
+                "mold_indicator",
                 "person",
                 "random",
                 "schedule",
@@ -4702,7 +4704,8 @@ class HelperConfigTools:
                     "helper_type='config_subentry' "
                     "(template, group, utility_meter, derivative, min_max, threshold, "
                     "integration, statistics, trend, random, filter, tod, "
-                    "generic_thermostat, switch_as_x, generic_hygrostat). "
+                    "generic_thermostat, switch_as_x, generic_hygrostat, "
+                    "history_stats, mold_indicator). "
                     "Ignored for simple helper types. "
                     "Field set is delivered as data_schema on the first validation error."
                 ),
@@ -4739,7 +4742,7 @@ class HelperConfigTools:
     ) -> dict[str, Any]:
         """
         Create or update Home Assistant helper entities and config subentries
-        (28 types, unified interface).
+        (30 types, unified interface).
 
         MUST call ha_get_skill_guide OR refer to your locally installed skills first.
 
@@ -4753,9 +4756,13 @@ class HelperConfigTools:
 
         FLOW types (pass `config` dict, Config Entry Flow API): template, group,
         utility_meter, derivative, min_max, threshold, integration, statistics, trend,
-        random, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat.
+        random, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat,
+        history_stats, mold_indicator.
         Note: `tod` is the purpose-built "is-current-time-in-range" indicator
         (supports cross-midnight ranges, unlike `schedule`).
+        Note: `otp` is a helper in the HA UI but is not offered here — its flow
+        requires a live TOTP code. Create it with ha_set_integration(domain="otp"),
+        as with any other helper-domain flow outside this list.
 
         CONFIG_SUBENTRY type (Config Subentry Flow API): config_subentry.
         Pass `entry_id`, `subentry_type`, and `config`. Pass `subentry_id` to

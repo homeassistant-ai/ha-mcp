@@ -108,7 +108,14 @@
     },
     "legacy_oauth_restart": {
       "title": "Uruchom ponownie Home Assistant, aby zastosować zmianę legacy OAuth",
-      "description": "Tryb uwierzytelniania legacy OAuth rejestruje własne punkty końcowe /authorize i /token, które Home Assistant może powiązać lub zwolnić tylko po pełnym ponownym uruchomieniu – niezależnie od tego, czy właśnie włączyłeś ten tryb, wyłączyłeś go, czy zmieniłeś jego Client ID/Secret. Uruchom ponownie Home Assistant (Ustawienia - System - Uruchom ponownie), aby zastosować zmianę; do tego czasu poprzednie zachowanie pozostaje w mocy."
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Uruchomić ponownie Home Assistanta?",
+            "description": "Zatwierdzenie tego formularza spowoduje ponowne uruchomienie Home Assistanta i zastosowanie zmiany Legacy OAuth.\n\nKliknij **Zatwierdź**, aby uruchomić ponownie teraz."
+          }
+        }
+      }
     }
   },
   "selector": {

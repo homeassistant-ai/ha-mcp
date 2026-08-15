@@ -86,17 +86,17 @@ configuration:
       hun schema, kunnen niet worden gedetecteerd. Standaard uitgeschakeld.
   enable_beta_features:
     name: Schakel bètafuncties in (hoofd)
-    description: ⚠ GEVAAR — deze tools kunnen je Home Assistant-installatie PERMANENT
+    description: ⚠ GEVAAR — deze tools kunnen je Home Assistant installatie PERMANENT
       BESCHADIGEN. Ze schrijven naar je YAML-configuratie, je bestandssysteem, installeren
       aangepaste componenten, voeren willekeurige gesandboxte Python uit en bewerken
       tool-docstrings die de AI ziet. Er is geen garantie en geen ondersteuningsgarantie
       — je schakelt ze in op EIGEN RISICO. Maak een Home Assistant-back-up voordat
       je dit inschakelt, en schakel het nooit in productie in zonder een back-up.
-      Hoofdschakelaar voor de 5 experimentele sub-vlaggen hieronder; sub-vlaggen worden
-      tijdens runtime genegeerd wanneer deze hoofdschakelaar uit staat, zelfs wanneer
-      ze expliciet op 'true' zijn ingesteld. Dezelfde schakelaar is ook zichtbaar
-      in de webinstellingen-UI onder "Bètafuncties (gevaarlijk)" — beide weergaven
-      reflecteren elkaar bij herstart.
+      Hoofdschakelaar voor de experimentele sub-vlaggen hieronder; sub-vlaggen worden
+      tijdens runtime genegeerd wanneer deze hoofdschakelaar uit staat, zelfs als
+      ze expliciet op 'true' zijn ingesteld. Dezelfde schakelaar verschijnt ook in
+      de webinstellingen-UI onder "Bètafuncties (gevaarlijk)" — beide weergaven weerspiegelen
+      elkaar na een herstart.
   enable_yaml_config_editing:
     name: YAML-configuratie bewerken inschakelen (bèta)
     description: Bètafunctie. Stelt AI-assistenten in staat om top-level sleutels
@@ -227,15 +227,23 @@ configuration:
       wordt deze sub-vlag tijdens runtime genegeerd, ongeacht de waarde hier.
   enable_auto_backup:
     name: Automatische back-up van bewerkingen inschakelen
-    description: Maakt een snapshot per entiteit vóór elke omwikkelde schrijf-/destructieve
-      MCP-toolaanroep (automatisering, script, scène, helper, dashboard, label, categorie,
-      groep, zone, gebied, kalender, todo, entiteit, integratie en gerelateerde verwijder-/delete-tools).
-      Snapshots worden opgeslagen als YAML-bestanden onder /data/ha_mcp_backups/ (overschrijven
-      via HAMCP_BACKUP_DIR) en kunnen worden weergegeven, hersteld of verwijderd via
-      het tabblad 'Back-ups' in de webinstellingen-UI of via ha_manage_backup(scope='edits',
-      ...). Best-effort — fouten loggen een WAARSCHUWING maar blokkeren nooit de onderliggende
-      schrijfbewerking. Standaard ingeschakeld; deselecteer om af te melden. Vereist
-      herstart om van kracht te worden.
+    description: 'Maakt een per-entiteit momentopname vóór elke omwikkelde schrijf-/destructieve
+      MCP-toolaanroep (automatisering, script, scène, helper, dashboard, dashboardbron,
+      label, categorie, groep, zone, gebied, kalender, todo, entiteit, apparaat, integratie
+      en gerelateerde verwijder-/wis-tools). De auto-back-up beperking bepaalt hoe
+      vaak dat gebeurt: 0 (standaard) maakt een momentopname bij elke dergelijke aanroep,
+      N>0 maximaal één momentopname per N minuten per entiteit. Momentopnamen worden
+      opgeslagen als YAML-bestanden onder /data/ha_mcp_backups/ (overschrijven via
+      HAMCP_BACKUP_DIR) en kunnen worden weergegeven, hersteld of verwijderd via het
+      tabblad Back-ups in de webinstellingen-UI of via ha_manage_backup(scope=''edits'',
+      ...). Voor die domeinen is de momentopname ''best-effort'' — een mislukking
+      logt een WAARSCHUWING en de schrijfbewerking gaat door. De bestand- en ruwe-YAML-tools
+      zijn de uitzondering: ha_write_file, ha_delete_file en ha_config_set_yaml behandelen
+      de momentopname als een voorwaarde, dus een schrijfbewerking via deze tools
+      wordt geweigerd wanneer dit uit staat, en een mislukte momentopname blokkeert
+      deze. Standaard ingeschakeld; uitschakelen annuleert de ''best-effort'' momentopnamen
+      en schakelt de bestand- en ruwe-YAML-tools hiermee uit. Vereist een herstart
+      om van kracht te worden.'
   auto_backup_throttle_minutes:
     name: Automatische back-up vertraging (minuten)
     description: Vertragingsvenster per entiteit. 0 (standaard) maakt een snapshot

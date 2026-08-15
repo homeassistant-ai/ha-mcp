@@ -108,7 +108,14 @@
     },
     "legacy_oauth_restart": {
       "title": "Starta om Home Assistant för att tillämpa ändringen av äldre OAuth",
-      "description": "Det äldre OAuth-autentiseringsläget registrerar sina egna /authorize- och /token-webbändpunkter, som Home Assistant endast kan binda eller släppa när det startas om helt – oavsett om du precis slog på detta läge, stängde av det eller ändrade dess klient-ID/hemlighet. Starta om Home Assistant (Inställningar - System - Starta om) för att tillämpa ändringen; fram till dess förblir det tidigare beteendet i kraft."
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Starta om Home Assistant?",
+            "description": "Att skicka in detta formulär kommer att starta om Home Assistant och tillämpa ändringen för legacy OAuth.\n\nKlicka på **Skicka** för att starta om nu."
+          }
+        }
+      }
     }
   },
   "selector": {

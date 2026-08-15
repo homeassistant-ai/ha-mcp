@@ -13,25 +13,26 @@ npm run preview  # Preview production build locally
 
 ## Setup Wizard (`site/src/pages/setup.astro`)
 
-Single-file Astro page that drives the on-site setup flow. Both the metadata (which clients/platforms/connections/deployments exist) and the per-client instruction prose live in this one file.
+Single-file Astro page that drives the on-site setup flow. Both the metadata (which clients/platforms/scopes exist) and the per-client instruction prose live in this one file.
 
-**Data** — four pre-sorted JS arrays at the top of the component frontmatter:
+**Data** — three pre-sorted JS arrays at the top of the component frontmatter, plus two client-capability lists:
 
 ```ts
-const clientsData = [...]    // 19 supported AI clients
-const platformsData = [...]  // macOS / Linux / Windows / Docker
-const connectionsData = [...]// local / network / remote
-const deploymentData = [...] // uvx / docker / ha-addon / cloudflared / webhook-proxy
+const clientsData = [...]     // 21 supported AI clients
+const platformsData = [...]   // macOS / Linux / Windows / Docker
+const scopeData = [...]       // local / remote
+const stdioOnlyClients = [..] // need the fastmcp-remote bridge for HTTP
+const remoteOnlyClients = [..]// cannot use a local endpoint, need public HTTPS
 ```
 
-These feed the picker tiles in the markup section AND the wizard `<script>` block (`state.client`, `state.connection`, etc.).
+These feed the picker tiles in the markup section AND the wizard `<script>` block (`state.client`, `state.scope`, etc.).
 
-**Instruction templates** are JS template literals inside the `<script>` block, keyed off `state.client.id` / `platformId` / `state.connection.id` / `state.proxy`. Cross-cutting troubleshooting and restart-related help lives in `site/src/pages/faq.astro`; OS-specific install walkthroughs live in `guide-macos.astro` / `guide-windows.astro`.
+**Instruction templates** are JS template literals inside the `<script>` block, keyed off `state.client.id` / `state.client.configFormat` / `platformId` / `state.method` / `state.remotePath`. Cross-cutting troubleshooting and restart-related help lives in `site/src/pages/faq.astro`; OS-specific install walkthroughs live in `guide-macos.astro` / `guide-windows.astro`.
 
-**Adding a new client / platform / connection / deployment:**
+**Adding a new client / platform / scope / server method / remote path:**
 
 1. Add an entry to the appropriate inline array (insert at the right `order` position). Keep each array ordered by the `order` field — the wizard renders entries in array order without re-sorting.
-2. Add a wizard branch in the `<script>` block keyed off the new entry's `id`. Match neighboring patterns: JSON clients add an `else if` in the JSON config builder; CLI clients add a CLI command emit; UI clients add an `instruction-block` div with click steps. See `cursor` / `chatgpt` / `claude-code` / `cloudflared` for examples.
+2. Add a wizard branch in the `<script>` block keyed off the new entry's `id`. Match neighboring patterns: JSON clients add an `else if` in the JSON config builder; CLI clients add a CLI command emit; UI clients add an `instruction-block` div with click steps. A `configFormat` shared by clients with incompatible schemas needs an `id` guard of its own — see the `hermes` branch, which would otherwise inherit Continue's YAML shape. See `cursor` / `chatgpt` / `claude-code` / `cloudflared` for examples.
 3. If the addition has cross-cutting troubleshooting content (PATH issues, restart requirements, version requirements), add it to `faq.astro`.
 
 ## Accessibility & checks

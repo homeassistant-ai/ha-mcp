@@ -1,7 +1,7 @@
 """Behavioural tests for ``site/src/pages/setup.astro``'s wizard script.
 
 The setup wizard's correctness is a multidimensional grid (5 server
-methods x 19 clients x 2 scopes x 4 platforms x 4 remote paths). The
+methods x 21 clients x 2 scopes x 4 platforms x 4 remote paths). The
 script is one giant state machine driving per-client instruction
 templates; a typo or condition inversion silently breaks setup for one
 or more branches and the only signal today is a user complaint.
@@ -19,6 +19,9 @@ Tests in this module:
   ``config-output`` AND that the emitted content is non-empty (so a typo
   that drops the JSON / CLI / instruction block is caught — not just "no
   JS error", which fires the moment any badge renders).
+* Pin the schema each YAML client gets, which the loop above cannot see:
+  both Continue and Hermes emit valid YAML, so a client falling through to
+  the other one's branch still counts as "emitted something".
 
 The harness rebuilds Astro's ``<script define:vars={...}>`` injection
 by reading the real arrays out of the page frontmatter, so changes to
@@ -585,6 +588,134 @@ class TestPerClientInstructionTemplate:
             f"empty after wizard flow — generateConfig's per-client branch "
             f"probably bailed; "
             f"config_code={code_body!r}, instructions_len={instructions_len}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# YAML dialects
+# ---------------------------------------------------------------------------
+
+
+# client id -> (marker its own config must carry, marker that belongs to the
+# other YAML client and must therefore not appear).
+YAML_DIALECTS = {
+    "continue": ("mcpServers:", "mcp_servers:"),
+    "hermes": ("mcp_servers:", "mcpServers:"),
+}
+
+
+class TestYamlDialects:
+    """``configFormat: "yaml"`` covers two incompatible schemas.
+
+    Continue takes a ``mcpServers:`` list of ``{name, type, url}`` entries;
+    Hermes takes a ``mcp_servers:`` mapping keyed by server name in
+    ``~/.hermes/config.yaml``. Both are well-formed YAML, so a client that
+    falls through to the other one's branch still emits *a* config and
+    ``TestPerClientInstructionTemplate`` — which only asserts that the branch
+    emitted something — stays green while the user copies a config their
+    client ignores. These assertions pin the dialect itself.
+    """
+
+    @pytest.mark.parametrize("stdio", [True, False], ids=["stdio", "http"])
+    @pytest.mark.parametrize(
+        "client_id", sorted(YAML_DIALECTS), ids=sorted(YAML_DIALECTS)
+    )
+    def test_yaml_client_gets_its_own_schema(
+        self,
+        client_id: str,
+        stdio: bool,
+        setup_script: str,
+        prelude: str,
+        wizard_vars: dict[str, Any],
+    ) -> None:
+        clients = {c["id"]: c for c in wizard_vars["clientsData"]}
+        assert clients[client_id]["configFormat"] == "yaml", (
+            f"test premise: {client_id!r} must be a YAML-config client"
+        )
+        own_marker, foreign_marker = YAML_DIALECTS[client_id]
+
+        # stdio-local always asks for the platform; an HTTP method serving a
+        # client with native HTTP support reaches config after scope alone.
+        flow = (
+            _click("server-method", "stdio-local")
+            + _click("client", client_id)
+            + _click("platform", "macos")
+            if stdio
+            else _click("server-method", "ha-addon")
+            + _click("client", client_id)
+            + _click("scope", "local")
+        )
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                flow + "document.body.dataset.configCode = "
+                "document.querySelector('#config-output code').textContent || '';\n"
+            ),
+        )
+        _assert_clean_init(result)
+        match = re.search(r'data-config-code="([^"]*)"', result.dom)
+        assert match is not None, "config-output was not captured"
+        config = match.group(1)
+
+        assert own_marker in config, (
+            f"{client_id} ({'stdio' if stdio else 'http'}): emitted config is "
+            f"missing its own root key {own_marker!r}; config={config!r}"
+        )
+        assert foreign_marker not in config, (
+            f"{client_id} ({'stdio' if stdio else 'http'}): emitted config "
+            f"carries {foreign_marker!r}, which belongs to the other YAML "
+            f"client — the branch fell through to the wrong schema; "
+            f"config={config!r}"
+        )
+
+    def test_hermes_http_instructions_do_not_offer_sse(
+        self,
+        setup_script: str,
+        prelude: str,
+        wizard_vars: dict[str, Any],
+    ) -> None:
+        """Hermes can speak SSE; the ha-mcp endpoint cannot.
+
+        ``mcp.run(transport="http")`` serves Streamable HTTP only, and a GET
+        against the MCP path — which is what an SSE-style pre-flight sends —
+        is answered with 405 (see ``ProbeAccessLogFilter`` in
+        ``src/ha_mcp/__main__.py``). Telling a Hermes user they may add
+        ``transport: sse`` therefore points them at a transport this server
+        does not serve, so the instructions must not offer it.
+        """
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "ha-addon")
+                + _click("client", "hermes")
+                + _click("scope", "local")
+                + """
+                const instructionsEl = document.getElementById('setup-instructions');
+                document.body.dataset.instructionsHtml = String(
+                  (instructionsEl && instructionsEl.innerHTML) || ''
+                );
+                """
+            ),
+        )
+        _assert_clean_init(result)
+        match = re.search(r'data-instructions-html="([^"]*)"', result.dom)
+        assert match is not None, "setup-instructions was not captured"
+        html = match.group(1)
+
+        # Plausibility floor: an empty capture must not pass the absence
+        # assertion below by saying nothing at all.
+        assert "Streamable HTTP" in html, (
+            "hermes: HTTP instructions never rendered — the absence check "
+            f"below would pass vacuously; html={html[:300]!r}"
+        )
+        assert "transport: sse" not in html, (
+            "hermes: the instructions offer `transport: sse`, but the ha-mcp "
+            "endpoint is Streamable HTTP only and answers an SSE-style "
+            "pre-flight with 405"
         )
 
 

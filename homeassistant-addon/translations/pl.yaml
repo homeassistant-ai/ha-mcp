@@ -131,17 +131,24 @@ configuration:
       wyszukiwaniem narzędzi. Nazwy narzędzi oddzielone przecinkami.
   enable_auto_backup:
     name: Włącz automatyczne tworzenie kopii zapasowych zmian
-    description: Tworzy migawkę dla każdej encji przed każdym wywołaniem narzędzia
+    description: 'Tworzy migawkę dla każdej encji przed każdym wywołaniem narzędzia
       MCP do zapisu/destrukcyjnego (automatyzacja, skrypt, scena, pomocnik, pulpit
-      nawigacyjny, etykieta, kategoria, grupa, strefa, obszar, kalendarz, zadanie,
-      encja, integracja oraz narzędzia do usuwania/kasowania powiązanych elementów).
-      Migawki są zapisywane jako pliki YAML w /data/ha_mcp_backups/ (można zmienić
-      za pomocą HAMCP_BACKUP_DIR) i mogą być wyświetlane, przywracane lub usuwane
-      za pośrednictwem zakładki „Kopie zapasowe” w interfejsie użytkownika ustawień
-      sieciowych lub za pomocą ha_manage_backup(scope='edits', ...). Najlepsze starania
-      — błędy logują OSTRZEŻENIE, ale nigdy nie blokują podstawowego zapisu. Domyślnie
-      włączone; odznacz, aby zrezygnować. Wymaga ponownego uruchomienia, aby zmiany
-      weszły w życie.
+      nawigacyjny, zasób pulpitu nawigacyjnego, etykieta, kategoria, grupa, strefa,
+      obszar, kalendarz, zadanie, encja, urządzenie, integracja oraz pokrewne narzędzia
+      do usuwania/kasowania). Ogranicznik automatycznej kopii zapasowej określa, jak
+      często to się dzieje: 0 (domyślnie) tworzy migawkę przy każdym takim wywołaniu,
+      N>0 co najwyżej jedną migawkę na N minut na encję. Migawki są zapisywane jako
+      pliki YAML w katalogu /data/ha_mcp_backups/ (można zmienić za pomocą HAMCP_BACKUP_DIR)
+      i są wyświetlane, przywracane lub usuwane za pośrednictwem zakładki Kopie zapasowe
+      w interfejsie ustawień sieciowych lub za pomocą ha_manage_backup(scope=''edits'',
+      ...). Dla tych domen przechwytywanie jest typu "best-effort" (najlepszych starań)
+      — niepowodzenie loguje OSTRZEŻENIE, a zapis jest kontynuowany. Narzędzia do
+      plików i surowego YAML są wyjątkiem: ha_write_file, ha_delete_file i ha_config_set_yaml
+      traktują migawkę jako warunek wstępny, więc zapis za ich pośrednictwem jest
+      odrzucany, gdy ta opcja jest wyłączona, a nieudane przechwycenie go blokuje.
+      Domyślnie włączone; odznaczenie wyłącza przechwytywanie typu "best-effort" i
+      wyłącza z użytku narzędzia do plików i surowego YAML. Wymaga ponownego uruchomienia,
+      aby zmiany weszły w życie.'
   auto_backup_throttle_minutes:
     name: Ograniczenie automatycznej kopii zapasowej (minuty)
     description: Okno ograniczenia dla każdej encji. 0 (domyślnie) tworzy migawkę

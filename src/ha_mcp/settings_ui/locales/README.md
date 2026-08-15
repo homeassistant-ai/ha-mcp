@@ -37,11 +37,16 @@ register the engine imitates, a component catalog left at a key or two rests
 entirely on whichever of them addresses the reader —
 `test_every_shipped_component_catalog_gets_reader_addressing_samples` pins that
 one. Leaving that catalog empty is fine, but the moment you author anything in
-it, at least one key must be one whose English addresses the reader in the
-second person, and it must carry a non-empty translation — a key left blank is
+it, at least two keys must be ones whose English addresses the reader in the
+second person, and each must carry a non-empty translation — a key left blank is
 skipped like a missing one rather than sampled empty. Most component strings do
 not address the reader, so starting at the top of the file leaves the catalog
-anchorless and that check red until you add one that does. To fill them in your own PR instead, run
+anchorless and that check red until you add ones that do. Two rather than one
+because the run likeliest to need the register is the one that rewords such a
+key: that queues it, and a queued key is dropped from the candidates, so a
+surface resting on a single anchor loses its register in exactly that run —
+`test_component_samples_survive_their_own_anchor_being_queued` pins the
+survival. To fill them in your own PR instead, run
 `scripts/translate_locales.py` yourself and review its output like any
 other diff. Also add the new code to the locale list in the repository-root
 `AGENTS.md`

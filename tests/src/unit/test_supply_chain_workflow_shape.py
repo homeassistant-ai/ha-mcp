@@ -1,5 +1,7 @@
 """Guard supply-chain hardening that cannot be exercised by PR workflows."""
 
+import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -97,6 +99,155 @@ def test_pr_checkout_guard_follows_reusable_workflows(tmp_path: Path) -> None:
     )
     with pytest.raises(AssertionError, match=r"reusable\.yaml persists"):
         _assert_checkout_credentials_are_not_persisted(caller, tmp_path)
+
+
+def test_renovate_token_can_read_vulnerability_alerts() -> None:
+    steps = _workflow(_WORKFLOW_DIR / "renovate.yml")["jobs"]["renovate"]["steps"]
+    token_step = next(
+        step
+        for step in steps
+        if "actions/create-github-app-token" in str(step.get("uses", ""))
+    )
+
+    token_inputs = token_step["with"]
+    assert token_inputs.get("client-id") == "${{ secrets.RENOVATE_APP_ID }}"
+    assert "app-id" not in token_inputs
+    assert token_inputs.get("permission-vulnerability-alerts") == "read", (
+        "the Renovate token lists permission-* inputs and so drops every "
+        "permission it does not name; without vulnerability_alerts read the "
+        "vulnerabilityAlerts carve-out in renovate.json cannot fire"
+    )
+
+
+def test_renovate_engine_uses_a_full_version_pin() -> None:
+    steps = _workflow(_WORKFLOW_DIR / "renovate.yml")["jobs"]["renovate"]["steps"]
+    renovate_step = next(
+        step
+        for step in steps
+        if "renovatebot/github-action" in str(step.get("uses", ""))
+    )
+
+    version = str((renovate_step.get("with") or {}).get("renovate-version", ""))
+    assert re.fullmatch(r"\d+\.\d+\.\d+", version), (
+        "the action version and Renovate engine version are separate pins; a "
+        "major-only engine tag changes behavior without a workflow diff"
+    )
+
+    config = json.loads((_REPO_ROOT / "renovate.json").read_text(encoding="utf-8"))
+    engine_manager = next(
+        manager
+        for manager in config["customManagers"]
+        if manager.get("depNameTemplate") == "renovatebot/renovate"
+    )
+    assert engine_manager.get("datasourceTemplate") == "github-releases", (
+        "the engine self-update must use a datasource with release timestamps so "
+        "the global age gate can eventually release it"
+    )
+
+
+def test_renovate_age_gate_does_not_freeze_timestamp_less_updates() -> None:
+    config = json.loads((_REPO_ROOT / "renovate.json").read_text(encoding="utf-8"))
+
+    assert config.get("minimumReleaseAge") == "7 days", (
+        "the release-age gate from #2196 is part of the supply-chain contract"
+    )
+    assert config.get("minimumReleaseAgeBehaviour") == "timestamp-optional", (
+        "timestamp-required permanently freezes updates from registries that do "
+        "not publish release timestamps"
+    )
+    required_rules = [
+        rule
+        for rule in config["packageRules"]
+        if rule.get("minimumReleaseAgeBehaviour") == "timestamp-required"
+    ]
+    assert not required_rules, (
+        "package-level timestamp requirements can recreate the permanent freeze "
+        "fixed by #2200"
+    )
+
+
+def test_renovate_log_levels_make_failures_actionable_without_warning_noise() -> None:
+    config = json.loads((_REPO_ROOT / "renovate.json").read_text(encoding="utf-8"))
+    remaps = config.get("logLevelRemap", [])
+
+    host_error_levels = [
+        remap.get("newLogLevel")
+        for remap in remaps
+        if "External host error causing abort - skipping"
+        in str(remap.get("matchMessage", ""))
+    ]
+    assert host_error_levels == ["error"], (
+        "an aborted repository scan must fail the workflow instead of finishing green"
+    )
+
+    git_error_levels = [
+        remap.get("newLogLevel")
+        for remap in remaps
+        if remap.get("matchMessage") == "Git error - aborting"
+    ]
+    assert git_error_levels == ["error"], (
+        "a Git 5xx abort also returns external-host-error and must fail the workflow"
+    )
+
+    timestamp_warning_levels = [
+        remap.get("newLogLevel")
+        for remap in remaps
+        if "minimumReleaseAgeBehaviour=timestamp-optional"
+        in str(remap.get("matchMessage", ""))
+    ]
+    assert timestamp_warning_levels == ["info"], (
+        "the expected warning for timestamp-less sources should not pollute the "
+        "dependency dashboard"
+    )
+
+
+def test_python_runtime_automation_is_digest_only() -> None:
+    config = json.loads((_REPO_ROOT / "renovate.json").read_text(encoding="utf-8"))
+    package_rules = config["packageRules"]
+    python_rules = [
+        rule
+        for rule in package_rules
+        if "dockerfile" in rule.get("matchManagers", [])
+        and "python" in rule.get("matchPackageNames", [])
+    ]
+
+    version_rule = next(
+        rule
+        for rule in python_rules
+        if rule.get("allowedVersions") == "/^3\\.13-slim$/"
+    )
+    assert "matchFileNames" not in version_rule, (
+        "every Python Dockerfile must inherit the coordinated 3.13-slim baseline"
+    )
+
+    proxy_rule = next(rule for rule in python_rules if rule.get("enabled") is False)
+    assert set(proxy_rule.get("matchFileNames", [])) == {
+        "homeassistant-addon-webhook-proxy/Dockerfile",
+        "homeassistant-addon-webhook-proxy-dev/Dockerfile",
+    }, "webhook-proxy images change only through the dev-first promotion workflow"
+
+    python_dockerfiles = {
+        path.relative_to(_REPO_ROOT).as_posix()
+        for path in _REPO_ROOT.rglob("Dockerfile")
+        if "FROM python:" in path.read_text(encoding="utf-8")
+    }
+    assert python_dockerfiles - set(proxy_rule["matchFileNames"]) == {
+        "Dockerfile",
+        "homeassistant-addon/Dockerfile",
+        "homeassistant-addon-dev/Dockerfile",
+        "tests/haos_image_build/screenshot_engine_mock/Dockerfile",
+    }
+    assert not any("matchUpdateTypes" in rule for rule in python_rules), (
+        "a pre-lookup enabled=false rule cannot be overridden later for digest updates"
+    )
+    assert "asdf" not in config.get("enabledManagers", [])
+    assert not any(
+        "asdf" in rule.get("matchManagers", []) or "postUpgradeTasks" in rule
+        for rule in package_rules
+    ), (
+        "Python minor-version changes span independent runtime contracts and must "
+        "not be rewritten by the old dead asdf task"
+    )
 
 
 def test_dev_release_tag_cleanup_uses_authenticated_github_api() -> None:
