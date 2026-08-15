@@ -7,7 +7,7 @@ import sys
 import types
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -55,11 +55,13 @@ def oauth_stack(monkeypatch):
     dcr = _load_submodule(monkeypatch, package_name, "oauth_dcr")
     indirect = _load_submodule(monkeypatch, package_name, "oauth_indirect")
     autoapprove = _load_submodule(monkeypatch, package_name, "oauth_autoapprove")
+    auth_native = _load_submodule(monkeypatch, package_name, "auth_native")
     return SimpleNamespace(
         oauth=oauth,
         dcr=dcr,
         indirect=indirect,
         autoapprove=autoapprove,
+        auth_native=auth_native,
         package_name=package_name,
     )
 
@@ -293,6 +295,44 @@ async def test_cimd_unreachable_result_is_negative_cached(oauth_stack, monkeypat
     indirect._cimd_cache.clear()
 
 
+async def test_as_documents_pin_the_claude_cimd_selection_contract(oauth_stack):
+    """Every advertised URL is proxy-owned and both public modes keep CIMD."""
+    oauth = oauth_stack.oauth
+    base = "https://ha.example"
+    hass = _hass(oauth, oauth.MODE_LEGACY)
+    provider = SimpleNamespace(
+        _hass=hass,
+        base_url_for=lambda _request: base,
+        authorization_server_url=lambda value: f"{value}{oauth.OAUTH_BASE}",
+    )
+    hass.data[oauth.DOMAIN]["oauth"] = provider
+    legacy_doc = (
+        await oauth.AuthorizationServerMetadataView(provider).get(_oauth_request())
+    ).json_body
+    ha_auth_doc = oauth_stack.auth_native.authorization_server_document(base)
+    none_doc = oauth_stack.autoapprove.authorization_server_document(base)
+
+    for doc in (ha_auth_doc, none_doc):
+        assert doc["client_id_metadata_document_supported"] is True
+        assert "none" in doc["token_endpoint_auth_methods_supported"]
+        assert doc["registration_endpoint"] == (
+            f"{base}{oauth.OAUTH_BASE}/register"
+        )
+
+    for doc in (ha_auth_doc, none_doc, legacy_doc):
+        assert doc["authorization_endpoint"] == (
+            f"{base}{oauth.OAUTH_BASE}/authorize"
+        )
+        assert doc["token_endpoint"] == f"{base}{oauth.OAUTH_BASE}/token"
+        assert doc["code_challenge_methods_supported"] == ["S256"]
+        assert doc["issuer"] == f"{base}{oauth.OAUTH_BASE}"
+
+    assert "registration_endpoint" not in legacy_doc
+    assert "client_secret_basic" in legacy_doc[
+        "token_endpoint_auth_methods_supported"
+    ]
+
+
 async def test_unified_authorize_dispatches_legacy_handler(
     oauth_stack, monkeypatch
 ):
@@ -423,3 +463,53 @@ async def test_ha_auth_refresh_rejects_unreproducible_identity_locally(oauth_sta
 
     assert response.status == 400
     assert response.json_body["error"] == "invalid_grant"
+
+
+async def test_ha_auth_refresh_with_redirect_translates_presented_origin(
+    oauth_stack, monkeypatch
+):
+    """A redirect-carrying refresh remains usable for multi-origin clients."""
+    oauth, dcr, indirect, autoapprove = (
+        oauth_stack.oauth,
+        oauth_stack.dcr,
+        oauth_stack.indirect,
+        oauth_stack.autoapprove,
+    )
+    redirect_uri = GOOGLE_REDIRECT_URIS[0]
+    client_id = dcr.mint_client_id(KEY, GOOGLE_REDIRECT_URIS)
+    core_response = SimpleNamespace(
+        status=200,
+        content_type="application/json",
+        read=AsyncMock(return_value=b'{"access_token":"core"}'),
+    )
+
+    class _CoreRequest:
+        async def __aenter__(self):
+            return core_response
+
+        async def __aexit__(self, *_args):
+            return False
+
+    relay_session = SimpleNamespace(post=MagicMock(return_value=_CoreRequest()))
+    hass = _hass(oauth, oauth.MODE_HA_AUTH)
+    hass.data[oauth.DOMAIN]["session"] = relay_session
+    monkeypatch.setattr(
+        indirect, "core_token_base_url", lambda _hass: "https://core.example"
+    )
+
+    response = await autoapprove.AutoApproveTokenView(hass).post(
+        _oauth_request(
+            form={
+                "grant_type": "refresh_token",
+                "refresh_token": "opaque",
+                "client_id": client_id,
+                "redirect_uri": redirect_uri,
+            }
+        )
+    )
+
+    assert response.status == 200
+    forwarded = relay_session.post.call_args.kwargs["data"]
+    assert forwarded["client_id"] == (
+        "https://oauth-redirect.googleusercontent.com"
+    )

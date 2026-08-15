@@ -604,17 +604,13 @@ class OAuthProvider:
         Delegates the seven discovery-document views to the shared,
         flag-guarded `register_metadata_views` (which binds them at most once
         per HA session — see `_METADATA_VIEWS_REGISTERED_KEY`), then registers
-        ONLY the two root views (`AuthorizeView` + `TokenView`). ha_auth mode
-        registers just the seven metadata views (HA core is the authorization
-        server, serving its own `/auth/authorize` + `/auth/token`, so the
-        add-on binds no root views); the bare `/authorize` + `/token` here are
-        this add-on's OWN legacy root views. Routing both modes through the same
-        registrar means a legacy<->ha_auth switch or a same-mode reload reuses
-        the already-bound seven instead of stacking silently-shadowed duplicate
-        routes (a duplicate registration does not raise — aiohttp lets the
-        first-registered path win — and HA can't unregister a bound view until
-        it restarts). The two root views stay gated by the caller's route-owner
-        / fingerprint logic in __init__.py.
+        ONLY the two root views (`AuthorizeView` + `TokenView`). The unified
+        scoped authorize/token views are bound separately for every mode and
+        dispatch through these handlers when legacy is live; the bare routes
+        remain compatibility aliases. Routing every mode through the shared
+        metadata registrar avoids silently-shadowed duplicate discovery views.
+        The two root aliases stay gated by the caller's route-owner/fingerprint
+        logic in __init__.py.
         """
         register_metadata_views(self._hass, self)
         for view in (AuthorizeView(self), TokenView(self)):
@@ -825,9 +821,8 @@ class AuthorizationServerMetadataView(HomeAssistantView):
         provider = _active_provider(self._provider)
         base = provider.base_url_for(request)
         if mode == MODE_HA_AUTH:
-            # HA core is the authorization server: advertise its /auth/* endpoints
-            # + CIMD. Built in auth_native, imported lazily to avoid an import
-            # cycle (auth_native imports this module at load).
+            # HA core authenticates the user behind proxy-owned scoped endpoints.
+            # Built in auth_native, imported lazily to avoid an import cycle.
             from .auth_native import authorization_server_document
 
             return web.json_response(authorization_server_document(base))
@@ -847,8 +842,8 @@ class AuthorizationServerMetadataView(HomeAssistantView):
                 # AuthorizeView redirects); omission reads as "not supported"
                 # to discovery clients.
                 "authorization_response_iss_parameter_supported": True,
-                "authorization_endpoint": f"{base}{AUTHORIZE_PATH}",
-                "token_endpoint": f"{base}{TOKEN_PATH}",
+                "authorization_endpoint": f"{base}{OAUTH_BASE}/authorize",
+                "token_endpoint": f"{base}{OAUTH_BASE}/token",
                 "response_types_supported": ["code"],
                 "grant_types_supported": [
                     "authorization_code",
@@ -1203,12 +1198,8 @@ def _metadata_views(provider: MetadataProvider) -> list[HomeAssistantView]:
 
 
 def register_metadata_views(hass: HomeAssistant, provider: MetadataProvider) -> None:
-    """Register ONLY the seven discovery-document views (ha_auth mode).
+    """Register the seven shared OAuth discovery-document views.
 
-    ha_auth serves just these — Home Assistant core is the authorization server,
-    serving its own `/auth/authorize` + `/auth/token`, so the add-on binds no
-    root views (the bare `/authorize` + `/token` are the legacy flavor's own
-    root views) and no HA restart is ever needed to enable or disable the mode.
     ``provider`` is an `auth_native.ResourceServer` (ha_auth) or an
     `OAuthProvider` (legacy, which routes its seven views through here); the
     views read its `base_url_for`, `resource_url`, `authorization_server_url`,

@@ -106,6 +106,7 @@ def authorization_server_document(base: str) -> dict:
         "authorization_response_iss_parameter_supported": True,
         "authorization_endpoint": f"{base}{OAUTH_BASE}/authorize",
         "token_endpoint": f"{base}{OAUTH_BASE}/token",
+        "registration_endpoint": f"{base}{OAUTH_BASE}/register",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
         "code_challenge_methods_supported": ["S256"],
