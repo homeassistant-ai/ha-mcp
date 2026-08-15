@@ -37,7 +37,7 @@ import secrets
 import time
 from html import escape
 from pathlib import Path
-from typing import Protocol, TypedDict
+from typing import Any, Protocol, TypedDict
 from urllib.parse import unquote_plus, urlparse
 
 from aiohttp import web
@@ -985,7 +985,9 @@ async def handle_legacy_authorize_post(
     provider: OAuthProvider, request: web.Request
 ) -> web.Response:
     """Consume legacy consent and redirect with a one-time authorization code."""
-    data = await request.post()
+    data = await read_form(request)
+    if data is None:
+        return _text_error(400, "Invalid form submission")
     action = str(data.get("action", ""))
     client_id = str(data.get("client_id", ""))
     redirect_uri = str(data.get("redirect_uri", ""))
@@ -1021,6 +1023,19 @@ async def handle_legacy_authorize_post(
     return _redirect_with_params(redirect_uri, code=code, state=state, iss=iss)
 
 
+async def read_form(request: web.Request) -> Any | None:
+    """Parse a form body, or None when the request body is undecodable.
+
+    aiohttp raises LookupError — NOT ValueError — when the Content-Type names
+    an unknown charset, and these views are ANONYMOUS, so an unguarded parse
+    turns one header into a 500 with a traceback (#2219 review round 3).
+    """
+    try:
+        return await request.post()
+    except (ValueError, LookupError):
+        return None
+
+
 def _extract_client_creds(
     request: web.Request, form: dict
 ) -> list[tuple[str | None, str | None]]:
@@ -1049,7 +1064,11 @@ def _extract_client_creds(
         if (client_id, client_secret) != candidates[0]:
             candidates.append((client_id, client_secret))
         return candidates
-    return [(form.get("client_id"), form.get("client_secret"))]
+    # str()-wrapped like every sibling site: request.post() yields
+    # str | bytes | FileField, and the non-str shapes are truthy, so they
+    # would slip past authenticate_client's emptiness guard and raise
+    # AttributeError on .encode() (#2219 review round 3).
+    return [(str(form.get("client_id", "")), str(form.get("client_secret", "")))]
 
 
 async def _handle_authorization_code(
@@ -1092,7 +1111,10 @@ async def handle_legacy_token_post(
     provider: OAuthProvider, request: web.Request
 ) -> web.Response:
     """Serve the proxy's legacy token exchange from either token route."""
-    form = dict(await request.post())
+    raw_form = await read_form(request)
+    if raw_form is None:
+        return _json_error("invalid_request", 400)
+    form = dict(raw_form)
     candidates = _extract_client_creds(request, form)
     if not any(
         provider.authenticate_client(client_id, client_secret)

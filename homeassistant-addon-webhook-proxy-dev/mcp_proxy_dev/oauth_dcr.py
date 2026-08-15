@@ -36,6 +36,10 @@ CFG_DCR_SIGNING_KEY = "dcr_signing_key"
 _DCR_VIEW_REGISTERED_KEY = "mcp_proxy_dev_oauth_dcr_view_registered"
 _CLIENT_ID_PREFIX = "hamcp-dcr-"
 
+# A conforming registration is a few KB; HA's own 16 MiB client_max_size is
+# no bound for an anonymous endpoint, so cap the read like the sibling CIMD
+# fetch does (#2219 review round 3).
+MAX_DCR_BODY_BYTES = 64 * 1024
 MAX_REDIRECT_URIS = 10
 MAX_REDIRECT_URI_LEN = 512
 
@@ -186,11 +190,17 @@ class DcrRegisterView(HomeAssistantView):
         key = _active_dcr_key(self._hass)
         if key is None:
             return web.json_response({"error": "not_found"}, status=404)
+        raw = await request.content.read(MAX_DCR_BODY_BYTES + 1)
+        if len(raw) > MAX_DCR_BODY_BYTES:
+            return _dcr_error("invalid_client_metadata", "body is too large")
         try:
-            body: Any = await request.json()
+            body: Any = json.loads(raw)
         except (ValueError, RecursionError):
             # RecursionError: json.loads on a deeply nested body (#2218
-            # review) — malformed metadata, not a server error.
+            # review) — malformed metadata, not a server error. Reading the
+            # bytes ourselves also sidesteps request.json()'s charset lookup,
+            # which raises LookupError on a bogus Content-Type charset
+            # (#2219 review round 3); JSON is UTF-8 by RFC 8259 anyway.
             return _dcr_error("invalid_client_metadata", "body must be JSON")
         if not isinstance(body, dict):
             return _dcr_error("invalid_client_metadata", "body must be an object")

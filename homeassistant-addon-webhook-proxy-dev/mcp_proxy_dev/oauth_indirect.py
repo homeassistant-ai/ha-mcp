@@ -288,13 +288,14 @@ async def resolve_forward_client_id(
     # path must pass such identities through for core to reject, not 500.
     parsed_client = urlparse(client_id)
     parsed_redirect = urlparse(redirect_uri)
-    # RAW, case-sensitive netloc equality — the same comparison core's own
-    # IndieAuth rule applies to what we forward (#2219 review, second round):
-    # a pair differing only in host casing must MISS this fast path so it
-    # takes the validated translation to an origin core accepts.
+    # Case-insensitive netloc equality, matching core's own authorize rule:
+    # indieauth._parse_url lowercases the netloc of BOTH the client_id and
+    # the redirect_uri before comparing. (Core's REFRESH leg is byte-exact
+    # instead, which is why the derivation below must reproduce what THIS
+    # leg forwarded, verbatim.)
     if parsed_client.scheme in ("http", "https") and (
-        (parsed_client.scheme, parsed_client.netloc)
-        == (parsed_redirect.scheme, parsed_redirect.netloc)
+        (parsed_client.scheme, parsed_client.netloc.lower())
+        == (parsed_redirect.scheme, parsed_redirect.netloc.lower())
     ):
         return client_id
 
@@ -336,20 +337,27 @@ async def translated_client_id_for_refresh(
         return RefreshDisposition.UNREPRODUCIBLE
     stable = stable_translation_origin(registered)
     assert stable is not None
-    # Passthrough exactly when the authorize fast path COULD have fired
-    # (#2218/#2219 reviews): that fast path compares the client_id's raw
-    # netloc against the PRESENTED redirect's, so refresh reconstructs it
-    # against the registered redirects (reproducible ⇒ all web, one canonical
-    # origin — but their RAW netlocs may still differ from the client_id's by
-    # an explicit default port or by host casing, where the fast path missed
-    # and the token was minted under the TRANSLATED origin). Raw and
-    # case-sensitive, exactly like the fast path itself.
+    # Reproduce what the authorize leg forwarded, or admit we cannot. That
+    # leg's fast path keys off the PRESENTED redirect, which the redirect-less
+    # refresh grant does not carry, so the registered list is all we have:
+    # every registered redirect shares the client_id's origin → the fast path
+    # fired whichever was presented → PASSTHROUGH; none do → it was
+    # translated to the one canonical origin; some but not all → the answer
+    # depends on which was presented and nothing records that →
+    # UNREPRODUCIBLE. The split case is real even under
+    # _refresh_identity_is_reproducible, which normalizes ports:
+    # ["https://h/a", "https://h:443/b"] is ONE canonical origin, yet
+    # authorize on /a passes through while /b translates (#2219 round 3).
     parsed = urlparse(client_id)
-    client_origin = (parsed.scheme, parsed.netloc)
-    for uri in registered:
-        parsed_redirect = urlparse(uri)
-        if (parsed_redirect.scheme, parsed_redirect.netloc) == client_origin:
-            return RefreshDisposition.PASSTHROUGH
+    client_origin = (parsed.scheme, parsed.netloc.lower())
+    matched = [
+        (urlparse(uri).scheme, urlparse(uri).netloc.lower()) == client_origin
+        for uri in registered
+    ]
+    if all(matched):
+        return RefreshDisposition.PASSTHROUGH
+    if any(matched):
+        return RefreshDisposition.UNREPRODUCIBLE
     return stable
 
 

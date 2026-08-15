@@ -58,6 +58,7 @@ from .oauth import (
     handle_legacy_authorize_get,
     handle_legacy_authorize_post,
     handle_legacy_token_post,
+    read_form,
 )
 
 # Dedicated session for anonymous CIMD lookups. Keeping it separate prevents a
@@ -397,7 +398,10 @@ class AutoApproveTokenView(HomeAssistantView):
         self, provider: AutoApproveProvider, request: web.Request
     ) -> web.Response:
         """Exchange a none-mode code for a cosmetic bearer under PKCE proof."""
-        form: dict[str, Any] = dict(await request.post())
+        raw_form = await read_form(request)
+        if raw_form is None:
+            return _json_error("invalid_request", 400)
+        form: dict[str, Any] = dict(raw_form)
         if form.get("grant_type", "") != "authorization_code":
             return _json_error("unsupported_grant_type", 400)
 
@@ -432,7 +436,10 @@ class AutoApproveTokenView(HomeAssistantView):
             translated_client_id_for_refresh,
         )
 
-        form = MultiDict(await request.post())
+        raw_form = await read_form(request)
+        if raw_form is None:
+            return _json_error("invalid_request", 400)
+        form = MultiDict(raw_form)
         grant_type = str(form.get("grant_type", ""))
         client_id = str(form.get("client_id", ""))
         redirect_uri = str(form.get("redirect_uri", ""))

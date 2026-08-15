@@ -75,8 +75,26 @@ def _hass(oauth, mode: str, *, dcr_key: bytes | None = KEY):
     return SimpleNamespace(data={oauth.DOMAIN: data}, http=SimpleNamespace())
 
 
+def _reader(raw: bytes):
+    """An async .read(limit) returning at most ``limit`` bytes of ``raw``."""
+
+    async def read(limit):
+        return raw[:limit]
+
+    return read
+
+
+def _raw_request(raw: bytes):
+    """A request whose bounded .content.read() yields ``raw``."""
+
+    async def read(limit):
+        return raw[:limit]
+
+    return SimpleNamespace(content=SimpleNamespace(read=read))
+
+
 def _json_request(body):
-    return SimpleNamespace(json=AsyncMock(return_value=body))
+    return _raw_request(json.dumps(body).encode())
 
 
 def _oauth_request(*, query=None, form=None, host="ha.example"):
@@ -278,27 +296,59 @@ async def test_same_case_uppercase_pair_passes_through_on_both_legs(
     redirects.assert_awaited_once_with(session, client_id)
 
 
-async def test_case_mismatched_pair_translates_on_both_legs(oauth_stack, monkeypatch):
-    """#2219 review, second round: a pair differing only in host casing must
-    miss the fast path — core's raw comparison would reject it untranslated —
-    and take the validated translation on both legs."""
+@pytest.mark.parametrize(
+    "presented_case, registered_case",
+    [("upper", "lower"), ("lower", "lower"), ("lower", "upper")],
+)
+async def test_case_only_differences_pass_through_on_both_legs(
+    oauth_stack, monkeypatch, presented_case, registered_case
+):
+    """#2219 review round 3: core's authorize leg lowercases BOTH sides
+    (indieauth._parse_url) while its refresh leg compares byte-exact, so a
+    case-only difference is same-origin to core and the raw client_id is what
+    both legs must forward — the document's casing is author-written and the
+    presented redirect is client-runtime, so they need not agree."""
     indirect = oauth_stack.indirect
-    redirects = AsyncMock(return_value=["https://claude.ai/api/mcp/auth_callback"])
-    monkeypatch.setattr(indirect, "fetch_cimd_redirects", redirects)
+    upper = "https://CLAUDE.AI/api/mcp/auth_callback"
+    lower = "https://claude.ai/api/mcp/auth_callback"
+    presented = upper if presented_case == "upper" else lower
+    registered = [upper if registered_case == "upper" else lower]
+    monkeypatch.setattr(
+        indirect, "fetch_cimd_redirects", AsyncMock(return_value=registered)
+    )
     client_id = "https://CLAUDE.AI/oauth/client.json"
 
     authorize_id = await indirect.resolve_forward_client_id(
         session=object(),
         dcr_key=None,
         client_id=client_id,
-        redirect_uri="https://claude.ai/api/mcp/auth_callback",
+        redirect_uri=presented,
     )
     refresh_id = await indirect.translated_client_id_for_refresh(
         object(), None, client_id
     )
 
-    assert authorize_id == "https://claude.ai"
-    assert refresh_id == "https://claude.ai"
+    assert authorize_id == client_id
+    assert refresh_id is indirect.RefreshDisposition.PASSTHROUGH
+
+
+async def test_mixed_port_shapes_are_unreproducible(oauth_stack, monkeypatch):
+    """#2219 review round 3: port normalization makes these ONE canonical
+    origin, but authorize passes through for the port-less redirect and
+    translates the explicit-port one — which was presented is unrecorded, so
+    the honest answer is a local invalid_grant."""
+    indirect = oauth_stack.indirect
+    monkeypatch.setattr(
+        indirect,
+        "fetch_cimd_redirects",
+        AsyncMock(return_value=["https://h.example/a", "https://h.example:443/b"]),
+    )
+
+    refresh_id = await indirect.translated_client_id_for_refresh(
+        object(), None, "https://h.example/client.json"
+    )
+
+    assert refresh_id is indirect.RefreshDisposition.UNREPRODUCIBLE
 
 
 async def test_symmetric_explicit_port_passes_through_on_both_legs(
@@ -640,10 +690,20 @@ async def test_dcr_register_rejects_deeply_nested_json(oauth_stack):
     body — malformed metadata answers 400, never a 500."""
     oauth, dcr = oauth_stack.oauth, oauth_stack.dcr
 
-    async def _nested_body():
-        return json.loads("[" * 100000 + "]" * 100000)
+    request = _raw_request(b"[" * 30000 + b"]" * 30000)
+    response = await dcr.DcrRegisterView(_hass(oauth, oauth.MODE_HA_AUTH)).post(request)
 
-    request = SimpleNamespace(json=_nested_body)
+    assert response.status == 400
+    assert response.json_body["error"] == "invalid_client_metadata"
+
+
+async def test_dcr_register_rejects_oversized_body(oauth_stack):
+    """#2219 review round 3: a conforming registration is a few KB, so the
+    read is capped rather than riding HA's 16 MiB client_max_size."""
+    oauth, dcr = oauth_stack.oauth, oauth_stack.dcr
+    oversized = b"x" * (dcr.MAX_DCR_BODY_BYTES + 1)
+
+    request = SimpleNamespace(content=SimpleNamespace(read=_reader(oversized)))
     response = await dcr.DcrRegisterView(_hass(oauth, oauth.MODE_HA_AUTH)).post(request)
 
     assert response.status == 400
