@@ -256,14 +256,26 @@
   {
     "name": "ha_manage_pipeline",
     "title": "Manage Assist Pipeline",
-    "description": "Manage Home Assistant Assist pipelines.\n\nUse action='list' to discover pipeline IDs, action='get' to inspect one\npipeline, action='create' or action='update' to write pipeline settings,\nand action='set_preferred' to choose the preferred pipeline.\n\nEXAMPLES:\n- List pipelines: ha_manage_pipeline(action=\"list\")\n- Get one pipeline: ha_manage_pipeline(action=\"get\", pipeline_id=\"preferred\")\n- Create by cloning preferred: ha_manage_pipeline(\n      action=\"create\",\n      name=\"Local Assist\",\n      conversation_engine=\"conversation.local_llm\",\n  )\n- Create by cloning a specific pipeline: ha_manage_pipeline(\n      action=\"create\",\n      base_pipeline_id=\"preferred\",\n      name=\"Local Assist\",\n      conversation_engine=\"conversation.local_llm\",\n  )\n- Update conversation agent and clear TTS voice: ha_manage_pipeline(\n      action=\"update\",\n      pipeline_id=\"preferred\",\n      conversation_engine=\"conversation.local_llm\",\n      tts_voice=\"\",\n  )\n- Set preferred: ha_manage_pipeline(\n      action=\"set_preferred\",\n      pipeline_id=\"preferred\",\n  )\n\nEmpty string clears nullable STT/TTS/wake-word fields. Non-nullable\nfields such as name, language, conversation_language, and\nconversation_engine must be omitted or non-empty.",
+    "description": "Manage Home Assistant Assist pipelines.\n\nUse action='list' to discover pipeline IDs, action='get' to inspect one\npipeline, action='create' or action='update' to write pipeline settings,\naction='set_preferred' to choose the preferred pipeline, and\naction='process' to run a sentence through Assist.\n\naction='process' sends the sentence straight to Assist's conversation\nagent, so a matched intent executes: it turns on the light rather than\nreporting that it would. Its result carries response_type\n('action_done', 'query_answer' or 'error') and, on an error, error_code\nsuch as 'no_intent_match' — Assist declining a sentence is an answer,\nnot a tool failure, so inspect those fields rather than expecting a\nraised error. Use ha_call_service to act on an entity directly; use\nthis to test what Assist itself understands. When the built-in agent\nanswers, a matching conversation trigger runs its automation: that\nagent checks its sentence triggers before it matches intents, so this\nis not limited to intents. pipeline_id borrows a pipeline's\nconversation agent and language, but the sentence still goes to the\nagent directly. So with an agent other than the built-in one, neither\nsentence triggers nor prefer_local_intents apply — a full pipeline run\nis what adds those for other agents.\n\nEXAMPLES:\n- List pipelines: ha_manage_pipeline(action=\"list\")\n- Get one pipeline: ha_manage_pipeline(action=\"get\", pipeline_id=\"preferred\")\n- Create by cloning preferred: ha_manage_pipeline(\n      action=\"create\",\n      name=\"Local Assist\",\n      conversation_engine=\"conversation.local_llm\",\n  )\n- Create by cloning a specific pipeline: ha_manage_pipeline(\n      action=\"create\",\n      base_pipeline_id=\"preferred\",\n      name=\"Local Assist\",\n      conversation_engine=\"conversation.local_llm\",\n  )\n- Update conversation agent and clear TTS voice: ha_manage_pipeline(\n      action=\"update\",\n      pipeline_id=\"preferred\",\n      conversation_engine=\"conversation.local_llm\",\n      tts_voice=\"\",\n  )\n- Set preferred: ha_manage_pipeline(\n      action=\"set_preferred\",\n      pipeline_id=\"preferred\",\n  )\n- Run a sentence: ha_manage_pipeline(\n      action=\"process\",\n      sentence=\"turn on the kitchen light\",\n  )\n- Run it through one pipeline's agent: ha_manage_pipeline(\n      action=\"process\",\n      sentence=\"turn on the kitchen light\",\n      pipeline_id=\"preferred\",\n  )\n- Continue a conversation: ha_manage_pipeline(\n      action=\"process\",\n      sentence=\"and the hallway?\",\n      conversation_id=\"<id from the previous response>\",\n  )\n\nEmpty string clears nullable STT/TTS/wake-word fields. Non-nullable\nfields such as name, language, conversation_language, and\nconversation_engine must be omitted or non-empty.",
     "inputSchema": {
       "properties": {
         "action": {
-          "type": "Annotated[PipelineAction, Field(description='Pipeline operation: list, get, create, update, or set_preferred.')]"
+          "type": "Annotated[PipelineAction, Field(description='Pipeline operation: list, get, create, update, set_preferred, or process.')]"
         },
         "pipeline_id": {
-          "type": "Annotated[str | None, Field(description='Assist pipeline ID. Required for get, update, and set_preferred.', default=None)]",
+          "type": "Annotated[str | None, Field(description='Assist pipeline ID. Required for get, update, and set_preferred. Optional for process, where it selects the conversation agent and language that pipeline is configured with.', default=None)]",
+          "default": null
+        },
+        "sentence": {
+          "type": "Annotated[str | None, Field(description=\"Natural-language command to run through Assist. Required when action='process'. A matched intent executes, and with the built-in agent a sentence matching a conversation trigger runs that automation.\", default=None)]",
+          "default": null
+        },
+        "conversation_id": {
+          "type": "Annotated[str | None, Field(description='For process only, the conversation to continue. Returned in the response so follow-up sentences keep their context.', default=None)]",
+          "default": null
+        },
+        "agent_id": {
+          "type": "Annotated[str | None, Field(description=\"For process only, the conversation agent entity ID to answer, e.g. 'conversation.home_assistant'. Overrides the agent taken from pipeline_id; omit both for the default agent.\", default=None)]",
           "default": null
         },
         "name": {
@@ -283,7 +295,7 @@
           "default": null
         },
         "language": {
-          "type": "Annotated[str | None, Field(description=\"Pipeline language, e.g. 'en'.\", default=None)]",
+          "type": "Annotated[str | None, Field(description=\"Pipeline language, e.g. 'en'. For process, the language to recognise the sentence in.\", default=None)]",
           "default": null
         },
         "stt_engine": {
@@ -328,7 +340,7 @@
       ]
     },
     "annotations": {
-      "openWorldHint": false,
+      "openWorldHint": true,
       "destructiveHint": true,
       "idempotentHint": false,
       "readOnlyHint": false
@@ -336,7 +348,7 @@
     "tags": [
       "Assist"
     ],
-    "source_file": "tools_voice_assistant.py"
+    "source_file": "tools_assist_pipeline.py"
   },
   {
     "name": "ha_config_get_automation",
