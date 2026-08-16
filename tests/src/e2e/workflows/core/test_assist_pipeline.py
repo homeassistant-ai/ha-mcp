@@ -9,7 +9,6 @@ import pytest
 from ...utilities.assertions import (
     MCPAssertions,
     assert_mcp_success,
-    parse_mcp_result,
     safe_call_tool,
 )
 from ...utilities.wait_helpers import wait_for_entity_state
@@ -170,15 +169,14 @@ class TestAssistPipeline:
         logger.info("Testing ha_manage_pipeline process executing an intent...")
 
         friendly_name = "Assist Process Probe"
-        create_data = parse_mcp_result(
-            await mcp_client.call_tool(
-                "ha_config_set_helper",
-                {
-                    "helper_type": "input_boolean",
-                    "name": friendly_name,
-                    "initial": "off",
-                },
-            )
+        create_data = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_helper",
+            {
+                "helper_type": "input_boolean",
+                "name": friendly_name,
+                "initial": "off",
+            },
         )
         if not create_data.get("success"):
             pytest.skip(f"Could not create the test helper: {create_data}")
@@ -189,20 +187,19 @@ class TestAssistPipeline:
             entity_id = f"input_boolean.{helper_id}" if helper_id else None
         if not entity_id:
             pytest.skip(f"Could not resolve the helper entity_id: {create_data}")
-        cleanup_tracker.track("input_boolean", entity_id)
-
-        assert await wait_for_entity_state(mcp_client, entity_id, "off"), (
-            f"{entity_id} never became available"
-        )
 
         try:
-            expose_data = parse_mcp_result(
-                await mcp_client.call_tool(
+            cleanup_tracker.track("input_boolean", entity_id)
+
+            assert await wait_for_entity_state(mcp_client, entity_id, "off"), (
+                f"{entity_id} never became available"
+            )
+
+            async with MCPAssertions(mcp_client) as mcp:
+                await mcp.call_tool_success(
                     "ha_set_entity",
                     {"entity_id": entity_id, "expose_to": {"conversation": True}},
                 )
-            )
-            assert expose_data.get("success"), f"Failed to expose entity: {expose_data}"
 
             # The new exposure reaches the conversation agent asynchronously, so
             # a sentence sent right away can still come back unmatched. Retry
