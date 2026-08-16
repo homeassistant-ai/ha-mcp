@@ -194,7 +194,11 @@ async def test_register_rejects_deeply_nested_json_body(dcr_view_client_factory)
     )
 
     assert resp.status == 400
-    assert (await resp.json())["error"] == "invalid_client_metadata"
+    body = await resp.json()
+    assert body["error"] == "invalid_client_metadata"
+    # The description distinguishes the arms: both guards answer the same
+    # error code, so only this pins that the PARSER rejected it.
+    assert body["error_description"] == "body must be JSON"
 
 
 async def test_register_survives_a_bogus_content_type_charset(
@@ -230,7 +234,9 @@ async def test_register_rejects_oversized_body(dcr_view_client_factory):
     )
 
     assert resp.status == 400
-    assert (await resp.json())["error"] == "invalid_client_metadata"
+    body = await resp.json()
+    assert body["error"] == "invalid_client_metadata"
+    assert body["error_description"] == "body is too large"
 
 
 async def test_register_reassembles_a_chunked_body(dcr_view_client_factory):
@@ -263,7 +269,9 @@ async def test_register_rejects_plain_invalid_json(dcr_view_client_factory):
     )
 
     assert resp.status == 400
-    assert (await resp.json())["error"] == "invalid_client_metadata"
+    body = await resp.json()
+    assert body["error"] == "invalid_client_metadata"
+    assert body["error_description"] == "body must be JSON"
 
 
 async def test_register_accepts_google_multi_origin_client(dcr_view_client_factory):
