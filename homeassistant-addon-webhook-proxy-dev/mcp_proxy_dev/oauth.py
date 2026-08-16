@@ -411,7 +411,14 @@ _HEARTBEAT_MAX_AGE = 90.0  # three missed 30-second touches
 # cached True would keep the surface serving after the stop. A fresh stat per
 # request while alive is microseconds in the executor; the cache exists so an
 # anonymous flood against a STOPPED install does not stat per request.
-_ADDON_DOWN_TTL = 15.0
+#
+# The lease MUST stay shorter than start.py's `_probe_oauth_active` delay
+# (2 s between 3 attempts): that probe drives a DESTRUCTIVE path — it tears
+# down a working webhook and demands an HA restart when the metadata endpoint
+# looks absent. A request arriving while the add-on was stopped would
+# otherwise leave a lease covering every probe of the next start, so a healthy
+# entry got removed on restart (#2219 codex review).
+_ADDON_DOWN_TTL = 1.0
 _addon_down_state = {"until": 0.0}
 
 

@@ -4,6 +4,7 @@ Structure tests verify addon files and config.yaml.
 Unit tests mock Supervisor API calls to test discovery logic in start.py.
 """
 
+import contextlib
 import importlib
 import importlib.util
 import json
@@ -31,11 +32,6 @@ WEBHOOK_PROXY_VARIANTS = {
         "config_file": "/config/.mcp_proxy_config.json",
         "inbound_log": "/config/.mcp_proxy_inbound.log",
         "oauth_marker": "/config/.mcp_proxy_oauth_restart_required",
-        "autoapprove_any_redirect": False,
-        "unified_oauth_routes": False,
-        "proxy_owned_oauth_endpoints": False,
-        "dcr_registration": False,
-        "dedicated_cimd_session": False,
         "sibling_base": "ha_mcp_webhook_proxy_dev",
         "mutex_id": "mcp_proxy_mutex",
     },
@@ -49,11 +45,6 @@ WEBHOOK_PROXY_VARIANTS = {
         "config_file": "/config/.mcp_proxy_dev_config.json",
         "inbound_log": "/config/.mcp_proxy_dev_inbound.log",
         "oauth_marker": "/config/.mcp_proxy_dev_oauth_restart_required",
-        "autoapprove_any_redirect": True,
-        "unified_oauth_routes": True,
-        "proxy_owned_oauth_endpoints": True,
-        "dcr_registration": True,
-        "dedicated_cimd_session": True,
         "sibling_base": "ha_mcp_webhook_proxy",
         "mutex_id": "mcp_proxy_dev_mutex",
     },
@@ -367,9 +358,57 @@ def test_heartbeat_touch_precedes_oauth_enforcement():
         start_src = Path(variant["addon_dir"], "start.py").read_text()
         if "HEARTBEAT_FILE" not in start_src:
             continue  # flavor predates the heartbeat gate
-        touch = start_src.index("HEARTBEAT_FILE.touch()")
-        enforce = start_src.index("_enforce_oauth_or_disable(enable_oauth)")
+        # Slice main()'s body: _keep_alive_loop is DEFINED earlier in the file
+        # and touches the heartbeat too, so a whole-file index() would be
+        # satisfied by that unrelated touch even with main()'s deleted.
+        body = start_src[start_src.index("\ndef main(") :]
+        assert "HEARTBEAT_FILE.touch()" in body, variant["key"]
+        touch = body.index("HEARTBEAT_FILE.touch()")
+        enforce = body.index("_enforce_oauth_or_disable(enable_oauth)")
         assert touch < enforce, variant["key"]
+
+
+def _component_src(name: str) -> str:
+    """Source of a component module in the CURRENT flavor, "" when absent."""
+    path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], name)
+    if not os.path.exists(path):
+        return ""
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _unified_oauth_routes() -> bool:
+    """Feature-detect the unified scoped authorize/token dispatchers.
+
+    The marker is the legacy handler they dispatch INTO: the scoped URL alone
+    is not distinguishing, because the none-mode-only view that predates
+    unification binds the same path. Stable gains this on promotion — same
+    lockstep-with-code approach as `_ha_auth_supported`."""
+    return "handle_legacy_authorize_get" in _component_src("oauth_autoapprove.py")
+
+
+def _dcr_registration_supported() -> bool:
+    """Feature-detect the stateless DCR registration endpoint."""
+    return "DcrRegisterView" in _component_src("oauth_dcr.py")
+
+
+def _dedicated_cimd_session() -> bool:
+    """Feature-detect the isolated CIMD connector pool."""
+    return "cimd_session" in _component_src("__init__.py")
+
+
+def _proxy_owned_oauth_endpoints() -> bool:
+    """Feature-detect that the ha_auth AS document advertises proxy-owned
+    endpoints under OAUTH_BASE rather than core's own /auth/* routes."""
+    return '"authorization_endpoint": f"{base}{OAUTH_BASE}/authorize"' in (
+        _component_src("auth_native.py")
+    )
+
+
+def _autoapprove_any_redirect() -> bool:
+    """Feature-detect none-mode accepting any valid redirect (the claude.ai
+    client allowlist retired)."""
+    return "without a client allowlist" in _component_src("oauth_autoapprove.py")
 
 
 def _none_autoapprove_supported() -> bool:
@@ -1664,7 +1703,7 @@ class TestOAuthOffPreservesBehavior:
             assert (
                 hass.data[mod.DOMAIN]["oauth_mode"] == mod.OAUTH_MODE_NONE_AUTOAPPROVE
             )
-        if CURRENT["dcr_registration"]:
+        if _dcr_registration_supported():
             # The none-mode surface now serves stateless DCR, keyed by the
             # signing secret loaded at setup.
             expected |= {"dcr_signing_key"}
@@ -1818,7 +1857,7 @@ class TestDebugLogging:
             # Dev's OAuth-off path also serves none-mode auto-approve discovery
             # (issue #1969): provider under "autoapprove" + the mode marker.
             expected |= {"autoapprove", "oauth_mode"}
-        if CURRENT["dcr_registration"]:
+        if _dcr_registration_supported():
             expected |= {"dcr_signing_key"}
         assert set(hass.data[mod.DOMAIN].keys()) == expected
 
@@ -2450,7 +2489,7 @@ class TestOAuthSetupEntry:
         expected_views = (
             4
             + len(_wellknown_oauth_urls(oauth, "mcp_test"))
-            + (2 if CURRENT["unified_oauth_routes"] else 0)
+            + (2 if _unified_oauth_routes() else 0)
         )
         assert hass.http.register_view.call_count == expected_views
         # Successful OAuth setup records that THIS flavor owns the root routes,
@@ -2715,7 +2754,7 @@ class TestOAuthRestartRepairTrigger:
         hass.data[mod.OAUTH_ROUTE_KEY_FINGERPRINT] = mod._oauth_route_fingerprint(
             creds["client_id"], creds["client_secret"], fixed_key
         )
-        if CURRENT["unified_oauth_routes"]:
+        if _unified_oauth_routes():
             # Same premise as the seeded fingerprint: the unified scoped
             # dispatchers were also bound earlier this session (guard key in
             # oauth_autoapprove.py), so the reload must reuse them.
@@ -2777,7 +2816,7 @@ class TestOAuthRestartRepairTrigger:
         # DIFFERENT (now-stale) identity than the creds we're reloading with.
         hass.data[mod.OAUTH_ROUTE_OWNER_KEY] = mod.DOMAIN
         hass.data[mod.OAUTH_ROUTE_KEY_FINGERPRINT] = "stale-fingerprint"
-        if CURRENT["unified_oauth_routes"]:
+        if _unified_oauth_routes():
             hass.data[
                 f"webhook_proxy_oauth_autoapprove_views_registered_{mod.DOMAIN}"
             ] = True
@@ -3433,9 +3472,7 @@ class TestAuthorizationServerView:
         assert body["issuer"].endswith(CURRENT["oauth_base"])
         # The dev mirror advertises its mode-dispatched scoped routes; stable
         # keeps the legacy root aliases until the promote workflow carries it.
-        route_base = (
-            CURRENT["oauth_base"] if CURRENT["proxy_owned_oauth_endpoints"] else ""
-        )
+        route_base = CURRENT["oauth_base"] if _proxy_owned_oauth_endpoints() else ""
         assert body["authorization_endpoint"] == (
             f"https://legit.example{route_base}/authorize"
         )
@@ -3722,14 +3759,38 @@ class TestShutdownAndWebhookErrors:
         log_file.write_text("x\n")
         old = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT))
         logs: list[str] = []
+        # The heartbeat gate is dev-only until promoted — same
+        # lockstep-with-code feature detection as `_ha_auth_supported`.
+        has_heartbeat = hasattr(start, "HEARTBEAT_FILE")
+        heartbeat = tmp_path / "heartbeat"
+        heartbeat.write_text("")
+        seen: dict[str, bool] = {}
+
+        def _record_then_remove():
+            # Captured DURING the slow HA call: the surface must already be
+            # dark by now, so a mid-cleanup kill can't leave it serving.
+            seen["heartbeat_alive"] = heartbeat.exists()
+
         try:
-            with (
-                patch.object(start, "INBOUND_LOG_FILE", log_file),
-                patch.object(start, "_remove_config_entry") as rm,
-                patch.object(start, "log_info", side_effect=logs.append),
-            ):
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(patch.object(start, "INBOUND_LOG_FILE", log_file))
+                rm = stack.enter_context(
+                    patch.object(
+                        start, "_remove_config_entry", side_effect=_record_then_remove
+                    )
+                )
+                stack.enter_context(
+                    patch.object(start, "log_info", side_effect=logs.append)
+                )
+                if has_heartbeat:
+                    stack.enter_context(
+                        patch.object(start, "HEARTBEAT_FILE", heartbeat)
+                    )
                 start._shutdown_cleanup("SIGTERM")
             rm.assert_called_once()
+            if has_heartbeat:
+                assert not heartbeat.exists()  # OAuth surface taken dark
+                assert seen["heartbeat_alive"] is False  # ...before the HA calls
             assert not log_file.exists()  # mirror file dropped
             assert any("reason: SIGTERM" in m for m in logs)
             # Handlers restored to default so a second signal can't abort cleanup.
@@ -4739,7 +4800,7 @@ class TestOAuthSetupEntryRegistersExpectedViews:
             "/authorize",
             "/token",
         } | _wellknown_oauth_urls(oauth, "mcp_test")
-        if CURRENT["unified_oauth_routes"]:
+        if _unified_oauth_routes():
             # The unified scoped dispatchers bind in every mode; the root
             # views above stay as the legacy compatibility aliases.
             expected |= {
@@ -4862,12 +4923,12 @@ class TestHaAuthMode:
             f"{CURRENT['oauth_base']}/protected-resource",
             f"{CURRENT['oauth_base']}/authorization-server",
         } | _wellknown_oauth_urls(oauth, "mcp_test")
-        if CURRENT["unified_oauth_routes"]:
+        if _unified_oauth_routes():
             expected |= {
                 f"{CURRENT['oauth_base']}/authorize",
                 f"{CURRENT['oauth_base']}/token",
             }
-        if CURRENT["dcr_registration"]:
+        if _dcr_registration_supported():
             expected.add(f"{CURRENT['oauth_base']}/register")
         assert registered == expected
         assert len(registered) == len(expected)
@@ -4890,7 +4951,7 @@ class TestHaAuthMode:
         self, hass, tmp_path
     ):
         """The dev parity surface persists DCR and isolates public lookups."""
-        if not CURRENT["dedicated_cimd_session"]:
+        if not _dedicated_cimd_session():
             pytest.skip("dedicated CIMD session has not been promoted")
         mod, _oauth, _auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
         _bind_repairs(mod, tmp_path)
@@ -4929,7 +4990,7 @@ class TestHaAuthMode:
         cimd_session = MagicMock()
         cimd_session.close = AsyncMock()
         sessions = [relay_session]
-        if CURRENT["dedicated_cimd_session"]:
+        if _dedicated_cimd_session():
             sessions.append(cimd_session)
         with (
             patch.object(mod, "_read_config", return_value=self._ha_auth_config()),
@@ -4949,7 +5010,7 @@ class TestHaAuthMode:
         assert "Failed to enable OAuth" in str(exc_info.value)
         mock_unreg.assert_called_once_with(hass, "mcp_test")
         relay_session.close.assert_awaited_once()
-        if CURRENT["dedicated_cimd_session"]:
+        if _dedicated_cimd_session():
             cimd_session.close.assert_awaited_once()
         else:
             cimd_session.close.assert_not_awaited()
@@ -5014,8 +5075,8 @@ class TestHaAuthMode:
             await mod.async_setup_entry(hass, MagicMock())
         assert first == (
             7
-            + (2 if CURRENT["unified_oauth_routes"] else 0)
-            + (1 if CURRENT["dcr_registration"] else 0)
+            + (2 if _unified_oauth_routes() else 0)
+            + (1 if _dcr_registration_supported() else 0)
         )
         assert hass.http.register_view.call_count == 0
         # The register-once flag lives in oauth.py (a top-level hass.data key),
@@ -5041,8 +5102,8 @@ class TestHaAuthMode:
             await mod.async_setup_entry(hass, MagicMock())
             assert hass.http.register_view.call_count == (
                 7
-                + (2 if CURRENT["unified_oauth_routes"] else 0)
-                + (1 if CURRENT["dcr_registration"] else 0)
+                + (2 if _unified_oauth_routes() else 0)
+                + (1 if _dcr_registration_supported() else 0)
             )
             flag_key = oauth._METADATA_VIEWS_REGISTERED_KEY
             assert hass.data[flag_key] is True
@@ -5091,8 +5152,8 @@ class TestHaAuthMode:
             await mod.async_setup_entry(hass, MagicMock())  # ha_auth discovery
             assert hass.http.register_view.call_count == (
                 7
-                + (2 if CURRENT["unified_oauth_routes"] else 0)
-                + (1 if CURRENT["dcr_registration"] else 0)
+                + (2 if _unified_oauth_routes() else 0)
+                + (1 if _dcr_registration_supported() else 0)
             )
             hass.http.register_view.reset_mock()
             await mod.async_setup_entry(hass, MagicMock())  # legacy: only 2 root
@@ -5122,11 +5183,11 @@ class TestHaAuthMode:
         ):
             await mod.async_setup_entry(hass, MagicMock())  # legacy views + root
             assert hass.http.register_view.call_count == (
-                11 if CURRENT["unified_oauth_routes"] else 9
+                11 if _unified_oauth_routes() else 9
             )
             hass.http.register_view.reset_mock()
             await mod.async_setup_entry(hass, MagicMock())  # ha_auth: reuse all
-        if CURRENT["dcr_registration"]:
+        if _dcr_registration_supported():
             assert [
                 call.args[0].url for call in hass.http.register_view.call_args_list
             ] == [f"{CURRENT['oauth_base']}/register"]
@@ -5261,9 +5322,7 @@ class TestHaAuthMode:
             await oauth.AuthorizationServerMetadataView(rs).get(request)
         doc = jr.call_args.args[0]
         assert doc["issuer"] == f"https://legit.example{oauth.OAUTH_BASE}"
-        route_base = (
-            oauth.OAUTH_BASE if CURRENT["proxy_owned_oauth_endpoints"] else "/auth"
-        )
+        route_base = oauth.OAUTH_BASE if _proxy_owned_oauth_endpoints() else "/auth"
         assert doc["authorization_endpoint"] == (
             f"https://legit.example{route_base}/authorize"
         )
@@ -5273,7 +5332,7 @@ class TestHaAuthMode:
         assert doc["code_challenge_methods_supported"] == ["S256"]
         assert doc["token_endpoint_auth_methods_supported"] == ["none"]
         assert doc["client_id_metadata_document_supported"] is True
-        if CURRENT["dcr_registration"]:
+        if _dcr_registration_supported():
             assert doc["registration_endpoint"] == (
                 f"https://legit.example{oauth.OAUTH_BASE}/register"
             )
@@ -5711,9 +5770,7 @@ class TestHaAuthMode:
         # It is genuinely the ha_auth document (public client + CIMD), not legacy.
         assert canonical["token_endpoint_auth_methods_supported"] == ["none"]
         assert canonical["client_id_metadata_document_supported"] is True
-        route_base = (
-            oauth.OAUTH_BASE if CURRENT["proxy_owned_oauth_endpoints"] else "/auth"
-        )
+        route_base = oauth.OAUTH_BASE if _proxy_owned_oauth_endpoints() else "/auth"
         assert canonical["authorization_endpoint"] == (
             f"https://legit.example{route_base}/authorize"
         )
@@ -5771,9 +5828,7 @@ class TestHaAuthMode:
         assert doc["client_id_metadata_document_supported"] is True
         # Host-derived base from the request, NOT the bound provider's pin.
         assert doc["issuer"] == f"https://switch-host.example{oauth.OAUTH_BASE}"
-        route_base = (
-            oauth.OAUTH_BASE if CURRENT["proxy_owned_oauth_endpoints"] else "/auth"
-        )
+        route_base = oauth.OAUTH_BASE if _proxy_owned_oauth_endpoints() else "/auth"
         assert doc["authorization_endpoint"] == (
             f"https://switch-host.example{route_base}/authorize"
         )
@@ -5811,7 +5866,7 @@ class TestHaAuthMode:
         assert "client_id_metadata_document_supported" not in doc
         # Pinned base from public_base_url, NOT the request Host.
         assert doc["issuer"] == f"https://pinned-legacy.example{oauth.OAUTH_BASE}"
-        route_base = oauth.OAUTH_BASE if CURRENT["proxy_owned_oauth_endpoints"] else ""
+        route_base = oauth.OAUTH_BASE if _proxy_owned_oauth_endpoints() else ""
         assert doc["authorization_endpoint"] == (
             f"https://pinned-legacy.example{route_base}/authorize"
         )
@@ -6339,7 +6394,7 @@ class TestNoneAutoApproveMode:
         # The two fields HA core's root doc lacks — the whole reason for #1969.
         assert doc["token_endpoint_auth_methods_supported"] == ["none"]
         assert doc["client_id_metadata_document_supported"] is True
-        if CURRENT["dcr_registration"]:
+        if _dcr_registration_supported():
             assert doc["registration_endpoint"] == (f"https://x.example{base}/register")
         else:
             assert "registration_endpoint" not in doc
@@ -6418,7 +6473,7 @@ class TestNoneAutoApproveMode:
 
     def test_redirect_gate_matches_flavor_policy(self):
         _mod, _oauth, autoapprove, _an = _import_none_autoapprove_stack()
-        if CURRENT["autoapprove_any_redirect"]:
+        if _autoapprove_any_redirect():
             base = {
                 "response_type": "code",
                 "code_challenge": "A" * 43,
@@ -6541,7 +6596,7 @@ class TestNoneAutoApproveMode:
             patch.object(autoapprove.web, "Response") as resp,
         ):
             await view.get(request)
-        if CURRENT["autoapprove_any_redirect"]:
+        if _autoapprove_any_redirect():
             resp.assert_called_once()
             assert resp.call_args.kwargs["status"] == 302
             jr.assert_not_called()
@@ -6691,7 +6746,7 @@ class TestNoneAutoApproveMode:
             f"{CURRENT['oauth_base']}/authorize",
             f"{CURRENT['oauth_base']}/token",
         }
-        if CURRENT["dcr_registration"]:
+        if _dcr_registration_supported():
             autoapprove_urls.add(f"{CURRENT['oauth_base']}/register")
         assert registered == metadata | autoapprove_urls
         assert len(registered) == len(metadata | autoapprove_urls)
@@ -6700,7 +6755,7 @@ class TestNoneAutoApproveMode:
         assert isinstance(
             hass.data[mod.DOMAIN]["autoapprove"], autoapprove.AutoApproveProvider
         )
-        if CURRENT["dcr_registration"]:
+        if _dcr_registration_supported():
             assert hass.data[mod.DOMAIN]["dcr_signing_key"] == (
                 mod.DCR_SECRET_FILE.read_bytes()
             )
@@ -6775,7 +6830,7 @@ class TestNoneAutoApproveMode:
         hass.data[oauth.DOMAIN] = {"oauth_mode": oauth.MODE_HA_AUTH, "oauth": rs}
         with patch.object(oauth.web, "json_response") as jr:
             await view.get(request)
-        ha_route_base = base if CURRENT["proxy_owned_oauth_endpoints"] else "/auth"
+        ha_route_base = base if _proxy_owned_oauth_endpoints() else "/auth"
         assert jr.call_args.args[0]["authorization_endpoint"] == (
             f"https://legit.example{ha_route_base}/authorize"
         )

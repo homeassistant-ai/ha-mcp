@@ -1078,7 +1078,8 @@ def _install_shutdown_handlers() -> dict[str, str | None]:
 
 
 def _shutdown_cleanup(reason: str | None) -> None:
-    """Clean shutdown: restore default signal handling first so a second signal
+    """Clean shutdown: unlink the heartbeat so the integration's OAuth surface
+    goes dark immediately, restore default signal handling so a second signal
     can't abort cleanup, log why we exited, remove the config entry to
     unregister the webhook (keeping the config + component files so the next
     start needs no HA restart), and drop the inbound mirror file.
@@ -1086,16 +1087,20 @@ def _shutdown_cleanup(reason: str | None) -> None:
     On full uninstall the user may still need to manually remove
     /config/custom_components/mcp_proxy_dev/, /config/.mcp_proxy_dev_config.json, and
     /config/.mcp_proxy_dev_inbound.log, then restart HA."""
+    # Take the OAuth surface dark FIRST — before default signal handling is
+    # restored (after which a second signal kills the process outright) and
+    # before the slow HA GET/DELETE calls in _remove_config_entry. Unlinking
+    # last left a fresh heartbeat behind whenever the process was terminated
+    # mid-cleanup, keeping the OAuth routes live for the full staleness window
+    # on an add-on that was already gone (#2219 codex review).
+    try:
+        HEARTBEAT_FILE.unlink(missing_ok=True)
+    except OSError as e:
+        log_error(f"Could not remove heartbeat file ({type(e).__name__}): {e}")
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, signal.SIG_DFL)
     log_info(f"Shutting down (reason: {reason or 'unknown'})...")
     _remove_config_entry()
-    try:
-        # Take the OAuth surface dark immediately on a clean stop; a crash
-        # skips this and the integration sees the mtime go stale instead.
-        HEARTBEAT_FILE.unlink(missing_ok=True)
-    except OSError as e:
-        log_error(f"Could not remove heartbeat file ({type(e).__name__}): {e}")
     try:
         INBOUND_LOG_FILE.unlink(missing_ok=True)
     except OSError as e:
