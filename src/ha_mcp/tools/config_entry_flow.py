@@ -30,6 +30,7 @@ imported in one direction only (menu <- form <- walker <- here):
 import asyncio
 import json
 import logging
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, NoReturn
 
@@ -85,7 +86,14 @@ _DEVICE_CONNECTION_ID_TYPES = frozenset({"ieee", "mac", "zigbee"})
 # lands mid-reload. The entry reports ``not_loaded`` and then
 # ``setup_in_progress`` before settling on ``loaded``; treating either as final
 # would report a clean reconfigure as unverified.
-_TRANSIENT_RECONFIGURE_STATES = frozenset({"not_loaded", "setup_in_progress"})
+# States HA passes THROUGH while reloading an entry. ``unload_in_progress`` is
+# the first one an enabled domain entry enters (``ConfigEntry.async_unload``
+# sets it before calling the component); it does not exist at the 2024.11.0
+# floor in hacs.json and does on dev, so treating it as terminal would report a
+# perfectly good reload as unverified on current Home Assistant.
+_TRANSIENT_RECONFIGURE_STATES = frozenset(
+    {"not_loaded", "setup_in_progress", "unload_in_progress"}
+)
 # Read-back attempts and the backoff between them. A network integration's
 # reload does real I/O, so the budget has to outlast a slow probe.
 _VERIFICATION_ATTEMPTS = 5
@@ -1432,38 +1440,80 @@ async def _subscribe_entry_changes(client: Any) -> tuple[Any, Any] | None:
     return ws, (sub_id, queue)
 
 
+def _entry_fragments(message: Any, entry_id: str) -> Iterator[dict[str, Any]]:
+    """Yield this entry's fragments from one subscription frame.
+
+    A frame carries a list: one item per dispatch, or every current entry for
+    the snapshot the subscribe answers with.
+    """
+    for item in message.get("event") or []:
+        if not isinstance(item, dict):
+            continue
+        entry = item.get("entry")
+        if isinstance(entry, dict) and entry.get("entry_id") == entry_id:
+            yield entry
+
+
 async def _observe_reload_settled(
     queue: Any, entry_id: str, *, timeout: float = _RELOAD_SETTLE_TIMEOUT
 ) -> dict[str, Any] | None:
     """Consume entry-change events until this entry reaches a settled state.
 
     Returns the settled entry fragment, or ``None`` if the budget expired
-    without one. Because the subscription predates the flow, an event seen
-    here is evidence the reload actually reached that state — unlike a poll,
-    which can sample the pre-reload ``loaded`` and mistake it for the result.
+    without one — in which case the caller falls back to polling.
+
+    **Only a state CHANGE may settle this.** Being on the stream is not by
+    itself evidence that the reload ran, because at least two fragments for
+    this entry predate it and both carry the pre-reload state:
+
+    * ``config_entries/subscribe`` answers with a snapshot of every current
+      entry (``{"type": None, "entry": ...}``) before any dispatch, and
+      ``subscribe_command`` registers the queue before sending the frame, so
+      that snapshot is queued rather than dropped.
+    * Committing the new values dispatches ``ConfigEntryChange.UPDATED``
+      before ``async_schedule_reload`` runs, carrying the new data and the
+      OLD state.
+
+    Settling on either would report the pre-reload state as an observed
+    result — strictly worse than the poll this replaces, since a non-``None``
+    return also switches off the caller's transient-state retry. Every state
+    transition dispatches the same ``UPDATED`` change type and ``modified_at``
+    is bumped by the commit itself, so neither field can order these; the
+    first fragment establishes a baseline and only a departure from it counts.
     """
     deadline = asyncio.get_running_loop().time() + timeout
-    settled: dict[str, Any] | None = None
+    baseline: str | None = None
+    have_baseline = False
     while True:
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
-            return settled
+            return None
         try:
             message = await asyncio.wait_for(queue.get(), timeout=remaining)
         except TimeoutError:
-            return settled
-        for item in message.get("event") or []:
-            if not isinstance(item, dict):
+            return None
+        for entry in _entry_fragments(message, entry_id):
+            state = entry.get("state")
+            if not have_baseline:
+                have_baseline = True
+                baseline = state
+                if entry.get("disabled_by"):
+                    # A disabled entry is never reloaded: async_unload returns
+                    # early at not_loaded without setting state, and
+                    # async_reload skips setup while disabled_by is set. No
+                    # transition is coming, so stop now rather than burn the
+                    # whole settle budget before falling back to polling.
+                    return None
                 continue
-            entry = item.get("entry")
-            if not isinstance(entry, dict) or entry.get("entry_id") != entry_id:
+            if state == baseline:
+                # Same state, new payload — the commit fragment, not the
+                # reload's outcome.
                 continue
+            baseline = state
             if _is_transient_reconfigure_state(entry):
                 # The reload is under way; keep reading for its outcome.
-                settled = None
                 continue
-            settled = entry
-            return settled
+            return entry
 
 
 async def _run_reconfigure_flow(
@@ -1777,7 +1827,9 @@ async def reconfigure_config_entry(
         )
         if subscription is not None:
             _, (_, queue) = subscription
-            observed_entry = await _observe_reload_settled(queue, entry_id)
+            observed_entry = await _observe_reload_settled(
+                queue, entry_id, timeout=_RELOAD_SETTLE_TIMEOUT
+            )
     finally:
         if subscription is not None:
             ws, (sub_id, _) = subscription

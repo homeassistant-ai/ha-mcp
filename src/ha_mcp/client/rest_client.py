@@ -36,9 +36,15 @@ def _is_ssl_error(exc: BaseException) -> bool:
 logger = logging.getLogger(__name__)
 
 # Transient gateway statuses from a reverse proxy / Supervisor ingress — HA Core
-# restarting or briefly overloaded behind it. The upstream couldn't be reached,
-# so the request did not execute and retrying is safe even for writes.
-_RETRYABLE_STATUS = frozenset({502, 503, 504})
+# restarting or briefly overloaded behind it. For these two the upstream could
+# not be reached at all, so the request did not execute and retrying is safe
+# even for writes.
+_RETRYABLE_STATUS = frozenset({502, 503})
+# A 504 is different in kind: the upstream WAS reached and merely failed to
+# answer in time, so a write may already have executed and a retry would
+# replay it. Retry it only for methods that have no side effects to replay.
+_RETRYABLE_STATUS_SAFE_METHODS_ONLY = frozenset({504})
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _MAX_REQUEST_ATTEMPTS = 3
 # Journald window requested for the Core error log on Supervisor-backed
 # installs. Both such branches of get_error_log() build their request from this
@@ -303,8 +309,11 @@ class HomeAssistantClient:
 
         Handles auth, HTTP 4xx/5xx, and transport errors in one place.
         Callers parse the body themselves (JSON via `_request`, text via
-        `get_addon_logs`, etc.). Transient gateway errors (502/503/504) are
-        retried with bounded exponential backoff before surfacing.
+        `get_addon_logs`, etc.). Transient gateway errors are retried with
+        bounded exponential backoff before surfacing: 502/503 for any method,
+        504 only for safe methods — it means the upstream answered too slowly
+        rather than being unreachable, so replaying a write could double-apply
+        it.
 
         Raises:
             HomeAssistantAuthError: 401 response.
@@ -323,10 +332,11 @@ class HomeAssistantClient:
                 if response.status_code >= 400:
                     message, error_data = self._error_message_from_response(response)
 
-                    if (
-                        response.status_code in _RETRYABLE_STATUS
-                        and attempt < _MAX_REQUEST_ATTEMPTS
-                    ):
+                    retryable = response.status_code in _RETRYABLE_STATUS or (
+                        response.status_code in _RETRYABLE_STATUS_SAFE_METHODS_ONLY
+                        and method.upper() in _SAFE_METHODS
+                    )
+                    if retryable and attempt < _MAX_REQUEST_ATTEMPTS:
                         logger.warning(
                             f"Transient {response.status_code} from Home Assistant "
                             f"(attempt {attempt}/{_MAX_REQUEST_ATTEMPTS}), retrying "

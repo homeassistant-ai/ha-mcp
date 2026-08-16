@@ -410,6 +410,24 @@ async def _submit_step(
                 submitted=payload,
                 is_reconfigure=is_reconfigure,
             )
+        if is_reconfigure and (api_err.status_code or 0) >= 500:
+            # A 5xx is the HTTP spelling of "no answer came back". A 504 from
+            # a proxy in front of Home Assistant means the upstream WAS
+            # reached and simply did not answer in time, so the submit — the
+            # call that probes, commits and reloads — may already have
+            # committed. Without a status this re-raised bare and the generic
+            # handler in _run_reconfigure_flow aborted a possibly-committed
+            # flow, which is exactly what POST_COMMIT_STATUSES exists to
+            # suppress. 4xx stays a re-raise: HA parsed the request and
+            # answered about it (rejection, auth, unknown flow).
+            _raise_reconfigure_no_answer(
+                api_err,
+                flow_id=flow_id,
+                payload=payload,
+                current_step=current_step,
+                error_code=ErrorCode.SERVICE_CALL_FAILED,
+                detail=f"HTTP {api_err.status_code}",
+            )
         raise
     except (TimeoutError, *_NO_ANSWER_ERRORS) as no_answer:
         # Every class here is evidence that NO ANSWER came back — see
@@ -430,26 +448,49 @@ async def _submit_step(
         # Carrying the post-commit status also suppresses that abort, since
         # _run_reconfigure_flow gates it on POST_COMMIT_STATUSES.
         if is_reconfigure:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.TIMEOUT_OPERATION
-                    if isinstance(no_answer, TimeoutError)
-                    else ErrorCode.SERVICE_CALL_FAILED,
-                    "Reconfigure flow submission got no answer from Home "
-                    f"Assistant ({type(no_answer).__name__}); the change may "
-                    "have been applied",
-                    suggestions=[
-                        "Do not retry automatically. Inspect the config entry in Home Assistant before attempting rollback."
-                    ],
-                    context={
-                        "flow_id": flow_id,
-                        "status": ReconfigureStatus.APPLIED_BUT_UNVERIFIED,
-                        "submitted_keys": sorted(payload),
-                        "details": current_step,
-                    },
-                )
+            _raise_reconfigure_no_answer(
+                no_answer,
+                flow_id=flow_id,
+                payload=payload,
+                current_step=current_step,
+                error_code=ErrorCode.TIMEOUT_OPERATION
+                if isinstance(no_answer, TimeoutError)
+                else ErrorCode.SERVICE_CALL_FAILED,
+                detail=type(no_answer).__name__,
             )
         raise
+
+
+def _raise_reconfigure_no_answer(
+    cause: BaseException,
+    *,
+    flow_id: str,
+    payload: dict[str, Any],
+    current_step: dict[str, Any],
+    error_code: ErrorCode,
+    detail: str,
+) -> NoReturn:
+    """Raise ``applied_but_unverified`` for a submit whose answer was lost.
+
+    Carrying the post-commit status is what suppresses the flow abort, since
+    ``_run_reconfigure_flow`` gates that on ``POST_COMMIT_STATUSES``.
+    """
+    raise_tool_error(
+        create_error_response(
+            error_code,
+            "Reconfigure flow submission got no answer from Home "
+            f"Assistant ({detail}); the change may have been applied",
+            suggestions=[
+                "Do not retry automatically. Inspect the config entry in Home Assistant before attempting rollback."
+            ],
+            context={
+                "flow_id": flow_id,
+                "status": ReconfigureStatus.APPLIED_BUT_UNVERIFIED,
+                "submitted_keys": sorted(payload),
+                "details": current_step,
+            },
+        )
+    )
 
 
 def _finish_flow_entry(

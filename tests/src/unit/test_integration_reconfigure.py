@@ -3176,6 +3176,30 @@ async def test_each_arm_of_the_entry_identity_guard_fires_alone(
 # === Patch76's question: the read-back can also land BEFORE the reload ===
 
 
+def _entry_event(entry: dict[str, Any], *, change: str | None = "updated") -> dict:
+    """One `config_entries/subscribe` frame. `change=None` is the snapshot."""
+    return {"id": 1, "type": "event", "event": [{"type": change, "entry": entry}]}
+
+
+def _reload_stream(entry: dict[str, Any], outcome: str) -> list[dict]:
+    """The frames a real reconfigure sees, in the order HA sends them.
+
+    The first two predate the reload and both carry the OLD state: the
+    snapshot every subscribe answers with, and the UPDATED dispatched when the
+    new values are committed (before `async_schedule_reload` runs). Then the
+    reload's own transitions. Building it this way is the point — a stream
+    that starts mid-reload cannot catch a settle on a pre-reload fragment.
+    """
+    return [
+        _entry_event(dict(entry), change=None),
+        _entry_event({**entry, "data": {"host": "192.0.2.99"}}),
+        _entry_event({**entry, "state": "unload_in_progress"}),
+        _entry_event({**entry, "state": "not_loaded"}),
+        _entry_event({**entry, "state": "setup_in_progress"}),
+        _entry_event({**entry, "state": outcome}),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_a_stale_pre_reload_read_cannot_settle_as_verified(
     reconfig_entry: dict[str, object],
@@ -3191,28 +3215,7 @@ async def test_a_stale_pre_reload_read_cannot_settle_as_verified(
     # Every poll returns the stale pre-reload `loaded`.
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
     client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
-    client._test_entry_events = [
-        {
-            "id": 1,
-            "type": "event",
-            "event": [
-                {
-                    "type": "updated",
-                    "entry": {**reconfig_entry, "state": "setup_in_progress"},
-                }
-            ],
-        },
-        {
-            "id": 1,
-            "type": "event",
-            "event": [
-                {
-                    "type": "updated",
-                    "entry": {**reconfig_entry, "state": "setup_retry"},
-                }
-            ],
-        },
-    ]
+    client._test_entry_events = _reload_stream(reconfig_entry, "setup_retry")
     client.start_reconfigure_flow = AsyncMock(
         return_value={
             "flow_id": "flow-stale-read",
@@ -3244,25 +3247,7 @@ async def test_an_observed_clean_reload_verifies(
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
     client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
-    client._test_entry_events = [
-        {
-            "id": 1,
-            "type": "event",
-            "event": [
-                {
-                    "type": "updated",
-                    "entry": {**reconfig_entry, "state": "setup_in_progress"},
-                }
-            ],
-        },
-        {
-            "id": 1,
-            "type": "event",
-            "event": [
-                {"type": "updated", "entry": {**reconfig_entry, "state": "loaded"}}
-            ],
-        },
-    ]
+    client._test_entry_events = _reload_stream(reconfig_entry, "loaded")
     client.start_reconfigure_flow = AsyncMock(
         return_value={
             "flow_id": "flow-observed-ok",
@@ -3306,3 +3291,286 @@ async def test_without_a_change_stream_the_source_is_reported_as_polled(
     )
 
     assert result["verification"]["operational_state_source"] == "polled"
+
+
+# === Patch76 re-review: only a state CHANGE may settle the observation ===
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pre_reload",
+    [
+        pytest.param("snapshot", id="subscribe_snapshot"),
+        pytest.param("commit", id="commit_updated_fragment"),
+    ],
+)
+async def test_a_pre_reload_fragment_cannot_settle_the_observation(
+    reconfig_entry: dict[str, object], pre_reload: str
+) -> None:
+    """Two fragments for this entry arrive before the reload, both saying `loaded`.
+
+    `config_entries/subscribe` answers with a snapshot of every current entry
+    (`{"type": None, ...}`) and the queue is registered before the frame is
+    sent, so it is never dropped; committing the new values then dispatches
+    UPDATED with the new data and the OLD state, before `async_schedule_reload`
+    runs. Settling on either reports the pre-reload state as an observed
+    result — worse than the poll it replaces, because a non-None observation
+    also switches off the transient-state retry. Both are present at the
+    2024.11.0 floor and on dev.
+    """
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    frame = (
+        _entry_event(dict(reconfig_entry), change=None)
+        if pre_reload == "snapshot"
+        else _entry_event({**reconfig_entry, "data": {"host": "192.0.2.99"}})
+    )
+    # The reload really ends in setup_retry; the pre-reload frame must not win.
+    client._test_entry_events = [
+        frame,
+        _entry_event({**reconfig_entry, "state": "setup_retry"}),
+    ]
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-pre-reload",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "entry-123", config={"host": "192.0.2.99"}
+    )
+
+    verification = result["verification"]
+    assert verification["entry_state"] == "setup_retry"
+    assert verification["operational_state_verified"] is False
+    assert result["status"] == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
+
+
+@pytest.mark.asyncio
+async def test_pre_reload_fragments_alone_degrade_to_polling(
+    reconfig_entry: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no transition on the stream there is nothing observed to report.
+
+    The snapshot and the commit fragment are not evidence a reload ran, so a
+    stream carrying only those must expire and hand back to the poll rather
+    than stamp the pre-reload state as `observed`.
+    """
+    monkeypatch.setattr(config_entry_flow, "_RELOAD_SETTLE_TIMEOUT", 0.25)
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    client._test_entry_events = [
+        _entry_event(dict(reconfig_entry), change=None),
+        _entry_event({**reconfig_entry, "data": {"host": "192.0.2.98"}}),
+    ]
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-no-transition",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "entry-123", config={"host": "192.0.2.98"}
+    )
+
+    assert result["verification"]["operational_state_source"] == "polled"
+
+
+@pytest.mark.asyncio
+async def test_unload_in_progress_is_a_transition_not_an_outcome(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """It is the FIRST state an enabled domain entry enters when reloading.
+
+    `ConfigEntry.async_unload` sets it before calling the component. Treating
+    it as terminal settles the observation on sight and reports a perfectly
+    good reload as unverified. It does not exist at the 2024.11.0 floor and
+    does on dev, so this is version-dependent breakage.
+    """
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    client._test_entry_events = _reload_stream(reconfig_entry, "loaded")
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-unloading",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "entry-123", config={"host": "192.0.2.97"}
+    )
+
+    assert result["verification"]["operational_state_source"] == "observed"
+    assert result["verification"]["entry_state"] == "loaded"
+    assert result["status"] == ReconfigureStatus.APPLIED_AND_VERIFIED
+
+
+@pytest.mark.asyncio
+async def test_a_polled_unload_in_progress_is_retried_not_reported(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """The transient set gates the polled path too, stream or no stream."""
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(
+        side_effect=[
+            {**reconfig_entry, "state": "unload_in_progress"},
+            dict(reconfig_entry),
+        ]
+    )
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-polled-unloading",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "entry-123", config={"host": "192.0.2.96"}
+    )
+
+    assert result["verification"]["operational_state_source"] == "polled"
+    assert result["status"] == ReconfigureStatus.APPLIED_AND_VERIFIED
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_entry_does_not_wait_for_a_reload_that_never_comes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A disabled entry emits no transition, so waiting for one burns the budget.
+
+    `async_unload` returns early at not_loaded without setting state and
+    `async_reload` skips setup while `disabled_by` is set. The snapshot tells
+    us that up front, so hand back to the poll immediately instead of stalling
+    every disabled-entry reconfigure for the full settle timeout.
+    """
+    entry = {
+        "entry_id": "disabled-entry",
+        "domain": "shelly",
+        "state": "not_loaded",
+        "disabled_by": "user",
+        "supports_reconfigure": True,
+    }
+    monkeypatch.setattr(config_entry_flow, "_RELOAD_SETTLE_TIMEOUT", 30.0)
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(return_value=entry)
+    client.list_config_entries = AsyncMock(return_value=[entry])
+    client._test_entry_events = [_entry_event(dict(entry), change=None)]
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-disabled-stream",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    started = asyncio.get_running_loop().time()
+    result = await reconfigure_config_entry(
+        client, "disabled-entry", config={"host": "192.0.2.95"}
+    )
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert result["verification"]["operational_state_source"] == "polled"
+    assert elapsed < 5.0, f"waited {elapsed:.1f}s for a reload that never comes"
+
+
+# === Patch76 re-review: the same ambiguity escaping as a 5xx ===
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [500, 502, 503, 504])
+async def test_a_5xx_on_submit_is_applied_but_unverified(
+    reconfig_entry: dict[str, object], status_code: int
+) -> None:
+    """A 5xx is the HTTP spelling of "no answer came back".
+
+    The 400/422 branch handles a rejection HA actually reasoned about;
+    everything else used to re-raise bare, with no status, and the generic
+    handler then aborted a flow that may already have committed — the exact
+    abort POST_COMMIT_STATUSES exists to suppress. A 504 from a proxy in front
+    of Home Assistant is the ordinary way to reach this.
+    """
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-5xx",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        side_effect=HomeAssistantAPIError(
+            f"API error: {status_code}", status_code=status_code
+        )
+    )
+    client.abort_config_flow = AsyncMock()
+
+    with pytest.raises(ToolError) as exc_info:
+        await reconfigure_config_entry(
+            client, "entry-123", config={"host": "192.0.2.94"}
+        )
+
+    payload = json.loads(str(exc_info.value))
+    assert payload["status"] == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
+    assert payload["rollback"]["manual_required"] is True
+    client.abort_config_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_4xx_that_is_not_a_rejection_still_re_raises(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """4xx means HA parsed the request and answered about it.
+
+    Auth, permission and unknown-flow answers are not the post-commit
+    ambiguity, so they must not be relabelled as applied_but_unverified.
+    """
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-404",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        side_effect=HomeAssistantAPIError("API error: 404", status_code=404)
+    )
+    client.abort_config_flow = AsyncMock()
+
+    with pytest.raises(HomeAssistantAPIError) as exc_info:
+        await reconfigure_config_entry(
+            client, "entry-123", config={"host": "192.0.2.93"}
+        )
+
+    assert exc_info.value.status_code == 404
+    # And the flow IS aborted here: HA answered, so nothing was committed to
+    # leave dangling. Only the post-commit statuses suppress that abort.
+    client.abort_config_flow.assert_awaited()
