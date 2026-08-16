@@ -693,11 +693,16 @@ async def test_dcr_register_rejects_deeply_nested_json(oauth_stack):
     body — malformed metadata answers 400, never a 500."""
     oauth, dcr = oauth_stack.oauth, oauth_stack.dcr
 
-    request = _raw_request(b"[" * 30000 + b"]" * 30000)
+    payload = b"[" * 30000 + b"]" * 30000
+    assert len(payload) < dcr.MAX_DCR_BODY_BYTES
+    request = _raw_request(payload)
     response = await dcr.DcrRegisterView(_hass(oauth, oauth.MODE_HA_AUTH)).post(request)
 
     assert response.status == 400
     assert response.json_body["error"] == "invalid_client_metadata"
+    # The description distinguishes the arms: both guards answer the same
+    # error code, so only this pins that the PARSER rejected it.
+    assert response.json_body["error_description"] == "body must be JSON"
 
 
 async def test_dcr_register_reassembles_a_chunked_body(oauth_stack):
@@ -723,3 +728,4 @@ async def test_dcr_register_rejects_oversized_body(oauth_stack):
 
     assert response.status == 400
     assert response.json_body["error"] == "invalid_client_metadata"
+    assert response.json_body["error_description"] == "body is too large"
