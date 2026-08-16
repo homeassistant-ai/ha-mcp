@@ -35,15 +35,21 @@ def _is_ssl_error(exc: BaseException) -> bool:
 
 logger = logging.getLogger(__name__)
 
-# Retried for every method: an HA-restart window otherwise surfaced
-# SERVICE_CALL_FAILED on ordinary writes. Neither status PROVES the write did
-# not execute (RFC 9110 has 502 as "received an invalid response from an inbound
-# server"), so a caller that cannot tolerate a replay opts out per request with
-# retry_gateway_errors=False instead of every write paying for the narrow case.
-_RETRYABLE_STATUS = frozenset({502, 503})
-# 504 means the upstream WAS reached and only answered too slowly, so a write
-# may already have executed. Safe methods only.
-_RETRYABLE_STATUS_SAFE_METHODS_ONLY = frozenset({504})
+# Transient gateway statuses from a reverse proxy / Supervisor ingress — HA Core
+# restarting or briefly overloaded behind it. Retried for SAFE METHODS ONLY.
+#
+# None of them proves Home Assistant did not execute the request: RFC 9110 has
+# 502 as "received an invalid response from an inbound server", which a proxy
+# only sends after reaching it, and 504 as the upstream answering too slowly.
+# #1623 extended the retry to writes on the premise that "a gateway 5xx means
+# the request never reached the backend"; that premise is false, and replaying
+# a write can double-apply it — fire an event twice, run a script twice, or
+# turn a completed DELETE into a misleading 404 on the replay.
+#
+# The flake class #1623 fixed was a 502 storm failing ~190 tests at once, which
+# is overwhelmingly reads; those keep the retry. A write that fails loudly is
+# recoverable by the caller, which a silent double-apply is not.
+_RETRYABLE_GATEWAY_STATUS = frozenset({502, 503, 504})
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _MAX_REQUEST_ATTEMPTS = 3
 # Journald window requested for the Core error log on Supervisor-backed
@@ -303,20 +309,15 @@ class HomeAssistantClient:
         return message, error_data
 
     async def _raw_request(
-        self,
-        method: str,
-        endpoint: str,
-        *,
-        retry_gateway_errors: bool = True,
-        **kwargs: Any,
+        self, method: str, endpoint: str, **kwargs: Any
     ) -> httpx.Response:
         """Authenticated request that returns the raw httpx.Response.
 
         Handles auth, HTTP 4xx/5xx, and transport errors in one place.
         Callers parse the body themselves (JSON via `_request`, text via
-        `get_addon_logs`, etc.). Transient gateway errors are retried with
-        bounded exponential backoff: 502/503 for any method, 504 for safe
-        methods only. Pass retry_gateway_errors=False to opt a call out.
+        `get_addon_logs`, etc.). Transient gateway errors (502/503/504) are
+        retried with bounded exponential backoff for safe methods only; a write
+        is never replayed.
 
         Raises:
             HomeAssistantAuthError: 401 response.
@@ -335,12 +336,9 @@ class HomeAssistantClient:
                 if response.status_code >= 400:
                     message, error_data = self._error_message_from_response(response)
 
-                    retryable = retry_gateway_errors and (
-                        response.status_code in _RETRYABLE_STATUS
-                        or (
-                            response.status_code in _RETRYABLE_STATUS_SAFE_METHODS_ONLY
-                            and method.upper() in _SAFE_METHODS
-                        )
+                    retryable = (
+                        response.status_code in _RETRYABLE_GATEWAY_STATUS
+                        and method.upper() in _SAFE_METHODS
                     )
                     if retryable and attempt < _MAX_REQUEST_ATTEMPTS:
                         logger.warning(
@@ -379,12 +377,7 @@ class HomeAssistantClient:
         raise AssertionError("_raw_request retry loop exhausted without returning")
 
     async def _request(
-        self,
-        method: str,
-        endpoint: str,
-        *,
-        retry_gateway_errors: bool = True,
-        **kwargs: Any,
+        self, method: str, endpoint: str, **kwargs: Any
     ) -> dict[str, Any]:
         """
         Make authenticated request to Home Assistant API and parse JSON body.
@@ -402,9 +395,7 @@ class HomeAssistantClient:
             HomeAssistantAuthError: Authentication failed
             HomeAssistantAPIError: API error
         """
-        response = await self._raw_request(
-            method, endpoint, retry_gateway_errors=retry_gateway_errors, **kwargs
-        )
+        response = await self._raw_request(method, endpoint, **kwargs)
         try:
             result: dict[str, Any] = response.json()
             return result
@@ -1273,14 +1264,12 @@ class HomeAssistantClient:
             HomeAssistantAPIError: If flow submission fails
         """
         logger.debug(f"Submitting flow step for flow_id: {flow_id}")
-        # No gateway retry: HA consumes the flow_id on success, so a replay
-        # returns 404 "Invalid flow specified" — a definitive-looking 4xx that
-        # hides a first attempt which may already have committed.
+        # POST, so no gateway retry — see _RETRYABLE_GATEWAY_STATUS. This is
+        # the call that motivated the rule: HA consumes the flow_id on success,
+        # so a replay returns 404 "Invalid flow specified", a definitive-looking
+        # 4xx that hides a first attempt which may already have committed.
         return await self._request(
-            "POST",
-            f"/config/config_entries/flow/{flow_id}",
-            json=user_input,
-            retry_gateway_errors=False,
+            "POST", f"/config/config_entries/flow/{flow_id}", json=user_input
         )
 
     async def abort_config_flow(self, flow_id: str) -> dict[str, Any]:

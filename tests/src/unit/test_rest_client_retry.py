@@ -1,19 +1,12 @@
 """Unit tests for ``_raw_request`` transient-gateway retry.
 
-A reverse proxy / Supervisor ingress returns 502/503 when HA Core is
-restarting or briefly overloaded behind it; the request never reached the
-backend, so ``_raw_request`` retries with bounded backoff instead of hard-
-failing the call (which previously surfaced as SERVICE_CALL_FAILED on every
-HA-restart window and flaked the in-addon E2E suite).
+A reverse proxy / Supervisor ingress returns 502/503/504 when HA Core is
+restarting or briefly overloaded behind it, and a 502 storm once failed ~190
+unrelated tests at once. Reads retry with bounded backoff.
 
-Strictly, neither status PROVES the backend never executed the write — RFC 9110
-has 502 as "received an invalid response from an inbound server", which a proxy
-only sends after reaching it. Callers that cannot tolerate a replay opt out per
-request instead of taxing every write; see
-``test_the_config_flow_submit_never_gateway_retries``.
-
-A 504 does not share the premise at all and is retried only for safe methods —
-see ``test_a_504_is_not_replayed_on_a_write``.
+Writes never do. None of those statuses proves the request failed to execute
+(RFC 9110 has 502 as "received an invalid response from an inbound server"), so
+a replay can double-apply — see ``test_no_write_is_ever_gateway_retried``.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -104,11 +97,12 @@ async def test_raw_request_success_first_try_no_retry(client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", [502, 503, 504])
 @pytest.mark.parametrize("method", ["GET", "HEAD", "OPTIONS"])
-async def test_a_504_still_retries_on_a_safe_method(client, method):
-    """Nothing is replayed by repeating a read, so the resilience stays."""
+async def test_reads_still_retry_every_gateway_status(client, status, method):
+    """Replaying a read costs nothing, so the storm protection stays."""
     ok = _response(200, json_body={"ok": True})
-    client.httpx_client.request = AsyncMock(side_effect=[_response(504), ok])
+    client.httpx_client.request = AsyncMock(side_effect=[_response(status), ok])
     with patch("ha_mcp.client.rest_client.asyncio.sleep", new=AsyncMock()):
         result = await client._raw_request(method, "/api/states")
     assert result is ok
@@ -116,57 +110,39 @@ async def test_a_504_still_retries_on_a_safe_method(client, method):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
-async def test_a_504_is_not_replayed_on_a_write(client, method):
-    """The upstream WAS reached and answered too slowly, so retrying a write
-    can commit it two or three times."""
-    client.httpx_client.request = AsyncMock(return_value=_response(504))
-    with (
-        patch("ha_mcp.client.rest_client.asyncio.sleep", new=AsyncMock()) as sleep,
-        pytest.raises(HomeAssistantAPIError) as exc,
-    ):
-        await client._raw_request(method, "/api/config/config_entries/flow/abc")
-    assert exc.value.status_code == 504
-    assert client.httpx_client.request.await_count == 1
-    sleep.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("status", [502, 503])
-async def test_the_unreachable_upstream_statuses_still_retry_on_writes(client, status):
-    """502/503 mean the upstream was never reached, so a write is safe to resend."""
-    ok = _response(200, json_body={"ok": True})
-    client.httpx_client.request = AsyncMock(side_effect=[_response(status), ok])
-    with patch("ha_mcp.client.rest_client.asyncio.sleep", new=AsyncMock()):
-        result = await client._raw_request("POST", "/api/services/light/turn_on")
-    assert result is ok
-    assert client.httpx_client.request.await_count == 2
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [502, 503, 504])
-async def test_the_config_flow_submit_never_gateway_retries(client, status):
-    """HA consumes the flow_id on success, so a replay returns 404 "Invalid
-    flow specified" — a definitive-looking 4xx that hides a first attempt which
-    may already have committed."""
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+async def test_no_write_is_ever_gateway_retried(client, status, method):
+    """None of these statuses proves Home Assistant did not execute the write.
+
+    #1623 retried them on the premise that a gateway 5xx means the request
+    never reached the backend. It does not: a replay can fire an event twice,
+    run a script twice, or turn a completed DELETE into a misleading 404.
+    """
     client.httpx_client.request = AsyncMock(return_value=_response(status))
     with (
         patch("ha_mcp.client.rest_client.asyncio.sleep", new=AsyncMock()) as sleep,
         pytest.raises(HomeAssistantAPIError) as exc,
     ):
-        await client.submit_config_flow_step("flow-1", {"host": "192.0.2.1"})
+        await client._raw_request(method, "/api/services/light/toggle")
     assert exc.value.status_code == status
     assert client.httpx_client.request.await_count == 1
     sleep.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_other_writes_keep_their_restart_window_retry(client):
-    """The opt-out is per request, not the global default: 502/503 retry on
-    writes exists because HA-restart windows failed ordinary service calls."""
-    ok = _response(200, json_body={"ok": True})
-    client.httpx_client.request = AsyncMock(side_effect=[_response(502), ok])
-    with patch("ha_mcp.client.rest_client.asyncio.sleep", new=AsyncMock()):
-        result = await client._request("POST", "/services/light/turn_on")
-    assert result == {"ok": True}
-    assert client.httpx_client.request.await_count == 2
+@pytest.mark.parametrize("status", [502, 503, 504])
+async def test_the_config_flow_submit_is_not_replayed(client, status):
+    """The call that motivated the rule.
+
+    HA consumes the flow_id on success, so a replay returns 404 "Invalid flow
+    specified" — a definitive-looking 4xx that hides a first attempt which may
+    already have committed.
+    """
+    client.httpx_client.request = AsyncMock(return_value=_response(status))
+    with (
+        patch("ha_mcp.client.rest_client.asyncio.sleep", new=AsyncMock()),
+        pytest.raises(HomeAssistantAPIError),
+    ):
+        await client.submit_config_flow_step("flow-1", {"host": "192.0.2.1"})
+    assert client.httpx_client.request.await_count == 1
