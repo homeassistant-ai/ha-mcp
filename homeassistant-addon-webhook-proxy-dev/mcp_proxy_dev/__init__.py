@@ -54,6 +54,17 @@ _LOGGER = logging.getLogger(__name__)
 # must survive a config-entry reload, during which hass.data[DOMAIN] is gone.
 _LOGGER_LEVEL_RAISED = False
 
+# Home Assistant's OWN webhook component logs "Received message for
+# unregistered webhook <id> from <ip>" at INFO and then answers an empty 200
+# ("Always respond successfully to not give away if a hook exists or not").
+# That line is the difference between "the request reached HA but nothing is
+# registered for this id" and "the request never arrived at all" — precisely
+# the question the inbound log exists to answer, and invisible by default
+# because it belongs to HA's logger rather than ours (#2220). Raise it
+# alongside our own for as long as the toggle is on.
+_WEBHOOK_LOGGER = logging.getLogger("homeassistant.components.webhook")
+_WEBHOOK_LOGGER_LEVEL_RAISED = False
+
 DOMAIN = "mcp_proxy_dev"
 CONFIG_FILE = Path("/config/.mcp_proxy_dev_config.json")
 DCR_SECRET_FILE = Path("/config/.mcp_proxy_dev_dcr_secret")
@@ -343,6 +354,25 @@ def _validate_and_mask_target(target_url: str, webhook_id: str) -> str:
     return masked_wh
 
 
+def _apply_logger_level(logger: logging.Logger, raised: bool, enable: bool) -> bool:
+    """Raise ``logger`` to INFO while the toggle is on; return the new flag.
+
+    Only raises when the effective level is less verbose, so an explicit
+    DEBUG/INFO from the user's `logger:` config is never overridden, and only
+    undoes a raise WE made. (If a user had set a level quieter than INFO then
+    toggled debug on and off, this resets to NOTSET rather than their original
+    level; restoring that would need durable per-level state, not worth it for
+    a debug aid.)
+    """
+    if enable and logger.getEffectiveLevel() > logging.INFO:
+        logger.setLevel(logging.INFO)
+        return True
+    if not enable and raised:
+        logger.setLevel(logging.NOTSET)
+        return False
+    return raised
+
+
 def _apply_debug_logging(proxy_config: dict) -> bool:
     """Apply the inbound-request debug-logging toggle to this integration's
     logger and return whether it is enabled."""
@@ -353,18 +383,14 @@ def _apply_debug_logging(proxy_config: dict) -> bool:
     # explicit DEBUG/INFO the user set via Home Assistant's `logger:` config. We
     # track whether WE raised it and, when the toggle is off, undo only our own
     # raise — never a level the user set themselves.
-    global _LOGGER_LEVEL_RAISED
+    global _LOGGER_LEVEL_RAISED, _WEBHOOK_LOGGER_LEVEL_RAISED
     debug_logging = bool(proxy_config.get("debug_logging", False))
-    if debug_logging and _LOGGER.getEffectiveLevel() > logging.INFO:
-        _LOGGER.setLevel(logging.INFO)
-        _LOGGER_LEVEL_RAISED = True
-    elif not debug_logging and _LOGGER_LEVEL_RAISED:
-        # Undo only the INFO we raised. (If a user had set an explicit level
-        # quieter than INFO — ERROR/CRITICAL — then toggled debug on then off,
-        # this resets to NOTSET rather than their original level; restoring that
-        # would need durable per-level state, not worth it for a debug aid.)
-        _LOGGER.setLevel(logging.NOTSET)
-        _LOGGER_LEVEL_RAISED = False
+    _LOGGER_LEVEL_RAISED = _apply_logger_level(
+        _LOGGER, _LOGGER_LEVEL_RAISED, debug_logging
+    )
+    _WEBHOOK_LOGGER_LEVEL_RAISED = _apply_logger_level(
+        _WEBHOOK_LOGGER, _WEBHOOK_LOGGER_LEVEL_RAISED, debug_logging
+    )
     return debug_logging
 
 

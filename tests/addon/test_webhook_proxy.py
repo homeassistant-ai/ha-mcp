@@ -1819,9 +1819,42 @@ class TestDebugLogging:
         # deterministic.
         mod._LOGGER.setLevel(logging.NOTSET)
         mod._LOGGER_LEVEL_RAISED = False
+        if hasattr(mod, "_WEBHOOK_LOGGER"):
+            mod._WEBHOOK_LOGGER.setLevel(logging.NOTSET)
+            mod._WEBHOOK_LOGGER_LEVEL_RAISED = False
         yield
         mod._LOGGER.setLevel(logging.NOTSET)
         mod._LOGGER_LEVEL_RAISED = False
+        if hasattr(mod, "_WEBHOOK_LOGGER"):
+            mod._WEBHOOK_LOGGER.setLevel(logging.NOTSET)
+            mod._WEBHOOK_LOGGER_LEVEL_RAISED = False
+
+    async def test_debug_on_also_surfaces_has_webhook_logger(self, mod, hass):
+        """#2220: with the toggle on and NO inbound lines, the user still can't
+        tell "request never arrived" from "arrived but nothing is registered
+        for this id" — HA answers an empty 200 for an unregistered webhook and
+        logs the reason on ITS logger, invisible by default. The toggle raises
+        that logger too, and undoes only its own raise."""
+        if not hasattr(mod, "_WEBHOOK_LOGGER"):
+            pytest.skip("flavor predates the webhook-logger raise")
+
+        await self._run_setup(mod, hass, debug=True)
+        assert mod._WEBHOOK_LOGGER.getEffectiveLevel() <= logging.INFO
+
+        await self._run_setup(mod, hass, debug=False)
+        assert mod._WEBHOOK_LOGGER.level == logging.NOTSET
+
+    async def test_debug_toggle_never_lowers_an_explicit_user_level(self, mod, hass):
+        """A user who set DEBUG via HA's `logger:` config keeps it: we only
+        ever raise a less-verbose logger, and only undo our own raise."""
+        if not hasattr(mod, "_WEBHOOK_LOGGER"):
+            pytest.skip("flavor predates the webhook-logger raise")
+        mod._WEBHOOK_LOGGER.setLevel(logging.DEBUG)
+
+        await self._run_setup(mod, hass, debug=True)
+        await self._run_setup(mod, hass, debug=False)
+
+        assert mod._WEBHOOK_LOGGER.level == logging.DEBUG
 
     async def _run_setup(self, mod, hass, debug):
         proxy_config = {

@@ -252,7 +252,7 @@ What stops an attacker who can reach the consent page from gaining access:
 
 If a client (e.g. Claude.ai) can't connect and you can't tell whether its requests are even reaching Home Assistant, turn on **Log inbound requests** (the `debug_logging` option on the main Configuration page) and **restart the addon**.
 
-When it's on, every request that hits the webhook is logged to the **Home Assistant log** (requests reach Home Assistant directly rather than passing through the addon process). View them at **Settings → System → Logs** (or filter for `mcp_proxy_dev`). The same lines are also **mirrored into this addon's own log**, so you can watch them on the addon's Log tab without leaving the addon page. Each line shows the method, a masked webhook path, the source address, whether an `Authorization` header was present, and the upstream response status:
+When it's on, every request that hits the webhook is logged to the **Home Assistant log** (along with Home Assistant's own webhook lines, which are otherwise hidden — that is what distinguishes a request that never arrived from one that arrived for an unregistered id) (requests reach Home Assistant directly rather than passing through the addon process). View them at **Settings → System → Logs** (or filter for `mcp_proxy_dev`). The same lines are also **mirrored into this addon's own log**, so you can watch them on the addon's Log tab without leaving the addon page. Each line shows the method, a masked webhook path, the source address, whether an `Authorization` header was present, and the upstream response status:
 
 ```
 MCP Proxy [inbound]: POST /api/webhook/mcp_3e... from 203.0.113.4 (Authorization header: present)
@@ -262,7 +262,8 @@ MCP Proxy [inbound]: -> upstream responded 200 (text/event-stream)
 How to read it:
 
 - **You see inbound lines** → the client is reaching the server; the problem is downstream (auth, the client's config, or the MCP server itself).
-- **You see nothing** → the request never arrived. The problem is network reachability — the public URL, DNS, TLS, or your reverse proxy — not this addon. See the reachability check under [Setup](#connecting-from-claudeai-web).
+- **You see `Received message for unregistered webhook`** (Home Assistant's own line, surfaced only while this toggle is on) → the request DID arrive, but nothing is registered for that webhook id, so Home Assistant answered an empty `200` without ever reaching this addon. Usually a stale URL: compare the id in the URL your client uses against the `webhook endpoint = /api/webhook/mcp_…` line this addon logs at startup, and restart Home Assistant if a restart Repair is pending.
+- **You see nothing at all** → the request never arrived. The problem is network reachability — the public URL, DNS, TLS, or your reverse proxy — not this addon. See the reachability check under [Setup](#connecting-from-claudeai-web).
 
 Turn it back off for normal operation (restart the addon after changing it).
 
