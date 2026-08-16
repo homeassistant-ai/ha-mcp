@@ -5,6 +5,12 @@ while Home Assistant core remains the authorization server. This module also
 validates cross-origin Client ID Metadata Documents before translating their
 client identities into the same-origin form accepted by core.
 
+MIRROR: this module is the near-verbatim twin of
+``custom_components/ha_mcp_tools/oauth_ha_auth.py``. Keep behavioural changes
+on the two sides in step — the identity rename, the flat ``hass.data[DOMAIN]``
+layout instead of the component's ``cfg[DATA_WEBHOOK]`` nesting, and the
+``_addon_alive`` gate are the intended deltas; anything else is drift.
+
 CIMD fetches are HTTPS-only, redirect-free, size- and time-bounded, and pinned
 to prevalidated globally routable DNS answers. Invalid identities pass through
 unchanged so Home Assistant remains the final authority.
@@ -42,6 +48,10 @@ CIMD_CACHE_TTL = 300.0
 CIMD_NEGATIVE_TTL = 60.0
 _CIMD_CACHE_MAX = 64
 _ALLOWED_SCHEMES = ("https",)
+# client_id URL -> (expires_monotonic, redirect_uris). Draft -00 section 4.4.3
+# forbids caching error responses and invalid documents; both return with
+# reached=True before any cache write. Unreachable-host and resolution outcomes
+# are outside section 4.4.3 and are negative-cached for CIMD_NEGATIVE_TTL.
 _cimd_cache: dict[str, tuple[float, list[str] | None]] = {}
 
 # Admission for the whole cache-miss lookup (DNS + fetch). Matches the
@@ -193,7 +203,7 @@ async def fetch_cimd_redirects(
     if not _valid_cimd_client_id(client_id):
         return None
     parsed = urlparse(client_id)
-    assert parsed.hostname is not None
+    assert parsed.hostname is not None  # established by _valid_cimd_client_id
     if _is_loopback_host(parsed.hostname):
         return None
     try:
@@ -238,6 +248,11 @@ async def _lookup_cimd(
         if not reached:
             continue
         if result is None:
+            # INVALID document: deliberately NOT cached — a client that fixes
+            # its metadata recovers on the next request (pinned by
+            # test_invalid_cimd_document_is_not_negative_cached; the component
+            # twin pins the same policy as
+            # test_invalid_cimd_is_not_negative_cached).
             _LOGGER.debug("CIMD lookup: document at %s failed validation", client_id)
             return None
         _cache_cimd(client_id, now, result)

@@ -468,6 +468,40 @@ async def test_cimd_unreachable_result_is_negative_cached(oauth_stack, monkeypat
     indirect._cimd_cache.clear()
 
 
+async def test_invalid_cimd_document_is_not_negative_cached(oauth_stack, monkeypatch):
+    """Draft -00 §4.4.3: an INVALID document is deliberately not cached, so a
+    client that fixes its metadata recovers on the very next request.
+
+    Mirrors the component's test_invalid_cimd_is_not_negative_cached. Without
+    this pin the policy is only a comment on this side: adding a _cache_cimd()
+    call to the invalid branch would keep every other proxy test green, and
+    both review bots have already re-raised the non-caching as a defect
+    (#2218 review by Patch76)."""
+    indirect = oauth_stack.indirect
+    monkeypatch.setattr(
+        indirect,
+        "_resolve_public_addresses",
+        AsyncMock(return_value=["93.184.216.34"]),
+    )
+    outcomes = [(True, None), (True, ["https://client.example/cb"])]
+    calls: list[str] = []
+
+    async def fetch(_session, fetched_id, _parsed, _address):
+        calls.append(fetched_id)
+        return outcomes[len(calls) - 1]
+
+    monkeypatch.setattr(indirect, "_fetch_pinned_cimd", fetch)
+    indirect._cimd_cache.clear()
+    client_id = "https://client.example/client.json"
+
+    assert await indirect.fetch_cimd_redirects(object(), client_id) is None
+    assert await indirect.fetch_cimd_redirects(object(), client_id) == [
+        "https://client.example/cb"
+    ]
+    assert len(calls) == 2  # re-fetched rather than served from a cache
+    indirect._cimd_cache.clear()
+
+
 async def test_as_documents_pin_the_claude_cimd_selection_contract(oauth_stack):
     """Every advertised URL is proxy-owned and both public modes keep CIMD."""
     oauth = oauth_stack.oauth

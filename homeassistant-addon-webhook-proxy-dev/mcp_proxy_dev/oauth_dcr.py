@@ -5,6 +5,13 @@ HMAC-signed blob containing the registered redirect URIs, making verification
 restart-safe without allowing an anonymous registration endpoint to grow
 persistent state. DCR is live only in ha_auth and none-autoapprove modes;
 legacy mode continues to use its configured static credential.
+
+MIRROR: this module is the near-verbatim twin of
+``custom_components/ha_mcp_tools/oauth_dcr.py``. Keep behavioural changes on
+the two sides in step — the identity rename, the flat ``hass.data[DOMAIN]``
+layout, the ``oauth_mode == ha_auth`` test in ``_active_grant_types`` where the
+component checks for a resource server, and the ``_addon_alive`` gate on the
+register view are the intended deltas; anything else is drift.
 """
 
 from __future__ import annotations
@@ -88,7 +95,13 @@ _DEFAULT_PORTS = {"https": 443, "http": 80}
 
 
 def normalized_origin(uri: str) -> tuple[str, str, int] | None:
-    """Return a canonical scheme, host, and explicit/default port identity."""
+    """(scheme, host, port) origin identity with the scheme default applied.
+
+    The ONE normalizer shared by registration validation and client-id
+    translation (#2213 review by Patch76): ``https://h/a`` and
+    ``https://h:443/b`` are the same origin everywhere, or nowhere.
+    None for unparseable/hostless URIs.
+    """
     parsed = urlparse(uri)
     if not parsed.scheme or parsed.hostname is None:
         return None
