@@ -7,9 +7,15 @@ client identities into the same-origin form accepted by core.
 
 MIRROR: this module is the near-verbatim twin of
 ``custom_components/ha_mcp_tools/oauth_ha_auth.py``. Keep behavioural changes
-on the two sides in step — the identity rename, the flat ``hass.data[DOMAIN]``
-layout instead of the component's ``cfg[DATA_WEBHOOK]`` nesting, and the
-``_addon_alive`` gate are the intended deltas; anything else is drift.
+on the two sides in step. This pair has exactly ONE intended delta and it is
+not behavioural: the loopback and redirect-shape helpers are imported from
+``oauth.py`` here and from ``oauth_legacy.py`` in the component. Those two
+definitions are equivalent today, ``_LOOPBACK_HOSTNAMES`` and
+``_AUTHORITY_CHARS_RE`` included — named here so it is noticed if that ever
+stops being true. Everything else that differs is drift, including the deltas
+the sibling ``oauth_dcr.py`` pair legitimately carries (the
+``hass.data[DOMAIN]`` layout, the ``_addon_alive`` gate): neither appears in
+either file of THIS pair.
 
 CIMD fetches are HTTPS-only, redirect-free, size- and time-bounded, and pinned
 to prevalidated globally routable DNS answers. Invalid identities pass through
