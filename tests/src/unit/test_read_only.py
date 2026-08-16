@@ -586,7 +586,7 @@ _EXEMPT_TOOL_MODULES = {
     "ha_manage_backup": "backup.py",
     "ha_manage_addon": "tools_addons.py",
     "ha_manage_energy_prefs": "tools_energy.py",
-    "ha_manage_pipeline": "tools_voice_assistant.py",
+    "ha_manage_pipeline": "tools_assist_pipeline.py",
     "ha_manage_custom_tool": "tools_code.py",
     "ha_manage_radio": "tools_radio.py",
     "ha_manage_updates": "tools_updates.py",

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.tools_voice_assistant import VoiceAssistantTools
+from ha_mcp.tools.tools_assist_pipeline import AssistPipelineTools
 
 
 def _pipeline(**overrides):
@@ -71,8 +71,8 @@ def mock_client():
 
 @pytest.fixture
 def tools(mock_client):
-    """Create VoiceAssistantTools instance."""
-    return VoiceAssistantTools(mock_client)
+    """Create AssistPipelineTools instance."""
+    return AssistPipelineTools(mock_client)
 
 
 async def test_get_assist_pipeline_lists_pipelines_when_id_omitted(tools):
