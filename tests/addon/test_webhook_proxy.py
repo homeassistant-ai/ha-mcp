@@ -411,6 +411,21 @@ def _autoapprove_any_redirect() -> bool:
     return "without a client allowlist" in _component_src("oauth_autoapprove.py")
 
 
+def _require_webhook_logger(mod) -> None:
+    """Skip only a flavor that genuinely predates the webhook-logger raise.
+
+    Feature-detected rather than keyed on the flavor name, so the promote
+    transform starts running these on stable the moment the code lands there
+    — a hard-coded flavor skip would silently stay off forever. Dev always
+    leads stable, so a missing attribute THERE is a real regression, not a
+    not-yet-promoted capability, and must fail rather than skip.
+    """
+    if hasattr(mod, "_WEBHOOK_LOGGER"):
+        return
+    assert CURRENT["key"] != "dev", "dev must ship the webhook-logger raise"
+    pytest.skip("flavor predates the webhook-logger raise")
+
+
 def _none_autoapprove_supported() -> bool:
     """Feature-detect whether the CURRENT flavor ships none-mode auto-approve
     discovery (its `oauth_autoapprove.py` module, issue #1969). The stable
@@ -1835,8 +1850,7 @@ class TestDebugLogging:
         for this id" — HA answers an empty 200 for an unregistered webhook and
         logs the reason on ITS logger, invisible by default. The toggle raises
         that logger too, and undoes only its own raise."""
-        if not hasattr(mod, "_WEBHOOK_LOGGER"):
-            pytest.skip("flavor predates the webhook-logger raise")
+        _require_webhook_logger(mod)
 
         await self._run_setup(mod, hass, debug=True)
         assert mod._WEBHOOK_LOGGER.getEffectiveLevel() <= logging.INFO
@@ -1847,8 +1861,7 @@ class TestDebugLogging:
     async def test_debug_toggle_never_lowers_an_explicit_user_level(self, mod, hass):
         """A user who set DEBUG via HA's `logger:` config keeps it: we only
         ever raise a less-verbose logger, and only undo our own raise."""
-        if not hasattr(mod, "_WEBHOOK_LOGGER"):
-            pytest.skip("flavor predates the webhook-logger raise")
+        _require_webhook_logger(mod)
         mod._WEBHOOK_LOGGER.setLevel(logging.DEBUG)
 
         await self._run_setup(mod, hass, debug=True)
