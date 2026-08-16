@@ -714,6 +714,9 @@ async def _verify_reconfigure_result(
             after = current_after
             verification = current_verification
             warnings = current_warnings
+            # This read succeeded, so any earlier failure was recovered from
+            # and must not surface as "never settled" below.
+            last_verification_error = None
             if (
                 observed_entry is None
                 and _is_transient_reconfigure_state(current_after)

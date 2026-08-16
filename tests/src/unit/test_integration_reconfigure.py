@@ -15,7 +15,11 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import config_entry_identity, config_entry_reconfigure
+from ha_mcp.tools import (
+    config_entry_identity,
+    config_entry_reconfigure,
+    config_entry_reload_watch,
+)
 from ha_mcp.tools.component_config_entries import UNKNOWN_UNIQUE_ID, EntryUniqueId
 from ha_mcp.tools.config_entry_flow import set_config_subentry
 from ha_mcp.tools.config_entry_flow_walker import (
@@ -3185,22 +3189,29 @@ def _entry_event(entry: dict[str, Any], *, change: str | None = "updated") -> di
     return {"id": 1, "type": "event", "event": [{"type": change, "entry": entry}]}
 
 
+#: Before and after the commit. `async_update_entry` bumps `modified_at`;
+#: `_async_set_state` does not, so every post-commit transition keeps AFTER.
+_BEFORE = "2026-08-16T10:00:00+00:00"
+_AFTER = "2026-08-16T10:00:05+00:00"
+
+
 def _reload_stream(entry: dict[str, Any], outcome: str) -> list[dict]:
     """The frames a real reconfigure sees, in the order HA sends them.
 
     The first two predate the reload and both carry the OLD state: the
     snapshot every subscribe answers with, and the UPDATED dispatched when the
     new values are committed (before `async_schedule_reload` runs). Then the
-    reload's own transitions. Building it this way is the point — a stream
-    that starts mid-reload cannot catch a settle on a pre-reload fragment.
+    reload's own transitions, which keep the commit's `modified_at`.
     """
+    base = {**entry, "modified_at": _BEFORE}
+    committed = {**entry, "modified_at": _AFTER}
     return [
-        _entry_event(dict(entry), change=None),
-        _entry_event({**entry, "data": {"host": "192.0.2.99"}}),
-        _entry_event({**entry, "state": "unload_in_progress"}),
-        _entry_event({**entry, "state": "not_loaded"}),
-        _entry_event({**entry, "state": "setup_in_progress"}),
-        _entry_event({**entry, "state": outcome}),
+        _entry_event(dict(base), change=None),
+        _entry_event({**committed, "data": {"host": "192.0.2.99"}}),
+        _entry_event({**committed, "state": "unload_in_progress"}),
+        _entry_event({**committed, "state": "not_loaded"}),
+        _entry_event({**committed, "state": "setup_in_progress"}),
+        _entry_event({**committed, "state": outcome}),
     ]
 
 
@@ -3320,15 +3331,19 @@ async def test_a_pre_reload_fragment_cannot_settle_the_observation(
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
     client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
-    frame = (
-        _entry_event(dict(reconfig_entry), change=None)
-        if pre_reload == "snapshot"
-        else _entry_event({**reconfig_entry, "data": {"host": "192.0.2.99"}})
+    # Both pre-reload frames carry the OLD state: the snapshot at the baseline
+    # modified_at, and the commit's UPDATED at the bumped one.
+    snapshot = _entry_event({**reconfig_entry, "modified_at": _BEFORE}, change=None)
+    commit = _entry_event(
+        {**reconfig_entry, "modified_at": _AFTER, "data": {"host": "192.0.2.99"}}
     )
-    # The reload really ends in setup_retry; the pre-reload frame must not win.
+    extra = snapshot if pre_reload == "snapshot" else commit
+    # The reload really ends in setup_retry; neither pre-reload frame may win.
     client._test_entry_events = [
-        frame,
-        _entry_event({**reconfig_entry, "state": "setup_retry"}),
+        snapshot,
+        extra,
+        commit,
+        _entry_event({**reconfig_entry, "modified_at": _AFTER, "state": "setup_retry"}),
     ]
     client.start_reconfigure_flow = AsyncMock(
         return_value={
@@ -3361,8 +3376,10 @@ async def test_pre_reload_fragments_alone_degrade_to_polling(
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
     client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
     client._test_entry_events = [
-        _entry_event(dict(reconfig_entry), change=None),
-        _entry_event({**reconfig_entry, "data": {"host": "192.0.2.98"}}),
+        _entry_event({**reconfig_entry, "modified_at": _BEFORE}, change=None),
+        _entry_event(
+            {**reconfig_entry, "modified_at": _AFTER, "data": {"host": "192.0.2.98"}}
+        ),
     ]
     client.start_reconfigure_flow = AsyncMock(
         return_value={
@@ -3465,7 +3482,9 @@ async def test_a_disabled_entry_does_not_wait_for_a_reload_that_never_comes(
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=entry)
     client.list_config_entries = AsyncMock(return_value=[entry])
-    client._test_entry_events = [_entry_event(dict(entry), change=None)]
+    client._test_entry_events = [
+        _entry_event({**entry, "modified_at": _BEFORE}, change=None)
+    ]
     client.start_reconfigure_flow = AsyncMock(
         return_value={
             "flow_id": "flow-disabled-stream",
@@ -3637,3 +3656,129 @@ async def test_a_read_back_that_never_settles_says_why(
     assert result["status"] == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
     assert any("never settled" in w for w in result["warnings"])
     assert any("registry went away" in w for w in result["warnings"])
+
+
+# === Patch76 3rd review: a foreign transition inside the flow window ===
+
+
+@pytest.mark.asyncio
+async def test_a_retry_firing_mid_flow_cannot_settle_the_observation(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """The mainline case: reconfiguring an entry that sits in setup_retry.
+
+    Such an entry always has a retry pending, and one firing while the flow
+    probes produces a real state change whose outcome is not this reconfigure's.
+    Only `modified_at` separates them — the commit bumps it, `_async_set_state`
+    does not — so nothing before the bump may settle.
+    """
+    entry = {**reconfig_entry, "state": "setup_retry", "modified_at": _BEFORE}
+    client = reconfigure_client()
+    # Every poll agrees the reload really ended in setup_retry.
+    client.get_config_entry = AsyncMock(return_value=entry)
+    client.list_config_entries = AsyncMock(return_value=[entry])
+    client._test_entry_events = [
+        _entry_event(dict(entry), change=None),
+        # The pending retry fires mid-flow and succeeds — pre-commit, so its
+        # `loaded` says nothing about the reconfigure.
+        _entry_event({**entry, "state": "setup_in_progress"}),
+        _entry_event({**entry, "state": "loaded"}),
+        # The commit, then the reload that fails again.
+        _entry_event({**entry, "modified_at": _AFTER, "state": "loaded"}),
+        _entry_event({**entry, "modified_at": _AFTER, "state": "setup_in_progress"}),
+        _entry_event({**entry, "modified_at": _AFTER, "state": "setup_retry"}),
+    ]
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-foreign-retry",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "entry-123", config={"host": "192.0.2.90"}
+    )
+
+    verification = result["verification"]
+    assert verification["entry_state"] == "setup_retry"
+    assert verification["operational_state_verified"] is False
+    assert result["status"] == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
+
+
+@pytest.mark.asyncio
+async def test_resubmitting_identical_values_degrades_to_polling_promptly(
+    reconfig_entry: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`async_update_entry` returns early on `not changed`, so nothing bumps
+    `modified_at` and no fragment is attributable. Give up on the stream fast
+    rather than stalling the whole settle budget.
+    """
+    monkeypatch.setattr(config_entry_reconfigure, "_RELOAD_SETTLE_TIMEOUT", 30.0)
+    monkeypatch.setattr(config_entry_reload_watch, "_COMMIT_VISIBLE_TIMEOUT", 0.25)
+    entry = {**reconfig_entry, "modified_at": _BEFORE}
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(return_value=entry)
+    client.list_config_entries = AsyncMock(return_value=[entry])
+    client._test_entry_events = [
+        _entry_event(dict(entry), change=None),
+        _entry_event({**entry, "state": "setup_in_progress"}),
+        _entry_event({**entry, "state": "loaded"}),
+    ]
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-identical",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    started = asyncio.get_running_loop().time()
+    result = await reconfigure_config_entry(
+        client, "entry-123", config={"host": "192.0.2.89"}
+    )
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert result["verification"]["operational_state_source"] == "polled"
+    assert elapsed < 5.0, f"stalled {elapsed:.1f}s waiting for a bump that never comes"
+
+
+@pytest.mark.asyncio
+async def test_a_recovered_read_back_carries_no_never_settled_warning(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """A read that fails once and then succeeds settled after all."""
+    client = reconfigure_client()
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    reads = {"n": 0}
+
+    async def _reads(entry_id: str) -> dict[str, object]:
+        reads["n"] += 1
+        if reads["n"] == 2:
+            raise ConnectionResetError("one bad read")
+        return dict(reconfig_entry)
+
+    client.get_config_entry = _reads
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-recovered",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "entry-123", config={"host": "192.0.2.88"}
+    )
+
+    assert result["status"] == ReconfigureStatus.APPLIED_AND_VERIFIED
+    assert not any("never settled" in w for w in result.get("warnings", []))

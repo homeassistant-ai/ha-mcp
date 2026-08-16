@@ -18,6 +18,11 @@ from ha_mcp.tools.config_entry_reload_watch import (
     _observe_reload_settled,
 )
 
+#: Timestamps bracketing a commit: the subscribe snapshot's baseline value,
+#: and the value `async_update_entry` bumps `modified_at` to.
+_BEFORE = "2026-08-16T10:00:00+00:00"
+_AFTER = "2026-08-16T10:00:05+00:00"
+
 
 def _frame(entry: dict[str, Any], *, change: str | None = "updated") -> dict[str, Any]:
     """One `config_entries/subscribe` frame; `change=None` models the snapshot."""
@@ -131,28 +136,11 @@ def test_a_disabled_entry_is_never_transient_even_at_a_transient_state(
 
 
 @pytest.mark.asyncio
-async def test_the_first_fragment_only_sets_a_baseline_even_at_a_terminal_state() -> (
-    None
-):
-    """Nothing predates the first fragment, so it can only become the baseline."""
-    entry_id = "entry-1"
-    queue = _queue_of(_frame({"entry_id": entry_id, "state": "loaded"}))
-
-    result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
-
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_a_same_state_fragment_after_the_baseline_cannot_settle() -> None:
-    """The commit's UPDATED carries new data but the pre-reload state.
-
-    Settling on it would report the pre-reload state as observed.
-    """
+async def test_a_baseline_with_nothing_after_it_never_commits_and_times_out() -> None:
+    """Nothing follows the baseline within budget, so it can never commit."""
     entry_id = "entry-1"
     queue = _queue_of(
-        _frame({"entry_id": entry_id, "state": "loaded"}),
-        _frame({"entry_id": entry_id, "state": "loaded", "data": {"host": "x"}}),
+        _frame({"entry_id": entry_id, "state": "loaded", "modified_at": _BEFORE})
     )
 
     result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
@@ -161,17 +149,57 @@ async def test_a_same_state_fragment_after_the_baseline_cannot_settle() -> None:
 
 
 @pytest.mark.asyncio
-async def test_transient_transitions_are_consumed_until_the_first_non_transient_change() -> (
+async def test_a_pre_commit_state_change_cannot_settle_even_to_a_terminal_state() -> (
     None
 ):
-    """Only the state that finally leaves the transient set is the outcome."""
+    """A foreign transition sharing the baseline's `modified_at` predates the commit.
+
+    `setup_retry` always has a pending retry; one firing mid-flow must not be
+    mistaken for the reconfigure's own outcome.
+    """
     entry_id = "entry-1"
-    final_fragment = {"entry_id": entry_id, "state": "loaded"}
     queue = _queue_of(
-        _frame({"entry_id": entry_id, "state": "loaded"}),
-        _frame({"entry_id": entry_id, "state": "unload_in_progress"}),
-        _frame({"entry_id": entry_id, "state": "not_loaded"}),
-        _frame({"entry_id": entry_id, "state": "setup_in_progress"}),
+        _frame({"entry_id": entry_id, "state": "setup_retry", "modified_at": _BEFORE}),
+        _frame({"entry_id": entry_id, "state": "setup_error", "modified_at": _BEFORE}),
+    )
+
+    result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_the_commit_fragment_itself_cannot_settle() -> None:
+    """The commit carries new data but the pre-reload state.
+
+    Settling on it would report the pre-reload state as observed.
+    """
+    entry_id = "entry-1"
+    queue = _queue_of(
+        _frame({"entry_id": entry_id, "state": "loaded", "modified_at": _BEFORE}),
+        _frame(
+            {
+                "entry_id": entry_id,
+                "state": "loaded",
+                "modified_at": _AFTER,
+                "data": {"host": "x"},
+            }
+        ),
+    )
+
+    result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_the_first_non_transient_state_change_after_commit_settles() -> None:
+    """Only a state change AFTER the commit is the reload's own outcome."""
+    entry_id = "entry-1"
+    final_fragment = {"entry_id": entry_id, "state": "loaded", "modified_at": _AFTER}
+    queue = _queue_of(
+        _frame({"entry_id": entry_id, "state": "setup_retry", "modified_at": _BEFORE}),
+        _frame({"entry_id": entry_id, "state": "setup_retry", "modified_at": _AFTER}),
         _frame(final_fragment),
     )
 
@@ -181,13 +209,88 @@ async def test_transient_transitions_are_consumed_until_the_first_non_transient_
 
 
 @pytest.mark.asyncio
-async def test_a_stream_that_never_transitions_expires_the_budget() -> None:
+async def test_post_commit_transient_states_are_consumed_until_the_first_non_transient_change() -> (
+    None
+):
+    """Only the state that finally leaves the transient set is the outcome."""
+    entry_id = "entry-1"
+    final_fragment = {"entry_id": entry_id, "state": "loaded", "modified_at": _AFTER}
+    queue = _queue_of(
+        _frame({"entry_id": entry_id, "state": "setup_retry", "modified_at": _BEFORE}),
+        _frame({"entry_id": entry_id, "state": "setup_retry", "modified_at": _AFTER}),
+        _frame(
+            {"entry_id": entry_id, "state": "unload_in_progress", "modified_at": _AFTER}
+        ),
+        _frame({"entry_id": entry_id, "state": "not_loaded", "modified_at": _AFTER}),
+        _frame(
+            {"entry_id": entry_id, "state": "setup_in_progress", "modified_at": _AFTER}
+        ),
+        _frame(final_fragment),
+    )
+
+    result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
+
+    assert result == final_fragment
+
+
+@pytest.mark.asyncio
+async def test_a_stream_that_never_transitions_after_commit_expires_the_budget() -> (
+    None
+):
     entry_id = "entry-1"
     queue = _queue_of(
-        _frame({"entry_id": entry_id, "state": "loaded"}),
-        _frame({"entry_id": entry_id, "state": "loaded"}),
-        _frame({"entry_id": entry_id, "state": "loaded"}),
+        _frame({"entry_id": entry_id, "state": "loaded", "modified_at": _BEFORE}),
+        _frame({"entry_id": entry_id, "state": "loaded", "modified_at": _AFTER}),
+        _frame({"entry_id": entry_id, "state": "loaded", "modified_at": _AFTER}),
     )
+
+    result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_no_modified_at_bump_within_the_commit_timeout_gives_up_early(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resubmit of identical values never bumps `modified_at`.
+
+    The internal commit-visibility budget must cut the wait short instead of
+    stalling for the whole (much larger) caller-supplied timeout.
+    """
+    monkeypatch.setattr(
+        "ha_mcp.tools.config_entry_reload_watch._COMMIT_VISIBLE_TIMEOUT", 0.25
+    )
+    entry_id = "entry-1"
+    queue = _queue_of(
+        _frame({"entry_id": entry_id, "state": "loaded", "modified_at": _BEFORE})
+    )
+
+    started = asyncio.get_running_loop().time()
+    result = await _observe_reload_settled(queue, entry_id, timeout=2.0)
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert result is None
+    assert elapsed < 1.0, f"waited {elapsed:.1f}s despite the short commit timeout"
+
+
+@pytest.mark.parametrize(
+    "modified_at",
+    [
+        pytest.param(None, id="modified_at_missing"),
+        pytest.param("not-a-timestamp", id="modified_at_unparseable"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_baseline_with_no_usable_modified_at_returns_none(
+    modified_at: str | None,
+) -> None:
+    """Without a comparable baseline nothing can be attributed to the commit."""
+    entry_id = "entry-1"
+    fragment: dict[str, Any] = {"entry_id": entry_id, "state": "loaded"}
+    if modified_at is not None:
+        fragment["modified_at"] = modified_at
+    queue = _queue_of(_frame(fragment))
 
     result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
 
@@ -199,7 +302,14 @@ async def test_a_disabled_first_fragment_returns_immediately_without_waiting() -
     """A disabled entry is never reloaded, so no transition is ever coming."""
     entry_id = "entry-1"
     queue = _queue_of(
-        _frame({"entry_id": entry_id, "state": "not_loaded", "disabled_by": "user"})
+        _frame(
+            {
+                "entry_id": entry_id,
+                "state": "not_loaded",
+                "modified_at": _BEFORE,
+                "disabled_by": "user",
+            }
+        )
     )
 
     started = asyncio.get_running_loop().time()
@@ -214,11 +324,14 @@ async def test_a_disabled_first_fragment_returns_immediately_without_waiting() -
 async def test_fragments_for_a_different_entry_id_are_ignored() -> None:
     """A subscription frame is process-wide; another entry's transition is noise."""
     entry_id = "entry-1"
-    final_fragment = {"entry_id": entry_id, "state": "loaded"}
+    final_fragment = {"entry_id": entry_id, "state": "loaded", "modified_at": _AFTER}
     queue = _queue_of(
-        _frame({"entry_id": entry_id, "state": "setup_retry"}),
-        _frame({"entry_id": "entry-other", "state": "loaded"}),
-        _frame({"entry_id": "entry-other", "state": "not_loaded"}),
+        _frame({"entry_id": entry_id, "state": "setup_retry", "modified_at": _BEFORE}),
+        _frame({"entry_id": "entry-other", "state": "loaded", "modified_at": _AFTER}),
+        _frame(
+            {"entry_id": "entry-other", "state": "not_loaded", "modified_at": _AFTER}
+        ),
+        _frame({"entry_id": entry_id, "state": "setup_retry", "modified_at": _AFTER}),
         _frame(final_fragment),
     )
 
