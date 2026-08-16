@@ -75,6 +75,10 @@ _ALLOWED_SCHEMES = ("https",)
 # are outside section 4.4.3 and are negative-cached for CIMD_NEGATIVE_TTL.
 _cimd_cache: dict[str, tuple[float, list[str] | None]] = {}
 
+# Admission for the whole cache-miss lookup (DNS + fetch). Matches the
+# dedicated CIMD connector limit so the two bounds cannot disagree.
+_CIMD_LOOKUP_SLOTS = asyncio.Semaphore(4)
+
 
 def _reject_json_constant(constant: str) -> None:
     """Reject NaN/Infinity, which RFC 8259 JSON does not permit."""
@@ -295,7 +299,14 @@ async def fetch_cimd_redirects(
 
     try:
         async with asyncio.timeout(CIMD_TOTAL_LOOKUP_TIMEOUT):
-            return await _lookup_cimd(session, client_id, parsed, now)
+            # The dedicated connector caps concurrent HTTP, but DNS runs in
+            # the executor BEFORE any connection is taken, so unique
+            # attacker-chosen client_ids could pile getaddrinfo() calls onto
+            # the shared pool (#2219 codex review). Admission covers the whole
+            # cache-miss path and waits inside the deadline above, so a
+            # legitimate lookup queues rather than failing.
+            async with _CIMD_LOOKUP_SLOTS:
+                return await _lookup_cimd(session, client_id, parsed, now)
     except TimeoutError:
         _LOGGER.debug("CIMD lookup: total deadline exceeded for %s", client_id)
         _cache_cimd(client_id, now, None)
@@ -397,11 +408,26 @@ async def resolve_forward_client_id(
     """
     if not client_id or not _is_valid_redirect_uri(redirect_uri):
         return client_id
-    parsed_client = urlparse(client_id)
-    parsed_redirect = urlparse(redirect_uri)
+    # urlparse defers some validation until access and raises outright on
+    # shapes like "https://[" (unterminated IPv6). These views are ANONYMOUS,
+    # so a malformed client_id must pass through for core to reject rather
+    # than traceback (#2219 codex review) — the same contract the redirect
+    # validator states for its own .port access.
+    try:
+        parsed_client = urlparse(client_id)
+        parsed_redirect = urlparse(redirect_uri)
+    except ValueError:
+        return client_id
+    # Case-insensitive netloc equality, matching core's own authorize rule:
+    # indieauth._parse_url lowercases the netloc of BOTH the client_id and the
+    # redirect_uri before comparing them, so a pair differing only in host
+    # casing is same-origin to core and needs no translation. (Core's REFRESH
+    # leg is byte-exact instead — refresh_token.client_id != client_id with no
+    # normalization — which is why the refresh derivation below must reproduce
+    # what THIS leg forwarded, verbatim.)
     if parsed_client.scheme in ("http", "https") and (
-        (parsed_client.scheme, parsed_client.netloc)
-        == (parsed_redirect.scheme, parsed_redirect.netloc)
+        (parsed_client.scheme, parsed_client.netloc.lower())
+        == (parsed_redirect.scheme, parsed_redirect.netloc.lower())
     ):
         return client_id
 
@@ -443,15 +469,21 @@ async def translated_client_id_for_refresh(
 
     Must agree with what the authorize/code legs presented to core, or core
     rejects the refresh (the token is bound to the client_id it was minted
-    under). The legs agree by construction:
+    under). Each case below either reproduces that identity exactly or
+    returns ``UNREPRODUCIBLE`` rather than guess:
 
     * Unmanaged identities (no DCR blob, no fetchable document) →
       ``PASSTHROUGH`` — core stays the authority. A transient CIMD fetch
       failure lands here too (logged by the fetch path); erring toward
       ``UNREPRODUCIBLE`` would force re-auth on working same-origin clients.
-    * Same-origin identities (client_id origin == stable origin — claude.ai's
-      hosted surfaces) took the authorize fast path untranslated →
-      ``PASSTHROUGH``, compared through the shared canonical origin form.
+    * Identities whose registered redirects ALL share the client_id's own
+      origin (claude.ai's hosted surfaces) took the authorize fast path
+      untranslated whichever redirect was presented → ``PASSTHROUGH``.
+    * Identities where only SOME registered redirects share it cannot be
+      resolved without knowing which redirect was presented — the fast path
+      keys off the PRESENTED redirect, and the server keeps no record →
+      ``UNREPRODUCIBLE`` (a local invalid_grant and a clean re-authorize beat
+      forwarding a coin-flip identity into core's failed-login accounting).
     * Cross-origin identities with exactly one web origin and no loopback
       entries were translated to that origin on every leg → return it.
     * Everything else that is VERIFIED — multiple web origins (Gemini
@@ -462,7 +494,12 @@ async def translated_client_id_for_refresh(
     if dcr_key is not None:
         registered = client_redirect_uris(dcr_key, client_id)
     if registered is None:
-        parsed = urlparse(client_id)
+        try:
+            parsed = urlparse(client_id)
+        except ValueError:
+            # Malformed identity: core stays the authority (see the authorize
+            # leg's note); never a traceback on an anonymous view.
+            return RefreshDisposition.PASSTHROUGH
         if parsed.scheme == "https" and session is not None:
             registered = await fetch_cimd_redirects(session, client_id)
     if not registered:
@@ -473,11 +510,36 @@ async def translated_client_id_for_refresh(
     # return None (canonical_origin_url is one-to-one over normalized origins).
     stable = stable_translation_origin(registered)
     assert stable is not None
-    # Canonical comparison (#2217 review): the raw-netloc form diverged from
-    # the fast path whenever a registered redirect carried an explicit
-    # scheme-default port.
-    if origin_client_id(client_id) == stable:
+    # Reproduce what the authorize leg forwarded, or admit we cannot. That
+    # leg's fast path keys off the PRESENTED redirect, which the redirect-less
+    # refresh grant does not carry, so the registered list is all we have:
+    #
+    #   every registered redirect shares the client_id's origin → whichever
+    #     one was presented, the fast path fired → the raw client_id went to
+    #     core → PASSTHROUGH;
+    #   none of them do → whichever was presented, it was translated to the
+    #     one canonical origin → return it;
+    #   some but not all → the answer depends on which was presented, and
+    #     nothing here records that → UNREPRODUCIBLE.
+    #
+    # The middle case is real even under _refresh_identity_is_reproducible,
+    # which normalizes ports: ["https://h/a", "https://h:443/b"] is ONE
+    # canonical origin, yet authorize on /a passes the raw client_id through
+    # while /b translates (#2219 review round 3). Casefolded because the
+    # authorize fast path is (core lowercases both sides there).
+    try:
+        parsed = urlparse(client_id)
+    except ValueError:
         return RefreshDisposition.PASSTHROUGH
+    client_origin = (parsed.scheme, parsed.netloc.lower())
+    matched = [
+        (urlparse(uri).scheme, urlparse(uri).netloc.lower()) == client_origin
+        for uri in registered
+    ]
+    if all(matched):
+        return RefreshDisposition.PASSTHROUGH
+    if any(matched):
+        return RefreshDisposition.UNREPRODUCIBLE
     return stable
 
 

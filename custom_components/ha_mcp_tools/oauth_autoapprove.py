@@ -58,6 +58,7 @@ from .oauth_legacy import (
     PKCECodeStore,
     _is_valid_redirect_uri,
     _issuer_for,
+    read_form,
 )
 
 if TYPE_CHECKING:
@@ -341,7 +342,10 @@ class AutoApproveTokenView(HomeAssistantView):
         if not isinstance(provider, AutoApproveProvider):
             return _json_not_found()
 
-        form: dict[str, Any] = dict(await request.post())
+        raw_form = await read_form(request)
+        if raw_form is None:
+            return _json_error("invalid_request", 400)
+        form: dict[str, Any] = dict(raw_form)
         if form.get("grant_type", "") != "authorization_code":
             return _json_error("unsupported_grant_type", 400)
 
@@ -387,7 +391,16 @@ class AutoApproveTokenView(HomeAssistantView):
             translated_client_id_for_refresh,
         )
 
-        form = MultiDict(await request.post())
+        raw_form = await read_form(request)
+        if raw_form is None:
+            return _json_error("invalid_request", 400)
+        # str()-coerce every value: request.post() also yields bytes and
+        # FileField on a multipart body, and those reach the outgoing
+        # session.post(data=form) serializer, which raises TypeError — an
+        # anonymous 500 (#2219 codex review). Repeated keys are preserved.
+        form: MultiDict = MultiDict(
+            (key, str(value)) for key, value in raw_form.items()
+        )
         grant_type = str(form.get("grant_type", ""))
         client_id = str(form.get("client_id", ""))
         redirect_uri = str(form.get("redirect_uri", ""))
