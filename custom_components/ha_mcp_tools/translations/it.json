@@ -66,7 +66,7 @@
           "auto_update": "Quando è attivo, la versione più recente del canale scelto viene installata automaticamente: a una ricarica o a un riavvio e tramite un controllo periodico. Quando è disattivo, il server resta alla versione installata finché non lo riattivi. Questo riguarda solo il pacchetto del server ha-mcp; gli aggiornamenti del componente personalizzato HA-MCP continuano ad arrivare tramite HACS.",
           "server_port": "La porta su cui questo server ascolta. Il componente aggiuntivo ha-mcp usa la 9583, quindi qui il valore predefinito è 9584 per farli convivere; se non usi il componente aggiuntivo, va bene qualsiasi porta libera.",
           "bind_host": "Chi può collegarsi direttamente alla porta del server MCP. Il valore predefinito coincide con quello del componente aggiuntivo: raggiungibile sulla rete locale, con il percorso segreto come credenziale. Scegli loopback per consentire solo le connessioni dalla macchina di Home Assistant stessa: l'URL del webhook e il pannello nella barra laterale funzionano in entrambi i casi.",
-          "webhook_auth": "Come i client MCP si identificano all'URL del webhook. Con l'URL segreto, il collegamento stesso è la credenziale. Con l'accesso tramite Home Assistant, client come claude.ai entrano con un account amministratore di Home Assistant (OAuth). Con OAuth legacy questa integrazione emette un proprio Client ID e Client Secret da incollare nei client che li richiedono, come Google Gemini Spark: attivarlo o disattivarlo richiede il riavvio di Home Assistant.",
+          "webhook_auth": "Come i client MCP si autenticano all'URL del webhook. Con l'URL segreto, il link stesso è l'unica credenziale - OAuth è ancora attivo per i client che lo usano, ma ogni accesso è approvato automaticamente: non sono necessari login, ID client o Secret. Con l'accesso di Home Assistant, i client come claude.ai accedono con un account amministratore di Home Assistant (OAuth). Con OAuth legacy, questa integrazione esegue il proprio servizio di accesso e rilascia un ID client e un Secret da incollare nei client che ne richiedono uno - potrebbe essere necessario un riavvio di Home Assistant per attivarlo o disattivarlo completamente.",
           "oauth_client_id_override": "Sostituisce il Client ID OAuth legacy generato automaticamente. Lascialo vuoto per mantenere quello attuale. Viene usato solo mentre la modalità di autenticazione è impostata su OAuth legacy.",
           "oauth_client_secret_override": "Sostituisce il Client Secret OAuth legacy generato automaticamente. Lascialo vuoto per mantenere quello attuale. Viene usato solo mentre la modalità di autenticazione è impostata su OAuth legacy.",
           "oauth_regenerate": "Azione una tantum: genera un Client ID e un Client Secret nuovi per la modalità OAuth legacy. Ha effetto solo dopo il riavvio di Home Assistant che la richiesta di riparazione chiede; fino ad allora continuano a funzionare i precedenti e non i nuovi. Svuota anche i due campi di sostituzione qui sopra.",
@@ -104,15 +104,15 @@
     },
     "legacy_hacs_source": {
       "title": "Componente installato dal repository obsoleto",
-      "description": "Per questo componente HACS sta seguendo il repository principale del server ha-mcp, quindi qui mostra i numeri di versione del server (7.x) e le sue note di rilascio invece di quelli del componente (1.x). Gli aggiornamenti continuano a funzionare, ma restano etichettati in modo sbagliato. Per rimediare: rimuovi questo repository da HACS (le impostazioni dell'integrazione e le voci di configurazione vengono mantenute), aggiungi homeassistant-ai/ha-mcp-integration come repository personalizzato, reinstalla il componente da lì e riavvia Home Assistant."
+      "description": "HACS sta tracciando il repository principale del server ha-mcp per questo componente, quindi HACS mostra qui i numeri di versione e le note di rilascio del server invece di quelli propri del componente (2.x). Gli aggiornamenti continuano a funzionare, ma rimangono etichettati in modo errato. Per risolvere: rimuovi questo repository da HACS (le tue impostazioni di integrazione e le voci di configurazione vengono mantenute), aggiungi homeassistant-ai/ha-mcp-integration come repository personalizzato, reinstalla il componente da esso e riavvia Home Assistant."
     },
     "legacy_oauth_restart": {
-      "title": "Riavvia Home Assistant per applicare la modifica a OAuth legacy",
+      "title": "Riavvia Home Assistant per applicare le impostazioni OAuth legacy",
       "fix_flow": {
         "step": {
           "confirm": {
             "title": "Riavvia Home Assistant?",
-            "description": "L'invio di questo modulo riavvierà Home Assistant e applicherà la modifica OAuth legacy.\n\nFai clic su **Invia** per riavviare ora."
+            "description": "L'invio di questo modulo riavvierà Home Assistant e applicherà le impostazioni OAuth legacy.\n\nFai clic su **Invia** per riavviare ora."
           }
         }
       }
@@ -129,7 +129,7 @@
       "options": {
         "none": "URL webhook segreto (predefinito)",
         "ha_auth": "Accedi con Home Assistant (OAuth)",
-        "legacy": "OAuth legacy (Client ID e Client Secret, per Google Gemini Spark)"
+        "legacy": "OAuth legacy (questa integrazione rilascia un ID client/Secret da incollare)"
       }
     },
     "llm_api_exposure": {

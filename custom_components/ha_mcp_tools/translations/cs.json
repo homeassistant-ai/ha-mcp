@@ -66,7 +66,7 @@
           "auto_update": "Když je zapnuto, nejnovější vydání vybraného kanálu se nainstaluje automaticky – při opětovném načtení nebo restartu a prostřednictvím pravidelné kontroly. Když je vypnuto, server zůstane na aktuálně nainstalované verzi, dokud to znovu nezapnete. Toto ovládá pouze balíček serveru ha-mcp; aktualizace samotné vlastní komponenty HA-MCP stále přicházejí přes HACS.",
           "server_port": "Port, na kterém tento server naslouchá. Doplněk ha-mcp používá 9583, takže zde je výchozí hodnota 9584, aby mohly běžet oba vedle sebe – pokud doplněk nepoužíváte, funguje jakýkoli volný port.",
           "bind_host": "Kdo se může přímo připojit k portu serveru MCP. Výchozí nastavení odpovídá doplňku: dosažitelné ve vaší místní síti, s tajnou cestou jako pověřením. Zvolte „loopback“, abyste povolili pouze připojení ze samotného zařízení Home Assistant – URL webhooku a panel postranního panelu fungují v obou případech.",
-          "webhook_auth": "Jak se klienti MCP ověřují na URL webhooku. S tajnou URL je samotný odkaz pověřením. S přihlášením Home Assistanta se klienti jako claude.ai přihlašují pomocí administrátorského účtu Home Assistanta (OAuth). S legacy OAuth tato integrace vydává vlastní ID klienta a tajný klíč, které se vloží do klientů, kteří je vyžadují, jako je Google Gemini Spark – k zapnutí nebo vypnutí potřebuje restart Home Assistanta.",
+          "webhook_auth": "Jak se klienti MCP ověřují na URL webhooku. S tajnou URL je samotný odkaz jediným pověřením – OAuth stále běží pro klienty, kteří jej používají, ale každé přihlášení je schváleno automaticky: není potřeba žádné přihlášení ani Client ID nebo Secret. S přihlášením Home Assistant se klienti jako claude.ai přihlašují pomocí administrátorského účtu Home Assistant (OAuth). S legacy OAuth tato integrace spouští vlastní přihlašovací službu a vydává Client ID a Secret k vložení do klientů, kteří je vyžadují – k úplnému zapnutí nebo vypnutí může být potřeba restart Home Assistanta.",
           "oauth_client_id_override": "Nahrazuje automaticky generované legacy OAuth ID klienta. Ponechte prázdné, abyste zachovali stávající. Používá se pouze, když je režim ověřování nastaven na legacy OAuth.",
           "oauth_client_secret_override": "Nahrazuje automaticky generovaný legacy OAuth tajný klíč klienta. Ponechte prázdné, abyste zachovali stávající. Používá se pouze, když je režim ověřování nastaven na legacy OAuth.",
           "oauth_regenerate": "Jednorázová akce: vytvoří nové ID klienta a tajný klíč pro režim legacy OAuth. Projeví se až po restartu Home Assistanta, o který požádá výzva k opravě – dokud nerestartujete, předchozí ID klienta a tajný klíč fungují a nové ne. Také vymaže dvě pole pro přepsání výše.",
@@ -104,15 +104,15 @@
     },
     "legacy_hacs_source": {
       "title": "Komponenta nainstalovaná z původního repozitáře",
-      "description": "HACS sleduje hlavní repozitář serveru ha-mcp pro tuto komponentu, takže HACS zde zobrazuje čísla verzí serveru (7.x) a poznámky k vydání serveru namísto vlastních (1.x) komponenty. Aktualizace fungují, ale zůstávají takto chybně označeny. Pro opravu: odeberte tento repozitář z HACS (nastavení vaší integrace a konfigurační záznamy zůstanou zachovány), přidejte homeassistant-ai/ha-mcp-integration jako vlastní repozitář, znovu nainstalujte komponentu z něj a restartujte Home Assistanta."
+      "description": "HACS sleduje hlavní repozitář serveru ha-mcp pro tuto komponentu, takže HACS zde zobrazuje čísla verzí a poznámky k vydání serveru namísto vlastních (2.x) komponenty. Aktualizace stále fungují, ale zůstávají takto chybně označeny. Pro opravu: odeberte tento repozitář z HACS (nastavení vaší integrace a konfigurační záznamy zůstanou zachovány), přidejte homeassistant-ai/ha-mcp-integration jako vlastní repozitář, přeinstalujte z něj komponentu a restartujte Home Assistanta."
     },
     "legacy_oauth_restart": {
-      "title": "Restartujte Home Assistanta pro uplatnění změny legacy OAuth",
+      "title": "Restartujte Home Assistanta pro použití nastavení legacy OAuth",
       "fix_flow": {
         "step": {
           "confirm": {
             "title": "Restartovat Home Assistanta?",
-            "description": "Odeslání tohoto formuláře restartuje Home Assistanta a uplatní změnu legacy OAuth.\n\nKlikněte na <strong>Odeslat</strong> pro restartování nyní."
+            "description": "Odesláním tohoto formuláře se restartuje Home Assistant a použijí se nastavení legacy OAuth.\n\nKlikněte na **Odeslat** pro restartování nyní."
           }
         }
       }
@@ -129,7 +129,7 @@
       "options": {
         "none": "Tajná URL webhooku (výchozí)",
         "ha_auth": "Přihlásit se pomocí Home Assistanta (OAuth)",
-        "legacy": "Legacy OAuth (ID klienta/tajný klíč, pro Google Gemini Spark)"
+        "legacy": "Legacy OAuth (tato integrace vydává Client ID/Secret k vložení)"
       }
     },
     "llm_api_exposure": {

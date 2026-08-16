@@ -66,7 +66,7 @@
           "auto_update": "启用时，所选通道的最新发行版会自动安装——在重新加载或重启时，以及通过定期检查。关闭时，服务器会保持当前已安装的版本，直到您重新启用此项。它仅控制 ha-mcp 服务器软件包；HA-MCP 自定义组件自身的更新仍通过 HACS 进行。",
           "server_port": "此服务器监听的端口。ha-mcp 插件使用 9583，因此这里默认为 9584，以便两者并存——如果您不运行该插件，任何空闲端口都可以。",
           "bind_host": "谁可以直接连接到 MCP 服务器端口。默认值与插件一致：可在本地网络中访问，并以密钥路径作为凭据。选择 loopback 则仅允许来自 Home Assistant 所在主机的连接——无论哪种方式，Webhook URL 和侧边栏面板都能正常工作。",
-          "webhook_auth": "MCP 客户端在 Webhook URL 上如何证明自己的身份。使用密钥 URL 时，链接本身就是凭据。使用 Home Assistant 登录时，claude.ai 等客户端会以 Home Assistant 管理员账户登录（OAuth）。使用旧版 OAuth 时，此集成会签发自己的 Client ID 和 Secret，供需要它们的客户端（例如 Google Gemini Spark）粘贴使用——开启或关闭该模式需要重启 Home Assistant。",
+          "webhook_auth": "MCP 客户端如何在 Webhook URL 处验证身份。使用秘密 URL 时，链接本身就是唯一的凭据——OAuth 仍会为使用它的客户端运行，但每次登录都会自动批准：无需登录，也无需客户端 ID 或密钥。使用 Home Assistant 登录时，claude.ai 等客户端会使用 Home Assistant 管理员账户登录 (OAuth)。使用旧版 OAuth 时，此集成会运行自己的登录服务，并颁发客户端 ID 和密钥以粘贴到需要它们的客户端中——可能需要重启 Home Assistant 才能完全启用或禁用它。",
           "oauth_client_id_override": "替换自动生成的旧版 OAuth Client ID。留空则保留当前值。仅在身份验证模式设为旧版 OAuth 时使用。",
           "oauth_client_secret_override": "替换自动生成的旧版 OAuth Client Secret。留空则保留当前值。仅在身份验证模式设为旧版 OAuth 时使用。",
           "oauth_regenerate": "一次性操作：为旧版 OAuth 模式生成新的 Client ID 和 Secret。它只有在修复提示所要求的 Home Assistant 重启之后才会生效——在您重启之前，原有的 Client ID 和 Secret 仍然有效，新的尚未启用。同时会清空上面两个覆盖字段。",
@@ -104,15 +104,15 @@
     },
     "legacy_hacs_source": {
       "title": "组件安装自旧版仓库",
-      "description": "HACS 为此组件跟踪的是 ha-mcp 服务器主仓库，因此 HACS 在此显示的是服务器的版本号（7.x）和服务器的发行说明，而不是组件自身的（1.x）。更新仍然可用，但会一直被这样错误标注。修复方法：从 HACS 中移除此仓库（您的集成设置和配置项会保留），将 homeassistant-ai/ha-mcp-integration 添加为自定义仓库，从中重新安装组件，然后重启 Home Assistant。"
+      "description": "HACS 正在跟踪此组件的主 ha-mcp 服务器仓库，因此 HACS 在此处显示的是服务器的版本号和发布说明，而非组件自身的 (2.x)。更新仍可正常工作，但会一直显示错误的标签。修复方法：从 HACS 中移除此仓库（您的集成设置和配置条目将保留），将 homeassistant-ai/ha-mcp-integration 添加为自定义仓库，从中重新安装组件，然后重启 Home Assistant。"
     },
     "legacy_oauth_restart": {
-      "title": "请重启 Home Assistant 以应用旧版 OAuth 更改",
+      "title": "重启 Home Assistant 以应用旧版 OAuth 设置",
       "fix_flow": {
         "step": {
           "confirm": {
             "title": "重启 Home Assistant？",
-            "description": "提交此表单将重启 Home Assistant 并应用旧版 OAuth 更改。\n\n点击 **提交** 立即重启。"
+            "description": "提交此表单将重启 Home Assistant 并应用旧版 OAuth 设置。\n\n点击 <strong>提交</strong> 立即重启。"
           }
         }
       }
@@ -129,7 +129,7 @@
       "options": {
         "none": "密钥 Webhook URL（默认）",
         "ha_auth": "使用 Home Assistant 登录（OAuth）",
-        "legacy": "旧版 OAuth（Client ID/Secret，适用于 Google Gemini Spark）"
+        "legacy": "旧版 OAuth（此集成颁发客户端 ID/密钥供粘贴）"
       }
     },
     "llm_api_exposure": {

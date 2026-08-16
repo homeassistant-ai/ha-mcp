@@ -66,7 +66,7 @@
           "auto_update": "Wanneer ingeschakeld, wordt de nieuwste release van het geselecteerde kanaal automatisch geïnstalleerd - bij een herlaadbeurt of herstart, en via een periodieke controle. Wanneer uitgeschakeld, blijft de server op de momenteel geïnstalleerde versie totdat je dit weer inschakelt. Dit beheert alleen het ha-mcp serverpakket; updates voor de HA-MCP Aangepaste Component zelf komen nog steeds via HACS.",
           "server_port": "De poort waarop deze server luistert. De ha-mcp add-on gebruikt 9583, dus dit is standaard 9584 om beide naast elkaar te laten draaien - als je de add-on niet draait, werkt elke vrije poort.",
           "bind_host": "Wie kan direct verbinding maken met de MCP serverpoort. De standaardinstelling komt overeen met de add-on: bereikbaar op je lokale netwerk, met het geheime pad als de referentie. Kies loopback om alleen verbindingen vanaf de Home Assistant machine zelf toe te staan - de webhook URL en het zijbalkpaneel werken hoe dan ook.",
-          "webhook_auth": "Hoe MCP-clients zich bewijzen bij de webhook URL. Met de geheime URL is de link zelf de referentie. Met Home Assistant aanmelding loggen clients zoals claude.ai in met een Home Assistant beheerdersaccount (OAuth). Met legacy OAuth geeft deze integratie zijn eigen Client ID en Secret uit om te plakken in clients die er een vereisen, zoals Google Gemini Spark - het vereist een Home Assistant herstart om in of uit te schakelen.",
+          "webhook_auth": "Hoe MCP-clients zich bewijzen bij de webhook-URL. Met de geheime URL is de link zelf de enige referentie - OAuth draait nog steeds voor clients die het gebruiken, maar elke aanmelding wordt automatisch goedgekeurd: geen login en geen Client ID of Secret nodig. Met Home Assistant-aanmelding loggen clients zoals claude.ai in met een Home Assistant-beheerdersaccount (OAuth). Met legacy OAuth draait deze integratie zijn eigen aanmeldingsservice en geeft een Client ID en Secret uit om te plakken in clients die er een nodig hebben - een herstart van Home Assistant kan nodig zijn om het volledig in of uit te schakelen.",
           "oauth_client_id_override": "Vervangt de automatisch gegenereerde legacy OAuth Client ID. Laat leeg om de huidige te behouden. Alleen gebruikt wanneer Authenticatiemodus is ingesteld op legacy OAuth.",
           "oauth_client_secret_override": "Vervangt de automatisch gegenereerde legacy OAuth Client Secret. Laat leeg om de huidige te behouden. Alleen gebruikt wanneer Authenticatiemodus is ingesteld op legacy OAuth.",
           "oauth_regenerate": "Eenmalige actie: genereert een nieuwe Client ID en Secret voor legacy OAuth-modus. Het wordt pas van kracht na de Home Assistant herstart waar de reparatieprompt om vraagt - totdat je herstart, blijven de vorige Client ID en Secret werken en de nieuwe niet. Maakt ook de twee overschrijvingsvelden hierboven leeg.",
@@ -104,15 +104,15 @@
     },
     "legacy_hacs_source": {
       "title": "Component geïnstalleerd vanuit de verouderde repository",
-      "description": "HACS volgt de hoofd ha-mcp server repository voor deze component, dus HACS toont hier de versienummers van de server (7.x) en de releasenotes van de server in plaats van die van de component zelf (1.x). Updates blijven werken, maar blijven op deze manier verkeerd gelabeld. Om dit te verhelpen: verwijder deze repository uit HACS (je integratie-instellingen en configuratie-items blijven behouden), voeg homeassistant-ai/ha-mcp-integration toe als een aangepaste repository, installeer de component opnieuw hiervandaan en herstart Home Assistant."
+      "description": "HACS volgt de hoofdrepository van de ha-mcp-server voor dit component, dus HACS toont hier de versienummers en releasenotes van de server in plaats van die van het component zelf (2.x). Updates blijven werken, maar blijven op deze manier verkeerd gelabeld. Om dit te verhelpen: verwijder deze repository uit HACS (je integratie-instellingen en configuratie-items blijven behouden), voeg homeassistant-ai/ha-mcp-integration toe als een aangepaste repository, installeer het component opnieuw hiervandaan, en herstart Home Assistant."
     },
     "legacy_oauth_restart": {
-      "title": "Herstart Home Assistant om de legacy OAuth-wijziging toe te passen",
+      "title": "Herstart Home Assistant om de legacy OAuth-instellingen toe te passen",
       "fix_flow": {
         "step": {
           "confirm": {
             "title": "Home Assistant opnieuw opstarten?",
-            "description": "Het indienen van dit formulier zal Home Assistant opnieuw opstarten en de legacy OAuth-wijziging toepassen.\n\nKlik op **Verzenden** om nu opnieuw op te starten."
+            "description": "Het indienen van dit formulier zal Home Assistant opnieuw opstarten en de legacy OAuth-instellingen toepassen.\n\nKlik op <strong>Verzenden</strong> om nu opnieuw op te starten."
           }
         }
       }
@@ -129,7 +129,7 @@
       "options": {
         "none": "Geheime webhook-URL (standaard)",
         "ha_auth": "Aanmelden met Home Assistant (OAuth)",
-        "legacy": "Legacy OAuth (Client ID/Secret, voor Google Gemini Spark)"
+        "legacy": "Legacy OAuth (deze integratie geeft een Client ID/Secret uit om te plakken)"
       }
     },
     "llm_api_exposure": {

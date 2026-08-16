@@ -66,7 +66,7 @@
           "auto_update": "Kiam ŝaltita, la plej nova eldono de la elektita kanalo estas instalita aŭtomate — dum reŝargo aŭ rekomenco, kaj per perioda kontrolo. Kiam malŝaltita, la servilo restas ĉe la nuntempe instalita versio ĝis vi reŝaltas ĉi tion. Ĉi tio regas nur la ha-mcp servilan pakaĵon; ĝisdatigoj al la HA-MCP Propra Komponanto mem ankoraŭ venas per HACS.",
           "server_port": "La pordo, ĉe kiu ĉi tiu servilo aŭskultas. La kromprogramo ha-mcp uzas 9583, do ĉi tie la defaŭlta valoro estas 9584, por ke ambaŭ povu funkcii samtempe — se vi ne uzas la kromprogramon, iu ajn libera pordo taŭgas.",
           "bind_host": "Kiu povas konektiĝi rekte al la MCP servila pordo. La defaŭlta valoro kongruas kun la kromprogramo: atingebla en via loka reto, kun la sekreta vojo kiel la akreditaĵo. Elektu 'loopback' por permesi nur konektojn de la Home Assistant maŝino mem — la retkroĉa URL kaj la flankbreta panelo funkcias ambaŭkaze.",
-          "webhook_auth": "Kiel MCP klientoj pruvas sin ĉe la retkroĉa URL. Kun la sekreta URL, la ligilo mem estas la akreditaĵo. Kun Home Assistant ensaluto, klientoj kiel claude.ai ensalutas per Home Assistant administranta konto (OAuth). Kun hereda OAuth, ĉi tiu integriĝo eldonas sian propran Klientan ID kaj Sekreton por alglui en klientojn, kiuj postulas tian, kiel Google Gemini Spark — ĝi bezonas Home Assistant rekomenco por ŝalti aŭ malŝalti.",
+          "webhook_auth": "Kiel MCP-klientoj pruvas sin ĉe la retkroĉa URL. Kun la sekreta URL, la ligilo mem estas la sola akreditaĵo — OAuth ankoraŭ funkcias por klientoj, kiuj uzas ĝin, sed ĉiu ensaluto estas aŭtomate aprobita: neniu ensaluto kaj neniu Klienta ID aŭ Sekreto necesas. Kun Home Assistant-ensaluto, klientoj kiel claude.ai ensalutas per Home Assistant-administranta konto (OAuth). Kun hereda OAuth, ĉi tiu integriĝo funkciigas sian propran ensalutan servon kaj eldonas Klientan ID-on kaj Sekreton por alglui en klientojn, kiuj postulas tian — rekomenco de Home Assistant eble necesos por plene ŝalti aŭ malŝalti ĝin.",
           "oauth_client_id_override": "Anstataŭigas la aŭtomate generitan heredan OAuth Klientan ID. Lasu malplena por konservi la nunan. Nur uzata kiam Aŭtentiga reĝimo estas agordita al hereda OAuth.",
           "oauth_client_secret_override": "Anstataŭigas la aŭtomate generitan heredan OAuth Klientan Sekreton. Lasu malplena por konservi la nunan. Nur uzata kiam Aŭtentiga reĝimo estas agordita al hereda OAuth.",
           "oauth_regenerate": "Unufoja ago: kreas novan Klientan ID kaj Sekreton por hereda OAuth-reĝimo. Ĝi ekvalidas nur post la rekomenco de Home Assistant, kiun la ripara peto petas — ĝis vi rekomencos, la antaŭaj Klienta ID kaj Sekreto daŭre funkcias kaj la novaj ne. Ankaŭ malplenigas la du superregajn kampojn supre.",
@@ -104,15 +104,15 @@
     },
     "legacy_hacs_source": {
       "title": "Komponanto instalita el la hereda deponejo",
-      "description": "HACS spuras la ĉefan deponejon de la servilo ha-mcp por ĉi tiu komponanto, do HACS montras la versinumerojn de la servilo (7.x) kaj la eldonajn notojn de la servilo ĉi tie anstataŭ tiujn de la komponanto (1.x). Ĝisdatigoj daŭre funkcias, sed restas misetikeditaj tiel. Por ripari: forigu ĉi tiun deponejon el HACS (viaj integriĝaj agordoj kaj agordaj eniroj estas konservitaj), aldonu homeassistant-ai/ha-mcp-integration kiel propran deponejon, reinstalu la komponanton el ĝi, kaj rekomencu Home Assistant."
+      "description": "HACS spuras la ĉefan deponejon de la ha-mcp-servilo por ĉi tiu komponanto, do HACS montras la versinumerojn kaj eldondetalojn de la servilo ĉi tie anstataŭ tiujn de la komponanto mem (2.x). Ĝisdatigoj daŭre funkcias, sed restas misetikeditaj tiel. Por ripari: forigu ĉi tiun deponejon el HACS (viaj integriĝaj agordoj kaj agordaj enskriboj estas konservitaj), aldonu homeassistant-ai/ha-mcp-integration kiel propran deponejon, reinstalu la komponanton el ĝi, kaj rekomencu Home Assistant."
     },
     "legacy_oauth_restart": {
-      "title": "Rekomencu Home Assistant por apliki la ŝanĝon de hereda OAuth",
+      "title": "Rekomencu Home Assistant por apliki la heredajn OAuth-agordojn",
       "fix_flow": {
         "step": {
           "confirm": {
             "title": "Rekomencu Home Assistant?",
-            "description": "Sendi ĉi tiun formularon rekomencos Home Assistant kaj aplikos la ŝanĝon de legacy OAuth.\n\nAlklaku **Sendu** por rekomenci nun."
+            "description": "Sendi ĉi tiun formularon rekomencos Home Assistant kaj aplikos la heredajn OAuth-agordojn.\n\nAlklaku **Sendi** por rekomenci nun."
           }
         }
       }
@@ -129,7 +129,7 @@
       "options": {
         "none": "Sekreta retkroĉa URL (defaŭlta)",
         "ha_auth": "Ensaluti per Home Assistant (OAuth)",
-        "legacy": "Hereda OAuth (Klienta ID/Sekreto, por Google Gemini Spark)"
+        "legacy": "Hereda OAuth (ĉi tiu integriĝo eldonas Klientan ID-on/Sekreton por alglui)"
       }
     },
     "llm_api_exposure": {

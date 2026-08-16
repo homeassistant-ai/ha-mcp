@@ -66,7 +66,7 @@
           "auto_update": "Lorsqu'activé, la dernière version du canal sélectionné est installée automatiquement – lors d'un rechargement ou redémarrage, et via une vérification périodique. Lorsqu'éteint, le serveur reste sur la version actuellement installée jusqu'à ce que vous le réactiviez. Cela contrôle uniquement le paquet serveur ha-mcp ; les mises à jour du composant personnalisé HA-MCP lui-même passent toujours par HACS.",
           "server_port": "Le port sur lequel ce serveur écoute. L'add-on ha-mcp utilise 9583, donc la valeur par défaut ici est 9584 pour permettre aux deux de coexister – si vous n'utilisez pas l'add-on, n'importe quel port libre convient.",
           "bind_host": "Qui peut se connecter directement au port du serveur MCP. La valeur par défaut correspond à l'add-on : accessible sur votre réseau local, avec le chemin secret comme identifiant. Choisissez loopback pour n'autoriser que les connexions depuis la machine Home Assistant elle-même – l'URL webhook et le panneau latéral fonctionnent dans les deux cas.",
-          "webhook_auth": "Comment les clients MCP s'authentifient à l'URL webhook. Avec l'URL secrète, le lien lui-même est l'identifiant. Avec la connexion Home Assistant, les clients comme claude.ai se connectent avec un compte administrateur Home Assistant (OAuth). Avec OAuth hérité, cette intégration émet son propre Client ID et Secret à coller dans les clients qui en ont besoin, comme Google Gemini Spark – un redémarrage de Home Assistant est nécessaire pour l'activer ou le désactiver.",
+          "webhook_auth": "Comment les clients MCP s'authentifient à l'URL du webhook. Avec l'URL secrète, le lien lui-même est la seule information d'identification – OAuth fonctionne toujours pour les clients qui l'utilisent, mais chaque connexion est approuvée automatiquement : pas de connexion et pas de Client ID ou Secret nécessaires. Avec la connexion Home Assistant, les clients tels que claude.ai se connectent avec un compte administrateur Home Assistant (OAuth). Avec OAuth hérité, cette intégration exécute son propre service de connexion et émet un Client ID et un Secret à coller dans les clients qui en nécessitent un – un redémarrage de Home Assistant peut être nécessaire pour l'activer ou le désactiver complètement.",
           "oauth_client_id_override": "Remplace le Client ID OAuth hérité généré automatiquement. Laissez vide pour conserver l'actuel. Utilisé uniquement lorsque le mode d'authentification est défini sur OAuth hérité.",
           "oauth_client_secret_override": "Remplace le Client Secret OAuth hérité généré automatiquement. Laissez vide pour conserver l'actuel. Utilisé uniquement lorsque le mode d'authentification est défini sur OAuth hérité.",
           "oauth_regenerate": "Action unique : génère un nouveau Client ID et Secret pour le mode OAuth hérité. Cela ne prend effet qu'après le redémarrage de Home Assistant demandé par l'invite de réparation – jusqu'au redémarrage, les anciens Client ID et Secret continuent de fonctionner et les nouveaux ne sont pas encore actifs. Efface également les deux champs de surcharge ci-dessus.",
@@ -104,15 +104,15 @@
     },
     "legacy_hacs_source": {
       "title": "Composant installé depuis le dépôt hérité",
-      "description": "HACS suit le dépôt principal du serveur ha-mcp pour ce composant, donc HACS affiche ici les numéros de version du serveur (7.x) et les notes de version du serveur au lieu de celles du composant (1.x). Les mises à jour continuent de fonctionner, mais restent mal étiquetées de cette façon. Pour corriger : supprimez ce dépôt de HACS (vos paramètres d'intégration et entrées de configuration sont conservés), ajoutez homeassistant-ai/ha-mcp-integration comme dépôt personnalisé, réinstallez le composant depuis celui-ci, et redémarrez Home Assistant."
+      "description": "HACS suit le dépôt principal du serveur ha-mcp pour ce composant, donc HACS affiche ici les numéros de version et les notes de publication du serveur au lieu de ceux du composant lui-même (2.x). Les mises à jour continuent de fonctionner, mais restent mal étiquetées de cette manière. Pour corriger : supprimez ce dépôt de HACS (vos paramètres d'intégration et entrées de configuration sont conservés), ajoutez homeassistant-ai/ha-mcp-integration comme dépôt personnalisé, réinstallez le composant à partir de celui-ci, et redémarrez Home Assistant."
     },
     "legacy_oauth_restart": {
-      "title": "Redémarrez Home Assistant pour appliquer le changement OAuth hérité",
+      "title": "Redémarrez Home Assistant pour appliquer les paramètres OAuth hérités",
       "fix_flow": {
         "step": {
           "confirm": {
             "title": "Redémarrer Home Assistant ?",
-            "description": "Soumettre ce formulaire redémarrera Home Assistant et appliquera le changement OAuth hérité.\n\nCliquez sur **Soumettre** pour redémarrer maintenant."
+            "description": "La soumission de ce formulaire redémarrera Home Assistant et appliquera les paramètres OAuth hérités.\n\nCliquez sur **Soumettre** pour redémarrer maintenant."
           }
         }
       }
@@ -129,7 +129,7 @@
       "options": {
         "none": "URL webhook secrète (par défaut)",
         "ha_auth": "Connexion avec Home Assistant (OAuth)",
-        "legacy": "OAuth hérité (Client ID/Secret, pour Google Gemini Spark)"
+        "legacy": "OAuth hérité (cette intégration émet un Client ID/Secret à coller)"
       }
     },
     "llm_api_exposure": {
