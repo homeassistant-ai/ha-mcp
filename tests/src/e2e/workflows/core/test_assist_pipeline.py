@@ -1,6 +1,8 @@
 """E2E smoke tests for Assist pipeline tools."""
 
+import asyncio
 import logging
+import time
 
 import pytest
 
@@ -13,6 +15,10 @@ from ...utilities.assertions import (
 from ...utilities.wait_helpers import wait_for_entity_state
 
 logger = logging.getLogger(__name__)
+
+# Budget for a freshly exposed entity to become matchable by the conversation
+# agent.
+_INTENT_MATCH_TIMEOUT = 20
 
 
 @pytest.mark.core
@@ -189,30 +195,54 @@ class TestAssistPipeline:
             f"{entity_id} never became available"
         )
 
-        expose_data = parse_mcp_result(
+        try:
+            expose_data = parse_mcp_result(
+                await mcp_client.call_tool(
+                    "ha_set_entity",
+                    {"entity_id": entity_id, "expose_to": {"conversation": True}},
+                )
+            )
+            assert expose_data.get("success"), f"Failed to expose entity: {expose_data}"
+
+            # The new exposure reaches the conversation agent asynchronously, so
+            # a sentence sent right away can still come back unmatched. Retry
+            # within a budget instead of racing it; a real regression still
+            # fails once the budget is spent.
+            deadline = time.monotonic() + _INTENT_MATCH_TIMEOUT
+            while True:
+                async with MCPAssertions(mcp_client) as mcp:
+                    data = await mcp.call_tool_success(
+                        "ha_manage_pipeline",
+                        {"action": "process", "sentence": f"turn on {friendly_name}"},
+                    )
+                if (
+                    data.get("error_code") != "no_intent_match"
+                    or time.monotonic() >= deadline
+                ):
+                    break
+                await asyncio.sleep(1)
+
+            assert data["response_type"] == "action_done", f"Intent not run: {data}"
+            assert data["service_calls"]["success"], f"No target reported: {data}"
+            assert entity_id in {
+                target.get("id") for target in data["service_calls"]["success"]
+            }, f"{entity_id} missing from the reported targets: {data}"
+            assert data["service_calls"]["failed"] == []
+            assert "warnings" not in data
+            assert await wait_for_entity_state(mcp_client, entity_id, "on"), (
+                f"{entity_id} did not turn on"
+            )
+        finally:
+            # cleanup_tracker only logs; the helper has to be removed by hand,
+            # as the other suites that create one do.
             await mcp_client.call_tool(
-                "ha_set_entity",
-                {"entity_id": entity_id, "expose_to": {"conversation": True}},
+                "ha_remove_helpers_integrations",
+                {
+                    "helper_type": "input_boolean",
+                    "target": entity_id,
+                    "confirm": True,
+                },
             )
-        )
-        assert expose_data.get("success"), f"Failed to expose entity: {expose_data}"
-
-        async with MCPAssertions(mcp_client) as mcp:
-            data = await mcp.call_tool_success(
-                "ha_manage_pipeline",
-                {"action": "process", "sentence": f"turn on {friendly_name}"},
-            )
-
-        assert data["response_type"] == "action_done", f"Intent not run: {data}"
-        assert data["service_calls"]["success"], f"No target reported: {data}"
-        assert entity_id in {
-            target.get("id") for target in data["service_calls"]["success"]
-        }, f"{entity_id} missing from the reported targets: {data}"
-        assert data["service_calls"]["failed"] == []
-        assert "warnings" not in data
-        assert await wait_for_entity_state(mcp_client, entity_id, "on"), (
-            f"{entity_id} did not turn on"
-        )
 
     async def test_process_requires_a_sentence(self, mcp_client):
         """process without a sentence is rejected before HA is contacted."""
