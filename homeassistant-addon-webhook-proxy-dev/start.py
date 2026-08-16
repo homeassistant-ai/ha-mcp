@@ -1519,11 +1519,15 @@ def _install_integration_and_handle_restart() -> None:
             )
         else:
             _reload_config_entry()
-            _ha_core_api(
-                "POST",
-                "/services/persistent_notification/dismiss",
-                {"notification_id": "mcp_proxy_dev_restart"},
-            )
+            for stale in ("mcp_proxy_dev_restart", "mcp_proxy_dev_setup_failed"):
+                # Also clear a setup-failed notice from an earlier boot: it
+                # tells the user the webhook URL is NOT active, which is now
+                # untrue and self-clears nowhere else.
+                _ha_core_api(
+                    "POST",
+                    "/services/persistent_notification/dismiss",
+                    {"notification_id": stale},
+                )
             log_info("Setup completed after HA restart")
     elif not _ensure_config_entry():
         log_error(
@@ -1553,12 +1557,15 @@ def _install_integration_and_handle_restart() -> None:
         # config file we just wrote (it may have loaded with stale data
         # during HA boot, before this addon started).
         _reload_config_entry()
-        # Dismiss any leftover restart notification from first install
-        _ha_core_api(
-            "POST",
-            "/services/persistent_notification/dismiss",
-            {"notification_id": "mcp_proxy_dev_restart"},
-        )
+        # Dismiss leftovers from an earlier boot: the first-install restart
+        # prompt, and a setup-failed notice that still claims the webhook URL
+        # is not active.
+        for stale in ("mcp_proxy_dev_restart", "mcp_proxy_dev_setup_failed"):
+            _ha_core_api(
+                "POST",
+                "/services/persistent_notification/dismiss",
+                {"notification_id": stale},
+            )
 
 
 def _enforce_oauth_or_disable(enable_oauth: bool) -> None:

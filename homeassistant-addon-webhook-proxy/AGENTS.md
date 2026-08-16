@@ -42,7 +42,9 @@ promote PR.
 
 ## Mutual exclusion
 Both flavors install a webhook + OAuth views; the OAuth provider owns the root
-`/authorize` and `/token` routes, which two live integrations cannot share. So only one
+`/authorize` and `/token` routes, which two live integrations cannot share. (The scoped
+`/api/mcp_proxy{,_dev}/oauth/*` routes carry the domain, so those do not collide — the
+bare root pair is what forces the exclusion.) So only one
 flavor may run at a time. Each `start.py` checks the Supervisor `/addons` list on
 startup and refuses (logs + a self-clearing HA notification, then exits) if its sibling
 is `started`. `start.py:_sibling_is_running` matches the sibling by exact slug or
@@ -97,7 +99,13 @@ manual fallback):
 `_webhook_proxy_variant` fixture rebinds `PROXY_ADDON_DIR`/`CURRENT`, so every test runs
 once as `[stable]` and once as `[dev]`. CI runs `tests/addon/`, so the dev code is
 exercised on every PR — that is what makes it safe to develop on the dev flavor before
-promoting. When you add a variant-specific value, add it to the `WEBHOOK_PROXY_VARIANTS`
-table rather than hard-coding it in a test. `tests/src/unit/test_webhook_proxy_dev_isolation.py`
+promoting. When you add a variant-specific VALUE — a path, slug, domain, or route base —
+add it to the `WEBHOOK_PROXY_VARIANTS` table rather than hard-coding it in a test. A
+variant-specific CAPABILITY is the opposite: feature-detect it from the flavor's own
+source, the way `_ha_auth_supported`, `_none_autoapprove_supported`, and
+`_rfc9207_iss_supported` already do. The promote transform copies code but never edits
+this test file, so a capability recorded as a table boolean stays `False` for stable
+after the code arrives, and the promote PR then asserts the old surface against the new
+one. `tests/src/unit/test_webhook_proxy_dev_isolation.py`
 separately guards the rename (no bare `mcp_proxy` token in the dev tree) and the dev-side
 mutual-exclusion constants.

@@ -406,6 +406,17 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/clear-text-storage-sensitive-data",
+        "homeassistant-addon-webhook-proxy/mcp_proxy/__init__.py",
+        "as clear text",
+        "DCR_SECRET_FILE.write_bytes(new_secret)",
+        "Warned fallback (DCR signing key, stable twin of the dev entry above "
+        "— promoted in 3.0.0): load_or_create_dcr_secret writes via "
+        "_atomic_write_0600 first; the flagged plain write only runs when the "
+        "filesystem cannot honor 0600 and it logs a warning. Persisting the "
+        "key is the feature (registered client_ids must survive restarts).",
+    ),
+    (
+        "py/clear-text-storage-sensitive-data",
         "homeassistant-addon-webhook-proxy/start.py",
         "as clear text",
         "",
