@@ -68,6 +68,11 @@ PipelineAction = Literal["list", "get", "create", "update", "set_preferred", "pr
 # agent can recognise intents in.
 _MATCH_ALL_LANGUAGE = "*"
 
+# IntentResponseErrorCode.FAILED_TO_HANDLE: HA matched the intent, ran the
+# action and the action raised. Unlike no_intent_match this is a failure the
+# caller should see, not Assist declining a sentence.
+_FAILED_TO_HANDLE_ERROR = "failed_to_handle"
+
 # Mirrors HA Core's assist_pipeline/pipeline.py pipeline create/update schema.
 _PIPELINE_FIELDS = (
     "conversation_engine",
@@ -408,7 +413,7 @@ class VoiceAssistantTools:
         because they may be more specific (``zh-CN`` rather than ``zh``).
         """
         language = pipeline.get("conversation_language")
-        if isinstance(language, str) and language != _MATCH_ALL_LANGUAGE:
+        if isinstance(language, str) and language and language != _MATCH_ALL_LANGUAGE:
             return language
         for field in ("stt_language", "tts_language", "language"):
             value = pipeline.get(field)
@@ -473,8 +478,18 @@ class VoiceAssistantTools:
             "POST", "/conversation/process", json=payload
         )
         response = result.get("response") if isinstance(result, dict) else None
-        if not isinstance(response, dict):
-            # An empty or malformed 2xx body arrives here as {} — the client
+        response_type = (
+            response.get("response_type") if isinstance(response, dict) else None
+        )
+        data = response.get("data") if isinstance(response, dict) else None
+        if (
+            not isinstance(response, dict)
+            or not isinstance(response_type, str)
+            or not isinstance(data, dict)
+        ):
+            # IntentResponse.as_dict always writes both response_type and data,
+            # so a body missing either is malformed rather than a variant. An
+            # empty or undecodable 2xx body arrives here as {} — the client
             # normalizes a JSON decode failure that way — and carrying on would
             # report success with a null response_type and no speech.
             raise_tool_error(
@@ -492,13 +507,11 @@ class VoiceAssistantTools:
                     ],
                 )
             )
-        data = response.get("data")
-        if not isinstance(data, dict):
-            data = {}
 
-        response_type = response.get("response_type")
         speech = self._speech_text(response)
-        return {
+        failed = data.get("failed", [])
+        error_code = data.get("code") if response_type == "error" else None
+        process_result: dict[str, Any] = {
             "success": True,
             "operation": "process",
             "pipeline_id": pipeline_id,
@@ -514,12 +527,36 @@ class VoiceAssistantTools:
             "targets": data.get("targets", []),
             "service_calls": {
                 "success": data.get("success", []),
-                "failed": data.get("failed", []),
+                "failed": failed,
             },
-            "error_code": data.get("code") if response_type == "error" else None,
-            "message": speech
-            or f"Assist responded with {response_type or 'no response type'}",
+            "error_code": error_code,
+            "message": speech or f"Assist responded with {response_type}",
         }
+
+        # HA raises only when no target succeeded, so a partial failure keeps
+        # response_type 'action_done' and the intent's ordinary speech. Without
+        # a warning the caller reads "Turned on the lights" and never looks in
+        # service_calls.failed.
+        warnings: list[str] = []
+        if failed:
+            failed_targets = ", ".join(
+                str(target.get("id") or target.get("name") or "unknown target")
+                for target in failed
+                if isinstance(target, dict)
+            )
+            warnings.append(
+                f"{len(failed)} target(s) the intent resolved failed"
+                + (f": {failed_targets}" if failed_targets else "")
+                + ". See service_calls.failed."
+            )
+        if error_code == _FAILED_TO_HANDLE_ERROR:
+            warnings.append(
+                "Assist matched the intent but handling it failed. The command "
+                "was understood and not carried out."
+            )
+        if warnings:
+            process_result["warnings"] = warnings
+        return process_result
 
     @tool(
         name="ha_manage_pipeline",
@@ -563,7 +600,9 @@ class VoiceAssistantTools:
             Field(
                 description=(
                     "Natural-language command to run through Assist. Required when "
-                    "action='process'. A matched intent executes."
+                    "action='process'. A matched intent executes, and with the "
+                    "built-in agent a sentence matching a conversation trigger "
+                    "runs that automation."
                 ),
                 default=None,
             ),
@@ -712,10 +751,14 @@ class VoiceAssistantTools:
         such as 'no_intent_match' — Assist declining a sentence is an answer,
         not a tool failure, so inspect those fields rather than expecting a
         raised error. Use ha_call_service to act on an entity directly; use
-        this to test what Assist itself understands. pipeline_id borrows a
-        pipeline's conversation agent and language, but the sentence still goes
-        to the agent directly, so sentence triggers and prefer_local_intents —
-        which only a full pipeline run applies — do not take effect.
+        this to test what Assist itself understands. When the built-in agent
+        answers, a matching conversation trigger runs its automation: that
+        agent checks its sentence triggers before it matches intents, so this
+        is not limited to intents. pipeline_id borrows a pipeline's
+        conversation agent and language, but the sentence still goes to the
+        agent directly. So with an agent other than the built-in one, neither
+        sentence triggers nor prefer_local_intents apply — a full pipeline run
+        is what adds those for other agents.
 
         EXAMPLES:
         - List pipelines: ha_manage_pipeline(action="list")

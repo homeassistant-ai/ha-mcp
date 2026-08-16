@@ -4,7 +4,13 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import MCPAssertions, assert_mcp_success, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    assert_mcp_success,
+    parse_mcp_result,
+    safe_call_tool,
+)
+from ...utilities.wait_helpers import wait_for_entity_state
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +112,107 @@ class TestAssistPipeline:
         assert data["response_type"] == "error"
         assert data["error_code"] == "no_intent_match"
         assert data["service_calls"] == {"success": [], "failed": []}
+
+    async def test_process_resolves_an_agent_id_home_assistant_accepts(
+        self, mcp_client
+    ):
+        """pipeline_id resolves an agent id the conversation endpoint accepts.
+
+        The resolution reads conversation_engine off the pipeline and sends it
+        as agent_id. Whether HA's own agent_id validator accepts that value is
+        only observable against a real instance: a rejected id is a 400 here,
+        and the mocked unit tests cannot see it. Still an unmatched sentence,
+        so nothing can change state.
+        """
+        logger.info("Testing ha_manage_pipeline process with pipeline_id...")
+
+        list_data = await safe_call_tool(
+            mcp_client, "ha_manage_pipeline", {"action": "list"}
+        )
+        if list_data.get("success") is not True:
+            pytest.skip(f"Assist pipeline websocket API unavailable: {list_data}")
+
+        preferred = list_data.get("preferred_pipeline")
+        if not preferred:
+            pytest.skip("No preferred Assist pipeline configured")
+
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_manage_pipeline",
+                {
+                    "action": "process",
+                    "sentence": "zzqx wibble frobnicate the quux",
+                    "pipeline_id": preferred,
+                },
+            )
+
+        assert data["pipeline_id"] == preferred
+        assert data["agent_id"], f"pipeline_id resolved no agent: {data}"
+        # Which one depends on the configured agent; that HA answered at all is
+        # what proves it accepted the resolved id.
+        assert data["response_type"] in {"error", "action_done", "query_answer"}
+
+    async def test_process_executes_a_matched_intent(self, mcp_client, cleanup_tracker):
+        """A matched sentence runs the intent against a throwaway helper.
+
+        The negative cases above cannot show that the payload HA accepts on the
+        happy path is right, nor that data.success is extracted from a real
+        response — on an error response both keys are absent and the defaults
+        make the assertion pass either way. Blast radius is one input_boolean
+        created here, in a per-worker container.
+        """
+        logger.info("Testing ha_manage_pipeline process executing an intent...")
+
+        friendly_name = "Assist Process Probe"
+        create_data = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_config_set_helper",
+                {
+                    "helper_type": "input_boolean",
+                    "name": friendly_name,
+                    "initial": "off",
+                },
+            )
+        )
+        if not create_data.get("success"):
+            pytest.skip(f"Could not create the test helper: {create_data}")
+
+        entity_id = create_data.get("entity_id")
+        if not entity_id:
+            helper_id = create_data.get("data", {}).get("id")
+            entity_id = f"input_boolean.{helper_id}" if helper_id else None
+        if not entity_id:
+            pytest.skip(f"Could not resolve the helper entity_id: {create_data}")
+        cleanup_tracker.track("input_boolean", entity_id)
+
+        assert await wait_for_entity_state(mcp_client, entity_id, "off"), (
+            f"{entity_id} never became available"
+        )
+
+        expose_data = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_set_entity",
+                {"entity_id": entity_id, "expose_to": {"conversation": True}},
+            )
+        )
+        assert expose_data.get("success"), f"Failed to expose entity: {expose_data}"
+
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_manage_pipeline",
+                {"action": "process", "sentence": f"turn on {friendly_name}"},
+            )
+
+        assert data["response_type"] == "action_done", f"Intent not run: {data}"
+        assert data["service_calls"]["success"], f"No target reported: {data}"
+        assert entity_id in {
+            target.get("id") for target in data["service_calls"]["success"]
+        }, f"{entity_id} missing from the reported targets: {data}"
+        assert data["service_calls"]["failed"] == []
+        assert "warnings" not in data
+        assert await wait_for_entity_state(mcp_client, entity_id, "on"), (
+            f"{entity_id} did not turn on"
+        )
 
     async def test_process_requires_a_sentence(self, mcp_client):
         """process without a sentence is rejected before HA is contacted."""
