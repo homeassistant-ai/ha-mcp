@@ -468,37 +468,78 @@ async def test_cimd_unreachable_result_is_negative_cached(oauth_stack, monkeypat
     indirect._cimd_cache.clear()
 
 
+class _CimdContent:
+    """Response body stream over fixed chunks."""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    async def iter_chunked(self, _size):
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _CimdResponse:
+    status = 200
+
+    def __init__(self, body: bytes):
+        self.content = _CimdContent([body])
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+
+class _CimdSession:
+    """Serves queued bodies over the real fetch/parse path."""
+
+    def __init__(self, bodies):
+        self._bodies = list(bodies)
+        self.calls: list[str] = []
+
+    def get(self, url, **_kwargs):
+        self.calls.append(url)
+        return _CimdResponse(self._bodies.pop(0))
+
+
 async def test_invalid_cimd_document_is_not_negative_cached(oauth_stack, monkeypatch):
     """Draft -00 §4.4.3: an INVALID document is deliberately not cached, so a
     client that fixes its metadata recovers on the very next request.
 
-    Mirrors the component's test_invalid_cimd_is_not_negative_cached. Without
-    this pin the policy is only a comment on this side: adding a _cache_cimd()
-    call to the invalid branch would keep every other proxy test green, and
-    both review bots have already re-raised the non-caching as a defect
-    (#2218 review by Patch76)."""
+    Mirrors the component's test_invalid_cimd_is_not_negative_cached, and like
+    it drives REAL bodies through _fetch_pinned_cimd and _parse_cimd rather
+    than stubbing the fetch — otherwise a _cache_cimd() introduced inside the
+    fetch path would stay green here while failing on the component side
+    (#2218 review by Patch76). Without this pin the policy is only a comment
+    on this side, and both review bots have already re-raised the
+    non-caching as a defect."""
     indirect = oauth_stack.indirect
+    client_id = "https://client.example/client.json"
+    invalid = json.dumps(  # no client_name -> rejected by _parse_cimd
+        {"client_id": client_id, "redirect_uris": ["https://client.example/cb"]}
+    ).encode()
+    valid = json.dumps(
+        {
+            "client_id": client_id,
+            "client_name": "Client",
+            "redirect_uris": ["https://client.example/cb"],
+        }
+    ).encode()
     monkeypatch.setattr(
         indirect,
         "_resolve_public_addresses",
         AsyncMock(return_value=["93.184.216.34"]),
     )
-    outcomes = [(True, None), (True, ["https://client.example/cb"])]
-    calls: list[str] = []
-
-    async def fetch(_session, fetched_id, _parsed, _address):
-        calls.append(fetched_id)
-        return outcomes[len(calls) - 1]
-
-    monkeypatch.setattr(indirect, "_fetch_pinned_cimd", fetch)
+    session = _CimdSession([invalid, valid])
     indirect._cimd_cache.clear()
-    client_id = "https://client.example/client.json"
 
-    assert await indirect.fetch_cimd_redirects(object(), client_id) is None
-    assert await indirect.fetch_cimd_redirects(object(), client_id) == [
+    assert await indirect.fetch_cimd_redirects(session, client_id) is None
+    assert await indirect.fetch_cimd_redirects(session, client_id) == [
         "https://client.example/cb"
     ]
-    assert len(calls) == 2  # re-fetched rather than served from a cache
+    assert len(session.calls) == 2  # re-fetched rather than served from a cache
     indirect._cimd_cache.clear()
 
 

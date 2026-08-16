@@ -27,6 +27,12 @@ forwarded UNCHANGED and core's own checks apply. The CIMD fetch itself is the
 only outbound request: https-only, no redirects, 10 KiB cap, 5 s timeout, and
 DNS pinned to pre-validated globally routable addresses (SSRF floor per the MCP
 security considerations page).
+
+MIRROR: ``homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py``
+is the near-verbatim twin of this module. Keep behavioural changes on the two
+sides in step; that file's header names the pair's one intended delta (the
+loopback and redirect-shape helpers come from ``oauth_legacy.py`` here and
+``oauth.py`` there).
 """
 
 from __future__ import annotations

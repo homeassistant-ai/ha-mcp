@@ -11,6 +11,14 @@ problems the MCP maintainers deprecated it over).
 
 Served only in ``none`` and ``ha_auth`` modes: legacy mode's whole purpose is a
 pasted static credential, so it advertises no ``registration_endpoint``.
+
+MIRROR: ``homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_dcr.py`` is
+the near-verbatim twin of this module. Keep behavioural changes on the two
+sides in step; that file's header names the pair's intended deltas (identity
+rename, the flat ``hass.data[DOMAIN]`` layout in place of this side's
+``cfg[DATA_WEBHOOK]`` nesting, the ``oauth_mode == ha_auth`` test in
+``_active_grant_types`` where this side checks for a resource server, and the
+``_addon_alive`` gate on the register view).
 """
 
 from __future__ import annotations
