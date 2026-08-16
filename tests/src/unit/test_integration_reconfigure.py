@@ -3307,16 +3307,11 @@ async def test_without_a_change_stream_the_source_is_reported_as_polled(
 async def test_a_pre_reload_fragment_cannot_settle_the_observation(
     reconfig_entry: dict[str, object], pre_reload: str
 ) -> None:
-    """Two fragments for this entry arrive before the reload, both saying `loaded`.
+    """Two fragments arrive before the reload, both still saying `loaded`.
 
-    `config_entries/subscribe` answers with a snapshot of every current entry
-    (`{"type": None, ...}`) and the queue is registered before the frame is
-    sent, so it is never dropped; committing the new values then dispatches
-    UPDATED with the new data and the OLD state, before `async_schedule_reload`
-    runs. Settling on either reports the pre-reload state as an observed
-    result — worse than the poll it replaces, because a non-None observation
-    also switches off the transient-state retry. Both are present at the
-    2024.11.0 floor and on dev.
+    The subscribe snapshot and the commit's UPDATED. Settling on either
+    reports the pre-reload state as observed, which is worse than the poll it
+    replaces: a non-None observation also disarms the transient-state retry.
     """
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
@@ -3356,12 +3351,7 @@ async def test_a_pre_reload_fragment_cannot_settle_the_observation(
 async def test_pre_reload_fragments_alone_degrade_to_polling(
     reconfig_entry: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With no transition on the stream there is nothing observed to report.
-
-    The snapshot and the commit fragment are not evidence a reload ran, so a
-    stream carrying only those must expire and hand back to the poll rather
-    than stamp the pre-reload state as `observed`.
-    """
+    """A stream carrying only pre-reload fragments must expire, not settle."""
     monkeypatch.setattr(config_entry_flow, "_RELOAD_SETTLE_TIMEOUT", 0.25)
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
@@ -3392,13 +3382,9 @@ async def test_pre_reload_fragments_alone_degrade_to_polling(
 async def test_unload_in_progress_is_a_transition_not_an_outcome(
     reconfig_entry: dict[str, object],
 ) -> None:
-    """It is the FIRST state an enabled domain entry enters when reloading.
-
-    `ConfigEntry.async_unload` sets it before calling the component. Treating
-    it as terminal settles the observation on sight and reports a perfectly
-    good reload as unverified. It does not exist at the 2024.11.0 floor and
-    does on dev, so this is version-dependent breakage.
-    """
+    """`async_unload` sets it before calling the component, so it is the first
+    state a reloading entry enters. Terminal treatment settles on sight and
+    reports a good reload as unverified."""
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
     client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
@@ -3459,12 +3445,10 @@ async def test_a_polled_unload_in_progress_is_retried_not_reported(
 async def test_a_disabled_entry_does_not_wait_for_a_reload_that_never_comes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A disabled entry emits no transition, so waiting for one burns the budget.
+    """A disabled entry is never reloaded, so no transition is ever coming.
 
-    `async_unload` returns early at not_loaded without setting state and
-    `async_reload` skips setup while `disabled_by` is set. The snapshot tells
-    us that up front, so hand back to the poll immediately instead of stalling
-    every disabled-entry reconfigure for the full settle timeout.
+    The snapshot says so up front; waiting anyway stalls every disabled-entry
+    reconfigure for the full settle timeout.
     """
     entry = {
         "entry_id": "disabled-entry",
@@ -3509,11 +3493,8 @@ async def test_a_5xx_on_submit_is_applied_but_unverified(
 ) -> None:
     """A 5xx is the HTTP spelling of "no answer came back".
 
-    The 400/422 branch handles a rejection HA actually reasoned about;
-    everything else used to re-raise bare, with no status, and the generic
-    handler then aborted a flow that may already have committed — the exact
-    abort POST_COMMIT_STATUSES exists to suppress. A 504 from a proxy in front
-    of Home Assistant is the ordinary way to reach this.
+    It used to re-raise bare, with no status, and the generic handler then
+    aborted a flow that may already have committed.
     """
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
@@ -3546,11 +3527,8 @@ async def test_a_5xx_on_submit_is_applied_but_unverified(
 async def test_a_4xx_that_is_not_a_rejection_still_re_raises(
     reconfig_entry: dict[str, object],
 ) -> None:
-    """4xx means HA parsed the request and answered about it.
-
-    Auth, permission and unknown-flow answers are not the post-commit
-    ambiguity, so they must not be relabelled as applied_but_unverified.
-    """
+    """4xx means HA parsed the request and answered about it, so auth,
+    permission and unknown-flow answers must not be relabelled."""
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
     client.start_reconfigure_flow = AsyncMock(

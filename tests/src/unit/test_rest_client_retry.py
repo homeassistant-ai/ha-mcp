@@ -6,7 +6,13 @@ backend, so ``_raw_request`` retries with bounded backoff instead of hard-
 failing the call (which previously surfaced as SERVICE_CALL_FAILED on every
 HA-restart window and flaked the in-addon E2E suite).
 
-A 504 does not share that premise and is retried only for safe methods —
+Strictly, neither status PROVES the backend never executed the write — RFC 9110
+has 502 as "received an invalid response from an inbound server", which a proxy
+only sends after reaching it. Callers that cannot tolerate a replay opt out per
+request instead of taxing every write; see
+``test_the_config_flow_submit_never_gateway_retries``.
+
+A 504 does not share the premise at all and is retried only for safe methods —
 see ``test_a_504_is_not_replayed_on_a_write``.
 """
 
@@ -112,12 +118,8 @@ async def test_a_504_still_retries_on_a_safe_method(client, method):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
 async def test_a_504_is_not_replayed_on_a_write(client, method):
-    """A 504 means the upstream WAS reached and answered too slowly.
-
-    Unlike 502/503 it is no evidence the request failed to execute, so
-    retrying a write can commit it two or three times. The reconfigure submit
-    is exactly such a write: it probes, commits and reloads in one call.
-    """
+    """The upstream WAS reached and answered too slowly, so retrying a write
+    can commit it two or three times."""
     client.httpx_client.request = AsyncMock(return_value=_response(504))
     with (
         patch("ha_mcp.client.rest_client.asyncio.sleep", new=AsyncMock()) as sleep,
@@ -138,4 +140,33 @@ async def test_the_unreachable_upstream_statuses_still_retry_on_writes(client, s
     with patch("ha_mcp.client.rest_client.asyncio.sleep", new=AsyncMock()):
         result = await client._raw_request("POST", "/api/services/light/turn_on")
     assert result is ok
+    assert client.httpx_client.request.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [502, 503, 504])
+async def test_the_config_flow_submit_never_gateway_retries(client, status):
+    """HA consumes the flow_id on success, so a replay returns 404 "Invalid
+    flow specified" — a definitive-looking 4xx that hides a first attempt which
+    may already have committed."""
+    client.httpx_client.request = AsyncMock(return_value=_response(status))
+    with (
+        patch("ha_mcp.client.rest_client.asyncio.sleep", new=AsyncMock()) as sleep,
+        pytest.raises(HomeAssistantAPIError) as exc,
+    ):
+        await client.submit_config_flow_step("flow-1", {"host": "192.0.2.1"})
+    assert exc.value.status_code == status
+    assert client.httpx_client.request.await_count == 1
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_other_writes_keep_their_restart_window_retry(client):
+    """The opt-out is per request, not the global default: 502/503 retry on
+    writes exists because HA-restart windows failed ordinary service calls."""
+    ok = _response(200, json_body={"ok": True})
+    client.httpx_client.request = AsyncMock(side_effect=[_response(502), ok])
+    with patch("ha_mcp.client.rest_client.asyncio.sleep", new=AsyncMock()):
+        result = await client._request("POST", "/services/light/turn_on")
+    assert result == {"ok": True}
     assert client.httpx_client.request.await_count == 2

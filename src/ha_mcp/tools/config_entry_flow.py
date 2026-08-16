@@ -86,11 +86,9 @@ _DEVICE_CONNECTION_ID_TYPES = frozenset({"ieee", "mac", "zigbee"})
 # lands mid-reload. The entry reports ``not_loaded`` and then
 # ``setup_in_progress`` before settling on ``loaded``; treating either as final
 # would report a clean reconfigure as unverified.
-# States HA passes THROUGH while reloading an entry. ``unload_in_progress`` is
-# the first one an enabled domain entry enters (``ConfigEntry.async_unload``
-# sets it before calling the component); it does not exist at the 2024.11.0
-# floor in hacs.json and does on dev, so treating it as terminal would report a
-# perfectly good reload as unverified on current Home Assistant.
+# States HA passes THROUGH while reloading. ``unload_in_progress`` is the first
+# one an enabled domain entry enters and exists only from HA 2025.x, so
+# treating it as terminal reports a good reload as unverified on current cores.
 _TRANSIENT_RECONFIGURE_STATES = frozenset(
     {"not_loaded", "setup_in_progress", "unload_in_progress"}
 )
@@ -1459,27 +1457,17 @@ async def _observe_reload_settled(
 ) -> dict[str, Any] | None:
     """Consume entry-change events until this entry reaches a settled state.
 
-    Returns the settled entry fragment, or ``None`` if the budget expired
-    without one — in which case the caller falls back to polling.
+    Returns the settled fragment, or ``None`` if the budget expired without
+    one, in which case the caller falls back to polling.
 
-    **Only a state CHANGE may settle this.** Being on the stream is not by
-    itself evidence that the reload ran, because at least two fragments for
-    this entry predate it and both carry the pre-reload state:
-
-    * ``config_entries/subscribe`` answers with a snapshot of every current
-      entry (``{"type": None, "entry": ...}``) before any dispatch, and
-      ``subscribe_command`` registers the queue before sending the frame, so
-      that snapshot is queued rather than dropped.
-    * Committing the new values dispatches ``ConfigEntryChange.UPDATED``
-      before ``async_schedule_reload`` runs, carrying the new data and the
-      OLD state.
-
-    Settling on either would report the pre-reload state as an observed
-    result — strictly worse than the poll this replaces, since a non-``None``
-    return also switches off the caller's transient-state retry. Every state
-    transition dispatches the same ``UPDATED`` change type and ``modified_at``
-    is bumped by the commit itself, so neither field can order these; the
-    first fragment establishes a baseline and only a departure from it counts.
+    Only a state CHANGE may settle this. Two fragments predate the reload and
+    both carry the pre-reload state: the snapshot ``config_entries/subscribe``
+    answers with, and the ``UPDATED`` dispatched when the values are committed
+    (before ``async_schedule_reload`` runs). Settling on either would report
+    the pre-reload state as observed. Neither ``type`` nor ``modified_at`` can
+    order them — every state change dispatches the same ``UPDATED``, and the
+    commit bumps ``modified_at`` — so the first fragment sets a baseline and
+    only a departure from it counts.
     """
     deadline = asyncio.get_running_loop().time() + timeout
     baseline: str | None = None
