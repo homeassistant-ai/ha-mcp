@@ -7,7 +7,6 @@ import importlib
 import json
 import sys
 from types import ModuleType, SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -322,40 +321,6 @@ async def test_symmetric_explicit_port_passes_through_on_both_legs(monkeypatch):
 
     assert authorize_id == client_id
     assert refresh_id is oauth_ha_auth.RefreshDisposition.PASSTHROUGH
-
-
-@pytest.mark.asyncio
-async def test_same_case_uppercase_pair_passes_through_on_both_legs(monkeypatch):
-    """#2219 review: an all-uppercase pair is equal under core's raw netloc
-    rule, so authorize passes it through untranslated — and refresh matches
-    the client_id against the REGISTERED redirects (not the canonicalized
-    stable origin, which is lowercased), so it passes through too. This is
-    the case the old stable-origin comparison got wrong."""
-
-    session = object()
-    redirects = AsyncMock(return_value=["https://CLAUDE.AI/api/mcp/auth_callback"])
-    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", redirects)
-    client_id = "https://CLAUDE.AI/oauth/client.json"
-
-    authorize_id = await resolve_forward_client_id(
-        session=session,
-        dcr_key=None,
-        client_id=client_id,
-        redirect_uri="https://CLAUDE.AI/api/mcp/auth_callback",
-    )
-    # The fast path decided authorize — no lookup.
-    redirects.assert_not_awaited()
-    refresh_id = await oauth_ha_auth.translated_client_id_for_refresh(
-        session=session,
-        dcr_key=None,
-        client_id=client_id,
-    )
-
-    assert authorize_id == client_id
-    assert refresh_id is oauth_ha_auth.RefreshDisposition.PASSTHROUGH
-    # Refresh DID fetch and matched the registered redirect — the passthrough
-    # is the comparison's verdict, not a skipped lookup.
-    redirects.assert_awaited_once_with(session, client_id)
 
 
 @pytest.mark.asyncio

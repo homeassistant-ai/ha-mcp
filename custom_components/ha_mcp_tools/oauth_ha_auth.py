@@ -75,6 +75,10 @@ _ALLOWED_SCHEMES = ("https",)
 # are outside section 4.4.3 and are negative-cached for CIMD_NEGATIVE_TTL.
 _cimd_cache: dict[str, tuple[float, list[str] | None]] = {}
 
+# Admission for the whole cache-miss lookup (DNS + fetch). Matches the
+# dedicated CIMD connector limit so the two bounds cannot disagree.
+_CIMD_LOOKUP_SLOTS = asyncio.Semaphore(4)
+
 
 def _reject_json_constant(constant: str) -> None:
     """Reject NaN/Infinity, which RFC 8259 JSON does not permit."""
@@ -295,7 +299,14 @@ async def fetch_cimd_redirects(
 
     try:
         async with asyncio.timeout(CIMD_TOTAL_LOOKUP_TIMEOUT):
-            return await _lookup_cimd(session, client_id, parsed, now)
+            # The dedicated connector caps concurrent HTTP, but DNS runs in
+            # the executor BEFORE any connection is taken, so unique
+            # attacker-chosen client_ids could pile getaddrinfo() calls onto
+            # the shared pool (#2219 codex review). Admission covers the whole
+            # cache-miss path and waits inside the deadline above, so a
+            # legitimate lookup queues rather than failing.
+            async with _CIMD_LOOKUP_SLOTS:
+                return await _lookup_cimd(session, client_id, parsed, now)
     except TimeoutError:
         _LOGGER.debug("CIMD lookup: total deadline exceeded for %s", client_id)
         _cache_cimd(client_id, now, None)
@@ -397,8 +408,16 @@ async def resolve_forward_client_id(
     """
     if not client_id or not _is_valid_redirect_uri(redirect_uri):
         return client_id
-    parsed_client = urlparse(client_id)
-    parsed_redirect = urlparse(redirect_uri)
+    # urlparse defers some validation until access and raises outright on
+    # shapes like "https://[" (unterminated IPv6). These views are ANONYMOUS,
+    # so a malformed client_id must pass through for core to reject rather
+    # than traceback (#2219 codex review) — the same contract the redirect
+    # validator states for its own .port access.
+    try:
+        parsed_client = urlparse(client_id)
+        parsed_redirect = urlparse(redirect_uri)
+    except ValueError:
+        return client_id
     # Case-insensitive netloc equality, matching core's own authorize rule:
     # indieauth._parse_url lowercases the netloc of BOTH the client_id and the
     # redirect_uri before comparing them, so a pair differing only in host
@@ -475,7 +494,12 @@ async def translated_client_id_for_refresh(
     if dcr_key is not None:
         registered = client_redirect_uris(dcr_key, client_id)
     if registered is None:
-        parsed = urlparse(client_id)
+        try:
+            parsed = urlparse(client_id)
+        except ValueError:
+            # Malformed identity: core stays the authority (see the authorize
+            # leg's note); never a traceback on an anonymous view.
+            return RefreshDisposition.PASSTHROUGH
         if parsed.scheme == "https" and session is not None:
             registered = await fetch_cimd_redirects(session, client_id)
     if not registered:
@@ -503,7 +527,10 @@ async def translated_client_id_for_refresh(
     # canonical origin, yet authorize on /a passes the raw client_id through
     # while /b translates (#2219 review round 3). Casefolded because the
     # authorize fast path is (core lowercases both sides there).
-    parsed = urlparse(client_id)
+    try:
+        parsed = urlparse(client_id)
+    except ValueError:
+        return RefreshDisposition.PASSTHROUGH
     client_origin = (parsed.scheme, parsed.netloc.lower())
     matched = [
         (urlparse(uri).scheme, urlparse(uri).netloc.lower()) == client_origin

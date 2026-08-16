@@ -963,6 +963,42 @@ async def test_none_mode_any_valid_https_redirect_autoapproves(
     assert "state=s1" in resp.headers["Location"]
 
 
+async def test_none_mode_token_undecodable_body_returns_400(
+    unified_view_client_factory,
+):
+    """#2219 codex review: aiohttp raises LookupError (not ValueError) when
+    Content-Type names an unknown charset. Driven through the real route so
+    reverting the guard on THIS call site fails here."""
+    client = await unified_view_client_factory(mode="none")
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data=b"grant_type=authorization_code",
+        headers={"Content-Type": "application/x-www-form-urlencoded; charset=nope"},
+    )
+
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "invalid_request"
+
+
+async def test_ha_auth_token_undecodable_body_returns_400(
+    unified_view_client_factory,
+):
+    """Same guard on the ha_auth token route (its own call site)."""
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=_CoreTokenSession()
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data=b"grant_type=refresh_token",
+        headers={"Content-Type": "application/x-www-form-urlencoded; charset=nope"},
+    )
+
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "invalid_request"
+
+
 async def test_none_mode_loopback_redirect_autoapproves(unified_view_client_factory):
     """Native/CLI loopback callbacks (RFC 8252) complete invisibly too."""
     client = await unified_view_client_factory(mode="none")

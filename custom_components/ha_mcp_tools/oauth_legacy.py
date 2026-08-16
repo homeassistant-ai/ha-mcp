@@ -367,6 +367,12 @@ def _is_loopback_host(hostname: str) -> bool:
         return False
 
 
+# RFC 3986 §3.2 authority charset (unreserved / pct-encoded / sub-delims /
+# ':' '@' and IPv6 brackets). Anything outside it (a backslash, a space, raw
+# unicode) is an illegal authority that downstream URL builders reject.
+_AUTHORITY_CHARS_RE = re.compile(r"[A-Za-z0-9._~%!$&'()*+,;=:@\[\]-]*")
+
+
 def _is_valid_redirect_uri(redirect_uri: str) -> bool:
     """Spec-floor validation for OAuth redirect_uri: an https:// URL — or an
     http:// loopback URL (RFC 8252 §7.3, for native/CLI clients) — with a
@@ -385,6 +391,13 @@ def _is_valid_redirect_uri(redirect_uri: str) -> bool:
     except ValueError:
         return False
     if not parsed.hostname:
+        return False
+    if not _AUTHORITY_CHARS_RE.fullmatch(parsed.netloc):
+        # Same contract as the .port access above: urlparse and yarl split
+        # authorities differently (a backslash before '@', a zero-width
+        # character in the host), so an RFC 3986-illegal authority must fail
+        # HERE rather than escape as a 500 out of _redirect_with
+        # (#2219 codex review).
         return False
     if parsed.scheme == "http":
         # Plain http only for loopback callbacks (native-client flow).

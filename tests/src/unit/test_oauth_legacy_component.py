@@ -730,6 +730,19 @@ class TestTokenViewPost:
         assert response.status == 400
         assert response.json_body["error"] == "unsupported_grant_type"
 
+    async def test_consent_post_undecodable_body_returns_400_not_500(self):
+        """The consent POST is the fourth guarded call site — reverting its
+        guard must fail here rather than 500 an anonymous view."""
+        provider = _make_provider()
+        view = oauth_legacy.AuthorizeView(provider)
+        request = MagicMock()
+        request.headers = {}
+        request.post = AsyncMock(side_effect=LookupError("unknown encoding: nope"))
+
+        response = await view.post(request)
+
+        assert response.status == 400
+
     async def test_undecodable_form_body_returns_400_not_500(self):
         """#2219 review round 3: aiohttp raises LookupError (not ValueError)
         when Content-Type names an unknown charset, so an anonymous caller
