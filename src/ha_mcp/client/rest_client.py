@@ -1433,37 +1433,31 @@ class HomeAssistantClient:
             )
         return [dict(entry) for entry in entries if isinstance(entry, dict)]
 
-    async def list_entity_registry(self) -> list[dict[str, Any]]:
-        """List Home Assistant's entity registry through the official WebSocket API."""
-        response = await self.send_websocket_message(
-            {"type": "config/entity_registry/list"}
-        )
+    async def _list_registry(self, ws_type: str, label: str) -> list[dict[str, Any]]:
+        """Read a registry list, raising rather than returning a partial one.
+
+        Callers use "empty" to mean the entry genuinely has nothing registered,
+        so a malformed response must never degrade to [].
+        """
+        response = await self.send_websocket_message({"type": ws_type})
         result: Any = response.get("result") if isinstance(response, dict) else None
         if not isinstance(result, list) or not all(
             isinstance(item, dict) for item in result
         ):
             detail = response.get("error") if isinstance(response, dict) else response
             raise HomeAssistantAPIError(
-                f"Unexpected response from entity registry API: {detail!r}",
+                f"Unexpected response from {label} registry API: {detail!r}",
                 status_code=500,
             )
         return [dict(item) for item in result]
 
+    async def list_entity_registry(self) -> list[dict[str, Any]]:
+        """List Home Assistant's entity registry through the official WebSocket API."""
+        return await self._list_registry("config/entity_registry/list", "entity")
+
     async def list_device_registry(self) -> list[dict[str, Any]]:
         """List Home Assistant's device registry through the official WebSocket API."""
-        response = await self.send_websocket_message(
-            {"type": "config/device_registry/list"}
-        )
-        result: Any = response.get("result") if isinstance(response, dict) else None
-        if not isinstance(result, list) or not all(
-            isinstance(item, dict) for item in result
-        ):
-            detail = response.get("error") if isinstance(response, dict) else response
-            raise HomeAssistantAPIError(
-                f"Unexpected response from device registry API: {detail!r}",
-                status_code=500,
-            )
-        return [dict(item) for item in result]
+        return await self._list_registry("config/device_registry/list", "device")
 
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
         """

@@ -3,7 +3,7 @@
 Split out of ``tools_integrations.py`` when that module passed 3,500 lines.
 Holds the whole reconfigure surface: the parameters legal only in this mode,
 the confirm-token handshake, the read-only preflight response, and the
-runner that drives ``config_entry_flow.reconfigure_config_entry``.
+runner that drives ``config_entry_reconfigure.reconfigure_config_entry``.
 
 ``tools_integrations`` keeps the ``ha_set_integration`` tool itself and
 delegates the reconfigure branch here. Deliberately NOT named ``tools_*``:
@@ -20,14 +20,14 @@ from fastmcp.exceptions import ToolError
 from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from .auto_backup import with_auto_backup
-from .config_entry_flow import (
+from .config_entry_flow_walker import ReconfigureStatus
+from .config_entry_identity import ReconfigureIdentity
+from .config_entry_reconfigure import (
     PreparedReconfigure,
-    ReconfigureIdentity,
     build_reconfigure_rollback_metadata,
     prepare_reconfigure_request,
     reconfigure_config_entry,
 )
-from .config_entry_flow_walker import ReconfigureStatus
 from .helpers import exception_to_structured_error, raise_tool_error
 
 logger = logging.getLogger(__name__)

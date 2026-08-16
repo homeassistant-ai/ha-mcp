@@ -15,18 +15,20 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import config_entry_flow, config_entry_identity
+from ha_mcp.tools import config_entry_identity, config_entry_reconfigure
 from ha_mcp.tools.component_config_entries import UNKNOWN_UNIQUE_ID, EntryUniqueId
-from ha_mcp.tools.config_entry_flow import (
-    PreparedReconfigure,
-    ReconfigureIdentity,
-    _classify_related_entries,
-    reconfigure_config_entry,
-    set_config_subentry,
-)
+from ha_mcp.tools.config_entry_flow import set_config_subentry
 from ha_mcp.tools.config_entry_flow_walker import (
     ReconfigureStatus,
     _handle_config_subentry_flow_steps,
+)
+from ha_mcp.tools.config_entry_identity import (
+    ReconfigureIdentity,
+    _classify_related_entries,
+)
+from ha_mcp.tools.config_entry_reconfigure import (
+    PreparedReconfigure,
+    reconfigure_config_entry,
 )
 from ha_mcp.tools.integration_reconfigure import _reconfigure_preflight_token
 from ha_mcp.tools.tools_integrations import IntegrationTools
@@ -72,7 +74,7 @@ def _legacy_registry_reads(monkeypatch: pytest.MonkeyPatch) -> None:
         return getattr(client, "_test_domain_unique_ids", None)
 
     monkeypatch.setattr(
-        config_entry_flow, "fetch_domain_unique_ids", _domain_unique_ids
+        config_entry_reconfigure, "fetch_domain_unique_ids", _domain_unique_ids
     )
 
     async def _subscribe(client: Any) -> Any:
@@ -88,7 +90,9 @@ def _legacy_registry_reads(monkeypatch: pytest.MonkeyPatch) -> None:
         ws.unsubscribe_command = AsyncMock()
         return ws, (1, queue)
 
-    monkeypatch.setattr(config_entry_flow, "_subscribe_entry_changes", _subscribe)
+    monkeypatch.setattr(
+        config_entry_reconfigure, "_subscribe_entry_changes", _subscribe
+    )
 
 
 _UNSET = object()
@@ -1139,7 +1143,7 @@ async def test_related_entries_unknown_cross_domain_warns_without_blocking() -> 
 
     assert related.blocking == []
     assert related.cross_domain == ["some_other_integration (other)"]
-    warnings = config_entry_flow.cross_domain_warnings(related.cross_domain)
+    warnings = config_entry_identity.cross_domain_warnings(related.cross_domain)
     assert len(warnings) == 1
     assert "some_other_integration (other)" in warnings[0]
 
@@ -3352,7 +3356,7 @@ async def test_pre_reload_fragments_alone_degrade_to_polling(
     reconfig_entry: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A stream carrying only pre-reload fragments must expire, not settle."""
-    monkeypatch.setattr(config_entry_flow, "_RELOAD_SETTLE_TIMEOUT", 0.25)
+    monkeypatch.setattr(config_entry_reconfigure, "_RELOAD_SETTLE_TIMEOUT", 0.25)
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=reconfig_entry)
     client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
@@ -3457,7 +3461,7 @@ async def test_a_disabled_entry_does_not_wait_for_a_reload_that_never_comes(
         "disabled_by": "user",
         "supports_reconfigure": True,
     }
-    monkeypatch.setattr(config_entry_flow, "_RELOAD_SETTLE_TIMEOUT", 30.0)
+    monkeypatch.setattr(config_entry_reconfigure, "_RELOAD_SETTLE_TIMEOUT", 30.0)
     client = reconfigure_client()
     client.get_config_entry = AsyncMock(return_value=entry)
     client.list_config_entries = AsyncMock(return_value=[entry])

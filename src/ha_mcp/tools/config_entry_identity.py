@@ -481,6 +481,13 @@ def _verify_reconfigure_identity_fields(
     expected_mac = expected_identity.get("mac")
     before_macs = set(before_identity.macs)
     after_macs = set(after_identity.macs)
+    # Unlike the device and entity guards, this one requires BOTH sets to be
+    # non-empty, so losing every MAC passes unless expected_mac was supplied.
+    # Deliberate: MACs come from a device's registry `connections`, which some
+    # integrations re-register with `identifiers` only after a reload. A device
+    # swap is already caught by the device guard above, so treating an emptied
+    # set as a mismatch would raise a POST-COMMIT identity error on a perfectly
+    # good reconfigure. A MAC that changes to a different one still fails here.
     if before_macs and after_macs and before_macs != after_macs:
         _raise_identity_mismatch(
             entry_id,
