@@ -186,6 +186,7 @@ class TestExemptionRules:
             ({"action": "create", "name": "x"}, False),
             ({"action": "update", "pipeline_id": "p1"}, False),
             ({"action": "set_preferred", "pipeline_id": "p1"}, False),
+            ({"action": "process", "sentence": "turn on the light"}, False),
             ({}, False),
         ],
     )
@@ -585,7 +586,7 @@ _EXEMPT_TOOL_MODULES = {
     "ha_manage_backup": "backup.py",
     "ha_manage_addon": "tools_addons.py",
     "ha_manage_energy_prefs": "tools_energy.py",
-    "ha_manage_pipeline": "tools_voice_assistant.py",
+    "ha_manage_pipeline": "tools_assist_pipeline.py",
     "ha_manage_custom_tool": "tools_code.py",
     "ha_manage_radio": "tools_radio.py",
     "ha_manage_updates": "tools_updates.py",
@@ -716,6 +717,12 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         # Extra set_preferred write, but it only fires on create/update,
         # which the action check blocks.
         "make_preferred",
+        # action='process' runs a sentence through Assist, where a matched
+        # intent executes; the action check blocks it, and these three only
+        # shape that already-blocked call.
+        "sentence",
+        "conversation_id",
+        "agent_id",
     },
     "ha_manage_custom_tool": {
         # (The FastMCP-injected ``ctx`` Context is excluded by

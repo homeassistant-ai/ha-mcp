@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.tools_voice_assistant import VoiceAssistantTools
+from ha_mcp.tools.tools_assist_pipeline import AssistPipelineTools
 
 
 def _pipeline(**overrides):
@@ -30,18 +30,49 @@ def _pipeline(**overrides):
     return pipeline
 
 
+def _conversation_result(**overrides):
+    """Build an HA ``/conversation/process`` response body."""
+    result = {
+        "response": {
+            "speech": {"plain": {"speech": "Turned on the light", "extra_data": None}},
+            "card": {},
+            "language": "en",
+            "response_type": "action_done",
+            "data": {
+                # Cores before 2026.4 send targets alongside success/failed;
+                # a distinct entity id here keeps the key pinned to what HA
+                # sent rather than to the extraction's own default.
+                "targets": [
+                    {"name": "Kitchen light", "type": "entity", "id": "light.kitchen"}
+                ],
+                "success": [
+                    {"name": "Kitchen light", "type": "entity", "id": "light.kitchen"}
+                ],
+                "failed": [],
+            },
+        },
+        "conversation_id": "01JABCDEF",
+        # True, not the extraction's own False default, so the key is pinned to
+        # what HA sent. ConversationResult.as_dict always carries it.
+        "continue_conversation": True,
+    }
+    result.update(overrides)
+    return result
+
+
 @pytest.fixture
 def mock_client():
     """Create a mock Home Assistant client."""
     client = MagicMock()
     client.send_websocket_message = AsyncMock()
+    client._request = AsyncMock()
     return client
 
 
 @pytest.fixture
 def tools(mock_client):
-    """Create VoiceAssistantTools instance."""
-    return VoiceAssistantTools(mock_client)
+    """Create AssistPipelineTools instance."""
+    return AssistPipelineTools(mock_client)
 
 
 async def test_get_assist_pipeline_lists_pipelines_when_id_omitted(tools):
@@ -576,3 +607,408 @@ async def test_get_assist_pipeline_maps_unexpected_exception(tools):
     assert error_data["success"] is False
     assert error_data["error"]["code"] == "INTERNAL_ERROR"
     assert "network down" in error_data["error"]["details"]
+
+
+async def test_process_sends_sentence_and_normalizes_response(tools):
+    """action='process' posts the sentence and flattens HA's answer."""
+    tools._client._request.return_value = _conversation_result()
+
+    result = await tools.ha_manage_pipeline(
+        action="process", sentence="turn on the kitchen light"
+    )
+
+    tools._client._request.assert_awaited_once_with(
+        "POST",
+        "/conversation/process",
+        json={"text": "turn on the kitchen light"},
+    )
+    # No pipeline_id was passed, so nothing may fetch a pipeline first.
+    tools._client.send_websocket_message.assert_not_awaited()
+    assert result == {
+        "success": True,
+        "operation": "process",
+        "pipeline_id": None,
+        "agent_id": None,
+        "response_type": "action_done",
+        "speech": "Turned on the light",
+        "language": "en",
+        "conversation_id": "01JABCDEF",
+        "continue_conversation": True,
+        "targets": [{"name": "Kitchen light", "type": "entity", "id": "light.kitchen"}],
+        "service_calls": {
+            "success": [
+                {"name": "Kitchen light", "type": "entity", "id": "light.kitchen"}
+            ],
+            "failed": [],
+        },
+        "error_code": None,
+        "message": "Turned on the light",
+    }
+    # A fully successful intent carries no warnings key at all.
+    assert "warnings" not in result
+
+
+async def test_process_passes_optional_conversation_fields(tools):
+    """language, conversation_id and agent_id reach HA when supplied."""
+    tools._client._request.return_value = _conversation_result()
+
+    await tools.ha_manage_pipeline(
+        action="process",
+        sentence="and the hallway?",
+        language="de",
+        conversation_id="01JPREV",
+        agent_id="conversation.home_assistant",
+    )
+
+    tools._client._request.assert_awaited_once_with(
+        "POST",
+        "/conversation/process",
+        json={
+            "text": "and the hallway?",
+            "language": "de",
+            "conversation_id": "01JPREV",
+            "agent_id": "conversation.home_assistant",
+        },
+    )
+
+
+async def test_process_takes_agent_and_language_from_pipeline(tools):
+    """pipeline_id resolves the agent, and '*' falls back to the STT language."""
+    tools._client.send_websocket_message.return_value = {
+        "success": True,
+        "result": _pipeline(),
+    }
+    tools._client._request.return_value = _conversation_result()
+
+    result = await tools.ha_manage_pipeline(
+        action="process",
+        sentence="turn on the kitchen light",
+        pipeline_id="pipeline_1",
+    )
+
+    tools._client.send_websocket_message.assert_awaited_once_with(
+        {"type": "assist_pipeline/pipeline/get", "pipeline_id": "pipeline_1"}
+    )
+    tools._client._request.assert_awaited_once_with(
+        "POST",
+        "/conversation/process",
+        json={
+            "text": "turn on the kitchen light",
+            "language": "en-US",
+            "agent_id": "conversation.openai_conversation",
+        },
+    )
+    assert result["pipeline_id"] == "pipeline_1"
+    assert result["agent_id"] == "conversation.openai_conversation"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        pytest.param(
+            {"stt_language": "zh-CN", "tts_language": "zh-TW", "language": "zh"},
+            "zh-CN",
+            id="stt-beats-tts-and-language",
+        ),
+        pytest.param(
+            {"stt_language": None, "tts_language": "zh-TW", "language": "zh"},
+            "zh-TW",
+            id="tts-when-no-stt",
+        ),
+        pytest.param(
+            {"stt_language": None, "tts_language": None, "language": "zh"},
+            "zh",
+            id="pipeline-language-last",
+        ),
+        pytest.param(
+            {"stt_language": None, "tts_language": None, "language": None},
+            None,
+            id="nothing-resolvable-omits-the-key",
+        ),
+        pytest.param(
+            {
+                "conversation_language": "",
+                "stt_language": "zh-CN",
+                "tts_language": None,
+                "language": "zh",
+            },
+            "zh-CN",
+            id="empty-conversation-language-falls-through",
+        ),
+    ],
+)
+async def test_process_resolves_the_pipeline_language_ladder(
+    tools, overrides, expected
+):
+    """Each rung of the STT/TTS/language fallback, and its precedence.
+
+    Core resolves MATCH_ALL the same way and prefers the more specific STT
+    value, so swapping two rungs is a real behaviour change. An empty
+    conversation_language is not a language either: HA's async_converse
+    substitutes its default for a missing language but not for an empty
+    string, so "" would go on the wire verbatim.
+    """
+    tools._client.send_websocket_message.return_value = {
+        "success": True,
+        "result": _pipeline(**{"conversation_language": "*", **overrides}),
+    }
+    tools._client._request.return_value = _conversation_result()
+
+    await tools.ha_manage_pipeline(
+        action="process", sentence="turn on the light", pipeline_id="pipeline_1"
+    )
+
+    payload = tools._client._request.await_args.kwargs["json"]
+    if expected is None:
+        assert "language" not in payload
+    else:
+        assert payload["language"] == expected
+
+
+async def test_process_uses_pipeline_conversation_language_when_specific(tools):
+    """A pipeline naming a real conversation language wins over STT/TTS."""
+    tools._client.send_websocket_message.return_value = {
+        "success": True,
+        "result": _pipeline(conversation_language="nl"),
+    }
+    tools._client._request.return_value = _conversation_result()
+
+    await tools.ha_manage_pipeline(
+        action="process", sentence="doe het licht aan", pipeline_id="pipeline_1"
+    )
+
+    assert tools._client._request.await_args.kwargs["json"]["language"] == "nl"
+
+
+async def test_process_explicit_arguments_override_the_pipeline(tools):
+    """Explicit agent_id and language are not overwritten by pipeline_id."""
+    tools._client.send_websocket_message.return_value = {
+        "success": True,
+        "result": _pipeline(),
+    }
+    tools._client._request.return_value = _conversation_result()
+
+    await tools.ha_manage_pipeline(
+        action="process",
+        sentence="turn on the kitchen light",
+        pipeline_id="pipeline_1",
+        agent_id="conversation.home_assistant",
+        language="fr",
+    )
+
+    payload = tools._client._request.await_args.kwargs["json"]
+    assert payload["agent_id"] == "conversation.home_assistant"
+    assert payload["language"] == "fr"
+
+
+@pytest.mark.parametrize("sentence", [None, "", "   "])
+async def test_process_requires_a_non_empty_sentence(tools, sentence):
+    """process without a usable sentence fails before any HA call."""
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_manage_pipeline(action="process", sentence=sentence)
+
+    error_data = json.loads(str(exc_info.value))
+    assert error_data["success"] is False
+    assert error_data["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
+    tools._client._request.assert_not_awaited()
+
+
+async def test_process_reports_an_unmatched_sentence_without_raising(tools):
+    """Assist declining a sentence is an answer, not a tool failure."""
+    tools._client._request.return_value = _conversation_result(
+        response={
+            "speech": {"plain": {"speech": "Sorry, I couldn't understand that"}},
+            "card": {},
+            "language": "en",
+            "response_type": "error",
+            "data": {"code": "no_intent_match"},
+        }
+    )
+
+    result = await tools.ha_manage_pipeline(
+        action="process", sentence="make me a sandwich"
+    )
+
+    assert result["success"] is True
+    assert result["response_type"] == "error"
+    assert result["error_code"] == "no_intent_match"
+    assert result["service_calls"] == {"success": [], "failed": []}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param({}, id="no-envelope"),
+        pytest.param({"response": "not a mapping"}, id="envelope-not-a-mapping"),
+        pytest.param([], id="body-not-a-mapping"),
+        pytest.param({"response": {}}, id="empty-envelope"),
+        pytest.param({"response": {"data": {}, "speech": {}}}, id="no-response-type"),
+        pytest.param(
+            {"response": {"response_type": "action_done", "data": "nope"}},
+            id="data-not-a-mapping",
+        ),
+        pytest.param(
+            {"response": {"response_type": "action_done", "speech": {}}},
+            id="no-data",
+        ),
+    ],
+)
+async def test_process_rejects_a_malformed_conversation_response(tools, body):
+    """A malformed envelope fails instead of reporting success.
+
+    ``IntentResponse.as_dict`` always writes both ``response_type`` and
+    ``data``, so every body here is malformed rather than a variant: no
+    envelope at all (``{}``, which is what ``_request`` normalizes an empty or
+    undecodable 2xx body to), a non-mapping envelope, a non-mapping body, an
+    empty envelope, and either required key missing or of the wrong type.
+    Accepting any of them would return success with a null response_type or
+    with service_calls indistinguishable from an intent that touched nothing.
+    """
+    tools._client._request.return_value = body
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_manage_pipeline(
+            action="process", sentence="unlock the front door for Alex"
+        )
+
+    raw = str(exc_info.value)
+    # Same guarantee as the transport-failure path: this raise site must not
+    # echo the utterance back into an error payload either.
+    assert "Alex" not in raw
+    error_data = json.loads(raw)
+    assert error_data["success"] is False
+    assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
+
+
+async def test_process_keeps_the_sentence_out_of_error_payloads(tools):
+    """A transport failure must not echo the utterance back."""
+    tools._client._request.side_effect = RuntimeError("upstream said no")
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_manage_pipeline(
+            action="process", sentence="unlock the front door for Alex"
+        )
+
+    raw = str(exc_info.value)
+    assert "Alex" not in raw
+    error_data = json.loads(raw)
+    assert error_data["error"]["code"] == "INTERNAL_ERROR"
+
+
+async def test_process_warns_when_some_targets_failed(tools):
+    """A partial intent failure is reported, not hidden in a nested list.
+
+    HA raises only when no target succeeded, so one failing integration still
+    comes back as action_done with the intent's ordinary speech.
+    """
+    tools._client._request.return_value = _conversation_result(
+        response={
+            "speech": {"plain": {"speech": "Turned on the lights"}},
+            "card": {},
+            "language": "en",
+            "response_type": "action_done",
+            "data": {
+                "success": [
+                    {"name": "Kitchen light", "type": "entity", "id": "light.kitchen"}
+                ],
+                "failed": [
+                    {"name": "Hallway light", "type": "entity", "id": "light.hallway"}
+                ],
+            },
+        }
+    )
+
+    result = await tools.ha_manage_pipeline(
+        action="process", sentence="turn on the lights"
+    )
+
+    assert result["success"] is True
+    assert result["message"] == "Turned on the lights"
+    assert result["service_calls"]["failed"] == [
+        {"name": "Hallway light", "type": "entity", "id": "light.hallway"}
+    ]
+    assert result["warnings"] == [
+        "1 target(s) the intent resolved failed: light.hallway. "
+        "See service_calls.failed."
+    ]
+
+
+async def test_process_warns_when_handling_the_intent_failed(tools):
+    """failed_to_handle is HA reporting a matched intent that did not run."""
+    tools._client._request.return_value = _conversation_result(
+        response={
+            "speech": {"plain": {"speech": "Sorry, something went wrong"}},
+            "card": {},
+            "language": "en",
+            "response_type": "error",
+            "data": {"code": "failed_to_handle"},
+        }
+    )
+
+    result = await tools.ha_manage_pipeline(
+        action="process", sentence="turn on the kitchen light"
+    )
+
+    assert result["success"] is True
+    assert result["error_code"] == "failed_to_handle"
+    assert result["warnings"] == [
+        "Assist matched the intent but handling it failed. The command was "
+        "understood and not carried out."
+    ]
+
+
+async def test_process_does_not_warn_about_an_unmatched_sentence(tools):
+    """no_intent_match is Assist answering, so it carries no warning."""
+    tools._client._request.return_value = _conversation_result(
+        response={
+            "speech": {"plain": {"speech": "Sorry, I couldn't understand that"}},
+            "card": {},
+            "language": "en",
+            "response_type": "error",
+            "data": {"code": "no_intent_match"},
+        }
+    )
+
+    result = await tools.ha_manage_pipeline(
+        action="process", sentence="make me a sandwich"
+    )
+
+    assert result["error_code"] == "no_intent_match"
+    assert "warnings" not in result
+
+
+@pytest.mark.parametrize(
+    "speech",
+    [
+        pytest.param(None, id="no-speech-key"),
+        pytest.param("just a string", id="speech-not-a-mapping"),
+        pytest.param({}, id="no-plain-key"),
+        pytest.param({"plain": "just a string"}, id="plain-not-a-mapping"),
+        pytest.param({"plain": {}}, id="no-speech-text"),
+        pytest.param({"plain": {"speech": 42}}, id="speech-text-not-a-string"),
+    ],
+)
+async def test_process_survives_a_response_without_usable_speech(tools, speech):
+    """An agent that acts without speaking must not turn into INTERNAL_ERROR.
+
+    Every guard in the speech extraction is a shape HA's own response can
+    take; reaching into the nested keys unguarded would raise here and report
+    a call that ran the intent as a tool failure.
+    """
+    response = {
+        "card": {},
+        "language": "en",
+        "response_type": "action_done",
+        "data": {"success": [], "failed": []},
+    }
+    if speech is not None:
+        response["speech"] = speech
+    tools._client._request.return_value = _conversation_result(response=response)
+
+    result = await tools.ha_manage_pipeline(
+        action="process", sentence="turn on the kitchen light"
+    )
+
+    assert result["success"] is True
+    assert result["speech"] is None
+    assert result["message"] == "Assist responded with action_done"
