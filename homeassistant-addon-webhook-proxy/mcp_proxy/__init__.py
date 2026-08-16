@@ -1092,10 +1092,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     webhook_id = data.get("webhook_id")
     if webhook_id:
         async_unregister(hass, webhook_id)
-    session = data.get("session")
-    if session:
-        await session.close()
-    cimd_session = data.get("cimd_session")
-    if cimd_session:
-        await cimd_session.close()
+    # Close each session independently: a failure closing one must not leak
+    # the other's connector or fail the unload, matching how the
+    # setup-failure path already suppresses close errors.
+    for candidate in ("session", "cimd_session"):
+        client = data.get(candidate)
+        if client:
+            with suppress(Exception):
+                await client.close()
     return True
