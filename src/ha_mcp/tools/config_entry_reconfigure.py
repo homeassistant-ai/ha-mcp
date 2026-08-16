@@ -766,6 +766,16 @@ async def _verify_reconfigure_result(
                 },
             )
         )
+    if last_verification_error is not None:
+        # A later attempt failed after an earlier one had already produced a
+        # (transient, hence unsettled) read. The status stays conservative
+        # because that read never reached "loaded", but without this the
+        # caller is told the result is unverified and never told why.
+        warnings = [
+            *warnings,
+            "Reconfigure verification never settled; the last read-back failed "
+            f"with {last_verification_error!r}",
+        ]
     return after, verification, warnings
 
 
@@ -805,6 +815,35 @@ def _reconfigure_response(
     if warnings:
         response["warnings"] = warnings
     return response
+
+
+async def _observed_reload_state(
+    subscription: tuple[Any, Any] | None, entry_id: str
+) -> dict[str, Any] | None:
+    """Read the settled state off the change stream, or None to fall back.
+
+    Never raises. The flow has COMMITTED by the time this runs, so anything
+    escaping would skip _verify_reconfigure_result and take the rollback
+    metadata and applied_* status with it, leaving the caller a bare traceback
+    for a change Home Assistant already applied. A malformed frame is enough to
+    get there: _entry_fragments calls message.get().
+    """
+    if subscription is None:
+        return None
+    _, (_, queue) = subscription
+    try:
+        return await _observe_reload_settled(
+            queue, entry_id, timeout=_RELOAD_SETTLE_TIMEOUT
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as watch_err:
+        logger.warning(
+            "Entry-change stream failed after commit (%r); "
+            "falling back to polled verification",
+            watch_err,
+        )
+        return None
 
 
 async def reconfigure_config_entry(
@@ -907,11 +946,7 @@ async def reconfigure_config_entry(
             flow_config=flow_config,
             rollback_metadata=rollback_metadata,
         )
-        if subscription is not None:
-            _, (_, queue) = subscription
-            observed_entry = await _observe_reload_settled(
-                queue, entry_id, timeout=_RELOAD_SETTLE_TIMEOUT
-            )
+        observed_entry = await _observed_reload_state(subscription, entry_id)
     finally:
         if subscription is not None:
             ws, (sub_id, _) = subscription

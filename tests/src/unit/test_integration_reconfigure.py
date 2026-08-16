@@ -3556,3 +3556,84 @@ async def test_a_4xx_that_is_not_a_rejection_still_re_raises(
     # And the flow IS aborted here: HA answered, so nothing was committed to
     # leave dangling. Only the post-commit statuses suppress that abort.
     client.abort_config_flow.assert_awaited()
+
+
+# === CodeRabbit 48638b49: post-commit failures must not escape the taxonomy ===
+
+
+@pytest.mark.asyncio
+async def test_a_broken_change_stream_after_commit_degrades_to_polling(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """The flow has committed by the time the stream is read.
+
+    Anything escaping there skips the post-commit classifier and takes the
+    rollback metadata and applied_* status with it. A non-dict frame is enough:
+    _entry_fragments calls message.get().
+    """
+    client = reconfigure_client()
+    client.get_config_entry = AsyncMock(return_value=reconfig_entry)
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    client._test_entry_events = ["not-a-frame"]
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-broken-stream",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "entry-123", config={"host": "192.0.2.92"}
+    )
+
+    assert result["verification"]["operational_state_source"] == "polled"
+    assert result["status"] == ReconfigureStatus.APPLIED_AND_VERIFIED
+
+
+@pytest.mark.asyncio
+async def test_a_read_back_that_never_settles_says_why(
+    reconfig_entry: dict[str, object],
+) -> None:
+    """A later failure behind an earlier transient read used to vanish.
+
+    The earlier read pins `after`/`verification`, so the "nothing succeeded"
+    guard never fires and the exception was dropped on the floor.
+    """
+    client = reconfigure_client()
+    client.list_config_entries = AsyncMock(return_value=[reconfig_entry])
+    reads = {"n": 0}
+
+    async def _reads(entry_id: str) -> dict[str, object]:
+        # 1: the preflight read. 2: an attempt that succeeds but is still
+        # mid-reload, which pins after/verification. 3+: the failures that
+        # used to vanish behind it.
+        reads["n"] += 1
+        if reads["n"] == 1:
+            return dict(reconfig_entry)
+        if reads["n"] == 2:
+            return {**reconfig_entry, "state": "setup_in_progress"}
+        raise ConnectionResetError("registry went away")
+
+    client.get_config_entry = _reads
+    client.start_reconfigure_flow = AsyncMock(
+        return_value={
+            "flow_id": "flow-never-settles",
+            "type": "form",
+            "data_schema": [{"name": "host", "required": True}],
+        }
+    )
+    client.submit_config_flow_step = AsyncMock(
+        return_value={"type": "abort", "reason": "reconfigure_successful"}
+    )
+
+    result = await reconfigure_config_entry(
+        client, "entry-123", config={"host": "192.0.2.91"}
+    )
+
+    assert result["status"] == ReconfigureStatus.APPLIED_BUT_UNVERIFIED
+    assert any("never settled" in w for w in result["warnings"])
+    assert any("registry went away" in w for w in result["warnings"])
