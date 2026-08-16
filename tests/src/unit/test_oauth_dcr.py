@@ -178,14 +178,18 @@ async def test_register_rejects_bad_redirects(dcr_view_client_factory):
 
 
 async def test_register_rejects_deeply_nested_json_body(dcr_view_client_factory):
-    """#2218 review (mirrored from the proxy): json.loads raises
-    RecursionError on a deeply nested body — malformed metadata answers 400,
-    never a 500."""
+    """#2218 review: json.loads raises RecursionError on a deeply nested body
+    — malformed metadata answers 400, never a 500. The payload stays UNDER
+    MAX_DCR_BODY_BYTES so it reaches the parse rather than being turned away
+    by the size guard added later (#2219 review round 3)."""
     client = await dcr_view_client_factory(dcr_key=KEY)
+    nesting = 10_000
+    payload = "[" * nesting + "]" * nesting
+    assert len(payload) < oauth_dcr.MAX_DCR_BODY_BYTES
 
     resp = await client.post(
         "/api/ha_mcp_tools/oauth/register",
-        data="[" * 100000 + "]" * 100000,
+        data=payload,
         headers={"Content-Type": "application/json"},
     )
 
