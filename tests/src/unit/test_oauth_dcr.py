@@ -177,6 +177,103 @@ async def test_register_rejects_bad_redirects(dcr_view_client_factory):
         assert resp.status == 400, bad
 
 
+async def test_register_rejects_deeply_nested_json_body(dcr_view_client_factory):
+    """#2218 review: json.loads raises RecursionError on a deeply nested body
+    — malformed metadata answers 400, never a 500. The payload stays UNDER
+    MAX_DCR_BODY_BYTES so it reaches the parse rather than being turned away
+    by the size guard added later (#2219 review round 3)."""
+    client = await dcr_view_client_factory(dcr_key=KEY)
+    nesting = 10_000
+    payload = "[" * nesting + "]" * nesting
+    assert len(payload) < oauth_dcr.MAX_DCR_BODY_BYTES
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/register",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert resp.status == 400
+    body = await resp.json()
+    assert body["error"] == "invalid_client_metadata"
+    # The description distinguishes the arms: both guards answer the same
+    # error code, so only this pins that the PARSER rejected it.
+    assert body["error_description"] == "body must be JSON"
+
+
+async def test_register_survives_a_bogus_content_type_charset(
+    dcr_view_client_factory,
+):
+    """#2219 review round 3: request.json() decodes via the Content-Type
+    charset and raises LookupError on an unknown one, so a single header
+    used to 500 this anonymous endpoint. Reading the bytes and parsing them
+    as UTF-8 JSON (RFC 8259) ignores the parameter, so a well-formed body
+    registers normally."""
+    client = await dcr_view_client_factory(dcr_key=KEY)
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/register",
+        data=b'{"redirect_uris": ["https://a.example/cb"]}',
+        headers={"Content-Type": "application/json; charset=nope"},
+    )
+
+    assert resp.status == 201
+
+
+async def test_register_rejects_oversized_body(dcr_view_client_factory):
+    """#2219 review round 3: a conforming registration is a few KB, so the
+    read is capped rather than riding HA's 16 MiB client_max_size."""
+    client = await dcr_view_client_factory(dcr_key=KEY)
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/register",
+        data=b'{"redirect_uris": ["https://a.example/cb"], "pad": "'
+        + b"x" * (oauth_dcr.MAX_DCR_BODY_BYTES + 16)
+        + b'"}',
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert resp.status == 400
+    body = await resp.json()
+    assert body["error"] == "invalid_client_metadata"
+    assert body["error_description"] == "body is too large"
+
+
+async def test_register_reassembles_a_chunked_body(dcr_view_client_factory):
+    """#2219 review round 3: a fragmented body must be read to EOF — a single
+    StreamReader.read() can return early and truncate the document."""
+    client = await dcr_view_client_factory(dcr_key=KEY)
+    body = b'{"redirect_uris": ["https://a.example/cb"], "client_name": "x"}'
+
+    async def chunked():
+        for i in range(0, len(body), 7):
+            yield body[i : i + 7]
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/register",
+        data=chunked(),
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert resp.status == 201
+
+
+async def test_register_rejects_plain_invalid_json(dcr_view_client_factory):
+    """The ordinary malformed-JSON arm still answers the same 400."""
+    client = await dcr_view_client_factory(dcr_key=KEY)
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/register",
+        data=b"not json at all",
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert resp.status == 400
+    body = await resp.json()
+    assert body["error"] == "invalid_client_metadata"
+    assert body["error_description"] == "body must be JSON"
+
+
 async def test_register_accepts_google_multi_origin_client(dcr_view_client_factory):
     """Accept Spark's two redirects but omit its unavailable refresh grant."""
     client = await dcr_view_client_factory(dcr_key=KEY, resource_server=object())

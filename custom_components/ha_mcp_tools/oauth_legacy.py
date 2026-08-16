@@ -40,11 +40,12 @@ import secrets
 import time
 from collections.abc import Callable
 from html import escape
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 from urllib.parse import unquote_plus, urlparse
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
+from multidict import MultiDictProxy
 
 from .const import WEBHOOK_AUTH_LEGACY
 
@@ -366,6 +367,12 @@ def _is_loopback_host(hostname: str) -> bool:
         return False
 
 
+# RFC 3986 §3.2 authority charset (unreserved / pct-encoded / sub-delims /
+# ':' '@' and IPv6 brackets). Anything outside it (a backslash, a space, raw
+# unicode) is an illegal authority that downstream URL builders reject.
+_AUTHORITY_CHARS_RE = re.compile(r"[A-Za-z0-9._~%!$&'()*+,;=:@\[\]-]*")
+
+
 def _is_valid_redirect_uri(redirect_uri: str) -> bool:
     """Spec-floor validation for OAuth redirect_uri: an https:// URL — or an
     http:// loopback URL (RFC 8252 §7.3, for native/CLI clients) — with a
@@ -384,6 +391,13 @@ def _is_valid_redirect_uri(redirect_uri: str) -> bool:
     except ValueError:
         return False
     if not parsed.hostname:
+        return False
+    if not _AUTHORITY_CHARS_RE.fullmatch(parsed.netloc):
+        # Same contract as the .port access above: urlparse and yarl split
+        # authorities differently (a backslash before '@', a zero-width
+        # character in the host), so an RFC 3986-illegal authority must fail
+        # HERE rather than escape as a 500 out of _redirect_with
+        # (#2219 codex review).
         return False
     if parsed.scheme == "http":
         # Plain http only for loopback callbacks (native-client flow).
@@ -765,7 +779,9 @@ async def handle_legacy_authorize_post(
     provider: LegacyOAuthProvider, request: web.Request
 ) -> web.Response:
     """Consume the consent form and redirect with a code (shared by both routes)."""
-    data = await request.post()
+    data = await read_form(request)
+    if data is None:
+        return _text_error(400, "Invalid form submission")
     action = str(data.get("action", ""))
     client_id = str(data.get("client_id", ""))
     redirect_uri = str(data.get("redirect_uri", ""))
@@ -808,10 +824,33 @@ async def handle_legacy_authorize_post(
     return _redirect_with_params(redirect_uri, code=code, state=state, iss=iss)
 
 
+async def read_form(request: web.Request) -> MultiDictProxy[Any] | None:
+    """Parse a form body, or None when the request body is undecodable.
+
+    aiohttp raises LookupError — NOT ValueError — when the Content-Type names
+    an unknown charset (``application/x-www-form-urlencoded; charset=nope``),
+    and every caller here is an ANONYMOUS view, so an unguarded parse turns
+    one header into a 500 with a traceback (#2219 review round 3).
+    """
+    try:
+        return await request.post()
+    except (ValueError, LookupError):
+        return None
+
+
 def _extract_client_creds(
     request: web.Request, form: dict
-) -> tuple[str | None, str | None]:
-    """Pull client_id/secret from Basic auth header OR form body."""
+) -> list[tuple[str | None, str | None]]:
+    """Candidate client_id/secret pairs from Basic auth OR the form body.
+
+    RFC 6749 §2.3.1: client_secret_basic values are form-urlencoded before
+    base64, so the decoded candidate applies unquote_PLUS ("+" means space in
+    that encoding). Many clients skip the encoding step, though, and custom
+    credential overrides may contain a literal "+" or "%XX" that decoding
+    would mangle (#2218 review, mirrored from the proxy) — so the raw split
+    is offered as a second candidate and either may authenticate. Both are
+    no-ops for the generated credentials (URL-safe alphabets).
+    """
     header = request.headers.get("Authorization", "")
     if header.lower().startswith("basic "):
         try:
@@ -819,20 +858,21 @@ def _extract_client_creds(
                 "utf-8"
             )
         except (ValueError, UnicodeDecodeError, binascii.Error):
-            return None, None
-        if ":" in decoded:
-            cid, _, sec = decoded.partition(":")
-            # RFC 6749 §2.3.1: client_secret_basic values are
-            # application/x-www-form-urlencoded before base64, so decode
-            # them back with unquote_PLUS ("+" means space in that
-            # encoding — plain unquote would leave it literal). A no-op for
-            # the generated credentials (URL-safe alphabets, nothing to
-            # decode) but required for custom overrides containing reserved
-            # characters — matches the form-body path below, which aiohttp
-            # also form-decodes ("+" → space).
-            return unquote_plus(cid), unquote_plus(sec)
-        return None, None
-    return form.get("client_id"), form.get("client_secret")
+            return []
+        if ":" not in decoded:
+            return []
+        cid, _, sec = decoded.partition(":")
+        candidates: list[tuple[str | None, str | None]] = [
+            (unquote_plus(cid), unquote_plus(sec))
+        ]
+        if (cid, sec) != candidates[0]:
+            candidates.append((cid, sec))
+        return candidates
+    # str()-wrapped like every sibling site: request.post() yields
+    # str | bytes | FileField, and the non-str shapes are truthy, so they
+    # would slip past authenticate_client's emptiness guard and raise
+    # AttributeError on .encode() (#2219 review round 3).
+    return [(str(form.get("client_id", "")), str(form.get("client_secret", "")))]
 
 
 async def _handle_authorization_code(
@@ -875,9 +915,15 @@ async def handle_legacy_token_post(
     provider: LegacyOAuthProvider, request: web.Request
 ) -> web.Response:
     """Token endpoint body (shared by the root and scoped routes)."""
-    form = dict(await request.post())
-    client_id, client_secret = _extract_client_creds(request, form)
-    if not provider.authenticate_client(client_id, client_secret):
+    raw_form = await read_form(request)
+    if raw_form is None:
+        return _json_error("invalid_request", 400)
+    form = dict(raw_form)
+    candidates = _extract_client_creds(request, form)
+    if not any(
+        provider.authenticate_client(client_id, client_secret)
+        for client_id, client_secret in candidates
+    ):
         return _json_error(
             "invalid_client",
             401,

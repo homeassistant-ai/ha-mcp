@@ -47,6 +47,10 @@ _CLIENT_ID_PREFIX = "hamcp-dcr-"
 # Registration floor: enough for any real client (claude.ai registers one
 # callback; CLI clients a couple of loopback variants), small enough that the
 # minted client_id stays a reasonable query-string citizen.
+# A conforming registration is a few KB; HA's own 16 MiB client_max_size is
+# no bound for an anonymous endpoint, so cap the read like the sibling CIMD
+# fetch does (#2219 review round 3).
+MAX_DCR_BODY_BYTES = 64 * 1024
 MAX_REDIRECT_URIS = 10
 MAX_REDIRECT_URI_LEN = 512
 
@@ -197,6 +201,25 @@ def _active_grant_types(hass: HomeAssistant, redirect_uris: list[str]) -> list[s
     return ["authorization_code"]
 
 
+async def _read_capped_body(request: web.Request) -> bytes | None:
+    """The request body, or None when it exceeds ``MAX_DCR_BODY_BYTES``.
+
+    Reads to EOF rather than taking one ``StreamReader.read(n)``: that call
+    may return a short chunk before EOF on a fragmented body, which would
+    parse a truncated document (#2219 review round 3).
+    """
+    chunks: list[bytes] = []
+    remaining = MAX_DCR_BODY_BYTES + 1
+    while remaining > 0:
+        chunk = await request.content.read(remaining)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    raw = b"".join(chunks)
+    return None if len(raw) > MAX_DCR_BODY_BYTES else raw
+
+
 def _dcr_error(error: str, description: str) -> web.Response:
     """RFC 7591 §3.2.2 registration error response."""
     return web.json_response(
@@ -227,9 +250,17 @@ class DcrRegisterView(HomeAssistantView):
         key = _active_dcr_key(self._hass)
         if key is None:
             return web.json_response({"error": "not_found"}, status=404)
+        raw = await _read_capped_body(request)
+        if raw is None:
+            return _dcr_error("invalid_client_metadata", "body is too large")
         try:
-            body: Any = await request.json()
-        except ValueError:
+            body: Any = json.loads(raw)
+        except (ValueError, RecursionError):
+            # RecursionError: json.loads on a deeply nested body (#2218
+            # review) — malformed metadata, not a server error. Reading the
+            # bytes ourselves also sidesteps request.json()'s charset lookup,
+            # which raises LookupError on a bogus Content-Type charset
+            # (#2219 review round 3); JSON is UTF-8 by RFC 8259 anyway.
             return _dcr_error("invalid_client_metadata", "body must be JSON")
         if not isinstance(body, dict):
             return _dcr_error("invalid_client_metadata", "body must be an object")

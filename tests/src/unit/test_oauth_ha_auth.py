@@ -295,24 +295,125 @@ async def test_refresh_unverified_identity_passes_through(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_refresh_same_origin_comparison_is_canonical(monkeypatch):
-    """#2217 review sweep: the same-origin fast-path comparison uses the
-    canonical origin form — a client_id with an explicit scheme-default port
-    is still same-origin with its redirect (the raw-netloc comparison used to
-    diverge from the authorize leg here)."""
+async def test_symmetric_explicit_port_passes_through_on_both_legs(monkeypatch):
+    """#2219 review: when the client_id AND the registered redirect both
+    carry the same explicit default port, the authorize fast path fires (raw
+    netlocs equal) and the token is bound to the full client_id — so refresh
+    must pass through, not translate to the canonicalized origin."""
+
+    async def fetch_redirects(_session, _client_id):
+        return ["https://claude.ai:443/api/mcp/auth_callback"]
+
+    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+    client_id = "https://claude.ai:443/oauth/client.json"
+
+    authorize_id = await resolve_forward_client_id(
+        session=object(),
+        dcr_key=None,
+        client_id=client_id,
+        redirect_uri="https://claude.ai:443/api/mcp/auth_callback",
+    )
+    refresh_id = await oauth_ha_auth.translated_client_id_for_refresh(
+        session=object(),
+        dcr_key=None,
+        client_id=client_id,
+    )
+
+    assert authorize_id == client_id
+    assert refresh_id is oauth_ha_auth.RefreshDisposition.PASSTHROUGH
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "presented_case, registered_case",
+    [("upper", "lower"), ("lower", "lower"), ("lower", "upper")],
+)
+async def test_case_only_differences_pass_through_on_both_legs(
+    monkeypatch, presented_case, registered_case
+):
+    """#2219 review round 3: core's authorize leg lowercases BOTH sides
+    (indieauth._parse_url) while its refresh leg compares byte-exact, so a
+    case-only difference is same-origin to core and the raw client_id is what
+    both of our legs must forward. The registered document's casing is
+    author-written and the presented redirect is client-runtime — they need
+    not agree, and none of these combinations may diverge."""
+    upper = "https://CLAUDE.AI/api/mcp/auth_callback"
+    lower = "https://claude.ai/api/mcp/auth_callback"
+    presented = upper if presented_case == "upper" else lower
+    registered = [upper if registered_case == "upper" else lower]
+
+    async def fetch_redirects(_session, _client_id):
+        return registered
+
+    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+    client_id = "https://CLAUDE.AI/oauth/client.json"
+
+    authorize_id = await resolve_forward_client_id(
+        session=object(),
+        dcr_key=None,
+        client_id=client_id,
+        redirect_uri=presented,
+    )
+    refresh_id = await oauth_ha_auth.translated_client_id_for_refresh(
+        session=object(),
+        dcr_key=None,
+        client_id=client_id,
+    )
+
+    assert authorize_id == client_id
+    assert refresh_id is oauth_ha_auth.RefreshDisposition.PASSTHROUGH
+
+
+@pytest.mark.asyncio
+async def test_mixed_port_shapes_are_unreproducible(monkeypatch):
+    """#2219 review round 3: _refresh_identity_is_reproducible normalizes
+    ports, so these two redirects are ONE canonical origin — but authorize
+    passes the raw client_id through for the port-less one and translates the
+    explicit-port one. Which was presented is unrecorded, so the honest
+    answer is a local invalid_grant, not a coin flip."""
+
+    async def fetch_redirects(_session, _client_id):
+        return ["https://h.example/a", "https://h.example:443/b"]
+
+    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+
+    refresh_id = await oauth_ha_auth.translated_client_id_for_refresh(
+        session=object(),
+        dcr_key=None,
+        client_id="https://h.example/client.json",
+    )
+
+    assert refresh_id is oauth_ha_auth.RefreshDisposition.UNREPRODUCIBLE
+
+
+@pytest.mark.asyncio
+async def test_explicit_default_port_translates_on_both_legs(monkeypatch):
+    """#2218 review (reverting #2217's canonical comparison): a client_id
+    with an explicit scheme-default port misses the raw-netloc authorize fast
+    path, so its token is minted under the TRANSLATED origin — and the
+    redirect-less refresh must re-derive that same origin, not pass the raw
+    client_id through into a guaranteed core rejection. The two legs agree."""
 
     async def fetch_redirects(_session, _client_id):
         return ["https://claude.ai/api/mcp/auth_callback"]
 
     monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+    client_id = "https://claude.ai:443/oauth/mcp-oauth-client-metadata"
 
-    translated = await oauth_ha_auth.translated_client_id_for_refresh(
+    authorize_id = await resolve_forward_client_id(
         session=object(),
         dcr_key=None,
-        client_id="https://claude.ai:443/oauth/mcp-oauth-client-metadata",
+        client_id=client_id,
+        redirect_uri="https://claude.ai/api/mcp/auth_callback",
+    )
+    refresh_id = await oauth_ha_auth.translated_client_id_for_refresh(
+        session=object(),
+        dcr_key=None,
+        client_id=client_id,
     )
 
-    assert translated is oauth_ha_auth.RefreshDisposition.PASSTHROUGH
+    assert authorize_id == "https://claude.ai"
+    assert refresh_id == "https://claude.ai"
 
 
 @pytest.mark.asyncio
