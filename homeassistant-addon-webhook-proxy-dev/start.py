@@ -185,6 +185,11 @@ def _refuse_if_sibling_running() -> bool:
 # not only in Settings -> System -> Logs. Path kept in sync with
 # mcp_proxy_dev/__init__.py:INBOUND_LOG_FILE.
 INBOUND_LOG_FILE = Path("/config/.mcp_proxy_dev_inbound.log")
+# Touched every keep-alive iteration; the bundled integration's OAuth views
+# serve only while this file's mtime is fresh (see mcp_proxy_dev/oauth.py
+# _addon_alive) — the proxy-owned liveness signal that survives a crash where
+# _shutdown_cleanup never ran.
+HEARTBEAT_FILE = Path("/config/.mcp_proxy_dev_heartbeat")
 
 
 def _supervisor_get(path: str) -> dict | None:
@@ -1073,7 +1078,8 @@ def _install_shutdown_handlers() -> dict[str, str | None]:
 
 
 def _shutdown_cleanup(reason: str | None) -> None:
-    """Clean shutdown: restore default signal handling first so a second signal
+    """Clean shutdown: unlink the heartbeat so the integration's OAuth surface
+    goes dark immediately, restore default signal handling so a second signal
     can't abort cleanup, log why we exited, remove the config entry to
     unregister the webhook (keeping the config + component files so the next
     start needs no HA restart), and drop the inbound mirror file.
@@ -1081,6 +1087,16 @@ def _shutdown_cleanup(reason: str | None) -> None:
     On full uninstall the user may still need to manually remove
     /config/custom_components/mcp_proxy_dev/, /config/.mcp_proxy_dev_config.json, and
     /config/.mcp_proxy_dev_inbound.log, then restart HA."""
+    # Take the OAuth surface dark FIRST — before default signal handling is
+    # restored (after which a second signal kills the process outright) and
+    # before the slow HA GET/DELETE calls in _remove_config_entry. Unlinking
+    # last left a fresh heartbeat behind whenever the process was terminated
+    # mid-cleanup, keeping the OAuth routes live for the full staleness window
+    # on an add-on that was already gone (#2219 codex review).
+    try:
+        HEARTBEAT_FILE.unlink(missing_ok=True)
+    except OSError as e:
+        log_error(f"Could not remove heartbeat file ({type(e).__name__}): {e}")
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, signal.SIG_DFL)
     log_info(f"Shutting down (reason: {reason or 'unknown'})...")
@@ -1791,8 +1807,18 @@ def _keep_alive_loop(
     inbound_tail: dict[str, int] = {"offset": _initial_tail_offset()}
     consecutive_failures = 0
     last_health = 0.0
+    heartbeat_warned = False
     try:
         while True:
+            try:
+                HEARTBEAT_FILE.touch()
+            except OSError as e:
+                if not heartbeat_warned:
+                    heartbeat_warned = True
+                    log_error(
+                        f"Could not touch heartbeat file ({type(e).__name__}): "
+                        f"{e} — the integration's OAuth views will go dark."
+                    )
             if debug_logging:
                 _emit_new_inbound_lines(inbound_tail)
 
@@ -1869,6 +1895,15 @@ def main() -> int:
 
     _install_integration_and_handle_restart()
 
+    # The integration's OAuth views serve only while the heartbeat is fresh,
+    # and the stale-code probe below hits one of those views — touch it BEFORE
+    # enforcement, or every clean start (the shutdown deleted the file) would
+    # misread the freshly loaded integration as stale and enter restart
+    # recovery (#2218 review).
+    try:
+        HEARTBEAT_FILE.touch()
+    except OSError as e:
+        log_error(f"Could not touch heartbeat file ({type(e).__name__}): {e}")
     _enforce_oauth_or_disable(enable_oauth)
 
     _log_startup_urls(

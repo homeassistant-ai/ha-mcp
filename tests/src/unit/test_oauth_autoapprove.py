@@ -41,6 +41,10 @@ class _FakeURL:
         query = "&".join(f"{k}={v}" for k, v in params.items())
         return _FakeURL(f"{self._url}{sep}{query}" if query else self._url)
 
+    def with_query(self, params) -> _FakeURL:
+        query = "&".join(f"{k}={v}" for k, v in params.items())
+        return _FakeURL(f"{self._url}?{query}" if query else self._url)
+
     def __str__(self) -> str:
         return self._url
 
