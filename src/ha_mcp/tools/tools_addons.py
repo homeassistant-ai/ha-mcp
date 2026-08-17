@@ -3112,16 +3112,11 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
           non-signal messages into short elision markers; INFO/WARNING/ERROR/exit
           lines always pass through. Pagination via `message_offset` / `message_limit`
           works on the raw collected list before summarize runs.
-        - `python_transform` applies a sandboxed Python expression as a final
-          post-processing step in both HTTP and WebSocket modes. The variable
-          `response` is bound to:
-            * WebSocket: `list[dict | str]` — parsed JSON messages are dicts,
-              undecodable frames stay as ANSI-stripped strings. Elision markers
-              appear as `{"elided": N, "note": "..."}` dicts when summarize ran.
-            * HTTP: `dict | list | str` — whichever the content-type produced.
-          Transforms may mutate in place (response.append(...), del response[k])
-          or reassign (response = [...]). This is post-processing only — it does
-          NOT provide optimistic-locking or write-back semantics.
+        - `python_transform` runs last in both modes; what `response` binds to
+          and what may be done to it is on the parameter itself. Only the
+          interaction is here: undecodable WebSocket frames arrive as
+          ANSI-stripped strings, and elision markers as
+          `{"elided": N, "note": "..."}` dicts when summarize ran.
 
         **WARNING:** Setting boot="auto"/"manual" will fail for add-ons whose Supervisor
         metadata locks the boot mode. The Supervisor returns an error in this case.
