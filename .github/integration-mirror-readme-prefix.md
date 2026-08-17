@@ -10,6 +10,15 @@ which syncs this repository automatically.
   (an entity HACS creates per downloaded repository, disabled by default)
   to receive `-dev.N` pre-release builds. Their new features may require a
   newer server and only become fully usable with the next stable release.
+  To install a specific development build, open the repository menu in HACS
+  and select **Update information**. Open the menu again, select
+  **Redownload**, expand **Need a different version?**, choose the desired
+  pre-release, and select **Download**. Home Assistant will then show a
+  notification that a restart is required; restart from that notification to
+  finish installing the selected integration version. If you
+  do not want notifications for later development releases, turn the
+  repository's **Pre-release** switch off again; HACS will continue checking
+  stable releases and notify you when the next stable version is available.
 
 Please open issues and pull requests on the
 [main repository](https://github.com/homeassistant-ai/ha-mcp/issues) -
