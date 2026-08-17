@@ -3191,8 +3191,10 @@ def _entry_event(entry: dict[str, Any], *, change: str | None = "updated") -> di
 
 #: Before and after the commit. `async_update_entry` bumps `modified_at`;
 #: `_async_set_state` does not, so every post-commit transition keeps AFTER.
-_BEFORE = "2026-08-16T10:00:00+00:00"
-_AFTER = "2026-08-16T10:00:05+00:00"
+#: Floats, because `as_json_fragment` emits `modified_at.timestamp()` — the ISO
+#: string only exists in `as_dict`, the .storage serializer.
+_BEFORE = 1786953600.0
+_AFTER = 1786953605.0
 
 
 def _reload_stream(entry: dict[str, Any], outcome: str) -> list[dict]:

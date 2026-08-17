@@ -426,6 +426,15 @@ class TestIntegrationManagement:
                 assert verification.get("entry_state") == "loaded", result
                 assert verification.get("operational_state_verified") is True, result
                 assert verification.get("identity_verification") == "complete", result
+                # Against a real core the change stream must be what answered.
+                # Every unit fixture builds its own frames, so a parser that
+                # rejects the shape Home Assistant actually sends
+                # (`as_json_fragment` emits `modified_at.timestamp()`, a float)
+                # degrades every reconfigure to polling with the suite still
+                # green. This is the only assertion that sees the real shape.
+                assert verification.get("operational_state_source") == "observed", (
+                    result
+                )
                 # filesize keys its entry on the file path, so a path change
                 # re-keys the unique_id through
                 # async_update_reload_and_abort(unique_id=...). That is a

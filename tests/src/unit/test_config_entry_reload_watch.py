@@ -20,8 +20,8 @@ from ha_mcp.tools.config_entry_reload_watch import (
 
 #: Timestamps bracketing a commit: the subscribe snapshot's baseline value,
 #: and the value `async_update_entry` bumps `modified_at` to.
-_BEFORE = "2026-08-16T10:00:00+00:00"
-_AFTER = "2026-08-16T10:00:05+00:00"
+_BEFORE = 1786953600.0
+_AFTER = 1786953605.0
 
 
 def _frame(entry: dict[str, Any], *, change: str | None = "updated") -> dict[str, Any]:
@@ -338,3 +338,53 @@ async def test_fragments_for_a_different_entry_id_are_ignored() -> None:
     result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
 
     assert result == final_fragment
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        pytest.param(1786953600.0, 1786953605.0, id="epoch_float_as_ha_sends"),
+        pytest.param(1786953600, 1786953605, id="epoch_int"),
+        pytest.param(
+            "2026-08-16T10:00:00+00:00", "2026-08-16T10:00:05+00:00", id="iso_tolerance"
+        ),
+    ],
+)
+async def test_the_commit_gate_reads_the_shape_home_assistant_actually_sends(
+    before: object, after: object
+) -> None:
+    """`as_json_fragment` emits `modified_at.timestamp()`, a JSON number.
+
+    A str-only parser rejects every real fragment, so the baseline is never
+    established and the whole observation silently degrades to polling.
+    """
+    entry = {"entry_id": "e1", "state": "loaded", "modified_at": before}
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    for frag in (
+        dict(entry),
+        {**entry, "modified_at": after},
+        {**entry, "modified_at": after, "state": "setup_in_progress"},
+        {**entry, "modified_at": after, "state": "setup_retry"},
+    ):
+        queue.put_nowait({"event": [{"type": "updated", "entry": frag}]})
+
+    settled = await _observe_reload_settled(queue, "e1", timeout=0.5)
+
+    assert settled is not None, "the commit gate rejected the real fragment shape"
+    assert settled["state"] == "setup_retry"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw", [None, True, [], {}, "not-a-timestamp"], ids=lambda v: repr(v)[:14]
+)
+async def test_an_unusable_modified_at_degrades_rather_than_guessing(
+    raw: object,
+) -> None:
+    """Nothing can be attributed to the commit, so the poll is the honest answer."""
+    entry = {"entry_id": "e1", "state": "loaded", "modified_at": raw}
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    queue.put_nowait({"event": [{"type": "updated", "entry": entry}]})
+
+    assert await _observe_reload_settled(queue, "e1", timeout=0.25) is None

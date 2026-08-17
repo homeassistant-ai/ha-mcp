@@ -34,15 +34,26 @@ _COMMIT_VISIBLE_TIMEOUT = 5.0
 WS_CONFIG_ENTRIES_SUBSCRIBE = "config_entries/subscribe"
 
 
-def _modified_at(entry: dict[str, Any]) -> datetime | None:
-    """Parse a fragment's ``modified_at``, or None when it is unusable."""
+def _modified_at(entry: dict[str, Any]) -> float | None:
+    """Epoch seconds from a fragment's ``modified_at``, or None if unusable.
+
+    ``as_json_fragment`` — what ``config_entries/subscribe`` pushes and what
+    the REST read returns — emits ``modified_at.timestamp()``, a JSON number.
+    Only ``as_dict``, the ``.storage`` serializer, writes an ISO string, which
+    is why the storage fixtures carry one; the ``str`` branch is tolerance,
+    not the shape this stream sends.
+    """
     raw = entry.get("modified_at")
-    if not isinstance(raw, str):
+    if isinstance(raw, bool):
         return None
-    try:
-        return datetime.fromisoformat(raw)
-    except ValueError:
-        return None
+    if isinstance(raw, int | float):
+        return float(raw)
+    if isinstance(raw, str):
+        try:
+            return datetime.fromisoformat(raw).timestamp()
+        except ValueError:
+            return None
+    return None
 
 
 def _is_transient_reconfigure_state(entry: dict[str, Any]) -> bool:
@@ -128,7 +139,7 @@ class _EntryFragmentReader:
         return self._buffer.pop(0)
 
 
-def _is_post_commit(entry: dict[str, Any], baseline: datetime) -> bool:
+def _is_post_commit(entry: dict[str, Any], baseline: float) -> bool:
     """Whether this fragment was written after the reconfigure committed."""
     modified = _modified_at(entry)
     return modified is not None and modified > baseline
