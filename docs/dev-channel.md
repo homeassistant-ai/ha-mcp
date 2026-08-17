@@ -156,7 +156,7 @@ The dev channel is available as a **separate add-on** in the Home Assistant add-
 **To use the dev channel:**
 
 1. Open Home Assistant
-2. Go to **Settings** → **Add-ons** → **Add-on Store**
+2. Go to **Settings** → **Apps (Add-ons)** → **App Store**
 3. Search for **"Home Assistant MCP Server (Dev)"**
 4. Click **Install**
 5. Configure with your token (if not using auto-discovery)

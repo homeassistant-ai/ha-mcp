@@ -154,7 +154,7 @@ ha-mcp does not vendor it; you install it yourself. Operators should know:
 **Setup by deployment.**
 - *HA OS / Supervised:* add balloob's add-on repository
   (`https://github.com/balloob/home-assistant-addons`) under Settings >
-  Add-ons > Add-on Store > Repositories, install the **Puppet** add-on, set its
+  Apps (Add-ons) > App Store > Repositories, install the **Puppet** add-on, set its
   `access_token` option to a Home Assistant long-lived access token, and start
   it. ha-mcp discovers the running add-on through the Supervisor (it matches
   the `*_puppet` slug). (The assistant can do this for you end-to-end via

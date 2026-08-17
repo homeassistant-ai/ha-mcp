@@ -60,17 +60,17 @@ configuration:
   read_only_mode:
     name: Read Only Mode
     description: Toggles all write tools off, and removes ability for tools to make
-      any write or destructive calls. Mixed read/write tools (backups, add-ons, energy
-      preferences, voice pipelines, and code mode when enabled) stay available with
-      their write operations blocked. Same toggle as the web UI Tools tab. Off by
-      default. Requires restart to take effect.
+      any write or destructive calls. Mixed read/write tools (backups, Apps (add-ons),
+      energy preferences, voice pipelines, and code mode when enabled) stay available
+      with their write operations blocked. Same toggle as the web UI Tools tab. Off
+      by default. Requires restart to take effect.
   redact_secrets:
     name: Redact Secrets
     description: Redacts secrets from tool responses before they reach the AI assistant.
-      Add-on options and integration fields marked as passwords are replaced with
-      a set/empty marker (so "is this credential configured?" stays answerable), and
-      other tool responses are scrubbed of secret values the server has already seen
-      (values shorter than 6 characters are skipped, since replacing tiny fragments
+      App (add-on) options and integration fields marked as passwords are replaced
+      with a set/empty marker (so "is this credential configured?" stays answerable),
+      and other tool responses are scrubbed of secret values the server has already
+      seen (values shorter than 6 characters are skipped, since replacing tiny fragments
       would corrupt unrelated output). Fields not marked as passwords by their schema
       cannot be detected. Off by default.
   enable_beta_features:
@@ -133,7 +133,7 @@ configuration:
       with no filesystem or arbitrary network access. Sandbox code can hit the HA
       REST API (api_get/api_post), send WebSocket commands (ws_send), call existing
       MCP tools (call_tool), or remove a saved tool (delete_saved_tool). Saved tools
-      persist to /data/saved_tools.json by default so they survive add-on restarts,
+      persist to /data/saved_tools.json by default so they survive App (add-on) restarts,
       and are visible to any client that can connect. See docs/beta.md for known limitations.
       Requires restart to take effect. REQUIRES the master "Enable beta features"
       toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored
@@ -189,14 +189,14 @@ configuration:
       tools, so AI assistants can inspect one or more responsive Lovelace images (e.g.
       to verify a dashboard they just created). Supports stable named views, mobile/tablet/desktop
       batches, and PNG/JPEG/WebP/BMP output. Rendering runs in a separate, opt-in
-      engine — balloob's "Puppet" add-on (headless Chromium) — which you install once
-      (add balloob's add-on repository, then install "Puppet") and give a long-lived
-      access token; on Docker/Container deployments you run that engine as a sidecar
-      and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is installed unless
-      you both enable this and install the engine. Requires restart to take effect.
-      REQUIRES the master "Enable beta features" toggle above (and in the web UI)
-      to be on — otherwise this sub-flag is ignored at runtime regardless of its value
-      here.
+      engine — balloob's "Puppet" App (add-on), headless Chromium — which you install
+      once (add balloob's App (add-on) repository, then install "Puppet") and give
+      a long-lived access token; on Docker/Container deployments you run that engine
+      as a sidecar and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is
+      installed unless you both enable this and install the engine. Requires restart
+      to take effect. REQUIRES the master "Enable beta features" toggle above (and
+      in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless
+      of its value here.
   enable_auto_backup:
     name: Enable auto-backup of edits
     description: 'Captures a per-entity snapshot before every wrapped write/destructive
@@ -257,9 +257,9 @@ configuration:
       names.
   verify_ssl:
     name: Verify TLS certificate
-    description: Verify the Home Assistant server's TLS certificate. The add-on connects
-      via the Supervisor proxy, so this normally has no effect and should stay enabled.
-      Disable only if you've reconfigured the add-on to talk to HA over a public HTTPS
-      hostname with a self-signed certificate or hostname mismatch. Disabling weakens
-      transport security — leave on unless you know you need it. Requires restart
-      to take effect.
+    description: Verify the Home Assistant server's TLS certificate. The App (add-on)
+      connects via the Supervisor proxy, so this normally has no effect and should
+      stay enabled. Disable only if you've reconfigured the App (add-on) to talk to
+      HA over a public HTTPS hostname with a self-signed certificate or hostname mismatch.
+      Disabling weakens transport security — leave on unless you know you need it.
+      Requires restart to take effect.

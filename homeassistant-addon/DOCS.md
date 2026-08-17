@@ -24,7 +24,7 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
    [![Add Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp)
 
-   Or manually add this repository URL in Supervisor → Add-on Store:
+   Or manually add this repository URL in Settings → Apps (Add-ons) → App Store:
    ```
    https://github.com/homeassistant-ai/ha-mcp
    ```

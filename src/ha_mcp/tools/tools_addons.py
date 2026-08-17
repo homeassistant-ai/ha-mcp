@@ -2725,12 +2725,12 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
     tools = AddOnTools(client)
 
     @mcp.tool(
-        tags={"Add-ons"},
+        tags={"Apps (add-ons)"},
         annotations={
             "openWorldHint": True,
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get Add-ons",
+            "title": "Get Apps (add-ons)",
         },
     )
     @log_tool_usage
@@ -2774,7 +2774,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Get Home Assistant add-ons - list installed, available, or get details for one.
+        """Get Home Assistant Apps (formerly known as add-ons) - list installed, available, or get details for one.
 
         This tool retrieves add-on information based on the parameters:
         - slug provided: Returns detailed info for a single add-on (ingress, ports, options, state)
@@ -2814,13 +2814,13 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         )
 
     @mcp.tool(
-        tags={"Add-ons"},
+        tags={"Apps (add-ons)"},
         annotations={
             "openWorldHint": True,
             "destructiveHint": True,
             "idempotentHint": False,
             "readOnlyHint": False,
-            "title": "Manage Add-on",
+            "title": "Manage App (add-on)",
         },
     )
     @log_tool_usage
@@ -3041,7 +3041,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Manage a Home Assistant add-on — update its configuration or call its internal API.
+        """Manage a Home Assistant App (formerly known as an add-on) — update its configuration or call its internal API.
 
         Five mutually exclusive operating modes:
 

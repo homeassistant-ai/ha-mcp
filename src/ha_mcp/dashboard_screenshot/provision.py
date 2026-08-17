@@ -76,7 +76,7 @@ TOKEN_HINT = (
 _INSTALL_HELP = (
     "Dashboard screenshot mode is enabled, but the Puppet screenshot engine "
     "add-on is not installed. On HA OS / Supervised: (1) add balloob's add-on "
-    f"repository ({_REPO_URL}) under Settings > Add-ons > Add-on Store > "
+    f"repository ({_REPO_URL}) under Settings > Apps (Add-ons) > App Store > "
     "Repositories, then install the 'Puppet' add-on; and (2) it REQUIRES a "
     f"token — {TOKEN_HINT}. Without a token the engine only serves a "
     "configuration-instructions page. On Docker / Container, run the Puppet "
@@ -86,7 +86,7 @@ _INSTALL_HELP = (
 
 _NOT_STARTED_HELP = (
     "The Puppet screenshot engine add-on is installed but not started. Open "
-    f"Settings > Add-ons > Puppet, {TOKEN_HINT} (enable 'Start on boot' to keep "
+    f"Settings > Apps (Add-ons) > Puppet, {TOKEN_HINT} (enable 'Start on boot' to keep "
     "it available)."
 )
 
