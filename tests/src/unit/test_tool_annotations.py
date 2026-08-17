@@ -53,26 +53,45 @@ def _parse_decorator_args(decorator_args: str, func_name: str, file_name: str) -
     }
 
 
+def _is_mcp_tool(func: ast.expr) -> bool:
+    """``mcp.tool`` as written on a decorator, called or bare."""
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == "tool"
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "mcp"
+    )
+
+
+def _closure_tools(content: str, file_name: str) -> list[dict]:
+    """Every ``@mcp.tool(...)`` closure-pattern tool, read from the AST.
+
+    Read structurally rather than by regex because the decorator arguments are
+    prose: a ``)`` inside an annotation string — ``"title": "Get Apps
+    (add-ons)"``, ``tags={"Apps (add-ons)"}`` — closes a ``[^)]*`` arm early
+    and drops the tool from the scan, and from every annotation check with it,
+    while a non-greedy ``(.*?)`` arm over-matches into the next tool instead.
+    The parser has no such failure mode, and only ``async def`` bodies are
+    collected, so a ``@mcp.tool(...)`` written inside a docstring is not a tool
+    here either.
+    """
+    tools = []
+    for node in ast.walk(ast.parse(content)):
+        if not isinstance(node, ast.AsyncFunctionDef):
+            continue
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Call) and _is_mcp_tool(decorator.func):
+                args = ", ".join(ast.unparse(kw) for kw in decorator.keywords)
+                tools.append(_parse_decorator_args(args, node.name, file_name))
+            elif _is_mcp_tool(decorator):
+                tools.append(_parse_decorator_args("", node.name, file_name))
+    return tools
+
+
 def extract_tool_decorators(file_path: Path) -> list[dict]:
     """Extract @mcp.tool and @tool decorator information from a Python file."""
     content = file_path.read_text(encoding="utf-8")
-    # Pattern 1: @mcp.tool(...) — closure pattern.
-    # The decorator-skip ``(?:@\w+(?:\([^()]*\))?\s*)*`` accepts bare
-    # decorators (``@log_tool_usage``) AND SINGLE-LEVEL parenthesized ones
-    # such as ``@with_auto_backup(domain="entity", id_param="entity_id",
-    # client=client)`` between ``@mcp.tool`` and ``async def``; the old
-    # bare-only ``(?:@\w+\s*)*`` dropped those backed-up tools from the count.
-    # ``\([^()]*\)`` does NOT span nested parens, so a closure-form tool whose
-    # decorator args contain them would stay unmatched; no tool does today
-    # (``ha_set_entity``'s ``id_fn=lambda`` is class-form, so Pattern 2 takes
-    # it), and test_tool_scan_finds_every_annotated_tool fails loudly if one
-    # ever falls out. Requiring decorators-then-``async def`` (not arbitrary
-    # text) keeps docstring ``@mcp.tool(...)`` mentions from matching.
-    pattern = r"@mcp\.tool\(([^)]*)\)\s*(?:@\w+(?:\([^()]*\))?\s*)*async def (\w+)"
-    tools = [
-        _parse_decorator_args(m.group(1), m.group(2), file_path.name)
-        for m in re.finditer(pattern, content, re.DOTALL)
-    ]
+    tools = _closure_tools(content, file_path.name)
 
     # Pattern 2: @tool(name="ha_*", ...) — class method pattern.
     # Uses (.*?) non-greedy (DOTALL) so ) inside annotation strings (e.g.
@@ -86,23 +105,8 @@ def extract_tool_decorators(file_path: Path) -> list[dict]:
         for m in re.finditer(class_pattern, content, re.DOTALL)
     )
 
-    # Also find bare @mcp.tool without arguments
-    bare_pattern = r"@mcp\.tool\s*\n\s*(?:@\w+\s*)*async def (\w+)"
-    for match in re.finditer(bare_pattern, content):
-        func_name = match.group(1)
-        tools.append(
-            {
-                "file": file_path.name,
-                "function": func_name,
-                "has_read_only_hint": False,
-                "has_destructive_hint": False,
-                "has_explicit_non_destructive_hint": False,
-                "has_title": False,
-                "has_open_world_hint": False,
-                "decorator_args": "",
-            }
-        )
-
+    # A bare ``@mcp.tool`` (no call) needs no separate arm — ``_closure_tools``
+    # reads it off the same decorator list and files it with empty args.
     return tools
 
 

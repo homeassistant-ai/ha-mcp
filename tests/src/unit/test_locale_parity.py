@@ -1645,6 +1645,13 @@ def test_a_pending_hidden_rendering_keeps_its_base_key_checked(
             return frozenset()
         return frozenset({f"{base}{PARSED_RENDERING_SUFFIX}"})
 
+    # The baseline is taken with NOTHING pending, not with whatever the tree
+    # happens to have pending: a PR that rewords a tool summary legitimately
+    # leaves that key pending, and reading the live set here would score its
+    # exclusion — a correct one — as this test's failure.
+    monkeypatch.setattr(
+        sys.modules[__name__], "_pending_keys", lambda _surface: frozenset()
+    )
     baseline = {
         key
         for surface, key, _, _ in _literal_parity_pairs("de")
