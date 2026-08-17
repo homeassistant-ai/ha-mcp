@@ -285,12 +285,21 @@ async def test_no_modified_at_bump_within_the_commit_timeout_gives_up_early(
 async def test_a_baseline_with_no_usable_modified_at_returns_none(
     modified_at: str | None,
 ) -> None:
-    """Without a comparable baseline nothing can be attributed to the commit."""
+    """Without a comparable baseline nothing can be attributed to the commit.
+
+    Followed by a stand-in commit and a settle fragment, so a parser that
+    wrongly accepted the baseline would return one of them instead of running
+    out of stream and reaching None by the other route.
+    """
     entry_id = "entry-1"
     fragment: dict[str, Any] = {"entry_id": entry_id, "state": "loaded"}
     if modified_at is not None:
         fragment["modified_at"] = modified_at
-    queue = _queue_of(_frame(fragment))
+    queue = _queue_of(
+        _frame(fragment),
+        _frame({"entry_id": entry_id, "state": "loaded", "modified_at": _AFTER}),
+        _frame({"entry_id": entry_id, "state": "setup_retry"}),
+    )
 
     result = await _observe_reload_settled(queue, entry_id, timeout=0.2)
 
@@ -382,9 +391,21 @@ async def test_the_commit_gate_reads_the_shape_home_assistant_actually_sends(
 async def test_an_unusable_modified_at_degrades_rather_than_guessing(
     raw: object,
 ) -> None:
-    """Nothing can be attributed to the commit, so the poll is the honest answer."""
-    entry = {"entry_id": "e1", "state": "loaded", "modified_at": raw}
+    """Nothing can be attributed to the commit, so the poll is the honest answer.
+
+    The stand-in commit and settle fragments behind the bad baseline are what
+    make this bite: with a single fragment a parser that wrongly ACCEPTS the
+    baseline also returns None, just from running out of stream.
+    """
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-    queue.put_nowait({"event": [{"type": "updated", "entry": entry}]})
+    for frag in (
+        {"entry_id": "e1", "state": "loaded", "modified_at": raw},
+        # Would be read as the commit by a parser that accepted the baseline.
+        {"entry_id": "e1", "state": "loaded", "modified_at": _AFTER},
+        # And this would then settle it. Post-commit fragments are not
+        # re-checked for modified_at, so it needs none.
+        {"entry_id": "e1", "state": "setup_retry"},
+    ):
+        queue.put_nowait({"event": [{"type": "updated", "entry": frag}]})
 
     assert await _observe_reload_settled(queue, "e1", timeout=0.25) is None
