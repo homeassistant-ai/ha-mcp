@@ -199,13 +199,15 @@ class TestToolAnnotations:
     def test_tool_scan_finds_every_annotated_tool(self):
         """The scan must not silently drop a tool from the checks above.
 
-        The closure-form pattern ``@mcp.tool\\(([^)]*)\\)`` cannot span a ``)``,
-        so a future decorator whose args contain one (e.g. a title like
-        "Get Logs (verbose)") would fall out of get_all_tools() and escape every
-        annotation assertion -- inheriting the MCP default openWorldHint=true
-        unnoticed. Every tool sets openWorldHint exactly once, so the scanned
-        count must equal the occurrences across the tool files; a drop breaks
-        parity and fails here instead of passing silently.
+        A tool that get_all_tools() does not return escapes every annotation
+        assertion above and inherits the MCP default openWorldHint=true
+        unnoticed. That happened while the closure arm matched decorator
+        arguments with ``[^)]*``: a ``)`` inside an annotation string (a title
+        like "Get Logs (verbose)") closed the arm early. The closure arm reads
+        the AST now, and the remaining regex is ``class_pattern``. Every tool
+        sets openWorldHint exactly once, so the scanned count must equal the
+        occurrences across the tool files; a drop breaks parity and fails here
+        instead of passing silently.
         """
         tools = get_all_tools()
         occurrences = sum(
@@ -216,10 +218,11 @@ class TestToolAnnotations:
 
         assert len(tools) == occurrences, (
             f"Tool scan found {len(tools)} tools but {occurrences} openWorldHint "
-            f"occurrences across the tool files. A tool the regex cannot parse is "
-            f"dropped from get_all_tools() and skips every annotation check. Fix "
-            f"the pattern in extract_tool_decorators() (a ')' inside the decorator "
-            f"args is the usual cause) rather than adjusting this count."
+            f"occurrences across the tool files. A tool extract_tool_decorators() "
+            f"cannot see is dropped from get_all_tools() and skips every annotation "
+            f"check. Fix the extraction (the class arm is still a regex, so a ')' "
+            f"inside its decorator args is a candidate) rather than adjusting this "
+            f"count."
         )
 
     def test_server_registered_tools_have_open_world_hint(self):
