@@ -1793,7 +1793,9 @@ async def _call_addon_api(
 class AddOnTools:
     """Encapsulates add-on management logic for ha_get_addon and ha_manage_addon.
 
-    ha_manage_addon supports three mutually exclusive modes: config
+    ha_manage_addon supports five mutually exclusive modes: lifecycle
+    (install/start/stop/restart/rebuild/update/uninstall), store-repository
+    (add_repository/remove_repository), config
     (options/network/boot/auto_update/watchdog), proxy (path-based HTTP or
     WebSocket), and array-patch (fetch-modify-post on a JSON array endpoint).
     """
@@ -3074,7 +3076,6 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         installs). Pass `port=...` to bypass Ingress and connect directly to
         an add-on's container port — that mode requires the MCP host to
         share Home Assistant's container network (i.e. only the HAOS addon).
-        Use ha_get_addon(slug="...") to discover available ports and endpoints.
 
         **ESPHome Device Builder dashboard (current rewrite):** config and log
         access is a WebSocket JSON-command API, NOT REST. The legacy endpoints
@@ -3108,10 +3109,10 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
         **Response shaping (proxy mode):**
         - WebSocket streams can be noisy (e.g. the ESPHome dashboard's devices/logs
-          dumps the device's full config banner on connect). By default, `summarize=True` collapses long runs of
-          non-signal messages into short elision markers; INFO/WARNING/ERROR/exit
-          lines always pass through. Pagination via `message_offset` / `message_limit`
-          works on the raw collected list before summarize runs.
+          dumps the device's full config banner on connect), which is what
+          `summarize` is for. INFO/WARNING/ERROR/exit lines always pass through
+          it, and pagination via `message_offset` / `message_limit` works on the
+          raw collected list before summarize runs.
         - `python_transform` runs last in both modes; what `response` binds to
           and what may be done to it is on the parameter itself. Only the
           interaction is here: undecodable WebSocket frames arrive as
