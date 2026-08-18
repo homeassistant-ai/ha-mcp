@@ -15,9 +15,6 @@ which for a disabled write tool means silently re-enabling it.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TypeVar
-
-T = TypeVar("T")
 
 # Retired tool name -> the name that serves it today.
 RENAMED_TOOLS: dict[str, str] = {
@@ -31,7 +28,7 @@ def current_tool_name(name: str) -> str:
     return RENAMED_TOOLS.get(name, name)
 
 
-def rename_retired_keys(states: Mapping[str, T]) -> dict[str, T]:
+def rename_retired_keys[T](states: Mapping[str, T]) -> dict[str, T]:
     """Re-key a per-tool mapping onto the current tool names.
 
     A value already stored under the current name wins: it was set against
@@ -42,7 +39,5 @@ def rename_retired_keys(states: Mapping[str, T]) -> dict[str, T]:
         for name, value in states.items()
         if name in RENAMED_TOOLS
     }
-    kept = {
-        name: value for name, value in states.items() if name not in RENAMED_TOOLS
-    }
+    kept = {name: value for name, value in states.items() if name not in RENAMED_TOOLS}
     return {**renamed, **kept}

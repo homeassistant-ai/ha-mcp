@@ -238,7 +238,6 @@ DEFAULT_FETCHES: dict[str, dict] = {
 }
 
 
-
 # The add-on tool as the settings API renders it, plus a Russian translation
 # supplied by the tests themselves (see _app_tool_dom).
 APP_TOOL_NAME = "ha_get_app"

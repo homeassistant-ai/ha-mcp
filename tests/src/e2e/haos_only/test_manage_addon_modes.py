@@ -327,9 +327,9 @@ async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
     """
     slug = await _resolve_slug(mcp_client, APPDAEMON_NAME)
     original = (
-        parse_mcp_result(
-            await mcp_client.call_tool("ha_get_app", {"slug": slug})
-        ).get("addon")
+        parse_mcp_result(await mcp_client.call_tool("ha_get_app", {"slug": slug})).get(
+            "addon"
+        )
         or {}
     ).get("state")
 

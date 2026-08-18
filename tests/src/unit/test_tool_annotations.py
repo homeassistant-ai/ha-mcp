@@ -70,7 +70,9 @@ def _annotations_dict(decorator: ast.Call) -> dict[str, ast.expr]:
         if keyword.arg == "annotations" and isinstance(keyword.value, ast.Dict):
             return {
                 key.value: value
-                for key, value in zip(keyword.value.keys, keyword.value.values)
+                for key, value in zip(
+                    keyword.value.keys, keyword.value.values, strict=True
+                )
                 if isinstance(key, ast.Constant) and isinstance(key.value, str)
             }
     return {}
@@ -281,7 +283,7 @@ class TestToolAnnotations:
             f"cannot see is dropped from get_all_tools() and skips every "
             f"annotation check above. Fix the extraction rather than this "
             f"expectation: the class arm is still a regex, so a decorator "
-            f"whose first argument is not name=\"ha_...\", a nested paren "
+            f'whose first argument is not name="ha_...", a nested paren '
             f"inside the ``([^()]*)`` decorator skip, or a tool on a sync def "
             f"are the candidates."
         )
