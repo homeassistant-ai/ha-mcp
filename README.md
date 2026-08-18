@@ -364,7 +364,7 @@ Leave it off in clients with deferred tool loading (claude.ai, Claude Desktop, C
 
 > 🔄 **Refresh your client's tool list after changing this (or any) setting.** Toggling `ENABLE_TOOL_SEARCH` (or changing pinned/disabled tools, Read Only Mode, etc.) changes the tools the server exposes, but your AI client keeps serving its **cached** tool list until it re-fetches. Restarting the app or Home Assistant does **not** refresh the client — reconnect or refresh the MCP server in your client (e.g. re-add/refresh the connector in ChatGPT, or close and reopen Claude Desktop). If you skip this, newly enabled tools won't appear in the client at all, and tools the server no longer exposes still show as available but return `Unknown tool` when called. ChatGPT sometimes keeps serving the stale list even after the connector is removed and re-added under the same name — if tools are still missing after re-adding, delete the connector and create a new one with a **different name**.
 
-For the HA app, the same option is documented in [`homeassistant-addon/DOCS.md`](homeassistant-addon/DOCS.md#enable_tool_search) along with the in-add-on settings UI for fine-grained tool enable/disable/pin.
+For the HA app, the same option is documented in [`homeassistant-addon/DOCS.md`](homeassistant-addon/DOCS.md#enable_tool_search) along with the in-app settings UI for fine-grained tool enable/disable/pin.
 
 ---
 
