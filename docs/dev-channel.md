@@ -151,7 +151,7 @@ docker pull ghcr.io/homeassistant-ai/ha-mcp:latest
 
 ### Home Assistant Add-on
 
-The dev channel is available as a **separate add-on** in the Home Assistant App store.
+The dev channel is available as a **separate App (add-on)** in the Home Assistant App store.
 
 **To use the dev channel:**
 

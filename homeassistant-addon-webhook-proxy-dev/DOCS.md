@@ -29,7 +29,7 @@ automatically on the next clean start.
 
 ## Setup
 
-1. **Install this addon** from the App store
+1. **Install this App (add-on)** from the App store
 2. **Start the addon** — on first run it will install the integration and create a notification asking you to restart Home Assistant
 3. **Restart Home Assistant** (Settings > System > Restart) — the addon detects the restart and automatically finishes setup
 4. **Copy the remote URL** from the addon logs:
