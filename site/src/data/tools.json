@@ -2331,7 +2331,7 @@
   {
     "name": "ha_set_integration",
     "title": "Set Integration",
-    "description": "Manage an integration (config entry): enable/disable, add, or update options.\n\nModes (pick one):\n- Enable/disable: entry_id + enabled.\n- Add integration: domain (+ config) — drives the domain's config\n  flow, including menus and multi-step forms.\n- Update options: entry_id + config — drives the entry's options\n  flow (what the \"Configure\" button does in the HA UI).\n\nWHEN NOT TO USE:\n- Helpers (template, group, utility_meter, ...): use\n  ha_config_set_helper. The exception is `otp`, which is a helper in\n  the HA UI but is created HERE via domain=\"otp\" — its flow needs a\n  live TOTP code, so ha_config_set_helper deliberately omits it.\n- Config subentries: use\n  ha_config_set_helper(helper_type='config_subentry').\n- Removing an entry: use ha_remove_helpers_integrations.\n\nUse ha_get_integration() to find entry IDs, and\nha_get_integration(entry_id=..., include_schema=True) to inspect the\noptions fields before an update.\n\nCaveats: adding an integration runs its config flow exactly as the HA\nUI would (may pair devices, scan the network, create entities). Flows\nrequiring a browser step (OAuth) or an asynchronous provider step\nerror out at that step with a structured error instead of completing.\n\nEXAMPLES:\n- Disable: ha_set_integration(entry_id=\"abc123\", enabled=False)\n- Add: ha_set_integration(domain=\"workday\", config={\"name\": \"Workday\"})\n- Update options: ha_set_integration(entry_id=\"abc123\", config={\"scan_interval\": 30})",
+    "description": "Manage an integration (config entry): enable/disable, add, update options, or reconfigure.\n\nModes (pick one):\n- Enable/disable: entry_id + enabled.\n- Add integration: domain (+ config) — drives the domain's config\n  flow, including menus and multi-step forms.\n- Update options: entry_id + config — drives the entry's options\n  flow (what the \"Configure\" button does in the HA UI).\n- Reconfigure: entry_id + reconfigure=True + config — drives the\n  existing entry's official reconfigure flow (host, port, credentials).\n  Call it without confirm_token for a read-only preflight; repeat with\n  the token it returns to apply.\n\nWHEN NOT TO USE:\n- Helpers (template, group, utility_meter, ...): use\n  ha_config_set_helper. The exception is `otp`, which is a helper in\n  the HA UI but is created HERE via domain=\"otp\" — its flow needs a\n  live TOTP code, so ha_config_set_helper deliberately omits it.\n- Config subentries: use\n  ha_config_set_helper(helper_type='config_subentry').\n- Removing an entry: use ha_remove_helpers_integrations.\n\nUse ha_get_integration() to find entry IDs, and\nha_get_integration(entry_id=..., include_schema=True) to inspect the\noptions fields before an update. Its supports_reconfigure field tells\nyou whether an entry qualifies for reconfigure=True; only integrations\nimplementing async_step_reconfigure do.\n\nCaveats: adding an integration runs its config flow exactly as the HA\nUI would (may pair devices, scan the network, create entities). Flows\nrequiring a browser step (OAuth) or an asynchronous provider step\nerror out at that step with a structured error instead of completing.\nReconfigure edits the settings a live integration connects with: a\nwrong host or credential takes it offline, and there is no automatic\nrollback — the returned rollback metadata describes repeating the\nofficial flow by hand with the previous values, which this tool cannot\nread back. The preflight does not validate config keys against the\nintegration's form; wrong field names surface on the confirm call.\n\nEXAMPLES:\n- Disable: ha_set_integration(entry_id=\"abc123\", enabled=False)\n- Add: ha_set_integration(domain=\"workday\", config={\"name\": \"Workday\"})\n- Update options: ha_set_integration(entry_id=\"abc123\", config={\"scan_interval\": 30})\n- Reconfigure preflight: ha_set_integration(entry_id=\"abc123\", reconfigure=True, config={\"host\": \"10.0.0.5\"})\n- Reconfigure apply: repeat that call adding confirm_token=\"sha256:...\"",
     "inputSchema": {
       "properties": {
         "entry_id": {
@@ -2349,12 +2349,38 @@
         "config": {
           "type": "Annotated[dict[str, Any] | None, JSON_STRING_COERCION, Field(description=\"Flow form data. With 'domain': input for the new integration's config flow. With 'entry_id' alone: input for the entry's options flow (updates its options). Multi-step flows consume keys per step; menu steps take 'next_step_id' — a string, or a list of successive selections for flows that present more than one menu (e.g. a menu revisited after each branch, ending in a finish option). The step's data_schema is returned on validation errors so field names can be corrected.\", default=None)]",
           "default": null
+        },
+        "reconfigure": {
+          "type": "Annotated[bool, Field(default=False, description=\"Use the existing config entry's official reconfigure flow (its connection settings) instead of its options flow. Without confirm_token this is a read-only preflight that returns one.\")]",
+          "default": false
+        },
+        "expected_device_id": {
+          "type": "Annotated[str | None, Field(default=None, description='Requires reconfigure=True. Device registry ID the entry must still own, before and after the change.')]",
+          "default": null
+        },
+        "expected_unique_id": {
+          "type": "Annotated[str | None, Field(default=None, description=\"Requires reconfigure=True, AND the ha_mcp_tools custom component: Home Assistant does not expose a config entry's unique_id over its API. Without the component this is rejected — anchor on expected_device_id, expected_mac or expected_entity_ids instead.\")]",
+          "default": null
+        },
+        "expected_mac": {
+          "type": "Annotated[str | None, Field(default=None, description=\"Requires reconfigure=True. MAC or IEEE the entry's device must still report.\")]",
+          "default": null
+        },
+        "expected_entity_ids": {
+          "type": "Annotated[list[str] | None, JSON_STRING_COERCION, Field(default=None, description='Requires reconfigure=True. Exact entity IDs that must remain associated with the entry.')]",
+          "default": null
+        },
+        "confirm_token": {
+          "type": "Annotated[str | None, Field(default=None, description=\"Requires reconfigure=True. A token from a reconfigure preflight; applies the change. Any token still matching the entry's current state and the same requested config is accepted, so a token stays valid while nothing moves.\")]",
+          "default": null
         }
       }
     },
     "annotations": {
       "openWorldHint": false,
-      "destructiveHint": true
+      "destructiveHint": true,
+      "readOnlyHint": false,
+      "idempotentHint": false
     },
     "tags": [
       "Integrations"
