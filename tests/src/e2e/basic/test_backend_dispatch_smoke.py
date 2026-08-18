@@ -85,13 +85,13 @@ _SKIP_CEILING_PER_LANE = {
     # gain 10; container is unchanged because the tests run there.
     # Entries below are CI-observed item counts, bumped only for intentional
     # marker-gated additions rather than runtime skips.
-    "container": 74,  # +1 HAOS stdio visibility e2e (haos_only)
+    "container": 74,  # +1 HAOS stdio visibility e2e (haos_stdio_only)
     "haos": 49,  # +1 HAOS stdio visibility e2e (haos_stdio_only)
     # HAOS stdio is the external HAOS set plus ``external_only`` tests, whose
-    # test-process monkeypatches cannot reach the subprocess server. Start with
-    # a conservative static ceiling; replace it with the CI-observed count once
-    # the first lane run reports its collection summary.
-    "haos_stdio": 112,
+    # test-process monkeypatches cannot reach the subprocess server. The first
+    # full lane run on 2026-08-18 observed 103 collection-time marker skips
+    # (plus 9 runtime skips); keep the same five-item buffer as established lanes.
+    "haos_stdio": 108,
     "haos_inaddon": 77,  # +1 HAOS stdio visibility e2e (haos_stdio_only)
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
     # lane's marker-skips PLUS two embedded-specific additions:
@@ -106,7 +106,7 @@ _SKIP_CEILING_PER_LANE = {
     # 1) + not_on_embedded 2 = 101. Parametrize inflates that to the CI-observed
     # count the entry below is pinned to — 133 on this PR's run, 132 before the
     # self-restart e2e. Read the count off a run rather than deriving it.
-    "embedded": 134,  # +1 HAOS stdio visibility e2e (haos_only)
+    "embedded": 134,  # +1 HAOS stdio visibility e2e (haos_stdio_only)
     # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it
     # skips the SAME set as the external HAOS lane (container_only + inaddon_only)
     # PLUS two haos_embedded-specific additions:

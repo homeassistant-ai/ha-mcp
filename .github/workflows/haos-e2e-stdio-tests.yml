@@ -162,14 +162,28 @@ jobs:
         run: ls -lh /tmp/haos-test-image.qcow2
 
       - name: Run full E2E suite through stdio against HAOS
+        # Keep self-restarting addon tests away from concurrent workers. The
+        # stdio lane normally skips them because they are inaddon-only, but
+        # retaining the two-phase contract makes that isolation fail-safe if
+        # their transport coverage is widened later.
         run: |
           cd tests
-          uv run pytest src/e2e/ -n2 --dist loadscope -v --tb=short --maxfail=0 ${{ github.event.inputs.pytest_args }}
+          # PYTEST_ARGS is intentionally word-split into individual pytest args.
+          # shellcheck disable=SC2086
+          uv run pytest src/e2e/ \
+            -n2 --dist loadscope -v --tb=short --maxfail=0 \
+            -m "not addon_disruptive" $PYTEST_ARGS
+          # shellcheck disable=SC2086
+          uv run pytest src/e2e/ \
+            -n0 -v --tb=short --maxfail=0 \
+            -m addon_disruptive $PYTEST_ARGS \
+            || { rc=$?; [ "$rc" -eq 5 ] && echo "no disruptive tests in selection"; [ "$rc" -eq 5 ]; }
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
           HAOS_TEST_MODE: stdio
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
 
       - name: Extract HA diagnostics from booted qcow2
         if: always()

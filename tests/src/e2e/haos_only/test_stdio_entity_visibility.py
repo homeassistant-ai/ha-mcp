@@ -64,13 +64,9 @@ async def test_stdio_sidecar_config_drives_real_visibility_middleware(
             # Seed the subprocess usage log with the entity id. report_issue's
             # recent_logs field makes the later outbound-policy assertion
             # deterministic without creating or mutating any HA entity.
-            await mcp.call_tool_success(
-                "ha_get_state", {"entity_id": _HIDDEN_ENTITY}
-            )
+            await mcp.call_tool_success("ha_get_state", {"entity_id": _HIDDEN_ENTITY})
 
-            current = await asyncio.to_thread(
-                _visibility_request, settings_url, "GET"
-            )
+            current = await asyncio.to_thread(_visibility_request, settings_url, "GET")
             saved = await asyncio.to_thread(
                 _visibility_request,
                 settings_url,
@@ -119,10 +115,9 @@ async def test_stdio_sidecar_config_drives_real_visibility_middleware(
                 "ha_report_issue",
                 {"tool_call_count": 2, "fields": ["recent_logs"]},
             )
-            assert (
-                restricted_report["error"]["code"]
-                == "ENTITY_VISIBILITY_ENFORCED"
-            ), restricted_report
+            assert restricted_report["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED", (
+                restricted_report
+            )
     finally:
         # Session-scoped stdio clients are shared by many tests on this worker;
         # always restore no-op visibility even when an API assertion fails.

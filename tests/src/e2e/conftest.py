@@ -241,9 +241,9 @@ def pytest_collection_modifyitems(config, items):
     - ``container_only``: only runs on the testcontainer backend.
     - ``external_only``: any tier where the server-under-test lives IN the
       pytest process — plain testcontainer AND HAOS external (``mcp_client``
-      is an in-process FastMCP server talking HTTP to HAOS). Skipped on
-      inaddon, container-embedded and HAOS-embedded. The name is historical
-      and does NOT mean "HAOS external only"; see the skip expression below.
+      is an in-process FastMCP server talking HTTP to HAOS). Skipped on stdio,
+      inaddon, container-embedded, and HAOS-embedded. The name is historical and
+      does NOT mean "HAOS external only"; see the skip expression below.
     - ``inaddon_only``: HAOS inaddon mode only (``mcp_client`` is HTTP
       to the addon's MCP endpoint, ``is_running_in_addon()=True`` paths
       exercised). Skipped on external mode and on testcontainer.
@@ -264,10 +264,10 @@ def pytest_collection_modifyitems(config, items):
     # The HAOS embedded lane (#1527) IS a HAOS backend (``haos`` True — qcow2
     # staged), so ``haos_only`` runs and ``container_only`` skips exactly like the
     # other HAOS lanes. Its server-under-test is the in-process MCP server
-    # inside the HAOS core container, driven over its ingress webhook — same
-    # out-of-process constraint as inaddon / container-embedded, so ``external_only``
-    # skips here too; and the haos_only embedded smoke module is redundant with the
-    # lane's own session backend, so it skips via ``not_on_haos_embedded``.
+    # inside the HAOS core container, driven over its ingress webhook — the same
+    # out-of-process constraint as stdio/inaddon/container-embedded, so
+    # ``external_only`` skips here too; the haos_only embedded smoke module is
+    # redundant with the lane's session backend and skips via ``not_on_haos_embedded``.
     haos_embedded = haos and is_haos_embedded_mode()
     skip_haos = pytest.mark.skip(
         reason="HAOS backend not selected (set HAOS_TEST_IMAGE_PATH)"
@@ -282,7 +282,7 @@ def pytest_collection_modifyitems(config, items):
         reason="HAOS stdio mode required (set HAOS_TEST_MODE=stdio)"
     )
     skip_external_only = pytest.mark.skip(
-        reason="out-of-process server (inaddon/embedded); test needs an "
+        reason="out-of-process server (stdio/inaddon/embedded); test needs an "
         "in-process server it can reconfigure via env/monkeypatch or reach an "
         "in-process mock"
     )
@@ -2823,9 +2823,7 @@ async def mcp_client(
         client = _stdio_client(container_info, haos_stdio_config_dir)
         try:
             async with client:
-                logger.debug(
-                    "🔗 FastMCP client connected (stdio subprocess transport)"
-                )
+                logger.debug("🔗 FastMCP client connected (stdio subprocess transport)")
                 yield client
         finally:
             _retire_stdio_sidecar(haos_stdio_config_dir)
@@ -2897,6 +2895,7 @@ def _stdio_client(container_info: dict[str, Any], config_dir: Path) -> Client:
         command="ha-mcp",
         args=[],
         env=_stdio_env(container_info, config_dir),
+        keep_alive=False,
     )
     return Client(transport)
 

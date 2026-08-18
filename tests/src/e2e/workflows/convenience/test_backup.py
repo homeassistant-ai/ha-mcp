@@ -32,15 +32,19 @@ def _error_message(data: dict) -> str:
 
 
 def _server_is_out_of_process() -> bool:
-    """True when the MCP server under test runs in a separate process from
-    pytest: the container-embedded backend (E2E_BACKEND=embedded) or the
-    HAOS embedded/inaddon tiers all run ha-mcp inside the HA instance
-    itself. `monkeypatch.setenv` + `_reset_global_settings()` only affect
-    the pytest process's own Settings singleton, so they cannot reach a
-    server running in one of these modes."""
+    """Return whether pytest cannot mutate the server process's environment.
+
+    The stdio subprocess and the embedded/in-addon servers all have their own
+    Settings singleton. ``monkeypatch.setenv`` plus ``_reset_global_settings``
+    only changes the pytest process, so it cannot reconfigure those servers.
+    """
     if os.environ.get("E2E_BACKEND", "").strip().lower() == "embedded":
         return True
-    return os.environ.get("HAOS_TEST_MODE", "external") in ("embedded", "inaddon")
+    return os.environ.get("HAOS_TEST_MODE", "external") in (
+        "embedded",
+        "inaddon",
+        "stdio",
+    )
 
 
 @pytest.mark.convenience

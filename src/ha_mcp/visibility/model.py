@@ -42,6 +42,11 @@ class VisibilityConfig(BaseModel):
     # the same hidden set is applied, not which entities are hidden, so it is
     # deliberately absent from ``to_wire`` and ``config_has_active_hide_dimensions``.
     enforce: bool = False
+    # ``ha_report_issue`` is the recovery path when visibility enforcement or
+    # its HA registry inputs fail. Keep it outside the barrier by default so it
+    # can return diagnostics; operators who treat report/log output as sensitive
+    # can opt it back into the normal inbound + outbound scans.
+    restrict_report_issue: bool = False
 
     def to_wire(self) -> dict[str, Any]:
         """Serialize the hide dimensions for the component ``search`` fast path.

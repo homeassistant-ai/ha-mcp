@@ -1217,6 +1217,19 @@ def _build_app(
             handlers["policy_get_value_source"],
             methods=["GET"],
         ),
+        # Entity visibility filter endpoints. The sidecar owns a hand-maintained
+        # route table (it cannot reuse FastMCP custom-route registration), so
+        # keep this pair in lockstep with settings_ui.register_settings_routes.
+        Route(
+            f"{secret_prefix}/api/visibility/config",
+            handlers["visibility_get_config"],
+            methods=["GET"],
+        ),
+        Route(
+            f"{secret_prefix}/api/visibility/config",
+            handlers["visibility_put_config"],
+            methods=["PUT"],
+        ),
     ]
 
     # /shutdown — POST endpoint that drops the disable sentinel and

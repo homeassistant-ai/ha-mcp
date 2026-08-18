@@ -37,6 +37,15 @@ def make_context(name, arguments=None):
     )
 
 
+
+def report_context(*, proxied=False):
+    arguments = {"fields": ["recent_logs"]}
+    if proxied:
+        return make_context(
+            "ha_call_read_tool", {"name": "ha_report_issue", "arguments": arguments}
+        )
+    return make_context("ha_report_issue", arguments)
+
 def text_result(text="ok", structured=None):
     """A ToolResult stand-in with a text content block + structured content."""
     return SimpleNamespace(
@@ -184,22 +193,26 @@ class TestInactivePassthrough:
 class TestReportIssueRestriction:
     """The diagnostics tool stays reachable unless explicitly restricted."""
 
+    @pytest.mark.parametrize("proxied", [False, True])
     async def test_report_issue_bypasses_active_enforcement_by_default(
-        self, set_config
+        self, set_config, proxied
     ):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
         client = FakeClient()
         mw = make_mw(get_client=lambda: client)
 
         result = await mw.on_call_tool(
-            make_context("ha_report_issue", {"fields": ["recent_logs"]}),
+            report_context(proxied=proxied),
             _returns(text_result("diagnostics mention sensor.hidden")),
         )
 
         assert result.content[0].text == "diagnostics mention sensor.hidden"
         assert client.get_states_calls == 0
 
-    async def test_report_issue_is_scanned_when_operator_opts_in(self, set_config):
+    @pytest.mark.parametrize("proxied", [False, True])
+    async def test_report_issue_is_scanned_when_operator_opts_in(
+        self, set_config, proxied
+    ):
         set_config(
             enabled=True,
             enforce=True,
@@ -210,11 +223,12 @@ class TestReportIssueRestriction:
 
         with pytest.raises(ToolError) as exc:
             await mw.on_call_tool(
-                make_context("ha_report_issue", {"fields": ["recent_logs"]}),
+                report_context(proxied=proxied),
                 _returns(text_result("diagnostics mention sensor.hidden")),
             )
 
         assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
 
 # ---------------------------------------------------------------------------
 # Inbound: concealment + refusal
@@ -400,6 +414,31 @@ class TestConfigLoadFailure:
             )
         body = _error_body(exc)
         assert body["error"]["code"] == "ENTITY_NOT_FOUND"
+
+    async def test_corrupt_config_after_report_opt_in_stays_enforced(
+        self, breakable_config
+    ):
+        breakable_config["config"] = VisibilityConfig(
+            enabled=True,
+            enforce=True,
+            exclude_categories=[],
+            deny_entity_ids=["sensor.hidden"],
+            restrict_report_issue=True,
+        )
+        mw = make_mw(get_client=FakeClient)
+        result = await mw.on_call_tool(
+            make_context("ha_report_issue", {"fields": ["recent_logs"]}),
+            _returns(text_result("clean diagnostics")),
+        )
+        assert result.content[0].text == "clean diagnostics"
+
+        breakable_config["broken"] = True
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_report_issue", {"fields": ["recent_logs"]}),
+                _returns(text_result("diagnostics mention sensor.hidden")),
+            )
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
 
 # ---------------------------------------------------------------------------
