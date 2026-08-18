@@ -26,11 +26,11 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
    Or manually add this repository URL in Settings → Apps → App store
    (Settings → Add-ons → Add-on store before Home Assistant 2026.2):
-   ```
+   ```text
    https://github.com/homeassistant-ai/ha-mcp
    ```
 
-2. **Navigate to the add-on** "Home Assistant MCP Server" from the App store
+2. **Navigate to the app** "Home Assistant MCP Server" from the App store
 
 3. **Click Install, Wait and then Start**
 
@@ -133,8 +133,8 @@ For secure remote access, you have two options:
 
 The **Webhook Proxy** add-on routes MCP traffic through your existing Home Assistant reverse proxy — no separate tunnel needed.
 
-1. Install the **MCP Server add-on** first (if not already installed — see the Installation section above)
-2. Install the **"Webhook Proxy for HA MCP"** add-on from the App store
+1. Install the **MCP Server app** first (if not already installed — see the Installation section above)
+2. Install the **"Webhook Proxy for HA MCP"** app from the App store
 3. Start it and **restart Home Assistant** when prompted
 4. Copy the URL from the webhook proxy add-on logs:
    ```

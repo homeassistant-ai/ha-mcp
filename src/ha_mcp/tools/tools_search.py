@@ -1867,7 +1867,7 @@ class SearchTools:
           - To read a known entity_id's state: use `ha_get_state` (cheaper).
           - To inspect one automation/script/scene config by id: use the
             matching `ha_config_get_*`.
-          - To list installed add-ons: use `ha_get_app`.
+          - To list installed Apps (add-ons): use `ha_get_app`.
 
         Config-body search is skipped when `domain_filter`/`area_filter`/
         `state_filter` signal entity-only intent (keeping name lookups off the

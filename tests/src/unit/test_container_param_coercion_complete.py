@@ -24,7 +24,9 @@ import asyncio
 import importlib
 import inspect
 import os
+import pathlib
 import pkgutil
+import tempfile
 import typing
 from typing import Any
 from unittest.mock import MagicMock
@@ -122,13 +124,28 @@ def _all_registered_tools() -> dict[str, Any]:
 
     from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
     from ha_mcp.tools.registry import EXPLICIT_MODULES
+    from ha_mcp.utils.data_paths import get_data_dir
 
     saved_env: dict[str, str | None] = {}
     for flag in FEATURE_FLAG_FIELDS:
         if flag.ftype is bool and flag.field != "read_only_mode":
             saved_env[flag.env] = os.environ.get(flag.env)
             os.environ[flag.env] = "true"
+
+    # Point the settings at an empty directory: otherwise get_global_settings()
+    # reads the real data dir, and a tool_config.json left there by a local run
+    # decides which tools this guardrail gets to inspect. Clearing the cache is
+    # the half that does the work -- get_data_dir is lru_cached, so setting the
+    # variable alone changes nothing once any earlier test has resolved it.
+    isolated_config = tempfile.TemporaryDirectory()
+    saved_env["HA_MCP_CONFIG_DIR"] = os.environ.get("HA_MCP_CONFIG_DIR")
+    os.environ["HA_MCP_CONFIG_DIR"] = isolated_config.name
+    get_data_dir.cache_clear()
     _reset_global_settings()
+    assert get_data_dir() == pathlib.Path(isolated_config.name), (
+        "the isolation did not take: the guardrail would read persisted local "
+        "state instead of an empty directory"
+    )
 
     async def _inner() -> dict[str, Any]:
         mcp = FastMCP("guardrail")
@@ -150,7 +167,9 @@ def _all_registered_tools() -> dict[str, Any]:
                 os.environ.pop(env_var, None)
             else:
                 os.environ[env_var] = prev
+        get_data_dir.cache_clear()
         _reset_global_settings()
+        isolated_config.cleanup()
 
 
 def test_every_container_param_has_json_string_coercion() -> None:
