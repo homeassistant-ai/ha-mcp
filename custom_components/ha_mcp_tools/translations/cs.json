@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Vlastní komponenta HA-MCP",
-        "description": "Vyberte, co chcete přidat. **Server HA-MCP** spouští plný server ha-mcp uvnitř Home Assistanta a zpřístupňuje jej prostřednictvím webhooku Home Assistanta – toto je instalace, kterou většina lidí chce. Je to samostatný server a kompletní náhrada za všechny ostatní instalační metody (doplněk, Docker, uvx/PyPI, stdio); pokud jej spustíte, nespouštějte žádnou z nich. **Nástroje souborů a YAML HA-MCP** přidávají privilegované služby pro úpravu souborů a YAML, potřebné pouze v případě, že zapnete volitelné nástroje souborů/YAML ha-mcp. Pokud váš server ha-mcp již běží jinde (doplněk, Docker, uvx), nepotřebujete položku serveru – přidejte pouze tuto položku Soubory a YAML, a to pouze v případě, že tyto nástroje používáte. Funguje se všemi typy serverů a lze jej kdykoli přidat později.",
+        "description": "Vyberte, co chcete přidat. **HA-MCP Server** spustí kompletní server ha-mcp uvnitř Home Assistanta a zpřístupní ho prostřednictvím webhooku Home Assistanta – toto je instalace, kterou většina lidí chce. Jedná se o samostatný server a kompletní náhradu za všechny ostatní způsoby instalace: App (add-on), Docker, uvx/PyPI, stdio; pokud jej spouštíte, nespouštějte zároveň žádný z nich. **HA-MCP File & YAML Tools** přidává privilegované služby pro úpravu souborů a YAML, které jsou potřeba pouze v případě, že zapnete volitelné nástroje ha-mcp pro úpravu souborů/YAML. Pokud váš server ha-mcp již běží jinde – App (add-on), Docker, uvx – nepotřebujete záznam serveru – přidejte pouze tento záznam File & YAML, a to pouze v případě, že tyto nástroje používáte. Funguje s každým typem serveru a lze jej kdykoli později přidat.",
         "menu_options": {
           "server": "Server HA-MCP (doporučeno)",
           "tools": "Nástroje souborů a YAML HA-MCP (volitelné)"
@@ -15,12 +15,12 @@
       },
       "server": {
         "title": "Server HA-MCP",
-        "description": "Tento server spouští plný server ha-mcp uvnitř Home Assistanta a zpřístupňuje jej vzdáleně prostřednictvím webhooku Home Assistanta (dostupného přes Nabu Casa nebo jakýkoli reverzní proxy). Je to samostatný server a kompletní náhrada za instalační metody doplněk, Docker, uvx/PyPI a stdio – nespouštějte jej vedle jiného serveru ha-mcp. Vyberte **Odeslat** pro spuštění; port, vazbu a ověřování můžete změnit později v možnostech integrace."
+        "description": "Tím se spustí kompletní server ha-mcp uvnitř Home Assistanta a zpřístupní se vzdáleně prostřednictvím webhooku Home Assistanta (dostupného přes Nabu Casa nebo libovolný reverzní proxy server). Jedná se o samostatný server a kompletní náhradu za instalační metody App (add-on), Docker, uvx/PyPI a stdio – nespouštějte jej současně s jiným serverem ha-mcp. Výběrem možnosti **Odeslat** jej spustíte; port, vazbu a ověřování můžete později změnit v nastavení integrace."
       }
     },
     "abort": {
       "already_configured": "Tato položka je již nastavena.",
-      "unsupported_home_assistant": "Server HA-MCP běžící ve stejném procesu vyžaduje Home Assistanta {required} nebo novější, ale tato instance běží na {installed}. Stále můžete použít položku Nástroje souborů a YAML HA-MCP této komponenty s externím serverem ha-mcp běžícím jako doplněk nebo kontejner Docker."
+      "unsupported_home_assistant": "In-process HA-MCP Server vyžaduje Home Assistant {required} nebo novější, ale tato instance běží na verzi {installed}. Záznam HA-MCP File & YAML Tools této komponenty můžete stále používat s externím serverem ha-mcp běžícím jako app (add-on) nebo kontejner Docker."
     }
   },
   "options": {
@@ -64,8 +64,8 @@
         "data_description": {
           "channel": "Stabilní instaluje nejnovější stabilní vydání; Vývoj instaluje nejnovější vývojovou verzi. Když jsou zapnuty automatické aktualizace, opětovné načtení nebo restart, plus pravidelná kontrola, nainstalují nejnovější sestavení vybraného kanálu. Přepsání balíčku vývojáře níže má přednost a zakazuje automatické aktualizace.",
           "auto_update": "Když je zapnuto, nejnovější vydání vybraného kanálu se nainstaluje automaticky – při opětovném načtení nebo restartu a prostřednictvím pravidelné kontroly. Když je vypnuto, server zůstane na aktuálně nainstalované verzi, dokud to znovu nezapnete. Toto ovládá pouze balíček serveru ha-mcp; aktualizace samotné vlastní komponenty HA-MCP stále přicházejí přes HACS.",
-          "server_port": "Port, na kterém tento server naslouchá. Doplněk ha-mcp používá 9583, takže zde je výchozí hodnota 9584, aby mohly běžet oba vedle sebe – pokud doplněk nepoužíváte, funguje jakýkoli volný port.",
-          "bind_host": "Kdo se může přímo připojit k portu serveru MCP. Výchozí nastavení odpovídá doplňku: dosažitelné ve vaší místní síti, s tajnou cestou jako pověřením. Zvolte „loopback“, abyste povolili pouze připojení ze samotného zařízení Home Assistant – URL webhooku a panel postranního panelu fungují v obou případech.",
+          "server_port": "Port, na kterém tento server naslouchá. Aplikace (doplněk) ha-mcp používá port 9583, takže ve výchozím nastavení je nastaveno 9584, aby mohly oba běžet vedle sebe – pokud aplikaci (doplněk) nepoužíváte, funguje jakýkoliv volný port.",
+          "bind_host": "Kdo se může připojit přímo k portu MCP serveru. Výchozí nastavení odpovídá aplikaci (doplněku): dosažitelné ve vaší lokální síti, přičemž přihlašovacím údajem je tajná cesta. Zvolte loopback, chcete-li povolit připojení pouze ze samotného stroje Home Assistant – adresa URL webhooku a panel postranního panelu fungují v obou případech.",
           "webhook_auth": "Jak se klienti MCP ověřují na URL webhooku. S tajnou URL je samotný odkaz jediným pověřením – OAuth stále běží pro klienty, kteří jej používají, ale každé přihlášení je schváleno automaticky: není potřeba žádné přihlášení ani Client ID nebo Secret. S přihlášením Home Assistant se klienti jako claude.ai přihlašují pomocí administrátorského účtu Home Assistant (OAuth). S legacy OAuth tato integrace spouští vlastní přihlašovací službu a vydává Client ID a Secret k vložení do klientů, kteří je vyžadují – k úplnému zapnutí nebo vypnutí může být potřeba restart Home Assistanta.",
           "oauth_client_id_override": "Nahrazuje automaticky generované legacy OAuth ID klienta. Ponechte prázdné, abyste zachovali stávající. Používá se pouze, když je režim ověřování nastaven na legacy OAuth.",
           "oauth_client_secret_override": "Nahrazuje automaticky generovaný legacy OAuth tajný klíč klienta. Ponechte prázdné, abyste zachovali stávající. Používá se pouze, když je režim ověřování nastaven na legacy OAuth.",

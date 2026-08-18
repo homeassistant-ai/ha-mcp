@@ -69,23 +69,24 @@ configuration:
       de usuario web. Requiere un reinicio para que surta efecto.'
   read_only_mode:
     name: Modo de solo lectura
-    description: Desactiva todas las herramientas de escritura y les retira la capacidad
-      de hacer llamadas de escritura o destructivas. Las herramientas mixtas de lectura/escritura
-      (copias de seguridad, complementos, preferencias de energía, canalizaciones
-      de voz y el modo de código cuando está activado) siguen disponibles, pero con
-      sus operaciones de escritura bloqueadas. Es la misma opción que la de la pestaña
-      Herramientas de la interfaz web. Desactivado de forma predeterminada. Requiere
-      reiniciar para que surta efecto.
+    description: Desactiva todas las herramientas de escritura y elimina la capacidad
+      de las herramientas para realizar llamadas de escritura o destructivas. Las
+      herramientas mixtas de lectura/escritura (copias de seguridad, Apps (add-ons),
+      preferencias de energía, canales de voz y el modo de código cuando está habilitado)
+      siguen estando disponibles con sus operaciones de escritura bloqueadas. Es el
+      mismo conmutador que en la pestaña Tools de la interfaz web. Desactivado por
+      defecto. Requiere reiniciar para que surta efecto.
   redact_secrets:
     name: Redactar secretos
-    description: Redacta secretos de las respuestas de las herramientas antes de que
-      lleguen al asistente de IA. Las opciones del complemento y los campos de integración
-      marcados como contraseñas se reemplazan con un marcador de establecido/vacío
-      (para que "¿está configurada esta credencial?" siga siendo respondible), y otras
-      respuestas de herramientas se limpian de valores secretos que el servidor ya
-      ha visto (los valores de menos de 6 caracteres se omiten, ya que reemplazar
-      fragmentos pequeños corrompería la salida no relacionada). Los campos no marcados
-      como contraseñas por su esquema no pueden ser detectados. Desactivado por defecto.
+    description: Elimina información confidencial de las respuestas de las herramientas
+      antes de que lleguen al asistente de IA. Las opciones de la app (add-on) y los
+      campos de integración marcados como contraseñas se reemplazan por un marcador
+      de establecido/vacío (para que "¿está esta credencial configurada?" siga teniendo
+      respuesta), y las respuestas de otras herramientas se depuran de valores secretos
+      que el servidor ya ha visto (se omiten los valores de menos de 6 caracteres,
+      ya que reemplazar fragmentos diminutos corrompería resultados no relacionados).
+      Los campos no marcados como contraseñas por su esquema no se pueden detectar.
+      Desactivado por defecto.
   enable_beta_features:
     name: Activar las funciones beta (principal)
     description: ⚠ PELIGRO — estas herramientas pueden DAÑAR PERMANENTEMENTE tu instalación
@@ -148,20 +149,20 @@ configuration:
       solo para ahorrar una ida y vuelta por edición.'
   enable_code_mode:
     name: Activar el entorno aislado de herramientas personalizadas (beta)
-    description: Función beta. Activa la herramienta ha_manage_custom_tool, que permite
-      a los asistentes de IA crear, ejecutar, guardar y eliminar código Python personalizado
-      en un entorno aislado seguro cuando ninguna herramienta integrada puede atender
-      la petición. El código se ejecuta en un intérprete aislado sin acceso al sistema
-      de archivos ni a la red de forma arbitraria. El código del entorno aislado puede
-      usar la API REST de HA (api_get/api_post), enviar comandos WebSocket (ws_send),
-      llamar a herramientas MCP existentes (call_tool) o eliminar una herramienta
-      guardada (delete_saved_tool). Las herramientas guardadas se conservan de forma
-      predeterminada en /data/saved_tools.json, así que sobreviven a los reinicios
-      del complemento, y son visibles para cualquier cliente que pueda conectarse.
-      Consulta docs/beta.md para conocer las limitaciones. Requiere reiniciar para
-      que surta efecto. REQUIERE que la opción principal "Activar las funciones beta"
-      de arriba (y en la interfaz web) esté activada; de lo contrario, este subindicador
-      se ignora en tiempo de ejecución sea cual sea su valor aquí.
+    description: Función beta. Habilita la herramienta ha_manage_custom_tool, que
+      permite a los asistentes de IA crear, ejecutar, guardar y eliminar código Python
+      personalizado en un espacio aislado seguro cuando ninguna herramienta integrada
+      puede manejar la solicitud. El código se ejecuta en un intérprete aislado sin
+      acceso al sistema de archivos ni red arbitraria. El código del espacio aislado
+      puede acceder a la API REST de HA (api_get/api_post), enviar comandos WebSocket
+      (ws_send), llamar a herramientas MCP existentes (call_tool) o eliminar una herramienta
+      guardada (delete_saved_tool). Las herramientas guardadas persisten en /data/saved_tools.json
+      por defecto para sobrevivir a los reinicios de la app (add-on), y son visibles
+      para cualquier cliente que pueda conectarse. Consulta docs/beta.md para conocer
+      las limitaciones conocidas. Requiere reiniciar para que surta efecto. REQUIERE
+      que el interruptor principal "Enable beta features" de arriba (y en la interfaz
+      web) esté activado; de lo contrario, este subindicador se ignorará en tiempo
+      de ejecución independientemente de su valor aquí.
   enable_lite_docstrings:
     name: Activar descripciones de herramientas reducidas (beta)
     description: 'Función beta. Sustituye las descripciones de unas pocas herramientas
@@ -217,21 +218,22 @@ configuration:
       sea cual sea su valor aquí.'
   enable_dashboard_screenshot:
     name: Activar el modo de captura de pantalla de paneles (beta)
-    description: Función beta, desactivada de forma predeterminada. Añade la herramienta
-      ha_get_dashboard_screenshot y las opciones include_screenshot / return_screenshot
-      en las herramientas de lectura y escritura de paneles, de modo que los asistentes
-      de IA puedan inspeccionar una o varias imágenes responsivas de Lovelace (p.
-      ej. para comprobar un panel que acaban de crear). Admite vistas con nombre estable,
-      lotes para móvil/tableta/escritorio y salida PNG/JPEG/WebP/BMP. El renderizado
-      se ejecuta en un motor aparte y opcional — el complemento "Puppet" de balloob
-      (Chromium sin interfaz) —, que instalas una sola vez (añade el repositorio de
-      complementos de balloob y luego instala "Puppet") y al que das un token de acceso
-      de larga duración; en despliegues Docker/Container ese motor se ejecuta como
-      sidecar y se configura HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. No se instala
-      nada pesado salvo que actives esto y además instales el motor. Requiere reiniciar
-      para que surta efecto. REQUIERE que la opción principal "Activar las funciones
-      beta" de arriba (y en la interfaz web) esté activada; de lo contrario, este
-      subindicador se ignora en tiempo de ejecución sea cual sea su valor aquí.
+    description: 'Función beta: deshabilitada por defecto. Añade la herramienta ha_get_dashboard_screenshot
+      además de las opciones include_screenshot / return_screenshot en las herramientas
+      de obtención/configuración de paneles, para que los asistentes de IA puedan
+      inspeccionar una o más imágenes adaptables de Lovelace (por ejemplo, para verificar
+      un panel que acaban de crear). Soporta vistas con nombre estables, lotes para
+      móvil/tablet/escritorio y salida PNG/JPEG/WebP/BMP. El renderizado se ejecuta
+      en un motor opcional independiente (la App (add-on) "Puppet" de balloob, Chromium
+      sin interfaz gráfica), que instalas una vez (añadiendo el repositorio de balloob
+      a la tienda de aplicaciones e instalando "Puppet") y le proporcionas un token
+      de acceso de larga duración; en implementaciones de Docker/Container, ejecutas
+      ese motor como un sidecar y configuras HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
+      No se instala nada pesado a menos que habilites esto e instales el motor. Requiere
+      reiniciar para que surta efecto. REQUIERE que el interruptor principal "Enable
+      beta features" de arriba (y en la interfaz web) esté activado; de lo contrario,
+      este subindicador se ignorará en tiempo de ejecución independientemente de su
+      valor aquí.'
   enable_auto_backup:
     name: Activar copia de seguridad automática de las ediciones
     description: 'Captura una instantánea por entidad antes de cada llamada envuelta
@@ -301,10 +303,10 @@ configuration:
       por comas.'
   verify_ssl:
     name: Verificar el certificado TLS
-    description: 'Verifica el certificado TLS del servidor de Home Assistant. El complemento
-      se conecta a través del proxy del Supervisor, así que normalmente esto no tiene
-      ningún efecto y debería quedarse activado. Desactívalo solo si has reconfigurado
-      el complemento para hablar con HA por un nombre de host HTTPS público con un
-      certificado autofirmado o con un nombre de host que no coincide. Desactivarlo
-      debilita la seguridad del transporte: déjalo activado salvo que sepas que lo
-      necesitas. Requiere reiniciar para que surta efecto.'
+    description: Verifica el certificado TLS del servidor de Home Assistant. La app
+      (add-on) se conecta a través del proxy del Supervisor, por lo que normalmente
+      esto no tiene efecto y debe permanecer habilitado. Desactívalo solo si has reconfigurado
+      la app (add-on) para comunicarse con HA a través de un nombre de host HTTPS
+      público con un certificado autofirmado o un error de coincidencia en el nombre
+      de host. Desactivarlo debilita la seguridad del transporte; déjalo activado
+      a menos que sepas que lo necesitas. Requiere reiniciar para aplicar los cambios.

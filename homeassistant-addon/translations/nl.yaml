@@ -33,23 +33,23 @@ configuration:
   enable_tool_search:
     name: Schakel tool-zoekfunctie in
     description: 'Vervang de volledige toolcatalogus door zoekgebaseerde ontdekking.
-      Vermindert de inactieve context met ongeveer 90%, tot ongeveer 5K tokens. ⚠️
-      Schakel dit NIET in bij clients met hun eigen ingebouwde toolzoekfunctie / uitgestelde
-      tools (claude.ai, Claude Desktop, Claude Code) — de twee zoeklagen conflicteren,
-      en de ingebouwde toolzoekfunctie van de client is daar de betere keuze; laat
-      dit uitgeschakeld. Of tools worden uitgesteld, hangt af van je client- en modelcombinatie:
-      gebruik dit wanneer je setup de volledige catalogus vooraf laadt — modellen
+      Vermindert inactieve context met ongeveer 90%, tot ongeveer 5K tokens. ⚠️ Schakel
+      dit NIET in bij clients met een ingebouwde toolzoekfunctie / uitgestelde tools
+      (claude.ai, Claude Desktop, Claude Code) — de twee zoeklagen conflicteren en
+      de ingebouwde toolzoekfunctie van de client heeft daar de voorkeur; laat dit
+      uitgeschakeld. Of tools worden uitgesteld hangt af van je client- en modelcombinatie:
+      gebruik dit wanneer je opstelling de volledige catalogus vooraf laadt — modellen
       zonder native uitgestelde tools (bijv. Gemini, OpenAI-compatibele lokale modellen,
-      Claude Haiku), clients die alle toolschema''s inline plaatsen ongeacht het model
+      Claude Haiku), clients die alle toolschema''s inline opnemen ongeacht het model
       (bijv. GitHub Copilot CLI), of kleinere contextvensters. Sommige Codex-modellen
       en ChatGPT bevatten ook uitgestelde tools — controleer je client/model direct
-      om de functies te bevestigen, zodat je dit niet onnodig ingeschakeld laat. Tools
-      worden gevonden via ha_search_tools en uitgevoerd via gecategoriseerde proxies
-      (lezen/schrijven/verwijderen). Vereist een herstart van de add-on om van kracht
-      te worden — maak vervolgens opnieuw verbinding of vernieuw de MCP-server in
-      je AI-client zodat deze de toollijst opnieuw laadt. Alleen het herstarten van
-      de add-on vernieuwt de gecachte toollijst van een client NIET; dit geldt na
-      het wijzigen van elke instelling hier.'
+      om de functies te bevestigen zodat je dit niet onnodig ingeschakeld laat. Tools
+      worden gevonden via ha_search_tools en uitgevoerd via gecategoriseerde proxy''s
+      (lezen/schrijven/verwijderen). Vereist een herstart van de app (add-on) om van
+      kracht te worden — maak daarna opnieuw verbinding of vernieuw de MCP-server
+      in je AI-client zodat deze de toollijst opnieuw laadt. Alleen de app (add-on)
+      herstarten vernieuwt de gecached toollijst van een client NIET; dit is van toepassing
+      na het wijzigen van een instelling hier.'
   tool_search_max_results:
     name: Max. resultaten tool-zoekfunctie
     description: 'Maximaal aantal tools geretourneerd door ha_search_tools wanneer
@@ -78,20 +78,20 @@ configuration:
     name: Alleen-lezen modus
     description: Schakelt alle schrijftools uit en verwijdert de mogelijkheid voor
       tools om schrijf- of destructieve aanroepen te doen. Gemengde lees-/schrijftools
-      (back-ups, add-ons, energievoorkeuren, spraakpijplijnen en codemodus indien
-      ingeschakeld) blijven beschikbaar, maar hun schrijfbewerkingen zijn geblokkeerd.
-      Zelfde schakelaar als het tabblad 'Tools' in de web-UI. Standaard uitgeschakeld.
-      Vereist een herstart om van kracht te worden.
+      — back-ups, apps (add-ons), energievoorkeuren, spraakpijplijnen en codemodus
+      wanneer ingeschakeld — blijven beschikbaar waarbij hun schrijfoperaties worden
+      geblokkeerd. Dezelfde schakelaar als het web-ui-tabblad Tools. Standaard uit.
+      Vereist herstart om van kracht te worden.
   redact_secrets:
     name: Geheimen redigeren
-    description: Redigeert geheimen uit tool-antwoorden voordat ze de AI-assistent
-      bereiken. Add-on-opties en integratievelden die als wachtwoorden zijn gemarkeerd,
-      worden vervangen door een ingestelde/lege markering (zodat "is deze referentie
-      geconfigureerd?" beantwoordbaar blijft), en andere tool-antwoorden worden ontdaan
+    description: Verbergt geheimen uit toolresponsen voordat ze de AI-assistent bereiken.
+      App (add-on)-opties en integratievelden die zijn gemarkeerd als wachtwoorden
+      worden vervangen door een marker voor ingesteld/leeg (zodat "is deze inloggegeven
+      geconfigureerd?" beantwoordbaar blijft), en andere toolresponsen worden opgeschoond
       van geheime waarden die de server al heeft gezien (waarden korter dan 6 tekens
-      worden overgeslagen, aangezien het vervangen van kleine fragmenten ongerelateerde
-      uitvoer zou beschadigen). Velden die niet als wachtwoorden zijn gemarkeerd door
-      hun schema, kunnen niet worden gedetecteerd. Standaard uitgeschakeld.
+      worden overgeslagen, aangezien het vervangen van kleine fragmenten gerelateerde
+      uitvoer zou beschadigen). Velden die niet door hun schema als wachtwoord zijn
+      gemarkeerd, kunnen niet worden gedetecteerd. Standaard uit.
   enable_mandatory_bps:
     name: Koppel best-practice vaardigheden aan schrijfbewerkingen
     description: 'Hoofdschakelaar voor de functie voor het leveren van vaardigheidsinhoud
@@ -179,10 +179,10 @@ configuration:
       beschermingen blijven van toepassing). Standaard 7.
   verify_ssl:
     name: TLS-certificaat verifiëren
-    description: Verifieer het TLS-certificaat van de Home Assistant-server. De add-on
-      maakt verbinding via de Supervisor-proxy, dus dit heeft normaal gesproken geen
-      effect en moet ingeschakeld blijven. Schakel alleen uit als je de add-on opnieuw
-      hebt geconfigureerd om met HA te communiceren via een openbare HTTPS-hostnaam
-      met een zelfondertekend certificaat of een hostnaam-mismatch. Uitschakelen verzwakt
-      de transportbeveiliging — laat ingeschakeld, tenzij je weet dat je het nodig
-      hebt. Vereist herstart om van kracht te worden.
+    description: Verifieer het TLS-certificaat van de Home Assistant-server. De app
+      (add-on) maakt verbinding via de Supervisor-proxy, dus dit heeft normaal gesproken
+      geen effect en moet ingeschakeld blijven. Schakel dit alleen uit als je de app
+      (add-on) zo hebt geconfigureerd dat deze via een openbare HTTPS-hostnaam met
+      een zelfondertekend certificaat of een niet-overeenkomende hostnaam met HA communiceert.
+      Uitschakelen verzwakt de transportbeveiliging — laat ingeschakeld tenzij je
+      zeker weet dat je het nodig hebt. Vereist een herstart om van kracht te worden.

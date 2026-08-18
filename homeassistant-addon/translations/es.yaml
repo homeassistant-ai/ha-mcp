@@ -30,25 +30,27 @@ configuration:
       '
   enable_tool_search:
     name: Activar la búsqueda de herramientas
-    description: 'Sustituye el catálogo completo de herramientas por un descubrimiento
-      basado en búsqueda. Reduce el contexto en reposo en torno a un 90 %, hasta unos
-      5K tokens. ⚠️ NO actives esto en clientes con su propia búsqueda de herramientas
-      / herramientas diferidas integrada (claude.ai, Claude Desktop, Claude Code):
-      las dos capas de búsqueda entran en conflicto y la búsqueda integrada del cliente
-      es allí la mejor opción; deja esto desactivado. Que las herramientas se difieran
-      depende de la combinación de cliente y modelo: usa esto cuando tu configuración
-      carga el catálogo completo de entrada — modelos sin herramientas diferidas nativas
-      (p. ej. Gemini, modelos locales compatibles con OpenAI, Claude Haiku), clientes
-      que insertan todos los esquemas de herramientas sea cual sea el modelo (p. ej.
-      GitHub Copilot CLI) o ventanas de contexto más pequeñas. Algunos modelos Codex
-      y ChatGPT también incluyen herramientas diferidas: comprueba directamente con
-      tu cliente/modelo qué características tiene para no dejar esto activado innecesariamente.
-      Las herramientas se localizan mediante ha_search_tools y se ejecutan a través
-      de proxies por categoría (lectura/escritura/borrado). Requiere reiniciar el
-      complemento para que surta efecto; después, vuelve a conectar o actualiza el
+    description: 'Reemplaza el catálogo completo de herramientas por un descubrimiento
+      basado en búsquedas. Reduce el contexto inactivo en aproximadamente un 90 %,
+      a unos 5K tokens. ⚠️ NO habilites esto en clientes que tengan su propia búsqueda
+      de herramientas integrada / herramientas diferidas (claude.ai, Claude Desktop,
+      Claude Code); ambas capas de búsqueda entran en conflicto y la búsqueda de herramientas
+      integrada del cliente es la mejor opción en ese caso; déjalo desactivado. El
+      hecho de que las herramientas se diferieran depende de tu combinación de cliente
+      y modelo: úsalo cuando tu configuración cargue el catálogo completo de entrada
+      (modelos sin herramientas diferidas nativas, por ejemplo, Gemini, modelos locales
+      compatibles con OpenAI, Claude Haiku), clientes que insertan todos los esquemas
+      de herramientas sin importar el modelo (por ejemplo, GitHub Copilot CLI), o
+      ventanas de contexto más pequeñas. Algunos modelos de Codex y ChatGPT también
+      incluyen herramientas diferidas; comprueba directamente tu cliente/modelo para
+      confirmar sus características y no dejar esto habilitado innecesariamente. Las
+      herramientas se encuentran mediante ha_search_tools y se ejecutan a través de
+      proxies categorizados (lectura/escritura/eliminación). Requiere reiniciar la
+      app (add-on) para que surta efecto; a continuación, reconecta o actualiza el
       servidor MCP en tu cliente de IA para que recargue la lista de herramientas.
-      Reiniciar el complemento por sí solo NO actualiza la lista de herramientas almacenada
-      en caché por el cliente; esto vale para cualquier cambio de ajustes aquí.'
+      Reiniciar solo la app (add-on) NO actualiza la lista de herramientas almacenada
+      en caché del cliente; esto se aplica después de cambiar cualquier configuración
+      aquí.'
   tool_search_max_results:
     name: Máximo de resultados de la búsqueda de herramientas
     description: 'Número máximo de herramientas que devuelve ha_search_tools cuando
@@ -78,23 +80,24 @@ configuration:
       de usuario web. Requiere un reinicio para que surta efecto.'
   read_only_mode:
     name: Modo de solo lectura
-    description: Desactiva todas las herramientas de escritura y les retira la capacidad
-      de hacer llamadas de escritura o destructivas. Las herramientas mixtas de lectura/escritura
-      (copias de seguridad, complementos, preferencias de energía, canalizaciones
-      de voz y el modo de código cuando está activado) siguen disponibles, pero con
-      sus operaciones de escritura bloqueadas. Es la misma opción que la de la pestaña
-      Herramientas de la interfaz web. Desactivado de forma predeterminada. Requiere
-      reiniciar para que surta efecto.
+    description: Desactiva todas las herramientas de escritura y elimina la capacidad
+      de las herramientas para realizar llamadas de escritura o destructivas. Las
+      herramientas mixtas de lectura/escritura (copias de seguridad, Apps (add-ons),
+      preferencias de energía, canales de voz y el modo de código cuando está habilitado)
+      siguen estando disponibles con sus operaciones de escritura bloqueadas. Es el
+      mismo conmutador que en la pestaña Tools de la interfaz web. Desactivado por
+      defecto. Requiere reiniciar para que surta efecto.
   redact_secrets:
     name: Redactar secretos
-    description: Redacta secretos de las respuestas de las herramientas antes de que
-      lleguen al asistente de IA. Las opciones del complemento y los campos de integración
-      marcados como contraseñas se reemplazan con un marcador de establecido/vacío
-      (para que "¿está configurada esta credencial?" siga siendo respondible), y otras
-      respuestas de herramientas se limpian de valores secretos que el servidor ya
-      ha visto (los valores de menos de 6 caracteres se omiten, ya que reemplazar
-      fragmentos pequeños corrompería la salida no relacionada). Los campos no marcados
-      como contraseñas por su esquema no pueden ser detectados. Desactivado por defecto.
+    description: Elimina información confidencial de las respuestas de las herramientas
+      antes de que lleguen al asistente de IA. Las opciones de la app (add-on) y los
+      campos de integración marcados como contraseñas se reemplazan por un marcador
+      de establecido/vacío (para que "¿está esta credencial configurada?" siga teniendo
+      respuesta), y las respuestas de otras herramientas se depuran de valores secretos
+      que el servidor ya ha visto (se omiten los valores de menos de 6 caracteres,
+      ya que reemplazar fragmentos diminutos corrompería resultados no relacionados).
+      Los campos no marcados como contraseñas por su esquema no se pueden detectar.
+      Desactivado por defecto.
   enable_mandatory_bps:
     name: Adjuntar skills de buenas prácticas en las escrituras
     description: 'Interruptor principal de la entrega de contenido de skills en las
@@ -186,10 +189,10 @@ configuration:
       y de las copias programadas siguen aplicándose). Predeterminado 7.
   verify_ssl:
     name: Verificar el certificado TLS
-    description: 'Verifica el certificado TLS del servidor de Home Assistant. El complemento
-      se conecta a través del proxy del Supervisor, así que normalmente esto no tiene
-      ningún efecto y debería quedarse activado. Desactívalo solo si has reconfigurado
-      el complemento para hablar con HA por un nombre de host HTTPS público con un
-      certificado autofirmado o con un nombre de host que no coincide. Desactivarlo
-      debilita la seguridad del transporte: déjalo activado salvo que sepas que lo
-      necesitas. Requiere reiniciar para que surta efecto.'
+    description: Verifica el certificado TLS del servidor de Home Assistant. La app
+      (add-on) se conecta a través del proxy del Supervisor, por lo que normalmente
+      esto no tiene efecto y debe permanecer habilitado. Desactívalo solo si has reconfigurado
+      la app (add-on) para comunicarse con HA a través de un nombre de host HTTPS
+      público con un certificado autofirmado o un error de coincidencia en el nombre
+      de host. Desactivarlo debilita la seguridad del transporte; déjalo activado
+      a menos que sepas que lo necesitas. Requiere reiniciar para aplicar los cambios.

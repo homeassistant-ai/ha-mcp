@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "HA-MCP Propra Komponanto",
-        "description": "Elektu kion aldoni. **HA-MCP Servilo** rulas la plenan ha-mcp servilon ene de Home Assistant kaj eksponas ĝin per Home Assistant retkroĉo — ĉi tio estas la instalaĵo, kiun plej multaj homoj volas. Ĝi estas memstara servilo kaj kompleta anstataŭaĵo por ĉiu alia instala metodo (kromprogramo, Docker, uvx/PyPI, stdio); se vi rulas ĝin, ne rulu ankaŭ unu el tiuj. **HA-MCP Dosieraj & YAML Iloj** aldonas la privilegiajn dosierajn kaj YAML-redaktajn servojn, necesajn nur se vi ŝaltas la laŭvolajn dosierajn/YAML-ilojn de ha-mcp. Se via ha-mcp servilo jam rulas aliloke (kromprogramo, Docker, uvx), vi ne bezonas la servilan eniron — aldonu nur ĉi tiun Dosieran & YAML eniron, kaj nur se vi uzas tiujn ilojn. Ĝi funkcias kun ĉiu servila tipo kaj povas esti aldonita poste iam ajn.",
+        "description": "Elektu kion aldoni. **HA-MCP Server** rulas la plenan ha-mcp servilon ene de Home Assistant kaj elmetas ĝin per Home Assistant rethoko (webhook) — ĉi tio estas la instalado, kiun la plej multaj homoj volas. Ĝi estas memstara servilo kaj kompleta anstataŭaĵo por ĉiu alia instala metodo: Apo (aldonaĵo), Docker, uvx/PyPI, stdio; se vi rulas ĝin, ne rulu ankaŭ unu el tiuj. **HA-MCP File & YAML Tools** aldonas la privilegiajn dosierajn kaj YAML-konfigurajn servojn, bezonatajn nur se vi ŝaltas la laŭvolajn dosierajn/YAML-ilojn de ha-mcp. Se via ha-mcp servilo jam rulas aliloke — Apo (aldonaĵo), Docker, uvx — vi ne bezonas la servilan eniron — aldonu nur ĉi tiun Dosieran & YAML eniron, kaj nur se vi uzas tiujn ilojn. Ĝi funkcias kun ĉiu servila tipo kaj povas esti aldonita poste iam ajn.",
         "menu_options": {
           "server": "HA-MCP Servilo (rekomendita)",
           "tools": "HA-MCP Dosieraj & YAML Iloj (laŭvola)"
@@ -15,12 +15,12 @@
       },
       "server": {
         "title": "HA-MCP Servilo",
-        "description": "Ĉi tio rulas la plenan ha-mcp servilon ene de Home Assistant kaj eksponas ĝin malproksime per Home Assistant retkroĉo (atingebla per Nabu Casa aŭ iu ajn inversa prokurilo). Ĝi estas memstara servilo kaj kompleta anstataŭaĵo por la instala metodoj kromprogramo, Docker, uvx/PyPI, kaj stdio — ne rulu ĝin kune kun alia ha-mcp servilo. Elektu **Sendi** por komenci ĝin; vi povas ŝanĝi la pordon, ligon, kaj aŭtentigon poste en la integriĝaj opcioj."
+        "description": "Ĉi tio rulas la plenan ha-mcp servilon ene de Home Assistant kaj elmetas ĝin malproksime per Home Assistant rethoko (webhook) (atingebla per Nabu Casa aŭ iu ajn inversa prokurilo). Ĝi estas memstara servilo kaj kompleta anstataŭaĵo por la apo (aldonaĵo), Docker, uvx/PyPI, kaj stdio instalaj metodoj — ne rulu ĝin kune kun alia ha-mcp servilo. Elektu **Submit** por starti ĝin; vi povas ŝalti la pordon, ligadon, kaj aŭtentigon poste en la integriĝaj opcioj."
       }
     },
     "abort": {
       "already_configured": "Ĉi tiu eniro jam estas agordita.",
-      "unsupported_home_assistant": "La enproceza HA-MCP Servilo postulas Home Assistant {required} aŭ pli novan, sed ĉi tiu instanco rulas {installed}. Vi ankoraŭ povas uzi la eniron HA-MCP Dosieraj & YAML Iloj de ĉi tiu komponanto kun ekstera ha-mcp servilo funkcianta kiel kromprogramo aŭ Docker-ujo."
+      "unsupported_home_assistant": "La enproceza HA-MCP Server postulas Home Assistant {required} aŭ pli novan, sed ĉi tiu instanco rulas {installed}. Vi ankoraŭ povas uzi la eniron HA-MCP File & YAML Tools de ĉi tiu kompenento kun ekstera ha-mcp servilo rulanta kiel apo (aldonaĵo) aŭ Docker-ujo."
     }
   },
   "options": {
@@ -64,8 +64,8 @@
         "data_description": {
           "channel": "Stabila instalas la plej novan stabilan eldonon; Disvolva instalas la plej novan disvolvan konstruaĵon. Kiam aŭtomataj ĝisdatigoj estas ŝaltitaj, reŝargo aŭ rekomenco, plus perioda kontrolo, instalas la plej novan konstruaĵon de la elektita kanalo. Programista pakaĵa superrego sube havas prioritaton kaj malŝaltas aŭtomatajn ĝisdatigojn.",
           "auto_update": "Kiam ŝaltita, la plej nova eldono de la elektita kanalo estas instalita aŭtomate — dum reŝargo aŭ rekomenco, kaj per perioda kontrolo. Kiam malŝaltita, la servilo restas ĉe la nuntempe instalita versio ĝis vi reŝaltas ĉi tion. Ĉi tio regas nur la ha-mcp servilan pakaĵon; ĝisdatigoj al la HA-MCP Propra Komponanto mem ankoraŭ venas per HACS.",
-          "server_port": "La pordo, ĉe kiu ĉi tiu servilo aŭskultas. La kromprogramo ha-mcp uzas 9583, do ĉi tie la defaŭlta valoro estas 9584, por ke ambaŭ povu funkcii samtempe — se vi ne uzas la kromprogramon, iu ajn libera pordo taŭgas.",
-          "bind_host": "Kiu povas konektiĝi rekte al la MCP servila pordo. La defaŭlta valoro kongruas kun la kromprogramo: atingebla en via loka reto, kun la sekreta vojo kiel la akreditaĵo. Elektu 'loopback' por permesi nur konektojn de la Home Assistant maŝino mem — la retkroĉa URL kaj la flankbreta panelo funkcias ambaŭkaze.",
+          "server_port": "La pordo, kiun ĉi tiu servilo aŭskultas. La ha-mcp apo (aldonaĵo) uzas 9583, do ĉi tio defaŭltas al 9584 por lasi ambaŭ ruli flank-al-flanke — se vi ne rulas la apon (aldonaĵon), iu ajn libera pordo funkcias.",
+          "bind_host": "Kiu povas konekti al la MCP-servila pordo rekte. La defaŭlto kongruas kun la apo (aldonaĵo): atingebla en via loka retumo, kun la sekreta vojo kiel la akreditaĵo. Elektu enbuklon (loopback) por permesi nur konektojn de la Home Assistant-maŝino mem — la rethoka URL kaj la flanka panelo funkcias ambaŭkaze.",
           "webhook_auth": "Kiel MCP-klientoj pruvas sin ĉe la retkroĉa URL. Kun la sekreta URL, la ligilo mem estas la sola akreditaĵo — OAuth ankoraŭ funkcias por klientoj, kiuj uzas ĝin, sed ĉiu ensaluto estas aŭtomate aprobita: neniu ensaluto kaj neniu Klienta ID aŭ Sekreto necesas. Kun Home Assistant-ensaluto, klientoj kiel claude.ai ensalutas per Home Assistant-administranta konto (OAuth). Kun hereda OAuth, ĉi tiu integriĝo funkciigas sian propran ensalutan servon kaj eldonas Klientan ID-on kaj Sekreton por alglui en klientojn, kiuj postulas tian — rekomenco de Home Assistant eble necesos por plene ŝalti aŭ malŝalti ĝin.",
           "oauth_client_id_override": "Anstataŭigas la aŭtomate generitan heredan OAuth Klientan ID. Lasu malplena por konservi la nunan. Nur uzata kiam Aŭtentiga reĝimo estas agordita al hereda OAuth.",
           "oauth_client_secret_override": "Anstataŭigas la aŭtomate generitan heredan OAuth Klientan Sekreton. Lasu malplena por konservi la nunan. Nur uzata kiam Aŭtentiga reĝimo estas agordita al hereda OAuth.",

@@ -69,22 +69,22 @@ configuration:
   read_only_mode:
     name: Mode lecture seule
     description: Désactive tous les outils d'écriture et supprime la capacité des
-      outils à effectuer des appels d'écriture ou destructeurs. Les outils mixtes
-      lecture/écriture (sauvegardes, add-ons, préférences énergétiques, pipelines
-      vocaux et mode code lorsqu'il est activé) restent disponibles avec leurs opérations
-      d'écriture bloquées. Même bouton que l'onglet Outils de l'interface Web. Désactivé
-      par défaut. Nécessite un redémarrage pour prendre effet.
+      outils d'effectuer des appels d'écriture ou destructifs. Les outils mixtes lecture/écriture
+      — sauvegardes, applications (add-ons), préférences énergétiques, pipelines vocaux
+      et mode code lorsqu'il est activé — restent disponibles avec leurs opérations
+      d'écriture bloquées. Même interrupteur que l'onglet Outils de l'interface Web.
+      Désactivé par défaut. Nécessite un redémarrage pour prendre effet.
   redact_secrets:
     name: Masquer les secrets
     description: Masque les secrets des réponses des outils avant qu'ils n'atteignent
-      l'assistant IA. Les options d'add-on et les champs d'intégration marqués comme
-      mots de passe sont remplacés par un marqueur défini/vide (afin que la question
-      « cette information d'identification est-elle configurée ? » reste répondable),
-      et les autres réponses des outils sont nettoyées des valeurs secrètes que le
-      serveur a déjà vues (les valeurs de moins de 6 caractères sont ignorées, car
-      le remplacement de petits fragments corromprait la sortie non liée). Les champs
-      non marqués comme mots de passe par leur schéma ne peuvent pas être détectés.
-      Désactivé par défaut.
+      l'assistant IA. Les options de l'application (add-on) et les champs d'intégration
+      marqués comme des mots de passe sont remplacés par un marqueur défini/vide (afin
+      que la question "ce secret est-il configuré ?" puisse toujours recevoir une
+      réponse), et les autres réponses des outils sont nettoyées des valeurs secrètes
+      déjà vues par le serveur (les valeurs de moins de 6 caractères sont ignorées,
+      car le remplacement de minuscules fragments corromprait des sorties sans rapport).
+      Les champs non marqués comme mots de passe par leur schéma ne peuvent pas être
+      détectés. Désactivé par défaut.
   enable_beta_features:
     name: Activer les fonctionnalités bêta (principal)
     description: ⚠ DANGER — ces outils peuvent ENDOMMAGER DÉFINITIVEMENT votre installation
@@ -153,15 +153,15 @@ configuration:
       personnalisé dans un bac à sable sécurisé lorsqu'aucun outil intégré ne peut
       traiter la demande. Le code s'exécute dans un interpréteur isolé sans accès
       au système de fichiers ni accès réseau arbitraire. Le code du bac à sable peut
-      atteindre l'API REST HA (api_get/api_post), envoyer des commandes WebSocket
-      (ws_send), appeler des outils MCP existants (call_tool) ou supprimer un outil
-      enregistré (delete_saved_tool). Les outils enregistrés persistent dans /data/saved_tools.json
-      par défaut afin qu'ils survivent aux redémarrages de l'add-on et soient visibles
-      par tout client pouvant se connecter. Voir docs/beta.md pour les limitations
-      connues. Nécessite un redémarrage pour prendre effet. REQUIERT que le bouton
-      principal « Activer les fonctionnalités bêta » ci-dessus (et dans l'interface
-      Web) soit activé — sinon ce sous-drapeau est ignoré à l'exécution indépendamment
-      de sa valeur ici.
+      appeler l'API REST HA (api_get/api_post), envoyer des commandes WebSocket (ws_send),
+      appeler des outils MCP existants (call_tool) ou supprimer un outil enregistré
+      (delete_saved_tool). Les outils enregistrés persistent dans /data/saved_tools.json
+      par défaut afin de survivre aux redémarrages de l'application (add-on), et sont
+      visibles par tout client capable de se connecter. Voir docs/beta.md pour les
+      limitations connues. Nécessite un redémarrage pour prendre effet. NÉCESSITE
+      que l'interrupteur principal "Activer les fonctionnalités bêta" ci-dessus (et
+      dans l'interface Web) soit activé — sinon ce sous-paramètre est ignoré à l'exécution
+      quelle que soit sa valeur ici.
   enable_lite_docstrings:
     name: Activer les docstrings allégées des outils (bêta)
     description: 'Fonctionnalité bêta. Remplace les docstrings d''une poignée d''outils
@@ -219,20 +219,21 @@ configuration:
   enable_dashboard_screenshot:
     name: Activer le mode capture d'écran du tableau de bord (bêta)
     description: Fonctionnalité bêta — désactivée par défaut. Ajoute l'outil ha_get_dashboard_screenshot
-      plus les options include_screenshot / return_screenshot sur les outils d'obtention/définition
-      du tableau de bord, afin que les assistants IA puissent inspecter une ou plusieurs
-      images Lovelace responsives (p. ex. pour vérifier un tableau de bord qu'ils
-      viennent de créer). Prend en charge les vues nommées stables, les lots mobile/tablette/desktop
-      et la sortie PNG/JPEG/WebP/BMP. Le rendu s'exécute dans un moteur distinct et
-      optionnel — l'add-on « Puppet » de balloob (Chromium sans tête) — que vous installez
-      une fois (ajoutez le dépôt d'add-ons de balloob, puis installez « Puppet »)
-      et lui donnez un jeton d'accès à longue durée de vie ; sur les déploiements
-      Docker/Conteneur, vous exécutez ce moteur comme sidecar et définissez HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
-      Rien de lourd n'est installé à moins que vous n'activiez ceci ET n'installiez
-      le moteur. Nécessite un redémarrage pour prendre effet. REQUIERT que le bouton
-      principal « Activer les fonctionnalités bêta » ci-dessus (et dans l'interface
-      Web) soit activé — sinon ce sous-drapeau est ignoré à l'exécution indépendamment
-      de sa valeur ici.
+      ainsi que les options include_screenshot / return_screenshot sur les outils
+      de get/set de tableau de bord, afin que les assistants IA puissent inspecter
+      une ou plusieurs images Lovelace responsives (par exemple pour vérifier un tableau
+      de bord qu'ils viennent de créer). Prend en charge les vues nommées stables,
+      les lots mobile/tablette/bureau et la sortie PNG/JPEG/WebP/BMP. Le rendu s'exécute
+      dans un moteur séparé optionnel — l'application (add-on) "Puppet" de balloob,
+      Chromium sans tête — que vous installez une seule fois (ajoutez le dépôt de
+      balloob à la boutique d'applications, puis installez "Puppet") et à laquelle
+      vous donnez un jeton d'accès longue durée ; sur les déploiements Docker/Container,
+      vous exécutez ce moteur en tant que sidecar et définissez HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
+      Rien de lourd n'est installé à moins que vous n'activiez à la fois cette option
+      et n'installiez le moteur. Nécessite un redémarrage pour prendre effet. NÉCESSITE
+      que l'interrupteur principal "Activer les fonctionnalités bêta" ci-dessus (et
+      dans l'interface Web) soit activé — sinon ce sous-paramètre est ignoré à l'exécution
+      quelle que soit sa valeur ici.
   enable_auto_backup:
     name: Activer la sauvegarde automatique des modifications
     description: 'Capture un instantané par entité avant chaque appel d''outil MCP
@@ -299,10 +300,10 @@ configuration:
       la recherche d'outils. Noms d'outils séparés par des virgules.
   verify_ssl:
     name: Vérifier le certificat TLS
-    description: Vérifie le certificat TLS du serveur Home Assistant. L'add-on se
-      connecte via le proxy Supervisor, donc cela n'a normalement aucun effet et doit
-      rester activé. Désactivez uniquement si vous avez reconfiguré l'add-on pour
-      communiquer avec HA via un nom d'hôte HTTPS public avec un certificat auto-signé
-      ou une discordance de nom d'hôte. Désactiver affaiblit la sécurité du transport
-      — laissez activé sauf si vous savez que vous en avez besoin. Nécessite un redémarrage
-      pour prendre effet.
+    description: Vérifier le certificat TLS du serveur Home Assistant. L'application
+      (add-on) se connecte via le proxy du Supervisor, cela n'a donc normalement aucun
+      effet et doit rester activé. Désactivez uniquement si vous avez reconfiguré
+      l'application (add-on) pour communiquer avec HA via un nom d'hôte HTTPS public
+      avec un certificat auto-signé ou une non-correspondance de nom d'hôte. La désactivation
+      affaiblit la sécurité du transport — laissez activé sauf si vous savez que vous
+      en avez besoin. Nécessite un redémarrage pour prendre effet.

@@ -56,21 +56,22 @@ configuration:
       omstart för att träda i kraft.'
   read_only_mode:
     name: Skrivskyddat läge
-    description: Stänger av alla skrivverktyg och tar bort verktygens förmåga att
-      göra skriv- eller destruktiva anrop. Blandade läs-/skrivverktyg (säkerhetskopior,
-      tillägg, energipreferenser, röstpipelines och kodläge när aktiverat) förblir
-      tillgängliga med sina skrivoperationer blockerade. Samma växling som fliken
-      Verktyg i webbgränssnittet. Avstängt som standard. Kräver omstart för att träda
-      i kraft.
+    description: Stänger av alla skrivverktyg och tar bort möjligheten för verktyg
+      att göra några skrivningar eller destruktiva anrop. Blandade läs-/skrivverktyg
+      – säkerhetskopior, appar (tillägg), energipreferenser, röstpipeliner och kodläge
+      när det är aktiverat – förblir tillgängliga men med sina skrivåtgärder blockerade.
+      Samma reglage som på fliken Tools i webbgränssnittet. Av som standard. Kräver
+      omstart för att träda i kraft.
   redact_secrets:
     name: Redigera hemligheter
-    description: Redigerar hemligheter från verktygssvar innan de når AI-assistenten.
-      Tilläggsalternativ och integrationsfält markerade som lösenord ersätts med en
-      satt/tom markör (så att ”är denna behörighet konfigurerad?” förblir besvarbar),
-      och andra verktygssvar rensas från hemliga värden som servern redan har sett
-      (värden kortare än 6 tecken hoppas över, eftersom att ersätta små fragment skulle
-      korrumpera orelaterad utdata). Fält som inte är markerade som lösenord av deras
-      schema kan inte upptäckas. Avstängt som standard.
+    description: Döljer hemligheter från verktygssvar innan de når AI-assistenten.
+      Appalternativ (tilläggsalternativ) och integrationsfält markerade som lösenord
+      ersätts med en markering för satt/tomt (så att "är denna autentiseringsuppgift
+      konfigurerad?" fortfarande kan besvaras), och andra verktygssvar rensas från
+      hemliga värden som servern redan har sett (värden kortare än 6 tecken hoppas
+      över, eftersom utbyte av små fragment skulle korruptera orelaterad utdata).
+      Fält som inte är markerade som lösenord av sitt schema kan inte upptäckas. Av
+      som standard.
   enable_beta_features:
     name: Aktivera beta-funktioner (huvud)
     description: ⚠ FARA — dessa verktyg kan PERMANENT SKADA din Home Assistant-installation.
@@ -127,17 +128,17 @@ configuration:
       retur per redigering.'
   enable_code_mode:
     name: Aktivera sandlåda för anpassade verktyg (beta)
-    description: Betafunktion. Aktiverar verktyget ha_manage_custom_tool, vilket låter
+    description: Betafunktion. Aktiverar verktyget ha_manage_custom_tool, som låter
       AI-assistenter skapa, köra, spara och ta bort anpassad Python-kod i en säker
       sandlåda när inget inbyggt verktyg kan hantera begäran. Koden körs i en isolerad
-      tolk utan filsystem eller godtycklig nätverksåtkomst. Sandlådekod kan anropa
-      HA REST API (api_get/api_post), skicka WebSocket-kommandon (ws_send), anropa
-      befintliga MCP-verktyg (call_tool) eller ta bort ett sparat verktyg (delete_saved_tool).
-      Sparade verktyg sparas till /data/saved_tools.json som standard så att de överlever
-      tilläggsomstarter och är synliga för alla klienter som kan ansluta. Se docs/beta.md
-      för kända begränsningar. Kräver omstart för att träda i kraft. KRÄVER att huvudbrytaren
-      "Aktivera betafunktioner" ovan (och i webbgränssnittet) är påslagen — annars
-      ignoreras denna underflagga vid körning oavsett dess värde här.
+      tolkningsmiljö utan åtkomst till filsystem eller godtyckligt nätverk. Sandlådekod
+      kan nå HA REST API (api_get/api_post), skicka WebSocket-kommandon (ws_send),
+      anropa befintliga MCP-verktyg (call_tool) eller ta bort ett sparat verktyg (delete_saved_tool).
+      Sparade verktyg sparas i /data/saved_tools.json som standard så att de överlever
+      omstart av appen (tillägget), och är synliga för alla klienter som kan ansluta.
+      Se docs/beta.md för kända begränsningar. Kräver omstart för att träda i kraft.
+      KRÄVER att huvudreglaget "Enable betafeatures" ovan (och i webbgränssnittet)
+      är på – annars ignoreras denna underflagga vid körning oavsett dess värde här.
   enable_lite_docstrings:
     name: Aktivera lätta verktygsdocstrings (beta)
     description: 'Betafunktion. Ersätter docstrings på ett fåtal tunga ha-mcp-verktyg
@@ -188,19 +189,19 @@ configuration:
       ignoreras denna underflagga vid körning oavsett dess värde här.'
   enable_dashboard_screenshot:
     name: Aktivera skärmbildsläge för instrumentpanel (beta)
-    description: Betafunktion — inaktiverad som standard. Lägger till verktyget ha_get_dashboard_screenshot
-      plus alternativen include_screenshot / return_screenshot för dashboardens get/set-verktyg,
-      så att AI-assistenter kan inspektera en eller flera responsiva Lovelace-bilder
-      (t.ex. för att verifiera en dashboard de just skapat). Stöder stabila namngivna
-      vyer, mobil-/surfplatta-/skrivbordsbatcher och PNG/JPEG/WebP/BMP-utdata. Rendering
-      körs i en separat, valfri motor — balloobs tillägg "Puppet" (huvudlöst Chromium)
-      — som du installerar en gång (lägg till balloobs tilläggsrepository, installera
-      sedan "Puppet") och ger en långlivad åtkomsttoken; vid Docker/Container-distributioner
-      kör du den motorn som en sidovagn och ställer in HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
-      Inget tungt installeras om du inte både aktiverar detta och installerar motorn.
-      Kräver omstart för att träda i kraft. KRÄVER att huvudomkopplaren "Aktivera
-      beta-funktioner" ovan (och i webbgränssnittet) är på — annars ignoreras denna
-      underflagga vid körning oavsett dess värde här.
+    description: Betafunktion – av som standard. Lägger till verktyget ha_get_dashboard_screenshot
+      samt alternativen include_screenshot / return_screenshot på instrumentpanelens
+      hämta-/sättverktyg, så att AI-assistenter kan granska en eller flera responsiva
+      Lovelace-bilder (t.ex. för att verifiera en instrumentpanel de nyss skapade).
+      Stöder stabila namngivna vyer, mobil-/surfplatta-/skrivbordsbatchar samt PNG/JPEG/WebP/BMP-utdata.
+      Renderingen körs i en separat, frivillig motor – balloobs "Puppet"-app (tillägg),
+      headless Chromium – som du installerar en gång (lägg till balloobs förråd i
+      App Store och installera sedan "Puppet") och ger en långlivad åtkomsttoken;
+      på Docker-/Container-distributioner kör du den motorn som en sidovagn (sidecar)
+      och ställer in HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Inget tungt installeras
+      om du inte både aktiverar detta och installerar motorn. Kräver omstart för att
+      träda i kraft. KRÄVER att huvudreglaget "Enable betafeatures" ovan (och i webbgränssnittet)
+      är på – annars ignoreras denna underflagga vid körning oavsett dess värde här.
   enable_auto_backup:
     name: Aktivera automatisk säkerhetskopiering av redigeringar
     description: 'Fångar en ögonblicksbild per entitet före varje omslutet skriv-/destruktivt
@@ -264,9 +265,10 @@ configuration:
       verktygsnamn.
   verify_ssl:
     name: Verifiera TLS-certifikat
-    description: Verifiera Home Assistant-serverns TLS-certifikat. Tillägget ansluter
-      via Supervisor-proxyn, så detta har normalt ingen effekt och bör förbli aktiverat.
-      Inaktivera endast om du har omkonfigurerat tillägget för att kommunicera med
-      HA över ett offentligt HTTPS-värdnamn med ett självsignerat certifikat eller
-      värdnamnsfel. Att inaktivera försvagar transportsäkerheten – låt det vara aktiverat
-      om du inte vet att du behöver det. Kräver omstart för att träda i kraft.
+    description: Verifiera Home Assistant-serverns TLS-certifikat. Appen (tillägget)
+      ansluter via Supervisor-proxyn, så detta har normalt ingen effekt och bör förbli
+      aktiverat. Inaktivera endast om du har konfigurerat om appen (tillägget) för
+      att kommunicera med HA över ett offentligt HTTPS-värdnamn med ett självsignerat
+      certifikat eller matchningsfel för värdnamn. Inaktivering försvagar transportsäkerheten
+      – lämna på om du inte vet att du behöver det. Kräver omstart för att träda i
+      kraft.

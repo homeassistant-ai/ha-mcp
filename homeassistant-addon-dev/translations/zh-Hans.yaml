@@ -31,12 +31,12 @@ configuration:
       Web UI 的“工具”标签页中，为“Manage Security Policy”打开“security gated”选项。需要重启才能生效。
   read_only_mode:
     name: 只读模式
-    description: 关闭所有写入工具，并移除工具进行任何写入或破坏性调用的能力。读写混合工具（备份、插件、能源偏好、语音流水线和启用时的代码模式）仍可用，其写入操作被阻止。与
-      Web UI 工具选项卡中的开关相同。默认关闭。需要重启才能生效。
+    description: 关闭所有写入工具，并移除工具执行任何写入或破坏性调用的能力。混合读写工具（备份、应用（附加组件）、能源偏好设置、语音管道，以及启用时的代码模式）在保持可用的同时，其写入操作会被阻止。与网页端
+      UI 的“工具”标签页使用相同的开关。默认关闭。需要重启才能生效。
   redact_secrets:
     name: 遮盖密文
-    description: 在工具响应到达 AI 助手之前，从中遮盖密文。附加组件选项和标记为密码的集成字段将替换为已设置/空标记（因此“此凭据是否已配置？”仍可回答），其他工具响应中会清除服务器已见过的密文值（长度小于
-      6 个字符的值将被跳过，因为替换微小片段会破坏不相关的输出）。未被其架构标记为密码的字段无法被检测到。默认关闭。
+    description: 在工具响应到达 AI 助手之前，对其机密信息进行红线遮掩（脱敏）。应用（附加组件）选项和标记为密码的集成字段将被替换为已设置/空标记（以便“此凭据是否已配置？”保持可回答状态），并且其他工具响应将被清除服务器已见过的机密值（长度小于
+      6 个字符的值将被跳过，因为替换微小的片段会破坏不相关的输出）。其架构未标记为密码的字段无法被检测到。默认关闭。
   enable_beta_features:
     name: 启用测试版功能（主开关）
     description: ⚠ 危险 — 这些工具可能会永久损坏您的 Home Assistant 安装。它们会写入您的 YAML 配置、文件系统，安装自定义组件，运行任意沙盒
@@ -66,11 +66,11 @@ configuration:
       #1720）。仅在每次编辑要省一次往返时关闭。'
   enable_code_mode:
     name: 启用自定义工具沙箱（测试版）
-    description: 测试版功能。启用 ha_manage_custom_tool 工具，当没有内置工具可处理请求时，让 AI 助手在安全沙箱中创建、运行、保存和删除自定义
-      Python 代码。代码在隔离的解释器中运行，无文件系统或任意网络访问。沙箱代码可调用 HA REST API（api_get/api_post）、发送
-      WebSocket 命令（ws_send）、调用现有 MCP 工具（call_tool），或删除已保存工具（delete_saved_tool）。已保存工具默认持久化到
-      /data/saved_tools.json，以便在插件重启后保留，且对任何能连接的客户端可见。已知限制见 docs/beta.md。需要重启才能生效。需要上方（及
-      Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。
+    description: Beta 功能。启用 ha_manage_custom_tool 工具，当没有内置工具可以处理请求时，该工具允许 AI 助手在安全沙箱中创建、运行、保存和删除自定义
+      Python 代码。代码在隔离的解释器中运行，无法访问文件系统或任意网络。沙箱代码可以调用 HA REST API (api_get/api_post)、发送
+      WebSocket 命令 (ws_send)、调用现有的 MCP 工具 (call_tool) 或删除已保存的工具 (delete_saved_tool)。保存的工具默认持久化到
+      /data/saved_tools.json，以便在应用（附加组件）重启后依然保留，并且可对任何能连接的客户端可见。已知限制请参见 docs/beta.md。需要重启才能生效。要求上方（以及
+      Web UI 中）的主“启用 Beta 功能”开关处于开启状态 — 否则此子标志在运行时将被忽略，无论此处的值为何。
   enable_lite_docstrings:
     name: 启用精简工具文档字符串（测试版）
     description: 测试版功能。将少数重型 ha-mcp 工具（自动化、脚本、场景、辅助元素、仪表盘、ha_call_service、ha_config_set_yaml）上的文档字符串替换为更短的变体，将
@@ -95,12 +95,12 @@ configuration:
       Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。
   enable_dashboard_screenshot:
     name: 启用仪表盘截图模式（测试版）
-    description: 测试版功能——默认关闭。新增 ha_get_dashboard_screenshot 工具，以及仪表盘 get/set 工具上的
-      include_screenshot / return_screenshot 选项，让 AI 助手可检查一个或多个响应式 Lovelace 图像（例如验证其刚创建的仪表盘）。支持稳定的命名视图、移动/平板/桌面批次，以及
-      PNG/JPEG/WebP/BMP 输出。渲染在独立的、可选引擎中运行——balloob 的“Puppet”插件（无头 Chromium）——您安装一次（添加
-      balloob 的插件仓库，然后安装“Puppet”）并为其提供长期访问令牌；在 Docker/容器部署中，您将该引擎作为 sidecar 运行并设置
-      HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL。除非您同时启用此功能并安装引擎，否则不会安装任何重型组件。需要重启才能生效。需要上方（及
-      Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。
+    description: Beta 功能 — 默认禁用。添加了 ha_get_dashboard_screenshot 工具以及仪表盘获取/设置工具上的 include_screenshot
+      / return_screenshot 选项，使 AI 助手能够检查一个或多个响应式 Lovelace 图像（例如验证刚刚创建的仪表盘）。支持稳定的命名视图、手机/平板/电脑批处理以及
+      PNG/JPEG/WebP/BMP 输出。渲染在单独的可选引擎中运行（balloob 的“Puppet”App（加载项）、无头 Chromium）——您只需安装一次（将
+      balloob 的仓库添加到 App 商店，然后安装“Puppet”）并提供一个长期访问令牌；在 Docker/Container 部署中，您可以将该引擎作为边车（sidecar）运行并设置
+      HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL。除非您同时启用此功能并安装引擎，否则不会安装任何笨重的组件。需要重启才能生效。要求上方（以及网页
+      UI 中的）主“启用 beta 功能”开关必须开启 —— 否则此子标志在运行时将被忽略，无论此处的值如何。
   enable_auto_backup:
     name: 启用编辑自动备份
     description: 在每次封装的写入/破坏性 MCP 工具调用（自动化、脚本、场景、辅助、仪表盘、仪表盘资源、标签、类别、组、区域、日历、待办事项、实体、设备、集成以及相关的移除/删除工具）之前，捕获每个实体的快照。自动备份节流限制了发生频率：0（默认）表示每次此类调用都捕获，N>0
@@ -133,5 +133,5 @@ configuration:
     description: 此处列出的工具会被锁定为固定——它们显示在“工具”选项卡顶部，且在取消此选项之前无法从网页设置界面取消固定。与工具搜索搭配使用时很有用。以逗号分隔的工具名称。
   verify_ssl:
     name: 验证 TLS 证书
-    description: 验证 Home Assistant 服务器的 TLS 证书。插件通过 Supervisor 代理连接，因此这通常没有影响，应保持启用。仅当您已将插件重新配置为通过公网
-      HTTPS 主机名与 HA 通信，且证书为自签名或主机名不匹配时才关闭。关闭会削弱传输安全性——除非确有需要，否则请保持开启。需重启才能生效。
+    description: 验证 Home Assistant 服务器的 TLS 证书。应用（add-on）通过 Supervisor 代理连接，因此此设置通常无效，应保持启用状态。仅当您重新配置了应用（add-on），使其通过具有自签名证书或主机名不匹配的公共
+      HTTPS 主机名与 HA 通信时，才可以禁用。禁用会削弱传输安全性 — 除非您确有需要，否则请保持开启。需要重启才能生效。

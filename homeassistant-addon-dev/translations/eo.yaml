@@ -62,20 +62,20 @@ configuration:
       Postulas restartigon por efektiviĝi.'
   read_only_mode:
     name: Nur-lega Reĝimo
-    description: Malŝaltas ĉiujn skribajn ilojn, kaj forigas la kapablon de iloj fari
-      iujn ajn skribajn aŭ detruajn vokojn. Miksitaj legaj/skribaj iloj (rezervoj,
-      aldonaĵoj, energiaj preferoj, voĉaj duktoj, kaj koda reĝimo kiam ebligita) restas
-      disponeblaj kun iliaj skribaj operacioj blokitaj. Sama ŝaltilo kiel la langeto
-      Iloj de la TTT-UI. Malŝaltita defaŭlte. Postulas restartigon por ekvalidi.
+    description: Malŝaltas ĉiujn skribilojn, kaj forigas la kapablon por iloj fari
+      skribajn aŭ detruajn vokojn. Miksitaj leg-skribaj iloj — savkopioj, Apoj (aldonaĵoj),
+      energiaj preferoj, voĉaj duktoj, kaj koda reĝimo kiam ebligite — restas haveblaj
+      kun siaj skribaj operacioj blokitaj. Sama ŝaltilo kiel la TTT-interfaca langeto
+      Iloj. Malŝaltita defaŭlte. Postulas restartigon por ekvalidi.
   redact_secrets:
     name: Redakti Sekretojn
-    description: Redaktas sekretojn el ilo-respondoj antaŭ ol ili atingas la AI-asistanton.
-      Aldonaĵaj opcioj kaj integriĝaj kampoj markitaj kiel pasvortoj estas anstataŭigitaj
-      per agordita/malplena markilo (tiel „ĉu ĉi tiu akreditaĵo estas agordita?” restas
-      respondinda), kaj aliaj ilo-respondoj estas purigitaj de sekretaj valoroj, kiujn
-      la servilo jam vidis (valoroj pli mallongaj ol 6 signoj estas preterlasitaj,
-      ĉar anstataŭigi etajn fragmentojn koruptus nerilatan eliron). Kampoj ne markitaj
-      kiel pasvortoj per ilia skemo ne povas esti detektitaj. Malŝaltita defaŭlte.
+    description: Redaktas sekretojn el ilaj respondon antaŭ ol ili atingas la AI-asistanton.
+      Apaj (aldonaĵaj) opcioj kaj integriĝaj kampoj markitaj kiel pasvortoj estas
+      anstataŭigitaj per aro/malplena markilo (do "ĉu ĉi tiu akreditaĵo estas agordita?"
+      restas respondoebla), kaj aliaj ilaj respondoj estas purigitaj de sekretaj valoroj
+      kiujn la servilo jam vidis (valoroj pli mallongaj ol 6 signoj estas preterlasitaj,
+      ĉar anstataŭigi etajn fragmentojn koruptus senrilatan eligon). Kampoj ne markitaj
+      kiel pasvortoj per sia skemo ne povas esti detektitaj. Malŝaltita defaŭlte.
   enable_beta_features:
     name: Ebligi beta-funkciojn (majstra)
     description: ⚠ DANĜERO — ĉi tiuj iloj povas PERMANENTE DAMAĜI vian Home Assistant-instalaĵon.
@@ -133,17 +133,17 @@ configuration:
   enable_code_mode:
     name: Ebligi kutiman ilon sandbokson (beta)
     description: Beta-funkcio. Ebligas la ilon ha_manage_custom_tool, kiu permesas
-      al AI-asistantoj krei, ruli, konservi, kaj forigi kutiman Python-kodon en sekura
-      sandbokso kiam neniu enkonstruita ilo povas trakti la peton. Kodo rulas en izolita
-      interpretilo sen dosiersistemo aŭ arbitra reta aliro. Sandboksa kodo povas atingi
-      la HA REST API (api_get/api_post), sendi WebSocket-komandojn (ws_send), voki
-      ekzistantajn MCP-ilojn (call_tool), aŭ forigi konservitan ilon (delete_saved_tool).
-      Konservitaj iloj persistas al /data/saved_tools.json defaŭlte, do ili postvivas
-      aldonaĵajn restartigojn, kaj estas videblaj al iu ajn kliento, kiu povas konekti.
-      Vidu docs/beta.md por konataj limigoj. Postulas restartigon por ekvalidi. POSTULAS
-      ke la ĉefa ŝaltilo "Enable beta features" supre (kaj en la reta UI) estu ŝaltita
-      — alie ĉi tiu sub-flago estas ignorita dum rultempo sendepende de ĝia valoro
-      ĉi tie.
+      al AI-asistantoj krei, ruli, konservi kaj forigi personigitajn Python-kodojn
+      en sekura sablokesto kiam neniu enkonstruita ilo povas trakti la peton. Kodo
+      ruliĝas en izolita interpretilo sen dosiersistemo aŭ propra reta aliro. Sablokesta
+      kodo povas trafi la HA REST API (api_get/api_post), sendi WebSocket-komandojn
+      (ws_send), voki ekzistantajn MCP-ilojn (call_tool), aŭ forigi konservitan ilon
+      (delete_saved_tool). Konservitaj iloj persistas al /data/saved_tools.json defaŭlte
+      por ke ili postvivu restartigojn de la apo (aldonaĵo), kaj estas videblaj al
+      ajna kliento kiu povas konektiĝi. Vidu docs/beta.md por konataj limigoj. Postulas
+      restartigon por ekvalidi. POSTULAS ke la ĉefa ŝaltilo "Enable beta features"
+      supre (kaj en la TTT-interfaco) estu ŝaltita — alie ĉi tiu subflago estas ignorata
+      dum rultempo sendepende de sia valoro ĉi tie.
   enable_lite_docstrings:
     name: Ebligi malpezajn ilajn dokumentŝnurojn (beta)
     description: 'Beta-funkcio. Anstataŭigas la dokumentŝnurojn de kelkaj pezaj ha-mcp-iloj
@@ -194,18 +194,19 @@ configuration:
   enable_dashboard_screenshot:
     name: Ebligi panelan ekrankaptan reĝimon (beta)
     description: Beta-funkcio — malŝaltita defaŭlte. Aldonas la ilon ha_get_dashboard_screenshot
-      plus la opciojn include_screenshot / return_screenshot al la iloj de panelo
-      get/set, tiel ke AI-asistantoj povas inspekti unu aŭ plurajn respondemajn Lovelace-bildojn
-      (ekz. por kontroli panelon, kiun ili ĵus kreis). Subtenas stabilajn nomitajn
-      vidojn, moveblajn/tabulkomputilajn/labortablajn arojn, kaj PNG/JPEG/WebP/BMP-eligon.
-      Bildigo funkcias en aparta, laŭvola motoro — la aldonaĵo "Puppet" de balloob
-      (senkapa Chromium) — kiun vi instalas unufoje (aldonu la deponejon de aldonaĵoj
-      de balloob, poste instalu "Puppet") kaj donas longdaŭran alirĵetonon; ĉe Docker/Container-deplojoj
-      vi rulas tiun motoron kiel flankveturilon kaj agordas HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
-      Nenio peza estas instalita krom se vi kaj ebligas ĉi tion kaj instalas la motoron.
-      Postulas restartigon por ekvalidi. POSTULAS, ke la ĉefa ŝaltilo "Ebligi beta-funkciojn"
-      supre (kaj en la reta UI) estu ŝaltita — alie ĉi tiu sub-flago estas ignorita
-      dum rultempo sendepende de ĝia valoro ĉi tie.
+      plus opciojn include_screenshot / return_screenshot ĉe la panelaj get/set-iloj,
+      por ke AI-asistantoj povu inspekti unu aŭ pli respondemajn Lovelace-bildojn
+      (ekz. por kontroli panelon kiun ili ĝuste kreis). Subtenas stabilajn nomitajn
+      vidojn, poŝtelefonajn/tabulkomputilajn/tabulajn arojn, kaj PNG/JPEG/WebP/BMP-eligon.
+      Teksturigo ruliĝas en aparta, libervola motoro — la "Puppet" App (aldonaĵo)
+      de balloob, senkapa Chromium — kiun vi instalas unufoje (aldonu la deponejon
+      de balloob al la Aldona Butiko, poste instalu "Puppet") kaj donas longdaŭran
+      alirtokonon; ĉe Docker/Container-deplojoj vi ruli tiun motoron kiel flankan
+      ujon kaj agordas HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Neniopeza estas instalita
+      krom se vi kaj ebligas ĉi tion kaj instalas la motoron. Postulas restartigon
+      por ekvalidi. POSTULAS ke la ĉefa ŝaltilo "Enable beta features" supre (kaj
+      en la TTT-interfaco) estu ŝaltita — alie ĉi tiu subflago estas ignorata dum
+      rultempo sendepende de sia valoro ĉi tie.
   enable_auto_backup:
     name: Ebligi aŭtomatan sekurkopion de redaktoj
     description: 'Kaptas momentfoton por ĉiu ento antaŭ ĉiu ĉirkaŭvolvita skriba/detrua
@@ -268,9 +269,10 @@ configuration:
       disigitaj per komoj.
   verify_ssl:
     name: Kontroli TLS-atestilon
-    description: Kontroli la TLS-atestilon de la Home Assistant servilo. La aldonaĵo
-      konektas per la Supervisor prokurilo, do ĉi tio normale ne havas efikon kaj
-      devus resti ebligita. Malaktivigu nur se vi rekonfiguraciis la aldonaĵon por
-      komuniki kun HA per publika HTTPS-gastignomo kun memsubskribita atestilo aŭ
-      gastignoma malkongruo. Malaktivigo malfortigas transportan sekurecon — lasu
-      ŝaltita krom se vi scias, ke vi bezonas ĝin. Postulas restartigon por efektiviĝi.
+    description: Kontrolu la TLS-atestilon de la servilo Home Assistant. La programo
+      (aldonaĵo) konektiĝas per la provkuratora prokurservilo (Supervisor proxy),
+      do ĉi tio kutime havas neniun efikon kaj devas resti ebligita. Malŝaltu nur
+      se vi reagordis la programon (aldonaĵo) por komuniki kun HA per publika HTTPS-gastnomo
+      kun memsubskribita atestilo aŭ malkongruo de gastnomo. Malŝalto malfortigas
+      transportan sekurecon — lasu ebligita krom se vi scias, ke vi bezonas tion.
+      Postulas restartigon por ekvalidi.

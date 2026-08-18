@@ -67,23 +67,22 @@ configuration:
       Erfordert einen Neustart, um wirksam zu werden.'
   read_only_mode:
     name: Nur-Lese-Modus
-    description: Schaltet alle Schreibtools aus und nimmt Tools die Möglichkeit, Schreib-
-      oder destruktive Aufrufe zu tätigen. Gemischte Lese-/Schreib-Tools (Backups,
-      Add-ons, Energiepräferenzen, Voice-Pipelines und Code-Modus, wenn aktiviert)
-      bleiben verfügbar, wobei ihre Schreiboperationen blockiert sind. Derselbe Schalter
-      wie im Web-UI-Tab Tools. Standardmäßig ausgeschaltet. Erfordert Neustart, um
-      wirksam zu werden.
+    description: Schaltet alle Schreib-Tools aus und entzieht Tools die Fähigkeit,
+      Schreib- oder destruktive Aufrufe auszuführen. Gemischte Lese-/Schreib-Tools
+      — Backups, Apps (Add-ons), Energieeinstellungen, Sprach-Pipelines und der Code-Modus,
+      wenn aktiviert — bleiben verfügbar, wobei ihre Schreiboperationen blockiert
+      sind. Gleicher Umschalter wie auf dem Web-UI-Tab Tools. Standardmäßig aus. Erfordert
+      einen Neustart, um wirksam zu werden.
   redact_secrets:
     name: Geheimnisse schwärzen
-    description: Schwärzt Geheimnisse aus Tool-Antworten, bevor sie den KI-Assistenten
-      erreichen. Add-on-Optionen und Integrationsfelder, die als Passwörter markiert
-      sind, werden durch einen gesetzt/leer-Marker ersetzt (damit „ist dieses Anmeldeinformationen
-      konfiguriert?“ weiterhin beantwortbar bleibt), und andere Tool-Antworten werden
-      von geheimen Werten bereinigt, die der Server bereits gesehen hat (Werte, die
-      kürzer als 6 Zeichen sind, werden übersprungen, da das Ersetzen kleiner Fragmente
-      zu einer Beschädigung der nicht zusammenhängenden Ausgabe führen würde). Felder,
-      die nicht durch ihr Schema als Passwörter markiert sind, können nicht erkannt
-      werden. Standardmäßig deaktiviert.
+    description: Entfernt Geheimnisse aus Tool-Antworten, bevor sie den KI-Assistenten
+      erreichen. App-Optionen (Add-on) und als Passwörter markierte Integrationsfelder
+      werden durch eine Markierung für gesetzt/leer ersetzt (sodass "ist diese Zugangsbezeichnung
+      konfiguriert?" beantwortet bleiben kann), und andere Tool-Antworten werden von
+      Geheimniswerten bereinigt, die der Server bereits gesehen hat (Werte, die kürzer
+      als 6 Zeichen sind, werden übersprungen, da das Ersetzen winziger Fragmente
+      zusammenhängende Ausgaben beschädigen würde). Felder, die von ihrem Schema nicht
+      als Passwörter markiert wurden, können nicht erkannt werden. Standardmäßig aus.
   enable_beta_features:
     name: Beta-Funktionen aktivieren (Master)
     description: ⚠ GEFAHR — diese Tools können deine Home Assistant-Installation DAUERHAFT
@@ -146,19 +145,20 @@ configuration:
       (Issue #1720). Schalte nur aus, um einen Roundtrip pro Bearbeitung zu sparen.'
   enable_code_mode:
     name: Benutzerdefinierte Tool-Sandbox aktivieren (Beta)
-    description: Beta-Funktion. Aktiviert das ha_manage_custom_tool-Tool, das KI-Assistenten
-      ermöglicht, benutzerdefinierten Python-Code in einer sicheren Sandbox zu erstellen,
-      auszuführen, zu speichern und zu löschen, wenn kein integriertes Tool die Anfrage
-      bearbeiten kann. Code wird in einem isolierten Interpreter ohne Dateisystem-
-      oder beliebigen Netzwerkzugriff ausgeführt. Sandbox-Code kann die HA REST API
-      treffen (api_get/api_post), WebSocket-Befehle senden (ws_send), vorhandene MCP-Tools
-      aufrufen (call_tool) oder ein gespeichertes Tool entfernen (delete_saved_tool).
-      Gespeicherte Tools werden standardmäßig in /data/saved_tools.json gespeichert,
-      sodass sie Add-on-Neustarts überstehen und für jeden Client sichtbar sind, der
-      sich verbinden kann. Siehe docs/beta.md für bekannte Einschränkungen. Erfordert
-      Neustart, um wirksam zu werden. ERFORDERT, dass der Master-Schalter Beta-Funktionen
-      aktivieren oben (und in der Web-UI) eingeschaltet ist – andernfalls wird dieses
-      Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert hier.
+    description: Beta-Funktion. Aktiviert das ha_manage_custom_tool-Tool, mit dem
+      KI-Assistenten benutzerdefinierten Python-Code in einer sicheren Sandbox erstellen,
+      ausführen, speichern und löschen können, wenn kein integriertes Tool die Anfrage
+      verarbeiten kann. Code läuft in einem isolierten Interpreter ohne Dateisystem
+      oder beliebigen Netzwerkzugriff. Sandbox-Code kann die HA REST API aufrufen
+      (api_get/api_post), WebSocket-Befehle senden (ws_send), bestehende MCP-Tools
+      aufrufen (call_tool) oder ein gespeichertes Tool löschen (delete_saved_tool).
+      Gespeicherte Tools bleiben standardmäßig in /data/saved_tools.json erhalten,
+      sodass sie Neustarts der App (Add-on) überstehen, und sind für jeden Client
+      sichtbar, der eine Verbindung herstellen kann. Bekannte Einschränkungen findest
+      du in docs/beta.md. Erfordert einen Neustart, um wirksam zu werden. ERFORDERT,
+      dass der Hauptschalter "Beta-Funktionen aktivieren" oben (und im Web-UI) eingeschaltet
+      ist — andernfalls wird dieses Unterflag zur Laufzeit unabhängig von seinem Wert
+      hier ignoriert.
   enable_lite_docstrings:
     name: Lite-Tool-Docstrings aktivieren (Beta)
     description: 'Beta-Funktion. Ersetzt die Docstrings auf einer Handvoll schwerer
@@ -211,20 +211,21 @@ configuration:
       unabhängig von seinem Wert hier.'
   enable_dashboard_screenshot:
     name: Dashboard-Screenshot-Modus aktivieren (Beta)
-    description: Beta-Funktion – standardmäßig deaktiviert. Fügt das ha_get_dashboard_screenshot-Tool
-      plus include_screenshot / return_screenshot-Optionen auf den Dashboard-Get-/Set-Tools
-      hinzu, sodass KI-Assistenten ein oder mehrere responsive Lovelace-Bilder inspizieren
-      können (z. B. um ein Dashboard zu verifizieren, das sie gerade erstellt haben).
-      Unterstützt stabile benannte Ansichten, Mobile-/Tablet-/Desktop-Batches und
-      PNG-/JPEG-/WebP-/BMP-Ausgabe. Das Rendering läuft in einer separaten Opt-in-Engine
-      – balloobs Puppet-Add-on (headless Chromium) – die du einmal installierst (füge
-      balloobs Add-on-Repository hinzu, dann installiere Puppet) und gibst ihm ein
-      langlebiges Zugriffstoken; bei Docker-/Container-Deployments führst du diese
-      Engine als Sidecar aus und setzt HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nichts
-      Schweres wird installiert, es sei denn, du aktivierst dies sowohl als auch installierst
-      die Engine. Erfordert Neustart, um wirksam zu werden. ERFORDERT, dass der Master-Schalter
-      Beta-Funktionen aktivieren oben (und in der Web-UI) eingeschaltet ist – andernfalls
-      wird dieses Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert hier.
+    description: Beta-Funktion — standardmäßig deaktiviert. Fügt das Tool ha_get_dashboard_screenshot
+      sowie die Optionen include_screenshot / return_screenshot zu den Dashboard-Get/Set-Tools
+      hinzu, sodass KI-Assistenten ein oder mehrere responsive Lovelace-Bilder überprüfen
+      können (z. B. um ein gerade erst erstelltes Dashboard zu überprüfen). Unterstützt
+      stabile benannte Ansichten, Mobil-/Tablet-/Desktop-Batches sowie PNG/JPEG/WebP/BMP-Ausgaben.
+      Das Rendern erfolgt in einer separaten, optionalen Engine — balloobs "Puppet"
+      App (Add-on), headless Chromium —, die du einmalig installierst (füge balloobs
+      Repository dem App-Store hinzu, installiere dann "Puppet") und mit einem langlebigen
+      Zugriffstoken versiehst; bei Docker/Container-Bereitstellungen führst du diese
+      Engine als Sidecar aus und setzt HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Es wird
+      nichts Schweres installiert, es sei denn, du aktivierst dies und installierst
+      die Engine. Erfordert einen Neustart, um wirksam zu werden. ERFORDERT, dass
+      der Hauptschalter "Beta-Funktionen aktivieren" oben (und im Web-UI) eingeschaltet
+      ist — andernfalls wird dieses Unterflag zur Laufzeit unabhängig von seinem Wert
+      hier ignoriert.
   enable_auto_backup:
     name: Auto-Backup von Bearbeitungen aktivieren
     description: 'Erstellt einen Snapshot pro Entität vor jedem umschlossenen Schreib-/destruktiven
@@ -289,10 +290,11 @@ configuration:
       Tool-Namen.
   verify_ssl:
     name: TLS-Zertifikat verifizieren
-    description: Verifiziert das TLS-Zertifikat des Home Assistant Servers. Das Add-on
-      verbindet sich via Supervisor-Proxy, daher hat dies normalerweise keinen Effekt
-      und sollte aktiviert bleiben. Deaktiviere nur, wenn du das Add-on umkonfiguriert
-      hast, um mit HA über einen öffentlichen HTTPS-Hostnamen mit selbstsigniertem
-      Zertifikat oder Hostname-Mismatch zu sprechen. Deaktivieren schwächt die Transport-Sicherheit
-      – lass an, außer du weißt, dass du es brauchst. Erfordert Neustart, um wirksam
-      zu werden.
+    description: Überprüfe das TLS-Zertifikat des Home Assistant-Servers. Die App
+      (das Add-on) verbindet sich über den Supervisor-Proxy, daher hat dies normalerweise
+      keine Auswirkungen und sollte aktiviert bleiben. Deaktiviere es nur, wenn du
+      die App (das Add-on) so rekonfiguriert hast, dass sie über einen öffentlichen
+      HTTPS-Hostnamen mit einem selbstsignierten Zertifikat oder einem Hostnamen-Mismatch
+      mit HA kommuniziert. Das Deaktivieren schwächt die Transportsicherheit — lasse
+      es eingeschaltet, es sei denn, du weißt, dass du es brauchst. Erfordert einen
+      Neustart, um wirksam zu werden.
