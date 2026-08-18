@@ -1244,6 +1244,49 @@ class TestSharedTranslationReuse:
         assert "messages:shared" in prompts[0]
         written = json.loads((locales / "de.json").read_text(encoding="utf-8"))
         assert written["messages"]["shared"] == "unbekannt"
+        component_written = json.loads(
+            (component / "de.json").read_text(encoding="utf-8")
+        )
+        assert component_written["common"]["version_unknown"] == "unbekannt"
+
+    def test_english_settings_sibling_is_translated_instead_of_reused(
+        self,
+        catalogs: tuple[Path, Path, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        locales, component, module = catalogs
+        settings = json.loads((locales / "de.json").read_text(encoding="utf-8"))
+        settings["messages"]["shared"] = "Unknown"
+        (locales / "de.json").write_text(json.dumps(settings), encoding="utf-8")
+        (component / "de.json").write_text(json.dumps({"common": {}}), encoding="utf-8")
+        prompts: list[str] = []
+
+        def fake_engine(prompt: str) -> dict[str, str]:
+            prompts.append(prompt)
+            return {"messages:shared": "unbekannt"}
+
+        monkeypatch.setattr(translate_locales, "_call_gemini", fake_engine)
+        items = [
+            WorkItem(
+                "de",
+                "component",
+                "common.version_unknown",
+                "Unknown",
+            )
+        ]
+        failures, _completed = translate_locales._translate_and_apply(
+            Plan(items=items), {"de": items}, module
+        )
+
+        assert failures == []
+        assert len(prompts) == 1
+        assert "messages:shared" in prompts[0]
+        settings_written = json.loads((locales / "de.json").read_text(encoding="utf-8"))
+        component_written = json.loads(
+            (component / "de.json").read_text(encoding="utf-8")
+        )
+        assert settings_written["messages"]["shared"] == "unbekannt"
+        assert component_written["common"]["version_unknown"] == "unbekannt"
 
     def test_disagreeing_siblings_are_translated_instead_of_reused(
         self,
@@ -1292,6 +1335,13 @@ class TestSharedTranslationReuse:
         assert "messages:shared" in prompts[0]
         written = json.loads((locales / "de.json").read_text(encoding="utf-8"))
         assert written["messages"]["shared"] == "unbekannt"
+        component_written = json.loads(
+            (component / "de.json").read_text(encoding="utf-8")
+        )
+        assert component_written["common"] == {
+            "version_unknown": "unbekannt",
+            "other_unknown": "unbekannt",
+        }
 
     def test_sibling_invalid_for_destination_is_translated_instead_of_reused(
         self,
@@ -1320,6 +1370,10 @@ class TestSharedTranslationReuse:
         assert "messages:shared" in prompts[0]
         written = json.loads((locales / "de.json").read_text(encoding="utf-8"))
         assert written["messages"]["shared"] == "unbekannt"
+        component_written = json.loads(
+            (component / "de.json").read_text(encoding="utf-8")
+        )
+        assert component_written["common"]["version_unknown"] == "unbekannt"
 
     def test_fully_stale_shared_group_is_translated_instead_of_reused(
         self,

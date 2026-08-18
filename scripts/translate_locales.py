@@ -1012,6 +1012,19 @@ def _apply_component(
         print(f"updated {path.relative_to(REPO_ROOT)}")
 
 
+def _authored_shared_refs(
+    where: tuple[tuple[str, str], ...],
+) -> list[tuple[Section, str]]:
+    """Convert authored catalog locations to translation-result references."""
+    refs: list[tuple[Section, str]] = []
+    for surface, key in where:
+        if surface == SETTINGS_SURFACE and key.startswith("messages."):
+            refs.append(("messages", key.removeprefix("messages.")))
+        elif surface == COMPONENT_SURFACE:
+            refs.append(("component", key))
+    return refs
+
+
 def _reuse_existing_authored_shared(
     locale: str, items: list[WorkItem], module: Any
 ) -> tuple[dict[tuple[str, str], str], list[WorkItem]]:
@@ -1034,66 +1047,80 @@ def _reuse_existing_authored_shared(
         )
 
     reused: dict[tuple[str, str], str] = {}
+    replaced: set[tuple[Section, str]] = set()
+    fallback_items: list[WorkItem] = []
     for english, where in module._authored_shared_groups():
-        refs: list[tuple[Section, str]] = []
-        for surface, key in where:
-            if surface == SETTINGS_SURFACE and key.startswith("messages."):
-                refs.append(("messages", key.removeprefix("messages.")))
-            elif surface == COMPONENT_SURFACE:
-                refs.append(("component", key))
+        refs = _authored_shared_refs(where)
         planned_refs = set(refs) & planned.keys()
+        if not planned_refs:
+            continue
         current_values = {
             existing[ref]
             for ref in refs
             if ref not in planned and ref in existing and existing[ref] != english
         }
-        if len(current_values) != 1:
+        if len(current_values) == 1:
+            value = next(iter(current_values))
+            if all(_validate(planned[ref], value) is None for ref in planned_refs):
+                for ref in planned_refs:
+                    reused[ref] = value
+                continue
+
+        # Component answers are validated under looser markup rules. When no
+        # sibling is reusable, queue one settings reference so the value later
+        # aligned across the group passes the strictest destination gate.
+        settings_refs = {ref for ref in refs if ref[0] == "messages"}
+        if not settings_refs or settings_refs & planned_refs:
             continue
-        value = next(iter(current_values))
-        if any(_validate(planned[ref], value) is not None for ref in planned_refs):
-            continue
-        for ref in planned_refs:
-            reused[ref] = value
+        canonical_ref = next(ref for ref in refs if ref in settings_refs)
+        replaced.update(planned_refs)
+        fallback_items.append(
+            WorkItem(
+                locale,
+                canonical_ref[0],
+                canonical_ref[1],
+                english,
+                changed=any(planned[ref].changed for ref in planned_refs),
+            )
+        )
 
     if reused:
         print(f"  {locale}: reused existing wording for {len(reused)} shared string(s)")
-    remaining = [item for item in items if (item.section, item.key) not in reused]
+    remaining = [
+        item
+        for item in items
+        if (item.section, item.key) not in reused
+        and (item.section, item.key) not in replaced
+    ]
+    remaining.extend(fallback_items)
     return reused, remaining
 
 
 def _align_authored_shared(
-    locale: str, results: dict[tuple[str, str], str], module: Any
+    _locale: str, results: dict[tuple[str, str], str], module: Any
 ) -> None:
     """Byte-align the wording shared across the two authored surfaces.
 
     Per-key contextual translation may word the settings and component copies
-    of one shared English string differently;
-    ``test_authored_shared_strings_read_the_same`` requires them identical.
-    The settings side wins (the historical rule); when only the component
-    side was retranslated this run, the locale's existing settings
-    translation is the reference.
+    of one shared English string differently, while
+    ``test_authored_shared_strings_read_the_same`` requires them identical. An
+    eligible existing sibling was already copied into ``results`` by
+    ``_reuse_existing_authored_shared``; otherwise a newly validated engine
+    result becomes the reference. The settings result wins when both surfaces
+    were translated, preserving the historical rule.
     """
     for _english, where in module._authored_shared_groups():
-        settings_keys = [
-            key.removeprefix("messages.")
-            for surface, key in where
-            if surface == SETTINGS_SURFACE and key.startswith("messages.")
-        ]
-        component_keys = [key for surface, key in where if surface == COMPONENT_SURFACE]
-        if not settings_keys:
+        refs = _authored_shared_refs(where)
+        settings_refs = [ref for ref in refs if ref[0] == "messages"]
+        affected = [ref for ref in refs if ref in results]
+        if not settings_refs or not affected:
             continue
-        value = results.get(("messages", settings_keys[0]))
-        if value is None:
-            catalog = _load_json(LOCALES_DIR / f"{locale}.json")
-            value = catalog.get("messages", {}).get(settings_keys[0])
-        if value is None:
-            continue
-        for key in settings_keys[1:]:
-            if ("messages", key) in results:
-                results[("messages", key)] = value
-        for key in component_keys:
-            if ("component", key) in results:
-                results[("component", key)] = value
+        value = next(
+            (results[ref] for ref in settings_refs if ref in results),
+            results[affected[0]],
+        )
+        for ref in refs:
+            results[ref] = value
 
 
 def _translate_and_apply(
