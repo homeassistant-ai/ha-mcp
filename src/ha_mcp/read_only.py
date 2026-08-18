@@ -38,6 +38,7 @@ from fastmcp.server.transforms import Transform
 from fastmcp.tools import Tool
 
 from .config import get_global_settings
+from .renamed_tools import current_tool_name
 from .errors import ErrorCode, create_error_response
 from .policy.middleware import PROXY_META_TOOLS
 from .tools.helpers import raise_tool_error
@@ -464,6 +465,12 @@ class ReadOnlyMiddleware(Middleware):
             if unwrapped is None:
                 return await call_next(context)
             inner_name, inner_args = unwrapped
+            # The envelope carries whatever name the client knows the tool by.
+            # An exemption is keyed on the current one, and a miss here does
+            # not block: _classify would call the stale name unknown, which is
+            # not "write", and the call would pass straight through to the
+            # proxy — which resolves the rename and dispatches the write tool.
+            inner_name = current_tool_name(inner_name)
             exemption = READ_ONLY_EXEMPT_TOOLS.get(inner_name)
             if exemption is not None:
                 blocked = exemption.blocked_write(inner_args)

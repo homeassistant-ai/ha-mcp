@@ -399,6 +399,35 @@ class TestMiddleware:
         )
         assert result == "proxied-backups"
 
+    async def test_proxied_call_on_a_retired_name_is_still_read_only_checked(
+        self, read_only_on
+    ):
+        """A stale envelope name must not walk past the exemption.
+
+        The exemptions are keyed on the tool's current name, and a miss does
+        not fail closed here: classification calls the retired name unknown,
+        unknown is not "write", and the call would pass through to the proxy,
+        which resolves the rename and dispatches the write after all.
+        """
+        mw = make_middleware()
+        call_next = AsyncMock()
+
+        with pytest.raises(ToolError) as excinfo:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_call_write_tool",
+                    {
+                        "name": "ha_manage_addon",
+                        "arguments": {"slug": "core_ssh", "action": "uninstall"},
+                    },
+                ),
+                call_next,
+            )
+
+        body = expect_read_only_error(excinfo)
+        assert body["tool_name"] == "ha_manage_app"
+        call_next.assert_not_called()
+
     async def test_double_wrapped_proxy_envelope_unwrapped(self, read_only_on):
         """Mirror the proxy's own double-wrap recovery: a proxy call
         whose inner name is another proxy gets unwrapped to the real
