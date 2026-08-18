@@ -5,6 +5,8 @@ name from a catalog it has not re-listed: the call has to reach the current
 tool, and the old name has to stay out of the catalog.
 """
 
+import logging
+
 import pytest
 from fastmcp import FastMCP
 from fastmcp.exceptions import NotFoundError
@@ -68,6 +70,37 @@ async def test_the_old_names_stay_out_of_the_catalog():
 
     assert listed == {"ha_get_app", "ha_manage_app"}
     assert not listed & set(RENAMED_TOOLS)
+
+
+@pytest.mark.asyncio
+async def test_the_first_call_on_a_retired_name_is_audible(caplog):
+    """An operator has to be able to see that a retired name is still in use.
+
+    That observation is the only thing that could ever justify retiring the
+    alias, and a per-call INFO line would be noise for a tool called in a
+    loop — so the first call on each name announces itself and the rest drop
+    to DEBUG.
+    """
+    mcp = _make_mcp()
+
+    with caplog.at_level(logging.DEBUG, logger="ha_mcp.tools.renamed_tool_middleware"):
+        await mcp.call_tool("ha_get_addon", {"source": "available"})
+        await mcp.call_tool("ha_get_addon", {"source": "available"})
+        await mcp.call_tool("ha_manage_addon", {"slug": "core_ssh"})
+
+    levels = [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if record.name == "ha_mcp.tools.renamed_tool_middleware"
+    ]
+
+    assert [level for level, _ in levels] == [
+        logging.INFO,
+        logging.DEBUG,
+        logging.INFO,
+    ]
+    assert "ha_get_addon" in levels[0][1] and "ha_get_app" in levels[0][1]
+    assert "ha_manage_addon" in levels[2][1]
 
 
 @pytest.mark.asyncio
