@@ -405,16 +405,11 @@ async def test_string_envelope_proxy_write_blocked(readonly_toolsearch_mcp):
         inner_name = "ha_manage_energy_prefs"
         inner_args = '{"mode": "set", "config": {}}'
 
-    try:
-        result = await client.call_tool(
-            "ha_call_write_tool",
-            {"name": inner_name, "arguments": inner_args},
-        )
-    except ToolError as exc:
-        body = tool_error_to_result(exc)
-    else:
-        body = parse_mcp_result(result)
-    assert body.get("error", {}).get("code") == "READ_ONLY_MODE", body
+    body = await _expect_read_only_blocked(
+        client,
+        "ha_call_write_tool",
+        {"name": inner_name, "arguments": inner_args},
+    )
     assert body.get("tool_name") == inner_name, body
 
 
