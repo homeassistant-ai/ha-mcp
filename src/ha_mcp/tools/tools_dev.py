@@ -1848,7 +1848,7 @@ class DevTools:
 
         Caveats: update_source changes ONLY the ha_mcp_tools custom
         component's separate in-process server entry — it never updates
-        the add-on, Docker, standalone, or PyPI server that may be
+        the App (add-on), Docker, standalone, or PyPI server that may be
         serving this connection (update those via ha_manage_app /
         docker pull / pip). In embedded mode that entry IS this server,
         so the update self-interrupts; elsewhere this connection is
@@ -1857,7 +1857,7 @@ class DevTools:
         the background, which can take minutes and can still fail
         (check HA logs). update_source requires the component's
         in-process server entry to exist. restart interrupts this MCP
-        connection in embedded and add-on deployments (the reply
+        connection in embedded and app deployments (the reply
         arrives just before the server goes down) and supports those
         two deployments only (standalone processes must be restarted
         externally). list_pending/approve/deny are exempt from policy
