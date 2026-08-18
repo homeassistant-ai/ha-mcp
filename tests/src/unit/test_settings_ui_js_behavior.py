@@ -238,6 +238,15 @@ DEFAULT_FETCHES: dict[str, dict] = {
 }
 
 
+# The add-on tool as the settings API renders it, plus a Russian translation
+# supplied by the tests themselves (see _app_tool_dom).
+APP_TOOL_NAME = "ha_get_app"
+APP_TOOL_TITLE = "Get Apps (add-ons)"
+APP_TOOL_GROUP = "Apps (add-ons)"
+APP_TOOL_TITLE_RU = "Получить приложения"
+APP_TOOL_GROUP_RU = "Приложения"
+
+
 class TestLocalizationBehavior:
     """Russian catalog application and language-selector behaviour."""
 
@@ -246,12 +255,15 @@ class TestLocalizationBehavior:
         locale: str = "ru",
         *,
         tools: dict[str, dict[str, str]] | None = None,
+        tool_groups: dict[str, str] | None = None,
     ) -> str:
         from ha_mcp.settings_ui._i18n import build_payload, serialize_payload
 
         catalog = build_payload(locale)
         if tools:
             catalog["tools"].update(tools)
+        if tool_groups:
+            catalog["tool_groups"].update(tool_groups)
         payload = serialize_payload(catalog)
         additions = (
             f'<script id="ha-mcp-i18n" type="application/json">{payload}</script>'
@@ -260,18 +272,20 @@ class TestLocalizationBehavior:
         )
         return MIN_DOM.replace("</body>", additions + "</body>")
 
-    def test_russian_static_group_and_tool_copy(self, settings_script: str) -> None:
-        fetches = {
+    @staticmethod
+    def _app_tool_fetches() -> dict:
+        """The tools endpoint as the server renders it for the add-on tool."""
+        return {
             **DEFAULT_FETCHES,
             "/api/settings/tools": {
                 "status": 200,
                 "json": {
                     "tools": [
                         {
-                            "name": "ha_get_addon",
-                            "title": "Get Add-ons",
-                            "description": "Get Home Assistant add-ons.",
-                            "primary_tag": "Add-ons",
+                            "name": APP_TOOL_NAME,
+                            "title": APP_TOOL_TITLE,
+                            "description": "Get Home Assistant apps.",
+                            "primary_tag": APP_TOOL_GROUP,
                             "category": "read",
                         }
                     ],
@@ -279,54 +293,64 @@ class TestLocalizationBehavior:
                 },
             },
         }
+
+    def _app_tool_dom(self) -> str:
+        """A catalog carrying a translation for that tool and its group.
+
+        Both entries are supplied here instead of read out of the shipped
+        Russian catalog. What the catalogs hold for this tool is not this
+        test's subject and does not stand still: the English behind the
+        heading and the title moves through the post-merge sync, which re-keys
+        the group and retranslates the title under the tool's current name.
+        Pinning the shipped Russian made this test green in a PR and red on
+        master one sync later, and reading it back would make the localized
+        search term collapse onto the English one for as long as the key is
+        missing — the test would keep passing while testing nothing.
+        """
+        return self._localized_dom(
+            tools={
+                APP_TOOL_NAME: {
+                    "title": APP_TOOL_TITLE_RU,
+                    "description": "Список приложений",
+                }
+            },
+            tool_groups={APP_TOOL_GROUP: APP_TOOL_GROUP_RU},
+        )
+
+    def test_russian_static_group_and_tool_copy(self, settings_script: str) -> None:
         result = run_script(
             settings_script,
-            initial_html=self._localized_dom(),
-            fetch_map=fetches,
+            initial_html=self._app_tool_dom(),
+            fetch_map=self._app_tool_fetches(),
         )
         assert not result.errors
         assert "Инструменты" in result.dom
-        assert "Дополнения" in result.dom
-        assert "Получить дополнения" in result.dom
+        assert APP_TOOL_GROUP_RU in result.dom
+        assert APP_TOOL_TITLE_RU in result.dom
 
     def test_tool_search_matches_localized_title(self, settings_script: str) -> None:
-        fetches = {
-            **DEFAULT_FETCHES,
-            "/api/settings/tools": {
-                "status": 200,
-                "json": {
-                    "tools": [
-                        {
-                            "name": "ha_get_addon",
-                            "title": "Get Add-ons",
-                            "description": "Get Home Assistant add-ons.",
-                            "primary_tag": "Add-ons",
-                            "category": "read",
-                        }
-                    ],
-                    "states": {},
-                },
-            },
-        }
-        result = run_script(
-            settings_script,
-            initial_html=self._localized_dom(),
-            fetch_map=fetches,
-            invoke="""
+        invoke = """
               await new Promise(r => setTimeout(r, 200));
               const search = document.getElementById('search');
-              search.value = 'получить дополнения';
+              search.value = '__LOCALIZED__';
               search.dispatchEvent(new Event('input', {bubbles: true}));
-              const row = document.querySelector('[data-name="ha_get_addon"]');
+              const row = document.querySelector('[data-name="__NAME__"]');
               document.body.dataset.localizedSearchMatch = String(
                 row && !row.classList.contains('hidden')
               );
-              search.value = 'get add-ons';
+              search.value = '__SOURCE__';
               search.dispatchEvent(new Event('input', {bubbles: true}));
               document.body.dataset.sourceSearchMatch = String(
                 row && !row.classList.contains('hidden')
               );
-            """,
+            """
+        result = run_script(
+            settings_script,
+            initial_html=self._app_tool_dom(),
+            fetch_map=self._app_tool_fetches(),
+            invoke=invoke.replace("__LOCALIZED__", APP_TOOL_TITLE_RU.lower())
+            .replace("__SOURCE__", APP_TOOL_TITLE.lower())
+            .replace("__NAME__", APP_TOOL_NAME),
         )
         assert not result.errors
         assert 'data-localized-search-match="true"' in result.dom
@@ -1247,7 +1271,7 @@ def _server_503_body() -> str:
     A hand-written fixture drifts, and drifts in the direction that keeps its
     own assertion passing: the first two copies of this paragraph in this file
     both dropped the sentence naming the three causes and wrote ``addon log``
-    where the server writes ``App (add-on) log``, so an assertion on
+    where the server writes ``app (add-on) log``, so an assertion on
     ``addon log`` passed only because the fixture was wrong.
     """
     from ha_mcp.settings_ui import POLICY_UNAVAILABLE_MESSAGE
@@ -3564,7 +3588,7 @@ class TestAddonModeLockedBannerCopy:
         )
         # Addon-aware copy must appear.
         assert "App (add-on) Configuration" in result.dom, (
-            f"expected 'App (add-on) Configuration' hint; dom tail: {result.dom[-2000:]}"
+            f"expected 'app (add-on) Configuration' hint; dom tail: {result.dom[-2000:]}"
         )
 
     def test_advanced_locked_banner_in_addon_mode_avoids_unset_copy(
@@ -3609,7 +3633,7 @@ class TestAddonModeLockedBannerCopy:
             "addon-mode advanced banner still shows standalone 'unset env var' copy"
         )
         assert "App (add-on) runtime environment" in result.dom, (
-            f"expected 'App (add-on) runtime environment' wording; "
+            f"expected 'app (add-on) runtime environment' wording; "
             f"dom tail: {result.dom[-2000:]}"
         )
 
@@ -3726,7 +3750,7 @@ class TestAddonModeLockedBannerCopy:
         # Supervisor" helper text (Supervisor never sees this start.py
         # setdefault value).
         assert "Hardcoded to" in result.dom and "cannot be changed" in result.dom, (
-            f"expected field-specific 'hardcoded in App (add-on) mode' copy; "
+            f"expected field-specific 'hardcoded in app (add-on) mode' copy; "
             f"dom tail: {result.dom[-2000:]}"
         )
         assert "managed by Home Assistant Supervisor" not in result.dom, (

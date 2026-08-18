@@ -987,7 +987,7 @@ class TestGetSupervisorLogWrapper:
         payload = _parse_tool_error(exc_info)
         suggestions = payload["error"]["suggestions"]
         assert any("not found or not installed" in s for s in suggestions)
-        assert any("ha_get_addon" in s for s in suggestions)
+        assert any("ha_get_app" in s for s in suggestions)
         # context kwargs get spread onto the response root by create_error_response
         assert payload.get("slug") == "nonexistent"
         assert payload.get("source") == "supervisor"
@@ -1037,7 +1037,7 @@ class TestGetSupervisorLogWrapper:
         assert any(
             "Verify add-on slug 'core_mosquitto' is correct" in s for s in suggestions
         )
-        assert any("ha_get_addon" in s for s in suggestions)
+        assert any("ha_get_app" in s for s in suggestions)
 
     @pytest.mark.asyncio
     async def test_level_param_emits_warning_for_supervisor_source(
@@ -1403,7 +1403,7 @@ class TestStaleToolNameReferences:
     """Regression guard for #950 bug 2: stale `ha_list_addons()` suggestions."""
 
     def test_no_tool_module_references_removed_ha_list_addons(self):
-        """`ha_list_addons` was consolidated into `ha_get_addon` — no stale refs.
+        """`ha_list_addons` was consolidated into `ha_get_app` — no stale refs.
 
         Scans every `src/ha_mcp/tools/**/*.py` with a word-boundary regex so
         the guard catches regressions in any module, not just tools_utility.py,
@@ -1418,7 +1418,7 @@ class TestStaleToolNameReferences:
         ]
         assert not offenders, (
             f"Stale `ha_list_addons` reference in: {offenders}. "
-            "Replace suggestions/docs with `ha_get_addon()` — see #950."
+            "Replace suggestions/docs with `ha_get_app()` — see #950."
         )
 
 

@@ -30,6 +30,7 @@ from ..client.rest_client import (
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from ..policy.editing import PolicyCaller
+from ..renamed_tools import current_tool_name
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -1199,6 +1200,13 @@ class DevTools:
                     "'tool' is required for action='set_tool'",
                 )
             )
+        # The alias middleware dispatches a *call* on a retired tool name, so
+        # the same name arriving as data has to reach the same tool. Without
+        # this the stale-catalog client the alias exists for is told its tool
+        # is unknown — and on the fallback path, where a failed metadata read
+        # skips the unknown-name guard below, the retired name reaches the
+        # writers and set_tool reports a gate it never put in force.
+        tool = current_tool_name(tool)
         if tool == "*":
             raise_tool_error(
                 create_error_response(
@@ -1841,8 +1849,8 @@ class DevTools:
         """Manage the running ha-mcp server itself (developer mode).
 
         When NOT to use: to restart Home Assistant use ha_restart; to
-        update HA add-ons or HACS packages use ha_manage_addon /
-        ha_manage_hacs.
+        update Home Assistant Apps (add-ons) or HACS packages use
+        ha_manage_app / ha_manage_hacs.
 
         When to use: development/testing workflows — inspecting how this
         server is deployed, switching the in-process (custom component)
@@ -1852,8 +1860,8 @@ class DevTools:
 
         Caveats: update_source changes ONLY the ha_mcp_tools custom
         component's separate in-process server entry — it never updates
-        the add-on, Docker, standalone, or PyPI server that may be
-        serving this connection (update those via ha_manage_addon /
+        the app (add-on), Docker, standalone, or PyPI server that may be
+        serving this connection (update those via ha_manage_app /
         docker pull / pip). In embedded mode that entry IS this server,
         so the update self-interrupts; elsewhere this connection is
         untouched and keeps its current version. Success means the
@@ -1861,7 +1869,7 @@ class DevTools:
         the background, which can take minutes and can still fail
         (check HA logs). update_source requires the component's
         in-process server entry to exist. restart interrupts this MCP
-        connection in embedded and add-on deployments (the reply
+        connection in embedded and app deployments (the reply
         arrives just before the server goes down) and supports those
         two deployments only (standalone processes must be restarted
         externally). list_pending/approve/deny are exempt from policy

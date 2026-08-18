@@ -874,6 +874,23 @@ class TestManageToolsState:
         )
         assert _tool_config()["tools"]["ha_get_history"] == "pinned"
 
+    async def test_set_state_follows_a_renamed_tool(self, dev_tools):
+        """A stale catalog names the tool the way it was called before.
+
+        The alias middleware runs a *call* on the retired name; the same name
+        arriving as data has to reach the same tool, or the client the alias
+        exists for is told its tool is unknown. Metadata is seeded so the
+        unknown-name guard is live rather than skipped.
+        """
+        _seed_metadata([{"name": "ha_manage_app", "tags": ["System"]}])
+
+        result = await dev_tools.ha_dev_manage_settings(
+            action="set_tool", tool="ha_manage_addon", state="disabled"
+        )
+
+        assert result["data"]["tool"] == "ha_manage_app"
+        assert _tool_config()["tools"] == {"ha_manage_app": "disabled"}
+
     async def test_set_state_rejects_invalid_state(self, dev_tools):
         with pytest.raises(ToolError, match="state must be one of"):
             await dev_tools.ha_dev_manage_settings(

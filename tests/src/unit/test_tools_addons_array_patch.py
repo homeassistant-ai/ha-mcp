@@ -1,4 +1,4 @@
-"""Unit tests for the array_patch helper and ha_manage_addon array_patch dispatch.
+"""Unit tests for the array_patch helper and ha_manage_app array_patch dispatch.
 
 The helper (`_apply_array_ops`) is exercised directly with synthetic data —
 no addon, no httpx — so the operation semantics are isolated from the
@@ -22,7 +22,7 @@ def _parse_tool_error(exc: pytest.ExceptionInfo[ToolError]) -> dict:
 
 @pytest.fixture
 def _registered_tool():
-    """Resolve the raw ha_manage_addon function from the @tool decorator stack.
+    """Resolve the raw ha_manage_app function from the @tool decorator stack.
 
     Shared by every TestHaManageAddon* class — they all need the same
     pre-registration unwrap to call the tool function directly.
@@ -40,7 +40,7 @@ def _registered_tool():
             return deco
 
     register_addon_tools(_MockMCP(), client=AsyncMock())
-    fn = captured["ha_manage_addon"]
+    fn = captured["ha_manage_app"]
     while hasattr(fn, "__wrapped__"):
         fn = fn.__wrapped__
     return fn
@@ -380,12 +380,12 @@ class TestApplyArrayOpsValidation:
 
 
 # ---------------------------------------------------------------------------
-# ha_manage_addon array_patch dispatch — happy + key error paths
+# ha_manage_app array_patch dispatch — happy + key error paths
 # ---------------------------------------------------------------------------
 
 
 class TestHaManageAddonArrayPatchDispatch:
-    """Exercise the dispatch in ha_manage_addon by mocking _call_addon_api.
+    """Exercise the dispatch in ha_manage_app by mocking _call_addon_api.
 
     We verify: GET happens with raw=True (full array needed for mutation);
     POST happens without raw (response is small, default truncation guards

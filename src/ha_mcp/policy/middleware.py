@@ -12,6 +12,7 @@ from anyio.to_thread import run_sync as run_in_thread
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 
 from ..errors import ErrorCode, create_error_response
+from ..renamed_tools import current_tool_name
 from ..tools.helpers import raise_tool_error, safe_progress
 from .approval_queue import ApprovalQueue, PendingApproval, compute_args_hash
 from .evaluator import Verdict, evaluate, find_matching_rule
@@ -100,7 +101,13 @@ class PolicyMiddleware(Middleware):
                     ],
                 )
             )
-        name = context.message.name
+        # RenamedToolAliasMiddleware runs ahead of this one and normally
+        # rewrites a retired name before it arrives. Resolving it again costs a
+        # dict lookup and removes the ordering dependency, which here is the
+        # difference between gated and ungated: rules are keyed on the current
+        # name, and ``evaluate`` returns ALLOW when nothing matches, so a gate
+        # reading a stale name lets the call through.
+        name = current_tool_name(context.message.name)
         args = context.message.arguments or {}
 
         if _passes_ungated(name, args):

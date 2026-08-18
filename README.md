@@ -50,37 +50,37 @@ The recommended way to run ha-mcp is the **HA-MCP Custom Component**. It install
 
 **Connect URL.** The Configure screen gives you a Home Assistant webhook URL for remote clients — `https://<your-ha-domain>/api/webhook/<webhook-id>` through Nabu Casa or any reverse proxy already pointed at Home Assistant (locally, `http://<ha-host>:8123/api/webhook/<webhook-id>`). For clients on the same network, the server is also reachable directly at `http://<ha-ip>:9584/private_<random>`.
 
-- **Replaces other install methods:** the in-process server is a complete, standalone ha-mcp install — it takes the place of the add-on, Docker, and uvx/PyPI (stdio) methods. Run only one; do not run the in-process server alongside another install.
+- **Replaces other install methods:** the in-process server is a complete, standalone ha-mcp install — it takes the place of the app (add-on), Docker, and uvx/PyPI (stdio) methods. Run only one; do not run the in-process server alongside another install.
 - **Local only?** Turn off **Remote access via webhook** in the entry options — no webhook is registered at all, while the direct port and sidebar panel keep working.
 - **Settings panel:** while the server runs, an admin-only **HA-MCP** panel appears in the Home Assistant sidebar for managing tools, feature flags, backups, and themes.
 - **Optional authentication:** set **Webhook authentication** to `ha_auth` to require a Home Assistant account sign-in instead of using the secret URL as the credential.
 - **Manual install (no HACS):** copy `custom_components/ha_mcp_tools/` from this repository into your Home Assistant `config/custom_components/` directory, then restart and add the integration as above.
 
-The component's second entry type, the **File & YAML services entry** (**HA-MCP File & YAML Tools**), is only needed if you enable ha-mcp's opt-in file and YAML editing tools (feature flags, off by default) — skip it otherwise; you can add it later at any time. It works with any server type (in-process, add-on, Docker, or stdio).
+The component's second entry type, the **File & YAML services entry** (**HA-MCP File & YAML Tools**), is only needed if you enable ha-mcp's opt-in file and YAML editing tools (feature flags, off by default) — skip it otherwise; you can add it later at any time. It works with any server type (in-process, app, Docker, or stdio).
 
 [Full in-process server documentation →](docs/in-process-server.md) · [Setup Wizard for client-specific config →](https://homeassistant-ai.github.io/ha-mcp/setup/)
 
-### 🏠 Home Assistant App (add-on)
+### 🏠 Home Assistant app (add-on)
 
-Prefer to run ha-mcp as a Home Assistant **app / add-on**? On **Home Assistant OS** and **Supervised** installs it is a close second — no access token to manage, and it works with Claude Desktop, Claude.ai, ChatGPT, and any other MCP client on your local network or configured for remote access.
+Prefer to run ha-mcp as a Home Assistant **app (add-on)**? On **Home Assistant OS** and **Supervised** installs it is a close second — no access token to manage, and it works with Claude Desktop, Claude.ai, ChatGPT, and any other MCP client on your local network or configured for remote access.
 
 1. Add the repository to your Home Assistant instance:
 
    [![Add Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp)
 
-   If that opens the App Store without an add-repository dialog (a [known Home Assistant issue](https://github.com/home-assistant/my.home-assistant.io/issues/698)), add it manually: **App Store → ⋮ → Repositories**, then paste `https://github.com/homeassistant-ai/ha-mcp`.
+   If that opens the App store without an add-repository dialog (a [known Home Assistant issue](https://github.com/home-assistant/my.home-assistant.io/issues/698)), add it manually: **Settings → Apps → Install app → ⋮ → Repositories**, then paste `https://github.com/homeassistant-ai/ha-mcp`.
 
-2. Install **"Home Assistant MCP Server"** from the App Store and click **Start**. *(Home Assistant 2026.2 renamed "Add-ons" to "Apps"; on older versions this is the Add-on Store.)*
+2. Install **"Home Assistant MCP Server"** from **Settings → Apps → Install app** and click **Start**. *(Home Assistant 2026.2 renamed "Add-ons" to "Apps"; on older versions this is the Add-on store.)*
 3. Open the **Logs** tab to find your unique MCP URL.
 4. Connect your AI client to that URL — **no token or credential setup needed**.
 
-[Full add-on documentation →](homeassistant-addon/DOCS.md)
+[Full app documentation →](homeassistant-addon/DOCS.md)
 
-> ⚠️ **Configure exactly one install method per client.** The custom component, the add-on, Docker/PyPI, and local stdio are independent ways to run the same server — pick one and point your AI client at that single URL. Keeping two entries for the same server in one client (for example a local `uvx ha-mcp@latest` entry with `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN` alongside an add-on or component URL) is a known cause of connection hangs.
+> ⚠️ **Configure exactly one install method per client.** The custom component, the app, Docker/PyPI, and local stdio are independent ways to run the same server — pick one and point your AI client at that single URL. Keeping two entries for the same server in one client (for example a local `uvx ha-mcp@latest` entry with `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN` alongside an app or component URL) is a known cause of connection hangs.
 
 ### Other install methods
 
-These run the server outside Home Assistant — useful for **Container** / **Core** installs (which can't run add-ons) or a separate host. The [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) generates the exact client-specific config for each.
+These run the server outside Home Assistant — useful for **Container** / **Core** installs (which can't run apps) or a separate host. The [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) generates the exact client-specific config for each.
 
 - **Docker (HTTP server):** run `ghcr.io/homeassistant-ai/ha-mcp` in HTTP mode, pointed at your Home Assistant URL and a long-lived token, and connect your client to its secret URL. See the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) for the full command and per-client config.
 - **PyPI / uvx (HTTP server):** run the published `ha-mcp` package with `uvx ha-mcp@latest` (or pip) as a streamable-HTTP server the same way. Details in the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/).
@@ -90,15 +90,15 @@ These run the server outside Home Assistant — useful for **Container** / **Cor
   > ⚠️ **stdio has known transport issues.** The stdio transport has connection problems that streamable HTTP does not ([#1713](https://github.com/homeassistant-ai/ha-mcp/issues/1713)). It is recommended only for demo/testing tinkering — for a real setup, use the custom component or an HTTP method above.
 
 <details>
-<summary><b>🌐 Remote access (Nabu Casa / Webhook Proxy add-on / OpenAI Tunnel)</b></summary>
+<summary><b>🌐 Remote access (Nabu Casa / Webhook Proxy app / OpenAI Tunnel)</b></summary>
 
-> **Using the HA-MCP custom component?** You do not need the **Webhook Proxy** — the component has its own built-in webhook for remote access (see the **Get Started** quick start at the top). The proxy is for the **add-on** (it can also front another external server via its `mcp_server_url` option). The **OpenAI Tunnel** below is different: it applies to **any** install method when Home Assistant isn't publicly reachable at all (no Nabu Casa or reverse proxy).
+> **Using the HA-MCP custom component?** You do not need the **Webhook Proxy** — the component has its own built-in webhook for remote access (see the **Get Started** quick start at the top). The proxy is for the **app** (it can also front another external server via its `mcp_server_url` option). The **OpenAI Tunnel** below is different: it applies to **any** install method when Home Assistant isn't publicly reachable at all (no Nabu Casa or reverse proxy).
 
-Already have **Nabu Casa** or another reverse proxy pointing at your Home Assistant? The Webhook Proxy add-on routes MCP traffic through your existing setup — no separate tunnel or port forwarding needed.
+Already have **Nabu Casa** or another reverse proxy pointing at your Home Assistant? The Webhook Proxy app routes MCP traffic through your existing setup — no separate tunnel or port forwarding needed.
 
-1. Install the **MCP Server add-on** (see above) and the **Webhook Proxy** add-on from the same store
+1. Install the **MCP Server app** (see above) and the **Webhook Proxy** app from the same store
 2. Start the webhook proxy and **restart Home Assistant** when prompted
-3. Copy the webhook URL from the add-on logs:
+3. Copy the webhook URL from the app logs:
    ```
    MCP Server URL (remote): https://xxxxx.ui.nabu.casa/api/webhook/mcp_xxxxxxxx
    ```
@@ -209,7 +209,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **🏠 Control** | Any service, bulk device control, real-time states |
 | **🔧 Manage** | Automations, scripts, helpers, dashboards, areas, zones, groups, calendars, blueprints |
 | **📊 Monitor** | History, statistics, camera snapshots, automation traces, ZHA devices |
-| **💾 System** | Backup/restore, updates, add-ons, device registry |
+| **💾 System** | Backup/restore, updates, apps, device registry |
 | **🔒 Safety** | Read Only Mode toggle, per-tool enable/disable, tool security policies (user approval), automatic edit backups |
 
 <details>
@@ -219,7 +219,7 @@ Spend less time configuring, more time enjoying your smart home.
 
 | Category | Tools |
 |----------|-------|
-| **Add-ons** | `ha_get_addon`, `ha_manage_addon` |
+| **Apps (add-ons)** | `ha_get_app`, `ha_manage_app` |
 | **Areas & Floors** | `ha_list_floors_areas`, `ha_remove_area_or_floor`, `ha_set_area_or_floor` |
 | **Assist** | `ha_manage_pipeline` |
 | **Automations** | `ha_config_get_automation`, `ha_config_remove_automation`, `ha_config_set_automation` |
@@ -268,7 +268,7 @@ ha-mcp is a standalone server built for **configuring, building, and debugging**
 | Build & edit dashboards | No | Yes |
 | Debug automations from traces, read history & logs | No | Yes |
 | Manage helpers, areas, zones, labels, groups | No | Yes |
-| Backups, add-ons, HACS, device & entity registry | No | Yes |
+| Backups, apps, HACS, device & entity registry | No | Yes |
 
 **Rule of thumb:** Use the built-in integration for voice-style control of devices you have already exposed; use ha-mcp when you want an AI assistant that can also build and maintain your Home Assistant setup.
 
@@ -332,12 +332,12 @@ For setups *without* deferred tool support — models like Claude Haiku, Gemini,
 
 If your model can't see the tools or your Home Assistant, it may be getting handed the whole tool catalog at once and struggling with it. It's recommended to try the following to see if it helps:
 
-- **Enable tool search** (`ENABLE_TOOL_SEARCH=true`, or the add-on option below). Instead of listing every tool up front, the server defers the catalog behind a search interface so the model pulls in only the tools it needs, when it needs them.
+- **Enable tool search** (`ENABLE_TOOL_SEARCH=true`, or the app option below). Instead of listing every tool up front, the server defers the catalog behind a search interface so the model pulls in only the tools it needs, when it needs them.
 - **Raise the model's context window above the default.** Local runtimes ship with small defaults (Ollama's `num_ctx` is one example) that can't hold a large tool set plus the conversation — increase it well beyond the default.
 
 ### Enable search-based discovery
 
-Set ENABLE_TOOL_SEARCH=true (or toggle the option in the HA add-on). The full catalog is replaced in the tool list with four entry points plus a small set of always-visible "pinned" tools (ha_search, ha_get_overview, ha_report_issue, etc.). All tools remain callable directly by name once discovered:
+Set ENABLE_TOOL_SEARCH=true (or toggle the option in the HA app). The full catalog is replaced in the tool list with four entry points plus a small set of always-visible "pinned" tools (ha_search, ha_get_overview, ha_report_issue, etc.). All tools remain callable directly by name once discovered:
 
 | Tool | Purpose |
 |------|---------|
@@ -362,9 +362,9 @@ The proxy split lets MCP clients apply different permission policies per categor
 
 Leave it off in clients with deferred tool loading (claude.ai, Claude Desktop, Claude Code); the full catalog has no idle cost there, direct calls skip the search step, and the client's built-in tool search is the better choice — there is no benefit to running ha-mcp's on top of it. Whether tools are deferred depends on the client and model combination: the same model can behave differently per client — GitHub Copilot CLI running Claude Sonnet/Opus inlines the full catalog and still benefits from tool search here. Some Codex models and ChatGPT include deferred tools too — check your client/model directly to confirm its features so you don't leave this enabled unnecessarily.
 
-> 🔄 **Refresh your client's tool list after changing this (or any) setting.** Toggling `ENABLE_TOOL_SEARCH` (or changing pinned/disabled tools, Read Only Mode, etc.) changes the tools the server exposes, but your AI client keeps serving its **cached** tool list until it re-fetches. Restarting the add-on or Home Assistant does **not** refresh the client — reconnect or refresh the MCP server in your client (e.g. re-add/refresh the connector in ChatGPT, or close and reopen Claude Desktop). If you skip this, newly enabled tools won't appear in the client at all, and tools the server no longer exposes still show as available but return `Unknown tool` when called. ChatGPT sometimes keeps serving the stale list even after the connector is removed and re-added under the same name — if tools are still missing after re-adding, delete the connector and create a new one with a **different name**.
+> 🔄 **Refresh your client's tool list after changing this (or any) setting.** Toggling `ENABLE_TOOL_SEARCH` (or changing pinned/disabled tools, Read Only Mode, etc.) changes the tools the server exposes, but your AI client keeps serving its **cached** tool list until it re-fetches. Restarting the app or Home Assistant does **not** refresh the client — reconnect or refresh the MCP server in your client (e.g. re-add/refresh the connector in ChatGPT, or close and reopen Claude Desktop). If you skip this, newly enabled tools won't appear in the client at all, and tools the server no longer exposes still show as available but return `Unknown tool` when called. ChatGPT sometimes keeps serving the stale list even after the connector is removed and re-added under the same name — if tools are still missing after re-adding, delete the connector and create a new one with a **different name**.
 
-For the HA add-on, the same option is documented in [`homeassistant-addon/DOCS.md`](homeassistant-addon/DOCS.md#enable_tool_search) along with the in-add-on settings UI for fine-grained tool enable/disable/pin.
+For the HA app, the same option is documented in [`homeassistant-addon/DOCS.md`](homeassistant-addon/DOCS.md#enable_tool_search) along with the in-add-on settings UI for fine-grained tool enable/disable/pin.
 
 ---
 
@@ -372,7 +372,7 @@ For the HA add-on, the same option is documented in [`homeassistant-addon/DOCS.m
 
 Want early access to new features and fixes? Dev releases (`.devN`) are published on every push to master.
 
-**[Dev Channel Documentation](docs/dev-channel.md)** — Instructions for pip/uvx, Docker, and Home Assistant add-on.
+**[Dev Channel Documentation](docs/dev-channel.md)** — Instructions for pip/uvx, Docker, and Home Assistant app.
 
 ---
 
@@ -446,17 +446,17 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@TomasDJo](https://github.com/TomasDJo)** — Category support for automations, scripts, and scenes.
 - **[@bzelch](https://github.com/bzelch)** — `python_transform` support for automations and scripts.
 - **[@gcormier](https://github.com/gcormier)** — Windows installer improvements: removed unused variable and fixed terminal closing after install.
-- **[@ekobres](https://github.com/ekobres)** — Feature flags for `HAMCP_ENABLE_FILESYSTEM_TOOLS` and the (since removed) `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION` in the add-on config, with beta tagging in source and docs.
+- **[@ekobres](https://github.com/ekobres)** — Feature flags for `HAMCP_ENABLE_FILESYSTEM_TOOLS` and the (since removed) `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION` in the app config, with beta tagging in source and docs.
 - **[@w3z315](https://github.com/w3z315)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
 - **[@griffinmartin](https://github.com/griffinmartin)** — Added OpenCode (by Anomaly) as a selectable AI client in the setup wizard, with both stdio and streamable HTTP support.
-- **[@hhopke](https://github.com/hhopke)** — Fixed addon API calls to route through HA Core ingress proxy instead of direct container connections, fixing `ha_manage_addon` proxy mode on addon installs.
+- **[@hhopke](https://github.com/hhopke)** — Fixed app (add-on) API calls to route through HA Core ingress proxy instead of direct container connections, fixing `ha_manage_addon` (now `ha_manage_app`) proxy mode on app installs.
 - **[@tomwilkie](https://github.com/tomwilkie)** — JMESPath middleware exploration (#1147) whose review-time token-measurement data informed the design of #1199 and #1225.
 - **[@SealKan](https://github.com/SealKan)** — `fields=`/`attribute_keys=` projection on six read-heavy tools (#1225), `ha_call_event` tool (#1239), dashboards-list helper refactor (#1207), `for:`-field duration-math detector in the best-practice checker (#1264), persistent DCR OAuth client registrations across restarts (#1265), and issue-triage prompt token-budgeting (#1522).
 - **[@KarelTestSpecial](https://github.com/KarelTestSpecial)** — Cached YAML instance to prevent CPU spikes during bulk edits (#1371).
 - **[@corgan2222](https://github.com/corgan2222)** — HA brand assets for custom integration (#1317).
 - **[@drseanwing](https://github.com/drseanwing)** — Progress emission via FastMCP `Context` in long-running tools (#1124); tool-discovery / categorized-search docs (#1123).
 - **[@fnordpig](https://github.com/fnordpig)** — Config subentry support (#1393) and Assist pipeline management tool (#1392).
-- **[@paul43210](https://github.com/paul43210)** — `array_patch` mode in `ha_manage_addon` for atomic GET-modify-POST (#1063).
+- **[@paul43210](https://github.com/paul43210)** — `array_patch` mode in `ha_manage_app` for atomic GET-modify-POST (#1063).
 - **[@L1AD](https://github.com/L1AD)** — Filed #966 proposing tool security policies; pointed to PolicyLayer's MCP-security work as prior art that inspired the predicate DSL shape.
 - **[@nightcityblade](https://github.com/nightcityblade)** — Updated stale Home Assistant Advanced Mode references after HA 2026.6 made formerly advanced options available by default (#1533).
 - **[@emmelutzer](https://github.com/emmelutzer)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕

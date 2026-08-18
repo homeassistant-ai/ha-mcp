@@ -1647,6 +1647,13 @@ def test_a_pending_hidden_rendering_keeps_its_base_key_checked(
             return frozenset()
         return frozenset({f"{base}{PARSED_RENDERING_SUFFIX}"})
 
+    # The baseline is taken with NOTHING pending, not with whatever the tree
+    # happens to have pending: a PR that rewords a tool summary legitimately
+    # leaves that key pending, and reading the live set here would score its
+    # exclusion — a correct one — as this test's failure.
+    monkeypatch.setattr(
+        sys.modules[__name__], "_pending_keys", lambda _surface: frozenset()
+    )
     baseline = {
         key
         for surface, key, _, _ in _literal_parity_pairs("de")
@@ -1666,6 +1673,26 @@ def test_a_pending_hidden_rendering_keeps_its_base_key_checked(
         f"stub, which has not moved, so nothing is owed a rewrite here"
     )
     assert base in keys, f"{base} is no longer compared at all"
+
+    # Positive control for the substitution itself: keys == baseline also holds
+    # if _is_owed_a_rewrite stopped consulting _pending_keys, or if this
+    # monkeypatch target drifted off the name the lookup resolves. Marking the
+    # bare key pending has to take it out of the comparison.
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "_pending_keys",
+        lambda surface: frozenset({base} if surface == TOOL_SOURCES_SURFACE else ()),
+    )
+    with_base_pending = {
+        key
+        for surface, key, _, _ in _literal_parity_pairs("de")
+        if surface == TOOL_SOURCES_SURFACE
+    }
+    assert base not in with_base_pending, (
+        f"marking {base} pending left it in the comparison, so the two passes "
+        "above prove nothing: either _is_owed_a_rewrite no longer consults "
+        "_pending_keys, or this monkeypatch no longer reaches the lookup"
+    )
 
 
 def test_every_guarded_surface_resolves_for_some_locale() -> None:

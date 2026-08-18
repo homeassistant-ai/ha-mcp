@@ -395,26 +395,21 @@ async def test_string_envelope_proxy_write_blocked(readonly_toolsearch_mcp):
     catalog = await server.mcp.local_provider._list_tools()
     names = {t.name for t in catalog}
 
-    # ha_manage_addon registers unconditionally (not supervisor-gated), but
+    # ha_manage_app registers unconditionally (not supervisor-gated), but
     # fall back to the always-registered energy tool if a future change
     # gates it, so this test stays meaningful on a non-HAOS container.
-    if "ha_manage_addon" in names:
-        inner_name = "ha_manage_addon"
+    if "ha_manage_app" in names:
+        inner_name = "ha_manage_app"
         inner_args = '{"slug": "x", "action": "install"}'
     else:
         inner_name = "ha_manage_energy_prefs"
         inner_args = '{"mode": "set", "config": {}}'
 
-    try:
-        result = await client.call_tool(
-            "ha_call_write_tool",
-            {"name": inner_name, "arguments": inner_args},
-        )
-    except ToolError as exc:
-        body = tool_error_to_result(exc)
-    else:
-        body = parse_mcp_result(result)
-    assert body.get("error", {}).get("code") == "READ_ONLY_MODE", body
+    body = await _expect_read_only_blocked(
+        client,
+        "ha_call_write_tool",
+        {"name": inner_name, "arguments": inner_args},
+    )
     assert body.get("tool_name") == inner_name, body
 
 

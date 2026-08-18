@@ -4,7 +4,7 @@ The **HA-MCP Custom Component** (`ha_mcp_tools`) can run the **full ha-mcp serve
 in-process**, inside the Home Assistant application, and expose it remotely
 through a Home Assistant webhook. This is one of the ways to run ha-mcp — and the
 recommended one. It is a complete, standalone ha-mcp install — a replacement for
-the add-on, Docker, and uvx/PyPI (stdio) server, not an addition to them. Run
+the app (add-on), Docker, and uvx/PyPI (stdio) server, not an addition to them. Run
 only one ha-mcp server; never run the in-process server alongside another
 install.
 
@@ -17,17 +17,17 @@ File & YAML services entry](#relationship-to-the-file--yaml-services-entry) belo
 ## Who it's for
 
 - **Home Assistant Container and Home Assistant Core users**, who cannot install
-  add-ons (add-ons require the Supervisor). Instead of running ha-mcp in a
+  apps (apps require the Supervisor). Instead of running ha-mcp in a
   separate Docker container or over stdio, you run it inside Home Assistant
   itself.
 - **Home Assistant OS / Supervised users** who would rather not run a separate
-  add-on. It works on HAOS too — the add-on remains a supported alternative, but
+  app. It works on HAOS too — the app remains a supported alternative, but
   you only need one of them; the two are fully independent.
 
 Because it reaches the internet through a Home Assistant webhook, the connect URL
 works through **Nabu Casa remote UI** (or any reverse proxy pointing at Home
 Assistant) with no separate tunnel or port forwarding — the same mechanism the
-Webhook Proxy add-on uses.
+Webhook Proxy app uses.
 
 ## How it works
 
@@ -50,7 +50,7 @@ The bring-up runs in the background, so it never delays Home Assistant startup.
 The in-process server requires **Home Assistant 2026.6.0 or newer**. Older Core
 releases constrain dependencies to versions that cannot run current `ha-mcp`
 servers. On older releases, the component remains available for its File & YAML
-services entry with an external add-on or Docker server, but its config flow blocks
+services entry with an external app or Docker server, but its config flow blocks
 creation of the incompatible in-process server entry.
 
 ## Setup
@@ -92,7 +92,7 @@ The server is reached through a Home Assistant webhook whose id is your secret
   `http://<home-assistant-host>:8123/api/webhook/<webhook-id>`
 
 The server is also reachable directly on its own port (default - same model
-as the add-on), bypassing the webhook, at the secret path (which looks like
+as the app), bypassing the webhook, at the secret path (which looks like
 `/private_<random>`):
 
 - **Direct LAN access:** `http://<home-assistant-ip>:9584/private_<random>`
@@ -163,19 +163,19 @@ To remove the API from every agent's selector entirely, turn off
 While a server entry is running, the integration adds an **HA-MCP** panel
 to the Home Assistant sidebar. It opens the server web settings UI (tool
 enable/disable/pin, feature flags, backups, themes) without needing the
-loopback URL - the same experience as the add-on "Open Web UI" button.
+loopback URL - the same experience as the app "Open Web UI" button.
 
 The panel is admin-only. Opening it establishes a short-lived session for
 your Home Assistant login, and every request re-checks that the account is
 still an active administrator. No token or secret ever appears in a URL,
 and the secret path stays on the loopback side of the proxy.
 
-## Independent from the add-on
+## Independent from the app
 
-The in-process server and the Home Assistant MCP Server add-on are completely
+The in-process server and the Home Assistant MCP Server app are completely
 independent: neither requires the other, and there is nothing to configure
-between them. The in-process server defaults to port **9584** while the add-on
-uses **9583**, so an existing add-on install does not conflict.
+between them. The in-process server defaults to port **9584** while the app
+uses **9583**, so an existing app install does not conflict.
 
 ## Options
 
@@ -187,8 +187,8 @@ Configure there just reports that.)
 |--------|---------|--------------|
 | **Release channel** | `stable` | `stable` installs the latest stable release; `dev` installs the latest development build. Both channels update automatically (a reload or restart, plus a periodic check, install the newest build of the selected channel). See [Release channels](#release-channels). |
 | **Automatic server updates** | on | When on, the selected channel's newest release is installed automatically (on reload/restart and via a periodic check). When off, the server stays on the version currently installed — new releases are still offered on the server's update entity, and its **Install** button installs one without turning automatic updates back on. Governs the ha-mcp **server package** only — component updates still come through HACS. A package override below overrides this. |
-| **Server port** | `9584` | Local TCP port the server listens on. `9584` avoids the add-on's `9583` so an existing add-on install does not conflict. |
-| **Network access** | `0.0.0.0` | The default matches the add-on: the port is reachable on your LAN with the secret path as the credential. `127.0.0.1` restricts direct access to the Home Assistant machine (the webhook and panel work either way). |
+| **Server port** | `9584` | Local TCP port the server listens on. `9584` avoids the app's `9583` so an existing app install does not conflict. |
+| **Network access** | `0.0.0.0` | The default matches the app: the port is reachable on your LAN with the secret path as the credential. `127.0.0.1` restricts direct access to the Home Assistant machine (the webhook and panel work either way). |
 | **Authentication mode** | `none` | `none`: the secret webhook URL is the credential. `ha_auth`: clients sign in with your Home Assistant account. `legacy`: self-hosted OAuth with a static Client ID + Secret, for OAuth-only clients (Gemini Spark, Copilot CLI). See [Security](#security). |
 | **ha-mcp package (advanced)** | empty (tracks the selected release channel) | The pip requirement installed at runtime. Leave it empty unless you are testing a pre-release — it accepts any pip requirement string, including a version pin or a GitHub tarball URL. An explicit value overrides the release channel and **disables automatic updates** (a pin stays put until you clear it); changing it forces a reinstall on the next reload. |
 | **Home Assistant URL for the server (advanced)** | empty (derived from your HA's http config) | How the in-process server reaches Home Assistant. Empty derives the loopback URL from your instance's real port and SSL setting (an SSL-enabled HA is reached over `https://127.0.0.1` with certificate verification off — the certificate never matches a loopback address). Only set a value when the server must take a different route entirely. |
@@ -321,7 +321,7 @@ The in-process server offers three authentication postures, chosen with the
 
 - **`none` (default): the secret webhook URL is the credential.** The webhook id
   is a high-entropy random string, and anyone who has the full URL can reach the
-  server — exactly like the Webhook Proxy add-on's default. When exposed through
+  server — exactly like the Webhook Proxy app's default. When exposed through
   Nabu Casa (or another HTTPS reverse proxy) the URL travels over TLS. Treat the
   URL like a password: don't share it or paste it where it could be logged.
 - **`ha_auth`: clients sign in with your Home Assistant account.** Home Assistant
@@ -344,7 +344,7 @@ The in-process server offers three authentication postures, chosen with the
   outstanding tokens, but only after the Home Assistant restart the repair
   prompts for. See [SECURITY.md](../SECURITY.md#in-process-server-ha_mcp_tools-in-process-server-entry)
   for the full threat model (unauthenticated consent page, permissive redirect
-  URIs, route ownership vs the add-on).
+  URIs, route ownership vs the app).
 
 All three postures ride Home Assistant's own remote access (Nabu Casa / your
 reverse proxy) for TLS. If you expose the server to the internet, prefer
@@ -366,7 +366,7 @@ are independent: the server works on its own, and most installs never need the
 File & YAML entry. Add it only if you enable ha-mcp's opt-in file and YAML editing
 tools (feature flags, off by default) — those tools call the privileged services
 that entry registers, and that applies to every server type, including an
-external add-on, Docker, or stdio server as well as the in-process server. Add or
+external app, Docker, or stdio server as well as the in-process server. Add or
 remove it at any time from the same **Add Integration** menu (choose **HA-MCP
 File & YAML Tools**); it changes nothing about how the in-process server runs.
 

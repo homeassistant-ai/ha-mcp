@@ -4,7 +4,7 @@ When ``Settings.redact_secrets`` is on (``redact_secrets`` addon option,
 ``REDACT_SECRETS`` env var, or the Server Settings web-UI toggle), three
 surfaces stop returning operator secrets verbatim:
 
-1. **Add-on options** (``ha_get_addon`` detail form, ``ha_manage_addon``'s
+1. **Add-on options** (``ha_get_app`` detail form, ``ha_manage_app``'s
    proxy-mode 403 hints): every ``options`` value whose Supervisor-serialized
    ``schema`` entry carries ``format: "password"`` is replaced with a
    set/empty sentinel. The schema is authoritative — keys without a schema
@@ -21,7 +21,7 @@ surfaces stop returning operator secrets verbatim:
 
 The set/empty sentinel split keeps the genuinely useful diagnostic — "is
 this credential configured at all?" — answerable without disclosing the
-value. ``ha_manage_addon`` and the config-entry flow writes reject
+value. ``ha_manage_app`` and the config-entry flow writes reject
 submitted values that are (or contain) a sentinel — unconditionally, not
 only while the flag is on — so a redacted marker can never be round-tripped
 into a live config (add-on writes still merge from the real, unredacted
@@ -188,7 +188,7 @@ def collect_addon_secret_values(options: Any, schema: Any) -> set[str]:
 def sentinel_option_keys(options: Any, _prefix: str = "") -> list[str]:
     """Dotted paths of submitted option values that equal a redaction sentinel.
 
-    Used by ``ha_manage_addon`` config mode to reject round-tripping a
+    Used by ``ha_manage_app`` config mode to reject round-tripping a
     redacted read back into a live add-on config.
     """
     keys: list[str] = []

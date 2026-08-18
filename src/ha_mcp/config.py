@@ -341,7 +341,7 @@ class Settings(BaseSettings):
     # either direction, and it is absent from the add-on config schemas
     # like enable_dev_mode. A leash on those surfaces, NOT a sandbox: dev
     # mode's update_source/restart can still replace the running server
-    # build, and in add-on mode ha_manage_addon can reach the add-on's
+    # build, and in add-on mode ha_manage_app can reach the add-on's
     # own options and ingress — gate those tools with policy rules (or
     # keep dev mode off) where that boundary matters.
     dev_tools_security_policy_access: bool = Field(

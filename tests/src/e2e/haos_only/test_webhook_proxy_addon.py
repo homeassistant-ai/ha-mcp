@@ -36,7 +36,7 @@ that path is exercised deliberately rather than relied on for setup.
 
 Tests exercise the addon's runtime through three observable surfaces:
 
-1. Supervisor / MCP tools (``ha_get_addon``, ``ha_manage_addon``,
+1. Supervisor / MCP tools (``ha_get_app``, ``ha_manage_app``,
    ``ha_call_service`` with ``hassio.addon_*``, ``ha_get_logs``).
 2. The HA Core webhook endpoint (``/api/webhook/<webhook_id>``) over
    HTTP using the bearer token the conftest yields.
@@ -87,12 +87,12 @@ _DISCOVERY_RE = re.compile(r"Discovered running MCP addon:\s*(\S+)")
 
 
 async def _get_addon_detail(mcp_client: Any, slug: str) -> dict[str, Any]:
-    raw = await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+    raw = await mcp_client.call_tool("ha_get_app", {"slug": slug})
     payload = parse_mcp_result(raw)
-    assert payload.get("success"), f"ha_get_addon({slug!r}) failed: {payload}"
+    assert payload.get("success"), f"ha_get_app({slug!r}) failed: {payload}"
     detail = payload.get("addon")
     assert isinstance(detail, dict), (
-        f"ha_get_addon({slug!r}) returned no addon dict: {payload}"
+        f"ha_get_app({slug!r}) returned no addon dict: {payload}"
     )
     return detail
 
@@ -162,13 +162,13 @@ def _extract_webhook_id(log_text: str) -> str | None:
 
 
 async def _set_options(mcp_client: Any, slug: str, options: dict[str, Any]) -> None:
-    """Update addon options via ha_manage_addon, asserting success."""
+    """Update addon options via ha_manage_app, asserting success."""
     raw = await mcp_client.call_tool(
-        "ha_manage_addon", {"slug": slug, "options": dict(options)}
+        "ha_manage_app", {"slug": slug, "options": dict(options)}
     )
     payload = parse_mcp_result(raw)
     ok = payload.get("success") is True or payload.get("status") == "pending_restart"
-    assert ok, f"ha_manage_addon options write failed: {payload}"
+    assert ok, f"ha_manage_app options write failed: {payload}"
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +263,7 @@ async def test_addon_logs_fetch_shape(
 async def test_addon_options_get_returns_dict(
     mcp_client: Any, webhook_proxy_started: Any
 ) -> None:
-    """``ha_get_addon`` exposes webhook-proxy options as a dict."""
+    """``ha_get_app`` exposes webhook-proxy options as a dict."""
     detail = await _get_addon_detail(mcp_client, WEBHOOK_PROXY_SLUG)
     options = detail.get("options")
     assert isinstance(options, dict), (
@@ -315,7 +315,7 @@ async def test_addon_start_stop_restart_roundtrip(
 async def test_addon_remote_url_round_trip(
     mcp_client: Any, webhook_proxy_started: Any
 ) -> None:
-    """``remote_url`` written via ha_manage_addon persists in Supervisor options.
+    """``remote_url`` written via ha_manage_app persists in Supervisor options.
 
     The addon's schema declares ``remote_url: str?``. Tests assert the
     write path round-trips through Supervisor; whether the addon actually

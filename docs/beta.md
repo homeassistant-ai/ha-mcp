@@ -6,37 +6,37 @@ Some ha-mcp tools are gated behind feature flags and disabled by default. They c
 
 | Tool | Toggle / env var | Description |
 |---|---|---|
-| `ha_config_set_yaml` | `enable_yaml_config_editing` (dev add-on Configuration tab); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_YAML_CONFIG_EDITING=true` env vars | Raw YAML editing of `configuration.yaml` and packages/*.yaml for YAML-only integrations. |
-| `ha_list_files` | `enable_filesystem_tools` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | List files in allowed directories. Requires `ha_mcp_tools` custom component. |
-| `ha_read_file` | `enable_filesystem_tools` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | Read files from allowed paths. Requires `ha_mcp_tools` custom component. |
-| `ha_write_file` | `enable_filesystem_tools` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | Write files to allowed directories. Requires `ha_mcp_tools` custom component. |
-| `ha_delete_file` | `enable_filesystem_tools` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | Delete files from allowed directories. Requires `ha_mcp_tools` custom component. |
-| `ha_manage_custom_tool` | `enable_code_mode` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_CODE_MODE=true` env vars | Sandboxed Python "escape hatch" that lets AI assistants write, run, save, and delete custom tools when no built-in tool covers the request. Code runs in pydantic-monty (no filesystem, no network); sandbox can call the HA REST API (`api_get`/`api_post`), send WebSocket commands (`ws_send`), call registered MCP tools (`call_tool`), or delete a saved tool (`delete_saved_tool`). Saved tools persist to disk via `CODE_MODE_SAVED_TOOLS_PATH` (defaults to `/data/saved_tools.json` in the dev add-on). |
-| _(behaviour flag, no new tool)_ | `enable_lite_docstrings` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_LITE_DOCSTRINGS=true` env vars | Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, `ha_call_service`, `ha_config_set_yaml`) with shorter variants that defer schema and example detail to `ha_get_skill_guide` (or its `skill://` resource). Reduces idle catalog token usage; relies on the LLM actually calling the skill tool/resource when it needs detail. See "Known limitations" below. |
-| `ha_get_dashboard_screenshot` (+ `include_screenshot` on `ha_config_get_dashboard`, `return_screenshot` on `ha_config_set_dashboard`) | `enable_dashboard_screenshot` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_DASHBOARD_SCREENSHOT=true` env vars | Render one or more responsive Lovelace images so the AI can see what it reads or creates. Rendering runs in a separate, opt-in engine — balloob's **Puppet** add-on (headless Chromium, Apache-2.0), which you install yourself — nothing heavy is installed unless you enable this AND install the engine. |
+| `ha_config_set_yaml` | `enable_yaml_config_editing` (dev app (add-on) Configuration tab); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_YAML_CONFIG_EDITING=true` env vars | Raw YAML editing of `configuration.yaml` and packages/*.yaml for YAML-only integrations. |
+| `ha_list_files` | `enable_filesystem_tools` (dev app); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | List files in allowed directories. Requires `ha_mcp_tools` custom component. |
+| `ha_read_file` | `enable_filesystem_tools` (dev app); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | Read files from allowed paths. Requires `ha_mcp_tools` custom component. |
+| `ha_write_file` | `enable_filesystem_tools` (dev app); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | Write files to allowed directories. Requires `ha_mcp_tools` custom component. |
+| `ha_delete_file` | `enable_filesystem_tools` (dev app); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | Delete files from allowed directories. Requires `ha_mcp_tools` custom component. |
+| `ha_manage_custom_tool` | `enable_code_mode` (dev app); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_CODE_MODE=true` env vars | Sandboxed Python "escape hatch" that lets AI assistants write, run, save, and delete custom tools when no built-in tool covers the request. Code runs in pydantic-monty (no filesystem, no network); sandbox can call the HA REST API (`api_get`/`api_post`), send WebSocket commands (`ws_send`), call registered MCP tools (`call_tool`), or delete a saved tool (`delete_saved_tool`). Saved tools persist to disk via `CODE_MODE_SAVED_TOOLS_PATH` (defaults to `/data/saved_tools.json` in the dev app). |
+| _(behaviour flag, no new tool)_ | `enable_lite_docstrings` (dev app); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_LITE_DOCSTRINGS=true` env vars | Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, `ha_call_service`, `ha_config_set_yaml`) with shorter variants that defer schema and example detail to `ha_get_skill_guide` (or its `skill://` resource). Reduces idle catalog token usage; relies on the LLM actually calling the skill tool/resource when it needs detail. See "Known limitations" below. |
+| `ha_get_dashboard_screenshot` (+ `include_screenshot` on `ha_config_get_dashboard`, `return_screenshot` on `ha_config_set_dashboard`) | `enable_dashboard_screenshot` (dev app); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_DASHBOARD_SCREENSHOT=true` env vars | Render one or more responsive Lovelace images so the AI can see what it reads or creates. Rendering runs in a separate, opt-in engine — balloob's **Puppet** app (headless Chromium, Apache-2.0), which you install yourself — nothing heavy is installed unless you enable this AND install the engine. |
 
 ## How to enable
 
 There are three paths depending on how you run ha-mcp:
 
-### Dev channel add-on (Home Assistant users)
+### Dev channel app (Home Assistant users)
 
-The dev channel add-on continues to expose its beta sub-flags on its
-Configuration page. Toggle them there, restart the add-on, done — the
-master beta toggle is auto-enabled for dev add-on users at start-up.
+The dev channel app continues to expose its beta sub-flags on its
+Configuration page. Toggle them there, restart the app, done — the
+master beta toggle is auto-enabled for dev app users at start-up.
 No web-UI step is needed.
 
-### Stable channel add-on (Home Assistant users)
+### Stable channel app (Home Assistant users)
 
-The stable add-on does NOT expose individual beta toggles. Use the web
+The stable app does NOT expose individual beta toggles. Use the web
 Settings UI instead:
 
-1. Open the add-on's web UI tab.
+1. Open the app's web UI tab.
 2. Open the **Server Settings** tab.
 3. Flip **Enable beta features** on.
 4. Enable the desired beta toggle below it (e.g. **Enable YAML config
    editing (beta)**).
-5. Restart the add-on.
+5. Restart the app.
 
 ### Non-add-on installs (Docker, uvx, pip)
 
@@ -51,7 +51,7 @@ ignored unless the master is also true.
 
 This tool edits `configuration.yaml` and package files directly, bypassing Home Assistant's config-entry flow. It includes safeguards (backup before every edit, YAML validation, key allowlist, path traversal blocking, post-edit config check), but operators should be aware of the following:
 
-**Two-step confirm flow (on by default).** Because a YAML edit re-serializes the whole file, an edit can change lines the AI never intended to touch (issue #1720). To surface that before it reaches disk, the confirm flow is **on by default**: the first `ha_config_set_yaml` call writes *nothing* and returns `preview: true`, a `confirm_token`, and a unified `diff` of exactly what would change on disk. The AI reviews that diff for collateral changes, then repeats the identical call adding `confirm_token` to apply the edit; every applied write also returns the final `diff`. If the file changed between preview and confirm the token no longer matches — the tool re-previews (`confirm_token_mismatch: true`) with a fresh token instead of writing stale content. Toggle it off (single-call writes, one less round-trip) via the **Require confirmation for YAML edits** sub-toggle under YAML config editing in the web Settings UI, the dev add-on Configuration tab, or `ENABLE_YAML_EDIT_CONFIRM=false`.
+**Two-step confirm flow (on by default).** Because a YAML edit re-serializes the whole file, an edit can change lines the AI never intended to touch (issue #1720). To surface that before it reaches disk, the confirm flow is **on by default**: the first `ha_config_set_yaml` call writes *nothing* and returns `preview: true`, a `confirm_token`, and a unified `diff` of exactly what would change on disk. The AI reviews that diff for collateral changes, then repeats the identical call adding `confirm_token` to apply the edit; every applied write also returns the final `diff`. If the file changed between preview and confirm the token no longer matches — the tool re-previews (`confirm_token_mismatch: true`) with a fresh token instead of writing stale content. Toggle it off (single-call writes, one less round-trip) via the **Require confirmation for YAML edits** sub-toggle under YAML config editing in the web Settings UI, the dev app Configuration tab, or `ENABLE_YAML_EDIT_CONFIRM=false`.
 
 **Config check has blind spots.** HA's config check — run automatically post-edit, and available manually via `ha_get_system_health(include="config_check")` — validates YAML syntax but does not catch all integration-level schema errors. An edit can pass validation, HA boots cleanly, but the target entity silently does not exist. Common LLM mistakes include mixing legacy and modern template sensor syntax, wrong field names (`value_template:` vs `state:`), and bad Jinja expressions.
 
@@ -63,7 +63,7 @@ This tool edits `configuration.yaml` and package files directly, bypassing Home 
 
 **The key allowlist is extensible per install.** Some integrations are legitimately YAML-first and too install-specific to hardcode globally. **Extra YAML write keys** (the "HA-MCP File & YAML Tools" integration options, the web Settings UI nested under YAML config editing, or `HA_MCP_EXTRA_YAML_KEYS`) takes a comma-separated list of extra top-level keys `ha_config_set_yaml` may write on this install, e.g. `alert2`. The integration-options set and the server setting are unioned, so a key configured in either place takes effect. Everything else is unchanged: the file allowlist, the confirm flow, the backup, and the post-edit config check all still apply, and an extra key with no reload service gets the conservative full-restart path. A small set of keys can never be added to this setting, because they redefine Home Assistant's own trust boundary rather than one integration's config: `homeassistant:` (auth providers, and the `packages:` root that bounds this very surface), `http:` (trusted proxies, CORS, IP-ban), `frontend:` and `lovelace:` (both load JavaScript modules into the authenticated dashboard). Those stay refused with an explicit message. This bounds the per-key edit path; `action="replace_file"` rewrites a whole file and has never been key-validated. Requires custom component 1.2.4 or newer.
 
-**Recovery requires filesystem access.** If an edit causes HA to enter recovery mode (e.g., a bad `!include` reference), `ha_config_set_yaml` cannot fix its own damage since the custom component doesn't load in recovery mode. Recovery requires SSH, the File Editor add-on, or `docker exec`.
+**Recovery requires filesystem access.** If an edit causes HA to enter recovery mode (e.g., a bad `!include` reference), `ha_config_set_yaml` cannot fix its own damage since the custom component doesn't load in recovery mode. Recovery requires SSH, the File Editor app, or `docker exec`.
 
 **Per-edit backups are restorable via `ha_manage_backup`.** Per-edit auto-backups are written to `.ha_mcp_tools_backups/` (at the Home Assistant config root) and can be listed, viewed, restored, and deleted with `ha_manage_backup(scope="edits", ...)`. Full HA snapshot tarballs are separate — create, list, and restore them with `scope="snapshot"`.
 
@@ -87,7 +87,7 @@ This tool exposes a sandboxed Python interpreter (`pydantic-monty`) to the AI as
 
 **The AI gets to write and run code on your HA instance.** Even though the sandbox prevents it from touching the filesystem or the public network, code can still call any tool the MCP server has registered, including write/destructive tools, and can hit any endpoint reachable via the HA REST or WebSocket API. The WebSocket surface in particular covers most registry CRUD (areas, devices, entities, automations) and template rendering — so this is effectively "do whatever HA's own UI can do, in any combination." Treat this like giving the AI a generic "do whatever existing tools allow you to do, in any combination" capability — not a tightly scoped per-feature tool.
 
-**Saved tools persist by default in the dev add-on.** Tools the AI saves via `save_as` are written to `CODE_MODE_SAVED_TOOLS_PATH` (defaults to `/data/saved_tools.json` in the add-on) and re-loaded on the next start. The cap is 256 saved tools per instance. Operators who want a clean slate can stop the add-on and delete the file. Operators migrating between environments can copy that JSON file to the new instance — it survives add-on updates, but **not** add-on uninstall/reinstall (the `/data` volume is recreated). Outside the add-on (pip / uvx / Docker direct), persistence is opt-in: set `CODE_MODE_SAVED_TOOLS_PATH=/path/to/tools.json` to enable.
+**Saved tools persist by default in the dev app.** Tools the AI saves via `save_as` are written to `CODE_MODE_SAVED_TOOLS_PATH` (defaults to `/data/saved_tools.json` in the app) and re-loaded on the next start. The cap is 256 saved tools per instance. Operators who want a clean slate can stop the app and delete the file. Operators migrating between environments can copy that JSON file to the new instance — it survives app updates, but **not** app uninstall/reinstall (the `/data` volume is recreated). Outside the app (pip / uvx / Docker direct), persistence is opt-in: set `CODE_MODE_SAVED_TOOLS_PATH=/path/to/tools.json` to enable.
 
 **Recursive self-call is blocked, but composition is not.** The sandbox refuses to invoke `ha_manage_custom_tool` from inside itself, so it can't directly recurse, but it can chain together every other tool the server registers. A buggy or adversarial prompt can still cause unexpected fan-out across destructive tools.
 
@@ -105,7 +105,7 @@ This tool exposes a sandboxed Python interpreter (`pydantic-monty`) to the AI as
 
 **Sandbox actions are auditable.** Every state-changing sandbox call (`POST /api/...`, every `ws_send`) logs a structured `sandbox.api_post` / `sandbox.ws_send` line at DEBUG level. Blocked attempts (e.g. a refused `POST /api/states/...` or a refused `config/core/update`) log a `sandbox.api_post.blocked` / `sandbox.ws_send.blocked` line at INFO level so they're visible in default operator logs.
 
-To get a full forensic trail of allowed calls, escalate the `ha_mcp.tools.tools_code` logger to DEBUG. This is HA's [`logger:` integration](https://www.home-assistant.io/integrations/logger/) and goes in **`configuration.yaml`** (not the add-on options):
+To get a full forensic trail of allowed calls, escalate the `ha_mcp.tools.tools_code` logger to DEBUG. This is HA's [`logger:` integration](https://www.home-assistant.io/integrations/logger/) and goes in **`configuration.yaml`** (not the app options):
 
 ```yaml
 # configuration.yaml
@@ -137,7 +137,7 @@ Pair this toggle with one of the following to mitigate:
 - `enable_tool_search` — the search transform's description already nudges the LLM toward the skill resources.
 - A clear system prompt that instructs the LLM to consult `ha_get_skill_guide` before creating/editing automations, scripts, or helpers.
 
-**Startup warning.** When this flag is enabled via environment variable, a single WARNING line is emitted at startup so non-add-on users see the trade-off in their logs. The add-on UI surfaces the same warning in the toggle's description.
+**Startup warning.** When this flag is enabled via environment variable, a single WARNING line is emitted at startup so non-add-on users see the trade-off in their logs. The app UI surfaces the same warning in the toggle's description.
 
 **What is replaced.** Only the descriptions exposed via the MCP `list_tools` reply are swapped. The Python docstrings in `src/ha_mcp/tools/` are unchanged — the substitution happens via a FastMCP transform installed during server initialisation. Tools not in the lite mapping pass through with their original descriptions.
 
@@ -148,17 +148,18 @@ Pair this toggle with one of the following to mitigate:
 ### Dashboard screenshot (`ha_get_dashboard_screenshot` / `include_screenshot` / `return_screenshot`)
 
 Rendering does not run inside ha-mcp; it runs in a separate engine — balloob's
-**Puppet** add-on (headless Chromium, https://github.com/balloob/home-assistant-addons).
+**Puppet** app (headless Chromium, https://github.com/balloob/home-assistant-addons).
 ha-mcp does not vendor it; you install it yourself. Operators should know:
 
 **Setup by deployment.**
-- *HA OS / Supervised:* add balloob's add-on repository
-  (`https://github.com/balloob/home-assistant-addons`) under Settings >
-  Add-ons > Add-on Store > Repositories, install the **Puppet** add-on, set its
+- *HA OS / Supervised:* add balloob's repository
+  (`https://github.com/balloob/home-assistant-addons`) under Settings > Apps >
+  Install app > ⋮ > Repositories (Settings > Add-ons > Add-on store before
+  Home Assistant 2026.2), install the **Puppet** App (add-on), set its
   `access_token` option to a Home Assistant long-lived access token, and start
-  it. ha-mcp discovers the running add-on through the Supervisor (it matches
+  it. ha-mcp discovers the running app through the Supervisor (it matches
   the `*_puppet` slug). (The assistant can do this for you end-to-end via
-  `ha_manage_addon(action="add_repository", repository=...)` then
+  `ha_manage_app(action="add_repository", repository=...)` then
   `action="install"` / `action="start"`, but you must supply the token.)
 - *Docker / Container:* run Puppet's image as a sidecar (build it from
   balloob's `puppet/` directory, with `access_token` set) and point ha-mcp at
@@ -168,7 +169,7 @@ ha-mcp does not vendor it; you install it yourself. Operators should know:
 
 **A long-lived access token is required.** Puppet authenticates by injecting a
 Home Assistant long-lived access token (the `access_token` option) into the
-browser. There is no token-less mode: the add-on's Supervisor token is not a
+browser. There is no token-less mode: the app's Supervisor token is not a
 valid HA frontend credential (HA Core rejects it), and a token cannot be minted
 programmatically. Create the token under Profile > Security — ideally for a
 dedicated, low-privilege user, since the engine holds whatever access that
@@ -184,20 +185,20 @@ user's whole UI to light on every screenshot (#1909). Recent Puppet versions
 fixed that cold-render dispatch, so ha-mcp's snapshot/restore bracket around
 each capture is now disabled (#1991); the guard code is retained so it can be
 switched back on if a future engine regression reintroduces the write. If you
-run an older Puppet build, update the add-on (or your self-hosted sidecar
+run an older Puppet build, update the app (or your self-hosted sidecar
 image) — older engines still persist the theme selection and will keep
 flipping it. A dedicated Puppet account remains a sound belt-and-suspenders
 setup. Language selection is local to Puppet's browser session.
 
-To change the Puppet engine add-on's own options (such as `keep_browser_open`)
-or to restart it, use `ha_manage_addon`; the screenshot tools only render and
-never modify the engine add-on's configuration.
+To change the Puppet engine app's own options (such as `keep_browser_open`)
+or to restart it, use `ha_manage_app`; the screenshot tools only render and
+never modify the engine app's configuration.
 
 **Puppet's HTTP listener has no inbound auth, and it publishes host port
 10000.** Anyone who can reach `http://<ha-host>:10000` can pull
 fully-authenticated dashboard renders. Keep it on a trusted network only — do
 NOT expose port 10000 to an untrusted LAN or the internet. (This is balloob's
-upstream packaging; the add-on's own info page calls it a prototype with "no
+upstream packaging; the app's own info page calls it a prototype with "no
 security.")
 
 **Charts are best-effort.** Canvas cards (ApexCharts, mini-graph-card,

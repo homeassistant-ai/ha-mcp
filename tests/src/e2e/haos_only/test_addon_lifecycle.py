@@ -22,10 +22,10 @@ Two coverage modes:
 2. **Stopped addons** (Mosquitto, MQTT IO — stay ``start=False`` because
    their schemas require config they don't have in the bake): exercise
    the surface that's reachable *without* the addon running —
-   ``ha_get_addon`` info + options dict + a logs-fetch shape check.
+   ``ha_get_app`` info + options dict + a logs-fetch shape check.
 
 Slugs are repository-hash-derived by Supervisor at install time, so every
-test resolves the slug at runtime by matching against ``ha_get_addon``'s
+test resolves the slug at runtime by matching against ``ha_get_app``'s
 display-name listing — mirroring the canary's pattern.
 """
 
@@ -87,9 +87,9 @@ async def _resolve_slug(mcp_client: Any, display_name: str) -> str:
     across rebuilds; the display name is the only field guaranteed to
     match ``build_image.py``'s ADDONS tuple.
     """
-    raw = await mcp_client.call_tool("ha_get_addon", {})
+    raw = await mcp_client.call_tool("ha_get_app", {})
     payload = parse_mcp_result(raw)
-    assert payload.get("success"), f"ha_get_addon listing failed: {payload}"
+    assert payload.get("success"), f"ha_get_app listing failed: {payload}"
 
     for entry in payload.get("addons", []):
         if entry.get("name") == display_name:
@@ -113,13 +113,13 @@ async def _resolve_slug(mcp_client: Any, display_name: str) -> str:
 
 
 async def _get_addon_detail(mcp_client: Any, slug: str) -> dict[str, Any]:
-    """Fetch ``ha_get_addon(slug=...)`` and return the inner ``addon`` dict."""
-    raw = await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+    """Fetch ``ha_get_app(slug=...)`` and return the inner ``addon`` dict."""
+    raw = await mcp_client.call_tool("ha_get_app", {"slug": slug})
     payload = parse_mcp_result(raw)
-    assert payload.get("success"), f"ha_get_addon({slug!r}) failed: {payload}"
+    assert payload.get("success"), f"ha_get_app({slug!r}) failed: {payload}"
     detail = payload.get("addon")
     assert isinstance(detail, dict), (
-        f"ha_get_addon({slug!r}) returned no addon dict: {payload}"
+        f"ha_get_app({slug!r}) returned no addon dict: {payload}"
     )
     return detail
 
@@ -151,7 +151,7 @@ async def _wait_for_state(
     *,
     timeout: float = _STATE_POLL_TIMEOUT,
 ) -> str:
-    """Poll ``ha_get_addon(slug=...)`` until ``state`` matches ``expected``.
+    """Poll ``ha_get_app(slug=...)`` until ``state`` matches ``expected``.
 
     Supervisor returns success from ``addon_{start,stop,restart}`` once
     the request is accepted, NOT once the container has reached the
@@ -216,7 +216,7 @@ async def _ensure_started(mcp_client: Any, slug: str) -> None:
 
 
 async def test_nodered_options_get_returns_dict(mcp_client: Any) -> None:
-    """`ha_get_addon(slug=...)` exposes the addon's options as a dict."""
+    """`ha_get_app(slug=...)` exposes the addon's options as a dict."""
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
     detail = await _get_addon_detail(mcp_client, slug)
     options = detail.get("options")
@@ -227,7 +227,7 @@ async def test_nodered_options_get_returns_dict(mcp_client: Any) -> None:
 
 
 async def test_nodered_options_set_persists(mcp_client: Any) -> None:
-    """`ha_manage_addon(options=...)` round-trips a probe key through Supervisor.
+    """`ha_manage_app(options=...)` round-trips a probe key through Supervisor.
 
     Reads current options, writes a probe value (toggles ``log_level``
     between "info" and "debug" — a schema-known Node-RED option that's
@@ -256,22 +256,22 @@ async def test_nodered_options_set_persists(mcp_client: Any) -> None:
 
         try:
             write_raw = await mcp_client.call_tool(
-                "ha_manage_addon",
+                "ha_manage_app",
                 {"slug": slug, "options": probe_options},
             )
             write_payload = parse_mcp_result(write_raw)
-            # ha_manage_addon's options-write returns either
+            # ha_manage_app's options-write returns either
             # ``{"success": True, ...}`` (config applied immediately) OR
             # ``{"status": "pending_restart", ...}`` when ``options`` /
             # ``network`` keys are written (see tools_addons.py:response
             # shape). BOTH indicate the write was accepted; the
             # pending_restart branch just means the addon needs a restart
-            # for runtime to pick it up. The next ``ha_get_addon`` read
+            # for runtime to pick it up. The next ``ha_get_app`` read
             # below verifies the persisted state regardless.
             ok = write_payload.get("success") is True or (
                 write_payload.get("status") == "pending_restart"
             )
-            assert ok, f"ha_manage_addon options probe write failed: {write_payload}"
+            assert ok, f"ha_manage_app options probe write failed: {write_payload}"
 
             detail_after = await _get_addon_detail(mcp_client, slug)
             options_after = detail_after.get("options") or {}
@@ -288,7 +288,7 @@ async def test_nodered_options_set_persists(mcp_client: Any) -> None:
             if "log_level" in restore_options or current_options:
                 try:
                     await mcp_client.call_tool(
-                        "ha_manage_addon",
+                        "ha_manage_app",
                         {"slug": slug, "options": restore_options},
                     )
                 except Exception:
@@ -319,7 +319,7 @@ async def test_nodered_logs_fetch_shape(mcp_client: Any) -> None:
 
 
 async def test_esphome_options_get_returns_dict(mcp_client: Any) -> None:
-    """`ha_get_addon(slug=...)` exposes ESPHome's options as a dict."""
+    """`ha_get_app(slug=...)` exposes ESPHome's options as a dict."""
     slug = await _resolve_slug(mcp_client, ESPHOME_NAME)
     detail = await _get_addon_detail(mcp_client, slug)
     options = detail.get("options")
@@ -330,7 +330,7 @@ async def test_esphome_options_get_returns_dict(mcp_client: Any) -> None:
 
 
 async def test_esphome_options_set_persists(mcp_client: Any) -> None:
-    """`ha_manage_addon(options=...)` round-trips a probe key for ESPHome.
+    """`ha_manage_app(options=...)` round-trips a probe key for ESPHome.
 
     ESPHome Device Builder's schema accepts ``leave_front_door_open``
     (a public toggle that's safe to flip mid-test). Use it as the
@@ -351,22 +351,22 @@ async def test_esphome_options_set_persists(mcp_client: Any) -> None:
 
         try:
             write_raw = await mcp_client.call_tool(
-                "ha_manage_addon",
+                "ha_manage_app",
                 {"slug": slug, "options": probe_options},
             )
             write_payload = parse_mcp_result(write_raw)
-            # ha_manage_addon's options-write returns either
+            # ha_manage_app's options-write returns either
             # ``{"success": True, ...}`` (config applied immediately) OR
             # ``{"status": "pending_restart", ...}`` when ``options`` /
             # ``network`` keys are written (see tools_addons.py:response
             # shape). BOTH indicate the write was accepted; the
             # pending_restart branch just means the addon needs a restart
-            # for runtime to pick it up. The next ``ha_get_addon`` read
+            # for runtime to pick it up. The next ``ha_get_app`` read
             # below verifies the persisted state regardless.
             ok = write_payload.get("success") is True or (
                 write_payload.get("status") == "pending_restart"
             )
-            assert ok, f"ha_manage_addon options probe write failed: {write_payload}"
+            assert ok, f"ha_manage_app options probe write failed: {write_payload}"
 
             detail_after = await _get_addon_detail(mcp_client, slug)
             options_after = detail_after.get("options") or {}
@@ -377,7 +377,7 @@ async def test_esphome_options_set_persists(mcp_client: Any) -> None:
         finally:
             try:
                 await mcp_client.call_tool(
-                    "ha_manage_addon",
+                    "ha_manage_app",
                     {"slug": slug, "options": dict(current_options)},
                 )
             except Exception:
@@ -413,7 +413,7 @@ async def test_matter_server_start_stop_restart_roundtrip(mcp_client: Any) -> No
     Matter Server is the addon set's representative of the
     ``ingress_panel=false`` shape (hidden from the HA sidebar even though
     Ingress is wired up). The lifecycle contract is the same as the other
-    running addons; the shape coverage comes from ``ha_get_addon`` detail.
+    running addons; the shape coverage comes from ``ha_get_app`` detail.
     """
     slug = await _resolve_slug(mcp_client, MATTER_NAME)
     try:
@@ -439,12 +439,12 @@ async def test_matter_server_start_stop_restart_roundtrip(mcp_client: Any) -> No
 
 
 async def test_matter_server_ingress_panel_false_shape(mcp_client: Any) -> None:
-    """`ha_get_addon(slug=...)` reports ``ingress_panel=false`` for Matter Server.
+    """`ha_get_app(slug=...)` reports ``ingress_panel=false`` for Matter Server.
 
     This is the load-bearing assertion for keeping Matter Server in the
     addon set: it's the only one whose Ingress route is configured but
     deliberately hidden from the HA sidebar (``ingress_panel=false``),
-    and ``ha_get_addon`` detail must surface that field. If a future
+    and ``ha_get_app`` detail must surface that field. If a future
     Supervisor version drops the field or renames it, this test catches
     it before regression hits real users.
     """
@@ -460,7 +460,7 @@ async def test_matter_server_ingress_panel_false_shape(mcp_client: Any) -> None:
 
 
 async def test_matter_server_options_set_persists(mcp_client: Any) -> None:
-    """`ha_manage_addon(options=...)` round-trips a probe key for Matter Server.
+    """`ha_manage_app(options=...)` round-trips a probe key for Matter Server.
 
     Matter Server's schema accepts ``beta`` (boolean toggle) — safe to
     flip between True and False as a probe value.
@@ -480,14 +480,14 @@ async def test_matter_server_options_set_persists(mcp_client: Any) -> None:
 
         try:
             write_raw = await mcp_client.call_tool(
-                "ha_manage_addon",
+                "ha_manage_app",
                 {"slug": slug, "options": probe_options},
             )
             write_payload = parse_mcp_result(write_raw)
             ok = write_payload.get("success") is True or (
                 write_payload.get("status") == "pending_restart"
             )
-            assert ok, f"ha_manage_addon options probe write failed: {write_payload}"
+            assert ok, f"ha_manage_app options probe write failed: {write_payload}"
 
             detail_after = await _get_addon_detail(mcp_client, slug)
             options_after = detail_after.get("options") or {}
@@ -498,7 +498,7 @@ async def test_matter_server_options_set_persists(mcp_client: Any) -> None:
         finally:
             try:
                 await mcp_client.call_tool(
-                    "ha_manage_addon",
+                    "ha_manage_app",
                     {"slug": slug, "options": dict(current_options)},
                 )
             except Exception:
@@ -528,12 +528,12 @@ async def test_matter_server_logs_fetch_shape(mcp_client: Any) -> None:
 
 
 async def test_appdaemon_webui_no_ingress_shape(mcp_client: Any) -> None:
-    """`ha_get_addon(slug=...)` reports ``webui`` set + ``ingress=false`` for AppDaemon.
+    """`ha_get_app(slug=...)` reports ``webui`` set + ``ingress=false`` for AppDaemon.
 
     Load-bearing assertion: AppDaemon is the addon set's representative
     of the ``webui`` field (a port-based URL that the HA UI renders as
     an external link) — distinct from Ingress addons. The wire contract
-    for ``ha_get_addon`` reading and surfacing ``webui`` would otherwise
+    for ``ha_get_app`` reading and surfacing ``webui`` would otherwise
     be uncovered.
     """
     slug = await _resolve_slug(mcp_client, APPDAEMON_NAME)

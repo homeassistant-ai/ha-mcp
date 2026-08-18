@@ -1144,7 +1144,7 @@ class EnergyTools:
         # Empty/whitespace stat_consumption would write a ``{"stat_consumption": ""}``
         # entry to energy prefs storage — a phantom row keyed on an empty
         # sensor reference. Same multi-modal-destructive class as
-        # ``ha_manage_addon`` slug guard.
+        # ``ha_manage_app`` slug guard.
         validate_identifier_not_empty(
             stat_consumption,
             "stat_consumption",

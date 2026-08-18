@@ -28,6 +28,7 @@ from fastmcp.tools import Tool
 from mcp.types import ToolAnnotations
 
 from ..errors import ErrorCode, create_error_response
+from ..renamed_tools import current_tool_name
 
 if TYPE_CHECKING:
     from fastmcp.server.transforms import GetToolNext
@@ -439,6 +440,13 @@ class CategorizedSearchTransform(BM25SearchTransform):
             # Rebuild category cache if catalog has changed
             await transform._rebuild_category_cache(ctx)
 
+            # A client working from an older catalog can name a tool that has
+            # since been renamed. The category check below reads the live
+            # catalog, so it would reject that call before the re-dispatch
+            # reaches RenamedToolAliasMiddleware — resolve the name here too,
+            # and the alias covers both call shapes.
+            name = current_tool_name(name)
+
             # Tolerate `arguments` passed as a JSON string — small models
             # sometimes serialize it before sending. Parse once up front so
             # downstream logic can assume a dict (or None).
@@ -469,15 +477,22 @@ class CategorizedSearchTransform(BM25SearchTransform):
                     transform._call_write_name,
                     transform._call_delete_name,
                 )
-                and arguments["name"] in all_known
             ):
-                logger.warning(
-                    "Detected double-wrapped proxy call for '%s' via %s — unwrapping",
-                    arguments["name"],
-                    name,
-                )
-                name = arguments["name"]
-                arguments = arguments.get("arguments") or {}
+                # The envelope carries whatever name the client knows the tool
+                # by, and this check reads the live catalog — so resolve the
+                # inner name for the same reason the outer one is resolved
+                # above, or the alias covers one envelope shape and not the
+                # other.
+                inner_name = current_tool_name(arguments["name"])
+                if inner_name in all_known:
+                    logger.warning(
+                        "Detected double-wrapped proxy call for '%s' via %s"
+                        " — unwrapping",
+                        inner_name,
+                        name,
+                    )
+                    name = inner_name
+                    arguments = arguments.get("arguments") or {}
 
             if name not in allowed:
                 _raise_wrong_category_error(name, transform, proxy_name)
