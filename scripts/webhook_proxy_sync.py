@@ -283,12 +283,12 @@ DOCS_BANNERS = {
     "mcp_proxy_dev": (
         "## Only one flavor runs at a time (dev vs stable)\n"
         "\n"
-        "This is the **dev** build. It is fully isolated from the stable Webhook Proxy add-on\n"
+        "This is the **dev** build. It is fully isolated from the stable Webhook Proxy app\n"
         "(separate integration, webhook URL, and OAuth credentials), but the two **cannot run at\n"
         "the same time** — they would collide over Home Assistant's root OAuth `/authorize` and\n"
-        "`/token` routes. If you start this add-on while the stable **Webhook Proxy for HA MCP**\n"
-        "add-on is running, it refuses to start (a clear error in the add-on log plus a Home\n"
-        "Assistant notification). Stop the stable add-on first; the notification clears\n"
+        "`/token` routes. If you start this app while the stable **Webhook Proxy for HA MCP**\n"
+        "app is running, it refuses to start (a clear error in the app log plus a Home\n"
+        "Assistant notification). Stop the stable app first; the notification clears\n"
         "automatically on the next clean start.\n"
         "\n"
     ),
