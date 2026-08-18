@@ -76,7 +76,7 @@ TOKEN_HINT = (
 _INSTALL_HELP = (
     "Dashboard screenshot mode is enabled, but the Puppet screenshot engine "
     "App (add-on) is not installed. On HA OS / Supervised: (1) add balloob's "
-    f"repository ({_REPO_URL}) under Settings > Apps > App store > "
+    f"repository ({_REPO_URL}) under Settings > Apps > Install app > ⋮ > "
     "Repositories (Settings > Add-ons > Add-on store before Home Assistant "
     "2026.2), then install the 'Puppet' app; and (2) it REQUIRES a "
     f"token — {TOKEN_HINT}. Without a token the engine only serves a "

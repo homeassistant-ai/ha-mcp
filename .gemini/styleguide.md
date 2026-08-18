@@ -70,7 +70,7 @@ Verify that safety annotations match actual tool behavior:
 - Tool with `readOnlyHint: True` must NOT modify state (no writes, no service calls)
 - Tool with `destructiveHint: True` must actually delete data
 - State-changing operations should have `idempotentHint: True` only if safe to retry
-- Tool with `openWorldHint: True` must reach an external, third-party-authored world (HACS store, add-on repositories, GitHub release feeds, arbitrary import URLs); a tool whose domain is the local Home Assistant instance should use `False`. It is open-world if its output carries externally-authored content back to the client, even when a local integration (HACS, Supervisor, HA Core) makes the actual network call on its behalf
+- Tool with `openWorldHint: True` must reach an external, third-party-authored world (HACS store, App (add-on) repositories, GitHub release feeds, arbitrary import URLs); a tool whose domain is the local Home Assistant instance should use `False`. It is open-world if its output carries externally-authored content back to the client, even when a local integration (HACS, Supervisor, HA Core) makes the actual network call on its behalf
 
 Flag HIGH severity if annotation contradicts actual behavior in the implementation.
 
@@ -126,6 +126,7 @@ These rules apply to new or modified tool docstrings in the PR diff only -- not 
 
 1. **Comments**: Only for non-obvious logic - too many comments is an anti-pattern (code should be self-documenting)
 2. **CHANGELOG.md**: Auto-generated via semantic-release (don't edit manually)
+3. **Apps, not add-ons**: Home Assistant 2026.2 renamed add-ons to apps. New user-facing text says **App (add-on)** on first mention and **app** after it; the retired term never stands alone. Identifiers keep their spelling — Supervisor's `/addons` routes, add-on slugs, the `addon` issue label, `homeassistant-addon*/` paths — as do the literal pre-2026.2 menu labels inside a compatibility note. Flag MEDIUM severity when new documentation names the product with the old term by itself.
 
 ## Architecture Alignment
 
@@ -181,7 +182,7 @@ A change is BREAKING only if it removes functionality that users depend on.
 
 ## Accessibility (web UI)
 
-Both rendered surfaces — the Astro docs site (`site/`) and the add-on settings UI (`src/ha_mcp/settings_ui/__init__.py` + `settings.css` / `settings.js`) — follow the conventions from #1574/#1596, anchored in CI by the `site-checks` job (`astro check`, `eslint-plugin-astro` + `jsx-a11y`, and an axe-core audit over the built pages — all blocking).
+Both rendered surfaces — the Astro docs site (`site/`) and the app settings UI (`src/ha_mcp/settings_ui/__init__.py` + `settings.css` / `settings.js`) — follow the conventions from #1574/#1596, anchored in CI by the `site-checks` job (`astro check`, `eslint-plugin-astro` + `jsx-a11y`, and an axe-core audit over the built pages — all blocking).
 
 **Flag MEDIUM severity when a change:**
 

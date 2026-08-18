@@ -44,7 +44,7 @@ RETIRED_WITH_CURRENT = (
         re.compile(r"Settings\s*(?:->|→|>)\s*Add-ons"),
         re.compile(r"Settings\s*(?:->|→|>)\s*Apps"),
     ),
-    (re.compile(r"[Aa]dd-on [Ss]tore"), re.compile(r"App store")),
+    (re.compile(r"[Aa]dd-on [Ss]tore"), re.compile(r"App store|Install app")),
 )
 
 

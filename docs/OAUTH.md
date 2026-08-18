@@ -133,7 +133,7 @@ Check that `HOMEASSISTANT_URL` is correct and accessible from the server running
 
 ### Can I use OAuth with Home Assistant OS?
 
-No. The ha-mcp add-on doesn't support OAuth mode.
+No. The ha-mcp App (add-on) doesn't support OAuth mode.
 
 **Alternatives:**
 - Run ha-mcp OAuth on another device (Raspberry Pi, NAS, PC)

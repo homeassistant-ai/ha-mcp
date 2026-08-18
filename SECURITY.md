@@ -55,7 +55,7 @@ other machines on the LAN. To restrict to the local machine, set
 fastmcp ships a Host/Origin guard — a DNS-rebinding defense that only accepts
 loopback `Host` headers and same-origin/loopback `Origin`s. ha-mcp defaults it
 off (`FASTMCP_HTTP_HOST_ORIGIN_PROTECTION=false`) across its Streamable-HTTP
-entry points (`ha-mcp-web`, `ha-mcp-oauth`, `ha-mcp-oidc`, the add-on, and the
+entry points (`ha-mcp-web`, `ha-mcp-oauth`, `ha-mcp-oidc`, the App (add-on), and the
 in-process component server). The supported
 deployment model — reverse proxies, tunnels (Cloudflare, Nabu Casa), and direct
 LAN access — presents `Host` headers ha-mcp cannot enumerate, and the guard
@@ -241,12 +241,12 @@ mode** option in the entry options:
   - **TLS is required in practice** — the endpoints ride Home Assistant's own
     HTTP, so expose them only over HA's HTTPS remote access (Nabu Casa or a
     TLS-terminating reverse proxy), never plaintext over the internet.
-  - **Route ownership:** the component and the Webhook Proxy add-on both bind
+  - **Route ownership:** the component and the Webhook Proxy app both bind
     the root `/authorize`/`/token`; only one may own them per Home Assistant
-    instance. When the add-on already owns them, the component's legacy mode
+    instance. When the app already owns them, the component's legacy mode
     still enables and serves on its scoped endpoints only, logging a warning —
     metadata-honoring clients are unaffected; metadata-ignoring clients that
-    guess root paths reach the add-on instead.
+    guess root paths reach the app instead.
 
 The connect notification deliberately carries no secrets: Home Assistant
 shows persistent notifications to every authenticated user, so the webhook
@@ -270,13 +270,13 @@ re-validates that the session still maps to an active admin. The loopback secret
 path is never exposed to the browser and no token or secret is placed in a URL;
 the proxy returns 503 whenever the server is not running.
 
-### Webhook Proxy add-on (`ha_mcp_webhook_proxy`)
+### Webhook Proxy app (`ha_mcp_webhook_proxy`)
 
-In the add-on's `ha_auth` mode the Home Assistant login is the credential, not
+In the app's `ha_auth` mode the Home Assistant login is the credential, not
 the webhook URL. The URL without a Bearer gets a 401, and the URL is not
 withheld: as in any OAuth mode, the RFC 9728 protected-resource document
 advertises it at a fixed unauthenticated path so clients can discover the
-endpoint. (This is the difference from the add-on's default posture with OAuth
+endpoint. (This is the difference from the app's default posture with OAuth
 disabled, where the URL is withheld because it alone is the credential.)
 
 **`ha_auth` is an access gate, not per-user authorization.** It validates the
@@ -286,7 +286,7 @@ non-administrators, and system-generated accounts are all accepted alike. (Home
 Assistant core itself rejects a deactivated user's tokens, so deactivation does
 revoke proxy access.) The in-process entry above, by contrast, accepts only
 active human administrators. The caller's Bearer is never forwarded upstream:
-the ha-mcp add-on services every request with its own
+the ha-mcp app services every request with its own
 Supervisor/`homeassistant_api` privileges regardless of which account
 authenticated. A caller holding a credential Home Assistant core honors is a
 trusted principal per "MCP clients are trusted principals" above, which draws
@@ -294,22 +294,22 @@ the line at possession of a working credential — not at holding any particular
 Home Assistant role.
 
 Treat a Home Assistant account on this instance as admin-equivalent wherever the
-add-on runs `ha_auth`: every account that can sign in reaches the same tool
+app runs `ha_auth`: every account that can sign in reaches the same tool
 surface. Because the gate never inspects the account's role, demoting a user out
 of the administrator group does not revoke their access through the proxy —
 deactivate the account, which Home Assistant honors immediately by dropping that
-user's refresh tokens. Turning the add-on's OAuth mode off revokes nobody, and
+user's refresh tokens. Turning the app's OAuth mode off revokes nobody, and
 loosens the boundary: the webhook id persists across the switch, so that posture
 falls back to treating as the sole credential a URL every `ha_auth` client
 already holds — and one that was advertised anonymously the whole time `ha_auth`
 was on. Treat any webhook id that has served `ha_auth` as public, and rotate it
-(add-on DOCS.md, "Rotating the webhook URL") when moving to the URL-secret
+(the app's DOCS.md, "Rotating the webhook URL") when moving to the URL-secret
 posture. The in-process entry's admin restriction is a property of that entry,
-not a guarantee of the add-on.
+not a guarantee of the app.
 
-The add-on's `legacy` mode carries the same properties as the in-process
+The app's `legacy` mode carries the same properties as the in-process
 `legacy` mode described above — the component's implementation was ported from
-this add-on's — including the static `client_id`/`client_secret` as the sole
+this app's — including the static `client_id`/`client_secret` as the sole
 boundary, admin-equivalent access, self-issued HMAC bearers, and revocation by
 credential rotation plus a restart. Only one of the two may own the root
 `/authorize` and `/token` routes per Home Assistant instance.
@@ -362,14 +362,14 @@ credential rotation plus a restart. Only one of the two may own the root
   data — and `run_saved` executes with the caller's own HA token, granting no
   access the caller lacks. Any client that can reach ha-mcp is a trusted
   principal (see [Threat Model](#threat-model) above).
-- Any Home Assistant account being accepted by the Webhook Proxy add-on's
+- Any Home Assistant account being accepted by the Webhook Proxy app's
   `ha_auth` mode — non-administrators and system-generated accounts alike:
   holding a credential Home Assistant core honors makes a caller a trusted
   principal (see [Threat Model](#threat-model) above), which is the bar that
   mode sets.
   `ha_auth` is an access gate, not per-user authorization; the in-process
   entry's admin restriction is a property of that entry, not a guarantee of the
-  add-on.
+  app.
 - Vulnerabilities that are only exploitable due to a misconfigured deployment
   (e.g., standard-mode instance exposed to the internet without TLS, or a
   network-reachable HTTP entrypoint using the default `MCP_SECRET_PATH`).
@@ -395,7 +395,7 @@ and carries a larger attack surface than the standard LLAT setup.
   restore or delete
   backups. Set `HA_MCP_DISABLE_SETTINGS_UI` to not serve the UI at all.
   Standard mode instead mounts the UI under the MCP secret path, which already
-  gates the tool surface. The add-on mounts it twice: under that secret path
+  gates the tool surface. The app mounts it twice: under that secret path
   for direct access, and at the bare root for Home Assistant ingress, where the
   routes admit only the Supervisor peer (`172.30.32.2`) and 403 every other
   caller.

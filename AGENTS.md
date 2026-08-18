@@ -159,7 +159,7 @@ deliberately omits `github-actions[bot]` to keep that lever.
 
 | Label | Meaning |
 |-------|---------|
-| `addon` | Issue is specific to the Home Assistant Add-on deployment (`homeassistant-addon/`, Supervisor ingress) |
+| `addon` | Issue is specific to the Home Assistant App (add-on) deployment (`homeassistant-addon/`, Supervisor ingress) |
 | `docker` | Issue is specific to the Docker / containerized deployment (`Dockerfile`, container env) |
 | `javascript` | Issue concerns the project website / Astro app (TypeScript) under `site/` |
 
@@ -352,11 +352,11 @@ since the previous stable tag.
 | `semver-release.yml` | Biweekly Wed 10:00 UTC or manual dispatch | Stable release (cuts version tag + GitHub release) |
 | `release-publish.yml` | After SemVer Release (`workflow_run`) or manual dispatch | Publish stable Docker image (`:latest` + `:stable` + semver) + MCP registry |
 | `build-binary.yml` | Release | Linux/macOS/Windows binaries |
-| `addon-publish.yml` | Release | HA add-on update |
+| `addon-publish.yml` | Release | HA app update |
 | `sync-tool-docs.yml` | Push to master (`src/ha_mcp/tools/`, `scripts/extract_tools.py`) | Regenerate `tools.json`, README, DOCS.md |
 | `locale-sync.yml` | Daily schedule + manual dispatch | Machine-translate stale/missing strings post-merge and push them straight to master |
 
-**Docker image tags** (`ghcr.io/homeassistant-ai/ha-mcp`): stable releases push `:latest` + `:stable` + semver tags (`release-publish.yml`); dev builds push only `:dev` + `:dev-<sha>` (`publish-dev.yml`) — **never `:latest`**, which is reserved for stable. The HA add-on images live in separate repos (`-addon-{arch}`, `-addon-dev-{arch}`) and are selected by an explicit `version:` pin, not by `:latest`.
+**Docker image tags** (`ghcr.io/homeassistant-ai/ha-mcp`): stable releases push `:latest` + `:stable` + semver tags (`release-publish.yml`); dev builds push only `:dev` + `:dev-<sha>` (`publish-dev.yml`) — **never `:latest`**, which is reserved for stable. The HA app images live in separate repos (`-addon-{arch}`, `-addon-dev-{arch}`) and are selected by an explicit `version:` pin, not by `:latest`.
 
 ## Development Commands
 
@@ -480,6 +480,19 @@ src/ha_mcp/
 
 **Tool Completion Semantics**: Tools should wait for operations to complete before returning, with optional `wait` parameter for control.
 
+## Terminology: apps, not add-ons
+
+Home Assistant 2026.2 renamed add-ons to apps, and the old term is deprecated.
+In anything a user or an agent reads — documentation, tool titles and
+descriptions, settings-UI strings, config-flow text — write **App (add-on)** on
+first mention and **app** afterwards. The retired term never stands on its own.
+
+What keeps the old spelling, because it names an identifier rather than the
+product: Supervisor's `/addons` routes and `addon_` container prefix, add-on
+slugs, the `addon` issue label, the `homeassistant-addon*/` directories, the
+`deployment_mode` value `addon`, and the literal pre-2026.2 menu labels inside a
+compatibility note (on those versions the panel really is *Add-ons*).
+
 ## Writing MCP Tools
 
 ### Naming Convention
@@ -577,7 +590,7 @@ Every tool needs `tags={"Category Name"}` (native FastMCP parameter). Drives the
 | `readOnlyHint: True` | `False` | Tool does not modify its environment |
 | `destructiveHint: True` | `True` | Tool may perform destructive updates (only meaningful when `readOnlyHint` is false). Set to `False` for non-destructive writes (e.g., creating a record) |
 | `idempotentHint: True` | `False` | Repeated calls with same args have no additional effect (only meaningful when `readOnlyHint` is false) |
-| `openWorldHint: True` | `True` | Tool reaches an external, third-party-authored world (HACS store, add-on repositories, GitHub release feeds, arbitrary import URLs). Set to `False` when the tool's domain is the local Home Assistant instance. A tool is also open-world if its output carries externally-authored content back to the client, even when a local integration (HACS, Supervisor, HA Core) makes the actual network call on its behalf — `ha_get_overview` and `ha_get_system_health` embed the update-check field that reaches PyPI / the Supervisor store, while `ha_get_blueprint` and `ha_config_list_dashboard_resources` return externally-authored content from purely local reads. Required on every tool — the default is `true`, so an omitted value silently marks a local tool as open-world |
+| `openWorldHint: True` | `True` | Tool reaches an external, third-party-authored world (HACS store, app repositories, GitHub release feeds, arbitrary import URLs). Set to `False` when the tool's domain is the local Home Assistant instance. A tool is also open-world if its output carries externally-authored content back to the client, even when a local integration (HACS, Supervisor, HA Core) makes the actual network call on its behalf — `ha_get_overview` and `ha_get_system_health` embed the update-check field that reaches PyPI / the Supervisor store, while `ha_get_blueprint` and `ha_config_list_dashboard_resources` return externally-authored content from purely local reads. Required on every tool — the default is `true`, so an omitted value silently marks a local tool as open-world |
 
 **Version baseline:** annotations describe a tool's behavior against current
 upstream versions of any external engine or component it drives; a side effect
@@ -718,7 +731,7 @@ fully validate a component change before merge.
   1.1.0 that had already shipped without the gated behaviours, so 1.1.0 builds
   split into with/without and the gate could not tell them apart).
 - **Keep the component backward-compatible with the released server.** The
-  component (HACS) and the server (add-on / PyPI / Docker) follow the same
+  component (HACS) and the server (app / PyPI / Docker) follow the same
   release cycle but are updated independently per install, so a new component
   can run against an *older* server. Never remove or tighten an existing service
   schema (e.g. dropping a param from a strict `vol.Schema`) without a shim the
@@ -733,10 +746,10 @@ fully validate a component change before merge.
 **One canonical store, generated projections, automated retranslation**
 (issue #2083). The settings UI catalogs
 (`src/ha_mcp/settings_ui/locales/<code>.json`) are the canonical store for
-every string except the component's config flow: the add-on option strings
+every string except the component's config flow: the app option strings
 live there under `addon.<key>.*` (plus `features.<key>.*` for options the
 settings UI also shows, and `addon_stable.<key>.*` for a stable-flavor
-wording deviation). Both add-on flavors' `translations/*.yaml` and the
+wording deviation). Both app flavors' `translations/*.yaml` and the
 `FEATURE_META` block in `settings.js` are **generated** from that store by
 `scripts/generate_locales.py` — never edit them by hand;
 `test_derived_catalogs_match_the_canonical_store` fails until you regenerate.
@@ -791,7 +804,7 @@ artifact that a separate post-merge workflow keeps current. Separately from
 those key rules, both authored surfaces cap how much *text* a catalog
 may leave byte-identical to English or omit outright, so a stub cannot ride the
 fallbacks: 5% for the settings UI `messages`, its `tools` titles and
-descriptions, and each generated add-on projection (per flavor, computed from
+descriptions, and each generated app projection (per flavor, computed from
 the canonical store), and 15% for the component catalogs,
 which carry the product names as keys of their own. On top of that share, a
 `tools` entry whose title *and* description are *both* byte-identical to English
@@ -879,36 +892,36 @@ changed. The engine itself is one function (`_call_gemini`) with
 Gemini-compatible endpoint, so replacing the provider stays a one-function
 change.
 
-The Webhook Proxy add-on and its bundled integration stay **English-only by
+The Webhook Proxy app and its bundled integration stay **English-only by
 decision** — not worth the upkeep. The test records that, so any other new
 catalog directory fails until it is either translated everywhere or listed as
 English-only alongside them.
 
-## Home Assistant Add-on
+## Home Assistant App
 
 **Required files:**
-- `repository.yaml` (root) - For HA add-on store recognition
+- `repository.yaml` (root) - For HA app store recognition
 - `homeassistant-addon/config.yaml` - Must match `pyproject.toml` version
 
-**Two add-on flavors:** `homeassistant-addon/` (stable, slug `ha_mcp`) and
+**Two app flavors:** `homeassistant-addon/` (stable, slug `ha_mcp`) and
 `homeassistant-addon-dev/` (dev channel, slug `ha_mcp_dev`) are *separate*
-add-ons with *separate* `config.yaml` files.
+apps with *separate* `config.yaml` files.
 
 **Functional config is NOT auto-synced between them.** The release pipeline
 only syncs the *version* (the `update-addon-config` job) and the *changelog*
 (the `Copy changelog to addon directory` step in `semver-release.yml`) into
 `homeassistant-addon/`. Functional keys — `ingress`, `ports`,
 `host_network`, `options`/`schema`, etc. — must be edited **by hand** in each
-flavor. When you add a non-beta capability to the dev add-on that should also
+flavor. When you add a non-beta capability to the dev app that should also
 ship on stable (e.g. `ingress` for the web Settings UI / "Open Web UI" button),
 mirror it into `homeassistant-addon/config.yaml` **in the same PR**. Assuming
-"the release pipeline handles it" is what kept `ingress` off the stable add-on.
+"the release pipeline handles it" is what kept `ingress` off the stable app.
 Beta-only keys are the deliberate exception — see the NOTE in
 `homeassistant-addon/config.yaml` and `docs/beta.md`.
 
-### Webhook Proxy add-on: dev-first, promote-only
+### Webhook Proxy app: dev-first, promote-only
 
-**Any work on the Webhook Proxy add-on must start by reading
+**Any work on the Webhook Proxy app must start by reading
 [`homeassistant-addon-webhook-proxy/AGENTS.md`](homeassistant-addon-webhook-proxy/AGENTS.md)**
 — it owns the full flow (flavors, versioning guard, promotion, testing).
 The short version: `homeassistant-addon-webhook-proxy/` (stable) is never

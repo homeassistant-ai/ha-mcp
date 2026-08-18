@@ -10,9 +10,9 @@ Common questions and solutions for ha-mcp setup.
 
 You can also use ha-mcp with other AI clients. See the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) for 15+ supported clients.
 
-### Do I need the Home Assistant Add-on?
+### Do I need the Home Assistant App (add-on)?
 
-**No.** The HA add-on is just one installation method. Most users run ha-mcp directly on their computer using `uvx` (recommended for Claude Desktop). The add-on is only needed if you want to run ha-mcp inside your Home Assistant OS environment.
+**No.** The HA app is just one installation method. Most users run ha-mcp directly on their computer using `uvx` (recommended for Claude Desktop). The app is only needed if you want to run ha-mcp inside your Home Assistant OS environment.
 
 ### What's the difference between ha-mcp and Home Assistant's built-in MCP?
 
@@ -74,7 +74,7 @@ This is a known Claude.ai behavior that affects all MCP servers, not just ha-mcp
 
 **Check for a port in the URL.** Your connector URL is built on your Home Assistant's own public address, which must **not** contain a port such as `:8123` (or any other port). To check, open just that base address (e.g. `https://ha.example.com`, without the `/api/webhook/...` secret path) in a browser — it should bring up your HA login page. Remote clients cannot reach a URL that carries a port, even though it loads fine in your own browser. Home Assistant can still listen on 8123 internally, as long as a reverse proxy, tunnel, or 443 port-forward serves that hostname — just don't put the port in the URL you paste.
 
-**Tailscale Funnel: use port `443`.** Funnel can also serve on the alternate HTTPS ports it offers (`8443`, `10000`), but Claude.ai's connector backend does not reliably reach non-standard ports: the connection fails identically in every auth mode, and no request from Anthropic's range (`160.79.104.0/21`) ever reaches the server — nothing appears in any log. Use standard port `443` instead, where the same setup connects on the first try. The official Tailscale add-on's built-in **"Share Home Assistant with Serve or Funnel"** option already exposes Home Assistant on `443`, so use that hostname in the connector URL (same webhook path). See [#2080](https://github.com/homeassistant-ai/ha-mcp/issues/2080).
+**Tailscale Funnel: use port `443`.** Funnel can also serve on the alternate HTTPS ports it offers (`8443`, `10000`), but Claude.ai's connector backend does not reliably reach non-standard ports: the connection fails identically in every auth mode, and no request from Anthropic's range (`160.79.104.0/21`) ever reaches the server — nothing appears in any log. Use standard port `443` instead, where the same setup connects on the first try. The official Tailscale app's built-in **"Share Home Assistant with Serve or Funnel"** option already exposes Home Assistant on `443`, so use that hostname in the connector URL (same webhook path). See [#2080](https://github.com/homeassistant-ai/ha-mcp/issues/2080).
 
 ### "Terminating session: None" in server logs
 
@@ -262,15 +262,15 @@ source ~/.zshrc
 
 None of the shipped example configs use parentheses in the key, so a default setup never hits this – it is specifically a hand-authored key like `Home Assistant (ha-mcp)` that trips it. This is a Claude Desktop client behavior, not a ha-mcp problem: ha-mcp's own tool names are all valid `snake_case`. See [#1743](https://github.com/homeassistant-ai/ha-mcp/issues/1743).
 
-### Can't connect remotely? Try the Webhook Proxy add-on {#webhook-proxy}
+### Can't connect remotely? Try the Webhook Proxy app {#webhook-proxy}
 
-If you're having trouble setting up remote access — TLS errors, Cloudflare configuration issues, or port forwarding problems — the **Webhook Proxy add-on** may be a simpler alternative.
+If you're having trouble setting up remote access — TLS errors, Cloudflare configuration issues, or port forwarding problems — the **Webhook Proxy app** may be a simpler alternative.
 
 Instead of requiring a dedicated tunnel to port 9583, the Webhook Proxy routes MCP traffic through Home Assistant's main port (8123) via a webhook. If you already have **Nabu Casa** or any reverse proxy pointing at your HA instance, this can be the easiest remote setup.
 
-1. Install the **MCP Server add-on** and the **Webhook Proxy add-on** from the add-on store
+1. Install the **MCP Server app** and the **Webhook Proxy app** from the app store
 2. Start the webhook proxy and restart Home Assistant when prompted
-3. Copy the webhook URL from the add-on logs
+3. Copy the webhook URL from the app logs
 4. Use that URL in your MCP client configuration
 
 See [#784](https://github.com/homeassistant-ai/ha-mcp/issues/784) for an example where this resolved a TLS connection issue.
@@ -371,7 +371,7 @@ denylist). It reads and writes the same file described below, so either surface
 works.
 
 The filter is off until `entity_visibility.json` exists in the ha-mcp data
-directory (the same directory as `tool_policy.json`; `/data` in the add-on) with
+directory (the same directory as `tool_policy.json`; `/data` in the app) with
 `"enabled": true`:
 
 ```json
