@@ -149,9 +149,9 @@ docker pull ghcr.io/homeassistant-ai/ha-mcp:latest
 # Stop your dev container and start a new one with :latest tag
 ```
 
-### Home Assistant App (add-on)
+### Home Assistant app (add-on)
 
-The dev channel is available as a **separate App (add-on)** in the Home Assistant App store.
+The dev channel is available as a **separate app (add-on)** in the Home Assistant App store.
 
 **To use the dev channel:**
 

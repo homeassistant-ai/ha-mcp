@@ -1848,7 +1848,7 @@ class DevTools:
 
         Caveats: update_source changes ONLY the ha_mcp_tools custom
         component's separate in-process server entry — it never updates
-        the App (add-on), Docker, standalone, or PyPI server that may be
+        the app (add-on), Docker, standalone, or PyPI server that may be
         serving this connection (update those via ha_manage_app /
         docker pull / pip). In embedded mode that entry IS this server,
         so the update self-interrupts; elsewhere this connection is

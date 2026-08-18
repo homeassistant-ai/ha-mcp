@@ -55,7 +55,7 @@ other machines on the LAN. To restrict to the local machine, set
 fastmcp ships a Host/Origin guard — a DNS-rebinding defense that only accepts
 loopback `Host` headers and same-origin/loopback `Origin`s. ha-mcp defaults it
 off (`FASTMCP_HTTP_HOST_ORIGIN_PROTECTION=false`) across its Streamable-HTTP
-entry points (`ha-mcp-web`, `ha-mcp-oauth`, `ha-mcp-oidc`, the App (add-on), and the
+entry points (`ha-mcp-web`, `ha-mcp-oauth`, `ha-mcp-oidc`, the app (add-on), and the
 in-process component server). The supported
 deployment model — reverse proxies, tunnels (Cloudflare, Nabu Casa), and direct
 LAN access — presents `Host` headers ha-mcp cannot enumerate, and the guard

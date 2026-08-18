@@ -1,6 +1,6 @@
 # Webhook Proxy for HA MCP - Documentation
 
-Remote access proxy for the Home Assistant MCP Server App (add-on) via webhooks.
+Remote access proxy for the Home Assistant MCP Server app (add-on) via webhooks.
 
 ## About
 
@@ -29,7 +29,7 @@ automatically on the next clean start.
 
 ## Setup
 
-1. **Install this App (add-on)** from the App store
+1. **Install this app (add-on)** from the App store
 2. **Start the app** — on first run it will install the integration and create a notification asking you to restart Home Assistant
 3. **Restart Home Assistant** (Settings > System > Restart) — the app detects the restart and automatically finishes setup
 4. **Copy the remote URL** from the app logs:

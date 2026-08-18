@@ -4,7 +4,7 @@ The **HA-MCP Custom Component** (`ha_mcp_tools`) can run the **full ha-mcp serve
 in-process**, inside the Home Assistant application, and expose it remotely
 through a Home Assistant webhook. This is one of the ways to run ha-mcp — and the
 recommended one. It is a complete, standalone ha-mcp install — a replacement for
-the App (add-on), Docker, and uvx/PyPI (stdio) server, not an addition to them. Run
+the app (add-on), Docker, and uvx/PyPI (stdio) server, not an addition to them. Run
 only one ha-mcp server; never run the in-process server alongside another
 install.
 

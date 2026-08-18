@@ -84,7 +84,7 @@ When implementing features or debugging, consult these resources:
 | **Home Assistant REST API** | https://developers.home-assistant.io/docs/api/rest | Entity states, services, config |
 | **Home Assistant WebSocket API** | https://developers.home-assistant.io/docs/api/websocket | Real-time events, subscriptions |
 | **HA Core Source** | `gh api /search/code -f q="... repo:home-assistant/core"` | Undocumented APIs (don't clone) |
-| **HA Add-on Development** | https://developers.home-assistant.io/docs/add-ons | Add-on packaging, config.yaml |
+| **HA App (add-on) Development** | https://developers.home-assistant.io/docs/apps | Add-on packaging, config.yaml |
 | **FastMCP Documentation** | https://gofastmcp.com/getting-started/welcome | MCP server framework |
 | **MCP Specification** | https://modelcontextprotocol.io/docs | Protocol details |
 
@@ -159,7 +159,7 @@ deliberately omits `github-actions[bot]` to keep that lever.
 
 | Label | Meaning |
 |-------|---------|
-| `addon` | Issue is specific to the Home Assistant App (add-on) deployment (`homeassistant-addon/`, Supervisor ingress) |
+| `addon` | Issue is specific to the Home Assistant app (add-on) deployment (`homeassistant-addon/`, Supervisor ingress) |
 | `docker` | Issue is specific to the Docker / containerized deployment (`Dockerfile`, container env) |
 | `javascript` | Issue concerns the project website / Astro app (TypeScript) under `site/` |
 
@@ -484,14 +484,23 @@ src/ha_mcp/
 
 Home Assistant 2026.2 renamed add-ons to apps, and the old term is deprecated.
 In anything a user or an agent reads — documentation, tool titles and
-descriptions, settings-UI strings, config-flow text — write **App (add-on)** on
-first mention and **app** afterwards. The retired term never stands on its own.
+descriptions, settings-UI strings, config-flow text — write **app (add-on)** on
+first mention and **app** afterwards, capitalised where the sentence calls for
+it. The retired term never stands on its own.
 
-What keeps the old spelling, because it names an identifier rather than the
-product: Supervisor's `/addons` routes and `addon_` container prefix, add-on
-slugs, the `addon` issue label, the `homeassistant-addon*/` directories, the
-`deployment_mode` value `addon`, and the literal pre-2026.2 menu labels inside a
-compatibility note (on those versions the panel really is *Add-ons*).
+Identifiers are not automatically exempt: check each one before assuming it
+stayed, because upstream has been moving them too. Measured against Supervisor
+`main` and this repo: the container prefix is **`app_`** now, with `addon_` only
+a legacy fallback (`tests/src/haos_runtime.py` reads the name from docker rather
+than assuming either); the REST API serves `/apps/...` as the current family and
+keeps `/addons/...` as a compatibility shim, which is what this server still
+calls; and `developers.home-assistant.io/docs/add-ons` redirects to
+`/docs/apps`.
+
+What genuinely keeps the old spelling: add-on slugs, the `addon` issue label,
+the `homeassistant-addon*/` directories, this project's own `deployment_mode`
+value `addon`, and the literal pre-2026.2 menu labels inside a compatibility
+note (on those versions the panel really is *Add-ons*).
 
 ## Writing MCP Tools
 
@@ -929,7 +938,7 @@ edited directly by a PR in regular operation; every change (code *and* docs)
 lands on `homeassistant-addon-webhook-proxy-dev/` with a version bump, and
 stable is updated only via the manual promote workflow.
 
-**Docs**: https://developers.home-assistant.io/docs/add-ons
+**Docs**: https://developers.home-assistant.io/docs/apps
 
 ## API Research
 

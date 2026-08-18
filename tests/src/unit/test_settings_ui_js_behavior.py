@@ -1168,7 +1168,7 @@ def _server_503_body() -> str:
     A hand-written fixture drifts, and drifts in the direction that keeps its
     own assertion passing: the first two copies of this paragraph in this file
     both dropped the sentence naming the three causes and wrote ``addon log``
-    where the server writes ``App (add-on) log``, so an assertion on
+    where the server writes ``app (add-on) log``, so an assertion on
     ``addon log`` passed only because the fixture was wrong.
     """
     from ha_mcp.settings_ui import POLICY_UNAVAILABLE_MESSAGE
@@ -3485,7 +3485,7 @@ class TestAddonModeLockedBannerCopy:
         )
         # Addon-aware copy must appear.
         assert "App (add-on) Configuration" in result.dom, (
-            f"expected 'App (add-on) Configuration' hint; dom tail: {result.dom[-2000:]}"
+            f"expected 'app (add-on) Configuration' hint; dom tail: {result.dom[-2000:]}"
         )
 
     def test_advanced_locked_banner_in_addon_mode_avoids_unset_copy(
@@ -3530,7 +3530,7 @@ class TestAddonModeLockedBannerCopy:
             "addon-mode advanced banner still shows standalone 'unset env var' copy"
         )
         assert "App (add-on) runtime environment" in result.dom, (
-            f"expected 'App (add-on) runtime environment' wording; "
+            f"expected 'app (add-on) runtime environment' wording; "
             f"dom tail: {result.dom[-2000:]}"
         )
 
@@ -3647,7 +3647,7 @@ class TestAddonModeLockedBannerCopy:
         # Supervisor" helper text (Supervisor never sees this start.py
         # setdefault value).
         assert "Hardcoded to" in result.dom and "cannot be changed" in result.dom, (
-            f"expected field-specific 'hardcoded in App (add-on) mode' copy; "
+            f"expected field-specific 'hardcoded in app (add-on) mode' copy; "
             f"dom tail: {result.dom[-2000:]}"
         )
         assert "managed by Home Assistant Supervisor" not in result.dom, (

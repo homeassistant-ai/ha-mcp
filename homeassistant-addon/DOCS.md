@@ -1,4 +1,4 @@
-# Home Assistant MCP Server App (add-on)
+# Home Assistant MCP Server app (add-on)
 
 AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
@@ -355,7 +355,7 @@ Mixed read/write tools whose read functionality exists nowhere else stay availab
 
 - `ha_config_get_dashboard` — config/list/search reads only; screenshot renders are blocked because Puppet can persist frontend theme/dark preferences
 - `ha_manage_backup` — only listing and viewing per-edit backups
-- `ha_manage_app` — only HTTP GET proxy reads of App (add-on) APIs
+- `ha_manage_app` — only HTTP GET proxy reads of app (add-on) APIs
 - `ha_manage_energy_prefs` — only `mode='get'` and `dry_run=true` previews
 - `ha_manage_pipeline` — only `action='list'` / `'get'`
 - `ha_manage_custom_tool` — only `list_saved=true`

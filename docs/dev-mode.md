@@ -15,7 +15,7 @@ Settings tab → **Developer** section (below the beta features). Flip the
 switch, confirm the warning, and restart the server for the tools to
 register. Alternatively set the `HAMCP_ENABLE_DEV_MODE=true` env var.
 
-The flag is intentionally absent from the App (add-on) Configuration page.
+The flag is intentionally absent from the app (add-on) Configuration page.
 
 Rewriting tool security policies and deciding queued approvals needs a second
 toggle in the same section — see [Security policy access](#security-policy-access).
@@ -28,7 +28,7 @@ toggle in the same section — see [Security policy access](#security-policy-acc
 | ------ | ------------- |
 | `info` | Reports server version, deployment mode (embedded / `addon` / standalone), Python version, data dir, HA version, and — when the [in-process server](in-process-server.md) entry exists — its current channel and pip spec. |
 | `update_source` | Points the in-process (custom component) server at a release `channel` (`stable` / `dev`) or an explicit `pip_spec` — a version pin or a GitHub tarball URL such as `https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/<PR>/head.tar.gz` — then reinstalls and restarts it via the component's own options flow. |
-| `restart` | Restarts this server: config-entry reload in embedded mode, Supervisor self-restart in App (add-on) mode. Standalone processes must be restarted externally. |
+| `restart` | Restarts this server: config-entry reload in embedded mode, Supervisor self-restart in app (add-on) mode. Standalone processes must be restarted externally. |
 | `list_pending` | Lists the tool calls currently blocked on a tool-security-policy approval, with each one's token, arguments, and expiry. Reports an empty list when policies were off at startup (no approval queue exists). |
 | `approve` / `deny` | Decides one blocked call by `token`. Requires [security policy access](#security-policy-access). |
 
@@ -52,7 +52,7 @@ shared libraries already loaded by the HA process are not reloaded.
 | `get_policy` | Returns the full tool-security policy (`wait_seconds`, `approval_ttl_minutes`, `rules`, `version`, `schema_version`) plus whether the policy engine is enabled and live. |
 | `set_policy` | Writes the full policy, schema-validated and guarded by the `version` from your last `get_policy` (optimistic concurrency). Requires [security policy access](#security-policy-access). |
 | `get_backup_config` | Returns the auto-backup config fields (the Backups tab's settings), with each value's origin. |
-| `set_backup_config` | Changes auto-backup settings, routed through the Supervisor in App (add-on) mode and the override file elsewhere. |
+| `set_backup_config` | Changes auto-backup settings, routed through the Supervisor in app (add-on) mode and the override file elsewhere. |
 
 Changes persist immediately but — like the web UI — most settings only take
 effect after a restart (`ha_dev_manage_server` `restart`). Security gates,
@@ -102,7 +102,7 @@ in the web settings UI or via the env vars.
 
 This is a leash on the dev tools' settings surfaces, **not a sandbox**. Dev
 mode's `update_source` / `restart` can still replace the running server
-build, and in App (add-on) deployments `ha_manage_app` can reach the app's own
+build, and in app (add-on) deployments `ha_manage_app` can reach the app's own
 options and ingress. `read_only_mode` likewise stays dev-tool-writable **by
 design** — developer mode is expected to be able to lift it. Where that
 boundary matters, gate those tools with policy rules — or keep dev mode off;

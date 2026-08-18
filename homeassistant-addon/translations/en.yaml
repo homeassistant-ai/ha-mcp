@@ -39,9 +39,9 @@ configuration:
       Some Codex models and ChatGPT include deferred tools too — check your client/model
       directly to confirm its features so you don''t leave this enabled unnecessarily.
       Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete).
-      Requires an App (add-on) restart to take effect — then reconnect or refresh
+      Requires an app (add-on) restart to take effect — then reconnect or refresh
       the MCP server in your AI client so it reloads the tool list. Restarting the
-      App (add-on) alone does NOT refresh a client''s cached tool list; this applies
+      app (add-on) alone does NOT refresh a client''s cached tool list; this applies
       after changing any setting here.'
   tool_search_max_results:
     name: Tool search max results
@@ -159,9 +159,9 @@ configuration:
       still apply). Default 7.
   verify_ssl:
     name: Verify TLS certificate
-    description: Verify the Home Assistant server's TLS certificate. The App (add-on)
+    description: Verify the Home Assistant server's TLS certificate. The app (add-on)
       connects via the Supervisor proxy, so this normally has no effect and should
-      stay enabled. Disable only if you've reconfigured the App (add-on) to talk to
+      stay enabled. Disable only if you've reconfigured the app (add-on) to talk to
       HA over a public HTTPS hostname with a self-signed certificate or hostname mismatch.
       Disabling weakens transport security — leave on unless you know you need it.
       Requires restart to take effect.

@@ -10,7 +10,7 @@ Common questions and solutions for ha-mcp setup.
 
 You can also use ha-mcp with other AI clients. See the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) for 15+ supported clients.
 
-### Do I need the Home Assistant App (add-on)?
+### Do I need the Home Assistant app (add-on)?
 
 **No.** The HA app is just one installation method. Most users run ha-mcp directly on their computer using `uvx` (recommended for Claude Desktop). The app is only needed if you want to run ha-mcp inside your Home Assistant OS environment.
 

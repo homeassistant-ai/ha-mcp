@@ -2,7 +2,7 @@
 
 **WARNING: This is the development channel. Expect bugs and breaking changes.**
 
-This App (add-on) receives updates with every commit to master. For stable releases, use the main "Home Assistant MCP Server" app.
+This app (add-on) receives updates with every commit to master. For stable releases, use the main "Home Assistant MCP Server" app.
 
 ## Configuration
 

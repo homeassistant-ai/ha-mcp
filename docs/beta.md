@@ -6,7 +6,7 @@ Some ha-mcp tools are gated behind feature flags and disabled by default. They c
 
 | Tool | Toggle / env var | Description |
 |---|---|---|
-| `ha_config_set_yaml` | `enable_yaml_config_editing` (dev App (add-on) Configuration tab); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_YAML_CONFIG_EDITING=true` env vars | Raw YAML editing of `configuration.yaml` and packages/*.yaml for YAML-only integrations. |
+| `ha_config_set_yaml` | `enable_yaml_config_editing` (dev app (add-on) Configuration tab); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_YAML_CONFIG_EDITING=true` env vars | Raw YAML editing of `configuration.yaml` and packages/*.yaml for YAML-only integrations. |
 | `ha_list_files` | `enable_filesystem_tools` (dev app); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | List files in allowed directories. Requires `ha_mcp_tools` custom component. |
 | `ha_read_file` | `enable_filesystem_tools` (dev app); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | Read files from allowed paths. Requires `ha_mcp_tools` custom component. |
 | `ha_write_file` | `enable_filesystem_tools` (dev app); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | Write files to allowed directories. Requires `ha_mcp_tools` custom component. |

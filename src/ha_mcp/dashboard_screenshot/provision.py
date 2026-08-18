@@ -86,7 +86,7 @@ _INSTALL_HELP = (
 )
 
 _NOT_STARTED_HELP = (
-    "The Puppet screenshot engine App (add-on) is installed but not started. "
+    "The Puppet screenshot engine app (add-on) is installed but not started. "
     "Open Settings > Apps > Puppet (Settings > Add-ons > Puppet before Home "
     f"Assistant 2026.2), {TOKEN_HINT} (enable 'Start on boot' to keep "
     "it available)."

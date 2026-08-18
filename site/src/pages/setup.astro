@@ -346,7 +346,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
               <PlatformIcon icon="home" size={22} class="text-[var(--text-secondary)]" />
               <span class="complexity-badge" data-complexity="quick">Quick</span>
             </div>
-            <h3 class="font-semibold text-white">HA App (add-on)</h3>
+            <h3 class="font-semibold text-white">HA app (add-on)</h3>
             <p class="text-sm text-slate-400">Home Assistant OS / Supervised only</p>
           </button>
           <button data-server-method="docker" class="option-card-large">
@@ -602,7 +602,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
             <h3 class="font-semibold text-white">Built-in webhook</h3>
             <p class="text-sm text-slate-400">Nabu Casa or an existing reverse proxy — no extra setup</p>
           </button>
-          <!-- HA App (add-on) only -->
+          <!-- HA app (add-on) only -->
           <button data-remote-path="webhook-proxy" class="option-card-large hidden">
             <div class="flex items-center gap-2 mb-2">
               <PlatformIcon icon="home" size={22} class="text-[var(--text-secondary)]" />
@@ -704,7 +704,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
           <div class="qs-branch">
             <a href={withBase('/guide-addon')} class="qs-option qs-option-rec">
               <span class="inline-block mb-1 px-2 py-0.5 text-xs rounded-full bg-green-900/30 text-green-400 font-medium">Recommended</span>
-              <span class="block font-semibold text-white">Home Assistant App (add-on)</span>
+              <span class="block font-semibold text-white">Home Assistant app (add-on)</span>
               <span class="block text-sm text-slate-400">Local or remote &middot; no access token</span>
             </a>
             <a href={withBase('/guide-macos')} class="qs-option">
@@ -727,7 +727,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
           <div class="qs-branch">
             <a href={withBase('/guide-addon')} class="qs-option qs-option-rec">
               <span class="inline-block mb-1 px-2 py-0.5 text-xs rounded-full bg-green-900/30 text-green-400 font-medium">Recommended</span>
-              <span class="block font-semibold text-white">Home Assistant App (add-on)</span>
+              <span class="block font-semibold text-white">Home Assistant app (add-on)</span>
               <span class="block text-sm text-slate-400">Local or remote &middot; no access token</span>
             </a>
             <a href={withBase('/guide-linux')} class="qs-option">
@@ -750,7 +750,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
           <div class="qs-branch">
             <a href={withBase('/guide-addon')} class="qs-option qs-option-rec">
               <span class="inline-block mb-1 px-2 py-0.5 text-xs rounded-full bg-green-900/30 text-green-400 font-medium">Recommended</span>
-              <span class="block font-semibold text-white">Home Assistant App (add-on)</span>
+              <span class="block font-semibold text-white">Home Assistant app (add-on)</span>
               <span class="block text-sm text-slate-400">Local or remote &middot; no access token</span>
             </a>
             <a href={withBase('/guide-windows')} class="qs-option">
@@ -1033,7 +1033,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai', 'gemini-spark'];
   // Display labels
   const methodLabels = {
     'ha-component': 'HA Custom Component',
-    'ha-addon': 'HA App (add-on)',
+    'ha-addon': 'HA app (add-on)',
     'docker': 'Docker',
     'uvx': 'uvx (Python)',
     'stdio-local': 'Local stdio',
@@ -1606,7 +1606,7 @@ volumes:
         </div>`;
       } else if (derivedDeployment === 'ha-addon') {
         deployInstr = `<div class="instruction-block">
-          <h3 class="instruction-title">Home Assistant App (add-on)</h3>
+          <h3 class="instruction-title">Home Assistant app (add-on)</h3>
           <p class="text-slate-300 text-sm mb-3">The app auto-discovers the HA connection, generates a secure secret path, and configures the token — no manual setup needed.</p>
           <p class="text-slate-300 mb-3">1. Add the repository to Home Assistant:</p>
           <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener noreferrer" class="inline-block mb-3">
