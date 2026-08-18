@@ -757,6 +757,7 @@ class TestSurfaceConnectUrls:
         esetup._surface_connect_urls(hass, entry, "none")
 
         assert self._message().endswith(
+            "\n\n"
             "To disable this notification, uncheck the startup notification box "
             "on that same configuration screen.\n"
         )
