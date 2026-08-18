@@ -628,10 +628,18 @@ def _assert_clean_init(result: HarnessResult) -> None:
 
 
 class TestVersionFooter:
-    """The version footer at the bottom of the settings page reads from
-    /api/settings/info on init and renders ``ha-mcp <version>`` so an
-    operator can see the running build without leaving the UI.
+    """The footer at the bottom of the settings page reads from
+    /api/settings/info on init and renders the running version and installation
+    method so an operator can identify the active build without leaving the UI.
     """
+
+    @staticmethod
+    def _footer_text(result: HarnessResult) -> str:
+        match = re.search(r'id="versionFooterText">([^<]*)</div>', result.dom)
+        assert match is not None, (
+            f"version footer missing; dom tail: {result.dom[-1500:]}"
+        )
+        return match.group(1)
 
     def test_version_rendered_from_settings_info(self, settings_script: str) -> None:
         fetches = {
@@ -654,8 +662,103 @@ class TestVersionFooter:
             invoke="await new Promise(r => setTimeout(r, 200));",
         )
         _assert_clean_init(result)
-        assert "ha-mcp 7.5.0.dev400" in result.dom, (
-            f"version footer missing or wrong; dom tail: {result.dom[-1500:]}"
+        assert self._footer_text(result) == "ha-mcp 7.5.0.dev400"
+
+    @pytest.mark.parametrize(
+        ("deployment_mode", "expected_label"),
+        [
+            ("embedded", "embedded"),
+            ("sidecar", "sidecar"),
+            ("addon", "app/add-on"),
+            ("docker", "container/docker"),
+            ("pyinstaller", "standalone binary"),
+            ("git", "source checkout"),
+            ("pypi", "python package"),
+            ("unknown", "unknown"),
+            ("future-mode", "future-mode"),
+            ("constructor", "constructor"),
+        ],
+    )
+    def test_installation_method_rendered_from_settings_info(
+        self,
+        settings_script: str,
+        deployment_mode: str,
+        expected_label: str,
+    ) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/info": {
+                "status": 200,
+                "json": {
+                    "is_addon": deployment_mode == "addon",
+                    "is_sidecar": deployment_mode == "sidecar",
+                    "deployment_mode": deployment_mode,
+                    "instance_id": "test-id",
+                    "started_at": 0,
+                    "version": "8.2.0",
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert (
+            self._footer_text(result)
+            == f"ha-mcp 8.2.0 · installation: {expected_label}"
+        )
+
+    @pytest.mark.parametrize(
+        ("deployment_mode", "translated_label"),
+        [("embedded", "intégré"), ("sidecar", "accompagnement")],
+    )
+    def test_server_mode_labels_stay_raw_when_footer_phrase_is_localized(
+        self,
+        settings_script: str,
+        deployment_mode: str,
+        translated_label: str,
+    ) -> None:
+        from ha_mcp.settings_ui._i18n import build_payload, serialize_payload
+
+        catalog = build_payload("fr")
+        catalog["messages"].update(
+            {
+                "footer.installation": "mode d’installation : {method}",
+                f"footer.deployment.{deployment_mode}": translated_label,
+            }
+        )
+        payload = serialize_payload(catalog)
+        localized_dom = MIN_DOM.replace(
+            "</body>",
+            f'<script id="ha-mcp-i18n" type="application/json">{payload}</script>'
+            "</body>",
+        )
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/info": {
+                "status": 200,
+                "json": {
+                    "is_addon": False,
+                    "is_sidecar": deployment_mode == "sidecar",
+                    "deployment_mode": deployment_mode,
+                    "instance_id": "test-id",
+                    "started_at": 0,
+                    "version": "8.2.0",
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=localized_dom,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert self._footer_text(result) == (
+            f"ha-mcp 8.2.0 · mode d’installation : {deployment_mode}"
         )
 
     def test_version_omitted_when_info_response_lacks_version(
@@ -684,7 +787,7 @@ class TestVersionFooter:
             invoke="await new Promise(r => setTimeout(r, 200));",
         )
         _assert_clean_init(result)
-        assert "ha-mcp undefined" not in result.dom
+        assert self._footer_text(result) == ""
 
 
 class TestXssGuard:
