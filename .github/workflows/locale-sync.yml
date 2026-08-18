@@ -44,11 +44,11 @@ name: Locale Sync
 #
 # Two jobs on purpose, as blast-radius reduction: the translate job executes
 # everything `uv sync` resolves (a supply chain of hundreds of packages) and
-# holds no credential beyond the free-tier Gemini key; the push job runs on
-# a fresh runner, executes only git against a fresh clone (no hooks, no
-# project code), and refuses any patch that touches files outside the locale
-# allowlist — data-only catalog files; settings.js is deliberately not
-# exportable (see the export step). A compromised dependency in the
+# holds no credential beyond the rotatable API key for its free-tier Gemini
+# project; the push job runs on a fresh runner against a fresh clone, executes
+# only git (no hooks or project code), and refuses any patch touching files
+# outside the locale allowlist — data-only catalogs; settings.js is deliberately
+# not exportable (see the export step). A compromised dependency in the
 # translate job can therefore corrupt at most the locale catalogs the
 # pipeline legitimately writes — never reach the ruleset-bypassing push
 # credential and never land executable code.
@@ -118,8 +118,8 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         # This job executes the resolved dependency tree, so it gets no
-        # credential except GEMINI_API_KEY (free-tier, rotatable) — never
-        # the push token.
+        # credential except the free-tier project's rotatable GEMINI_API_KEY
+        # — never the push token.
         persist-credentials: false
 
     - name: Install uv
