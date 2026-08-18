@@ -101,12 +101,19 @@ async def test_stdio_sidecar_config_drives_real_visibility_middleware(
             )
             assert _HIDDEN_ENTITY in json.dumps(report), report
 
+            restricted_current = await asyncio.to_thread(
+                _visibility_request, settings_url, "GET"
+            )
+            assert restricted_current["enabled"] is True
+            assert restricted_current["enforce"] is True
+            assert restricted_current["deny_entity_ids"] == [_HIDDEN_ENTITY]
+
             await asyncio.to_thread(
                 _visibility_request,
                 settings_url,
                 "PUT",
                 {
-                    **saved,
+                    **restricted_current,
                     "restrict_report_issue": True,
                 },
             )

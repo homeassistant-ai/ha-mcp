@@ -455,9 +455,10 @@ class TestSnapshotDelete:
         if _server_is_out_of_process():
             pytest.skip(
                 "monkeypatch.setenv cannot reach an out-of-process server "
-                "(container-embedded / HAOS embedded / HAOS inaddon); the "
-                "guard-rejection tests above already exercise the real "
-                "delete path end-to-end under those backends"
+                "(container-embedded / HAOS embedded / HAOS inaddon / "
+                "HAOS stdio); the guard-rejection tests above already "
+                "exercise the real delete path end-to-end under those "
+                "backends"
             )
         logger.info("🗑️ Testing snapshot delete success path...")
 

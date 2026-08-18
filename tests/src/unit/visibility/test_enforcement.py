@@ -37,7 +37,6 @@ def make_context(name, arguments=None):
     )
 
 
-
 def report_context(*, proxied=False):
     arguments = {"fields": ["recent_logs"]}
     if proxied:
@@ -45,6 +44,7 @@ def report_context(*, proxied=False):
             "ha_call_read_tool", {"name": "ha_report_issue", "arguments": arguments}
         )
     return make_context("ha_report_issue", arguments)
+
 
 def text_result(text="ok", structured=None):
     """A ToolResult stand-in with a text content block + structured content."""
