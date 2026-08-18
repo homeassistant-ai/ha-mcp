@@ -5,7 +5,8 @@ the *App store*. Every string this project ships to a user — the settings-UI
 catalog, the integration's config-flow text, and the runtime hints in
 ``update_check`` and the screenshot provisioner — therefore has to name the
 current label. The retired one may still appear, but only next to the current
-one, as the note for installations older than 2026.2.
+one, as the note for installations older than 2026.2. The add-on's own option
+labels ship the same way and are swept with them.
 
 This is a sweep rather than a per-string pin: the strings move (a reword, a
 new hint, a new deployment mode), and a pin only guards the wording it was
@@ -21,6 +22,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 
@@ -36,6 +38,12 @@ JSON_SURFACES = (
     REPO_ROOT / "custom_components/ha_mcp_tools/strings.json",
     REPO_ROOT / "custom_components/ha_mcp_tools/translations/en.json",
 )
+# The add-on option labels the Supervisor renders in its own configuration
+# dialog — same class as ``strings.json``, and the dev copy ships them too.
+YAML_SURFACES = (
+    REPO_ROOT / "homeassistant-addon/translations/en.yaml",
+    REPO_ROOT / "homeassistant-addon-dev/translations/en.yaml",
+)
 
 # (what Home Assistant no longer shows, what it shows instead). A string may
 # carry the retired form only if it also carries the current one.
@@ -45,6 +53,10 @@ RETIRED_WITH_CURRENT = (
         re.compile(r"Settings\s*(?:->|→|>)\s*Apps"),
     ),
     (re.compile(r"[Aa]dd-on [Ss]tore"), re.compile(r"App store|Install app")),
+    # The product term itself, which is what the terminology rule is about:
+    # "the Puppet add-on is not started" names a thing the user's Home
+    # Assistant does not call an add-on any more.
+    (re.compile(r"[Aa]dd-ons?\b"), re.compile(r"\b[Aa]pps?\b")),
 )
 
 
@@ -52,9 +64,16 @@ def _python_strings(path: Path) -> list[str]:
     """Every shipped string literal in a module, f-strings flattened.
 
     Adjacent literals are already one constant after parsing, so a menu path
-    split across source lines arrives whole — which is how it is read.
-    Docstrings are skipped: they describe the Supervisor API to the next
-    maintainer, where the slugs and endpoints really are still add-ons.
+    split across source lines arrives whole — which is how it is read. An
+    f-string is reported once, as the flattened whole: its fragments are also
+    ``Constant`` nodes in the tree, and reporting those separately would fail a
+    correct string whose retired label and compat note sit on either side of an
+    interpolation.
+
+    Docstrings are skipped: they describe the Supervisor surface to the next
+    maintainer, where the slugs and the option names really did keep the old
+    spelling, and the REST paths are the compatibility family this server still
+    calls.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"))
     docstrings = {
@@ -69,12 +88,20 @@ def _python_strings(path: Path) -> list[str]:
         and isinstance(node.body[0].value.value, str)
     }
 
+    interpolated = {
+        id(part)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.JoinedStr)
+        for part in node.values
+    }
+
     strings: list[str] = []
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
             and id(node) not in docstrings
+            and id(node) not in interpolated
         ):
             strings.append(node.value)
         elif isinstance(node, ast.JoinedStr):
@@ -88,29 +115,36 @@ def _python_strings(path: Path) -> list[str]:
     return strings
 
 
-def _json_strings(path: Path) -> list[str]:
-    def walk(value: object) -> list[str]:
-        if isinstance(value, str):
-            return [value]
-        if isinstance(value, dict):
-            return [s for item in value.values() for s in walk(item)]
-        if isinstance(value, list):
-            return [s for item in value for s in walk(item)]
-        return []
+def _walk_strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for item in value.values() for s in _walk_strings(item)]
+    if isinstance(value, list):
+        return [s for item in value for s in _walk_strings(item)]
+    return []
 
-    return walk(json.loads(path.read_text(encoding="utf-8")))
+
+def _json_strings(path: Path) -> list[str]:
+    return _walk_strings(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _yaml_strings(path: Path) -> list[str]:
+    return _walk_strings(yaml.safe_load(path.read_text(encoding="utf-8")))
 
 
 def _surfaces() -> list[tuple[Path, list[str]]]:
-    return [(path, _python_strings(path)) for path in PYTHON_SURFACES] + [
-        (path, _json_strings(path)) for path in JSON_SURFACES
-    ]
+    return (
+        [(path, _python_strings(path)) for path in PYTHON_SURFACES]
+        + [(path, _json_strings(path)) for path in JSON_SURFACES]
+        + [(path, _yaml_strings(path)) for path in YAML_SURFACES]
+    )
 
 
 @pytest.mark.parametrize(
     ("retired", "current"),
     RETIRED_WITH_CURRENT,
-    ids=["menu-path", "store-name"],
+    ids=["menu-path", "store-name", "product-term"],
 )
 def test_a_retired_label_never_ships_without_the_current_one(
     retired: re.Pattern[str], current: re.Pattern[str]
@@ -125,9 +159,33 @@ def test_a_retired_label_never_ships_without_the_current_one(
     assert not offenders, (
         f"{len(offenders)} shipped string(s) name {retired.pattern!r} with no "
         f"{current.pattern!r} beside it, so a user on Home Assistant 2026.2 or "
-        "later is sent to a panel that no longer carries that name:\n  "
+        "later reads a label their Home Assistant does not use:\n  "
         + "\n  ".join(offenders)
     )
+
+
+def test_an_interpolated_string_is_read_once_as_a_whole(tmp_path: Path) -> None:
+    """The extractor cannot fail a correct string, or count one twice.
+
+    An f-string's fragments are ``Constant`` nodes of their own. Reported
+    separately, a message carrying the retired label on one side of an
+    interpolation and the current one on the other reads as an offender, and
+    every f-string inflates the offender count it is reported in.
+    """
+    module = tmp_path / "shipped.py"
+    module.write_text(
+        'RELEASE = "2026.2"\n'
+        'HELP = f"Open Settings > Apps (before {RELEASE}: Settings > Add-ons)"\n',
+        encoding="utf-8",
+    )
+
+    strings = _python_strings(module)
+
+    assert [s for s in strings if "Add-ons" in s] == [
+        "Open Settings > Apps (before : Settings > Add-ons)"
+    ]
+    retired, current = RETIRED_WITH_CURRENT[0]
+    assert not [s for s in strings if retired.search(s) and not current.search(s)]
 
 
 def test_the_sweep_reads_the_surfaces_it_claims_to() -> None:
