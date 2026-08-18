@@ -821,8 +821,135 @@ class HomeAssistantSmartMCPServer:
             'mean "search failed", not "no results" — see `partial_reason` '
             "(also mirrored into `warnings`). Do not treat a partial response as "
             "complete.\n\n"
-            "For parameters, schema, and examples, see ha_get_skill_guide."
+            "For what to do with what you find — native-first patterns, "
+            "entity_id over device_id, impact analysis before renaming — see "
+            "ha_get_skill_guide."
         ),
+        # ha_manage_backup: 4571 -> 1295 chars, a 72% reduction. All figures
+        # in this map are dedented characters — the size actually advertised
+        # on the wire — measured with BACKUP_HINT=normal, which varies the
+        # full total by ~100 chars.
+        #
+        # This was the largest remaining full description outside the map.
+        # The reduction is smaller than pure compression would give because
+        # the safety content below is kept inline. The routing matrix STAYS —
+        # the `action` parameter's own Field description says "Valid (scope,
+        # action) combinations are listed in the tool description", so
+        # trimming it away would leave that pointer aimed at nothing.
+        #
+        # This entry DEFERS NOTHING — it carries no ha_get_skill_guide
+        # pointer, and its destination is "self-contained". The skill pack
+        # has no backup reference yet (homeassistant-ai/skills#76 adds one),
+        # and advertising a file the pinned submodule does not contain is the
+        # exact dead-end this map exists to prevent. What the eleven worked
+        # examples covered is call syntax, which the input schema already
+        # carries; the judgment they illustrated moves in with the pointer,
+        # in the same commit that bumps the pin.
+        #
+        # destructiveHint is set on this tool, so the lite text keeps every
+        # irreversibility marker inline rather than deferring it: the
+        # restart, the confirm, the human-only enable_snapshot_delete, and
+        # each individual delete guard. It also keeps the two diagnostics
+        # that have no fallback anywhere else — the enable_auto_backup
+        # empty-list ambiguity, and the {backup_hint_text} timing sentence
+        # (resolved per-instance; see _lite_docstring_tokens).
+        "ha_manage_backup": (
+            "Manage Home Assistant backups: full HA snapshots "
+            "(`scope='snapshot'`) and per-entity auto-backups of agent edits "
+            "(`scope='edits'`). Pick the scope first — the wrong one routes "
+            "through the wrong code path.\n\n"
+            "`scope='snapshot'` actions: `create`, `list`, `restore` "
+            "(**restarts HA**), `delete` (needs `confirm=True`; disabled "
+            "until a human sets `enable_snapshot_delete` — an agent cannot "
+            "enable it. Even then a delete is refused for "
+            "scheduled/automatic backups, for anything younger than "
+            "`snapshot_delete_min_age_days` (default 7), and for the single "
+            "newest snapshot remaining).\n\n"
+            "`scope='edits'` actions: `create`, `list`, `view`, `diff`, "
+            "`restore` (no HA restart), `delete`. Automatic capture on write "
+            "is gated by `enable_auto_backup`, so an empty `list` means "
+            '"nothing saved" OR "the toggle is off" — check it before '
+            "concluding there is nothing to restore.\n\n"
+            "Use `edits` to undo a recent agent edit to an "
+            "automation/script/scene/dashboard/helper; use `snapshot` for "
+            "system-wide recovery and before irreversible operations. "
+            "{backup_hint_text}"
+        ),
+        # ha_report_issue: 2045 -> 712 chars, a 65% reduction. Same dedented
+        # basis as above; the raw indented docstring is 2351 chars, which is
+        # NOT what gets advertised.
+        #
+        # Unlike every other entry here, the deferral target is the tool's
+        # OWN RESPONSE, not the skill guide: `instructions` (see
+        # tools_bug_report.py) independently re-derives the duplicate check,
+        # the template choice, the missing-tool pre-check, and the mandatory
+        # anonymisation step. Issue reporting is ha-mcp product meta — it
+        # cannot go in the skill pack, whose CONTRIBUTING forbids coupling
+        # skill content to specific MCP tool names. The lite text says so
+        # outright so a compliant agent doesn't spend a call finding out.
+        "ha_report_issue": (
+            "Get diagnostic information plus a ready-to-file report "
+            "template. Covers two kinds of report: a runtime bug (ha-mcp "
+            "errored or behaved unexpectedly) and agent-behaviour feedback "
+            "(the AI used the wrong tool or worked inefficiently). Pick "
+            "based on whether the fault was in ha-mcp or in the agent's own "
+            "choices.\n\n"
+            "The response carries the full workflow in its `instructions` "
+            "field — duplicate check, template selection, the mandatory "
+            "anonymisation step, and the submit URLs — plus "
+            '`missing_tool_hint` for the "a tool I expected is missing" '
+            "case, which is usually a stale client tool list rather than a "
+            "bug. Read `instructions` before presenting anything to the "
+            "user; ha_get_skill_guide does not cover issue reporting."
+        ),
+    }
+
+    # Where each _LITE_DOCSTRINGS entry's "see ..." pointer actually lands.
+    #
+    # The pointer is the whole bargain of lite mode: the trimmed text is only
+    # acceptable because the detail is reachable. Enforcing that every entry
+    # merely CONTAINS the string "ha_get_skill_guide" (the original
+    # invariant) checks the pointer and never the destination — which is how
+    # an entry deferring to guide content that does not exist could pass
+    # tests (#2153 review). This map names the destination so
+    # tests/src/unit/test_lite_docstrings.py can resolve it against the
+    # vendored skill pack.
+    #
+    # Three legal value forms, each with a matching check in the tests:
+    #
+    #   "references/<file>.md" / "SKILL.md"
+    #       A path inside the home-assistant-best-practices skill. Must
+    #       resolve against the VENDORED pack, and the lite text must carry
+    #       a ha_get_skill_guide pointer to reach it.
+    #   "tool-response:<field>"
+    #       The guidance ships in the tool's own response instead. The field
+    #       must actually be returned, and the lite text must name it.
+    #   "self-contained"
+    #       The entry defers nothing. The lite text must carry NO
+    #       ha_get_skill_guide pointer and name no reference file, so an
+    #       entry cannot quietly re-acquire a pointer to content that isn't
+    #       vendored — which is what "self-contained" exists to prevent.
+    _LITE_DOCSTRING_DESTINATIONS: ClassVar[dict[str, str]] = {
+        "ha_config_get_automation": "references/automation-patterns.md",
+        "ha_config_set_automation": "references/automation-patterns.md",
+        "ha_config_get_script": "references/automation-patterns.md",
+        "ha_config_set_script": "references/automation-patterns.md",
+        "ha_config_get_scene": "references/scenes.md",
+        "ha_config_set_scene": "references/scenes.md",
+        "ha_config_list_helpers": "references/helper-selection.md",
+        "ha_config_set_helper": "references/helper-selection.md",
+        "ha_config_get_dashboard": "references/dashboard-cards.md",
+        "ha_config_set_dashboard": "references/dashboard-guide.md",
+        "ha_call_service": "references/domain-docs.md",
+        "ha_config_set_yaml": "references/yaml-only-integrations.md",
+        # The skill pack has no search reference, so this lands on the
+        # decision workflow. The lite text was reworded to promise what
+        # SKILL.md actually holds (what to do with the results) instead of
+        # "parameters, schema, and examples", which it never had — the
+        # parameters ship in the input schema regardless.
+        "ha_search": "SKILL.md",
+        "ha_manage_backup": "self-contained",
+        "ha_report_issue": "tool-response:instructions",
     }
 
     # Description overrides that REPLACE the original description for BM25.
@@ -833,6 +960,48 @@ class HomeAssistantSmartMCPServer:
     # unnecessarily trim context for other clients.
     _SEARCH_DESCRIPTION_OVERRIDES: ClassVar[dict[str, str]] = {}
 
+    @staticmethod
+    def _lite_docstring_tokens() -> dict[str, str]:
+        """Operator-tuned values interpolated into the lite descriptions.
+
+        ``_LITE_DOCSTRINGS`` is a static ``ClassVar``, but not every full
+        description it replaces is static: ``ha_manage_backup``'s is an
+        f-string built in ``register_backup_tools()`` that interpolates
+        ``_get_backup_hint_text()`` from ``BACKUP_HINT``
+        (strong/normal/weak). Hard-coding one wording into the lite text
+        would make that setting a silent no-op whenever lite mode is on —
+        the add-on UI would confirm a Backup-hint change that changed
+        nothing. So the lite values carry ``{token}`` placeholders and are
+        resolved here, reading the same env var at the same point in
+        startup the full description does.
+        """
+        # Local import: same lazy-seam pattern as backup_manager's
+        # _normalize_config_for_roundtrip import, and it keeps the tools
+        # package off server.py's import path at module load.
+        from .tools.backup import _get_backup_hint_text
+
+        return {"backup_hint_text": _get_backup_hint_text()}
+
+    @classmethod
+    def _resolve_lite_docstrings(cls) -> dict[str, str]:
+        """Return ``_LITE_DOCSTRINGS`` with its placeholders filled in.
+
+        Uses ``str.replace`` rather than ``str.format`` so the descriptions
+        stay free to contain literal braces (Jinja examples, JSON) without
+        a stray ``{`` turning into a ``KeyError`` at startup. An unknown
+        placeholder is left verbatim rather than raising —
+        ``test_every_placeholder_in_the_map_is_resolvable`` is what catches a
+        typo'd token, at test time instead of in a user's tool catalog.
+        """
+        tokens = cls._lite_docstring_tokens()
+        resolved: dict[str, str] = {}
+        for name, lite in cls._LITE_DOCSTRINGS.items():
+            filled = lite
+            for token, value in tokens.items():
+                filled = filled.replace("{" + token + "}", value)
+            resolved[name] = filled
+        return resolved
+
     def _apply_lite_docstrings(self) -> None:
         """Swap heavy tool descriptions for shorter variants if enabled.
 
@@ -842,6 +1011,10 @@ class HomeAssistantSmartMCPServer:
         that defers detail to
         ``ha_get_skill_guide``. Tools not in the
         mapping pass through unchanged.
+
+        Descriptions are resolved through ``_resolve_lite_docstrings`` so
+        operator-tuned text (``BACKUP_HINT``) survives the swap instead of
+        being pinned to whatever wording the static map happened to carry.
 
         Emits a startup WARNING when enabled so non-addon users (Docker,
         uvx, pip) see the trade-off in their logs — the addon UI surfaces
@@ -877,7 +1050,7 @@ class HomeAssistantSmartMCPServer:
 
         try:
             self.mcp.add_transform(
-                LiteDocstringsTransform(replacements=self._LITE_DOCSTRINGS)
+                LiteDocstringsTransform(replacements=self._resolve_lite_docstrings())
             )
         except Exception:
             logger.exception("Failed to apply LiteDocstringsTransform")

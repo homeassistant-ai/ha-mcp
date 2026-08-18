@@ -264,6 +264,40 @@ def test_extract_section_handles_ifthen_style_anchor() -> None:
     assert "Other" not in result
 
 
+def test_extract_section_matches_githubs_double_hyphen_anchor() -> None:
+    """Stripped punctuation leaves BOTH flanking spaces → a double hyphen.
+
+    GitHub removes the em dash and turns each surrounding space into its own
+    hyphen, so its own heading link is
+    ``#config-entry-data--blind-spots-for-entity-registry-renames``. A
+    skill author copies that anchor out of the rendered page, so it is the
+    form that has to resolve. Collapsing whitespace runs produced a single
+    hyphen and matched nothing — and ``resolve_skill_files`` skips misses
+    silently, so the agent got no content and no error. Two anchors cited in
+    the bundled ``SKILL.md`` were dead this way.
+    """
+    body = (
+        "## Config-Entry Data — Blind Spots for entity registry renames\n"
+        "\nbody\n\n## Other\n"
+    )
+    result = skill_loader.extract_section(
+        body, "config-entry-data--blind-spots-for-entity-registry-renames"
+    )
+    assert result is not None
+    assert "Other" not in result
+
+
+def test_extract_section_matches_ampersand_double_hyphen_anchor() -> None:
+    """Same rule for ``&`` — ``Triggers & Conditions`` → ``triggers--conditions``."""
+    body = "## Purpose-Specific Triggers & Conditions (default since 2026.7)\nbody\n"
+    assert (
+        skill_loader.extract_section(
+            body, "purpose-specific-triggers--conditions-default-since-20267"
+        )
+        is not None
+    )
+
+
 def test_extract_section_returns_none_when_anchor_unknown() -> None:
     body = "## A\nbody\n## B\nbody\n"
     assert skill_loader.extract_section(body, "c") is None

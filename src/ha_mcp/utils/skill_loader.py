@@ -44,7 +44,15 @@ logger = logging.getLogger(__name__)
 # (e.g. "## if/then vs choose" → "ifthen-vs-choose").
 _HEADING_LINE_RE = re.compile(r"^(#+)\s+(.+?)\s*$")
 _SLUG_STRIP = re.compile(r"[^\w\s-]")
-_SLUG_SPACES = re.compile(r"\s+")
+# One hyphen per whitespace CHARACTER, not per run. GitHub drops stripped
+# punctuation in place and leaves the spaces that flanked it, so an em-dash
+# heading yields a DOUBLE hyphen: "Config-Entry Data — Blind Spots" becomes
+# "config-entry-data--blind-spots". Collapsing runs (`\s+`) produced a single
+# hyphen, so every anchor a skill author copied out of GitHub's own heading
+# link silently matched nothing — and resolve_skill_files skips misses
+# silently by design, so the agent just got no content back. Two anchors
+# already cited in the bundled SKILL.md were dead this way.
+_SLUG_SPACES = re.compile(r"\s")
 
 
 def _slugify(heading: str) -> str:
