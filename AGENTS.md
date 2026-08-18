@@ -492,10 +492,12 @@ Identifiers are not automatically exempt: check each one before assuming it
 stayed, because upstream has been moving them too. Measured against Supervisor
 `main` and this repo: the container prefix is **`app_`** now, with `addon_` only
 a legacy fallback (`tests/src/haos_runtime.py` reads the name from docker rather
-than assuming either); the REST API serves `/apps/...` as the current family and
-keeps `/addons/...` as a compatibility shim, which is what this server still
-calls; and `developers.home-assistant.io/docs/add-ons` redirects to
-`/docs/apps`.
+than assuming either); the REST API still documents and serves the Apps API at
+`/addons/...`, which is what this server calls, while `/v2/apps` is a separate
+v2 surface mounted only when the `supervisor_v2_api` feature flag is on —
+off by default, added in 2026-04 with v1 kept backward-compatible, absent from
+older Supervisors, and returning `apps` where v1 returns `addons`; and
+`developers.home-assistant.io/docs/add-ons` redirects to `/docs/apps`.
 
 What genuinely keeps the old spelling: add-on slugs, the `addon` issue label,
 the `homeassistant-addon*/` directories, this project's own `deployment_mode`

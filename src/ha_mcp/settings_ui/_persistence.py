@@ -167,10 +167,10 @@ def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
             # that tool: without this, a disabled write tool comes back
             # enabled the first time the server starts after the rename.
             # Both name-keyed maps in this file need it — an orphaned
-            # ``llm_api`` override falls through to the default, which for the
-            # app tools means exposed to every conversation agent, and the
-            # next Tools-tab save replaces that map wholesale and drops the
-            # record for good.
+            # ``llm_api`` override is not lost, it is worse than lost: it
+            # stays in the file, keyed on a name nothing looks up, while the
+            # tool falls through to its default, which for the app tools
+            # means exposed to every conversation agent.
             for key in ("tools", LLM_API_CONFIG_KEY):
                 states = result.get(key)
                 if isinstance(states, dict):

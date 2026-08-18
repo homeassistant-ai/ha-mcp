@@ -2718,11 +2718,13 @@ class AddOnTools:
 # docstring line of each tool follow Home Assistant's 2026.2 rename to "Apps",
 # because those are what an agent reads and what the locale catalogs translate.
 # The docstring bodies keep "add-on" for the Supervisor surface they describe:
-# the slugs and the option names did keep the old spelling, and the /addons REST
-# paths this server calls are upstream's compatibility family -- /apps/... is
-# the current one (AGENTS.md, Apps terminology) -- so neither finishing the
-# rename into the bodies nor reverting the first line for consistency is the
-# fix.
+# the slugs and the option names kept the old spelling, and so did the REST
+# paths this server calls. /addons is the documented default route, served by
+# the v1 app; /v2/apps is a separate surface, mounted only when the
+# supervisor_v2_api feature flag is on (it defaults to off, arrived in
+# 2026-04, and is absent from older Supervisors), and its list contract is not
+# even the same shape. So neither finishing the rename into the bodies nor
+# reverting the first line for consistency is the fix.
 def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -> None:
     """
     Register add-on management tools with the MCP server.

@@ -71,9 +71,8 @@ def _python_strings(path: Path) -> list[str]:
     interpolation.
 
     Docstrings are skipped: they describe the Supervisor surface to the next
-    maintainer, where the slugs and the option names really did keep the old
-    spelling, and the REST paths are the compatibility family this server still
-    calls.
+    maintainer, where the slugs, the option names and the REST paths this
+    server calls really did keep the old spelling.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"))
     docstrings = {
