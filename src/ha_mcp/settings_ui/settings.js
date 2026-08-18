@@ -536,14 +536,36 @@ async function applyInfoChrome() {
         '⚠ Changes saved. Restart the ha-mcp process, then refresh the MCP tool list in your AI client.'
       );
     }
-    // Version footer — show the running ha-mcp build at the bottom
-    // of every page. ``info.version`` is whatever
-    // ``HA_MCP_BUILD_VERSION`` the addon's Dockerfile set (e.g.
-    // ``7.5.0`` on stable, ``7.5.0.dev355`` on dev), with a fallback
-    // to package metadata in standalone deployments.
+    // Footer — show the running build and the same deployment classification
+    // used by ha_report_issue. The backend keeps embedded and sidecar distinct
+    // because they need different restart behavior; preserve those concise
+    // names here and clarify the less obvious packaging-oriented values.
     if (info.version) {
       const fEl = document.getElementById('versionFooterText');
-      if (fEl) fEl.textContent = 'ha-mcp ' + info.version;
+      const deploymentMode = typeof info.deployment_mode === 'string'
+        ? info.deployment_mode
+        : '';
+      const deploymentLabels = {
+        embedded: 'embedded',
+        sidecar: 'sidecar',
+        addon: t('footer.deployment.addon', {}, 'app/add-on'),
+        docker: t('footer.deployment.docker', {}, 'container/docker'),
+        pyinstaller: t('footer.deployment.pyinstaller', {}, 'standalone binary'),
+        git: t('footer.deployment.git', {}, 'source checkout'),
+        pypi: t('footer.deployment.pypi', {}, 'python package'),
+        unknown: t('footer.deployment.unknown', {}, 'unknown'),
+      };
+      const deploymentLabel = Object.prototype.hasOwnProperty.call(
+        deploymentLabels, deploymentMode
+      ) ? deploymentLabels[deploymentMode] : deploymentMode;
+      const installation = deploymentLabel
+        ? ' · ' + t(
+          'footer.installation',
+          {method: deploymentLabel},
+          'installation: {method}'
+        )
+        : '';
+      if (fEl) fEl.textContent = 'ha-mcp ' + info.version + installation;
     }
   } catch (e) {
     // A transient /api/settings/info failure must not leave the restart
