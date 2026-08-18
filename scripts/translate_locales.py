@@ -31,8 +31,8 @@ Python hardcodes staying untranslated) before it is written; a failure
 leaves that string unwritten and the run red rather than shipping a broken
 translation.
 
-Rate limits and outages: requests are paced under the free-tier rate and
-retry transient errors with backoff; a persistently failing batch marks its
+Rate limits and outages: requests use conservative free-tier pacing and retry
+transient errors with backoff; a persistently failing batch marks its
 strings failed and the run continues, and two consecutive dead batches stop
 the run early. Partial runs are resumable — completed work is recorded in
 ``tests/src/unit/locale_sync_progress.json`` and skipped on the rerun; only a
@@ -91,8 +91,9 @@ SETTINGS_SURFACE = "src/ha_mcp/settings_ui/locales"
 COMPONENT_SURFACE = "custom_components/ha_mcp_tools/translations"
 TOOLS_SURFACE = "settings UI tool titles and descriptions"
 
-DEFAULT_MODEL = "gemini-2.5-flash"
-# Free-tier pacing: stay comfortably under the strictest published RPM.
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
+# Free-tier pacing goal. Active RPM/RPD limits are project- and tier-specific
+# and are shown in Google AI Studio.
 _SECONDS_BETWEEN_REQUESTS = 7.0
 # Self-imposed wall-clock bound, kept below the workflow's job timeout: when
 # it trips, the run degrades exactly like a quota hit — remaining strings
@@ -682,10 +683,7 @@ def _call_gemini(prompt: str) -> dict[str, Any]:
     )
     body = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.2,
-            "response_mime_type": "application/json",
-        },
+        "generationConfig": {"response_mime_type": "application/json"},
     }
     last_error = ""
     for attempt in range(1, 6):
@@ -886,8 +884,8 @@ def _translate_locale(
     identifiers rather than deduplicated by English text — the same English
     may legitimately need different wording per key (Spanish genders
     "enabled" as ``activado``/``activada`` depending on the noun), and the
-    key gives the model that context. The one pair *required* to share
-    wording across the authored surfaces is aligned afterwards by
+    key gives the model that context. Authored copies required to share
+    wording across surfaces are aligned afterwards by
     ``_align_authored_shared``. A chunk-level engine failure marks that
     chunk's strings failed and moves on, so one blocked or truncated batch
     cannot take down the whole run.

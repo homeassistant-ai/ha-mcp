@@ -793,6 +793,28 @@ class TestCallGeminiRetry:
             ),
         )
 
+    def test_uses_current_model_without_deprecated_sampling_parameters(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("GEMINI_MODEL", raising=False)
+        monkeypatch.delenv("GEMINI_API_URL", raising=False)
+        request: dict[str, Any] = {}
+
+        def fake_post(url: str, **kwargs: Any) -> Any:
+            request["url"] = url
+            request["body"] = kwargs["json"]
+            return self._response(200)
+
+        monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
+        assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
+        assert request["url"] == (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            "gemini-3.5-flash-lite:generateContent"
+        )
+        generation_config = request["body"]["generationConfig"]
+        assert generation_config["response_mime_type"] == "application/json"
+        assert {"temperature", "topP", "topK"}.isdisjoint(generation_config)
+
     def test_retries_transient_statuses_then_succeeds(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

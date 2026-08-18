@@ -804,8 +804,8 @@ Component catalogs need every `strings.json` key with identical
 tool docstring, or `strings.json` + component `en.json`), and the machine
 translates the rest: `scripts/translate_locales.py` reads the English-source
 baseline diff (`tests/src/unit/locale_source_baseline.json`), retranslates
-the changed or missing keys in every language via the Gemini API
-(`GEMINI_API_KEY`; free tier), validates placeholders and markup, regenerates
+the changed or missing keys in every language via the Gemini API free tier
+using `GEMINI_API_KEY`, validates placeholders and markup, regenerates
 the derived catalogs, and repins the baseline. The `locale-sync.yml` workflow
 runs it AFTER merge, on a daily schedule, and pushes the result straight to
 master with the release App credential (the same pattern as the version-bump
@@ -857,8 +857,11 @@ stub-review work, not translation work — the pipeline holds that baseline key
 stale, and the locale-sync run stays red until a human confirms the stub
 still describes the tool and runs `python scripts/update_locale_baseline.py`.
 
-**Rate limits and outages degrade loudly, never silently.** Engine calls are
-paced under the free-tier request rate and retry transient errors (429/5xx,
+**Rate limits and outages degrade loudly, never silently.** The sync is intended
+to remain on Gemini's free tier. Active RPM and RPD limits are project- and
+tier-specific and are shown in Google AI Studio. Engine calls use a
+conservative fixed interval rather than claiming one universal free-tier
+ceiling, and retry transient errors (429/5xx,
 timeouts) with backoff; a request that keeps failing marks its strings failed
 and the run continues, and two consecutive dead batches stop the run early
 instead of burning the remaining quota. A partial run — a daily-quota hit,
