@@ -567,6 +567,42 @@ class TestBoundaryRegex:
 
 
 class TestUnscannableSurfaces:
+    @pytest.mark.parametrize(
+        ("proxy_name", "target_name", "arguments"),
+        [
+            (
+                "ha_call_read_tool",
+                "ha_config_get_dashboard",
+                {"include_screenshot": True},
+            ),
+            (
+                "ha_call_write_tool",
+                "ha_config_set_dashboard",
+                {"return_screenshot": True},
+            ),
+            ("ha_call_write_tool", "ha_manage_custom_tool", {"code": "print(1)"}),
+            ("ha_call_write_tool", "ha_manage_custom_tool", {"run_saved": "t"}),
+        ],
+    )
+    async def test_proxied_unscannable_call_refused_before_dispatch(
+        self, set_config, proxy_name, target_name, arguments
+    ):
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
+        mw = make_mw(get_client=FakeClient)
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(
+                    proxy_name,
+                    {"name": target_name, "arguments": arguments},
+                ),
+                _unreached_call_next,
+            )
+
+        body = _error_body(exc)
+        assert body["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert body["tool_name"] == target_name
+
     async def test_custom_tool_code_refused(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
         mw = make_mw(get_client=FakeClient)

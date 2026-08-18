@@ -276,12 +276,12 @@ def _unwrap_proxy_call(args: dict[str, Any]) -> tuple[str, dict[str, Any]] | Non
     return name, arguments
 
 
-def _effective_tool_name(name: str, args: dict[str, Any]) -> str:
-    """Return the real tool name when this call is a categorized proxy."""
+def _effective_tool_call(name: str, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Return the real tool name and arguments for a categorized proxy."""
     if name not in PROXY_META_TOOLS:
-        return name
+        return name, args
     inner = _unwrap_proxy_call(args)
-    return inner[0] if inner is not None else name
+    return inner if inner is not None else (name, args)
 
 
 def _config_cache_key(config: VisibilityConfig) -> str:
@@ -376,14 +376,17 @@ class VisibilityInboundEnforcement(_VisibilityEnforcementBase):
     ) -> Any:
         name = context.message.name
         args = context.message.arguments or {}
-        config = await self._active_config(_effective_tool_name(name, args))
+        effective_name, effective_args = _effective_tool_call(name, args)
+        config = await self._active_config(effective_name)
         if config is None:
             return await call_next(context)
 
-        reason = _unscannable_reason(name, args)
+        reason = _unscannable_reason(effective_name, effective_args)
         if reason is not None:
-            logger.info("visibility enforce: refused unscannable call to %s", name)
-            _raise_enforced(name, reason)
+            logger.info(
+                "visibility enforce: refused unscannable call to %s", effective_name
+            )
+            _raise_enforced(effective_name, reason)
 
         try:
             hidden, regex = await self._hidden_and_regex(config)
@@ -430,7 +433,8 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
     ) -> Any:
         name = context.message.name
         args = context.message.arguments or {}
-        config = await self._active_config(_effective_tool_name(name, args))
+        effective_name, _effective_args = _effective_tool_call(name, args)
+        config = await self._active_config(effective_name)
         if config is None:
             return await call_next(context)
         try:
