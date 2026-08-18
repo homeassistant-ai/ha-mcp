@@ -11,6 +11,7 @@ Additionally, every tool SHOULD have a title for UI display.
 
 import ast
 import re
+import textwrap
 from pathlib import Path
 
 
@@ -63,28 +64,77 @@ def _is_mcp_tool(func: ast.expr) -> bool:
     )
 
 
+def _annotations_dict(decorator: ast.Call) -> dict[str, ast.expr]:
+    """The decorator's ``annotations={...}`` mapping, keyed by literal name."""
+    for keyword in decorator.keywords:
+        if keyword.arg == "annotations" and isinstance(keyword.value, ast.Dict):
+            return {
+                key.value: value
+                for key, value in zip(keyword.value.keys, keyword.value.values)
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            }
+    return {}
+
+
+def _closure_tool_info(decorator: ast.expr, func_name: str, file_name: str) -> dict:
+    """Tool info for one ``@mcp.tool`` decorator, read off the parsed nodes.
+
+    The closure arm holds real AST nodes, so each flag comes from the
+    ``annotations`` value itself. ``_parse_decorator_args`` — still used by
+    the class arm, which has only text — instead looks for ``True`` in the 20
+    characters after the key, a window a neighbouring value can reach into:
+    ``'destructiveHint': False}, tags={'True Colors'}`` puts one two
+    characters inside it and marks the tool destructive and explicitly
+    non-destructive at once.
+    """
+    keywords = decorator.keywords if isinstance(decorator, ast.Call) else []
+    annotations = (
+        _annotations_dict(decorator) if isinstance(decorator, ast.Call) else {}
+    )
+
+    def literal(key: str) -> object:
+        node = annotations.get(key)
+        return node.value if isinstance(node, ast.Constant) else None
+
+    return {
+        "file": file_name,
+        "function": func_name,
+        "has_read_only_hint": literal("readOnlyHint") is True,
+        "has_destructive_hint": literal("destructiveHint") is True,
+        "has_explicit_non_destructive_hint": literal("destructiveHint") is False,
+        "has_title": "title" in annotations,
+        "has_tags": any(keyword.arg == "tags" for keyword in keywords),
+        "has_open_world_hint": isinstance(literal("openWorldHint"), bool),
+        "decorator_args": ", ".join(ast.unparse(keyword) for keyword in keywords),
+    }
+
+
 def _closure_tools(content: str, file_name: str) -> list[dict]:
-    """Every ``@mcp.tool(...)`` closure-pattern tool, read from the AST.
+    """Every ``@mcp.tool`` closure-pattern tool, read from the AST.
 
     Read structurally rather than by regex because the decorator arguments are
     prose: a ``)`` inside an annotation string — ``"title": "Get Apps
     (add-ons)"``, ``tags={"Apps (add-ons)"}`` — closes a ``[^)]*`` arm early
     and drops the tool from the scan, and from every annotation check with it,
     while a non-greedy ``(.*?)`` arm over-matches into the next tool instead.
-    The parser has no such failure mode, and only ``async def`` bodies are
-    collected, so a ``@mcp.tool(...)`` written inside a docstring is not a tool
-    here either.
+
+    A ``@mcp.tool(...)`` written inside a docstring is not a tool here because
+    a string constant never reaches a ``decorator_list`` — that immunity is
+    the parser's, not the ``async def`` filter's. The filter carries a rule of
+    its own: a ``@mcp.tool`` on a sync ``def`` is dropped without a word, and
+    ``test_tool_scan_finds_every_annotated_tool`` is what turns that into a
+    failure. The bare (uncalled) form reaches the same builder as the called
+    one, so it arrives with every key the assertions read rather than a dict
+    missing ``has_tags``; no tool is written that way today.
     """
     tools = []
     for node in ast.walk(ast.parse(content)):
         if not isinstance(node, ast.AsyncFunctionDef):
             continue
         for decorator in node.decorator_list:
-            if isinstance(decorator, ast.Call) and _is_mcp_tool(decorator.func):
-                args = ", ".join(ast.unparse(kw) for kw in decorator.keywords)
-                tools.append(_parse_decorator_args(args, node.name, file_name))
-            elif _is_mcp_tool(decorator):
-                tools.append(_parse_decorator_args("", node.name, file_name))
+            called = isinstance(decorator, ast.Call)
+            if _is_mcp_tool(decorator.func if called else decorator):
+                tools.append(_closure_tool_info(decorator, node.name, file_name))
     return tools
 
 
@@ -106,7 +156,7 @@ def extract_tool_decorators(file_path: Path) -> list[dict]:
     )
 
     # A bare ``@mcp.tool`` (no call) needs no separate arm — ``_closure_tools``
-    # reads it off the same decorator list and files it with empty args.
+    # reads it off the same decorator list and files it with no annotations.
     return tools
 
 
@@ -204,26 +254,117 @@ class TestToolAnnotations:
         unnoticed. That happened while the closure arm matched decorator
         arguments with ``[^)]*``: a ``)`` inside an annotation string (a title
         like "Get Logs (verbose)") closed the arm early. The closure arm reads
-        the AST now, and the remaining regex is ``class_pattern``. Every tool
-        sets openWorldHint exactly once, so the scanned count must equal the
-        occurrences across the tool files; a drop breaks parity and fails here
-        instead of passing silently.
+        the AST now, and the remaining regex is ``class_pattern``.
+
+        The expectation is the set of names every tool declares as
+        ``async def ha_*``, read with no decorator parsing at all. A count over
+        an annotation key cannot carry this: one dropped tool and one prose
+        mention of the counted key cancel out, and a count names no tool when
+        it does fail.
         """
-        tools = get_all_tools()
-        occurrences = sum(
-            py_file.read_text(encoding="utf-8").count("openWorldHint")
+        scanned = {tool["function"] for tool in get_all_tools()}
+        declared = {
+            name
             for py_file in sorted(get_tools_dir().glob("*.py"))
             if not py_file.name.startswith("_")
+            for name in re.findall(
+                r"^\s*async def (ha_\w+)\(",
+                py_file.read_text(encoding="utf-8"),
+                re.MULTILINE,
+            )
+        }
+
+        assert scanned == declared, (
+            f"Tool scan and tool sources disagree. Declared but not scanned: "
+            f"{sorted(declared - scanned)}. Scanned but not declared: "
+            f"{sorted(scanned - declared)}. A tool extract_tool_decorators() "
+            f"cannot see is dropped from get_all_tools() and skips every "
+            f"annotation check above. Fix the extraction rather than this "
+            f"expectation: the class arm is still a regex, so a decorator "
+            f"whose first argument is not name=\"ha_...\", a nested paren "
+            f"inside the ``([^()]*)`` decorator skip, or a tool on a sync def "
+            f"are the candidates."
         )
 
-        assert len(tools) == occurrences, (
-            f"Tool scan found {len(tools)} tools but {occurrences} openWorldHint "
-            f"occurrences across the tool files. A tool extract_tool_decorators() "
-            f"cannot see is dropped from get_all_tools() and skips every annotation "
-            f"check. Fix the extraction (the class arm is still a regex, so a ')' "
-            f"inside its decorator args is a candidate) rather than adjusting this "
-            f"count."
+    def test_closure_scan_reads_called_and_bare_decorators(self):
+        """Both ``@mcp.tool`` forms parse, and prose never becomes a tool.
+
+        The bare form registers no tool in src/ha_mcp/tools today, so nothing
+        else exercises that branch — and the branch it replaced built its dict
+        by hand without ``has_tags``, which test_all_tools_have_tags reads, so
+        the first bare decorator to land would have raised KeyError instead of
+        asserting. This pins the called form, the bare form, and the immunity
+        the scan claims for decorators mentioned in a docstring.
+        """
+        source = textwrap.dedent(
+            '''
+            """Module docstring: @mcp.tool(annotations={"title": "Nope"}) here.
+
+            async def ha_docstring_tool(): ...
+            """
+
+
+            @mcp.tool(
+                tags={"Apps (add-ons)"},
+                annotations={
+                    "title": "Get Apps (add-ons)",
+                    "readOnlyHint": True,
+                    "openWorldHint": False,
+                },
+            )
+            async def ha_called_tool() -> None:
+                """A ``)`` in the title above must not end the decorator."""
+
+
+            @mcp.tool
+            async def ha_bare_tool() -> None:
+                """No annotations at all, but the same keys."""
+            '''
         )
+
+        tools = {tool["function"]: tool for tool in _closure_tools(source, "x.py")}
+
+        assert set(tools) == {"ha_called_tool", "ha_bare_tool"}, tools.keys()
+        called = tools["ha_called_tool"]
+        assert called["has_title"] and called["has_tags"]
+        assert called["has_read_only_hint"] and called["has_open_world_hint"]
+        assert not called["has_destructive_hint"]
+        bare = tools["ha_bare_tool"]
+        assert bare["has_tags"] is False and bare["has_title"] is False
+        assert bare["has_open_world_hint"] is False
+
+    def test_closure_scan_reads_flags_off_the_annotations_dict(self):
+        """A neighbouring value must not decide another key's flag.
+
+        ``_parse_decorator_args`` classifies by looking for ``True`` in the 20
+        characters after the key, so a short neighbouring key whose value
+        carries the word reaches into the window and marks a tool destructive
+        and explicitly non-destructive at once. Real annotation keys clear the
+        window by a character or two, which is the whole of the margin. The
+        closure arm reads the ``annotations`` dict, so the distance stops
+        mattering there; the class arm, which has only text, still goes
+        through the window.
+        """
+        source = textwrap.dedent(
+            '''
+            @mcp.tool(annotations={"destructiveHint": False, "i": "True"})
+            async def ha_window_tool() -> None:
+                """Nothing here is destructive."""
+            '''
+        )
+
+        (tool,) = _closure_tools(source, "x.py")
+
+        assert tool["has_explicit_non_destructive_hint"] is True
+        assert tool["has_destructive_hint"] is False
+
+        # The window this arm no longer consults does get that wrong.
+        through_the_window = _parse_decorator_args(
+            "annotations={'destructiveHint': False, 'i': 'True'}",
+            "ha_window_tool",
+            "x.py",
+        )
+        assert through_the_window["has_destructive_hint"] is True
 
     def test_server_registered_tools_have_open_world_hint(self):
         """Tools registered directly on the server must also set openWorldHint.
