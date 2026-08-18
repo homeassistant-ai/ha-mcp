@@ -268,7 +268,7 @@ If you're having trouble setting up remote access — TLS errors, Cloudflare con
 
 Instead of requiring a dedicated tunnel to port 9583, the Webhook Proxy routes MCP traffic through Home Assistant's main port (8123) via a webhook. If you already have **Nabu Casa** or any reverse proxy pointing at your HA instance, this can be the easiest remote setup.
 
-1. Install the **MCP Server app** and the **Webhook Proxy app** from the app store
+1. Install the **MCP Server app** and the **Webhook Proxy app** from **Settings > Apps > Install app**
 2. Start the webhook proxy and restart Home Assistant when prompted
 3. Copy the webhook URL from the app logs
 4. Use that URL in your MCP client configuration

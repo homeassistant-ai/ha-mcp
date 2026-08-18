@@ -178,7 +178,7 @@ The generated values are persisted at `/data/oauth_creds.json` inside the app, s
 2. **Get fresh random values via the UI** (no filesystem access needed): turn on **Regenerate OAuth Credentials on Next Start** in the app configuration, save, restart. The app wipes the stored creds, generates a fresh pair, prints them in the log, and flips the regenerate toggle back to off. Update your MCP client to match.
 3. **Get fresh random values manually:** stop the app, delete `/data/oauth_creds.json` (e.g. via SSH/Terminal app), start the app. Equivalent to option 2 but requires filesystem access.
 
-**To disable OAuth protection:** set **Enable OAuth (Beta)** back to off and restart the app. The webhook returns to unauthenticated URL-as-secret behavior. The none-mode compatibility endpoints remain available, but their cosmetic token is not required by the webhook.
+**To disable OAuth protection:** set **Enable OAuth (Beta)** back to off and restart **Home Assistant** (Settings → System → Restart) — restarting the app alone does not drop the OAuth views, see the restart note below. The webhook returns to unauthenticated URL-as-secret behavior. The none-mode compatibility endpoints remain available, but their cosmetic token is not required by the webhook.
 
 **OAuth endpoints:**
 

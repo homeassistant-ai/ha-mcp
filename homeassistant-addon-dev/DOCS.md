@@ -38,8 +38,11 @@ Like the stable app, the dev app requests `hassio_role: manager` to
 fetch app, system-service, and HA-core logs via the Supervisor REST API
 (`/addons/<slug>/logs`, `/<service>/logs`, `/core/logs`) — `default` returns
 403 on these endpoints (see #1116). The role also grants
-start/stop/install/update on other apps; ha-mcp only uses the read-side
-capabilities.
+start/stop/install/update on other apps, and ha-mcp does use that write
+side: `ha_manage_app` installs, starts, stops, restarts and reconfigures
+apps. Read-only mode blocks all of it except HTTP GET proxy reads of an
+app's own API, so operators who want the role without the authority should
+turn that mode on.
 
 ## Tool Settings Web UI
 
