@@ -28,6 +28,7 @@ from fastmcp.tools import Tool
 from mcp.types import ToolAnnotations
 
 from ..errors import ErrorCode, create_error_response
+from ..renamed_tools import current_tool_name
 
 if TYPE_CHECKING:
     from fastmcp.server.transforms import GetToolNext
@@ -438,6 +439,13 @@ class CategorizedSearchTransform(BM25SearchTransform):
         ) -> Any:
             # Rebuild category cache if catalog has changed
             await transform._rebuild_category_cache(ctx)
+
+            # A client working from an older catalog can name a tool that has
+            # since been renamed. The category check below reads the live
+            # catalog, so it would reject that call before the re-dispatch
+            # reaches RenamedToolAliasMiddleware — resolve the name here too,
+            # and the alias covers both call shapes.
+            name = current_tool_name(name)
 
             # Tolerate `arguments` passed as a JSON string — small models
             # sometimes serialize it before sending. Parse once up front so
