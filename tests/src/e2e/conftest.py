@@ -60,6 +60,7 @@ from haos_runtime import (
     is_haos_backend_selected,
     is_haos_embedded_mode,
     is_haos_inaddon_mode,
+    is_haos_stdio_mode,
     login_for_token,
     refresh_dev_addon_source_in_qcow2,
     refresh_recorder_in_qcow2,
@@ -246,10 +247,13 @@ def pytest_collection_modifyitems(config, items):
     - ``inaddon_only``: HAOS inaddon mode only (``mcp_client`` is HTTP
       to the addon's MCP endpoint, ``is_running_in_addon()=True`` paths
       exercised). Skipped on external mode and on testcontainer.
+    - ``haos_stdio_only``: HAOS stdio mode only (``mcp_client`` launches the
+      installed ``ha-mcp`` command and uses real stdio JSON-RPC framing).
     """
     del config
     haos = is_haos_backend_selected()
     inaddon = haos and is_haos_inaddon_mode()
+    haos_stdio = haos and is_haos_stdio_mode()
     # The embedded backend (#1527) is a testcontainer variant, so ``haos`` is
     # False here — ``haos_only`` still skips and ``container_only`` still runs on
     # it. What differs is that the in-process server lives INSIDE the container:
@@ -274,6 +278,9 @@ def pytest_collection_modifyitems(config, items):
     skip_inaddon_only = pytest.mark.skip(
         reason="inaddon mode required (set HAOS_TEST_MODE=inaddon)"
     )
+    skip_haos_stdio_only = pytest.mark.skip(
+        reason="HAOS stdio mode required (set HAOS_TEST_MODE=stdio)"
+    )
     skip_external_only = pytest.mark.skip(
         reason="out-of-process server (inaddon/embedded); test needs an "
         "in-process server it can reconfigure via env/monkeypatch or reach an "
@@ -297,6 +304,8 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_container)
         if "inaddon_only" in keywords and not inaddon:
             item.add_marker(skip_inaddon_only)
+        if "haos_stdio_only" in keywords and not haos_stdio:
+            item.add_marker(skip_haos_stdio_only)
         # ``external_only`` skips on any tier where the server is NOT in the
         # pytest process: the inaddon HAOS addon AND the embedded backend's
         # in-process MCP server (both #1527). The name is historical (from
@@ -314,7 +323,9 @@ def pytest_collection_modifyitems(config, items):
         # monkeypatch or reach an in-process mock. These tests keep full coverage
         # on the external HAOS lane (where the in-process FastMCP server IS in the
         # test process) and the container lane.
-        elif "external_only" in keywords and (inaddon or embedded or haos_embedded):
+        elif "external_only" in keywords and (
+            inaddon or embedded or haos_embedded or haos_stdio
+        ):
             item.add_marker(skip_external_only)
         # ``not_on_embedded`` is applied only where a test is provably redundant
         # with the embedded lane's own session backend (e.g. the workflows/embedded
@@ -2526,6 +2537,7 @@ def ha_container_with_fresh_config(request):
         base_image_path = Path(os.environ[HAOS_IMAGE_ENV])
         inaddon = is_haos_inaddon_mode()
         haos_embedded = is_haos_embedded_mode()
+        haos_stdio = is_haos_stdio_mode()
         image_path = _prepare_haos_image(base_image_path, inaddon, haos_embedded)
         with boot_haos_qemu(image_path) as base_url:
             token, blueprint_for_haos = _haos_post_boot_setup(base_url, request)
@@ -2556,6 +2568,8 @@ def ha_container_with_fresh_config(request):
                         if inaddon
                         else "haos_embedded"
                         if haos_embedded
+                        else "haos_stdio"
+                        if haos_stdio
                         else "haos"
                     ),
                     # Only set on inaddon mode; external/embedded modes leave None.
@@ -2753,10 +2767,15 @@ async def mcp_server(
     server or build an HTTP transport pointing at the out-of-process server.
     """
     container_info = ha_container_with_fresh_config
-    if container_info.get("backend") in ("haos_inaddon", "embedded", "haos_embedded"):
+    if container_info.get("backend") in (
+        "haos_inaddon",
+        "haos_stdio",
+        "embedded",
+        "haos_embedded",
+    ):
         logger.info(
             "%s mode: skipping in-process MCP server "
-            "(tests use the out-of-process server's HTTP endpoint instead)",
+            "(tests use the out-of-process server transport instead)",
             container_info.get("backend"),
         )
         yield None
@@ -2782,12 +2801,14 @@ async def mcp_server(
 
 @pytest.fixture(scope="session")
 async def mcp_client(
-    ha_container_with_fresh_config, mcp_server
+    ha_container_with_fresh_config, mcp_server, haos_stdio_config_dir
 ) -> AsyncGenerator[Client]:
     """Create FastMCP client — in-memory for in-process server, HTTP otherwise.
 
     On testcontainer + HAOS-external: in-memory transport bound to the
     ``mcp_server`` fixture (current behavior).
+    On HAOS-stdio: ``StdioTransport`` launches the installed ``ha-mcp`` command
+    with an isolated config directory and the real HAOS URL/token.
     On HAOS-inaddon: ``StreamableHttpTransport`` pointing at the dev
     addon's MCP endpoint (running inside the booted HAOS).
     On embedded (#1527): ``StreamableHttpTransport`` pointing at the
@@ -2798,6 +2819,18 @@ async def mcp_client(
     """
     container_info = ha_container_with_fresh_config
     backend = container_info.get("backend")
+    if backend == "haos_stdio":
+        client = _stdio_client(container_info, haos_stdio_config_dir)
+        try:
+            async with client:
+                logger.debug(
+                    "🔗 FastMCP client connected (stdio subprocess transport)"
+                )
+                yield client
+        finally:
+            _retire_stdio_sidecar(haos_stdio_config_dir)
+        return
+
     if backend in ("haos_inaddon", "embedded", "haos_embedded"):
         from fastmcp.client.transports import StreamableHttpTransport
 
@@ -2834,9 +2867,73 @@ async def mcp_client(
         yield client
 
 
+def _stdio_env(container_info: dict[str, Any], config_dir: Path) -> dict[str, str]:
+    """Build the explicit environment for an installed ``ha-mcp`` process."""
+    return {
+        "HOMEASSISTANT_URL": container_info["base_url"],
+        "HOMEASSISTANT_TOKEN": container_info.get("token", TEST_TOKEN),
+        "HA_MCP_CONFIG_DIR": str(config_dir),
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+        "HA_MAX_RETRIES": "1",
+        "HA_MCP_DISABLE_SETTINGS_UI": "false",
+        "ENABLE_BETA_FEATURES": "true",
+        "ENABLE_YAML_CONFIG_EDITING": "true",
+        "ENABLE_YAML_PACKAGES_AUTOMATION": "true",
+        "ENABLE_YAML_PACKAGES_SCRIPT": "true",
+        "ENABLE_YAML_PACKAGES_SCENE": "true",
+        "HAMCP_ENABLE_FILESYSTEM_TOOLS": "true",
+        "HA_MCP_EXTRA_YAML_KEYS": "alert2",
+        "ENABLE_STRICT_MANDATORY_BPS": "false",
+        "ENABLE_SNAPSHOT_DELETE": "true",
+    }
+
+
+def _stdio_client(container_info: dict[str, Any], config_dir: Path) -> Client:
+    """Return a FastMCP client backed by the installed stdio entry point."""
+    from fastmcp.client.transports import StdioTransport
+
+    transport = StdioTransport(
+        command="ha-mcp",
+        args=[],
+        env=_stdio_env(container_info, config_dir),
+    )
+    return Client(transport)
+
+
+def _retire_stdio_sidecar(config_dir: Path) -> None:
+    """Best-effort retirement for the detached settings sidecar subprocess."""
+    url_file = config_dir / "ui.url"
+    try:
+        url = url_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return
+    if not url:
+        return
+
+    from ha_mcp import stdio_settings_sidecar
+
+    acknowledged, _sentinel_created = stdio_settings_sidecar._post_shutdown(url)
+    if not acknowledged:
+        logger.warning("stdio settings sidecar did not acknowledge retirement")
+
+
+@pytest.fixture(scope="session")
+def haos_stdio_config_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Isolated persistent config used by the full-suite HAOS stdio process."""
+    return tmp_path_factory.mktemp("haos-stdio-config")
+
+
+@pytest.fixture(scope="session")
+def packaging_stdio_config_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Separate config for tests that explicitly request ``stdio_mcp_client``."""
+    return tmp_path_factory.mktemp("packaging-stdio-config")
+
+
 @pytest.fixture(scope="session")
 async def stdio_mcp_client(
     ha_container_with_fresh_config,
+    packaging_stdio_config_dir,
 ) -> AsyncGenerator[Client]:
     """Spawn ``ha-mcp`` as a subprocess and connect via stdio JSON-RPC.
 
@@ -2854,36 +2951,14 @@ async def stdio_mcp_client(
     can land green on CI.
     """
 
-    from fastmcp.client.transports import StdioTransport
-
     container_info = ha_container_with_fresh_config
-
-    # Subprocess inherits no env by default — forward only what ha-mcp
-    # actually needs at startup. PATH so the subprocess resolves its
-    # own dependencies via the test venv's site-packages.
-    env = {
-        "HOMEASSISTANT_URL": container_info["base_url"],
-        "HOMEASSISTANT_TOKEN": TEST_TOKEN,
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", ""),
-        # Keep startup snappy — the connection retry is irrelevant here,
-        # the test container is already up by the time this fixture runs.
-        "HA_MAX_RETRIES": "1",
-        # Same pin as the session-server env blocks (#1779): strict mode
-        # defaults ON and would prepend the acknowledgment line to tier-3
-        # skill content, breaking the content == on-disk-bytes assertions.
-        "ENABLE_STRICT_MANDATORY_BPS": "false",
-    }
-
-    # ``args`` is a required positional on the base ``StdioTransport``
-    # (subclasses like ``PythonStdioTransport`` default it to ``None``,
-    # but the base requires ``list[str]``). Pass an explicit empty list
-    # since ``ha-mcp`` takes no positional args in stdio mode.
-    transport = StdioTransport(command="ha-mcp", args=[], env=env)
-    client = Client(transport)
-    async with client:
-        logger.debug("🔗 FastMCP client connected (stdio subprocess transport)")
-        yield client
+    client = _stdio_client(container_info, packaging_stdio_config_dir)
+    try:
+        async with client:
+            logger.debug("🔗 FastMCP client connected (stdio subprocess transport)")
+            yield client
+    finally:
+        _retire_stdio_sidecar(packaging_stdio_config_dir)
 
 
 # Test session information

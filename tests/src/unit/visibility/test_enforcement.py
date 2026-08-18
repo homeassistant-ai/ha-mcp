@@ -181,6 +181,41 @@ class TestInactivePassthrough:
         assert client.get_states_calls == 0
 
 
+class TestReportIssueRestriction:
+    """The diagnostics tool stays reachable unless explicitly restricted."""
+
+    async def test_report_issue_bypasses_active_enforcement_by_default(
+        self, set_config
+    ):
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
+        client = FakeClient()
+        mw = make_mw(get_client=lambda: client)
+
+        result = await mw.on_call_tool(
+            make_context("ha_report_issue", {"fields": ["recent_logs"]}),
+            _returns(text_result("diagnostics mention sensor.hidden")),
+        )
+
+        assert result.content[0].text == "diagnostics mention sensor.hidden"
+        assert client.get_states_calls == 0
+
+    async def test_report_issue_is_scanned_when_operator_opts_in(self, set_config):
+        set_config(
+            enabled=True,
+            enforce=True,
+            deny_entity_ids=["sensor.hidden"],
+            restrict_report_issue=True,
+        )
+        mw = make_mw(get_client=FakeClient)
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_report_issue", {"fields": ["recent_logs"]}),
+                _returns(text_result("diagnostics mention sensor.hidden")),
+            )
+
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
 # ---------------------------------------------------------------------------
 # Inbound: concealment + refusal
 # ---------------------------------------------------------------------------
@@ -306,6 +341,21 @@ class TestConfigLoadFailure:
         body = _error_body(exc)
         assert body["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
         assert "entity_visibility.json" in body["error"]["message"]
+
+    async def test_corrupt_config_with_no_prior_load_keeps_report_issue_available(
+        self, breakable_config
+    ):
+        breakable_config["broken"] = True
+        client = FakeClient()
+        mw = make_mw(get_client=lambda: client)
+
+        result = await mw.on_call_tool(
+            make_context("ha_report_issue", {"fields": ["recent_logs"]}),
+            _returns(text_result("diagnostics still available")),
+        )
+
+        assert result.content[0].text == "diagnostics still available"
+        assert client.get_states_calls == 0
 
     async def test_corrupt_config_after_enforce_off_load_passes_through(
         self, breakable_config

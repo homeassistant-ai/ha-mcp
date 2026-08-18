@@ -12,7 +12,9 @@ from ha_mcp.visibility.persistence import (
 
 
 def test_absent_file_returns_default(tmp_path):
-    assert load_visibility_config(tmp_path) == VisibilityConfig()
+    loaded = load_visibility_config(tmp_path)
+    assert loaded == VisibilityConfig()
+    assert loaded.restrict_report_issue is False
 
 
 def test_save_then_load_roundtrip_bumps_version(tmp_path):
@@ -28,6 +30,20 @@ def test_save_then_load_preserves_enforce(tmp_path):
     )
     loaded = load_visibility_config(tmp_path)
     assert loaded.enforce is True
+
+
+def test_save_then_load_preserves_report_issue_restriction(tmp_path):
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            version=1,
+            enabled=True,
+            enforce=True,
+            restrict_report_issue=True,
+        ),
+    )
+    loaded = load_visibility_config(tmp_path)
+    assert loaded.restrict_report_issue is True
 
 
 def test_corrupt_json_raises_valueerror(tmp_path):

@@ -2569,6 +2569,35 @@ class TestVisibilityHandlers:
         assert resp.status_code == 400
 
 
+class TestSidecarVisibilityRouteTable:
+    """The real stdio sidecar app must mount the shared visibility handlers."""
+
+    def test_real_app_get_put_round_trip(self, tmp_data_dir: Path) -> None:
+        port = 47652
+        prefix = "/private_visibility_test"
+        app = sidecar._build_app("127.0.0.1", port, prefix)
+        client = TestClient(app, base_url=f"http://127.0.0.1:{port}")
+
+        initial = client.get(f"{prefix}/api/visibility/config")
+        assert initial.status_code == 200
+        assert initial.json()["restrict_report_issue"] is False
+
+        saved = client.put(
+            f"{prefix}/api/visibility/config",
+            json={
+                "version": initial.json()["version"],
+                "enabled": True,
+                "enforce": True,
+                "deny_entity_ids": ["light.bed_light"],
+                "restrict_report_issue": True,
+            },
+        )
+        assert saved.status_code == 200
+        current = client.get(f"{prefix}/api/visibility/config").json()
+        assert current["deny_entity_ids"] == ["light.bed_light"]
+        assert current["restrict_report_issue"] is True
+
+
 class TestEmbeddedRestart:
     """The restart endpoint reloads the server config entry in embedded mode."""
 

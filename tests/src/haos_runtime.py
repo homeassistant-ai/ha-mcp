@@ -387,6 +387,18 @@ def is_haos_embedded_mode() -> bool:
     return os.environ.get("HAOS_TEST_MODE", "external") == "embedded"
 
 
+def is_haos_stdio_mode() -> bool:
+    """True iff this run targets the external stdio HAOS tier.
+
+    The stdio mode boots the same real HAOS backend as the external lane but
+    runs the server-under-test as the installed ``ha-mcp`` command and connects
+    through a real stdio JSON-RPC transport. This is distinct from both the
+    in-process FastMCP client used by the external lane and the embedded server
+    entry running inside Home Assistant.
+    """
+    return os.environ.get("HAOS_TEST_MODE", "external") == "stdio"
+
+
 def is_haos_backend_selected() -> bool:
     """True iff the workflow has staged a HAOS qcow2 for this run."""
     raw = os.environ.get(HAOS_IMAGE_ENV)
