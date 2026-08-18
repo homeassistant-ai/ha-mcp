@@ -267,7 +267,10 @@ def update_command_hint(current: str) -> str:
         )
     if is_running_in_addon():
         # Add-on users update through the Supervisor UI, not pip/docker.
-        return "Update from Settings -> Apps (Add-ons) -> Home Assistant MCP Server."
+        return (
+            "Update from Settings -> Apps -> Home Assistant MCP Server "
+            "(Settings -> Add-ons before Home Assistant 2026.2)."
+        )
     dev = is_dev_version(current)
     if _running_in_docker():
         # Dev images are tagged :dev (rolling); :stable is the stable channel.

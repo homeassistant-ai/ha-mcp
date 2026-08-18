@@ -152,13 +152,14 @@ Rendering does not run inside ha-mcp; it runs in a separate engine — balloob's
 ha-mcp does not vendor it; you install it yourself. Operators should know:
 
 **Setup by deployment.**
-- *HA OS / Supervised:* add balloob's add-on repository
-  (`https://github.com/balloob/home-assistant-addons`) under Settings >
-  Apps (Add-ons) > App Store > Repositories, install the **Puppet** add-on, set its
+- *HA OS / Supervised:* add balloob's repository
+  (`https://github.com/balloob/home-assistant-addons`) under Settings > Apps >
+  App store > Repositories (Settings > Add-ons > Add-on store before Home
+  Assistant 2026.2), install the **Puppet** add-on, set its
   `access_token` option to a Home Assistant long-lived access token, and start
   it. ha-mcp discovers the running add-on through the Supervisor (it matches
   the `*_puppet` slug). (The assistant can do this for you end-to-end via
-  `ha_manage_addon(action="add_repository", repository=...)` then
+  `ha_manage_app(action="add_repository", repository=...)` then
   `action="install"` / `action="start"`, but you must supply the token.)
 - *Docker / Container:* run Puppet's image as a sidecar (build it from
   balloob's `puppet/` directory, with `access_token` set) and point ha-mcp at
@@ -190,7 +191,7 @@ flipping it. A dedicated Puppet account remains a sound belt-and-suspenders
 setup. Language selection is local to Puppet's browser session.
 
 To change the Puppet engine add-on's own options (such as `keep_browser_open`)
-or to restart it, use `ha_manage_addon`; the screenshot tools only render and
+or to restart it, use `ha_manage_app`; the screenshot tools only render and
 never modify the engine add-on's configuration.
 
 **Puppet's HTTP listener has no inbound auth, and it publishes host port

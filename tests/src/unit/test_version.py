@@ -286,7 +286,9 @@ class TestLogStartupVersion:
         ]
         assert any("available: 7.9.0" in m for m in warnings), warnings
         # add-on upgrade hint, not the dev-channel banner (suppressed in add-on)
-        assert any("Settings -> Apps (Add-ons)" in m for m in warnings), warnings
+        assert any(
+            "Settings -> Apps -> Home Assistant MCP Server" in m for m in warnings
+        ), warnings
         assert not any("dev channel" in m for m in warnings), warnings
 
 

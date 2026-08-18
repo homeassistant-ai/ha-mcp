@@ -1920,7 +1920,7 @@ const FEATURE_META = {
   },
   read_only_mode: {
     label: "Read Only Mode",
-    help: "Toggles all write tools off, and removes ability for tools to make any write or destructive calls. Mixed read/write tools (backups, Apps (add-ons), energy preferences, voice pipelines, and code mode when enabled) stay available with their write operations blocked. Same toggle as the web UI Tools tab. Off by default. Requires restart to take effect.",
+    help: "Toggles all write tools off, and removes ability for tools to make any write or destructive calls. Mixed read/write tools — backups, Apps (add-ons), energy preferences, voice pipelines, and code mode when enabled — stay available with their write operations blocked. Same toggle as the web UI Tools tab. Off by default. Requires restart to take effect.",
   },
   redact_secrets: {
     label: "Redact Secrets",
@@ -1972,7 +1972,7 @@ const FEATURE_META = {
   },
   enable_dashboard_screenshot: {
     label: "Enable dashboard screenshot mode (beta)",
-    help: "Beta feature — disabled by default. Adds the ha_get_dashboard_screenshot tool plus include_screenshot / return_screenshot options on the dashboard get/set tools, so AI assistants can inspect one or more responsive Lovelace images (e.g. to verify a dashboard they just created). Supports stable named views, mobile/tablet/desktop batches, and PNG/JPEG/WebP/BMP output. Rendering runs in a separate, opt-in engine — balloob's \"Puppet\" App (add-on), headless Chromium — which you install once (add balloob's App (add-on) repository, then install \"Puppet\") and give a long-lived access token; on Docker/Container deployments you run that engine as a sidecar and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is installed unless you both enable this and install the engine. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
+    help: "Beta feature — disabled by default. Adds the ha_get_dashboard_screenshot tool plus include_screenshot / return_screenshot options on the dashboard get/set tools, so AI assistants can inspect one or more responsive Lovelace images (e.g. to verify a dashboard they just created). Supports stable named views, mobile/tablet/desktop batches, and PNG/JPEG/WebP/BMP output. Rendering runs in a separate, opt-in engine — balloob's \"Puppet\" App (add-on), headless Chromium — which you install once (add balloob's repository to the App store, then install \"Puppet\") and give a long-lived access token; on Docker/Container deployments you run that engine as a sidecar and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is installed unless you both enable this and install the engine. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
 };
 // FEATURE_META:END GENERATED

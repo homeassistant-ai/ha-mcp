@@ -13,8 +13,8 @@ startup, never silently installed):
 2. **HA OS / Supervised** — ``SUPERVISOR_TOKEN`` is present. The Puppet
    add-on (slug ``*_puppet``) is discovered via the Supervisor REST API and
    reached on the internal network by its hostname. The user must have
-   installed + started it themselves (add balloob's add-on repository, then
-   install "Puppet") — we never auto-install.
+   installed + started it themselves (add balloob's repository to the App
+   store, then install "Puppet") — we never auto-install.
 3. **Neither** (stdio / standalone) — a clear :class:`ToolError` explaining
    how to enable it.
 """
@@ -75,9 +75,10 @@ TOKEN_HINT = (
 
 _INSTALL_HELP = (
     "Dashboard screenshot mode is enabled, but the Puppet screenshot engine "
-    "add-on is not installed. On HA OS / Supervised: (1) add balloob's add-on "
-    f"repository ({_REPO_URL}) under Settings > Apps (Add-ons) > App Store > "
-    "Repositories, then install the 'Puppet' add-on; and (2) it REQUIRES a "
+    "App (add-on) is not installed. On HA OS / Supervised: (1) add balloob's "
+    f"repository ({_REPO_URL}) under Settings > Apps > App store > "
+    "Repositories (Settings > Add-ons > Add-on store before Home Assistant "
+    "2026.2), then install the 'Puppet' app; and (2) it REQUIRES a "
     f"token — {TOKEN_HINT}. Without a token the engine only serves a "
     "configuration-instructions page. On Docker / Container, run the Puppet "
     "image as a sidecar (with its access_token set) and point ha-mcp at it via "
@@ -85,14 +86,15 @@ _INSTALL_HELP = (
 )
 
 _NOT_STARTED_HELP = (
-    "The Puppet screenshot engine add-on is installed but not started. Open "
-    f"Settings > Apps (Add-ons) > Puppet, {TOKEN_HINT} (enable 'Start on boot' to keep "
+    "The Puppet screenshot engine App (add-on) is installed but not started. "
+    "Open Settings > Apps > Puppet (Settings > Add-ons > Puppet before Home "
+    f"Assistant 2026.2), {TOKEN_HINT} (enable 'Start on boot' to keep "
     "it available)."
 )
 
 _STDIO_HELP = (
     "Dashboard screenshot mode needs either HA OS / Supervised (add balloob's "
-    "add-on repository and install the 'Puppet' add-on) or a Puppet sidecar "
+    "repository to the App store and install the 'Puppet' app) or a Puppet sidecar "
     "reachable via HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. This deployment "
     "(stdio / standalone) can host neither — see docs/beta.md."
 )
@@ -259,7 +261,7 @@ async def _discover_engine_via_supervisor() -> EngineTarget:
             # The /addons list is only reliable for slug discovery (the
             # repo-hash prefix is not known ahead of time). Per-addon details
             # are authoritative on /addons/<slug>/info — the same source
-            # ha_manage_addon trusts.
+            # ha_manage_app trusts.
             addon_infos: list[tuple[str, dict[str, Any]]] = []
             for match in matches:
                 slug = str(match["slug"])

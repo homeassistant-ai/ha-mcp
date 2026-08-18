@@ -69,7 +69,7 @@ If you prefer not to use the web UI (or want to set these before first start), t
 The dev channel updates automatically with every commit to master. You may receive multiple updates per day.
 
 To check for updates:
-1. Go to Settings > Apps (Add-ons)
+1. Go to Settings > Apps (Settings > Add-ons before Home Assistant 2026.2)
 2. Click on "Home Assistant MCP Server (Dev)"
 3. Click "Check for updates"
 

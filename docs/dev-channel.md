@@ -151,12 +151,12 @@ docker pull ghcr.io/homeassistant-ai/ha-mcp:latest
 
 ### Home Assistant Add-on
 
-The dev channel is available as a **separate add-on** in the Home Assistant add-on store.
+The dev channel is available as a **separate add-on** in the Home Assistant App store.
 
 **To use the dev channel:**
 
 1. Open Home Assistant
-2. Go to **Settings** → **Apps (Add-ons)** → **App Store**
+2. Go to **Settings** → **Apps** → **App store** (**Settings** → **Add-ons** → **Add-on store** before Home Assistant 2026.2)
 3. Search for **"Home Assistant MCP Server (Dev)"**
 4. Click **Install**
 5. Configure with your token (if not using auto-discovery)

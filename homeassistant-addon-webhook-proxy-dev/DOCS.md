@@ -29,7 +29,7 @@ automatically on the next clean start.
 
 ## Setup
 
-1. **Install this addon** from the add-on store
+1. **Install this addon** from the App store
 2. **Start the addon** — on first run it will install the integration and create a notification asking you to restart Home Assistant
 3. **Restart Home Assistant** (Settings > System > Restart) — the addon detects the restart and automatically finishes setup
 4. **Copy the remote URL** from the addon logs:
@@ -281,7 +281,7 @@ The webhook bypasses the ingress session cookie requirement that external MCP cl
 ### "No running MCP addon found"
 
 The main MCP Server addon is not running. Install and start it first:
-- Settings > Add-ons > Home Assistant MCP Server > Start
+- Settings > Apps > Home Assistant MCP Server > Start (Settings > Add-ons before Home Assistant 2026.2)
 
 ### "Could not discover secret path"
 
