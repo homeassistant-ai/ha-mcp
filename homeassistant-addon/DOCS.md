@@ -355,7 +355,7 @@ Mixed read/write tools whose read functionality exists nowhere else stay availab
 
 - `ha_config_get_dashboard` — config/list/search reads only; screenshot renders are blocked because Puppet can persist frontend theme/dark preferences
 - `ha_manage_backup` — only listing and viewing per-edit backups
-- `ha_manage_app` — only HTTP GET proxy reads of add-on APIs
+- `ha_manage_app` — only HTTP GET proxy reads of App (add-on) APIs
 - `ha_manage_energy_prefs` — only `mode='get'` and `dry_run=true` previews
 - `ha_manage_pipeline` — only `action='list'` / `'get'`
 - `ha_manage_custom_tool` — only `list_saved=true`
@@ -378,7 +378,7 @@ read_only_mode: true
 
 Redacts secrets from tool responses before they reach the AI assistant. When enabled:
 
-- **Add-on options** (`ha_get_app`, `ha_manage_app`): any option value whose add-on schema marks it `format: password` is replaced with `<redacted: set>` or `<redacted: empty>` — so "is this credential configured at all?" stays answerable without disclosing the value.
+- **App (add-on) options** (`ha_get_app`, `ha_manage_app`): any option value whose app schema marks it `format: password` is replaced with `<redacted: set>` or `<redacted: empty>` — so "is this credential configured at all?" stays answerable without disclosing the value.
 - **Integration options** (`ha_get_integration`): fields the options flow marks with a password selector get the same treatment, including the `include_schema=True` schema echo.
 - **All other tool responses** (logs, file reads, diagnostics, etc.): occurrences of secret values the server has already seen on the surfaces above are scrubbed to `<redacted>`.
 
@@ -449,7 +449,7 @@ The add-on requests `hassio_role: manager` (declared in `config.yaml`).
 `manager` is required for the Supervisor REST endpoints used to fetch
 add-on and system-service logs (`/addons/<slug>/logs`, `/<service>/logs`,
 `/core/logs`) — `default` returns 403 (see #1116). The role also supports
-explicit add-on management through `ha_manage_app`. When dashboard
+explicit app management through `ha_manage_app`. When dashboard
 screenshots are enabled, `ha_get_dashboard_screenshot` may update only the
 schema-verified Puppet add-on's `keep_browser_open` option and restart that
 same add-on; it accepts no caller-supplied slug for those operations.

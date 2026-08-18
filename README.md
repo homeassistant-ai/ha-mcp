@@ -449,7 +449,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@ekobres](https://github.com/ekobres)** — Feature flags for `HAMCP_ENABLE_FILESYSTEM_TOOLS` and the (since removed) `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION` in the add-on config, with beta tagging in source and docs.
 - **[@w3z315](https://github.com/w3z315)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
 - **[@griffinmartin](https://github.com/griffinmartin)** — Added OpenCode (by Anomaly) as a selectable AI client in the setup wizard, with both stdio and streamable HTTP support.
-- **[@hhopke](https://github.com/hhopke)** — Fixed addon API calls to route through HA Core ingress proxy instead of direct container connections, fixing `ha_manage_addon` (now `ha_manage_app`) proxy mode on addon installs.
+- **[@hhopke](https://github.com/hhopke)** — Fixed App (add-on) API calls to route through HA Core ingress proxy instead of direct container connections, fixing `ha_manage_addon` (now `ha_manage_app`) proxy mode on addon installs.
 - **[@tomwilkie](https://github.com/tomwilkie)** — JMESPath middleware exploration (#1147) whose review-time token-measurement data informed the design of #1199 and #1225.
 - **[@SealKan](https://github.com/SealKan)** — `fields=`/`attribute_keys=` projection on six read-heavy tools (#1225), `ha_call_event` tool (#1239), dashboards-list helper refactor (#1207), `for:`-field duration-math detector in the best-practice checker (#1264), persistent DCR OAuth client registrations across restarts (#1265), and issue-triage prompt token-budgeting (#1522).
 - **[@KarelTestSpecial](https://github.com/KarelTestSpecial)** — Cached YAML instance to prevent CPU spikes during bulk edits (#1371).
