@@ -1014,6 +1014,51 @@ def _apply_component(
         print(f"updated {path.relative_to(REPO_ROOT)}")
 
 
+def _reuse_existing_authored_shared(
+    locale: str, items: list[WorkItem], module: Any
+) -> tuple[dict[tuple[str, str], str], list[WorkItem]]:
+    """Copy current shared wording before sending the remaining work out."""
+    planned = {(item.section, item.key) for item in items}
+    settings = _load_json(LOCALES_DIR / f"{locale}.json")
+    existing: dict[tuple[str, str], str] = {
+        ("messages", key): value
+        for key, value in settings.get("messages", {}).items()
+        if isinstance(value, str) and value
+    }
+    component_path = COMPONENT_DIR / f"{locale}.json"
+    if component_path.exists():
+        existing.update(
+            {
+                ("component", key): value
+                for key, value in _flatten(_load_json(component_path)).items()
+                if value
+            }
+        )
+
+    reused: dict[tuple[str, str], str] = {}
+    for _english, where in module._authored_shared_groups():
+        refs: list[tuple[str, str]] = []
+        for surface, key in where:
+            if surface == SETTINGS_SURFACE and key.startswith("messages."):
+                refs.append(("messages", key.removeprefix("messages.")))
+            elif surface == COMPONENT_SURFACE:
+                refs.append(("component", key))
+        current_values = {
+            existing[ref] for ref in refs if ref not in planned and ref in existing
+        }
+        if len(current_values) != 1:
+            continue
+        value = next(iter(current_values))
+        for ref in refs:
+            if ref in planned:
+                reused[ref] = value
+
+    if reused:
+        print(f"  {locale}: reused existing wording for {len(reused)} shared string(s)")
+    remaining = [item for item in items if (item.section, item.key) not in reused]
+    return reused, remaining
+
+
 def _align_authored_shared(
     locale: str, results: dict[tuple[str, str], str], module: Any
 ) -> None:
@@ -1063,19 +1108,24 @@ def _translate_and_apply(
     engine_dead = False
     try:
         for locale in _target_locales():
-            results: dict[tuple[str, str], str] = {}
-            if locale in by_locale and engine_dead:
+            locale_items = by_locale.get(locale, [])
+            results, remaining = _reuse_existing_authored_shared(
+                locale, locale_items, module
+            )
+            if remaining and engine_dead:
                 failures.append(
-                    f"{locale}: {len(by_locale[locale])} string(s) skipped — "
+                    f"{locale}: {len(remaining)} string(s) skipped — "
                     "the engine was declared unavailable earlier in this run"
                 )
-            elif locale in by_locale:
-                results, locale_failures, _failed, engine_dead = _translate_locale(
-                    locale, by_locale[locale]
+            elif remaining:
+                translated, locale_failures, _failed, engine_dead = _translate_locale(
+                    locale, remaining
                 )
+                results.update(translated)
                 failures += locale_failures
+            if locale_items:
                 _align_authored_shared(locale, results, module)
-                for item in by_locale[locale]:
+                for item in locale_items:
                     if item.changed and (item.section, item.key) in results:
                         completed.setdefault((item.section, item.key), set()).add(
                             locale
