@@ -507,7 +507,9 @@ def _surface_connect_urls(
         "(Settings - Devices & Services - HA-MCP Custom Component - "
         "HA-MCP Server - Configure) and in the Home Assistant log - both "
         "administrator-only, because the URL is the credential.\n\n"
-        f"{auth_note}\n"
+        f"{auth_note}\n\n"
+        "To disable this notification, uncheck the startup notification box "
+        "on that same configuration screen.\n"
     )
     persistent_notification.async_create(
         hass,

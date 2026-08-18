@@ -749,6 +749,19 @@ class TestSurfaceConnectUrls:
         assert "[HA-MCP settings panel](/ha-mcp)" in self._message()
         dismiss.assert_not_called()
 
+    def test_startup_notification_ends_with_disable_instructions(self):
+        _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"})
+
+        esetup._surface_connect_urls(hass, entry, "none")
+
+        assert self._message().endswith(
+            "\n\n"
+            "To disable this notification, uncheck the startup notification box "
+            "on that same configuration screen.\n"
+        )
+
     def test_startup_notification_off_dismisses_and_skips_create(
         self, monkeypatch, caplog
     ):
