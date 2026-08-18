@@ -127,7 +127,11 @@ async def fetch_entity_enrichment_via_component(
     ]
     merged: dict[str, dict[str, Any]] = {}
     try:
-        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
         for chunk in chunks:
             raw = await ws.send_command(WS_ENTITY_ENRICH, entity_ids=chunk)
             result = raw.get("result")

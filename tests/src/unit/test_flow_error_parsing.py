@@ -314,6 +314,40 @@ class TestHandleFlowStepsOptionsFlowError:
         assert body.get("data_schema") == intro_schema
         assert body.get("flow_id") == "opt-flow"
 
+    async def test_reconfigure_error_uses_active_schema_without_new_setup_flow(
+        self,
+    ) -> None:
+        """Reconfigure errors must not introspect the unrelated setup flow."""
+        api_err = HomeAssistantAPIError(
+            "API error: 400 - Bad Request",
+            status_code=400,
+            response_data={"errors": {"host": "invalid_host"}},
+        )
+        client = AsyncMock()
+        submit_fn = AsyncMock(side_effect=api_err)
+        active_schema = [{"name": "host", "required": True}]
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_flow_steps(
+                client=client,
+                flow_id="reconfigure-flow",
+                initial_step={
+                    "type": "form",
+                    "flow_id": "reconfigure-flow",
+                    "step_id": "reconfigure",
+                    "data_schema": active_schema,
+                },
+                config={"host": "bad"},
+                submit_fn=submit_fn,
+                helper_type="shelly",
+                is_reconfigure=True,
+            )
+
+        body = _parse_tool_error(exc_info.value)
+        assert body.get("data_schema") == active_schema
+        assert body.get("status") == "apply_failed"
+        client.start_config_flow.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # 5. Undrivable step types (issue #1814)

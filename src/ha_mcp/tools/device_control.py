@@ -959,7 +959,9 @@ class DeviceControlTools:
         # below so a POST-SEND failure is never misclassified as pre-send.
         try:
             ws = await get_websocket_client(
-                url=self.client.base_url, token=self.client.token
+                url=self.client.base_url,
+                token=self.client.token,
+                verify_ssl=getattr(self.client, "verify_ssl", None),
             )
         except Exception as exc:
             logger.warning(

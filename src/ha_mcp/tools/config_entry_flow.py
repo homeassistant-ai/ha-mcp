@@ -11,9 +11,12 @@ for the 17 helper types listed in FLOW_HELPER_TYPES.
 
 The same flow walkers drive every other config-entry surface, not just
 helpers: ``ha_set_integration`` creates entries for arbitrary domains through
-``create_config_entry`` and edits them through ``update_config_entry_options``,
-and ``ha_config_set_helper(helper_type="config_subentry")`` drives subentry
-flows through ``set_config_subentry``.
+``create_config_entry`` and edits them through ``update_config_entry_options``;
+``ha_config_set_helper(helper_type="config_subentry")`` drives subentry flows
+through ``set_config_subentry``. Changing a live entry's connection settings is
+a different problem — it commits in place and Home Assistant reloads afterwards
+— and lives in ``config_entry_reconfigure``, which depends on this module for
+the shared flow-abort and sentinel-rejection helpers.
 
 The step machinery those entry points drive lives in three sibling modules,
 imported in one direction only (menu <- form <- walker <- here):
@@ -25,13 +28,17 @@ imported in one direction only (menu <- form <- walker <- here):
 """
 
 import asyncio
+import json
 import logging
 from typing import Any, Literal
+
+from fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
 from ..redaction import sentinel_option_keys
 from .config_entry_flow_form import _extract_schema_field_names
 from .config_entry_flow_walker import (
+    POST_COMMIT_STATUSES,
     _FlowType,
     _handle_config_subentry_flow_steps,
     _handle_flow_steps,
@@ -39,6 +46,26 @@ from .config_entry_flow_walker import (
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
+
+
+async def _abort_flow_best_effort(client: Any, flow_id: str) -> None:
+    """Abort a still-pending flow without hiding the original failure."""
+    try:
+        await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
+    except Exception as abort_err:
+        logger.warning("Failed to abort flow %s after error: %s", flow_id, abort_err)
+
+
+async def _abort_subentry_flow_best_effort(client: Any, flow_id: str) -> None:
+    """Abort a pending subentry flow without hiding the original failure."""
+    try:
+        await asyncio.wait_for(client.abort_config_subentry_flow(flow_id), timeout=5.0)
+    except Exception as abort_err:
+        logger.warning(
+            "Failed to abort config subentry flow %s after error: %s",
+            flow_id,
+            abort_err,
+        )
 
 
 def _reject_redaction_sentinels(config_dict: dict[str, Any]) -> None:
@@ -138,6 +165,11 @@ async def set_config_subentry(
     subentry, provided reconfigures that existing subentry.
     ``show_advanced_options`` is a no-op on HA 2026.6+ and kept only for older
     HA versions pending removal before HA 2027.6.
+
+    The reconfigure branch fails when the flow leaves any supplied config key
+    unconsumed, where it previously returned success plus a warning — see
+    :func:`_handle_config_subentry_flow_steps` for why. The create branch is
+    unchanged.
     """
     _reject_redaction_sentinels(config_dict)
     flow_result = await client.start_config_subentry_flow(
@@ -174,17 +206,21 @@ async def set_config_subentry(
             config_dict,
             is_reconfigure=subentry_id is not None,
         )
-    except Exception:
-        try:
-            await asyncio.wait_for(
-                client.abort_config_subentry_flow(flow_id), timeout=5.0
-            )
-        except Exception as abort_err:
-            logger.warning(
-                "Failed to abort config subentry flow %s after error: %s",
-                flow_id,
-                abort_err,
-            )
+    except asyncio.CancelledError:
+        await _abort_subentry_flow_best_effort(client, flow_id)
+        raise
+    except Exception as flow_error:
+        payload: dict[str, Any] = {}
+        if isinstance(flow_error, ToolError):
+            try:
+                parsed_payload = json.loads(str(flow_error))
+            except (TypeError, ValueError):
+                parsed_payload = {}
+            if isinstance(parsed_payload, dict):
+                payload = parsed_payload
+        post_commit_status = payload.get("status") in POST_COMMIT_STATUSES
+        if payload.get("flow_budget_exhausted") or not post_commit_status:
+            await _abort_subentry_flow_best_effort(client, flow_id)
         raise
 
     response = {

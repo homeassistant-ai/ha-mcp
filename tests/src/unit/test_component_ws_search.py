@@ -562,6 +562,7 @@ class FakeConfigEntry:
         data=None,
         entry_id="entry",
         *,
+        unique_id=None,
         state=None,
         source="user",
         supports_options=False,
@@ -586,6 +587,7 @@ class FakeConfigEntry:
         self.entry_id = entry_id
         # config_entries-row fields (all optional so the many flow-helper callers
         # that pass only domain/title/options/data/entry_id are unaffected).
+        self.unique_id = unique_id
         self.state = state
         self.source = source
         self.supports_options = supports_options
@@ -3365,6 +3367,7 @@ class TestConfigEntries:
             "options": {"discovery": True},
             "data": {"password": "DATA_SECRET_XYZ"},
             "entry_id": entry_id,
+            "unique_id": "mqtt-unique-1",
             "created_at": self._CREATED_AT,
             "modified_at": self._MODIFIED_AT,
             "supported_subentry_types": {"device": {"supports_reconfigure": True}},
@@ -3399,6 +3402,9 @@ class TestConfigEntries:
                 "modified_at": self._MODIFIED_AT.timestamp(),
                 "entry_id": "cfg1",
                 "domain": "mqtt",
+                # Superset field: core's as_json_fragment withholds unique_id,
+                # the component supplies it for the reconfigure identity anchor.
+                "unique_id": "mqtt-unique-1",
                 "title": "Mosquitto",
                 "state": "loaded",  # ConfigEntryState.value
                 "source": "user",
@@ -4222,3 +4228,33 @@ class TestRegistries:
                 FakeHass(),
                 {"registries": ["category"], "category_scopes": ["automation"]},
             )
+
+
+class TestConfigEntryUniqueId:
+    """The one field the component adds beyond core's as_json_fragment."""
+
+    def test_row_carries_unique_id_which_core_withholds(self):
+        """Core omits unique_id everywhere; this row is the only source.
+
+        REST /api/config/config_entries, config_entries/get and get_single all
+        serialize ConfigEntry.as_json_fragment, which has no unique_id key.
+        """
+        row = wsapi._config_entry_row(
+            FakeConfigEntry("mqtt", entry_id="cfg1", unique_id="abc-123"),
+            frozenset(),
+        )
+
+        assert row["unique_id"] == "abc-123"
+
+    def test_row_reports_a_genuinely_absent_unique_id_as_none(self):
+        """Present key, None value — distinguishable from an older component.
+
+        A server reading an older component sees the KEY MISSING, which is what
+        lets this be additive within schema_version 1 with no version gate.
+        """
+        row = wsapi._config_entry_row(
+            FakeConfigEntry("mqtt", entry_id="cfg2"), frozenset()
+        )
+
+        assert "unique_id" in row
+        assert row["unique_id"] is None

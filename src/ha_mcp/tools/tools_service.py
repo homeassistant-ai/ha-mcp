@@ -830,7 +830,9 @@ class ServiceTools:
         # misclassified as pre-send → a safe legacy first fire.
         try:
             ws = await get_websocket_client(
-                url=self._client.base_url, token=self._client.token
+                url=self._client.base_url,
+                token=self._client.token,
+                verify_ssl=getattr(self._client, "verify_ssl", None),
             )
         except Exception as exc:
             logger.warning(

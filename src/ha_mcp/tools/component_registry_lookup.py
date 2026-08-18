@@ -85,7 +85,14 @@ async def fetch_entities_for_config_entry_via_component(
     if not component_supports(caps, "registry_lookup"):
         return None
     try:
-        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            # verify_ssl keys the client pool, so omitting it hands back a
+            # DIFFERENT pooled client than the capability probe used and a
+            # self-signed setup fails the read after passing detection.
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
         raw = await ws.send_command(WS_REGISTRY_LOOKUP, config_entry_id=config_entry_id)
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):
@@ -133,7 +140,14 @@ async def resolve_entities_via_component(
     if not component_supports(caps, "registry_lookup"):
         return None
     try:
-        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            # verify_ssl keys the client pool, so omitting it hands back a
+            # DIFFERENT pooled client than the capability probe used and a
+            # self-signed setup fails the read after passing detection.
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
         raw = await ws.send_command(WS_REGISTRY_LOOKUP, entity_ids=entity_ids)
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):

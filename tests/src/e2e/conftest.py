@@ -238,9 +238,11 @@ def pytest_collection_modifyitems(config, items):
       (``HAOS_TEST_IMAGE_PATH`` set). Auto-applied to anything under
       ``tests/src/e2e/haos_only/``.
     - ``container_only``: only runs on the testcontainer backend.
-    - ``external_only``: HAOS external mode only (``mcp_client`` is an
-      in-process FastMCP server talking HTTP to HAOS). Skipped on the
-      inaddon tier.
+    - ``external_only``: any tier where the server-under-test lives IN the
+      pytest process — plain testcontainer AND HAOS external (``mcp_client``
+      is an in-process FastMCP server talking HTTP to HAOS). Skipped on
+      inaddon, container-embedded and HAOS-embedded. The name is historical
+      and does NOT mean "HAOS external only"; see the skip expression below.
     - ``inaddon_only``: HAOS inaddon mode only (``mcp_client`` is HTTP
       to the addon's MCP endpoint, ``is_running_in_addon()=True`` paths
       exercised). Skipped on external mode and on testcontainer.

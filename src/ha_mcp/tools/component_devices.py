@@ -91,7 +91,14 @@ async def fetch_device_via_component(
     if include_entities:
         kwargs["include_entities"] = True
     try:
-        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            # verify_ssl keys the client pool, so omitting it hands back a
+            # DIFFERENT pooled client than the capability probe used and a
+            # self-signed setup fails the read after passing detection.
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
         raw = await ws.send_command(WS_DEVICE_GET, **kwargs)
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):
@@ -163,7 +170,14 @@ async def fetch_device_list_via_component(client: Any) -> dict[str, Any] | None:
     if not component_supports(caps, "device_list"):
         return None
     try:
-        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            # verify_ssl keys the client pool, so omitting it hands back a
+            # DIFFERENT pooled client than the capability probe used and a
+            # self-signed setup fails the read after passing detection.
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
         raw = await ws.send_command(WS_DEVICE_LIST)
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):
