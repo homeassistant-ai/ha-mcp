@@ -40,18 +40,39 @@ class RenamedToolAliasMiddleware(Middleware):
     on, rather than an alias it would not recognise.
     """
 
+    def __init__(self) -> None:
+        # Which retired names have been logged at INFO already, so the first
+        # call on each is audible and the rest stay at DEBUG. An operator
+        # otherwise has no way to know a client is still calling the old name —
+        # the one observation that could ever justify retiring this alias —
+        # while a per-call INFO line would be noise for a tool called in a
+        # loop. Log de-duplication only: no dispatch decision reads it, and a
+        # restart simply announces each name once more.
+        self._announced: set[str] = set()
+
     async def on_call_tool(
         self, context: MiddlewareContext, call_next: CallNext
     ) -> Any:
-        current = RENAMED_TOOLS.get(context.message.name)
+        retired = context.message.name
+        current = RENAMED_TOOLS.get(retired)
         if current is None:
             return await call_next(context)
 
-        logger.debug(
-            "Tool %s was renamed to %s; dispatching the call to the current name",
-            context.message.name,
-            current,
-        )
+        if retired in self._announced:
+            logger.debug(
+                "Tool %s was renamed to %s; dispatching the call to the current name",
+                retired,
+                current,
+            )
+        else:
+            self._announced.add(retired)
+            logger.info(
+                "A client called %s, which was renamed to %s; dispatching to the "
+                "current name. Old names stay callable, but a client that re-lists "
+                "its tools after a server update will not need this.",
+                retired,
+                current,
+            )
         return await call_next(
             context.copy(message=context.message.model_copy(update={"name": current}))
         )

@@ -85,9 +85,10 @@ def _closure_tool_info(decorator: ast.expr, func_name: str, file_name: str) -> d
     ``annotations`` value itself. ``_parse_decorator_args`` — still used by
     the class arm, which has only text — instead looks for ``True`` in the 20
     characters after the key, a window a neighbouring value can reach into:
-    ``'destructiveHint': False}, tags={'True Colors'}`` puts one two
-    characters inside it and marks the tool destructive and explicitly
-    non-destructive at once.
+    ``'destructiveHint': False, 'i': 'True'`` puts one four characters inside
+    it and marks the tool destructive and explicitly non-destructive at once
+    (measured, and pinned by
+    ``test_closure_scan_reads_flags_off_the_annotations_dict``).
     """
     keywords = decorator.keywords if isinstance(decorator, ast.Call) else []
     annotations = (

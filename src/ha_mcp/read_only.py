@@ -453,9 +453,9 @@ class ReadOnlyMiddleware(Middleware):
 
         # RenamedToolAliasMiddleware runs ahead of this one and normally
         # rewrites a retired name before it gets here. Resolving it again costs
-        # a dict lookup and removes the ordering dependency: a middleware
-        # inserted ahead of the alias would otherwise leave this gate reading a
-        # name no exemption is keyed on, which does not fail closed.
+        # a dict lookup and removes the ordering dependency: were this gate ever
+        # registered ahead of the alias, it would read a name no exemption is
+        # keyed on, which does not fail closed.
         name = current_tool_name(context.message.name)
         args = context.message.arguments or {}
 

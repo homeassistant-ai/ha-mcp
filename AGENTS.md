@@ -84,7 +84,7 @@ When implementing features or debugging, consult these resources:
 | **Home Assistant REST API** | https://developers.home-assistant.io/docs/api/rest | Entity states, services, config |
 | **Home Assistant WebSocket API** | https://developers.home-assistant.io/docs/api/websocket | Real-time events, subscriptions |
 | **HA Core Source** | `gh api /search/code -f q="... repo:home-assistant/core"` | Undocumented APIs (don't clone) |
-| **HA App (add-on) Development** | https://developers.home-assistant.io/docs/apps | Add-on packaging, config.yaml |
+| **HA App (add-on) Development** | https://developers.home-assistant.io/docs/apps | App packaging, config.yaml |
 | **FastMCP Documentation** | https://gofastmcp.com/getting-started/welcome | MCP server framework |
 | **MCP Specification** | https://modelcontextprotocol.io/docs | Protocol details |
 
