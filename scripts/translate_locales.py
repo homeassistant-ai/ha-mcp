@@ -1016,7 +1016,7 @@ def _reuse_existing_authored_shared(
     locale: str, items: list[WorkItem], module: Any
 ) -> tuple[dict[tuple[str, str], str], list[WorkItem]]:
     """Copy current shared wording before sending the remaining work out."""
-    planned = {(item.section, item.key) for item in items}
+    planned = {(item.section, item.key): item for item in items}
     settings = _load_json(LOCALES_DIR / f"{locale}.json")
     existing: dict[tuple[str, str], str] = {
         ("messages", key): value
@@ -1034,22 +1034,26 @@ def _reuse_existing_authored_shared(
         )
 
     reused: dict[tuple[str, str], str] = {}
-    for _english, where in module._authored_shared_groups():
-        refs: list[tuple[str, str]] = []
+    for english, where in module._authored_shared_groups():
+        refs: list[tuple[Section, str]] = []
         for surface, key in where:
             if surface == SETTINGS_SURFACE and key.startswith("messages."):
                 refs.append(("messages", key.removeprefix("messages.")))
             elif surface == COMPONENT_SURFACE:
                 refs.append(("component", key))
+        planned_refs = set(refs) & planned.keys()
         current_values = {
-            existing[ref] for ref in refs if ref not in planned and ref in existing
+            existing[ref]
+            for ref in refs
+            if ref not in planned and ref in existing and existing[ref] != english
         }
         if len(current_values) != 1:
             continue
         value = next(iter(current_values))
-        for ref in refs:
-            if ref in planned:
-                reused[ref] = value
+        if any(_validate(planned[ref], value) is not None for ref in planned_refs):
+            continue
+        for ref in planned_refs:
+            reused[ref] = value
 
     if reused:
         print(f"  {locale}: reused existing wording for {len(reused)} shared string(s)")

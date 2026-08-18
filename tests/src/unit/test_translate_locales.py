@@ -1217,6 +1217,110 @@ class TestSharedTranslationReuse:
             "other": "Andere",
         }
 
+    def test_english_sibling_is_translated_instead_of_reused(
+        self,
+        catalogs: tuple[Path, Path, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        locales, component, module = catalogs
+        (component / "de.json").write_text(
+            json.dumps({"common": {"version_unknown": "Unknown"}}),
+            encoding="utf-8",
+        )
+        prompts: list[str] = []
+
+        def fake_engine(prompt: str) -> dict[str, str]:
+            prompts.append(prompt)
+            return {"messages:shared": "unbekannt"}
+
+        monkeypatch.setattr(translate_locales, "_call_gemini", fake_engine)
+        items = [WorkItem("de", "messages", "shared", "Unknown")]
+        failures, _completed = translate_locales._translate_and_apply(
+            Plan(items=items), {"de": items}, module
+        )
+
+        assert failures == []
+        assert len(prompts) == 1
+        assert "messages:shared" in prompts[0]
+        written = json.loads((locales / "de.json").read_text(encoding="utf-8"))
+        assert written["messages"]["shared"] == "unbekannt"
+
+    def test_disagreeing_siblings_are_translated_instead_of_reused(
+        self,
+        catalogs: tuple[Path, Path, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        locales, component, _module = catalogs
+        component_en = json.loads((component / "en.json").read_text(encoding="utf-8"))
+        component_en["common"]["other_unknown"] = "Unknown"
+        (component / "en.json").write_text(json.dumps(component_en), encoding="utf-8")
+        component_de = json.loads((component / "de.json").read_text(encoding="utf-8"))
+        component_de["common"]["other_unknown"] = "nicht bekannt"
+        (component / "de.json").write_text(json.dumps(component_de), encoding="utf-8")
+        module = SimpleNamespace(
+            _authored_shared_groups=lambda: (
+                (
+                    "Unknown",
+                    (
+                        (translate_locales.SETTINGS_SURFACE, "messages.shared"),
+                        (
+                            translate_locales.COMPONENT_SURFACE,
+                            "common.version_unknown",
+                        ),
+                        (
+                            translate_locales.COMPONENT_SURFACE,
+                            "common.other_unknown",
+                        ),
+                    ),
+                ),
+            )
+        )
+        prompts: list[str] = []
+
+        def fake_engine(prompt: str) -> dict[str, str]:
+            prompts.append(prompt)
+            return {"messages:shared": "unbekannt"}
+
+        monkeypatch.setattr(translate_locales, "_call_gemini", fake_engine)
+        items = [WorkItem("de", "messages", "shared", "Unknown")]
+        failures, _completed = translate_locales._translate_and_apply(
+            Plan(items=items), {"de": items}, module
+        )
+
+        assert failures == []
+        assert len(prompts) == 1
+        assert "messages:shared" in prompts[0]
+        written = json.loads((locales / "de.json").read_text(encoding="utf-8"))
+        assert written["messages"]["shared"] == "unbekannt"
+
+    def test_sibling_invalid_for_destination_is_translated_instead_of_reused(
+        self,
+        catalogs: tuple[Path, Path, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        locales, component, module = catalogs
+        (component / "de.json").write_text(
+            json.dumps({"common": {"version_unknown": "<script>unbekannt</script>"}}),
+            encoding="utf-8",
+        )
+        prompts: list[str] = []
+
+        def fake_engine(prompt: str) -> dict[str, str]:
+            prompts.append(prompt)
+            return {"messages:shared": "unbekannt"}
+
+        monkeypatch.setattr(translate_locales, "_call_gemini", fake_engine)
+        items = [WorkItem("de", "messages", "shared", "Unknown")]
+        failures, _completed = translate_locales._translate_and_apply(
+            Plan(items=items), {"de": items}, module
+        )
+
+        assert failures == []
+        assert len(prompts) == 1
+        assert "messages:shared" in prompts[0]
+        written = json.loads((locales / "de.json").read_text(encoding="utf-8"))
+        assert written["messages"]["shared"] == "unbekannt"
+
     def test_fully_stale_shared_group_is_translated_instead_of_reused(
         self,
         catalogs: tuple[Path, Path, Any],
