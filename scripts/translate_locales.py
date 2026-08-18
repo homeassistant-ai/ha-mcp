@@ -1097,7 +1097,7 @@ def _reuse_existing_authored_shared(
 
 
 def _align_authored_shared(
-    _locale: str, results: dict[tuple[str, str], str], module: Any
+    locale: str, results: dict[tuple[str, str], str], module: Any
 ) -> None:
     """Byte-align the wording shared across the two authored surfaces.
 
@@ -1105,11 +1105,12 @@ def _align_authored_shared(
     of one shared English string differently, while
     ``test_authored_shared_strings_read_the_same`` requires them identical. An
     eligible existing sibling was already copied into ``results`` by
-    ``_reuse_existing_authored_shared``; otherwise a newly validated engine
-    result becomes the reference. The settings result wins when both surfaces
-    were translated, preserving the historical rule.
+    ``_reuse_existing_authored_shared``; otherwise an engine result becomes the
+    reference only after it passes every destination's validation. The settings
+    result wins when both surfaces were translated, preserving the historical
+    rule.
     """
-    for _english, where in module._authored_shared_groups():
+    for english, where in module._authored_shared_groups():
         refs = _authored_shared_refs(where)
         settings_refs = [ref for ref in refs if ref[0] == "messages"]
         affected = [ref for ref in refs if ref in results]
@@ -1119,6 +1120,15 @@ def _align_authored_shared(
             (results[ref] for ref in settings_refs if ref in results),
             results[affected[0]],
         )
+        if any(
+            _validate(WorkItem(locale, section, key, english), value) is not None
+            for section, key in refs
+        ):
+            # Do not let a looser component-only partial result bypass the
+            # settings gate or mark the rest of the shared group complete.
+            for ref in affected:
+                results.pop(ref, None)
+            continue
         for ref in refs:
             results[ref] = value
 
