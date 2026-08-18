@@ -28,7 +28,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..config import get_global_settings
-from ..renamed_tools import rename_retired_keys
+from ..llm_exposure import LLM_API_CONFIG_KEY
+from ..renamed_tools import current_tool_name, rename_retired_keys
 from ..utils.data_paths import get_data_dir
 
 if TYPE_CHECKING:
@@ -117,21 +118,28 @@ def _seed_tool_config_from_env(settings: Settings) -> dict[str, str]:
     PINNED_TOOLS wins ties only where a tool is not already marked
     disabled (matches the historical seed semantics). Returns an empty
     dict when neither env var names anything.
+
+    Each name is resolved to the tool's current one as it is read, so a
+    retired name on one var and the current name on the other are one key
+    and the tie rule above decides between them. Re-keying afterwards
+    instead would hand the tie to whichever var used the current spelling,
+    inverting the rule for exactly the case the rename mapping exists to
+    protect: a disabled write tool.
     """
     tools: dict[str, str] = {}
     disabled_raw = getattr(settings, "disabled_tools", "")
     if disabled_raw:
         for raw_name in disabled_raw.split(","):
-            name = raw_name.strip()
+            name = current_tool_name(raw_name.strip())
             if name:
                 tools[name] = "disabled"
     pinned_raw = getattr(settings, "pinned_tools", "")
     if pinned_raw:
         for raw_name in pinned_raw.split(","):
-            name = raw_name.strip()
+            name = current_tool_name(raw_name.strip())
             if name and name not in tools:
                 tools[name] = "pinned"
-    return rename_retired_keys(tools)
+    return tools
 
 
 def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
@@ -155,12 +163,18 @@ def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
         except json.JSONDecodeError:
             logger.warning("Tool config at %s is not valid JSON; ignoring.", path)
         else:
-            # A state stored under a tool's retired name still belongs to that
-            # tool: without this, a disabled write tool comes back enabled the
-            # first time the server starts after the rename.
-            states = result.get("tools")
-            if isinstance(states, dict):
-                result["tools"] = rename_retired_keys(states)
+            # A state stored under a tool's retired name still belongs to
+            # that tool: without this, a disabled write tool comes back
+            # enabled the first time the server starts after the rename.
+            # Both name-keyed maps in this file need it — an orphaned
+            # ``llm_api`` override falls through to the default, which for the
+            # app tools means exposed to every conversation agent, and the
+            # next Tools-tab save replaces that map wholesale and drops the
+            # record for good.
+            for key in ("tools", LLM_API_CONFIG_KEY):
+                states = result.get(key)
+                if isinstance(states, dict):
+                    result[key] = rename_retired_keys(states)
             return result
 
     if settings is None:
@@ -183,19 +197,23 @@ def env_pinned_tools(settings: Settings | None = None) -> dict[str, str]:
     Used by the UI to render env-pinned rows as read-only and by the
     save handler to reject flips. PINNED_TOOLS wins ties (matches the
     existing seed semantics in load_tool_config).
+
+    Names resolve to the current tool as they are read, for the reason
+    given in ``_seed_tool_config_from_env``: the tie rule has to see one
+    key per tool, whichever spelling each var used.
     """
     if settings is None:
         settings = get_global_settings()
     pinned: dict[str, str] = {}
     for raw_name in (settings.disabled_tools or "").split(","):
-        name = raw_name.strip()
+        name = current_tool_name(raw_name.strip())
         if name:
             pinned[name] = "disabled"
     for raw_name in (settings.pinned_tools or "").split(","):
-        name = raw_name.strip()
+        name = current_tool_name(raw_name.strip())
         if name:
             pinned[name] = "pinned"
-    return rename_retired_keys(pinned)
+    return pinned
 
 
 def effective_tool_config(settings: Settings | None = None) -> dict[str, Any]:

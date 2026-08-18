@@ -30,6 +30,7 @@ from ..client.rest_client import (
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from ..policy.editing import PolicyCaller
+from ..renamed_tools import current_tool_name
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -1195,6 +1196,13 @@ class DevTools:
                     "'tool' is required for action='set_tool'",
                 )
             )
+        # The alias middleware dispatches a *call* on a retired tool name, so
+        # the same name arriving as data has to reach the same tool. Without
+        # this the stale-catalog client the alias exists for is told its tool
+        # is unknown — and on the fallback path, where a failed metadata read
+        # skips the unknown-name guard below, the retired name reaches the
+        # writers and set_tool reports a gate it never put in force.
+        tool = current_tool_name(tool)
         if tool == "*":
             raise_tool_error(
                 create_error_response(

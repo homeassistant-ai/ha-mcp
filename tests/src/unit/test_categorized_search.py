@@ -565,6 +565,38 @@ class TestDoubleUnwrap:
         )
 
     @pytest.mark.anyio
+    async def test_double_wrapped_renamed_tool_unwraps_under_its_current_name(
+        self, transform
+    ):
+        """The envelope's inner name comes from the same stale catalog.
+
+        The recovery block tests it against the live category sets, so an
+        unresolved retired name fails the unwrap and the call dies with a
+        wrong-category error naming the proxy — the alias covering one envelope
+        shape and not the other.
+        """
+        _prepopulate_cache(
+            transform,
+            [
+                _make_tool("ha_manage_app", destructive=True),
+                _make_tool("ha_get_state", read_only=True),
+            ],
+        )
+        ctx = _make_ctx(call_tool_return={"success": True})
+        fn = self._get_proxy_fn(transform, "write")
+
+        result = await fn(
+            "ha_call_write_tool",
+            {"name": "ha_manage_addon", "arguments": {"slug": "core_ssh"}},
+            ctx,
+        )
+
+        assert result == {"success": True}
+        ctx.fastmcp.call_tool.assert_called_once_with(
+            "ha_manage_app", {"slug": "core_ssh"}
+        )
+
+    @pytest.mark.anyio
     async def test_double_wrapped_wrong_category_still_rejected(self, transform):
         """Double-wrapped write tool via read proxy is rejected after unwrapping."""
         ctx = _make_ctx()

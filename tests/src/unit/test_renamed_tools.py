@@ -15,6 +15,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from ha_mcp.llm_exposure import effective_llm_api_exposed
+from ha_mcp.policy.evaluator import find_matching_rule
 from ha_mcp.policy.persistence import load_policy
 from ha_mcp.renamed_tools import (
     RENAMED_TOOLS,
@@ -63,6 +65,27 @@ class TestStoredToolConfig:
 
         assert loaded["tools"] == {"ha_manage_app": "disabled"}
 
+    def test_an_llm_api_override_follows_the_rename(self, tmp_path: Path) -> None:
+        """The second name-keyed map in the same file, and the riskier one.
+
+        ``ha_manage_app`` is exposed to conversation agents by default, so an
+        orphaned override does not merely lose its setting — it re-exposes app
+        install/uninstall/restart to a voice assistant, and the next Tools-tab
+        save writes the map back without the record.
+        """
+        config_path = tmp_path / "tool_config.json"
+        config_path.write_text(
+            json.dumps({"llm_api": {"ha_manage_addon": False}}), encoding="utf-8"
+        )
+
+        with patch(
+            "ha_mcp.settings_ui._persistence._get_config_path", return_value=config_path
+        ):
+            loaded = load_tool_config()
+
+        assert loaded["llm_api"] == {"ha_manage_app": False}
+        assert not effective_llm_api_exposed("ha_manage_app", [], loaded["llm_api"])
+
     def test_an_env_pin_follows_the_rename(self) -> None:
         settings = SimpleNamespace(
             disabled_tools="ha_manage_addon", pinned_tools="ha_get_addon"
@@ -72,6 +95,34 @@ class TestStoredToolConfig:
             "ha_manage_app": "disabled",
             "ha_get_app": "pinned",
         }
+
+    def test_the_seeds_tie_rule_survives_the_rename(self, tmp_path: Path) -> None:
+        """A retired name on one env var and the current one on the other.
+
+        The seed's documented rule is that PINNED_TOOLS wins a tie only where
+        the tool is not already disabled, so naming one spelling in each var
+        has to leave the tool disabled — losing that is how a write tool the
+        user switched off comes back on.
+        """
+        with patch(
+            "ha_mcp.settings_ui._persistence._get_config_path",
+            return_value=tmp_path / "tool_config.json",
+        ):
+            config = load_tool_config(
+                SimpleNamespace(
+                    disabled_tools="ha_manage_addon", pinned_tools="ha_manage_app"
+                )
+            )
+
+        assert config["tools"] == {"ha_manage_app": "disabled"}
+
+    def test_the_env_overlays_tie_rule_survives_the_rename(self) -> None:
+        """``env_pinned_tools`` documents the opposite tie: pinned wins."""
+        settings = SimpleNamespace(
+            disabled_tools="ha_manage_addon", pinned_tools="ha_manage_app"
+        )
+
+        assert env_pinned_tools(settings) == {"ha_manage_app": "pinned"}
 
 
 class TestStoredPolicy:
@@ -96,6 +147,62 @@ class TestStoredPolicy:
             "ha_manage_app",
             "ha_call_service",
         ]
+
+    def test_a_rule_authored_on_the_current_name_supplies_remember_minutes(
+        self, tmp_path: Path
+    ) -> None:
+        """Both rules stay — gating is additive — but order decides one field.
+
+        ``find_matching_rule`` returns the first match and the middleware reads
+        ``remember_minutes`` off it, so the rule the user authored against the
+        tool as it is called today has to come first; an inherited one would
+        otherwise silently supply the approval-memory duration.
+        """
+        (tmp_path / "tool_policy.json").write_text(
+            json.dumps(
+                {
+                    "rules": [
+                        {"tool_name": "ha_manage_addon", "remember_minutes": 60},
+                        {"tool_name": "ha_manage_app", "remember_minutes": 0},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        policy = load_policy(tmp_path)
+
+        assert [rule.tool_name for rule in policy.rules] == [
+            "ha_manage_app",
+            "ha_manage_app",
+        ]
+        first = find_matching_rule("ha_manage_app", {}, policy)
+        assert first is not None and first.remember_minutes == 0
+
+    def test_an_inherited_rule_alone_keeps_its_position(self, tmp_path: Path) -> None:
+        """Only a same-tool rule displaces an inherited one.
+
+        A wildcard rule matches the same call and supplies ``remember_minutes``
+        when it comes first, so sinking every inherited rule to the end would
+        hand a tool that only ever had one rule to the wildcard behind it.
+        """
+        (tmp_path / "tool_policy.json").write_text(
+            json.dumps(
+                {
+                    "rules": [
+                        {"tool_name": "ha_manage_addon", "remember_minutes": 60},
+                        {"tool_name": "*", "remember_minutes": 5},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        policy = load_policy(tmp_path)
+
+        assert [rule.tool_name for rule in policy.rules] == ["ha_manage_app", "*"]
+        first = find_matching_rule("ha_manage_app", {}, policy)
+        assert first is not None and first.remember_minutes == 60
 
     def test_a_policy_without_retired_names_is_returned_as_is(
         self, tmp_path: Path

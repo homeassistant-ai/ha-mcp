@@ -477,15 +477,22 @@ class CategorizedSearchTransform(BM25SearchTransform):
                     transform._call_write_name,
                     transform._call_delete_name,
                 )
-                and arguments["name"] in all_known
             ):
-                logger.warning(
-                    "Detected double-wrapped proxy call for '%s' via %s — unwrapping",
-                    arguments["name"],
-                    name,
-                )
-                name = arguments["name"]
-                arguments = arguments.get("arguments") or {}
+                # The envelope carries whatever name the client knows the tool
+                # by, and this check reads the live catalog — so resolve the
+                # inner name for the same reason the outer one is resolved
+                # above, or the alias covers one envelope shape and not the
+                # other.
+                inner_name = current_tool_name(arguments["name"])
+                if inner_name in all_known:
+                    logger.warning(
+                        "Detected double-wrapped proxy call for '%s' via %s"
+                        " — unwrapping",
+                        inner_name,
+                        name,
+                    )
+                    name = inner_name
+                    arguments = arguments.get("arguments") or {}
 
             if name not in allowed:
                 _raise_wrong_category_error(name, transform, proxy_name)
