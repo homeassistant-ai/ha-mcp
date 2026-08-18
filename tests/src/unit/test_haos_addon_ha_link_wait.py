@@ -7,7 +7,7 @@ proxy answers HTTP 502 for a beat after boot. Setup therefore returned while
 the addon was half-ready and the session's first HA-backed tool call could
 fail with ``CONNECTION_FAILED`` (observed on #1997:
 ``test_web_ui_debug_log_level_reaches_addon_log`` died on its first
-``ha_get_addon`` while the same job's main suite passed 1037 tests).
+``ha_get_app`` while the same job's main suite passed 1037 tests).
 
 These drive the probe through a stub, so they need no booted HAOS. The clock
 is faked so the poll loop is deterministic and instant.

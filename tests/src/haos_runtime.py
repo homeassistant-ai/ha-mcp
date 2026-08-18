@@ -1593,7 +1593,7 @@ def _probe_addon_ha_link(addon_mcp_url: str, budget: float) -> None:
             timeout=inner,
             init_timeout=inner,
         ) as client:
-            await client.call_tool("ha_get_addon", {}, timeout=inner)
+            await client.call_tool("ha_get_app", {}, timeout=inner)
 
     async def _bounded() -> None:
         try:
@@ -1602,7 +1602,7 @@ def _probe_addon_ha_link(addon_mcp_url: str, budget: float) -> None:
             # wait_for raises a bare TimeoutError(), whose repr carries nothing.
             # Name the target so the loop's final report is actionable.
             raise TimeoutError(
-                f"ha_get_addon at {addon_mcp_url} did not answer within "
+                f"ha_get_app at {addon_mcp_url} did not answer within "
                 f"{budget:.1f}s (fastmcp's own {inner:.1f}s deadlines did not "
                 f"fire, so the stall was not in initialize or the read)"
             ) from exc
@@ -1623,7 +1623,7 @@ def wait_for_addon_ha_link_ready(
     can land in that window and fail with ``CONNECTION_FAILED`` — which reads
     as a product bug rather than a setup race.
 
-    ``ha_get_addon`` is the probe because it needs both legs of that path (the
+    ``ha_get_app`` is the probe because it needs both legs of that path (the
     Core WebSocket and the Supervisor API) and is the call that surfaced the
     race. Returns False on timeout so the caller can fail with context.
     Transient errors are retried; bugs propagate.

@@ -438,7 +438,7 @@ async def test_logs_supervisor_propagates_api_error_to_structured_tool_error(
     `/api/hassio/addons/<anything>/logs` returns a non-2xx that must travel
     `_raw_request → HomeAssistantAPIError → exception_to_structured_error`
     and surface as a `ToolError` whose payload carries the slug context and
-    the `ha_get_addon()` / Supervisor suggestions. Regression guard for the
+    the `ha_get_app()` / Supervisor suggestions. Regression guard for the
     #950 chain (see PR #951).
     """
     logger.info("Testing supervisor error path is translated to structured ToolError")
@@ -457,8 +457,8 @@ async def test_logs_supervisor_propagates_api_error_to_structured_tool_error(
 
     suggestions = payload["error"].get("suggestions") or []
     # At minimum the error must point the caller at the add-on tool.
-    assert any("ha_get_addon" in s for s in suggestions), (
-        f"expected ha_get_addon() suggestion, got: {suggestions}"
+    assert any("ha_get_app" in s for s in suggestions), (
+        f"expected ha_get_app() suggestion, got: {suggestions}"
     )
     assert any("Supervisor" in s for s in suggestions), (
         f"expected Supervisor availability hint, got: {suggestions}"

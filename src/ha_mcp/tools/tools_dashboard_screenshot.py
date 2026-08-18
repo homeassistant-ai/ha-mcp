@@ -236,7 +236,7 @@ class DashboardScreenshotTools:
         metadata therefore records the values sent to the engine.
 
         To change the Puppet engine add-on itself (keep_browser_open, restart),
-        use ha_manage_addon.
+        use ha_manage_app.
         """
         target = await resolve_dashboard_render_target(
             self._client,

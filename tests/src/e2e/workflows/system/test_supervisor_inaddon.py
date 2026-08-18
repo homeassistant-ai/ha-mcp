@@ -386,8 +386,8 @@ class TestMockResilienceReal:
 
     # NOTE: ``test_insufficient_role_supervisor_call_surfaces_403`` was
     # deleted in this commit. Premise was: pass empty ``options={}`` to
-    # ha_manage_addon to surface Supervisor's role-check 403. Reality
-    # (verified on PR #1375 CI 287c5ced): ha_manage_addon's TOOL-side
+    # ha_manage_app to surface Supervisor's role-check 403. Reality
+    # (verified on PR #1375 CI 287c5ced): ha_manage_app's TOOL-side
     # input validation fires FIRST and returns VALIDATION_FAILED before
     # the Supervisor call is even made — "Must provide either 'path'
     # for proxy mode or at least one config parameter (options/network/

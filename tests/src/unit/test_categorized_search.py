@@ -854,7 +854,7 @@ class TestApplySearchKeywordEnrichment:
             "ha_config_set_script",
             "ha_config_set_helper",
             "ha_search",
-            "ha_manage_addon",
+            "ha_manage_app",
         ):
             assert tool_name in keywords, f"{tool_name} missing from _SEARCH_KEYWORDS"
 

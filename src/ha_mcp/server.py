@@ -227,6 +227,13 @@ class HomeAssistantSmartMCPServer:
         # the skill guide tool are registered so it can wrap everything)
         self._apply_tool_search()
 
+        # Keep the pre-rename tool names callable for clients that still hold
+        # an older catalog. First in the chain, so everything after it sees the
+        # current name it is keyed on.
+        from .tools.renamed_tool_middleware import RenamedToolAliasMiddleware
+
+        self.mcp.add_middleware(RenamedToolAliasMiddleware())
+
         # Convert Pydantic type-validation errors to structured ToolErrors so
         # models get actionable guidance instead of raw Pydantic messages.
         from .tools.validation_middleware import ValidationErrorMiddleware
@@ -640,7 +647,7 @@ class HomeAssistantSmartMCPServer:
             "binary_sensor command_line rest mqtt knx platform yaml-only "
             "config file modify add remove replace"
         ),
-        "ha_manage_addon": (
+        "ha_manage_app": (
             "manage app apps addon add-on configure settings options port network boot "
             "watchdog auto_update supervisor ingress proxy websocket api rest "
             "esphome nodered node-red frigate mosquitto mqtt zigbee2mqtt zigbee "

@@ -765,7 +765,7 @@ class IntegrationTools:
           when HA returned an int, ``None`` otherwise (no override set, or HA
           provided a level name as a string).
 
-        This is distinct from the add-on side, where ``ha_get_addon`` returns
+        This is distinct from the add-on side, where ``ha_get_app`` returns
         Supervisor's lowercase ``"default"`` literal — do not cross-compare.
         """
         try:

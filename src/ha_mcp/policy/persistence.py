@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from ..renamed_tools import RENAMED_TOOLS, current_tool_name
 from .model import Policy, Rule
 
 logger = logging.getLogger(__name__)
@@ -24,9 +25,28 @@ def load_policy(data_dir: Path) -> Policy:
     except json.JSONDecodeError as e:
         raise ValueError(f"tool_policy.json is not valid JSON: {e}") from e
     try:
-        return Policy.model_validate(raw)
+        policy = Policy.model_validate(raw)
     except ValidationError as e:
         raise ValueError(f"tool_policy.json failed schema validation: {e}") from e
+    return _follow_renamed_tools(policy)
+
+
+def _follow_renamed_tools(policy: Policy) -> Policy:
+    """Point rules naming a retired tool at the name it answers to today.
+
+    A rule is a gate: left on the old name it matches nothing, so a tool the
+    user had put behind approval or denial would run ungated after the rename,
+    with the rule still visible in the editor as if it applied.
+    """
+    renamed = [
+        rule.model_copy(update={"tool_name": current_tool_name(rule.tool_name)})
+        if rule.tool_name in RENAMED_TOOLS
+        else rule
+        for rule in policy.rules
+    ]
+    if renamed == policy.rules:
+        return policy
+    return policy.model_copy(update={"rules": renamed})
 
 
 def migrate_policy_any_semantics(data_dir: Path) -> bool:

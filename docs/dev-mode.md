@@ -102,7 +102,7 @@ in the web settings UI or via the env vars.
 
 This is a leash on the dev tools' settings surfaces, **not a sandbox**. Dev
 mode's `update_source` / `restart` can still replace the running server
-build, and in add-on deployments `ha_manage_addon` can reach the add-on's own
+build, and in add-on deployments `ha_manage_app` can reach the add-on's own
 options and ingress. `read_only_mode` likewise stays dev-tool-writable **by
 design** — developer mode is expected to be able to lift it. Where that
 boundary matters, gate those tools with policy rules — or keep dev mode off;

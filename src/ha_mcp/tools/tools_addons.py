@@ -1068,7 +1068,7 @@ async def _call_addon_ws(
             processes the response. The variable ``response`` is bound to
             the list of parsed messages (``list[dict | str]``); the value
             of ``response`` after execution replaces ``messages`` in the
-            output. See ``ha_manage_addon`` docstring for details.
+            output. See ``ha_manage_app`` docstring for details.
 
     Returns:
         Dictionary with collected messages, metadata, and status.
@@ -1098,7 +1098,7 @@ async def _call_addon_ws(
         port,
         ingress_suggestions=[
             "Use the 'port' parameter for WebSocket connections to this add-on",
-            f"Use ha_get_addon(slug='{slug}') to see available ports",
+            f"Use ha_get_app(slug='{slug}') to see available ports",
         ],
     )
 
@@ -1128,7 +1128,7 @@ async def _call_addon_ws(
     except websockets.exceptions.InvalidHandshake as e:
         suggestions = [
             "Check that the add-on supports WebSocket on this path",
-            f"Use ha_get_addon(slug='{slug}') to inspect available endpoints",
+            f"Use ha_get_app(slug='{slug}') to inspect available endpoints",
         ]
         # 401/403 means auth was rejected, not a path-shape problem.
         if isinstance(e, websockets.exceptions.InvalidStatus):
@@ -1593,7 +1593,7 @@ def _add_http_error_hints(
                 result["suggestion"] = (
                     f"Map {example_proto} to a host port in the HA UI "
                     f"('{addon_label}' → Configuration → Network), restart the "
-                    f"add-on, then retry with ha_manage_addon(slug='{slug_val}', "
+                    f"add-on, then retry with ha_manage_app(slug='{slug_val}', "
                     f"path='...', port={example_port})."
                 )
             else:
@@ -1601,7 +1601,7 @@ def _add_http_error_hints(
                     "This add-on is blocking direct connections (likely Nginx IP restriction). "
                     "Try using the 'port' parameter to connect to the add-on's direct access port "
                     "(see addon_config.ports above) with 'leave_front_door_open' enabled. "
-                    "Example: ha_manage_addon(slug='...', path='...', port=<direct_port>). "
+                    "Example: ha_manage_app(slug='...', path='...', port=<direct_port>). "
                     "The user may need to change add-on settings in the HA UI and restart the add-on."
                 )
 
@@ -1653,7 +1653,7 @@ async def _call_addon_api(
             after offset/limit slicing.
         raw: Internal flag — when True, skip the size-based truncation that
             otherwise replaces large array/object responses with an error
-            placeholder. Used by array_patch mode in ha_manage_addon, which
+            placeholder. Used by array_patch mode in ha_manage_app, which
             needs the full parsed response in memory to apply operations
             even when the JSON is larger than _MAX_RESPONSE_SIZE.
         extra_headers: Optional caller-supplied request headers. Layered
@@ -1687,7 +1687,7 @@ async def _call_addon_api(
         port,
         ingress_suggestions=[
             "Check if this add-on exposes a direct port instead",
-            f"Use ha_get_addon(slug='{slug}') to see port mappings",
+            f"Use ha_get_app(slug='{slug}') to see port mappings",
             "Use the 'port' parameter to connect to a direct access port",
         ],
     )
@@ -1791,9 +1791,9 @@ async def _call_addon_api(
 
 
 class AddOnTools:
-    """Encapsulates add-on management logic for ha_get_addon and ha_manage_addon.
+    """Encapsulates add-on management logic for ha_get_app and ha_manage_app.
 
-    ha_manage_addon supports five mutually exclusive modes: lifecycle
+    ha_manage_app supports five mutually exclusive modes: lifecycle
     (install/start/stop/restart/rebuild/update/uninstall), store-repository
     (add_repository/remove_repository), config
     (options/network/boot/auto_update/watchdog), proxy (path-based HTTP or
@@ -1944,7 +1944,7 @@ class AddOnTools:
         (``POST /store/repositories`` with body ``{"repository": "<url>"}``);
         ``remove_repository`` unregisters one by its repository slug
         (``DELETE /store/repositories/{slug}``). Registering a repository is
-        what makes its add-ons show up in ``ha_get_addon(source="available")``
+        what makes its add-ons show up in ``ha_get_app(source="available")``
         so they can then be installed via lifecycle ``action="install"``.
         """
         key = action.lower().strip()
@@ -2067,7 +2067,7 @@ class AddOnTools:
         else:
             suggestions = [
                 "Verify the repository slug — list current repositories with "
-                + "ha_get_addon(source='available')",
+                + "ha_get_app(source='available')",
                 "A repository that still has installed add-ons can't be removed "
                 + "until those add-ons are uninstalled",
             ]
@@ -2084,7 +2084,7 @@ class AddOnTools:
     def _reject_sentinel_options(options: dict[str, Any]) -> None:
         """Reject redaction sentinels before any merge/write (#2157).
 
-        A caller round-tripping a redacted ha_get_addon read must not
+        A caller round-tripping a redacted ha_get_app read must not
         overwrite a live credential with the placeholder string. Omitting
         the key keeps the current value (writes merge server-side). Active
         regardless of the redact_secrets toggle: a sentinel captured while
@@ -2172,7 +2172,7 @@ class AddOnTools:
                     f"Supervisor rejected configuration for add-on '{slug}'",
                     details=error_detail,
                     suggestions=[
-                        "Fetch current options via ha_get_addon(slug) to see required fields",
+                        "Fetch current options via ha_get_app(slug) to see required fields",
                         "Re-submit all required option fields together",
                     ],
                 )
@@ -2196,7 +2196,7 @@ class AddOnTools:
         if ignored_fields:
             response.setdefault("warnings", []).append(
                 f"{len(ignored_fields)} field(s) not in add-on schema were ignored "
-                f"before write: {ignored_fields}. Use ha_get_addon(slug) to see the "
+                f"before write: {ignored_fields}. Use ha_get_app(slug) to see the "
                 "declared schema."
             )
             response["ignored_fields"] = ignored_fields
@@ -2619,7 +2619,7 @@ class AddOnTools:
         validate_identifier_not_empty(
             slug,
             "slug",
-            suggestions=["Use ha_get_addon() to discover installed add-on slugs"],
+            suggestions=["Use ha_get_app() to discover installed add-on slugs"],
         )
         config_data = self._build_config_payload(
             options, network, boot, auto_update, watchdog
@@ -2714,6 +2714,13 @@ class AddOnTools:
         )
 
 
+# Terminology boundary, deliberate: the tool names, titles, tags and the first
+# docstring line of each tool follow Home Assistant's 2026.2 rename to "Apps",
+# because those are what an agent reads and what the locale catalogs translate.
+# The docstring bodies keep "add-on" for the Supervisor surface they describe --
+# slugs, the /addons REST paths and the option names have not been renamed --
+# so neither finishing the rename into the bodies nor reverting the first line
+# for consistency is the fix.
 def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -> None:
     """
     Register add-on management tools with the MCP server.
@@ -2736,7 +2743,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         },
     )
     @log_tool_usage
-    async def ha_get_addon(
+    async def ha_get_app(
         source: Annotated[
             Literal["installed", "available"] | None,
             Field(
@@ -2776,7 +2783,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Get Home Assistant Apps (formerly known as add-ons) - list installed, available, or get details for one.
+        """Get Home Assistant Apps (formerly known as add-ons, and this tool as ha_get_addon) - list installed, available, or get details for one.
 
         This tool retrieves add-on information based on the parameters:
         - slug provided: Returns detailed info for a single add-on (ingress, ports, options, state)
@@ -2788,8 +2795,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         **SINGLE ADD-ON (slug provided):**
         Returns comprehensive details including ingress entry, ports, options, state,
         and (when the add-on exposes one) a top-level ``log_level`` reflecting the
-        current Supervisor option — useful for confirming ha_manage_addon log_level changes.
-        Useful for discovering what APIs an add-on exposes before calling ha_manage_addon.
+        current Supervisor option — useful for confirming ha_manage_app log_level changes.
+        Useful for discovering what APIs an add-on exposes before calling ha_manage_app.
 
         **INSTALLED ADD-ONS (source='installed'):**
         Returns add-ons with version, state (started/stopped), and update availability.
@@ -2801,11 +2808,11 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         - query: Search by name or description (case-insensitive)
 
         **Example Usage:**
-        - List installed add-ons: ha_get_addon()
-        - Get Node-RED details: ha_get_addon(slug="<prefix>_nodered")
-        - List with resource usage: ha_get_addon(include_stats=True)
-        - List available add-ons: ha_get_addon(source="available")
-        - Search for MQTT: ha_get_addon(source="available", query="mqtt")
+        - List installed add-ons: ha_get_app()
+        - Get Node-RED details: ha_get_app(slug="<prefix>_nodered")
+        - List with resource usage: ha_get_app(include_stats=True)
+        - List available add-ons: ha_get_app(source="available")
+        - Search for MQTT: ha_get_app(source="available", query="mqtt")
         """
         return await tools.get_addon(
             source=source,
@@ -2826,12 +2833,12 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         },
     )
     @log_tool_usage
-    async def ha_manage_addon(
+    async def ha_manage_app(
         slug: Annotated[
             str,
             Field(
                 description="Add-on slug (e.g., '<prefix>_nodered', '<prefix>_frigate'). "
-                "Slug prefixes vary by add-on repository — call ha_get_addon() "
+                "Slug prefixes vary by add-on repository — call ha_get_app() "
                 "to discover the actual installed slug. Required for every mode "
                 "except the store-repository actions "
                 "(action='add_repository'/'remove_repository'), which use "
@@ -2873,7 +2880,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             int | None,
             Field(
                 description="Proxy mode only. Connect to this port instead of the Ingress port. "
-                "Use ha_get_addon(slug='...') to find available ports.",
+                "Use ha_get_app(slug='...') to find available ports.",
                 default=None,
             ),
         ] = None,
@@ -3021,7 +3028,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 description="Lifecycle mode: run a Supervisor add-on action. One of "
                 "'install', 'uninstall', 'start', 'stop', 'restart', 'rebuild', "
                 "'update'. 'install'/'update' require the add-on's repository to be "
-                "registered (it appears in ha_get_addon(source='available')). "
+                "registered (it appears in ha_get_app(source='available')). "
                 "Store-repository mode: 'add_repository' / 'remove_repository' "
                 "register or unregister a custom add-on store repository — these "
                 "use the 'repository' param instead of 'slug'. "
@@ -3037,13 +3044,13 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 "'remove_repository'). For add_repository: the repository URL "
                 "(e.g., 'https://github.com/balloob/home-assistant-addons'). For "
                 "remove_repository: the repository slug (e.g., '0f1cc410', as shown "
-                "in ha_get_addon(source='available')). Required for those actions; "
+                "in ha_get_app(source='available')). Required for those actions; "
                 "ignored otherwise.",
                 default=None,
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Manage a Home Assistant App (formerly known as an add-on) — update its configuration or call its internal API.
+        """Manage a Home Assistant App (formerly known as an add-on, and this tool as ha_manage_addon) — update its configuration or call its internal API.
 
         Five mutually exclusive operating modes:
 
@@ -3051,7 +3058,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         stop/restart/rebuild/update):
         Runs a Supervisor add-on action on ``slug``. ``install`` / ``update`` go
         through the store (the add-on's repository must be registered — it shows
-        up in ``ha_get_addon(source="available")``); the rest act on an installed
+        up in ``ha_get_app(source="available")``); the rest act on an installed
         add-on. This is how an assistant brings an add-on online for the user
         (e.g. installing + starting the dashboard screenshot engine).
 
@@ -3113,11 +3120,12 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
           `summarize` is for. INFO/WARNING/ERROR/exit lines always pass through
           it, and pagination via `message_offset` / `message_limit` works on the
           raw collected list before summarize runs.
-        - `python_transform` runs last in both modes; what `response` binds to
-          and what may be done to it is on the parameter itself. Only the
-          interaction is here: undecodable WebSocket frames arrive as
-          ANSI-stripped strings, and elision markers as
-          `{"elided": N, "note": "..."}` dicts when summarize ran.
+        - `python_transform` runs after slicing and summarize, and before the
+          response size cap, so it can narrow an oversized response back under
+          the limit. What `response` binds to and what may be done to it is on
+          the parameter itself. Only the interaction is here: undecodable
+          WebSocket frames arrive as ANSI-stripped strings, and elision markers
+          as `{"elided": N, "note": "..."}` dicts when summarize ran.
 
         **WARNING:** Setting boot="auto"/"manual" will fail for add-ons whose Supervisor
         metadata locks the boot mode. The Supervisor returns an error in this case.
@@ -3125,32 +3133,32 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         **NOTE:** This tool only works with Home Assistant OS or Supervised installations.
 
         **Examples:**
-        - Install an add-on: ha_manage_addon(slug="...", action="install")
-        - Start an add-on: ha_manage_addon(slug="...", action="start")
-        - Add a store repository: ha_manage_addon(action="add_repository", repository="https://github.com/balloob/home-assistant-addons")
-        - Remove a store repository: ha_manage_addon(action="remove_repository", repository="0f1cc410")
-        - Set add-on option: ha_manage_addon(slug="...", options={"log_level": "debug"})
+        - Install an add-on: ha_manage_app(slug="...", action="install")
+        - Start an add-on: ha_manage_app(slug="...", action="start")
+        - Add a store repository: ha_manage_app(action="add_repository", repository="https://github.com/balloob/home-assistant-addons")
+        - Remove a store repository: ha_manage_app(action="remove_repository", repository="0f1cc410")
+        - Set add-on option: ha_manage_app(slug="...", options={"log_level": "debug"})
           Note: only the fields you provide are updated — current values are fetched first
           and merged automatically. Fields not in the add-on's schema are ignored with a warning.
-        - Disable auto-update: ha_manage_addon(slug="...", auto_update=False)
-        - Change host port: ha_manage_addon(slug="...", network={"5800/tcp": 8082})
-        - Set boot mode: ha_manage_addon(slug="...", boot="manual")
-        - Call HTTP API: ha_manage_addon(slug="...", path="/api/events")
-        - Direct port: ha_manage_addon(slug="...", path="/flows", port=1880)
-        - ESPHome list devices (HTTP): ha_manage_addon(slug="<prefix>_esphome", path="/devices")
-        - ESPHome read a device's YAML (WS one-shot): ha_manage_addon(slug="<prefix>_esphome", path="/ws", websocket=True, wait_for_close=False, message_limit=2, body={"command": "devices/get_config", "message_id": "1", "args": {"configuration": "device.yaml"}})
-        - ESPHome live logs (WS, bounded): ha_manage_addon(slug="<prefix>_esphome", path="/ws", websocket=True, wait_for_close=False, message_limit=60, body={"command": "devices/logs", "message_id": "1", "args": {"configuration": "device.yaml", "port": "OTA"}})
-        - Filter WS errors only: ha_manage_addon(slug="...", path="/ws", websocket=True, python_transform="response = [m for m in response if 'ERROR' in str(m) or 'WARN' in str(m)]")
-        - HTTP subset: ha_manage_addon(slug="...", path="/flows", python_transform="response = [f['id'] for f in response]")
+        - Disable auto-update: ha_manage_app(slug="...", auto_update=False)
+        - Change host port: ha_manage_app(slug="...", network={"5800/tcp": 8082})
+        - Set boot mode: ha_manage_app(slug="...", boot="manual")
+        - Call HTTP API: ha_manage_app(slug="...", path="/api/events")
+        - Direct port: ha_manage_app(slug="...", path="/flows", port=1880)
+        - ESPHome list devices (HTTP): ha_manage_app(slug="<prefix>_esphome", path="/devices")
+        - ESPHome read a device's YAML (WS one-shot): ha_manage_app(slug="<prefix>_esphome", path="/ws", websocket=True, wait_for_close=False, message_limit=2, body={"command": "devices/get_config", "message_id": "1", "args": {"configuration": "device.yaml"}})
+        - ESPHome live logs (WS, bounded): ha_manage_app(slug="<prefix>_esphome", path="/ws", websocket=True, wait_for_close=False, message_limit=60, body={"command": "devices/logs", "message_id": "1", "args": {"configuration": "device.yaml", "port": "OTA"}})
+        - Filter WS errors only: ha_manage_app(slug="...", path="/ws", websocket=True, python_transform="response = [m for m in response if 'ERROR' in str(m) or 'WARN' in str(m)]")
+        - HTTP subset: ha_manage_app(slug="...", path="/flows", python_transform="response = [f['id'] for f in response]")
         - Array-patch (Node-RED, rename a node):
-            ha_manage_addon(
+            ha_manage_app(
                 slug="a0d7b954_nodered", path="/flows",
                 array_patch={"operations": [
                     {"op": "patch", "id": "abc123", "patches": {"name": "New Name"}},
                 ]},
             )
         - Array-patch (Node-RED, replace one tab's nodes atomically):
-            ha_manage_addon(
+            ha_manage_app(
                 slug="a0d7b954_nodered", path="/flows",
                 array_patch={"operations": [
                     {"op": "delete_where", "field": "z", "value": "tab-id"},
@@ -3160,7 +3168,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 request_headers={"Node-RED-Deployment-Type": "full"},
             )
         - Custom request headers (proxy mode):
-            ha_manage_addon(slug="...", path="/api/state",
+            ha_manage_app(slug="...", path="/api/state",
                             request_headers={"Accept": "text/plain"})
         """
         return await tools.manage_addon(

@@ -2959,7 +2959,7 @@ class TestListAddonsStats:
 
 
 class TestManageAddon:
-    """Tests for ha_manage_addon tool (config mode and proxy mode)."""
+    """Tests for ha_manage_app tool (config mode and proxy mode)."""
 
     @pytest.fixture
     def mock_mcp(self):
@@ -2984,11 +2984,11 @@ class TestManageAddon:
 
     @pytest.fixture
     def manage_addon_tool(self, mock_mcp, mock_client):
-        """Register tools and return the ha_manage_addon function."""
+        """Register tools and return the ha_manage_app function."""
         from ha_mcp.tools.tools_addons import register_addon_tools
 
         register_addon_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_manage_addon"]
+        return self.registered_tools["ha_manage_app"]
 
     # --- Config mode ---
 
@@ -4060,7 +4060,7 @@ class TestManageAddonActionMode:
 
 
 def _manage_addon_kwargs(**overrides):
-    """Build the full ha_manage_addon kwargs with defaults, applying overrides.
+    """Build the full ha_manage_app kwargs with defaults, applying overrides.
 
     manage_addon takes every operating-mode param positionally-by-keyword; a
     helper keeps the store-repository tests focused on the few params that
@@ -4535,7 +4535,7 @@ class TestGetAddonInfoRedaction:
 
 
 class TestConfigModeSentinelRejection:
-    """ha_manage_addon config mode must reject redaction sentinels (issue 2157)."""
+    """ha_manage_app config mode must reject redaction sentinels (issue 2157)."""
 
     def _tools(self):
         from ha_mcp.tools.tools_addons import AddOnTools

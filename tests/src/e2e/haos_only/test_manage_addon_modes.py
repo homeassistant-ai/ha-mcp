@@ -1,4 +1,4 @@
-"""End-to-end coverage for every ``ha_manage_addon`` operating mode.
+"""End-to-end coverage for every ``ha_manage_app`` operating mode.
 
 Closes the "real tests, not mocks" half of #1350: the unit tests in
 ``tests/src/unit/test_tools_addons*.py`` exercise the tool's call-site
@@ -91,9 +91,9 @@ async def _resolve_slug(mcp_client: Any, display_name: str) -> str:
     files start needing it, but for now two private copies is simpler
     than reshuffling the helpers tree.
     """
-    raw = await mcp_client.call_tool("ha_get_addon", {})
+    raw = await mcp_client.call_tool("ha_get_app", {})
     payload = parse_mcp_result(raw)
-    assert payload.get("success"), f"ha_get_addon listing failed: {payload}"
+    assert payload.get("success"), f"ha_get_app listing failed: {payload}"
     for entry in payload.get("addons", []):
         if entry.get("name") == display_name:
             slug = entry.get("slug")
@@ -116,12 +116,12 @@ async def _wait_addon_running(
     slug: str,
     timeout: float = _ADDON_RUNNING_TIMEOUT_S,
 ) -> None:
-    """Block until ``ha_get_addon(slug=...)`` reports ``state=started``.
+    """Block until ``ha_get_app(slug=...)`` reports ``state=started``.
 
     Use this before any test that asserts on the HTTP/WS contract of an
     addon (rather than tolerating an addon-not-running structured
     error). When Supervisor reports the addon as anything other than
-    ``started``, ``ha_manage_addon`` raises ``ToolError`` from its
+    ``started``, ``ha_manage_app`` raises ``ToolError`` from its
     running-state guard (``tools_addons.py`` "Verify add-on is running");
     the JSON-encoded error payload carries the observed transient state.
     The bake installs addons with ``start=True``, but their containers
@@ -130,7 +130,7 @@ async def _wait_addon_running(
     ``_wait_for_state`` in ``test_addon_lifecycle.py`` (same private-
     sibling convention as ``_resolve_slug``).
 
-    Transient errors from ``ha_get_addon`` are caught via the project's
+    Transient errors from ``ha_get_app`` are caught via the project's
     canonical ``_POLLING_TRANSIENT_ERRORS`` tuple (see
     ``tests/src/e2e/utilities/wait_helpers.py``) — the same discipline
     every other polling helper in the suite uses. Bugs (``TypeError`` /
@@ -142,7 +142,7 @@ async def _wait_addon_running(
     last_state: str | None = None
     while True:
         try:
-            detail_raw = await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+            detail_raw = await mcp_client.call_tool("ha_get_app", {"slug": slug})
             detail = parse_mcp_result(detail_raw).get("addon") or {}
             last_state = detail.get("state")
         except _POLLING_TRANSIENT_ERRORS as e:
@@ -171,7 +171,7 @@ async def _wait_addon_state(
     expected: frozenset[str],
     timeout: float = _ADDON_RUNNING_TIMEOUT_S,
 ) -> str:
-    """Block until ``ha_get_addon(slug=...)`` reports a state in ``expected``.
+    """Block until ``ha_get_app(slug=...)`` reports a state in ``expected``.
 
     The state-set generalization of ``_wait_addon_running`` for lifecycle
     actions that drive an addon to ``stopped`` as well as ``started``. Same
@@ -182,7 +182,7 @@ async def _wait_addon_state(
     last_state: str | None = None
     while True:
         try:
-            detail_raw = await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+            detail_raw = await mcp_client.call_tool("ha_get_app", {"slug": slug})
             detail = parse_mcp_result(detail_raw).get("addon") or {}
             last_state = detail.get("state")
         except _POLLING_TRANSIENT_ERRORS as e:
@@ -204,26 +204,26 @@ async def _wait_addon_state(
 
 
 async def test_config_boot_roundtrip(mcp_client: Any) -> None:
-    """`ha_manage_addon(boot=...)` round-trips Matter Server's boot strategy.
+    """`ha_manage_app(boot=...)` round-trips Matter Server's boot strategy.
 
     Matter Server defaults to ``boot=auto`` in the bake. Flip to
-    ``manual``, confirm via ``ha_get_addon``, restore.
+    ``manual``, confirm via ``ha_get_app``, restore.
     """
     slug = await _resolve_slug(mcp_client, MATTER_NAME)
-    detail_raw = await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+    detail_raw = await mcp_client.call_tool("ha_get_app", {"slug": slug})
     original = (parse_mcp_result(detail_raw).get("addon") or {}).get("boot")
     probe = "manual" if original != "manual" else "auto"
     try:
         write = parse_mcp_result(
-            await mcp_client.call_tool("ha_manage_addon", {"slug": slug, "boot": probe})
+            await mcp_client.call_tool("ha_manage_app", {"slug": slug, "boot": probe})
         )
         assert write.get("success") or write.get("status") == "pending_restart", (
-            f"ha_manage_addon(boot={probe!r}) write failed: {write}"
+            f"ha_manage_app(boot={probe!r}) write failed: {write}"
         )
 
         after = (
             parse_mcp_result(
-                await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+                await mcp_client.call_tool("ha_get_app", {"slug": slug})
             ).get("addon")
             or {}
         )
@@ -233,14 +233,14 @@ async def test_config_boot_roundtrip(mcp_client: Any) -> None:
     finally:
         if original is not None:
             await mcp_client.call_tool(
-                "ha_manage_addon", {"slug": slug, "boot": original}
+                "ha_manage_app", {"slug": slug, "boot": original}
             )
 
 
 async def test_config_auto_update_roundtrip(mcp_client: Any) -> None:
-    """`ha_manage_addon(auto_update=...)` round-trips an addon's auto-update flag."""
+    """`ha_manage_app(auto_update=...)` round-trips an addon's auto-update flag."""
     slug = await _resolve_slug(mcp_client, APPDAEMON_NAME)
-    detail_raw = await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+    detail_raw = await mcp_client.call_tool("ha_get_app", {"slug": slug})
     original = bool(
         (parse_mcp_result(detail_raw).get("addon") or {}).get("auto_update")
     )
@@ -248,15 +248,15 @@ async def test_config_auto_update_roundtrip(mcp_client: Any) -> None:
     try:
         write = parse_mcp_result(
             await mcp_client.call_tool(
-                "ha_manage_addon", {"slug": slug, "auto_update": probe}
+                "ha_manage_app", {"slug": slug, "auto_update": probe}
             )
         )
         assert write.get("success") or write.get("status") == "pending_restart", (
-            f"ha_manage_addon(auto_update={probe!r}) write failed: {write}"
+            f"ha_manage_app(auto_update={probe!r}) write failed: {write}"
         )
         after = (
             parse_mcp_result(
-                await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+                await mcp_client.call_tool("ha_get_app", {"slug": slug})
             ).get("addon")
             or {}
         )
@@ -266,28 +266,28 @@ async def test_config_auto_update_roundtrip(mcp_client: Any) -> None:
         )
     finally:
         await mcp_client.call_tool(
-            "ha_manage_addon", {"slug": slug, "auto_update": original}
+            "ha_manage_app", {"slug": slug, "auto_update": original}
         )
 
 
 async def test_config_watchdog_roundtrip(mcp_client: Any) -> None:
-    """`ha_manage_addon(watchdog=...)` round-trips the Supervisor watchdog flag."""
+    """`ha_manage_app(watchdog=...)` round-trips the Supervisor watchdog flag."""
     slug = await _resolve_slug(mcp_client, APPDAEMON_NAME)
-    detail_raw = await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+    detail_raw = await mcp_client.call_tool("ha_get_app", {"slug": slug})
     original = bool((parse_mcp_result(detail_raw).get("addon") or {}).get("watchdog"))
     probe = not original
     try:
         write = parse_mcp_result(
             await mcp_client.call_tool(
-                "ha_manage_addon", {"slug": slug, "watchdog": probe}
+                "ha_manage_app", {"slug": slug, "watchdog": probe}
             )
         )
         assert write.get("success") or write.get("status") == "pending_restart", (
-            f"ha_manage_addon(watchdog={probe!r}) write failed: {write}"
+            f"ha_manage_app(watchdog={probe!r}) write failed: {write}"
         )
         after = (
             parse_mcp_result(
-                await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+                await mcp_client.call_tool("ha_get_app", {"slug": slug})
             ).get("addon")
             or {}
         )
@@ -297,7 +297,7 @@ async def test_config_watchdog_roundtrip(mcp_client: Any) -> None:
         )
     finally:
         await mcp_client.call_tool(
-            "ha_manage_addon", {"slug": slug, "watchdog": original}
+            "ha_manage_app", {"slug": slug, "watchdog": original}
         )
 
 
@@ -307,7 +307,7 @@ async def test_config_watchdog_roundtrip(mcp_client: Any) -> None:
 
 
 async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
-    """`ha_manage_addon(action=...)` drives a real addon through its lifecycle.
+    """`ha_manage_app(action=...)` drives a real addon through its lifecycle.
 
     Exercises ``_execute_action_mode`` → ``_supervisor_api_call`` →
     ``send_command`` end-to-end against the real Supervisor: stop the addon,
@@ -328,7 +328,7 @@ async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
     slug = await _resolve_slug(mcp_client, APPDAEMON_NAME)
     original = (
         parse_mcp_result(
-            await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+            await mcp_client.call_tool("ha_get_app", {"slug": slug})
         ).get("addon")
         or {}
     ).get("state")
@@ -336,11 +336,11 @@ async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
     async def _action(action: str) -> dict[str, Any]:
         payload = parse_mcp_result(
             await mcp_client.call_tool(
-                "ha_manage_addon", {"slug": slug, "action": action}
+                "ha_manage_app", {"slug": slug, "action": action}
             )
         )
         assert payload.get("success"), (
-            f"ha_manage_addon(action={action!r}) failed: {payload}"
+            f"ha_manage_app(action={action!r}) failed: {payload}"
         )
         assert payload.get("action") == action, (
             f"action echo mismatch: expected {action!r}, got {payload!r}"
@@ -363,13 +363,13 @@ async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
             try:
                 detail = (
                     parse_mcp_result(
-                        await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+                        await mcp_client.call_tool("ha_get_app", {"slug": slug})
                     ).get("addon")
                     or {}
                 )
                 if detail.get("state") != "started":
                     await mcp_client.call_tool(
-                        "ha_manage_addon", {"slug": slug, "action": "start"}
+                        "ha_manage_app", {"slug": slug, "action": "start"}
                     )
                     await _wait_addon_state(mcp_client, slug, frozenset({"started"}))
             except Exception:  # pragma: no cover - cleanup best-effort
@@ -382,7 +382,7 @@ async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
 
 
 async def test_proxy_http_get_returns_structured_response(mcp_client: Any) -> None:
-    """`ha_manage_addon(path=..., method='GET')` reaches Node-RED through Ingress.
+    """`ha_manage_app(path=..., method='GET')` reaches Node-RED through Ingress.
 
     Pins the tool-contract: the result is a parsed dict that surfaces
     *either* an int ``status_code`` (HTTP layer reached the addon, even
@@ -394,7 +394,7 @@ async def test_proxy_http_get_returns_structured_response(mcp_client: Any) -> No
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
     payload = await safe_call_tool(
         mcp_client,
-        "ha_manage_addon",
+        "ha_manage_app",
         {"slug": slug, "path": "/auth/strategy", "method": "GET"},
     )
     assert isinstance(payload, dict), f"Tool did not return a dict: {payload!r}"
@@ -424,12 +424,12 @@ async def test_proxy_http_request_headers_pass_through(mcp_client: Any) -> None:
     await _wait_addon_running(mcp_client, slug)
     without = await safe_call_tool(
         mcp_client,
-        "ha_manage_addon",
+        "ha_manage_app",
         {"slug": slug, "path": "/flows", "method": "POST", "body": "[]"},
     )
     with_header = await safe_call_tool(
         mcp_client,
-        "ha_manage_addon",
+        "ha_manage_app",
         {
             "slug": slug,
             "path": "/flows",
@@ -454,7 +454,7 @@ async def test_proxy_http_request_headers_pass_through(mcp_client: Any) -> None:
 
 @pytest.mark.inaddon_only
 async def test_proxy_direct_port_inaddon(mcp_client: Any) -> None:
-    """`ha_manage_addon(path=..., port=...)` bypasses Ingress on the inaddon tier.
+    """`ha_manage_app(path=..., port=...)` bypasses Ingress on the inaddon tier.
 
     Direct-port proxy only works when the MCP host shares Supervisor's
     container network, which is true for the inaddon tier where ha-mcp
@@ -468,7 +468,7 @@ async def test_proxy_direct_port_inaddon(mcp_client: Any) -> None:
     slug = await _resolve_slug(mcp_client, MATTER_NAME)
     payload = await safe_call_tool(
         mcp_client,
-        "ha_manage_addon",
+        "ha_manage_app",
         {"slug": slug, "path": "/", "port": 5580, "method": "GET"},
     )
     assert isinstance(payload, dict), f"Tool did not return a dict: {payload!r}"
@@ -493,7 +493,7 @@ _ESPHOME_VALIDATE_CONFIG = {
 
 
 async def test_proxy_websocket_validate_summarize(mcp_client: Any) -> None:
-    """`ha_manage_addon(path='/validate', websocket=True)` returns shaped output.
+    """`ha_manage_app(path='/validate', websocket=True)` returns shaped output.
 
     Default ``summarize=True`` collapses ESPHome's config dump into
     elision markers while preserving any INFO/WARN/ERROR signal lines.
@@ -501,7 +501,7 @@ async def test_proxy_websocket_validate_summarize(mcp_client: Any) -> None:
     slug = await _resolve_slug(mcp_client, ESPHOME_NAME)
     payload = await safe_call_tool(
         mcp_client,
-        "ha_manage_addon",
+        "ha_manage_app",
         {
             "slug": slug,
             "path": "/validate",
@@ -523,7 +523,7 @@ async def test_proxy_websocket_validate_raw_pagination(mcp_client: Any) -> None:
     slug = await _resolve_slug(mcp_client, ESPHOME_NAME)
     payload = await safe_call_tool(
         mcp_client,
-        "ha_manage_addon",
+        "ha_manage_app",
         {
             "slug": slug,
             "path": "/validate",
@@ -558,7 +558,7 @@ async def test_array_patch_flows_no_ops_roundtrip(mcp_client: Any) -> None:
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
     payload = await safe_call_tool(
         mcp_client,
-        "ha_manage_addon",
+        "ha_manage_app",
         {
             "slug": slug,
             "path": "/flows",
@@ -590,7 +590,7 @@ async def test_python_transform_filters_http_response(mcp_client: Any) -> None:
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
     payload = await safe_call_tool(
         mcp_client,
-        "ha_manage_addon",
+        "ha_manage_app",
         {
             "slug": slug,
             "path": "/auth/strategy",
@@ -615,7 +615,7 @@ async def test_python_transform_sandbox_error_surfaced(mcp_client: Any) -> None:
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
     payload = await safe_call_tool(
         mcp_client,
-        "ha_manage_addon",
+        "ha_manage_app",
         {
             "slug": slug,
             "path": "/auth/strategy",

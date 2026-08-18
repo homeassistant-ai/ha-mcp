@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..config import get_global_settings
+from ..renamed_tools import rename_retired_keys
 from ..utils.data_paths import get_data_dir
 
 if TYPE_CHECKING:
@@ -130,7 +131,7 @@ def _seed_tool_config_from_env(settings: Settings) -> dict[str, str]:
             name = raw_name.strip()
             if name and name not in tools:
                 tools[name] = "pinned"
-    return tools
+    return rename_retired_keys(tools)
 
 
 def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
@@ -154,6 +155,12 @@ def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
         except json.JSONDecodeError:
             logger.warning("Tool config at %s is not valid JSON; ignoring.", path)
         else:
+            # A state stored under a tool's retired name still belongs to that
+            # tool: without this, a disabled write tool comes back enabled the
+            # first time the server starts after the rename.
+            states = result.get("tools")
+            if isinstance(states, dict):
+                result["tools"] = rename_retired_keys(states)
             return result
 
     if settings is None:
@@ -188,7 +195,7 @@ def env_pinned_tools(settings: Settings | None = None) -> dict[str, str]:
         name = raw_name.strip()
         if name:
             pinned[name] = "pinned"
-    return pinned
+    return rename_retired_keys(pinned)
 
 
 def effective_tool_config(settings: Settings | None = None) -> dict[str, Any]:

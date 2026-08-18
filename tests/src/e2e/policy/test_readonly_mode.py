@@ -395,11 +395,11 @@ async def test_string_envelope_proxy_write_blocked(readonly_toolsearch_mcp):
     catalog = await server.mcp.local_provider._list_tools()
     names = {t.name for t in catalog}
 
-    # ha_manage_addon registers unconditionally (not supervisor-gated), but
+    # ha_manage_app registers unconditionally (not supervisor-gated), but
     # fall back to the always-registered energy tool if a future change
     # gates it, so this test stays meaningful on a non-HAOS container.
-    if "ha_manage_addon" in names:
-        inner_name = "ha_manage_addon"
+    if "ha_manage_app" in names:
+        inner_name = "ha_manage_app"
         inner_args = '{"slug": "x", "action": "install"}'
     else:
         inner_name = "ha_manage_energy_prefs"

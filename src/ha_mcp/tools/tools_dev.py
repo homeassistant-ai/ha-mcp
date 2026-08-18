@@ -1837,7 +1837,7 @@ class DevTools:
         """Manage the running ha-mcp server itself (developer mode).
 
         When NOT to use: to restart Home Assistant use ha_restart; to
-        update HA add-ons or HACS packages use ha_manage_addon /
+        update HA add-ons or HACS packages use ha_manage_app /
         ha_manage_hacs.
 
         When to use: development/testing workflows — inspecting how this
@@ -1849,7 +1849,7 @@ class DevTools:
         Caveats: update_source changes ONLY the ha_mcp_tools custom
         component's separate in-process server entry — it never updates
         the add-on, Docker, standalone, or PyPI server that may be
-        serving this connection (update those via ha_manage_addon /
+        serving this connection (update those via ha_manage_app /
         docker pull / pip). In embedded mode that entry IS this server,
         so the update self-interrupts; elsewhere this connection is
         untouched and keeps its current version. Success means the

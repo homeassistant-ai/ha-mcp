@@ -46,7 +46,7 @@ CATALOG = [
     make_tool("ha_restart", False),
     make_tool("ha_unannotated", None),
     make_tool("ha_manage_backup", False),
-    make_tool("ha_manage_addon", False),
+    make_tool("ha_manage_app", False),
     # #1991: ha_config_get_dashboard is now annotated readOnlyHint=True — it is
     # honestly read-only (the theme-guard bracket is disabled), so it is a plain
     # read tool, no longer a mixed read/write exemption.
@@ -148,7 +148,7 @@ class TestExemptionRules:
         ],
     )
     def test_manage_addon(self, args, allowed):
-        rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_addon"].blocked_write
+        rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_app"].blocked_write
         assert (rule(args) is None) is allowed
 
     @pytest.mark.parametrize(
@@ -506,7 +506,7 @@ class TestMiddleware:
         mw = ReadOnlyMiddleware(list_tools=list_tools)
         call_next = AsyncMock(return_value="flows")
         result = await mw.on_call_tool(
-            make_context("ha_manage_addon", {"slug": "x", "path": "/flows"}),
+            make_context("ha_manage_app", {"slug": "x", "path": "/flows"}),
             call_next,
         )
         assert result == "flows"
@@ -527,7 +527,7 @@ class TestTransform:
             "ha_get_state",
             "ha_search",
             "ha_manage_backup",
-            "ha_manage_addon",
+            "ha_manage_app",
             "ha_config_get_dashboard",
         }
 
@@ -561,7 +561,7 @@ class TestExemptTableContract:
         in read-only mode')."""
         assert set(READ_ONLY_EXEMPT_TOOLS) == {
             "ha_manage_backup",
-            "ha_manage_addon",
+            "ha_manage_app",
             "ha_manage_energy_prefs",
             "ha_manage_pipeline",
             "ha_manage_custom_tool",
@@ -584,7 +584,7 @@ _SRC_TOOLS_DIR = Path(__file__).resolve().parents[3] / "src" / "ha_mcp" / "tools
 # Module that defines each exempt tool's ``@tool`` / ``@mcp.tool`` method.
 _EXEMPT_TOOL_MODULES = {
     "ha_manage_backup": "backup.py",
-    "ha_manage_addon": "tools_addons.py",
+    "ha_manage_app": "tools_addons.py",
     "ha_manage_energy_prefs": "tools_energy.py",
     "ha_manage_pipeline": "tools_assist_pipeline.py",
     "ha_manage_custom_tool": "tools_code.py",
@@ -603,7 +603,7 @@ _EXEMPT_TOOL_MODULES = {
 # read-only predicate.
 _EXEMPT_INSPECTED_ARGS = {
     "ha_manage_backup": {"scope", "action"},
-    "ha_manage_addon": {
+    "ha_manage_app": {
         "action",
         "options",
         "network",
@@ -664,7 +664,7 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "older_than_days",
         "limit",
     },
-    "ha_manage_addon": {
+    "ha_manage_app": {
         # Read-path selectors/modifiers of the allowed GET proxy.
         "slug",
         "path",
@@ -837,12 +837,12 @@ class TestExemptPredicateSchemaDrift:
         )
 
     def test_addon_config_write_params_are_real_tool_args(self):
-        module_path = _SRC_TOOLS_DIR / _EXEMPT_TOOL_MODULES["ha_manage_addon"]
-        real_params = _decorated_tool_param_names(module_path, "ha_manage_addon")
+        module_path = _SRC_TOOLS_DIR / _EXEMPT_TOOL_MODULES["ha_manage_app"]
+        real_params = _decorated_tool_param_names(module_path, "ha_manage_app")
         for arg in _ADDON_CONFIG_WRITE_PARAMS:
             assert arg in real_params, (
                 f"_ADDON_CONFIG_WRITE_PARAMS lists {arg!r}, absent from "
-                f"ha_manage_addon's signature ({module_path.name})"
+                f"ha_manage_app's signature ({module_path.name})"
             )
 
     @pytest.mark.parametrize("tool_name", sorted(_EXEMPT_INSPECTED_ARGS))
@@ -955,14 +955,14 @@ class TestStringEnvelopeProxy:
                 make_context(
                     "ha_call_write_tool",
                     {
-                        "name": "ha_manage_addon",
+                        "name": "ha_manage_app",
                         "arguments": '{"slug": "x", "action": "install"}',
                     },
                 ),
                 call_next,
             )
         body = expect_read_only_error(excinfo)
-        assert body["tool_name"] == "ha_manage_addon"
+        assert body["tool_name"] == "ha_manage_app"
         call_next.assert_not_called()
 
     async def test_string_envelope_exempt_read_passes(self, read_only_on):
@@ -986,7 +986,7 @@ class TestStringEnvelopeProxy:
         result = await mw.on_call_tool(
             make_context(
                 "ha_call_write_tool",
-                {"name": "ha_manage_addon", "arguments": "not json"},
+                {"name": "ha_manage_app", "arguments": "not json"},
             ),
             call_next,
         )
@@ -1000,7 +1000,7 @@ class TestStringEnvelopeProxy:
         result = await mw.on_call_tool(
             make_context(
                 "ha_call_write_tool",
-                {"name": "ha_manage_addon", "arguments": "[1, 2]"},
+                {"name": "ha_manage_app", "arguments": "[1, 2]"},
             ),
             call_next,
         )

@@ -22,7 +22,7 @@ Three layers of guard, each catching a different silent-failure mode:
    Catches dispatch falling through to the wrong code path.
 
 2. ``test_supervisor_addon_tool_behavior_matches_backend`` — calls
-   ``ha_get_addon`` (which only works when a real Supervisor is present)
+   ``ha_get_app`` (which only works when a real Supervisor is present)
    and asserts success-vs-failure matches the claimed backend. Catches
    the case where conftest reports ``backend=X`` but actually a different
    HA instance is running (e.g. mock Supervisor on testcontainer making
@@ -223,16 +223,16 @@ async def test_supervisor_addon_tool_behavior_matches_backend(
     mcp_client: Any,
     ha_container_with_fresh_config: dict[str, Any],
 ) -> None:
-    """Behavioral cross-check: ``ha_get_addon`` must succeed on HAOS, fail on container.
+    """Behavioral cross-check: ``ha_get_app`` must succeed on HAOS, fail on container.
 
     Stronger guarantee than the dispatch-field check: conftest could
     self-report ``backend=container`` but actually have HAOS running
     (or vice versa). A real Supervisor only exists on HAOS — the HA
     Core testcontainer has no Supervisor service running. So:
 
-    - HAOS external + inaddon: ``ha_get_addon`` returns a populated
+    - HAOS external + inaddon: ``ha_get_app`` returns a populated
       addons list (the bake installs several addons).
-    - testcontainer: ``ha_get_addon`` raises ToolError
+    - testcontainer: ``ha_get_app`` raises ToolError
       (RESOURCE_NOT_FOUND from the ``supervisor/api`` WebSocket proxy
       because no Supervisor is running); ``safe_call_tool`` catches
       and decodes the structured error to ``{"success": False, ...}``.
@@ -243,16 +243,16 @@ async def test_supervisor_addon_tool_behavior_matches_backend(
     impersonate the other while keeping this test green.
     """
     backend = ha_container_with_fresh_config["backend"]
-    result = await safe_call_tool(mcp_client, "ha_get_addon", {})
+    result = await safe_call_tool(mcp_client, "ha_get_app", {})
 
-    # All HAOS backends run against a real Supervisor, so ha_get_addon succeeds —
+    # All HAOS backends run against a real Supervisor, so ha_get_app succeeds —
     # including haos_embedded, whose in-process server reaches Supervisor through
     # HA Core's supervisor/api WS proxy (it runs standalone with HA_MCP_EMBEDDED,
     # so it does not use SUPERVISOR_TOKEN directly, but the proxy path still works
     # because HA Core itself is supervised).
     if backend in ("haos", "haos_inaddon", "haos_embedded"):
         assert result.get("success") is True, (
-            f"ha_get_addon failed on {backend} backend; Supervisor must "
+            f"ha_get_app failed on {backend} backend; Supervisor must "
             f"be running. Result: {result!r}"
         )
         # list_addons returns ``{"success": True, "addons": [...], "summary": {...}}``
@@ -264,9 +264,9 @@ async def test_supervisor_addon_tool_behavior_matches_backend(
             f"{addons!r}"
         )
     else:
-        # testcontainer has no Supervisor → ha_get_addon must fail
+        # testcontainer has no Supervisor → ha_get_app must fail
         assert result.get("success") is False, (
-            f"ha_get_addon unexpectedly succeeded on {backend} backend. "
+            f"ha_get_app unexpectedly succeeded on {backend} backend. "
             f"Testcontainer has no Supervisor service; success here "
             f"means we're actually running on HAOS but conftest reported "
             f"backend={backend!r}. Result: {result!r}"

@@ -24,12 +24,13 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
    [![Add Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp)
 
-   Or manually add this repository URL in Settings → Apps (Add-ons) → App Store:
+   Or manually add this repository URL in Settings → Apps → App store
+   (Settings → Add-ons → Add-on store before Home Assistant 2026.2):
    ```
    https://github.com/homeassistant-ai/ha-mcp
    ```
 
-2. **Navigate to the add-on** "Home Assistant MCP Server" from the add-on store
+2. **Navigate to the add-on** "Home Assistant MCP Server" from the App store
 
 3. **Click Install, Wait and then Start**
 
@@ -133,7 +134,7 @@ For secure remote access, you have two options:
 The **Webhook Proxy** add-on routes MCP traffic through your existing Home Assistant reverse proxy — no separate tunnel needed.
 
 1. Install the **MCP Server add-on** first (if not already installed — see the Installation section above)
-2. Install the **"Webhook Proxy for HA MCP"** add-on from the add-on store
+2. Install the **"Webhook Proxy for HA MCP"** add-on from the App store
 3. Start it and **restart Home Assistant** when prompted
 4. Copy the URL from the webhook proxy add-on logs:
    ```
@@ -354,7 +355,7 @@ Mixed read/write tools whose read functionality exists nowhere else stay availab
 
 - `ha_config_get_dashboard` — config/list/search reads only; screenshot renders are blocked because Puppet can persist frontend theme/dark preferences
 - `ha_manage_backup` — only listing and viewing per-edit backups
-- `ha_manage_addon` — only HTTP GET proxy reads of add-on APIs
+- `ha_manage_app` — only HTTP GET proxy reads of add-on APIs
 - `ha_manage_energy_prefs` — only `mode='get'` and `dry_run=true` previews
 - `ha_manage_pipeline` — only `action='list'` / `'get'`
 - `ha_manage_custom_tool` — only `list_saved=true`
@@ -377,11 +378,11 @@ read_only_mode: true
 
 Redacts secrets from tool responses before they reach the AI assistant. When enabled:
 
-- **Add-on options** (`ha_get_addon`, `ha_manage_addon`): any option value whose add-on schema marks it `format: password` is replaced with `<redacted: set>` or `<redacted: empty>` — so "is this credential configured at all?" stays answerable without disclosing the value.
+- **Add-on options** (`ha_get_app`, `ha_manage_app`): any option value whose add-on schema marks it `format: password` is replaced with `<redacted: set>` or `<redacted: empty>` — so "is this credential configured at all?" stays answerable without disclosing the value.
 - **Integration options** (`ha_get_integration`): fields the options flow marks with a password selector get the same treatment, including the `include_schema=True` schema echo.
 - **All other tool responses** (logs, file reads, diagnostics, etc.): occurrences of secret values the server has already seen on the surfaces above are scrubbed to `<redacted>`.
 
-Redaction is schema-driven — fields not marked as passwords by their schema cannot be detected and are returned as-is until the value scrub has seen them. The value scrub skips secrets shorter than 6 characters (replacing tiny fragments would corrupt unrelated output). Writes through `ha_manage_addon` keep working with partial updates (merging uses the real current options server-side), and submitting a redaction marker as a value is rejected so a redacted read can never be written back into a live config.
+Redaction is schema-driven — fields not marked as passwords by their schema cannot be detected and are returned as-is until the value scrub has seen them. The value scrub skips secrets shorter than 6 characters (replacing tiny fragments would corrupt unrelated output). Writes through `ha_manage_app` keep working with partial updates (merging uses the real current options server-side), and submitting a redaction marker as a value is rejected so a redacted read can never be written back into a live config.
 
 **When to enable:**
 - Add-on or integration configs hold credentials (API tokens, PATs, database passwords) that must not land in AI conversation transcripts
@@ -448,7 +449,7 @@ The add-on requests `hassio_role: manager` (declared in `config.yaml`).
 `manager` is required for the Supervisor REST endpoints used to fetch
 add-on and system-service logs (`/addons/<slug>/logs`, `/<service>/logs`,
 `/core/logs`) — `default` returns 403 (see #1116). The role also supports
-explicit add-on management through `ha_manage_addon`. When dashboard
+explicit add-on management through `ha_manage_app`. When dashboard
 screenshots are enabled, `ha_get_dashboard_screenshot` may update only the
 schema-verified Puppet add-on's `keep_browser_open` option and restart that
 same add-on; it accepts no caller-supplied slug for those operations.
@@ -515,9 +516,9 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 
 > Tools marked **(beta — dev channel only)** are gated behind feature flags and ship with the dev channel add-on only. See [docs/beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for setup and caveats.
 
-### Add-ons
-- `ha_get_addon` — Get Home Assistant add-ons - list installed, available, or get details for one.
-- `ha_manage_addon` — Manage a Home Assistant add-on — update its configuration or call its internal API.
+### Apps (add-ons)
+- `ha_get_app` — Get Home Assistant Apps (formerly known as add-ons, and this tool as ha_get_addon) - list installed, available, or get details for one.
+- `ha_manage_app` — Manage a Home Assistant App (formerly known as an add-on, and this tool as ha_manage_addon) — update its configuration or call its internal API.
 
 ### Areas & Floors
 - `ha_list_floors_areas` — List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.

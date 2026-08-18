@@ -80,7 +80,7 @@ def _backup_write(args: dict[str, Any]) -> str | None:
 # Add-on parameters that, when present, mean the call mutates add-on
 # configuration (so the read-only middleware must block it). Module-level
 # so the schema-drift guard test (test_read_only.py) can pin an
-# independent manifest against it — see item 10b / ha_manage_addon.
+# independent manifest against it — see item 10b / ha_manage_app.
 _ADDON_CONFIG_WRITE_PARAMS = ("options", "network", "boot", "auto_update", "watchdog")
 
 
@@ -174,7 +174,7 @@ def _radio_write(args: dict[str, Any]) -> str | None:
 
 
 # Mixed read/write tools whose read surface has no pure-read duplicate
-# (verified per tool: ha_get_addon cannot proxy-read addon-internal
+# (verified per tool: ha_get_app cannot proxy-read addon-internal
 # APIs; energy prefs and assist pipelines are reachable only through
 # these tools; edit-backup listing exists nowhere else; the saved-tools
 # cache is only listable here; ha_manage_radio's 'ping' probe, 'cluster_read'
@@ -200,7 +200,7 @@ READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
         "action='list', 'view', or 'diff') and listing snapshots "
         "(scope='snapshot', action='list')",
     ),
-    "ha_manage_addon": ReadOnlyExemption(
+    "ha_manage_app": ReadOnlyExemption(
         _addon_write,
         "HTTP GET proxy reads of add-on APIs (slug + path, method='GET')",
     ),

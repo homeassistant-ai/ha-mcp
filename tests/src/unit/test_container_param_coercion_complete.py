@@ -40,7 +40,7 @@ from ha_mcp.tools.util_helpers import JSON_STRING_COERCION
 # string into a dict could change behavior. Surfaced for maintainer decision;
 # move them out of this allowlist to opt them in.
 COERCION_EXEMPT: dict[tuple[str, str], str] = {
-    ("ha_manage_addon", "body"): (
+    ("ha_manage_app", "body"): (
         "Proxy request body: 'Pass a JSON object or JSON string' — str is an "
         "accepted raw-body form, not a serialization artifact."
     ),
@@ -300,8 +300,8 @@ def test_dict_or_list_only_params_advertise_no_string_arm() -> None:
 @pytest.mark.parametrize(
     ("tool_name", "param_name", "json_value", "expected"),
     [
-        ("ha_manage_addon", "options", '{"ssl": true}', {"ssl": True}),
-        ("ha_manage_addon", "network", '{"5800/tcp": 8081}', {"5800/tcp": 8081}),
+        ("ha_manage_app", "options", '{"ssl": true}', {"ssl": True}),
+        ("ha_manage_app", "network", '{"5800/tcp": 8081}', {"5800/tcp": 8081}),
         (
             "ha_manage_energy_prefs",
             "config",
@@ -322,7 +322,7 @@ def test_dict_only_param_coerces_json_object_string(
 @pytest.mark.parametrize(
     ("tool_name", "param_name"),
     [
-        ("ha_manage_addon", "options"),
+        ("ha_manage_app", "options"),
         ("ha_manage_energy_prefs", "config"),
     ],
 )
