@@ -3,6 +3,25 @@
 <!-- version list -->
 
 
+## v3.0.1 (2026-08-18)
+
+### Documentation
+
+- Home Assistant 2026.2 renamed add-ons to apps, so the setup, OAuth and
+  troubleshooting instructions now call the product an app (add-on) on first
+  mention and an app after it. Navigation paths carry Home Assistant's current
+  labels — `Settings > Apps > Install app` — with the pre-2026.2 path in a
+  compatibility note, since on those versions the panel really is *Add-ons*.
+  Slugs, `/addons` Supervisor routes, directory names and the add-on store
+  identity are unchanged.
+
+### Fixed
+
+- Disabling OAuth protection documented an app restart, which is not enough:
+  the OAuth HTTP views are registered with Home Assistant and only drop on a
+  full Home Assistant restart, so following the old instruction could leave
+  the previous OAuth behaviour in force. The instruction now says so.
+
 ## v3.0.0 (2026-08-16)
 
 ### Changed
