@@ -451,7 +451,12 @@ class ReadOnlyMiddleware(Middleware):
         if not get_global_settings().read_only_mode:
             return await call_next(context)
 
-        name = context.message.name
+        # RenamedToolAliasMiddleware runs ahead of this one and normally
+        # rewrites a retired name before it gets here. Resolving it again costs
+        # a dict lookup and removes the ordering dependency: a middleware
+        # inserted ahead of the alias would otherwise leave this gate reading a
+        # name no exemption is keyed on, which does not fail closed.
+        name = current_tool_name(context.message.name)
         args = context.message.arguments or {}
 
         # Call proxies: decide on the INNER call (see _unwrap_proxy_call).

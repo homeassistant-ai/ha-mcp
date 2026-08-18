@@ -399,6 +399,31 @@ class TestMiddleware:
         )
         assert result == "proxied-backups"
 
+    async def test_direct_call_on_a_retired_name_is_still_read_only_checked(
+        self, read_only_on
+    ):
+        """The gate does not depend on the alias middleware running first.
+
+        It normally does — it is registered ahead of this one — but a
+        middleware inserted before it would leave the exemption lookup on a
+        name it is not keyed on, and that miss passes the call rather than
+        blocking it.
+        """
+        mw = make_middleware()
+        call_next = AsyncMock()
+
+        with pytest.raises(ToolError) as excinfo:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_manage_addon", {"slug": "core_ssh", "action": "uninstall"}
+                ),
+                call_next,
+            )
+
+        body = expect_read_only_error(excinfo)
+        assert body["tool_name"] == "ha_manage_app"
+        call_next.assert_not_called()
+
     async def test_proxied_call_on_a_retired_name_is_still_read_only_checked(
         self, read_only_on
     ):
