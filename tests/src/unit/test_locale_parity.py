@@ -678,8 +678,10 @@ def test_derived_catalogs_match_the_canonical_store() -> None:
 AUTHORED_SHARED_PLACES = {
     "src/ha_mcp/settings_ui/locales": (
         "messages.advanced.extra_yaml_write_keys.label",
+        "messages.footer.deployment.unknown",
     ),
     "custom_components/ha_mcp_tools/translations": (
+        "common.version_unknown",
         "options.step.tools_info.data.extra_yaml_keys",
     ),
 }
