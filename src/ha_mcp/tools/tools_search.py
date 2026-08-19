@@ -1691,8 +1691,9 @@ class SearchTools:
             Field(
                 default=None,
                 description=(
-                    "Narrow entity-registry results to an area (id or name). "
-                    "Does not affect configuration search."
+                    "Narrow entity-registry results to an area (id, name, or alias). "
+                    "Area only, never a floor: use ha_list_floors_areas first for "
+                    "floor-wide requests. Does not affect configuration search."
                 ),
             ),
         ] = None,

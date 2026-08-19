@@ -4,12 +4,15 @@ import asyncio
 import logging
 from typing import Any
 
+from fastmcp.exceptions import ToolError
+
+from ...errors import ErrorCode, create_error_response
 from ...utils.fuzzy_search import calculate_partial_ratio
 from ...visibility.resolver import (
     device_registry_needed_for_visibility,
     load_hidden_set,
 )
-from ..helpers import exception_to_structured_error
+from ..helpers import exception_to_structured_error, raise_tool_error
 from ..util_helpers import merge_visibility_warnings
 from ._base import _SearchBase
 
@@ -433,6 +436,9 @@ class EntitySearchMixin(_SearchBase):
                 self.client.send_websocket_message(
                     {"type": "config/device_registry/list"}
                 ),
+                self.client.send_websocket_message(
+                    {"type": "config/floor_registry/list"}
+                ),
                 return_exceptions=True,
             )
 
@@ -465,10 +471,46 @@ class EntitySearchMixin(_SearchBase):
             area_registry = self._parse_area_registry(results[1], registry_warnings)
             entity_reg_map = self._parse_entity_reg_map(results[2], registry_warnings)
             device_area_map = self._parse_device_area_map(results[3], registry_warnings)
+            floor_registry = self._parse_floor_registry(results[4], registry_warnings)
             degraded_warnings = registry_warnings + visibility_warnings
 
             area_query_lower = area_query.lower().strip()
-            matched_area_ids = self._match_area_ids(area_registry, area_query_lower)
+            exact_area_ids = self._match_exact_registry_ids(
+                area_registry, "area_id", area_query_lower
+            )
+            if exact_area_ids:
+                matched_area_ids = exact_area_ids
+            else:
+                matched_floor_ids = self._match_exact_registry_ids(
+                    floor_registry, "floor_id", area_query_lower
+                )
+                if matched_floor_ids:
+                    matched_floors = [
+                        floor_registry[floor_id]
+                        for floor_id in sorted(matched_floor_ids)
+                    ]
+                    floor_names = [
+                        floor.get("name", floor.get("floor_id", ""))
+                        for floor in matched_floors
+                    ]
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            f"area_filter '{area_query}' identifies floor "
+                            f"'{floor_names[0]}', not an area",
+                            suggestions=[
+                                "Use ha_list_floors_areas to list the floor's areas, "
+                                "then call ha_search once per area_id"
+                            ],
+                            context={
+                                "parameter": "area_filter",
+                                "value": area_query,
+                                "matched_floor_ids": sorted(matched_floor_ids),
+                                "matched_floor_names": floor_names,
+                            },
+                        )
+                    )
+                matched_area_ids = self._match_area_ids(area_registry, area_query_lower)
 
             if not matched_area_ids:
                 return merge_visibility_warnings(
@@ -508,6 +550,8 @@ class EntitySearchMixin(_SearchBase):
                 degraded_warnings,
             )
 
+        except ToolError:
+            raise
         except Exception as e:
             logger.error(f"Error in get_entities_by_area: {e}")
             exception_to_structured_error(
@@ -537,6 +581,18 @@ class EntitySearchMixin(_SearchBase):
         return area_registry
 
     @classmethod
+    def _parse_floor_registry(
+        cls, result: Any, warnings: list[str] | None = None
+    ) -> dict[str, dict[str, Any]]:
+        """Parse the floor registry into ``floor_id -> floor info``."""
+        floor_registry: dict[str, dict[str, Any]] = {}
+        for floor in cls._extract_registry_list(result, "floor registry", warnings):
+            floor_id = floor.get("floor_id", "")
+            if floor_id:
+                floor_registry[floor_id] = floor
+        return floor_registry
+
+    @classmethod
     def _parse_entity_reg_map(
         cls, result: Any, warnings: list[str] | None = None
     ) -> dict[str, dict[str, str | None]]:
@@ -563,6 +619,30 @@ class EntitySearchMixin(_SearchBase):
             if device_id:
                 device_area_map[device_id] = device.get("area_id")
         return device_area_map
+
+    @staticmethod
+    def _match_exact_registry_ids(
+        registry: dict[str, dict[str, Any]],
+        id_key: str,
+        query_lower: str,
+    ) -> set[str]:
+        """Return exact case-insensitive id, name, or alias matches."""
+        matches: set[str] = set()
+        for registry_id, info in registry.items():
+            item_id = str(info.get(id_key) or registry_id)
+            name = str(info.get("name") or "")
+            aliases = info.get("aliases", []) or []
+            if (
+                query_lower == item_id.lower()
+                or query_lower == name.lower()
+                or any(
+                    query_lower == alias.lower()
+                    for alias in aliases
+                    if isinstance(alias, str)
+                )
+            ):
+                matches.add(registry_id)
+        return matches
 
     @staticmethod
     def _match_area_ids(

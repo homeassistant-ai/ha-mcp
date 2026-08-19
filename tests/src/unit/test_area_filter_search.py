@@ -9,6 +9,7 @@ names instead of consulting the entity/device/area registries.
 """
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.smart_search import SmartSearchTools
 
@@ -25,11 +26,13 @@ class MockClientWithRegistries:
         self,
         entities: list[dict],
         areas: list[dict] | None = None,
+        floors: list[dict] | None = None,
         entity_registry: list[dict] | None = None,
         device_registry: list[dict] | None = None,
     ):
         self.entities = entities
         self.areas = areas or []
+        self.floors = floors or []
         self.entity_registry = entity_registry or []
         self.device_registry = device_registry or []
         self.base_url = "http://localhost:8123"
@@ -44,6 +47,8 @@ class MockClientWithRegistries:
         msg_type = message.get("type", "")
         if msg_type == "config/area_registry/list":
             return _ws_success(self.areas)
+        elif msg_type == "config/floor_registry/list":
+            return _ws_success(self.floors)
         elif msg_type == "config/entity_registry/list":
             return _ws_success(self.entity_registry)
         elif msg_type == "config/device_registry/list":
@@ -318,6 +323,86 @@ class TestAreaMatchingLogic:
         area_ids = [a["area_id"] for a in available]
         assert "living_room" in area_ids
         assert "kitchen" in area_ids
+
+    @staticmethod
+    def _basement_client(*, area_aliases: list[str] | None = None):
+        return MockClientWithRegistries(
+            entities=[
+                {
+                    "entity_id": "light.basement_hall",
+                    "attributes": {"friendly_name": "Basement Hall"},
+                    "state": "on",
+                }
+            ],
+            areas=[
+                {
+                    "area_id": "couloir_sous_sol",
+                    "name": "Couloir Sous-Sol",
+                    "aliases": area_aliases or [],
+                }
+            ],
+            floors=[
+                {
+                    "floor_id": "sous_sol",
+                    "name": "Sous-sol",
+                    "aliases": ["Cave level"],
+                }
+            ],
+            entity_registry=[
+                {
+                    "entity_id": "light.basement_hall",
+                    "area_id": "couloir_sous_sol",
+                    "device_id": None,
+                }
+            ],
+        )
+
+    @pytest.mark.asyncio
+    async def test_floor_name_does_not_fuzzy_match_partial_area(self):
+        """A floor name must not silently resolve to a similarly named area."""
+        tools = SmartSearchTools(client=self._basement_client(), fuzzy_threshold=60)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.get_entities_by_area("sous-sol")
+
+        error = str(exc_info.value)
+        assert "Sous-sol" in error
+        assert "floor" in error.lower()
+        assert "ha_list_floors_areas" in error
+
+    @pytest.mark.asyncio
+    async def test_floor_alias_does_not_fuzzy_match_partial_area(self):
+        """An exact floor alias receives the same deterministic rejection."""
+        tools = SmartSearchTools(client=self._basement_client(), fuzzy_threshold=60)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.get_entities_by_area("Cave level")
+
+        assert "Sous-sol" in str(exc_info.value)
+        assert "ha_list_floors_areas" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_exact_area_id_still_wins_over_floor_guard(self):
+        """A literal area_id from ha_list_floors_areas remains valid."""
+        tools = SmartSearchTools(client=self._basement_client(), fuzzy_threshold=60)
+
+        result = await tools.get_entities_by_area("couloir_sous_sol")
+
+        assert result["total_areas_found"] == 1
+        assert set(result["areas"]) == {"couloir_sous_sol"}
+
+    @pytest.mark.asyncio
+    async def test_exact_area_alias_still_works(self):
+        """An exact area alias remains a valid area_filter."""
+        tools = SmartSearchTools(
+            client=self._basement_client(area_aliases=["Hall du bas"]),
+            fuzzy_threshold=60,
+        )
+
+        result = await tools.get_entities_by_area("Hall du bas")
+
+        assert result["total_areas_found"] == 1
+        assert set(result["areas"]) == {"couloir_sous_sol"}
 
 
 class TestAreaFilterGroupByDomain:
