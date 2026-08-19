@@ -1,6 +1,6 @@
 name: Build HAOS Test Image (Prime Shared Cache)
 
-# Bakes the pre-baked HAOS qcow2 used by haos-e2e-tests.yml — see #1281.
+# Bakes the pre-baked HAOS qcow2 used by all four HAOS E2E lanes — see #1281.
 # The workflow's job on master is to local-build the qcow2 and warm the shared
 # Actions cache; the lanes restore from that cache and local-build on a miss.
 # The PR-time job uploads the qcow2 as a workflow artifact so reviewers can
@@ -10,22 +10,21 @@ name: Build HAOS Test Image (Prime Shared Cache)
 # Triggered on: manual dispatch, weekly cron (refreshes addon Docker layers),
 # and push to master that touches any input baked into the qcow2.
 #
-# INVARIANT — the path triggers below MUST mirror the ``git ls-tree`` paths
-# that haos-e2e-tests.yml hashes into its image cache key (see the
-# "Compute image cache key" step). When master commits change a baked
-# input that isn't listed here, the master cache-prime stays at the
-# previous state and every subsequent PR on a cache miss builds locally
-# (rather than restoring the master-primed cache), which adds ~25 min
-# to the PR run. This was how the #1374 (knx allowlist) merge forced
-# every open PR to rebuild until a manual dispatch refreshed master.
-# Keep both lists in sync.
+# INVARIANT — the path triggers below cover the baked inputs centralized in
+# tests/haos_image_build/image_cache_key.sh, plus workflow-only rebuild inputs.
+# When master commits change a baked input that is not covered here, the master
+# cache-prime stays at the previous state and every subsequent PR on a cache miss
+# builds locally (rather than restoring the master-primed cache), which adds
+# about 25 minutes to the PR run. This was how the #1374 (knx allowlist) merge
+# forced every open PR to rebuild until a manual dispatch refreshed master.
+# Keep the trigger superset aligned with the helper.
 
 on:
   workflow_dispatch:
   push:
     branches: [master]
     paths:
-      # Bake inputs — must match haos-e2e-tests.yml cache-key paths.
+      # Bake inputs — must cover the shared image_cache_key.sh paths.
       - 'tests/haos_image_build/**'
       - 'tests/initial_test_state/**'
       - 'custom_components/ha_mcp_tools/**'
@@ -241,14 +240,9 @@ jobs:
         id: e2e_cache_key
         if: github.ref == 'refs/heads/master'
         continue-on-error: true
-        # INVARIANT: this git ls-tree must stay byte-IDENTICAL to the block in
-        # .github/actions/setup-haos-e2e/action.yml, which serves all four E2E
-        # lanes. Otherwise this warms a key the lanes
-        # never restore (a wasted prime, not a stale test: the lanes still
-        # recompute their own correct key). NOTE the push-trigger paths above
-        # are a deliberate SUPERSET (they also list homeassistant-addon-dev/**
-        # + this file), NOT an identical mirror — keep that distinction in mind
-        # when editing.
+        # The shared helper is also called by all four E2E lanes. The push-trigger
+        # paths above are deliberately broader (they also list the dev add-on and
+        # this workflow), while the cache key covers only files baked into qcow2.
         run: |
           # Position the qcow2 at the exact path the lanes restore to FIRST, so
           # the cache-key output below is set only once the file is in place
@@ -258,12 +252,7 @@ jobs:
           # rename, not a copy. The artifact upload above already consumed
           # the workspace copy, so nothing later needs it.
           mv haos-test-image.qcow2 /tmp/haos-test-image.qcow2
-          hash=$(git ls-tree -r HEAD \
-            tests/haos_image_build \
-            tests/initial_test_state \
-            custom_components/ha_mcp_tools \
-            homeassistant-addon-webhook-proxy \
-            | sha256sum | cut -d' ' -f1 | head -c16)
+          hash=$(bash tests/haos_image_build/image_cache_key.sh)
           echo "cache-key=haos-image-$hash" >> "$GITHUB_OUTPUT"
 
       - name: Warm shared Actions cache for E2E lanes (master only)

@@ -30,6 +30,8 @@ run it uploads the qcow2 as a workflow artifact (reviewer sanity-check). On
 shared Actions cache used by the four E2E lanes — external, inaddon, embedded,
 and stdio all run `.github/actions/setup-haos-e2e/action.yml` to restore the
 qcow2 from that cache and fall back to a local build on a miss.
+Both the master builder and those lanes compute the key through
+`image_cache_key.sh`, which owns the baked-input list and hash format.
 
 ## Version pinning
 

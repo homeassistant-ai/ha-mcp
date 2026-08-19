@@ -257,6 +257,24 @@ class TestReportIssueRestriction:
             "restrict_report_issue=false" in record.message for record in caplog.records
         ), [record.message for record in caplog.records]
 
+    async def test_default_bypass_is_not_logged_when_enforcement_inactive(
+        self, set_config, caplog
+    ):
+        set_config(enabled=True, enforce=False, deny_entity_ids=["sensor.hidden"])
+        mw = make_mw(get_client=FakeClient)
+
+        with caplog.at_level("INFO", logger="ha_mcp.visibility.enforcement"):
+            result = await mw.on_call_tool(
+                report_context(),
+                _returns(text_result("diagnostics mention sensor.hidden")),
+            )
+
+        assert result.content[0].text == "diagnostics mention sensor.hidden"
+        assert not any(
+            "bypassing ha_report_issue" in record.message
+            for record in caplog.records
+        ), [record.message for record in caplog.records]
+
     @pytest.mark.parametrize("proxied", [False, True])
     async def test_report_issue_is_scanned_when_operator_opts_in(
         self, set_config, proxied

@@ -21,18 +21,11 @@ runs:
       id: key
       # Cache invalidates when any input baked into the qcow2 changes. The
       # git ls-tree object IDs make the key reproducible without mtime noise.
-      #
-      # INVARIANT: keep this block byte-identical to the cache-key block in
-      # build-haos-test-image.yml. Its master build primes the same key; a miss
-      # here builds from the PR merge ref instead of falling back to a stale image.
+      # The helper is shared with the master image builder so both sides use the
+      # same path list and key algorithm.
       shell: bash
       run: |
-        hash=$(git ls-tree -r HEAD \
-          tests/haos_image_build \
-          tests/initial_test_state \
-          custom_components/ha_mcp_tools \
-          homeassistant-addon-webhook-proxy \
-          | sha256sum | cut -d' ' -f1 | head -c16)
+        hash=$(bash tests/haos_image_build/image_cache_key.sh)
         echo "cache-key=haos-image-$hash" >> "$GITHUB_OUTPUT"
 
     - name: Restore image from cache
@@ -65,6 +58,8 @@ runs:
           | sudo tee /etc/udev/rules.d/99-kvm4all.rules
         sudo udevadm control --reload-rules
         sudo udevadm trigger --name-match=kvm
+        ls -l /dev/kvm
+        test -w /dev/kvm
 
     - name: Free disk space for the local build
       # A miss downloads ~1.5 GB, expands to ~7 GB, and grows the qcow2 to

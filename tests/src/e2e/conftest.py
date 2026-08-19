@@ -108,6 +108,8 @@ _E2E_FEATURE_FLAG_ENV = {
     "ENABLE_STRICT_MANDATORY_BPS": "false",
     # Production defaults snapshot deletion off; disposable E2E HA may exercise it.
     "ENABLE_SNAPSHOT_DELETE": "true",
+}
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -2893,7 +2895,7 @@ async def _stdio_client_session(
 
         # Test config dirs are session/test-scoped and discarded afterwards, so
         # retirement need not preserve discovery files for a future process.
-        stdio_settings_sidecar.retire_sidecar(config_dir)
+        await asyncio.to_thread(stdio_settings_sidecar.retire_sidecar, config_dir)
 
 
 @pytest.fixture(scope="session")

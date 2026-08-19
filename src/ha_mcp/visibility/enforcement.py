@@ -380,7 +380,7 @@ class _VisibilityEnforcementBase(Middleware):
         if tool_name == _REPORT_ISSUE_TOOL and (
             config is None or not config.restrict_report_issue
         ):
-            if config is not None:
+            if config is not None and config.enabled and config.enforce:
                 logger.info(
                     "visibility enforce: bypassing ha_report_issue because "
                     "restrict_report_issue=false"

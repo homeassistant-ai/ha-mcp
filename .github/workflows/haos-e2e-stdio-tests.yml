@@ -137,23 +137,37 @@ jobs:
           sudo chmod +r /boot/vmlinuz-* || true
           mkdir -p /tmp/haos-diagnostics
           cp /tmp/haos-build/haos-serial.log /tmp/haos-diagnostics/bake-serial.log 2>/dev/null || true
-          QCOW2=/tmp/haos-test-image.qcow2
-          [ -f "$QCOW2" ] || QCOW2=/tmp/haos-build/haos-test-image.qcow2
-          guestfish --ro -a "$QCOW2" run \
-            : mount /dev/sda8 / \
-            : ll /supervisor/homeassistant \
-            > /tmp/haos-diagnostics/config-dir-listing.txt 2>&1 \
-            || echo "directory listing failed"
-          guestfish --ro -a "$QCOW2" run \
-            : mount /dev/sda8 / \
-            : tar-out /supervisor/homeassistant/.storage /tmp/haos-diagnostics/storage.tar \
-            || echo ".storage tar-out failed"
-          guestfish --ro -a "$QCOW2" run \
-            : mount /dev/sda8 / \
-            : glob copy-out '/supervisor/homeassistant/*.log*' /tmp/haos-diagnostics/ \
-            || echo "log glob copy failed"
-          ls -la /tmp/haos-diagnostics/ || true
-          cat /tmp/haos-diagnostics/config-dir-listing.txt || true
+          # xdist boots per-worker overlays; the base image is not the runtime
+          # state that a parallel test failure needs for diagnosis.
+          shopt -s nullglob
+          targets=(/tmp/haos-test-image-gw*.qcow2)
+          if [ ${#targets[@]} -eq 0 ]; then
+            targets=(/tmp/haos-test-image.qcow2)
+          fi
+          if [ ! -f "${targets[0]}" ] && [ -f /tmp/haos-build/haos-test-image.qcow2 ]; then
+            targets=(/tmp/haos-build/haos-test-image.qcow2)
+          fi
+          for img in "${targets[@]}"; do
+            label=$(basename "$img" .qcow2)
+            outdir=/tmp/haos-diagnostics/$label
+            mkdir -p "$outdir"
+            echo "=== extracting diagnostics from $img ==="
+            guestfish --ro -a "$img" run \
+              : mount /dev/sda8 / \
+              : ll /supervisor/homeassistant \
+              > "$outdir/config-dir-listing.txt" 2>&1 \
+              || echo "directory listing failed for $img"
+            guestfish --ro -a "$img" run \
+              : mount /dev/sda8 / \
+              : tar-out /supervisor/homeassistant/.storage "$outdir/storage.tar" \
+              || echo ".storage tar-out failed for $img"
+            guestfish --ro -a "$img" run \
+              : mount /dev/sda8 / \
+              : glob copy-out '/supervisor/homeassistant/*.log*' "$outdir/" \
+              || echo "log glob copy failed for $img"
+            cat "$outdir/config-dir-listing.txt" || true
+          done
+          ls -laR /tmp/haos-diagnostics/ || true
           # The injected GitHub token is persisted in .storage (and therefore in
           # storage.tar), so diagnostics must be scrubbed before artifact upload.
           python3 scripts/redact_diagnostics_secrets.py /tmp/haos-diagnostics

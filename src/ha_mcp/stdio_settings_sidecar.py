@@ -246,14 +246,6 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _read_recorded_pid() -> int | None:
-    """Return the PID recorded in ``ui.pid``, or None if absent/garbage."""
-    try:
-        return int(_pid_file().read_text().strip())
-    except (OSError, ValueError):
-        return None
-
-
 # Timeouts for retiring the previous sidecar. The HTTP timeout is
 # urllib's per-socket-operation timeout (a listener that accepts and
 # dribbles can stretch the total), which in practice bounds the startup
@@ -384,20 +376,14 @@ def _post_shutdown(url: str) -> tuple[bool, bool | None]:
     return False, None
 
 
-def retire_sidecar(config_dir: Path) -> bool:
-    """Best-effort retirement for an externally managed stdio test process.
-
-    This public helper intentionally crosses the process boundary: callers that
-    spawn a real ``ha-mcp`` stdio server otherwise have no handle to its detached
-    settings listener. It uses discovery files in ``config_dir``, reports each
-    failure mode, and returns whether the sidecar acknowledged shutdown.
-    """
+def _read_retirement_url(config_dir: Path) -> str | None:
+    """Read the sidecar URL used by an external-process cleanup."""
     url_path = config_dir / "ui.url"
     try:
-        url = url_path.read_text().strip()
+        url = url_path.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
         logger.debug("Sidecar URL file %s not found; nothing to retire.", url_path)
-        return False
+        return None
     except PermissionError:
         logger.warning(
             "Cannot read sidecar URL file %s; a detached listener may still be "
@@ -406,7 +392,7 @@ def retire_sidecar(config_dir: Path) -> bool:
             config_dir,
             exc_info=True,
         )
-        return False
+        return None
     except OSError:
         logger.warning(
             "Failed to read sidecar URL file %s; a detached listener may still be "
@@ -415,7 +401,7 @@ def retire_sidecar(config_dir: Path) -> bool:
             config_dir,
             exc_info=True,
         )
-        return False
+        return None
     if not url:
         logger.warning(
             "Sidecar URL file %s is empty; a detached listener may still be running "
@@ -423,15 +409,18 @@ def retire_sidecar(config_dir: Path) -> bool:
             url_path,
             config_dir,
         )
-        return False
+        return None
+    return url
+
+
+def _read_retirement_pid(config_dir: Path) -> int | None:
+    """Read the recorded PID so an acknowledged retirement can await exit."""
     pid_path = config_dir / "ui.pid"
     try:
-        pid = int(pid_path.read_text().strip())
+        return int(pid_path.read_text(encoding="utf-8").strip())
     except FileNotFoundError:
-        pid = None
         logger.debug("Sidecar PID file %s not found; exit cannot be polled.", pid_path)
     except PermissionError:
-        pid = None
         logger.warning(
             "Cannot read sidecar PID file %s; exit cannot be polled for config "
             "dir %s.",
@@ -440,7 +429,6 @@ def retire_sidecar(config_dir: Path) -> bool:
             exc_info=True,
         )
     except OSError:
-        pid = None
         logger.warning(
             "Failed to read sidecar PID file %s; exit cannot be polled for config "
             "dir %s.",
@@ -449,61 +437,81 @@ def retire_sidecar(config_dir: Path) -> bool:
             exc_info=True,
         )
     except ValueError:
-        pid = None
         logger.warning(
             "Sidecar PID file %s is invalid; exit cannot be polled for config "
             "dir %s.",
             pid_path,
             config_dir,
         )
+    return None
 
-    sentinel_path = config_dir / "settings_ui_disabled"
+
+def _retirement_sentinel_preexisting(sentinel_path: Path) -> bool:
+    """Snapshot whether the user already disabled the settings sidecar."""
     try:
-        sentinel_preexisting = sentinel_path.exists()
+        return sentinel_path.exists()
     except OSError:
-        sentinel_preexisting = True
         logger.warning(
             "Cannot inspect sidecar disable sentinel %s; preserving it.",
             sentinel_path,
             exc_info=True,
         )
+        return True
 
-    acked, sentinel_created = _post_shutdown(url)
-    if not acked:
-        logger.warning(
-            "Sidecar at %s did not acknowledge retirement for config dir %s; "
-            "the detached listener may still be running.",
-            url,
-            config_dir,
-        )
-        return False
 
-    # Current retire endpoints create no sentinel. Older endpoints do; clear only
-    # one attributable to this request so a user's existing disable choice survives.
+def _clear_retirement_sentinel(
+    sentinel_path: Path,
+    *,
+    url: str,
+    sentinel_preexisting: bool,
+    sentinel_created: bool | None,
+) -> None:
+    """Clear only a legacy disable sentinel attributable to this retirement."""
     should_clear = (
         sentinel_created if sentinel_created is not None else not sentinel_preexisting
     )
-    if should_clear:
-        try:
-            sentinel_path.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            logger.warning(
-                "Retired sidecar at %s but could not remove its disable sentinel %s.",
-                url,
-                sentinel_path,
-                exc_info=True,
-            )
+    if not should_clear:
+        return
+    try:
+        sentinel_path.unlink()
+    except FileNotFoundError:
+        logger.debug(
+            "Sidecar disable sentinel %s was already absent after retiring %s.",
+            sentinel_path,
+            url,
+        )
+    except OSError:
+        logger.warning(
+            "Retired sidecar at %s but could not remove its disable sentinel %s.",
+            url,
+            sentinel_path,
+            exc_info=True,
+        )
 
-    logger.info("Retired settings UI sidecar at %s for config dir %s", url, config_dir)
 
-    if pid is not None:
-        import time
+def _wait_for_retired_pid(
+    pid: int | None,
+    *,
+    url: str,
+    config_dir: Path,
+    replacing: bool,
+) -> None:
+    """Wait a bounded interval for an acknowledged detached sidecar to exit."""
+    if pid is None:
+        return
+    import time
 
-        deadline = time.monotonic() + _OLD_SIDECAR_EXIT_WAIT
-        while _pid_alive(pid):
-            if time.monotonic() >= deadline:
+    deadline = time.monotonic() + _OLD_SIDECAR_EXIT_WAIT
+    while _pid_alive(pid):
+        if time.monotonic() >= deadline:
+            if replacing:
+                logger.warning(
+                    "Old sidecar pid %s still alive %.0fs after acknowledging "
+                    "shutdown; spawning replacement anyway.",
+                    pid,
+                    _OLD_SIDECAR_EXIT_WAIT,
+                )
+            else:
                 logger.warning(
                     "Retired sidecar pid %s at %s is still alive after %.0fs for "
                     "config dir %s.",
@@ -512,9 +520,64 @@ def retire_sidecar(config_dir: Path) -> bool:
                     _OLD_SIDECAR_EXIT_WAIT,
                     config_dir,
                 )
-                break
-            time.sleep(_OLD_SIDECAR_EXIT_POLL)
+            return
+        time.sleep(_OLD_SIDECAR_EXIT_POLL)
+
+
+def _retire_sidecar_at(config_dir: Path, *, replacing: bool) -> bool:
+    """Run the shared retire sequence for the state-file directory."""
+    url = _read_retirement_url(config_dir)
+    if url is None:
+        return False
+    if replacing:
+        # Preserve a pre-ui.state install's bookmarked URL before the old
+        # sidecar removes its serving files.
+        _seed_state_from_url(url)
+    # Capture both before the POST: an acknowledged sidecar may remove its PID,
+    # and the sentinel snapshot distinguishes a legacy endpoint's write from a
+    # user's preexisting disable choice.
+    pid = _read_retirement_pid(config_dir)
+    sentinel_path = config_dir / "settings_ui_disabled"
+    sentinel_preexisting = _retirement_sentinel_preexisting(sentinel_path)
+
+    acked, sentinel_created = _post_shutdown(url)
+    if not acked:
+        if not replacing:
+            logger.warning(
+                "Sidecar at %s did not acknowledge retirement for config dir %s; "
+                "the detached listener may still be running.",
+                url,
+                config_dir,
+            )
+        return False
+
+    _clear_retirement_sentinel(
+        sentinel_path,
+        url=url,
+        sentinel_preexisting=sentinel_preexisting,
+        sentinel_created=sentinel_created,
+    )
+    if replacing:
+        logger.info("Retired previous settings UI sidecar at %s", url)
+    else:
+        logger.info(
+            "Retired settings UI sidecar at %s for config dir %s", url, config_dir
+        )
+    _wait_for_retired_pid(
+        pid, url=url, config_dir=config_dir, replacing=replacing
+    )
     return True
+
+
+def retire_sidecar(config_dir: Path) -> bool:
+    """Best-effort retirement for an externally managed stdio test process.
+
+    This public helper intentionally crosses the process boundary: callers that
+    spawn a real ``ha-mcp`` stdio server otherwise have no handle to its detached
+    settings listener. It uses discovery files in ``config_dir``, reports each
+    failure mode, and returns whether the sidecar acknowledged shutdown.
+    """
+    return _retire_sidecar_at(config_dir, replacing=False)
 
 
 def _log_shutdown_timeout(exc: BaseException) -> None:
@@ -554,67 +617,7 @@ def _shutdown_existing_sidecar() -> None:
     replacement loses the port to that lingering process, it serves on
     an ephemeral fallback instead).
     """
-    url = read_sidecar_url()
-    if url is None:
-        return
-    _seed_state_from_url(url)
-
-    # Snapshot BEFORE the POST: /shutdown writes the disable sentinel, so
-    # afterwards its presence is ambiguous between "my POST caused it"
-    # (clear it — this is a replace, not a disable) and "the user clicked
-    # Stop in this very window" (keep it — their disable must stick).
-    sentinel_preexisting = _disabled_sentinel().exists()
-
-    # Capture the pid BEFORE the POST: a current-code sidecar can ack and
-    # run its ownership-guarded cleanup (unlinking ui.pid) before we get
-    # back here — a post-POST read would then find nothing and skip the
-    # exit wait, racing the dying process for the remembered port.
-    pid = _read_recorded_pid()
-
-    acked, sentinel_created = _post_shutdown(url)
-    if not acked:
-        return
-    logger.info("Retired previous settings UI sidecar at %s", url)
-
-    # /shutdown drops the disable sentinel before signalling exit — its
-    # "user clicked shutdown" contract. This is a replace, not a disable:
-    # clear the sentinel or the freshly spawned child would honor it and
-    # exit immediately. Only a sentinel our own POST caused is cleared —
-    # the endpoint's sentinel_created field is authoritative (it closes
-    # the window where a user's Stop lands between the snapshot above
-    # and our POST); legacy endpoints without the field fall back to
-    # the snapshot.
-    should_clear = (
-        sentinel_created if sentinel_created is not None else not sentinel_preexisting
-    )
-    if should_clear:
-        with contextlib.suppress(FileNotFoundError, OSError):
-            _disabled_sentinel().unlink()
-
-    if pid is None:
-        return
-
-    import time
-
-    # Wait (bounded) for the old process to exit, for two reasons: (a) it
-    # holds the port the replacement wants to rebind — the sticky URL only
-    # survives if the port frees inside this window; (b) sidecars from
-    # releases BEFORE the ownership-guarded cleanup unlink ui.pid/ui.url
-    # blindly on exit, so during migration a still-dying legacy process
-    # could delete the replacement's freshly written files. (Current-code
-    # sidecars can't: _cleanup_owned_serving_files checks ownership under
-    # _serving_files_lock.)
-    deadline = time.monotonic() + _OLD_SIDECAR_EXIT_WAIT
-    while _pid_alive(pid):
-        if time.monotonic() >= deadline:
-            logger.warning(
-                "Old sidecar pid %s still alive %.0fs after acknowledging "
-                "shutdown; spawning replacement anyway.",
-                pid,
-                _OLD_SIDECAR_EXIT_WAIT,
-            )
-            return
-        time.sleep(_OLD_SIDECAR_EXIT_POLL)
+    _retire_sidecar_at(_sidecar_dir(), replacing=True)
 
 
 def _spawn_lock_path() -> Path:
