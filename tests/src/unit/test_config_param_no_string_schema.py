@@ -27,7 +27,22 @@ def _get_param_schema(
         mcp = FastMCP("test")
         register_fn(mcp, MagicMock(), device_tools=MagicMock())
         tool = await mcp.get_tool(tool_name)
+
         return tool.parameters["properties"][param_name]  # type: ignore[no-any-return]
+
+    return asyncio.run(_inner())
+
+
+def _get_tool_parameters(
+    register_fn: Callable[..., Any], tool_name: str
+) -> dict[str, Any]:
+    from fastmcp import FastMCP
+
+    async def _inner() -> dict[str, Any]:
+        mcp = FastMCP("test")
+        register_fn(mcp, MagicMock(), device_tools=MagicMock())
+        tool = await mcp.get_tool(tool_name)
+        return tool.parameters
 
     return asyncio.run(_inner())
 
@@ -199,3 +214,27 @@ def test_list_param_advertises_array(module, register_fn, tool_name, param_name)
     assert has_array, (
         f"{tool_name}.{param_name}: schema does not include type:array. Schema: {schema}"
     )
+
+
+def test_bulk_operations_schema_names_required_item_fields():
+    """Models must see the bulk item contract instead of an untyped object."""
+    from ha_mcp.tools.tools_service import register_service_tools
+
+    parameters = _get_tool_parameters(register_service_tools, "ha_bulk_control")
+    operations = parameters["properties"]["operations"]
+    item_schema = operations["items"]
+    if "$ref" in item_schema:
+        item_schema = parameters["$defs"][item_schema["$ref"].rsplit("/", 1)[-1]]
+
+    assert item_schema["type"] == "object"
+    assert set(item_schema["required"]) == {"entity_id", "action"}
+    assert {
+        "entity_id",
+        "action",
+        "parameters",
+        "timeout_seconds",
+        "validate_first",
+    } <= set(item_schema["properties"])
+    assert "service" not in item_schema["properties"]
+    assert "domain" not in item_schema["properties"]
+    assert "Use action='off', not service='turn_off'" in operations["description"]

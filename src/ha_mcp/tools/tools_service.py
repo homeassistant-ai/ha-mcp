@@ -5,7 +5,7 @@ This module provides service execution and WebSocket-enabled operation monitorin
 """
 
 import logging
-from typing import Annotated, Any, NoReturn, cast
+from typing import Annotated, Any, NoReturn, NotRequired, TypedDict, cast
 
 import httpx
 from fastmcp import Context
@@ -54,6 +54,51 @@ from .util_helpers import (
 # REST POST + hardcoded ``_SERVICE_TO_STATE`` guess + WS-subscribe verification.
 # Named once so the routing helper and its tests agree on the wire string.
 WS_CALL_SERVICE = "ha_mcp_tools/call_service"
+
+
+class BulkControlOperation(TypedDict):
+    """One entity action in a ha_bulk_control request."""
+
+    entity_id: Annotated[
+        str,
+        Field(description="Exact Home Assistant entity ID, e.g. 'light.kitchen'."),
+    ]
+    action: Annotated[
+        str,
+        Field(
+            description=(
+                "Device action such as 'on', 'off', or 'toggle'. For lights, use "
+                "'off' instead of the ha_call_service form 'turn_off'."
+            )
+        ),
+    ]
+    parameters: NotRequired[
+        Annotated[
+            dict[str, Any],
+            Field(
+                description=(
+                    "Optional action parameters, e.g. {'brightness_pct': 30} "
+                    "when action='on'."
+                )
+            ),
+        ]
+    ]
+    timeout_seconds: NotRequired[
+        Annotated[
+            int,
+            Field(
+                description="Optional per-operation confirmation timeout in seconds."
+            ),
+        ]
+    ]
+    validate_first: NotRequired[
+        Annotated[
+            bool,
+            Field(
+                description="Validate the entity and action before dispatch; default true."
+            ),
+        ]
+    ]
 
 
 class _AmbiguousDispatch:
@@ -1438,15 +1483,41 @@ class ServiceTools:
     @log_tool_usage
     async def ha_bulk_control(
         self,
-        operations: Annotated[list[dict[str, Any]], JSON_STRING_COERCION],
+        operations: Annotated[
+            list[BulkControlOperation],
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "All entity operations to execute in this single tool call. "
+                    "Each item requires entity_id and action. Use action='off', not "
+                    "service='turn_off'; do not include domain or service. Example: "
+                    "[{'entity_id': 'light.hall', 'action': 'off'}, "
+                    "{'entity_id': 'light.cave', 'action': 'off'}]"
+                )
+            ),
+        ],
         parallel: bool = True,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        """Control multiple devices with bulk operation support and WebSocket tracking."""
+        """Control multiple entities in one request; prefer this over repeated calls.
+
+        Put every target in the ``operations`` list and call this tool exactly once
+        for a multi-entity action. Each operation uses the device-action schema
+        ``{"entity_id": "light.hall", "action": "off"}``. It does NOT use the
+        ha_call_service schema: never pass ``domain``, ``service``,
+        ``turn_on``, or ``turn_off`` for ordinary light/switch operations.
+
+        Example — turn off two lights in one tool call:
+        ``operations=[{"entity_id": "light.hall", "action": "off"},
+        {"entity_id": "light.cave", "action": "off"}]``.
+
+        Use optional ``parameters`` inside an item for brightness, temperature,
+        position, or other action data. Parallel execution is the default.
+        """
         parallel_bool = parallel
 
-        # FastMCP validates operations as list[dict] before this runs.
-        # parse_json_param is kept as a defensive passthrough for the list case.
+        # FastMCP validates the TypedDict item contract before this runs.
+        # parse_json_param remains a defensive passthrough for the list case.
         try:
             parsed_operations = parse_json_param(operations, "operations")
         except ValueError as e:
