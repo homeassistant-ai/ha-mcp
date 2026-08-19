@@ -2404,7 +2404,7 @@ class TestReadinessProbe:
 # ---------------------------------------------------------------------------
 
 
-class TestServeRouteRegistration:
+class TestServeBrowserLanding:
     @pytest.fixture(autouse=True)
     def _isolate_env(self):
         # _thread_main stages HA_MCP_CONFIG_DIR/HA_MCP_EMBEDDED into os.environ;
@@ -2449,66 +2449,6 @@ class TestServeRouteRegistration:
 
         # Registered on the real MCP app, at the server's secret path.
         assert landing_calls == [(fake_mcp, "/private_secret")]
-        assert isinstance(mgr._thread_exc, _StopServe)
-
-    def test_serve_does_not_advertise_settings_path(self, tmp_path, monkeypatch):
-        # Embedded users reach settings through the HA sidebar. The alternate
-        # direct-connect path still serves the UI, but must not be handed to
-        # every MCP client as a redundant ha_get_overview hint (#2236).
-        mgr, _hass, _entry = _manager(
-            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
-        )
-
-        class _StopServe(Exception):
-            pass
-
-        class _FakeMcp:
-            def http_app(self, path, stateless_http):
-                raise _StopServe
-
-        fake_mcp = _FakeMcp()
-        route_calls: list[tuple[object, str, bool]] = []
-        _stub_ha_mcp_surface(monkeypatch, mcp=fake_mcp)
-
-        def _routes_probe(mcp, server, secret_path="", advertise_prefix=True) -> None:
-            route_calls.append((mcp, secret_path, advertise_prefix))
-
-        sys.modules["ha_mcp.settings_ui"].register_settings_routes = _routes_probe
-
-        mgr._thread_main("tok")
-
-        assert route_calls == [(fake_mcp, "/private_secret", False)]
-        assert isinstance(mgr._thread_exc, _StopServe)
-
-    def test_serve_tolerates_legacy_settings_route_registration(
-        self, tmp_path, monkeypatch
-    ):
-        # The component permits pinned server versions back to 7.10, before
-        # register_settings_routes gained advertise_prefix. Those installs
-        # cannot suppress the old hint, but must continue to start (#2236).
-        mgr, _hass, _entry = _manager(
-            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
-        )
-
-        class _StopServe(Exception):
-            pass
-
-        class _FakeMcp:
-            def http_app(self, path, stateless_http):
-                raise _StopServe
-
-        fake_mcp = _FakeMcp()
-        route_calls: list[tuple[object, str]] = []
-        _stub_ha_mcp_surface(monkeypatch, mcp=fake_mcp)
-
-        def _legacy_routes(mcp, server, secret_path="") -> None:
-            route_calls.append((mcp, secret_path))
-
-        sys.modules["ha_mcp.settings_ui"].register_settings_routes = _legacy_routes
-
-        mgr._thread_main("tok")
-
-        assert route_calls == [(fake_mcp, "/private_secret")]
         assert isinstance(mgr._thread_exc, _StopServe)
 
     def test_serve_tolerates_missing_browser_landing_module(

@@ -530,6 +530,20 @@ class TestRouteRegistration:
         assert "/mcp/api/settings/tools" in paths
         assert get_http_settings_prefix() == "/mcp"
 
+    def test_embedded_mount_is_not_advertised(self, monkeypatch):
+        # Embedded runs inside HA Core and has HA-managed settings entry points.
+        # HAOS Core also carries SUPERVISOR_TOKEN, so set both markers to pin the
+        # real deployment shape while keeping the direct settings route mounted.
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(return_value=lambda fn: fn)
+        register_settings_routes(mcp, MagicMock(), secret_path="/private_x")
+        paths = self._collect_paths(mcp)
+        assert "/settings" not in paths
+        assert "/private_x/settings" in paths
+        assert get_http_settings_prefix() is None
+
     def test_no_routes_when_no_addon_and_no_secret(self, monkeypatch):
         # Refuse to mount publicly: no auth → no routes.
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
-from .._version import is_running_in_addon
+from .._version import is_embedded, is_running_in_addon
 from ..transforms import DEFAULT_PINNED_TOOLS
 from ..utils.data_paths import get_data_dir
 from ._handlers_advanced import build_advanced_handlers
@@ -595,11 +595,10 @@ def register_settings_routes(
             nothing rather than expose the routes publicly.
         advertise_prefix: When True (default), record the secret-path mount in
             ``_http_settings_prefix`` for unmanaged HTTP deployments so
-            ``ha_get_overview`` can hint at the settings URL. The add-on never
-            records it because Supervisor ingress supplies an "Open Web UI"
-            entry point. Embedded and OAuth/OIDC modes pass False because they
-            already have a sidebar entry point or use a dedicated settings
-            secret, respectively.
+            ``ha_get_overview`` can hint at the settings URL. Managed add-on
+            and embedded deployments never record it because Home Assistant
+            supplies their settings entry points. OAuth/OIDC callers pass False
+            because they use a dedicated settings secret.
     """
     handlers = build_settings_handlers(server)
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
@@ -706,11 +705,11 @@ def register_settings_routes(
         # need the same secret to reach the UI as they do for the MCP
         # endpoint.
         _mount(secret_prefix)
-        if advertise_prefix and not is_addon:
+        if advertise_prefix and not is_addon and not is_embedded():
             # Record the mount so ha_get_overview can point users at the
             # settings page in unmanaged HTTP transports that have no stdio
-            # sidecar URL file (#1458). The add-on already has Supervisor
-            # ingress discovery; embedded and OAuth/OIDC callers explicitly
-            # suppress advertising as well.
+            # sidecar URL file (#1458). Managed add-on and embedded deployments
+            # already have Home Assistant settings entry points; OAuth/OIDC
+            # callers suppress their dedicated settings secret explicitly.
             global _http_settings_prefix
             _http_settings_prefix = secret_prefix
