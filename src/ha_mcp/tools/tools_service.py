@@ -89,7 +89,8 @@ class BulkControlOperation(TypedDict):
         Annotated[
             int,
             Field(
-                description="Optional per-operation confirmation timeout in seconds."
+                ge=0,
+                description="Optional per-operation confirmation timeout in seconds.",
             ),
         ]
     ]

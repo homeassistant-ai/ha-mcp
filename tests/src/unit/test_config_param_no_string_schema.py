@@ -241,6 +241,7 @@ def test_bulk_operations_schema_names_required_item_fields():
         "validate_first",
     } <= set(item_schema["properties"])
     assert item_schema["additionalProperties"] is False
+    assert item_schema["properties"]["timeout_seconds"]["minimum"] == 0
     assert "service" not in item_schema["properties"]
     assert "domain" not in item_schema["properties"]
     assert "Use action='off', not service='turn_off'" in operations["description"]
@@ -259,3 +260,18 @@ def test_bulk_operations_reject_obsolete_service_keys(obsolete_key: str):
 
     with pytest.raises(ValidationError):
         TypeAdapter(BulkControlOperation).validate_python(operation)
+
+
+def test_bulk_operation_timeout_rejects_negative_and_accepts_zero():
+    """Bulk timeout validation rejects negatives without excluding zero."""
+    from ha_mcp.tools.tools_service import BulkControlOperation
+
+    adapter = TypeAdapter(BulkControlOperation)
+    operation = {"entity_id": "light.kitchen", "action": "off"}
+
+    with pytest.raises(ValidationError):
+        adapter.validate_python({**operation, "timeout_seconds": -1})
+
+    assert adapter.validate_python({**operation, "timeout_seconds": 0})[
+        "timeout_seconds"
+    ] == 0
