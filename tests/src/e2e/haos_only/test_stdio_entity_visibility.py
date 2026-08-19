@@ -4,23 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 import pytest
 import requests
 
-from ha_mcp.visibility.model import VisibilityConfig
-from ha_mcp.visibility.persistence import (
-    load_visibility_config,
-    save_visibility_config,
-)
+from ha_mcp.visibility.persistence import load_visibility_config
 
 from ..utilities.assertions import MCPAssertions, safe_call_tool
 
 pytestmark = pytest.mark.haos_stdio_only
 
+logger = logging.getLogger(__name__)
+
 _HIDDEN_ENTITY = "light.bed_light"
+_SIDECAR_URL_TIMEOUT_SECONDS = 15.0
 
 
 def _visibility_request(
@@ -40,16 +40,29 @@ def _visibility_request(
 
 
 async def _wait_for_settings_url(config_dir: Path) -> str:
+    """Wait for the detached sidecar to atomically publish its settings URL."""
     url_file = config_dir / "ui.url"
-    for _attempt in range(50):
+    deadline = asyncio.get_running_loop().time() + _SIDECAR_URL_TIMEOUT_SECONDS
+    last_missing: FileNotFoundError | None = None
+    last_observation = "not checked"
+    while asyncio.get_running_loop().time() < deadline:
         try:
             url = url_file.read_text(encoding="utf-8").strip()
-        except OSError:
+        except FileNotFoundError as exc:
+            last_missing = exc
             url = ""
+            last_observation = repr(exc)
+            logger.debug("Waiting for stdio sidecar URL at %s: %s", url_file, exc)
         if url:
             return url
+        if last_missing is None:
+            last_observation = "file exists but is empty"
         await asyncio.sleep(0.1)
-    raise AssertionError(f"stdio sidecar did not publish {url_file.name}")
+    raise AssertionError(
+        "stdio sidecar did not publish a non-empty URL at "
+        f"{url_file} within {_SIDECAR_URL_TIMEOUT_SECONDS:.0f}s; "
+        f"last observation: {last_observation}"
+    )
 
 
 async def test_stdio_sidecar_config_drives_real_visibility_middleware(
@@ -57,9 +70,12 @@ async def test_stdio_sidecar_config_drives_real_visibility_middleware(
     haos_stdio_config_dir: Path,
 ) -> None:
     """Prove UI persistence, HA REST/WS resolution, and report-tool policy."""
-    settings_url = await _wait_for_settings_url(haos_stdio_config_dir)
+    settings_url: str | None = None
+    original_config: dict[str, Any] | None = None
+    config_changed = False
 
     try:
+        settings_url = await _wait_for_settings_url(haos_stdio_config_dir)
         async with MCPAssertions(mcp_client) as mcp:
             # Seed the subprocess usage log with the entity id. report_issue's
             # recent_logs field makes the later outbound-policy assertion
@@ -67,6 +83,7 @@ async def test_stdio_sidecar_config_drives_real_visibility_middleware(
             await mcp.call_tool_success("ha_get_state", {"entity_id": _HIDDEN_ENTITY})
 
             current = await asyncio.to_thread(_visibility_request, settings_url, "GET")
+            original_config = dict(current)
             saved = await asyncio.to_thread(
                 _visibility_request,
                 settings_url,
@@ -80,6 +97,7 @@ async def test_stdio_sidecar_config_drives_real_visibility_middleware(
                     "restrict_report_issue": False,
                 },
             )
+            config_changed = True
             persisted = load_visibility_config(haos_stdio_config_dir)
             assert persisted.version == saved["version"]
             assert persisted.deny_entity_ids == [_HIDDEN_ENTITY]
@@ -97,38 +115,51 @@ async def test_stdio_sidecar_config_drives_real_visibility_middleware(
 
             report = await mcp.call_tool_success(
                 "ha_report_issue",
-                {"tool_call_count": 2, "fields": ["recent_logs"]},
+                {"tool_call_count": 16, "fields": ["recent_logs"]},
             )
             assert _HIDDEN_ENTITY in json.dumps(report), report
 
-            restricted_current = await asyncio.to_thread(
+            unrestricted_report_config = await asyncio.to_thread(
                 _visibility_request, settings_url, "GET"
             )
-            assert restricted_current["enabled"] is True
-            assert restricted_current["enforce"] is True
-            assert restricted_current["deny_entity_ids"] == [_HIDDEN_ENTITY]
+            assert unrestricted_report_config["enabled"] is True
+            assert unrestricted_report_config["enforce"] is True
+            assert unrestricted_report_config["deny_entity_ids"] == [_HIDDEN_ENTITY]
 
             await asyncio.to_thread(
                 _visibility_request,
                 settings_url,
                 "PUT",
                 {
-                    **restricted_current,
+                    **unrestricted_report_config,
                     "restrict_report_issue": True,
                 },
             )
             restricted_report = await safe_call_tool(
                 mcp_client,
                 "ha_report_issue",
-                {"tool_call_count": 2, "fields": ["recent_logs"]},
+                {"tool_call_count": 16, "fields": ["recent_logs"]},
             )
             assert restricted_report["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED", (
                 restricted_report
             )
+            assert "would include an entity restricted" in restricted_report["error"][
+                "message"
+            ], restricted_report
     finally:
         # Session-scoped stdio clients are shared by many tests on this worker;
-        # always restore no-op visibility even when an API assertion fails.
-        save_visibility_config(
-            haos_stdio_config_dir,
-            VisibilityConfig(enabled=False, enforce=False, exclude_categories=[]),
-        )
+        # restore the exact prior config through the same version-checked sidecar
+        # API the test exercises, so cleanup cannot rewind the on-disk version.
+        if settings_url is not None and original_config is not None and config_changed:
+            latest = await asyncio.to_thread(
+                _visibility_request, settings_url, "GET"
+            )
+            await asyncio.to_thread(
+                _visibility_request,
+                settings_url,
+                "PUT",
+                {
+                    **original_config,
+                    "version": latest["version"],
+                },
+            )

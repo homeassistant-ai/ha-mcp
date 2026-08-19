@@ -26,6 +26,7 @@ from ha_mcp.settings_ui import (
     build_settings_handlers,
     dump_tool_metadata_cache,
     load_tool_metadata_cache,
+    register_settings_routes,
 )
 
 
@@ -263,6 +264,41 @@ class TestReadSidecarUrl:
     def test_returns_none_when_file_empty(self, tmp_data_dir: Path) -> None:
         (tmp_data_dir / "ui.url").write_text("")
         assert sidecar.read_sidecar_url() is None
+
+
+class TestRetireSidecar:
+    """The public cleanup helper makes detached-listener failures observable."""
+
+    def test_missing_url_file_is_debug_logged(
+        self, tmp_data_dir: Path, caplog
+    ) -> None:
+        with caplog.at_level("DEBUG", logger="ha_mcp.stdio_settings_sidecar"):
+            acknowledged = sidecar.retire_sidecar(tmp_data_dir)
+
+        assert acknowledged is False
+        assert any(
+            str(tmp_data_dir / "ui.url") in record.message
+            and "not found" in record.message
+            for record in caplog.records
+        ), [record.message for record in caplog.records]
+
+    def test_unacknowledged_retirement_names_target_and_consequence(
+        self, tmp_data_dir: Path, caplog
+    ) -> None:
+        url = "http://127.0.0.1:54321/private_cleanup/settings"
+        (tmp_data_dir / "ui.url").write_text(url)
+
+        with (
+            patch.object(sidecar, "_post_shutdown", return_value=(False, None)),
+            caplog.at_level("WARNING", logger="ha_mcp.stdio_settings_sidecar"),
+        ):
+            acknowledged = sidecar.retire_sidecar(tmp_data_dir)
+
+        assert acknowledged is False
+        messages = [record.message for record in caplog.records]
+        assert any(url in message for message in messages), messages
+        assert any(str(tmp_data_dir) in message for message in messages), messages
+        assert any("may still be running" in message for message in messages), messages
 
 
 class TestPidLiveness:
@@ -2568,6 +2604,59 @@ class TestVisibilityHandlers:
         resp = self._client().put("/api/visibility/config", json={"version": "abc"})
         assert resp.status_code == 400
 
+    def test_put_holds_the_cross_process_lock(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The sidecar visibility compare-and-save must be one locked CAS."""
+        import contextlib
+
+        import ha_mcp.utils.config_write_lock as cwl
+        from ha_mcp.visibility import persistence
+
+        events: list[str] = []
+
+        @contextlib.contextmanager
+        def _recording_lock(data_dir: Path | None = None) -> Any:
+            events.append("acquire")
+            try:
+                yield
+            finally:
+                events.append("release")
+
+        def _recording_save(data_dir: Path, config: Any) -> None:
+            events.append("save")
+            real_save(data_dir, config)
+
+        real_save = persistence.save_visibility_config
+        monkeypatch.setattr(cwl, "config_file_lock", _recording_lock)
+        monkeypatch.setattr(
+            persistence, "save_visibility_config", _recording_save
+        )
+
+        handlers = build_settings_handlers(server=None)
+        app = Starlette(
+            routes=[
+                Route(
+                    "/api/visibility/config",
+                    handlers["visibility_put_config"],
+                    methods=["PUT"],
+                )
+            ]
+        )
+        resp = TestClient(app).put(
+            "/api/visibility/config",
+            json={
+                "version": 1,
+                "enabled": True,
+                "deny_entity_ids": ["light.x"],
+            },
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert events == ["acquire", "save", "release"], (
+            f"the save must happen inside the file lock; got {events}"
+        )
+
 
 class TestSidecarVisibilityRouteTable:
     """The real stdio sidecar app must mount the shared visibility handlers."""
@@ -2596,6 +2685,51 @@ class TestSidecarVisibilityRouteTable:
         current = client.get(f"{prefix}/api/visibility/config").json()
         assert current["deny_entity_ids"] == ["light.bed_light"]
         assert current["restrict_report_issue"] is True
+
+    def test_sidecar_routes_match_shared_settings_surface(
+        self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every shared route except restart must be reachable in stdio mode."""
+        prefix = "/private_route_parity"
+        registered: set[tuple[str, frozenset[str]]] = set()
+
+        def _record_route(path: str, methods: list[str]):
+            registered.add((path, frozenset(methods)))
+
+            def _decorator(handler):
+                return handler
+
+            return _decorator
+
+        mcp = MagicMock()
+        mcp.custom_route = _record_route
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+
+        from ha_mcp import settings_ui
+
+        monkeypatch.setattr(settings_ui, "_http_settings_mounted", False)
+        register_settings_routes(mcp, None, secret_path=prefix)
+
+        app = sidecar._build_app("127.0.0.1", 47653, prefix)
+        mounted = {
+            (
+                route.path,
+                frozenset((route.methods or set()) - {"HEAD"}),
+            )
+            for route in app.routes
+            if isinstance(route, Route)
+        }
+        restart = (f"{prefix}/api/settings/restart", frozenset({"POST"}))
+        shutdown = (
+            f"{prefix}/api/settings/shutdown",
+            frozenset({"POST"}),
+        )
+
+        assert mounted - {shutdown} == registered - {restart}, (
+            "stdio sidecar settings routes drifted from the shared HTTP surface; "
+            f"missing={sorted((registered - {restart}) - mounted)!r}, "
+            f"extra={sorted((mounted - {shutdown}) - registered)!r}"
+        )
 
 
 class TestEmbeddedRestart:
