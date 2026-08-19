@@ -3430,10 +3430,11 @@ class SearchTools:
         minimize the response) but only when the sidecar URL file
         actually exists.
 
-        In standalone HTTP / Docker modes there is no sidecar URL file and the
-        server can't know its externally reachable host, so the response
-        instead carries a ``settings_url_hint`` string telling the user where
-        the page is mounted and to read the full URL from the startup logs.
+        In standalone HTTP / Docker modes, when an HTTP settings prefix is
+        advertised, there is no sidecar URL file and the server can't know its
+        externally reachable host. The response instead carries a
+        ``settings_url_hint`` string telling the user where the page is mounted
+        and how to find or construct the full URL.
         Hand whichever of the two fields is present to the user.
 
         The response also carries an ``ha_mcp_update`` object
@@ -3524,8 +3525,10 @@ class SearchTools:
                     "The settings page (enable/disable/pin tools, feature "
                     "flags, advanced settings, backups, tool-approval) is "
                     f"served at '{settings_path}' on this MCP server. Find the "
-                    "full URL in the ha-mcp startup logs, or append it to the "
-                    "base URL your client connects to."
+                    "full URL in the ha-mcp startup logs. For a direct connection, "
+                    "use the MCP endpoint's scheme, host, and port with this "
+                    "settings path (replace the endpoint path rather than "
+                    "appending to it)."
                 )
 
         # Surface Read Only Mode after projection so the flag survives any

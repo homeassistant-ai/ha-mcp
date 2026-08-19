@@ -595,8 +595,8 @@ def register_settings_routes(
             nothing rather than expose the routes publicly.
         advertise_prefix: When True (default), record the secret-path mount in
             ``_http_settings_prefix`` for unmanaged HTTP deployments so
-            ``ha_get_overview`` can hint at the settings URL. Managed add-on
-            and embedded deployments never record it because Home Assistant
+            ``ha_get_overview`` can hint at the settings URL. The managed app
+            (add-on) and embedded deployments never record it because Home Assistant
             supplies their settings entry points. OAuth/OIDC callers pass False
             because they use a dedicated settings secret.
     """
@@ -713,7 +713,7 @@ def register_settings_routes(
         if advertise_prefix and not is_addon and not is_embedded():
             # Record the mount so ha_get_overview can point users at the
             # settings page in unmanaged HTTP transports that have no stdio
-            # sidecar URL file (#1458). Managed add-on and embedded deployments
+            # sidecar URL file (#1458). The managed app (add-on) and embedded deployments
             # already have Home Assistant settings entry points; OAuth/OIDC
             # callers suppress their dedicated settings secret explicitly.
             _http_settings_prefix = secret_prefix

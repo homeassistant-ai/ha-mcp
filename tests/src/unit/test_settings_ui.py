@@ -514,7 +514,7 @@ class TestRouteRegistration:
         assert "/settings" in paths
         assert "/private_x/settings" in paths
         assert "/private_x/api/settings/tools" in paths
-        # Add-on users already have Supervisor ingress's "Open Web UI" button,
+        # App (add-on) users already have Supervisor ingress's "Open Web UI" button,
         # so ha_get_overview must not hand MCP clients the alternate direct-path
         # credential just to advertise a redundant settings-page route (#2236).
         assert get_http_settings_prefix() is None
@@ -569,11 +569,12 @@ class TestRouteRegistration:
         assert mcp.custom_route.call_count == 0
         assert get_http_settings_prefix() is None
 
-    def test_advertise_prefix_false_mounts_but_does_not_record(self, monkeypatch):
+    def test_advertise_prefix_false_clears_stale_hint_but_mounts(self, monkeypatch):
         # OAuth/OIDC dedicated-secret mount: routes are served, but the secret
         # prefix must NOT be recorded — otherwise ha_get_overview would leak it
         # to every connected MCP client (GHSA-mx64-982r-65vg).
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", "/stale")
         mcp = MagicMock()
         mcp.custom_route = MagicMock(return_value=lambda fn: fn)
         register_settings_routes(
