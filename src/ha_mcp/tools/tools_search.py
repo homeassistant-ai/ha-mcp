@@ -2207,6 +2207,10 @@ class SearchTools:
                 outcome, Exception
             ):
                 raise outcome
+            # ToolError is an intentional public validation/security failure,
+            # not a degraded backend surface. Preserve its MCP isError semantics.
+            if isinstance(outcome, ToolError):
+                raise outcome
             if isinstance(outcome, Exception):
                 partial = True
                 errors.append({"surface": label, "error": str(outcome)})

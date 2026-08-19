@@ -361,6 +361,7 @@ class ListingModeClient(RoutingClient):
 
     def __init__(self) -> None:
         super().__init__()
+        self.floor_rows: list[dict[str, Any]] = []
         self.registry_with_area = {
             "success": True,
             "result": [
@@ -387,7 +388,7 @@ class ListingModeClient(RoutingClient):
             }
         if msg_type == "config/floor_registry/list":
             self.ws_types[msg_type] += 1
-            return {"success": True, "result": []}
+            return {"success": True, "result": self.floor_rows}
         if msg_type == "config/entity_registry/list":
             self.ws_types[msg_type] += 1
             return self.registry_with_area
@@ -652,6 +653,25 @@ class TestListingModesBypassComponent:
         assert not ws.send_command.await_count, (
             "component must not be consulted for area-scoped queries"
         )
+
+    @pytest.mark.asyncio
+    async def test_floor_filter_tool_error_propagates_from_public_ha_search(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A floor passed as area_filter is a hard validation error, not partial."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        client = ListingModeClient()
+        client.floor_rows = [
+            {"floor_id": "sous_sol", "name": "Sous-sol", "aliases": ["Basement"]}
+        ]
+        ha_search = _build_ha_search(client)
+        ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result={})
+
+        with patch_ws(ws, tools_search), pytest.raises(ToolError) as excinfo:
+            await ha_search(area_filter="Sous-sol", domain_filter="light")
+
+        assert "identifies floor 'Sous-sol', not an area" in str(excinfo.value)
+        assert not ws.send_command.await_count
 
     @pytest.mark.asyncio
     async def test_state_filter_only_bypasses_component(
