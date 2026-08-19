@@ -502,7 +502,9 @@ class TestRouteRegistration:
         return [call.args[0] for call in mcp.custom_route.call_args_list]
 
     def test_registers_root_in_addon_mode(self, monkeypatch):
+        monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", "/stale")
         mcp = MagicMock()
         mcp.custom_route = MagicMock(return_value=lambda fn: fn)
         register_settings_routes(mcp, MagicMock(), secret_path="/private_x")
@@ -518,6 +520,7 @@ class TestRouteRegistration:
         assert get_http_settings_prefix() is None
 
     def test_secret_path_only_when_not_addon(self, monkeypatch):
+        monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         mcp = MagicMock()
         mcp.custom_route = MagicMock(return_value=lambda fn: fn)
@@ -536,6 +539,7 @@ class TestRouteRegistration:
         # real deployment shape while keeping the direct settings route mounted.
         monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", "/stale")
         mcp = MagicMock()
         mcp.custom_route = MagicMock(return_value=lambda fn: fn)
         register_settings_routes(mcp, MagicMock(), secret_path="/private_x")
