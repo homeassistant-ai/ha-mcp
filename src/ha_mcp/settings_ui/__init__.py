@@ -559,48 +559,6 @@ def is_http_settings_mounted() -> bool:
     return _http_settings_mounted
 
 
-# Shared route contract for the HTTP server and stdio sidecar. Methods are tuples
-# so the table is immutable; each transport converts them to its framework's form.
-SETTINGS_ROUTE_SPECS: tuple[tuple[str, tuple[str, ...], str], ...] = (
-    ("/settings", ("GET",), "settings_page"),
-    ("/api/settings/tools", ("GET",), "get_tools"),
-    ("/api/settings/tools", ("POST",), "save_tools"),
-    ("/api/settings/restart", ("POST",), "restart_addon"),
-    ("/api/settings/info", ("GET",), "settings_info"),
-    ("/api/settings/features", ("GET",), "get_feature_flags"),
-    ("/api/settings/features", ("POST",), "save_feature_flags"),
-    # Theme / accessibility prefs (#1574 review).
-    ("/api/settings/theme", ("GET",), "get_theme_prefs"),
-    ("/api/settings/theme", ("POST",), "save_theme_prefs"),
-    # Advanced settings endpoints.
-    ("/api/settings/advanced", ("GET",), "get_advanced_settings"),
-    ("/api/settings/advanced", ("POST",), "save_advanced_settings"),
-    # Auto-backup endpoints (#1288).
-    ("/api/settings/backups", ("GET",), "list_backups"),
-    ("/api/settings/backups", ("DELETE",), "delete_backups_bulk"),
-    ("/api/settings/backups/{name}", ("GET",), "view_backup"),
-    ("/api/settings/backups/{name}/diff", ("GET",), "diff_backup"),
-    ("/api/settings/backups/{name}/restore", ("POST",), "restore_backup"),
-    ("/api/settings/backups/{name}", ("DELETE",), "delete_backup"),
-    ("/api/settings/backup-config", ("GET",), "get_backup_config"),
-    ("/api/settings/backup-config", ("POST",), "save_backup_config"),
-    # Custom filesystem directories (issue #1567).
-    ("/api/settings/fs-custom-paths", ("GET",), "get_fs_custom_paths"),
-    ("/api/settings/fs-custom-paths", ("POST",), "save_fs_custom_paths"),
-    # Tool security policies endpoints (#966).
-    ("/api/policy/config", ("GET",), "policy_get_config"),
-    ("/api/policy/config", ("PUT",), "policy_put_config"),
-    ("/api/policy/pending", ("GET",), "policy_get_pending"),
-    ("/api/policy/approve", ("POST",), "policy_post_approve"),
-    ("/api/policy/deny", ("POST",), "policy_post_deny"),
-    ("/api/policy/tool-schema", ("GET",), "policy_get_tool_schema"),
-    ("/api/policy/value-source", ("GET",), "policy_get_value_source"),
-    # Entity visibility filter endpoints (issue #1728).
-    ("/api/visibility/config", ("GET",), "visibility_get_config"),
-    ("/api/visibility/config", ("PUT",), "visibility_put_config"),
-)
-
-
 def register_settings_routes(
     mcp: FastMCP,
     server: HomeAssistantSmartMCPServer,
@@ -672,20 +630,64 @@ def register_settings_routes(
     global _http_settings_mounted
     _http_settings_mounted = True
 
-    # The shared table is also consumed by the stdio sidecar. The frontend uses
-    # relative fetches, so the same paths work under every transport prefix.
-    # Add-on mode mounts the table at root for ingress and HTTP modes mount it
-    # under their secret path.
+    # Every route this function mounts except the add-on-only root mount is defined
+    # once in this table and mounted under each active prefix below: at root
+    # in add-on mode (so HA ingress can proxy localhost:9583/), and under the
+    # secret path when one is set (Docker / standalone direct access). A
+    # deployment hits either, both, or — guarded above — neither. Deriving
+    # the mounts from one table keeps them from drifting; the frontend uses
+    # relative fetches (./api/settings/...) so the handlers work at any prefix.
+    routes: list[tuple[str, list[str], str]] = [
+        ("/settings", ["GET"], "settings_page"),
+        ("/api/settings/tools", ["GET"], "get_tools"),
+        ("/api/settings/tools", ["POST"], "save_tools"),
+        ("/api/settings/restart", ["POST"], "restart_addon"),
+        ("/api/settings/info", ["GET"], "settings_info"),
+        ("/api/settings/features", ["GET"], "get_feature_flags"),
+        ("/api/settings/features", ["POST"], "save_feature_flags"),
+        # Theme / accessibility prefs (#1574 review) — server-side copy so
+        # they survive a stdio sidecar origin change (stable by default
+        # since #2131, but fresh on first spawn / lost ui.state / pin
+        # change / taken remembered port)
+        ("/api/settings/theme", ["GET"], "get_theme_prefs"),
+        ("/api/settings/theme", ["POST"], "save_theme_prefs"),
+        # Advanced settings endpoints
+        ("/api/settings/advanced", ["GET"], "get_advanced_settings"),
+        ("/api/settings/advanced", ["POST"], "save_advanced_settings"),
+        # Auto-backup endpoints (#1288)
+        ("/api/settings/backups", ["GET"], "list_backups"),
+        ("/api/settings/backups", ["DELETE"], "delete_backups_bulk"),
+        ("/api/settings/backups/{name}", ["GET"], "view_backup"),
+        ("/api/settings/backups/{name}/diff", ["GET"], "diff_backup"),
+        ("/api/settings/backups/{name}/restore", ["POST"], "restore_backup"),
+        ("/api/settings/backups/{name}", ["DELETE"], "delete_backup"),
+        ("/api/settings/backup-config", ["GET"], "get_backup_config"),
+        ("/api/settings/backup-config", ["POST"], "save_backup_config"),
+        # Custom filesystem directories (issue #1567) — component-owned list
+        ("/api/settings/fs-custom-paths", ["GET"], "get_fs_custom_paths"),
+        ("/api/settings/fs-custom-paths", ["POST"], "save_fs_custom_paths"),
+        # Tool security policies endpoints
+        ("/api/policy/config", ["GET"], "policy_get_config"),
+        ("/api/policy/config", ["PUT"], "policy_put_config"),
+        ("/api/policy/pending", ["GET"], "policy_get_pending"),
+        ("/api/policy/approve", ["POST"], "policy_post_approve"),
+        ("/api/policy/deny", ["POST"], "policy_post_deny"),
+        ("/api/policy/tool-schema", ["GET"], "policy_get_tool_schema"),
+        ("/api/policy/value-source", ["GET"], "policy_get_value_source"),
+        # Entity visibility filter endpoints (issue #1728)
+        ("/api/visibility/config", ["GET"], "visibility_get_config"),
+        ("/api/visibility/config", ["PUT"], "visibility_put_config"),
+    ]
 
     def _mount(prefix: str, *, guard: bool = False) -> None:
         # guard=True wraps each handler in _ingress_only so the route only
         # answers HA ingress (the Supervisor) — used for the add-on root
         # mount, whose port 9583 is reachable without the MCP secret.
-        for path, methods, handler_key in SETTINGS_ROUTE_SPECS:
+        for path, methods, handler_key in routes:
             handler = handlers[handler_key]
             if guard:
                 handler = _ingress_only(handler)
-            mcp.custom_route(f"{prefix}{path}", methods=list(methods))(handler)
+            mcp.custom_route(f"{prefix}{path}", methods=methods)(handler)
 
     if is_addon:
         # Root mount lets HA ingress proxy localhost:9583/ → the settings UI

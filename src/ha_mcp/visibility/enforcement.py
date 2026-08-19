@@ -46,7 +46,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
@@ -262,14 +262,7 @@ def _coerce_arguments(arguments: Any) -> dict[str, Any] | None:
     return None
 
 
-class _EffectiveToolCall(NamedTuple):
-    """The tool and arguments whose behavior the middleware must enforce."""
-
-    name: str
-    arguments: dict[str, Any]
-
-
-def _unwrap_proxy_call(args: dict[str, Any]) -> _EffectiveToolCall | None:
+def _unwrap_proxy_call(args: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     """Extract the innermost proxy target and arguments, or None if unusable.
 
     Mirrors ``ReadOnlyMiddleware._unwrap_proxy_call``: the dispatching call proxies
@@ -294,10 +287,10 @@ def _unwrap_proxy_call(args: dict[str, Any]) -> _EffectiveToolCall | None:
         arguments = _coerce_arguments(arguments.get("arguments"))
     if arguments is None:
         return None
-    return _EffectiveToolCall(name, arguments)
+    return name, arguments
 
 
-def _effective_tool_call(name: str, args: dict[str, Any]) -> _EffectiveToolCall:
+def _effective_tool_call(name: str, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     """Resolve a dispatching proxy to the call that will actually execute.
 
     Search is a meta-tool but not a dispatcher, so its incidental ``name`` key
@@ -307,9 +300,9 @@ def _effective_tool_call(name: str, args: dict[str, Any]) -> _EffectiveToolCall:
     """
     name = current_tool_name(name)
     if name not in CALL_PROXY_META_TOOLS:
-        return _EffectiveToolCall(name, args)
+        return name, args
     inner = _unwrap_proxy_call(args)
-    return inner if inner is not None else _EffectiveToolCall(name, args)
+    return inner if inner is not None else (name, args)
 
 
 def _config_cache_key(config: VisibilityConfig) -> str:
@@ -418,43 +411,44 @@ class VisibilityInboundEnforcement(_VisibilityEnforcementBase):
     ) -> Any:
         name = context.message.name
         args = context.message.arguments or {}
-        effective = _effective_tool_call(name, args)
-        config = await self._active_config(effective.name)
+        effective_name, effective_args = _effective_tool_call(name, args)
+        config = await self._active_config(effective_name)
         if config is None:
             return await call_next(context)
 
-        reason = _unscannable_reason(effective.name, effective.arguments)
+        reason = _unscannable_reason(effective_name, effective_args)
         if reason is not None:
             logger.info(
-                "visibility enforce: refused unscannable call to %s", effective.name
+                "visibility enforce: refused unscannable call to %s", effective_name
             )
-            _raise_enforced(effective.name, reason)
+            _raise_enforced(effective_name, reason)
 
         try:
             hidden, regex = await self._hidden_and_regex(config)
         except VisibilityDataUnavailable:
-            _raise_enforced(effective.name, _FAIL_CLOSED_REASON)
+            _raise_enforced(effective_name, _FAIL_CLOSED_REASON)
 
-        self._scan_inbound(
-            effective.name, effective.arguments, args, hidden, regex
-        )
+        self._scan_inbound(effective_name, name, args, hidden, regex)
         return await call_next(context)
 
     def _scan_inbound(
         self,
         name: str,
-        effective_args: dict[str, Any],
-        raw_args: dict[str, Any],
+        outer_name: str,
+        args: dict[str, Any],
         hidden: set[str],
         regex: re.Pattern[str] | None,
     ) -> None:
         """Conceal on an exact hidden-id argument; refuse on an embedded one."""
-        exact, embedded = _scan_value(effective_args, hidden, regex)
-        if effective_args is not raw_args:
-            # Scan the envelope too: its metadata can itself name a hidden entity.
-            raw_exact, raw_embedded = _scan_value(raw_args, hidden, regex)
-            exact = exact or raw_exact
-            embedded = embedded or raw_embedded
+        exact: str | None = None
+        embedded = False
+        if current_tool_name(outer_name) in CALL_PROXY_META_TOOLS:
+            inner = _unwrap_proxy_call(args)
+            if inner is not None:
+                exact, embedded = _scan_value(inner[1], hidden, regex)
+        raw_exact, raw_embedded = _scan_value(args, hidden, regex)
+        exact = exact or raw_exact
+        embedded = embedded or raw_embedded
         if exact is not None:
             logger.info("visibility enforce: concealed hidden entity in %s call", name)
             _conceal_as_not_found(exact)
@@ -475,16 +469,16 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
     ) -> Any:
         name = context.message.name
         args = context.message.arguments or {}
-        effective = _effective_tool_call(name, args)
-        config = await self._active_config(effective.name)
+        effective_name, _effective_args = _effective_tool_call(name, args)
+        config = await self._active_config(effective_name)
         if config is None:
             return await call_next(context)
         try:
             _hidden, regex = await self._hidden_and_regex(config)
         except VisibilityDataUnavailable:
-            _raise_enforced(effective.name, _FAIL_CLOSED_REASON)
+            _raise_enforced(effective_name, _FAIL_CLOSED_REASON)
         return await self._call_and_scan_outbound(
-            effective.name, context, call_next, regex
+            effective_name, context, call_next, regex
         )
 
     async def _call_and_scan_outbound(

@@ -48,10 +48,12 @@ from contextlib import suppress
 from pathlib import Path
 
 import pytest
+from fastmcp import Client
+from fastmcp.client.transports import StdioTransport
 
 from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX
 
-from ...conftest import TEST_TOKEN, _stdio_client_session
+from ...conftest import TEST_TOKEN, _retire_stdio_sidecar, _stdio_env
 from ...utilities.wait_helpers import wait_for_condition
 
 logger = logging.getLogger(__name__)
@@ -66,22 +68,28 @@ async def test_stdio_launcher_runs_the_startup_nudge(
 
     container_info = ha_container_with_fresh_config
 
-    # The shared lifecycle helper supplies the exact stdio fixture environment and
-    # retires the detached settings sidecar. Its explicit env intentionally omits
-    # HA_MCP_DISABLE_UPDATE_CHECK, which would return the nudge early.
+    # Use the same explicit environment as the stdio fixtures, plus this test's
+    # config dir. HA_MCP_DISABLE_UPDATE_CHECK is intentionally absent because it
+    # would return the nudge early.
+    env = _stdio_env(container_info, tmp_path)
+    transport = StdioTransport(command="ha-mcp", args=[], env=env, keep_alive=False)
+    client = Client(transport)
 
     def marker_files():
         return list(tmp_path.glob(f"{MARKER_FILENAME_PREFIX}_*.json"))
 
-    async with _stdio_client_session(container_info, tmp_path):
-        # Poll INSIDE the client context: leaving it terminates the subprocess,
-        # and the lifespan cancels the nudge task on the way out.
-        found = await wait_for_condition(
-            marker_files,
-            timeout=30,
-            condition_name="HACS refresh marker written by the stdio launcher",
-        )
-        markers = marker_files()
+    try:
+        async with client:
+            # Poll INSIDE the client context: leaving it terminates the subprocess,
+            # and the lifespan cancels the nudge task on the way out.
+            found = await wait_for_condition(
+                marker_files,
+                timeout=30,
+                condition_name="HACS refresh marker written by the stdio launcher",
+            )
+            markers = marker_files()
+    finally:
+        await _retire_stdio_sidecar(tmp_path)
 
     assert found, (
         "No HACS refresh marker appeared in the subprocess data dir within 30s "

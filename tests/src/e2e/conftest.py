@@ -32,7 +32,6 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -90,26 +89,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from test_constants import HA_TEST_IMAGE, TEST_PASSWORD, TEST_TOKEN, TEST_USER
 
 # Configure logging for tests
-
-# Every E2E server surface receives the same feature flags. The stdio client
-# receives an explicit environment rather than inheriting the pytest process, so
-# this single table prevents the subprocess and in-process paths from drifting.
-_E2E_FEATURE_FLAG_ENV = {
-    # Beta master plus all packages/*.yaml sub-toggles.
-    "ENABLE_BETA_FEATURES": "true",
-    "ENABLE_YAML_CONFIG_EDITING": "true",
-    "ENABLE_YAML_PACKAGES_AUTOMATION": "true",
-    "ENABLE_YAML_PACKAGES_SCRIPT": "true",
-    "ENABLE_YAML_PACKAGES_SCENE": "true",
-    "HAMCP_ENABLE_FILESYSTEM_TOOLS": "true",
-    # Non-built-in YAML write key used by the success-path coverage (#1887).
-    "HA_MCP_EXTRA_YAML_KEYS": "alert2",
-    # Strict BPS defaults on with its parent; the dedicated #1779 test enables it.
-    "ENABLE_STRICT_MANDATORY_BPS": "false",
-    # Production defaults snapshot deletion off; disposable E2E HA may exercise it.
-    "ENABLE_SNAPSHOT_DELETE": "true",
-}
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -1799,7 +1778,9 @@ def _haos_worker_setup(base_image_path: Path) -> Path:
     return overlay_path
 
 
-def _prepare_haos_image(base_image_path: Path, backend: str) -> Path:
+def _prepare_haos_image(
+    base_image_path: Path, inaddon: bool, haos_embedded: bool, haos_stdio: bool
+) -> Path:
     """Set up the per-worker qcow2 overlay and stage all pre-boot mutations."""
     # Per-worker port + overlay setup for pytest-xdist parallel HAOS
     # (#1350). Single-worker runs short-circuit and reuse the base
@@ -1807,7 +1788,13 @@ def _prepare_haos_image(base_image_path: Path, backend: str) -> Path:
     image_path = _haos_worker_setup(base_image_path)
     logger.info(
         "HAOS backend selected (mode=%s) — booting qcow2 at %s",
-        backend.removeprefix("haos_") if backend != "haos" else "external",
+        (
+            "inaddon"
+            if inaddon
+            else "embedded"
+            if haos_embedded
+            else "stdio" if haos_stdio else "external"
+        ),
         image_path,
     )
     # Shift the baked recorder timestamps forward so seeded rows fall
@@ -1838,7 +1825,7 @@ def _prepare_haos_image(base_image_path: Path, backend: str) -> Path:
     # their only embedded consumer is the smoke test, which needs no overrides.
     # Hard-raises on failure (unlike the best-effort wheel staging): the suite
     # depends on these overrides, so a delivery failure should fail setup loudly.
-    if backend == "haos_embedded":
+    if haos_embedded:
         stage_embedded_server_feature_flags_in_qcow2(
             image_path, _EMBEDDED_FEATURE_FLAGS
         )
@@ -1851,7 +1838,7 @@ def _prepare_haos_image(base_image_path: Path, backend: str) -> Path:
     # source + bump config.yaml version so Supervisor detects an
     # update-available on next boot. The Supervisor WS API trigger
     # below applies it via Docker layer cache (#1349 item 7).
-    if backend == "haos_inaddon":
+    if inaddon:
         refresh_dev_addon_source_in_qcow2(image_path)
     return image_path
 
@@ -1958,7 +1945,27 @@ def _haos_post_boot_setup(base_url: str, request) -> tuple[str, dict]:
     # ensures the WebSocket pool and settings pick up the HAOS URL.
     os.environ["HOMEASSISTANT_URL"] = base_url
     os.environ["HOMEASSISTANT_TOKEN"] = token
-    os.environ.update(_E2E_FEATURE_FLAG_ENV)
+    # Beta sub-flags require the master to be on too.
+    os.environ["ENABLE_BETA_FEATURES"] = "true"
+    os.environ["ENABLE_YAML_CONFIG_EDITING"] = "true"
+    # Per-key sub-toggles default OFF; the E2E suite covers the
+    # whole packages/*.yaml surface so enable all three.
+    os.environ["ENABLE_YAML_PACKAGES_AUTOMATION"] = "true"
+    os.environ["ENABLE_YAML_PACKAGES_SCRIPT"] = "true"
+    os.environ["ENABLE_YAML_PACKAGES_SCENE"] = "true"
+    os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
+    # Operator extra YAML write keys (#1887): widen the allowlist with a
+    # single non-built-in key so the success-path write test has a key to
+    # exercise. Value mirrors _EMBEDDED_FEATURE_FLAGS["extra_yaml_write_keys"].
+    os.environ["HA_MCP_EXTRA_YAML_KEYS"] = "alert2"
+    # Strict best-practices gate (#1779) defaults ON with its parent;
+    # pin it OFF so the suite's keyless writes aren't hard-blocked. The
+    # strict-gate e2e test builds its own server with the flag enabled.
+    os.environ["ENABLE_STRICT_MANDATORY_BPS"] = "false"
+    # Snapshot deletion (#1861) defaults OFF in production; enabled
+    # here so the e2e suite can cover the (snapshot, delete) guard
+    # chain against a disposable test HAOS instance.
+    os.environ["ENABLE_SNAPSHOT_DELETE"] = "true"
     _reset_ha_in_process_caches()
     haos_headers = {"Authorization": f"Bearer {token}"}
     _wait_for_haos_sun_ready(base_url, haos_headers)
@@ -2541,15 +2548,9 @@ def ha_container_with_fresh_config(request):
         inaddon = is_haos_inaddon_mode()
         haos_embedded = is_haos_embedded_mode()
         haos_stdio = is_haos_stdio_mode()
-        if inaddon:
-            backend = "haos_inaddon"
-        elif haos_embedded:
-            backend = "haos_embedded"
-        elif haos_stdio:
-            backend = "haos_stdio"
-        else:
-            backend = "haos"
-        image_path = _prepare_haos_image(base_image_path, backend)
+        image_path = _prepare_haos_image(
+            base_image_path, inaddon, haos_embedded, haos_stdio
+        )
         with boot_haos_qemu(image_path) as base_url:
             token, blueprint_for_haos = _haos_post_boot_setup(base_url, request)
             # Pull setup-time work INTO the try/finally so post-mortem log
@@ -2574,7 +2575,15 @@ def ha_container_with_fresh_config(request):
                     # → addon_mcp_url), haos_embedded (mcp_client →
                     # embedded_webhook_url), and external (in-process FastMCP
                     # server pointing at base_url).
-                    "backend": backend,
+                    "backend": (
+                        "haos_inaddon"
+                        if inaddon
+                        else "haos_embedded"
+                        if haos_embedded
+                        else "haos_stdio"
+                        if haos_stdio
+                        else "haos"
+                    ),
                     # Only set on inaddon mode; external/embedded modes leave None.
                     "addon_mcp_url": addon_mcp_url,
                     # Only set on haos_embedded; other HAOS modes leave None. Named
@@ -2644,7 +2653,28 @@ def ha_container_with_fresh_config(request):
         # Set environment variables for the dynamic URL so WebSocket client uses correct port
         os.environ["HOMEASSISTANT_URL"] = base_url
         os.environ["HOMEASSISTANT_TOKEN"] = TEST_TOKEN
-        os.environ.update(_E2E_FEATURE_FLAG_ENV)
+        # Enable feature flags for e2e tests. Beta sub-flags require
+        # the master to also be on.
+        os.environ["ENABLE_BETA_FEATURES"] = "true"
+        os.environ["ENABLE_YAML_CONFIG_EDITING"] = "true"
+        # Per-key sub-toggles default OFF; the E2E suite covers the
+        # whole packages/*.yaml surface so enable all three.
+        os.environ["ENABLE_YAML_PACKAGES_AUTOMATION"] = "true"
+        os.environ["ENABLE_YAML_PACKAGES_SCRIPT"] = "true"
+        os.environ["ENABLE_YAML_PACKAGES_SCENE"] = "true"
+        os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
+        # Operator extra YAML write keys (#1887): widen the allowlist with a
+        # single non-built-in key so the success-path write test has a key to
+        # exercise. Value mirrors _EMBEDDED_FEATURE_FLAGS["extra_yaml_write_keys"].
+        os.environ["HA_MCP_EXTRA_YAML_KEYS"] = "alert2"
+        # Strict best-practices gate (#1779) defaults ON with its parent; pin it
+        # OFF so the suite's keyless writes aren't hard-blocked. The strict-gate
+        # e2e test builds its own server with the flag enabled.
+        os.environ["ENABLE_STRICT_MANDATORY_BPS"] = "false"
+        # Snapshot deletion (#1861) defaults OFF in production; enabled here so
+        # the e2e suite can cover the (snapshot, delete) guard chain against a
+        # disposable test container.
+        os.environ["ENABLE_SNAPSHOT_DELETE"] = "true"
 
         # Reset cached settings + WebSocket pool so subsequent client
         # lookups pick up the new container's URL.
@@ -2802,10 +2832,15 @@ async def mcp_client(
     container_info = ha_container_with_fresh_config
     backend = container_info.get("backend")
     if backend == "haos_stdio":
-        async with _stdio_client_session(
-            container_info, haos_stdio_config_dir
-        ) as client:
-            yield client
+        client = _stdio_client(container_info, haos_stdio_config_dir)
+        try:
+            async with client:
+                logger.debug(
+                    "🔗 FastMCP client connected (stdio subprocess transport)"
+                )
+                yield client
+        finally:
+            await _retire_stdio_sidecar(haos_stdio_config_dir)
         return
 
     if backend in ("haos_inaddon", "embedded", "haos_embedded"):
@@ -2861,7 +2896,21 @@ def _stdio_env(container_info: dict[str, Any], config_dir: Path) -> dict[str, st
         # Unset also enables the sidecar; spell this out because stdio visibility
         # E2E requires the web settings endpoint to participate in the sequence.
         "HA_MCP_DISABLE_SETTINGS_UI": "false",
-        **_E2E_FEATURE_FLAG_ENV,
+        # Beta master plus all packages/*.yaml sub-toggles.
+        "ENABLE_BETA_FEATURES": "true",
+        "ENABLE_YAML_CONFIG_EDITING": "true",
+        "ENABLE_YAML_PACKAGES_AUTOMATION": "true",
+        "ENABLE_YAML_PACKAGES_SCRIPT": "true",
+        "ENABLE_YAML_PACKAGES_SCENE": "true",
+        "HAMCP_ENABLE_FILESYSTEM_TOOLS": "true",
+        # Non-built-in YAML write key used by the success-path coverage (#1887).
+        "HA_MCP_EXTRA_YAML_KEYS": "alert2",
+        # Strict best-practices defaults on with its parent. Pinning it off
+        # preserves the full suite's keyless writes; #1779 enables it explicitly.
+        "ENABLE_STRICT_MANDATORY_BPS": "false",
+        # Production defaults snapshot deletion off; the disposable HAOS guest
+        # may exercise the guarded deletion path.
+        "ENABLE_SNAPSHOT_DELETE": "true",
     }
 
 
@@ -2880,22 +2929,13 @@ def _stdio_client(container_info: dict[str, Any], config_dir: Path) -> Client:
     return Client(transport)
 
 
-@asynccontextmanager
-async def _stdio_client_session(
-    container_info: dict[str, Any], config_dir: Path
-) -> AsyncGenerator[Client]:
-    """Connect one installed stdio server and retire its detached sidecar."""
-    client = _stdio_client(container_info, config_dir)
-    try:
-        async with client:
-            logger.debug("🔗 FastMCP client connected (stdio subprocess transport)")
-            yield client
-    finally:
-        from ha_mcp import stdio_settings_sidecar
+async def _retire_stdio_sidecar(config_dir: Path) -> None:
+    """Retire the detached listener without blocking the event loop."""
+    from ha_mcp import stdio_settings_sidecar
 
-        # Test config dirs are session/test-scoped and discarded afterwards, so
-        # retirement need not preserve discovery files for a future process.
-        await asyncio.to_thread(stdio_settings_sidecar.retire_sidecar, config_dir)
+    # Test config dirs are session/test-scoped and discarded afterwards, so
+    # retirement need not preserve discovery files for a future process.
+    await asyncio.to_thread(stdio_settings_sidecar.retire_sidecar, config_dir)
 
 
 @pytest.fixture(scope="session")
@@ -2939,10 +2979,15 @@ async def stdio_mcp_client(
     """
 
     container_info = ha_container_with_fresh_config
-    async with _stdio_client_session(
-        container_info, packaging_stdio_config_dir
-    ) as client:
-        yield client
+    client = _stdio_client(container_info, packaging_stdio_config_dir)
+    try:
+        async with client:
+            logger.debug(
+                "🔗 FastMCP client connected (stdio subprocess transport)"
+            )
+            yield client
+    finally:
+        await _retire_stdio_sidecar(packaging_stdio_config_dir)
 
 
 # Test session information

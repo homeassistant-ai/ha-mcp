@@ -271,8 +271,7 @@ class TestReportIssueRestriction:
 
         assert result.content[0].text == "diagnostics mention sensor.hidden"
         assert not any(
-            "bypassing ha_report_issue" in record.message
-            for record in caplog.records
+            "bypassing ha_report_issue" in record.message for record in caplog.records
         ), [record.message for record in caplog.records]
 
     @pytest.mark.parametrize("proxied", [False, True])

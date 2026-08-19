@@ -2723,7 +2723,9 @@ class TestSidecarVisibilityRouteTable:
         from ha_mcp import settings_ui
 
         monkeypatch.setattr(settings_ui, "_http_settings_mounted", False)
-        register_settings_routes(mcp, None, secret_path=prefix)
+        register_settings_routes(
+            mcp, None, secret_path=prefix, advertise_prefix=False
+        )
 
         app = sidecar._build_app("127.0.0.1", 47653, prefix)
         mounted = {

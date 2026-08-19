@@ -27,11 +27,10 @@ partition, then runs onboarding and addon installs. Total wall time on a
 `build-haos-test-image.yml` runs the same script on `ubuntu-22.04`. On every
 run it uploads the qcow2 as a workflow artifact (reviewer sanity-check). On
 `master` (push / weekly cron / manual dispatch) it additionally primes the
-shared Actions cache used by the four E2E lanes — external, inaddon, embedded,
-and stdio all run `.github/actions/setup-haos-e2e/action.yml` to restore the
-qcow2 from that cache and fall back to a local build on a miss.
-Both the master builder and those lanes compute the key through
-`image_cache_key.sh`, which owns the baked-input list and hash format.
+shared Actions cache used by all four E2E lanes — `haos-e2e-tests.yml`,
+`haos-e2e-inaddon-tests.yml`, `haos-e2e-embedded-tests.yml`, and
+`haos-e2e-stdio-tests.yml` restore the qcow2 from that cache and fall back to
+a local build on a miss.
 
 ## Version pinning
 
