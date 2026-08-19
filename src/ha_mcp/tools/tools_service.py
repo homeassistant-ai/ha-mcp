@@ -59,8 +59,6 @@ WS_CALL_SERVICE = "ha_mcp_tools/call_service"
 class BulkControlOperation(TypedDict):
     """One entity action in a ha_bulk_control request."""
 
-    __pydantic_config__ = ConfigDict(extra="forbid")
-
     entity_id: Annotated[
         str,
         Field(description="Exact Home Assistant entity ID, e.g. 'light.kitchen'."),
@@ -102,6 +100,11 @@ class BulkControlOperation(TypedDict):
             ),
         ]
     ]
+
+
+# Pydantic reads this runtime config when generating the TypedDict schema. Keep it
+# outside the class body because mypy permits only field declarations there.
+BulkControlOperation.__pydantic_config__ = ConfigDict(extra="forbid")  # type: ignore[attr-defined]
 
 
 class _AmbiguousDispatch:

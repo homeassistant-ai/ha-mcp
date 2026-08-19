@@ -272,6 +272,7 @@ def test_bulk_operation_timeout_rejects_negative_and_accepts_zero():
     with pytest.raises(ValidationError):
         adapter.validate_python({**operation, "timeout_seconds": -1})
 
-    assert adapter.validate_python({**operation, "timeout_seconds": 0})[
-        "timeout_seconds"
-    ] == 0
+    assert (
+        adapter.validate_python({**operation, "timeout_seconds": 0})["timeout_seconds"]
+        == 0
+    )

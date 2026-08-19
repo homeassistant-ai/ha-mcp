@@ -5,6 +5,7 @@ This module provides entity search, system overview, deep search, and state retr
 """
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, cast
@@ -2207,10 +2208,21 @@ class SearchTools:
                 outcome, Exception
             ):
                 raise outcome
-            # ToolError is an intentional public validation/security failure,
-            # not a degraded backend surface. Preserve its MCP isError semantics.
-            if isinstance(outcome, ToolError):
-                raise outcome
+            # A floor passed as area_filter is an intentional public validation
+            # failure. Preserve its MCP isError semantics without re-raising the
+            # operational ToolErrors that branch helpers intentionally format for
+            # the historical partial/errors[] response.
+            if isinstance(outcome, ToolError) and label == "entities":
+                try:
+                    error_payload = json.loads(str(outcome))
+                except (json.JSONDecodeError, TypeError):
+                    error_payload = {}
+                if (
+                    error_payload.get("error", {}).get("code")
+                    == "VALIDATION_INVALID_PARAMETER"
+                    and error_payload.get("parameter") == "area_filter"
+                ):
+                    raise outcome
             if isinstance(outcome, Exception):
                 partial = True
                 errors.append({"surface": label, "error": str(outcome)})
