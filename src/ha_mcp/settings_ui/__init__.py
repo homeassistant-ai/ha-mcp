@@ -600,6 +600,12 @@ def register_settings_routes(
             supplies their settings entry points. OAuth/OIDC callers pass False
             because they use a dedicated settings secret.
     """
+    global _http_settings_mounted, _http_settings_prefix
+
+    # Never let a rejected or non-advertised registration inherit another
+    # server's credential-bearing hint.
+    _http_settings_prefix = None
+
     handlers = build_settings_handlers(server)
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
     if secret_prefix and ("{" in secret_prefix or "}" in secret_prefix):
@@ -627,13 +633,7 @@ def register_settings_routes(
     # Past this point at least one HTTP mount happens (add-on root and/or the
     # secret path). Record that so consumers can distinguish HTTP from the stdio
     # sidecar even when the prefix itself is not advertised (advertise_prefix=False).
-    global _http_settings_mounted, _http_settings_prefix
     _http_settings_mounted = True
-    # Registration state describes the current server. Clear any prefix from a
-    # prior registration before deciding whether this deployment advertises its
-    # new mount; otherwise a managed or OAuth registration could inherit a stale
-    # standalone path.
-    _http_settings_prefix = None
 
     # Every route this function mounts except the add-on-only root mount is defined
     # once in this table and mounted under each active prefix below: at root

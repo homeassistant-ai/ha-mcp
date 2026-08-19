@@ -438,6 +438,34 @@ class TestHaGetOverviewSettingsUrl:
         assert "settings_url_hint" not in result
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("rejected_secret", ["", "/private_{token}"])
+    async def test_rejected_registration_clears_stale_http_hint(
+        self, overview_tool, monkeypatch, rejected_secret
+    ):
+        """A rejected later registration must not advertise an older server."""
+        from ha_mcp import settings_ui
+
+        monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setattr(
+            "ha_mcp.stdio_settings_sidecar.read_sidecar_url", lambda: None
+        )
+        monkeypatch.setattr(settings_ui, "_http_settings_prefix", None)
+
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(return_value=lambda fn: fn)
+        settings_ui.register_settings_routes(mcp, MagicMock(), secret_path="/old")
+        assert settings_ui.get_http_settings_prefix() == "/old"
+
+        settings_ui.register_settings_routes(
+            MagicMock(), MagicMock(), secret_path=rejected_secret
+        )
+        assert settings_ui.get_http_settings_prefix() is None
+
+        result = await overview_tool(detail_level="minimal")
+        assert "settings_url_hint" not in result
+
+    @pytest.mark.asyncio
     async def test_settings_url_hint_normalizes_trailing_slash(
         self, overview_tool, monkeypatch
     ):
