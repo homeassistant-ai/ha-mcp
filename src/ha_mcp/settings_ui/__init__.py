@@ -312,21 +312,25 @@ def _build_visibility_handlers(*, data_dir: Path) -> dict[str, Any]:
             new_config = VisibilityConfig.model_validate(await request.json())
         except (ValidationError, ValueError) as e:
             return JSONResponse({"error": str(e)}, status_code=400)
-        # Optimistic concurrency: reject if the on-disk version moved between
-        # this caller's GET and PUT.
-        current = load_visibility_config(data_dir)
-        if new_config.version != current.version:
-            return JSONResponse(
-                {
-                    "error": (
-                        "Visibility config version mismatch. Reload before saving."
-                    ),
-                    "current_version": current.version,
-                    "current_config": current.model_dump(mode="json"),
-                },
-                status_code=409,
-            )
-        save_visibility_config(data_dir, new_config)
+        # The guard makes the version check a real cross-process
+        # compare-and-swap: the stdio settings sidecar and main MCP process can
+        # both write this file.
+        from ..utils.config_write_lock import config_write_guard
+
+        async with config_write_guard():
+            current = load_visibility_config(data_dir)
+            if new_config.version != current.version:
+                return JSONResponse(
+                    {
+                        "error": (
+                            "Visibility config version mismatch. Reload before saving."
+                        ),
+                        "current_version": current.version,
+                        "current_config": current.model_dump(mode="json"),
+                    },
+                    status_code=409,
+                )
+            save_visibility_config(data_dir, new_config)
         return JSONResponse({"saved": True, "version": new_config.version + 1})
 
     return {

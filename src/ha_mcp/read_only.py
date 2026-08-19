@@ -39,7 +39,7 @@ from fastmcp.tools import Tool
 
 from .config import get_global_settings
 from .errors import ErrorCode, create_error_response
-from .policy.middleware import PROXY_META_TOOLS
+from .policy.middleware import CALL_PROXY_META_TOOLS
 from .renamed_tools import current_tool_name
 from .tools.helpers import raise_tool_error
 
@@ -428,7 +428,7 @@ class ReadOnlyMiddleware(Middleware):
         arguments = cls._coerce_arguments(args.get("arguments"))
         while (
             isinstance(name, str)
-            and name in PROXY_META_TOOLS
+            and name in CALL_PROXY_META_TOOLS
             and isinstance(arguments, dict)
             and isinstance(arguments.get("name"), str)
         ):
@@ -460,12 +460,14 @@ class ReadOnlyMiddleware(Middleware):
         args = context.message.arguments or {}
 
         # Call proxies: decide on the INNER call (see _unwrap_proxy_call).
-        # ha_search_tools and envelope-less proxy calls pass through —
-        # searching is a read, and the proxy raises its own validation
-        # error for a missing inner name. When the inner call is allowed,
-        # the proxy dispatch re-enters this middleware with the real tool
-        # name anyway (harmless re-check, same verdict).
-        if name in PROXY_META_TOOLS:
+        # Envelope-less proxy calls pass through because the proxy raises its own
+        # validation error for a missing inner name. When the inner call is
+        # allowed, proxy dispatch re-enters this middleware with the real tool name
+        # anyway (harmless re-check, same verdict). ``ha_search_tools`` is not a
+        # dispatch proxy; it reaches generic classification below as an unknown
+        # synthetic tool, which passes through to the search transform (or the
+        # stale-tool hint path when search is disabled).
+        if name in CALL_PROXY_META_TOOLS:
             unwrapped = self._unwrap_proxy_call(args)
             if unwrapped is None:
                 return await call_next(context)

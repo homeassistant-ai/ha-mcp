@@ -6667,6 +6667,7 @@ _VISIBILITY_DOM = MIN_DOM.replace(
   <span id="visibility-save-status" class="status" role="status" aria-live="polite"></span>
   <input id="visibility-enabled" type="checkbox" />
   <input id="visibility-enforce" type="checkbox" />
+  <input id="visibility-restrict-report-issue" type="checkbox" />
   <input id="visibility-cat-diagnostic" type="checkbox" />
   <input id="visibility-cat-config" type="checkbox" />
   <input id="visibility-exclude-hidden" type="checkbox" />
@@ -6705,6 +6706,39 @@ class TestVisibilitySettingsTab:
         assert "Failed to load visibility config" in result.dom
         # The error region is an assertive alert so a screen reader announces it.
         assert 'role="alert"' in result.dom
+
+    def test_report_issue_restriction_loads_and_saves(
+        self, settings_script: str
+    ) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/visibility/config": {
+                "status": 200,
+                "json": {"version": 4, "restrict_report_issue": True},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_VISIBILITY_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await window.visibilityLoadConfig();
+              const toggle = document.getElementById('visibility-restrict-report-issue');
+              document.body.dataset.loaded = String(toggle.checked);
+              toggle.checked = false;
+              await window.visibilitySaveConfig();
+            """,
+        )
+        _assert_clean_init(result)
+        assert 'data-loaded="true"' in result.dom
+        puts = [
+            f
+            for f in result.fetches
+            if "/api/visibility/config" in f["url"] and f["method"] == "PUT"
+        ]
+        assert len(puts) == 1
+        body = json.loads(puts[0]["body"])
+        assert body["restrict_report_issue"] is False
 
     def test_save_success_reports_saved_as_polite_status(
         self, settings_script: str

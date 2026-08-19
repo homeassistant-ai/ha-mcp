@@ -136,7 +136,14 @@ def _fetch_requirements_all(ha_version: str) -> set[str]:
     )
 
 
-_KNOWN_BACKENDS = {"container", "embedded", "haos", "haos_inaddon", "haos_embedded"}
+_KNOWN_BACKENDS = {
+    "container",
+    "embedded",
+    "haos",
+    "haos_stdio",
+    "haos_inaddon",
+    "haos_embedded",
+}
 
 
 def _skip_unless_embedded(info) -> None:

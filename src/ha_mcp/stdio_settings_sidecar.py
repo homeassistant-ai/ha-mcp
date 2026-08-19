@@ -277,7 +277,15 @@ def _no_proxy_opener() -> Any:
     """
     import urllib.request
 
-    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+        """Keep the loopback-only shutdown request on its original target."""
+
+        def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), _NoRedirectHandler()
+    )
 
 
 # Shape run_main() writes into ui.url. Doubles as the legacy-migration
@@ -285,6 +293,15 @@ def _no_proxy_opener() -> Any:
 _SIDECAR_URL_RE = re.compile(
     r"http://127\.0\.0\.1:(\d{1,5})(/private_[A-Za-z0-9_-]+)/settings"
 )
+
+
+def _is_trusted_sidecar_url(url: str) -> bool:
+    """Return whether a URL matches the loopback sidecar producer contract."""
+    match = _SIDECAR_URL_RE.fullmatch(url.strip())
+    if match is None:
+        return False
+    port = int(match.group(1))
+    return 1024 <= port <= 65535
 
 
 def _seed_state_from_url(url: str) -> None:
@@ -335,6 +352,13 @@ def _post_shutdown(url: str) -> tuple[bool, bool | None]:
     """
     import urllib.error
 
+    if not _is_trusted_sidecar_url(url):
+        logger.warning(
+            "Recorded sidecar URL is invalid; refusing the shutdown request and "
+            "replacing state files only."
+        )
+        return False, None
+
     try:
         import urllib.request
 
@@ -384,6 +408,185 @@ def _post_shutdown(url: str) -> tuple[bool, bool | None]:
     return False, None
 
 
+def _read_external_retirement_url(config_dir: Path) -> str | None:
+    """Read the sidecar URL used by an external-process cleanup."""
+    url_path = config_dir / "ui.url"
+    try:
+        url = url_path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        logger.debug("Sidecar URL file %s not found; nothing to retire.", url_path)
+        return None
+    except PermissionError:
+        logger.warning(
+            "Cannot read sidecar URL file %s; a detached listener may still be "
+            "running for config dir %s.",
+            url_path,
+            config_dir,
+            exc_info=True,
+        )
+        return None
+    except OSError:
+        logger.warning(
+            "Failed to read sidecar URL file %s; a detached listener may still be "
+            "running for config dir %s.",
+            url_path,
+            config_dir,
+            exc_info=True,
+        )
+        return None
+    if not url:
+        logger.warning(
+            "Sidecar URL file %s is empty; a detached listener may still be running "
+            "for config dir %s.",
+            url_path,
+            config_dir,
+        )
+        return None
+    return url
+
+
+def _read_external_retirement_pid(config_dir: Path) -> int | None:
+    """Read the recorded PID so an acknowledged retirement can await exit."""
+    pid_path = config_dir / "ui.pid"
+    try:
+        return int(pid_path.read_text(encoding="utf-8").strip())
+    except FileNotFoundError:
+        logger.debug("Sidecar PID file %s not found; exit cannot be polled.", pid_path)
+    except PermissionError:
+        logger.warning(
+            "Cannot read sidecar PID file %s; exit cannot be polled for config dir %s.",
+            pid_path,
+            config_dir,
+            exc_info=True,
+        )
+    except OSError:
+        logger.warning(
+            "Failed to read sidecar PID file %s; exit cannot be polled for config "
+            "dir %s.",
+            pid_path,
+            config_dir,
+            exc_info=True,
+        )
+    except ValueError:
+        logger.warning(
+            "Sidecar PID file %s is invalid; exit cannot be polled for config dir %s.",
+            pid_path,
+            config_dir,
+        )
+    return None
+
+
+def _external_retirement_sentinel_preexisting(sentinel_path: Path) -> bool:
+    """Snapshot whether the user already disabled the settings sidecar."""
+    try:
+        return sentinel_path.exists()
+    except OSError:
+        logger.warning(
+            "Cannot inspect sidecar disable sentinel %s; preserving it.",
+            sentinel_path,
+            exc_info=True,
+        )
+        return True
+
+
+def _clear_external_retirement_sentinel(
+    sentinel_path: Path,
+    *,
+    url: str,
+    sentinel_preexisting: bool,
+    sentinel_created: bool | None,
+) -> None:
+    """Clear only a legacy disable sentinel attributable to this retirement."""
+    should_clear = (
+        sentinel_created if sentinel_created is not None else not sentinel_preexisting
+    )
+    if not should_clear:
+        return
+    try:
+        sentinel_path.unlink()
+    except FileNotFoundError:
+        logger.debug(
+            "Sidecar disable sentinel %s was already absent after retiring %s.",
+            sentinel_path,
+            url,
+        )
+    except OSError:
+        logger.warning(
+            "Retired sidecar at %s but could not remove its disable sentinel %s.",
+            url,
+            sentinel_path,
+            exc_info=True,
+        )
+
+
+def _wait_for_external_retired_pid(
+    pid: int | None,
+    *,
+    url: str,
+    config_dir: Path,
+) -> None:
+    """Wait a bounded interval for an acknowledged detached sidecar to exit."""
+    if pid is None:
+        return
+    import time
+
+    deadline = time.monotonic() + _OLD_SIDECAR_EXIT_WAIT
+    while _pid_alive(pid):
+        if time.monotonic() >= deadline:
+            logger.warning(
+                "Retired sidecar pid %s at %s is still alive after %.0fs for "
+                "config dir %s.",
+                pid,
+                url,
+                _OLD_SIDECAR_EXIT_WAIT,
+                config_dir,
+            )
+            return
+        time.sleep(_OLD_SIDECAR_EXIT_POLL)
+
+
+def retire_sidecar(config_dir: Path) -> bool:
+    """Best-effort retirement for an externally managed stdio test process.
+
+    This public helper intentionally crosses the process boundary: callers that
+    spawn a real ``ha-mcp`` stdio server otherwise have no handle to its detached
+    settings listener. It uses discovery files in ``config_dir``, reports each
+    failure mode, and returns whether the sidecar acknowledged shutdown.
+
+    The replacement path in ``_shutdown_existing_sidecar`` deliberately remains
+    separate because it seeds global sidecar state and immediately spawns a successor.
+    """
+    url = _read_external_retirement_url(config_dir)
+    if url is None:
+        return False
+    # Capture both before the POST: an acknowledged sidecar may remove its PID,
+    # and the sentinel snapshot distinguishes a legacy endpoint's write from a
+    # user's preexisting disable choice.
+    pid = _read_external_retirement_pid(config_dir)
+    sentinel_path = config_dir / "settings_ui_disabled"
+    sentinel_preexisting = _external_retirement_sentinel_preexisting(sentinel_path)
+
+    acked, sentinel_created = _post_shutdown(url)
+    if not acked:
+        logger.warning(
+            "Sidecar at %s did not acknowledge retirement for config dir %s; "
+            "the detached listener may still be running.",
+            url,
+            config_dir,
+        )
+        return False
+
+    _clear_external_retirement_sentinel(
+        sentinel_path,
+        url=url,
+        sentinel_preexisting=sentinel_preexisting,
+        sentinel_created=sentinel_created,
+    )
+    logger.info("Retired settings UI sidecar at %s for config dir %s", url, config_dir)
+    _wait_for_external_retired_pid(pid, url=url, config_dir=config_dir)
+    return True
+
+
 def _log_shutdown_timeout(exc: BaseException) -> None:
     logger.warning(
         "Old sidecar did not answer /shutdown within %.1fs (%s); "
@@ -420,6 +623,9 @@ def _shutdown_existing_sidecar() -> None:
     replacement, so nothing hands out the old URL anymore (if the
     replacement loses the port to that lingering process, it serves on
     an ephemeral fallback instead).
+
+    External test-process cleanup uses ``retire_sidecar``; the sequences stay
+    separate because only this path seeds state and immediately replaces the listener.
     """
     url = read_sidecar_url()
     if url is None:
@@ -1163,6 +1369,60 @@ def _build_app(
             handlers["save_theme_prefs"],
             methods=["POST"],
         ),
+        # Advanced settings. The stdio-only sidecar-port control is rendered
+        # from this handler, so these routes are required in sidecar mode.
+        Route(
+            f"{secret_prefix}/api/settings/advanced",
+            handlers["get_advanced_settings"],
+            methods=["GET"],
+        ),
+        Route(
+            f"{secret_prefix}/api/settings/advanced",
+            handlers["save_advanced_settings"],
+            methods=["POST"],
+        ),
+        # Auto-backup endpoints (#1288). The Backups tab is available in the
+        # shared settings page and must use the same handlers in stdio mode.
+        Route(
+            f"{secret_prefix}/api/settings/backups",
+            handlers["list_backups"],
+            methods=["GET"],
+        ),
+        Route(
+            f"{secret_prefix}/api/settings/backups",
+            handlers["delete_backups_bulk"],
+            methods=["DELETE"],
+        ),
+        Route(
+            f"{secret_prefix}/api/settings/backups/{{name}}",
+            handlers["view_backup"],
+            methods=["GET"],
+        ),
+        Route(
+            f"{secret_prefix}/api/settings/backups/{{name}}/diff",
+            handlers["diff_backup"],
+            methods=["GET"],
+        ),
+        Route(
+            f"{secret_prefix}/api/settings/backups/{{name}}/restore",
+            handlers["restore_backup"],
+            methods=["POST"],
+        ),
+        Route(
+            f"{secret_prefix}/api/settings/backups/{{name}}",
+            handlers["delete_backup"],
+            methods=["DELETE"],
+        ),
+        Route(
+            f"{secret_prefix}/api/settings/backup-config",
+            handlers["get_backup_config"],
+            methods=["GET"],
+        ),
+        Route(
+            f"{secret_prefix}/api/settings/backup-config",
+            handlers["save_backup_config"],
+            methods=["POST"],
+        ),
         # Custom filesystem directories (issue #1567). The sub-form is rendered
         # in the features panel, so the stdio sidecar must serve these too — its
         # route list is hand-maintained and does NOT derive from
@@ -1216,6 +1476,19 @@ def _build_app(
             f"{secret_prefix}/api/policy/value-source",
             handlers["policy_get_value_source"],
             methods=["GET"],
+        ),
+        # Entity visibility filter endpoints. The sidecar owns a hand-maintained
+        # route table (it cannot reuse FastMCP custom-route registration), so
+        # keep this pair in lockstep with settings_ui.register_settings_routes.
+        Route(
+            f"{secret_prefix}/api/visibility/config",
+            handlers["visibility_get_config"],
+            methods=["GET"],
+        ),
+        Route(
+            f"{secret_prefix}/api/visibility/config",
+            handlers["visibility_put_config"],
+            methods=["PUT"],
         ),
     ]
 

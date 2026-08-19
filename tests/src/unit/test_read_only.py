@@ -335,6 +335,23 @@ class TestMiddleware:
             result = await mw.on_call_tool(make_context(name, {}), call_next)
             assert result == "proxied"
 
+    async def test_search_tool_extra_name_is_not_treated_as_dispatch(
+        self, read_only_on
+    ):
+        """ha_search_tools never dispatches, even when a caller adds name fields."""
+        mw = make_middleware()
+        call_next = AsyncMock(return_value="search-results")
+
+        result = await mw.on_call_tool(
+            make_context(
+                "ha_search_tools",
+                {"query": "automation", "name": "ha_config_set_automation"},
+            ),
+            call_next,
+        )
+
+        assert result == "search-results"
+
     async def test_proxied_write_tool_blocked_with_inner_name(self, read_only_on):
         """ha_call_write_tool(name=<hidden write tool>) must produce the
         explanatory READ_ONLY_MODE error naming the INNER tool — the

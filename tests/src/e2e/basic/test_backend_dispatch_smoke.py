@@ -1,12 +1,13 @@
 """Multi-layer smoke tests for backend dispatch correctness.
 
-The three e2e CI lanes set env vars that ``conftest.ha_container_with_fresh_config``
+The e2e CI lanes set env vars that ``conftest.ha_container_with_fresh_config``
 reads to choose a backend:
 
 | Lane                          | HAOS_TEST_IMAGE_PATH | HAOS_TEST_MODE | expected backend |
 | ----------------------------- | -------------------- | -------------- | ---------------- |
 | e2e-tests.yml (testcontainer) | unset                | unset          | ``container``    |
 | haos-e2e-tests.yml (external) | set                  | unset          | ``haos``         |
+| haos-e2e-stdio-tests.yml      | set                  | ``stdio``      | ``haos_stdio``   |
 | haos-e2e-inaddon-tests.yml    | set                  | ``inaddon``    | ``haos_inaddon`` |
 | haos-e2e-embedded-tests.yml   | set                  | ``embedded``   | ``haos_embedded``|
 
@@ -82,11 +83,18 @@ _SKIP_CEILING_PER_LANE = {
     # container_only: they RUN only on the container lane (in-process server +
     # fake engine) and SKIP on both HAOS lanes. So haos and haos_inaddon each
     # gain 10; container is unchanged because the tests run there.
-    # Entries below are CI-observed item counts, bumped only for intentional
-    # marker-gated additions rather than runtime skips.
-    "container": 73,  # was 72; +1 inaddon startup-nudge e2e (haos_only + inaddon_only)
-    "haos": 48,  # was 46; +1 embedded HACS-nudge skip e2e (container_only), +1 inaddon startup-nudge e2e (inaddon_only)
-    "haos_inaddon": 76,  # was 75; +1 embedded HACS-nudge skip e2e (container_only)
+    # Established-lane entries are CI-observed item counts, bumped only for
+    # intentional marker-gated additions rather than runtime skips. A new lane
+    # starts at its observed count plus the five-item buffer described above;
+    # subsequent additions consume that buffer explicitly.
+    "container": 74,  # was 73; +1 HAOS stdio visibility e2e (haos_stdio_only)
+    "haos": 49,  # was 48; +1 HAOS stdio visibility e2e (haos_stdio_only)
+    # HAOS stdio is the external HAOS set plus ``external_only`` tests, whose
+    # test-process monkeypatches cannot reach the subprocess server. The first
+    # full lane run on 2026-08-18 observed 103 collection-time marker skips
+    # (plus 9 runtime skips); keep the same five-item buffer as established lanes.
+    "haos_stdio": 108,
+    "haos_inaddon": 77,  # was 76; +1 visibility e2e (haos_stdio_only)
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
     # lane's marker-skips PLUS two embedded-specific additions:
     #   - haos_only + inaddon_only tests skip on embedded just like on container
@@ -98,9 +106,9 @@ _SKIP_CEILING_PER_LANE = {
     # visible locally): haos_only 52 + inaddon_only-outside-haos 11 + external_only
     # 36 (auto_backup 19, supervisor_mock 15, self_update_notice 1, file_operations
     # 1) + not_on_embedded 2 = 101. Parametrize inflates that to the CI-observed
-    # count the entry below is pinned to — 133 on this PR's run, 132 before the
-    # self-restart e2e. Read the count off a run rather than deriving it.
-    "embedded": 133,  # was 132; +1 embedded self-restart e2e (haos_only)
+    # count of 133 in the 2026-08-18 CI run (132 before the self-restart e2e).
+    # Read future changes from CI instead of deriving them.
+    "embedded": 134,  # was 133; +1 visibility e2e (haos_stdio_only)
     # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it
     # skips the SAME set as the external HAOS lane (container_only + inaddon_only)
     # PLUS two haos_embedded-specific additions:
@@ -114,10 +122,10 @@ _SKIP_CEILING_PER_LANE = {
     # item-inflation isn't visible): container_only 16 + inaddon_only 20 +
     # external_only 40 + smoke 4 = 80 (no overlaps: no external_only test is also
     # container_only/inaddon_only, and the 2 not_on_embedded tests are already
-    # container_only). Parametrize inflates that to the CI-observed count the
-    # entry below is pinned to — 107 on this PR's run, 106 before the
-    # self-restart e2e. Read the count off a run rather than deriving it.
-    "haos_embedded": 107,  # was 106; +1 embedded self-restart e2e (not_on_haos_embedded)
+    # container_only). Parametrize inflates that to the CI-observed count of
+    # 107 in the 2026-08-18 CI run (106 before the self-restart e2e).
+    # Read future changes from CI instead of deriving them.
+    "haos_embedded": 108,  # was 107; +1 visibility e2e (haos_stdio_only)
 }
 
 
@@ -154,6 +162,17 @@ def test_backend_dispatch_matches_workflow_env(
         assert ha_container_with_fresh_config["container"] is None
         assert ha_container_with_fresh_config["port"] is None
         assert ha_container_with_fresh_config["config_path"] is None
+    elif image_path and mode == "stdio":
+        assert backend == "haos_stdio", (
+            "Workflow set HAOS_TEST_IMAGE_PATH + HAOS_TEST_MODE=stdio "
+            f"but dispatch picked backend={backend!r}. The installed stdio "
+            "server is NOT being exercised by this run."
+        )
+        assert ha_container_with_fresh_config["container"] is None
+        assert ha_container_with_fresh_config["port"] is None
+        assert ha_container_with_fresh_config["config_path"] is None
+        assert ha_container_with_fresh_config.get("addon_mcp_url") is None
+        assert ha_container_with_fresh_config.get("embedded_webhook_url") is None
     elif image_path and mode == "embedded":
         # haos_embedded (#1527): a HAOS backend whose server-under-test is the
         # baked in-process MCP server, driven over its ingress webhook on the
@@ -250,7 +269,7 @@ async def test_supervisor_addon_tool_behavior_matches_backend(
     # HA Core's supervisor/api WS proxy (it runs standalone with HA_MCP_EMBEDDED,
     # so it does not use SUPERVISOR_TOKEN directly, but the proxy path still works
     # because HA Core itself is supervised).
-    if backend in ("haos", "haos_inaddon", "haos_embedded"):
+    if backend in ("haos", "haos_stdio", "haos_inaddon", "haos_embedded"):
         assert result.get("success") is True, (
             f"ha_get_app failed on {backend} backend; Supervisor must "
             f"be running. Result: {result!r}"
