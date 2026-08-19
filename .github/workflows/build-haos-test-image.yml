@@ -230,8 +230,9 @@ jobs:
           if-no-files-found: error
 
       # --- Warm the shared Actions cache (master only) -----------------------
-      # The E2E lanes (haos-e2e-tests.yml / haos-e2e-inaddon-tests.yml) restore
-      # the qcow2 from the Actions cache and fall back to a local build on a
+      # All four E2E consumers call .github/actions/setup-haos-e2e/action.yml:
+      # external, inaddon, embedded, and stdio restore the qcow2 from the
+      # Actions cache and fall back to a local build on a
       # miss. Saving the image here, on the default branch, lets PR runs restore
       # it via GitHub's default-branch cache scope and skip the local build.
       # Purely additive: on a miss/eviction the lanes fall back to a local build
@@ -240,9 +241,9 @@ jobs:
         id: e2e_cache_key
         if: github.ref == 'refs/heads/master'
         continue-on-error: true
-        # INVARIANT: this git ls-tree must stay byte-IDENTICAL to the
-        # "Compute image cache key" step in BOTH haos-e2e-tests.yml and
-        # haos-e2e-inaddon-tests.yml — otherwise this warms a key the lanes
+        # INVARIANT: this git ls-tree must stay byte-IDENTICAL to the block in
+        # .github/actions/setup-haos-e2e/action.yml, which serves all four E2E
+        # lanes. Otherwise this warms a key the lanes
         # never restore (a wasted prime, not a stale test: the lanes still
         # recompute their own correct key). NOTE the push-trigger paths above
         # are a deliberate SUPERSET (they also list homeassistant-addon-dev/**

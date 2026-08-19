@@ -269,9 +269,7 @@ class TestReadSidecarUrl:
 class TestRetireSidecar:
     """The public cleanup helper makes detached-listener failures observable."""
 
-    def test_missing_url_file_is_debug_logged(
-        self, tmp_data_dir: Path, caplog
-    ) -> None:
+    def test_missing_url_file_is_debug_logged(self, tmp_data_dir: Path, caplog) -> None:
         with caplog.at_level("DEBUG", logger="ha_mcp.stdio_settings_sidecar"):
             acknowledged = sidecar.retire_sidecar(tmp_data_dir)
 
@@ -299,6 +297,25 @@ class TestRetireSidecar:
         assert any(url in message for message in messages), messages
         assert any(str(tmp_data_dir) in message for message in messages), messages
         assert any("may still be running" in message for message in messages), messages
+
+    def test_acknowledged_retirement_waits_for_recorded_pid(
+        self, tmp_data_dir: Path
+    ) -> None:
+        url = "http://127.0.0.1:54321/private_cleanup/settings"
+        (tmp_data_dir / "ui.url").write_text(url)
+        (tmp_data_dir / "ui.pid").write_text("4242")
+
+        with (
+            patch.object(sidecar, "_post_shutdown", return_value=(True, False)),
+            patch.object(sidecar, "_pid_alive", side_effect=[True, False]) as alive,
+            patch("time.sleep") as sleep,
+        ):
+            acknowledged = sidecar.retire_sidecar(tmp_data_dir)
+
+        assert acknowledged is True
+        assert alive.call_count == 2
+        alive.assert_called_with(4242)
+        sleep.assert_called_once_with(sidecar._OLD_SIDECAR_EXIT_POLL)
 
 
 class TestPidLiveness:
@@ -2629,9 +2646,7 @@ class TestVisibilityHandlers:
 
         real_save = persistence.save_visibility_config
         monkeypatch.setattr(cwl, "config_file_lock", _recording_lock)
-        monkeypatch.setattr(
-            persistence, "save_visibility_config", _recording_save
-        )
+        monkeypatch.setattr(persistence, "save_visibility_config", _recording_save)
 
         handlers = build_settings_handlers(server=None)
         app = Starlette(

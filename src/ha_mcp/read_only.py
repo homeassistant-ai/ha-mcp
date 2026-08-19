@@ -39,7 +39,7 @@ from fastmcp.tools import Tool
 
 from .config import get_global_settings
 from .errors import ErrorCode, create_error_response
-from .policy.middleware import PROXY_META_TOOLS
+from .policy.middleware import CALL_PROXY_META_TOOLS
 from .renamed_tools import current_tool_name
 from .tools.helpers import raise_tool_error
 
@@ -428,7 +428,7 @@ class ReadOnlyMiddleware(Middleware):
         arguments = cls._coerce_arguments(args.get("arguments"))
         while (
             isinstance(name, str)
-            and name in PROXY_META_TOOLS
+            and name in CALL_PROXY_META_TOOLS
             and isinstance(arguments, dict)
             and isinstance(arguments.get("name"), str)
         ):
@@ -465,7 +465,7 @@ class ReadOnlyMiddleware(Middleware):
         # error for a missing inner name. When the inner call is allowed,
         # the proxy dispatch re-enters this middleware with the real tool
         # name anyway (harmless re-check, same verdict).
-        if name in PROXY_META_TOOLS:
+        if name in CALL_PROXY_META_TOOLS:
             unwrapped = self._unwrap_proxy_call(args)
             if unwrapped is None:
                 return await call_next(context)

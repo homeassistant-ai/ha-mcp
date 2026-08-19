@@ -35,17 +35,20 @@ class VisibilityConfig(BaseModel):
     # Respect HA Assist exposure: when true, hide entities not effectively exposed
     # to the "conversation" assistant (explicit override, else domain default).
     respect_assist_exposure: bool = False
-    # Enforce mode (issue #2015): when true, hiding is applied strongly across all
-    # tools instead of only decluttering ha_search / ha_get_overview — direct reads
-    # of a hidden entity are concealed (not-found) and content reads that would
-    # surface one are refused. This is NOT a hide dimension: it changes how strongly
-    # the same hidden set is applied, not which entities are hidden, so it is
-    # deliberately absent from ``to_wire`` and ``config_has_active_hide_dimensions``.
+    # Enforce mode (issue #2015): when true, hiding is applied strongly across tool
+    # reads instead of only decluttering ha_search / ha_get_overview — direct reads
+    # are concealed and content reads that would surface a hidden id are refused.
+    # The report-tool exception is controlled separately below. This is NOT a hide
+    # dimension: it changes how strongly the same hidden set is applied, not which
+    # entities are hidden, so it is deliberately absent from ``to_wire`` and
+    # ``config_has_active_hide_dimensions``.
     enforce: bool = False
-    # ``ha_report_issue`` is the recovery path when visibility enforcement or
-    # its HA registry inputs fail. Keep it outside the barrier by default so it
-    # can return diagnostics; operators who treat report/log output as sensitive
-    # can opt it back into the normal inbound + outbound scans.
+    # ``ha_report_issue`` stays outside the barrier on every call by default,
+    # not only when visibility inputs fail, so diagnostics remain reachable.
+    # Operators can opt it into the normal inbound/outbound scans. Like ``enforce``,
+    # this changes application strength rather than the hidden set, so it is
+    # deliberately absent from ``to_wire`` and
+    # ``config_has_active_hide_dimensions``.
     restrict_report_issue: bool = False
 
     def to_wire(self) -> dict[str, Any]:

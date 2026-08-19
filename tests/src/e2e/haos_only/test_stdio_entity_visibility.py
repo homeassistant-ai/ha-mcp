@@ -143,17 +143,16 @@ async def test_stdio_sidecar_config_drives_real_visibility_middleware(
             assert restricted_report["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED", (
                 restricted_report
             )
-            assert "would include an entity restricted" in restricted_report["error"][
-                "message"
-            ], restricted_report
+            assert (
+                "would include an entity restricted"
+                in restricted_report["error"]["message"]
+            ), restricted_report
     finally:
         # Session-scoped stdio clients are shared by many tests on this worker;
         # restore the exact prior config through the same version-checked sidecar
         # API the test exercises, so cleanup cannot rewind the on-disk version.
         if settings_url is not None and original_config is not None and config_changed:
-            latest = await asyncio.to_thread(
-                _visibility_request, settings_url, "GET"
-            )
+            latest = await asyncio.to_thread(_visibility_request, settings_url, "GET")
             await asyncio.to_thread(
                 _visibility_request,
                 settings_url,

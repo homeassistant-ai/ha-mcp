@@ -4,8 +4,9 @@ The visibility filter (``visibility/``) normally only declutters ``ha_search`` /
 ``ha_get_overview``. When a user turns on ``enforce`` (Entity Visibility tab, or
 ``"enforce": true`` in ``entity_visibility.json``), the
 :class:`VisibilityInboundEnforcement` / :class:`VisibilityOutboundEnforcement`
-middleware pair makes the hidden set genuinely unreadable across ALL tools —
-"refuse on contact":
+middleware pair makes the hidden set unreadable across tool reads, except for
+the deliberately unrestricted-by-default ``ha_report_issue`` diagnostic
+escape hatch — "refuse on contact":
 
 - **Direct reads are concealed.** A call whose arguments name a hidden entity_id
   exactly is refused BEFORE the tool runs with a canonical ``ENTITY_NOT_FOUND``,
@@ -19,9 +20,14 @@ middleware pair makes the hidden set genuinely unreadable across ALL tools —
 - **Unscannable surfaces are refused wholesale** while enforce is active — sandbox
   code execution and screenshot/pixel output can read arbitrary state that no text
   scan can attribute to an entity.
-- **Issue reports stay available by default.** ``ha_report_issue`` is the recovery
-  path when visibility inputs fail, so operators must explicitly opt it into the
-  same inbound/outbound scans with ``restrict_report_issue``.
+- **Issue reports stay available by default.** ``ha_report_issue`` is always
+  outside the barrier while ``restrict_report_issue`` is false, including when
+  visibility inputs are healthy. This unconditional default keeps the diagnostic
+  path available if the filter or its Home Assistant registry inputs fail.
+  Operators can explicitly opt it into the same inbound/outbound scans.
+- **Proxy envelopes are enforced as the tool they dispatch.** Unscannable checks,
+  scans, errors, and logs use the inner call. A malformed envelope stays attributed
+  to the outer proxy, so enforcement remains active while proxy validation rejects it.
 
 This is a strong read barrier against *incidental* exposure, not a cryptographic
 guarantee: a Jinja template that derives a hidden entity's state without ever
@@ -40,13 +46,14 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 
 from ..errors import ErrorCode, create_entity_not_found_error, create_error_response
-from ..policy.middleware import PROXY_META_TOOLS
+from ..policy.middleware import CALL_PROXY_META_TOOLS
+from ..renamed_tools import current_tool_name
 from ..tools.helpers import raise_tool_error
 from . import resolver
 from .model import VisibilityConfig
@@ -73,6 +80,8 @@ _SCREENSHOT_TOOL = "ha_get_dashboard_screenshot"
 _DASHBOARD_TOOL = "ha_config_get_dashboard"
 _DASHBOARD_SET_TOOL = "ha_config_set_dashboard"
 _CUSTOM_TOOL = "ha_manage_custom_tool"
+
+# Tool deliberately outside the visibility barrier unless the operator opts in.
 _REPORT_ISSUE_TOOL = "ha_report_issue"
 
 _SANDBOX_REASON = (
@@ -253,35 +262,54 @@ def _coerce_arguments(arguments: Any) -> dict[str, Any] | None:
     return None
 
 
-def _unwrap_proxy_call(args: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+class _EffectiveToolCall(NamedTuple):
+    """The tool and arguments whose behavior the middleware must enforce."""
+
+    name: str
+    arguments: dict[str, Any]
+
+
+def _unwrap_proxy_call(args: dict[str, Any]) -> _EffectiveToolCall | None:
     """Extract the innermost proxy target and arguments, or None if unusable.
 
-    Mirrors ``ReadOnlyMiddleware._unwrap_proxy_call``: the categorized call proxies
+    Mirrors ``ReadOnlyMiddleware._unwrap_proxy_call``: the dispatching call proxies
     accept ``arguments`` as a JSON string, so an inner exact entity_id match would
     otherwise be seen only as an embedded (generic-refusal) hit on the raw string.
-    Unwrapping parses it so the inner exact id yields concealment instead.
+    Unwrapping parses it so the inner exact id yields concealment instead. Retired
+    tool names are normalized because alias middleware rewrites only the outer
+    message, not names inside client-supplied envelopes.
     """
-    name = args.get("name")
+    raw_name = args.get("name")
+    if not isinstance(raw_name, str):
+        return None
+    name = current_tool_name(raw_name)
     arguments = _coerce_arguments(args.get("arguments"))
     while (
-        isinstance(name, str)
-        and name in PROXY_META_TOOLS
+        name in CALL_PROXY_META_TOOLS
         and isinstance(arguments, dict)
         and isinstance(arguments.get("name"), str)
     ):
-        name = arguments.get("name")
+        raw_name = arguments["name"]
+        name = current_tool_name(raw_name)
         arguments = _coerce_arguments(arguments.get("arguments"))
-    if not isinstance(name, str) or arguments is None:
+    if arguments is None:
         return None
-    return name, arguments
+    return _EffectiveToolCall(name, arguments)
 
 
-def _effective_tool_call(name: str, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    """Return the real tool name and arguments for a categorized proxy."""
-    if name not in PROXY_META_TOOLS:
-        return name, args
+def _effective_tool_call(name: str, args: dict[str, Any]) -> _EffectiveToolCall:
+    """Resolve a dispatching proxy to the call that will actually execute.
+
+    Search is a meta-tool but not a dispatcher, so its incidental ``name`` key
+    must never be treated as executable. If a call-proxy envelope is malformed,
+    retain the outer proxy and raw arguments: visibility enforcement stays active,
+    then the proxy emits its own validation error without dispatching anything.
+    """
+    name = current_tool_name(name)
+    if name not in CALL_PROXY_META_TOOLS:
+        return _EffectiveToolCall(name, args)
     inner = _unwrap_proxy_call(args)
-    return inner if inner is not None else (name, args)
+    return inner if inner is not None else _EffectiveToolCall(name, args)
 
 
 def _config_cache_key(config: VisibilityConfig) -> str:
@@ -331,18 +359,32 @@ class _VisibilityEnforcementBase(Middleware):
             self._last_good_config = config
         except Exception:
             config = self._last_good_config
+            if config is not None:
+                outcome = "using last-known-good config"
+            elif tool_name == _REPORT_ISSUE_TOOL:
+                outcome = (
+                    "allowing ha_report_issue because its diagnostic exemption "
+                    "defaults to unrestricted"
+                )
+            else:
+                outcome = "failing closed"
             logger.warning(
                 "visibility enforce: config load failed; %s",
-                "using last-known-good config" if config else "failing closed",
+                outcome,
                 exc_info=True,
             )
-        # ``ha_report_issue`` is intentionally the diagnostic escape hatch. A
-        # missing/corrupt first config load therefore follows its safe default
-        # (unrestricted), while a last-known-good explicit opt-in continues to
-        # enforce. Successful loads consult the live toggle on every call.
+        # ``ha_report_issue`` is an unconditional diagnostic escape hatch while
+        # the toggle is off, not only a registry-failure fallback. A missing or
+        # corrupt first config load follows that safe default; a last-known-good
+        # explicit opt-in continues to enforce.
         if tool_name == _REPORT_ISSUE_TOOL and (
             config is None or not config.restrict_report_issue
         ):
+            if config is not None:
+                logger.info(
+                    "visibility enforce: bypassing ha_report_issue because "
+                    "restrict_report_issue=false"
+                )
             return None
         if config is None:
             _raise_enforced(tool_name, _CONFIG_LOAD_FAILED_REASON)
@@ -376,43 +418,43 @@ class VisibilityInboundEnforcement(_VisibilityEnforcementBase):
     ) -> Any:
         name = context.message.name
         args = context.message.arguments or {}
-        effective_name, effective_args = _effective_tool_call(name, args)
-        config = await self._active_config(effective_name)
+        effective = _effective_tool_call(name, args)
+        config = await self._active_config(effective.name)
         if config is None:
             return await call_next(context)
 
-        reason = _unscannable_reason(effective_name, effective_args)
+        reason = _unscannable_reason(effective.name, effective.arguments)
         if reason is not None:
             logger.info(
-                "visibility enforce: refused unscannable call to %s", effective_name
+                "visibility enforce: refused unscannable call to %s", effective.name
             )
-            _raise_enforced(effective_name, reason)
+            _raise_enforced(effective.name, reason)
 
         try:
             hidden, regex = await self._hidden_and_regex(config)
         except VisibilityDataUnavailable:
-            _raise_enforced(name, _FAIL_CLOSED_REASON)
+            _raise_enforced(effective.name, _FAIL_CLOSED_REASON)
 
-        self._scan_inbound(name, args, hidden, regex)
+        self._scan_inbound(
+            effective.name, effective.arguments, args, hidden, regex
+        )
         return await call_next(context)
 
     def _scan_inbound(
         self,
         name: str,
-        args: dict[str, Any],
+        effective_args: dict[str, Any],
+        raw_args: dict[str, Any],
         hidden: set[str],
         regex: re.Pattern[str] | None,
     ) -> None:
         """Conceal on an exact hidden-id argument; refuse on an embedded one."""
-        exact: str | None = None
-        embedded = False
-        if name in PROXY_META_TOOLS:
-            inner = _unwrap_proxy_call(args)
-            if inner is not None:
-                exact, embedded = _scan_value(inner[1], hidden, regex)
-        raw_exact, raw_embedded = _scan_value(args, hidden, regex)
-        exact = exact or raw_exact
-        embedded = embedded or raw_embedded
+        exact, embedded = _scan_value(effective_args, hidden, regex)
+        if effective_args is not raw_args:
+            # Scan the envelope too: its metadata can itself name a hidden entity.
+            raw_exact, raw_embedded = _scan_value(raw_args, hidden, regex)
+            exact = exact or raw_exact
+            embedded = embedded or raw_embedded
         if exact is not None:
             logger.info("visibility enforce: concealed hidden entity in %s call", name)
             _conceal_as_not_found(exact)
@@ -433,15 +475,17 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
     ) -> Any:
         name = context.message.name
         args = context.message.arguments or {}
-        effective_name, _effective_args = _effective_tool_call(name, args)
-        config = await self._active_config(effective_name)
+        effective = _effective_tool_call(name, args)
+        config = await self._active_config(effective.name)
         if config is None:
             return await call_next(context)
         try:
             _hidden, regex = await self._hidden_and_regex(config)
         except VisibilityDataUnavailable:
-            _raise_enforced(name, _FAIL_CLOSED_REASON)
-        return await self._call_and_scan_outbound(name, context, call_next, regex)
+            _raise_enforced(effective.name, _FAIL_CLOSED_REASON)
+        return await self._call_and_scan_outbound(
+            effective.name, context, call_next, regex
+        )
 
     async def _call_and_scan_outbound(
         self,

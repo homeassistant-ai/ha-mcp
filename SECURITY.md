@@ -99,28 +99,34 @@ user).
 
 The opt-in entity visibility filter's **enforce mode** (`"enforce": true`, see
 the [Entity visibility filter FAQ](docs/FAQ.md#enforce-mode)) makes a hidden set
-unreadable across all tools: direct reads of a hidden entity are refused with a
-generic not-found before the tool runs, and content reads (dashboards, templates,
-automations, traces, logs, files) that would surface a hidden entity_id are
-refused on contact. It fails closed when the registry cannot be loaded. This is a
-strong barrier against an agent *incidentally* surfacing a hidden entity, not a
-cryptographic guarantee: enforcement is a text scan for the hidden entity_id, so a
-Jinja template or sandbox-adjacent computation that *derives* a hidden entity's
-state without ever naming its entity_id cannot be caught. The guaranteed property
-is that a hidden entity's data never flows to the client through a tool read —
-existence concealment
-is best-effort: the concealment error is a canonical not-found, and per-tool
-not-found shapes vary (details text, suggestions, bulk reads that normally
-partial-succeed), so a prober comparing error shapes may infer that an id is
-hidden rather than absent. The boundary covers Home Assistant entity data, not
-physical-world imagery: a camera the filter does not hide stays readable
-(`ha_get_camera_image`), and its frames could incidentally show a display that
-renders a hidden entity's state — hide the camera itself (denylist or its area)
-when its view is sensitive. Enforce mode is not a
-defense against an adversarial prompt author deliberately trying to exfiltrate a
-hidden entity's state, and (like the default filter) it is not a substitute for
-Home Assistant's own permission model — restrict what the configured token can
-reach in HA for a hard boundary.
+unreadable across ordinary tool reads: direct reads of a hidden entity are
+refused with a generic not-found before the tool runs, and scannable content
+reads (dashboards, templates, automations, traces, logs, files) that would
+surface a hidden entity_id are refused on contact. Those enforced paths fail
+closed when registry data cannot be loaded.
+
+One diagnostic path is deliberately outside that guarantee by default:
+`ha_report_issue` bypasses both scans while `restrict_report_issue` is false,
+even when visibility data is healthy, and its report may contain logs naming a
+hidden entity. This is the troubleshooting escape hatch when the filter itself
+fails; operators can opt it into enforcement. A config that cannot be loaded
+with no last-good copy follows that unrestricted default for this one tool while
+all other calls fail closed.
+
+This is a strong barrier against an agent *incidentally* surfacing a hidden
+entity, not a cryptographic guarantee: enforcement scans for the hidden
+entity_id, so a Jinja template or sandbox-adjacent computation that *derives* a
+hidden entity's state without naming its entity_id cannot be caught. On enforced
+scannable paths, a matching hidden entity's data is not returned. Existence
+concealment is best-effort: per-tool not-found shapes vary, so a prober comparing
+errors may infer that an id is hidden rather than absent. The boundary covers
+Home Assistant entity data, not physical-world imagery: a visible camera stays
+readable (`ha_get_camera_image`) and could incidentally show a display that
+renders a hidden entity's state — hide that camera when its view is sensitive.
+Enforce mode is not a defense against an adversarial prompt author deliberately
+trying to exfiltrate a hidden entity's state, nor a substitute for Home
+Assistant's permission model; restrict what the configured token can reach in
+HA for a hard boundary.
 
 ### OAuth Bearer token design
 

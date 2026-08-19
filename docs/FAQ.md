@@ -352,7 +352,8 @@ still appears in automation, dashboard, and template content, so do not rely on
 the default filter as a security boundary. The opt-in **[Enforce mode](#enforce-mode)**
 below turns it into a genuine read barrier: with `"enforce": true`, direct reads
 of a hidden entity are concealed and content reads that would surface one are
-refused across every tool.
+refused across tool reads, except for the deliberately unrestricted-by-default
+`ha_report_issue` diagnostic path described below.
 
 **Default form: reads only – it does not gate control tools.** Without enforce
 mode the filter only scopes what the *collection read* tools return. It does
@@ -387,7 +388,8 @@ directory (the same directory as `tool_policy.json`; `/data` in the app) with
   "allow_areas": [],
   "allow_labels": [],
   "respect_assist_exposure": false,
-  "enforce": false
+  "enforce": false,
+  "restrict_report_issue": false
 }
 ```
 
@@ -431,8 +433,9 @@ it passes every active one.
 #### Enforce mode
 
 Set `"enforce": true` (or the **Enforce mode** toggle in the Entity Visibility
-tab) to turn the same hidden set into a genuine read barrier applied across
-**every** tool, not just `ha_search` / `ha_get_overview`. `enforce` is not a hide
+tab) to turn the same hidden set into a genuine read barrier applied across tool
+reads, not just `ha_search` / `ha_get_overview`. The default exception is
+`ha_report_issue`, described below. `enforce` is not a hide
 dimension — it does not change *which* entities are hidden, only how strongly the
 hiding is applied — so it is inert unless the filter is also `enabled` with at
 least one active hide dimension. What it covers:
@@ -451,10 +454,10 @@ least one active hide dimension. What it covers:
   automation, script, scene, helper, or dashboard record that references a
   hidden entity is omitted from the config results (in the default soft mode
   such records still appear — that is the documented soft-filter behavior).
-- **Content reads are refused on contact.** A dashboard config, template result,
-  automation/script body, trace, log, or file read whose output would surface a
-  hidden entity_id is refused with a generic `ENTITY_VISIBILITY_ENFORCED` error
-  that never names the matched id.
+- **Content reads are refused on contact.** An ordinary dashboard config,
+  template result, automation/script body, trace, log, or file read whose output
+  would surface a hidden entity_id is refused with a generic
+  `ENTITY_VISIBILITY_ENFORCED` error that never names the matched id.
 - **Writes naming a hidden entity are concealed too.** The inbound argument scan
   applies to *every* tool, including service calls: a `ha_call_service` targeting
   a hidden entity_id is concealed as not-found, so an agent cannot confirm the
@@ -474,10 +477,21 @@ camera whose view happens to include a display showing a hidden entity's state;
 if a camera can see something sensitive, hide the camera too (denylist or its
 area).
 
-Enforce mode **fails closed**: if the entity registry (or the config file
-itself) cannot be loaded, the server falls back to the last good read from this
-session — and with none available, tool calls are refused rather than risk
-leaking a restricted entity. The hidden set is cached for ~30s, so an area/label
+A second surface is deliberately **exempt by default**: `ha_report_issue`.
+While `"restrict_report_issue": false`, it bypasses both visibility scans on
+every call — not only during a registry failure — and can return diagnostic
+fields such as core, app/add-on, recent, and startup logs that contain hidden
+entity_ids. This keeps the troubleshooting path available when visibility
+configuration or Home Assistant registry inputs are the problem. Set
+`"restrict_report_issue": true` to scan and refuse it like other tool reads.
+
+Except for that default diagnostic escape hatch, enforce mode **fails closed**:
+if the entity registry (or the config file itself) cannot be loaded, the server
+falls back to the last good read from this session — and with none available,
+tool calls are refused rather than risk leaking a restricted entity. If no
+config can be read, `ha_report_issue` follows its safe unrestricted default;
+if a last-good config opted it in, it fails closed too. The hidden set is cached
+for ~30s, so an area/label
 membership change in Home Assistant can take up to that long to take effect for
 the area/label dimensions (a config edit in the settings UI applies on the next
 call).

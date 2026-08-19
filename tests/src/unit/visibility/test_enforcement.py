@@ -254,8 +254,7 @@ class TestReportIssueRestriction:
             )
 
         assert any(
-            "restrict_report_issue=false" in record.message
-            for record in caplog.records
+            "restrict_report_issue=false" in record.message for record in caplog.records
         ), [record.message for record in caplog.records]
 
     @pytest.mark.parametrize("proxied", [False, True])
@@ -421,7 +420,9 @@ class TestConfigLoadFailure:
         assert result.content[0].text == "diagnostics still available"
         assert client.get_states_calls == 0
         messages = [record.message for record in caplog.records]
-        assert any("allowing ha_report_issue" in message for message in messages), messages
+        assert any("allowing ha_report_issue" in message for message in messages), (
+            messages
+        )
         assert not any("failing closed" in message for message in messages), messages
 
     async def test_corrupt_config_after_enforce_off_load_passes_through(
