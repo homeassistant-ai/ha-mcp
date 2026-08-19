@@ -451,6 +451,7 @@ class TestHaGetOverviewSettingsUrl:
             "ha_mcp.stdio_settings_sidecar.read_sidecar_url", lambda: None
         )
         monkeypatch.setattr(settings_ui, "_http_settings_prefix", None)
+        monkeypatch.setattr(settings_ui, "_http_settings_mounted", False)
 
         mcp = MagicMock()
         mcp.custom_route = MagicMock(return_value=lambda fn: fn)
