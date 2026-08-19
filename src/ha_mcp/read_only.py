@@ -460,11 +460,13 @@ class ReadOnlyMiddleware(Middleware):
         args = context.message.arguments or {}
 
         # Call proxies: decide on the INNER call (see _unwrap_proxy_call).
-        # ha_search_tools and envelope-less proxy calls pass through —
-        # searching is a read, and the proxy raises its own validation
-        # error for a missing inner name. When the inner call is allowed,
-        # the proxy dispatch re-enters this middleware with the real tool
-        # name anyway (harmless re-check, same verdict).
+        # Envelope-less proxy calls pass through because the proxy raises its own
+        # validation error for a missing inner name. When the inner call is
+        # allowed, proxy dispatch re-enters this middleware with the real tool name
+        # anyway (harmless re-check, same verdict). ``ha_search_tools`` is not a
+        # dispatch proxy; it reaches generic classification below as an unknown
+        # synthetic tool, which passes through to the search transform (or the
+        # stale-tool hint path when search is disabled).
         if name in CALL_PROXY_META_TOOLS:
             unwrapped = self._unwrap_proxy_call(args)
             if unwrapped is None:

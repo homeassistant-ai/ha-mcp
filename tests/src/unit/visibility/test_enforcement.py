@@ -274,6 +274,23 @@ class TestReportIssueRestriction:
             "bypassing ha_report_issue" in record.message for record in caplog.records
         ), [record.message for record in caplog.records]
 
+    async def test_default_bypass_is_not_logged_without_active_hide_dimension(
+        self, set_config, caplog
+    ):
+        set_config(enabled=True, enforce=True)
+        mw = make_mw(get_client=FakeClient)
+
+        with caplog.at_level("INFO", logger="ha_mcp.visibility.enforcement"):
+            result = await mw.on_call_tool(
+                report_context(),
+                _returns(text_result("diagnostics remain reachable")),
+            )
+
+        assert result.content[0].text == "diagnostics remain reachable"
+        assert not any(
+            "bypassing ha_report_issue" in record.message for record in caplog.records
+        ), [record.message for record in caplog.records]
+
     @pytest.mark.parametrize("proxied", [False, True])
     async def test_report_issue_is_scanned_when_operator_opts_in(
         self, set_config, proxied
