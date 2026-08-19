@@ -479,12 +479,32 @@ def test_finalize_partial_state_extends_errors_not_clobbers() -> None:
         response, partial_local=True, errors_local=orchestrator_errors
     )
     assert response["partial"] is True
+    assert response["partial_reason"] == "entities: ws_connection_closed"
     # Both sets of errors must survive — payload errors first (already in
     # response from the merge), orchestrator surface errors appended.
     assert response["errors"] == [
         {"surface": "config-internal", "code": "BUDGET"},
         {"surface": "entities", "error": "ws_connection_closed"},
     ]
+
+
+def test_finalize_partial_state_appends_existing_reason() -> None:
+    """A local branch error must not clobber payload-side incompleteness."""
+    response = {
+        "partial": True,
+        "partial_reason": "config: budget exhausted",
+        "errors": [],
+    }
+
+    _finalize_partial_state(
+        response,
+        partial_local=True,
+        errors_local=[{"surface": "entities", "error": "ws closed"}],
+    )
+
+    assert response["partial_reason"] == (
+        "config: budget exhausted; entities: ws closed"
+    )
 
 
 def test_finalize_partial_state_noop_when_no_branch_raised() -> None:

@@ -5,7 +5,6 @@ This module provides entity search, system overview, deep search, and state retr
 """
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, cast
@@ -322,6 +321,13 @@ def _finalize_partial_state(
     if partial_local:
         response["partial"] = True
         response["errors"].extend(errors_local)
+        local_reason = "; ".join(
+            f"{error['surface']}: {error['error']}" for error in errors_local
+        )
+        existing_reason = response.get("partial_reason")
+        response["partial_reason"] = (
+            f"{existing_reason}; {local_reason}" if existing_reason else local_reason
+        )
 
 
 def _compute_eligibility(
@@ -1692,9 +1698,9 @@ class SearchTools:
             Field(
                 default=None,
                 description=(
-                    "Narrow entity-registry results to an area (id, name, or alias). "
-                    "Area only, never a floor: use ha_list_floors_areas first for "
-                    "floor-wide requests. Does not affect configuration search."
+                    "Narrow entity-registry results to an area (id, name, or alias) "
+                    "or an exact floor (id, name, or alias), which expands to all "
+                    "areas on that floor. Does not affect configuration search."
                 ),
             ),
         ] = None,
@@ -2208,21 +2214,6 @@ class SearchTools:
                 outcome, Exception
             ):
                 raise outcome
-            # A floor passed as area_filter is an intentional public validation
-            # failure. Preserve its MCP isError semantics without re-raising the
-            # operational ToolErrors that branch helpers intentionally format for
-            # the historical partial/errors[] response.
-            if isinstance(outcome, ToolError) and label == "entities":
-                try:
-                    error_payload = json.loads(str(outcome))
-                except (json.JSONDecodeError, TypeError):
-                    error_payload = {}
-                if (
-                    error_payload.get("error", {}).get("code")
-                    == "VALIDATION_INVALID_PARAMETER"
-                    and error_payload.get("parameter") == "area_filter"
-                ):
-                    raise outcome
             if isinstance(outcome, Exception):
                 partial = True
                 errors.append({"surface": label, "error": str(outcome)})
@@ -2272,7 +2263,10 @@ class SearchTools:
             str | None,
             Field(
                 default=None,
-                description="Limit to entities in a specific area (area ID or name).",
+                description=(
+                    "Limit to an area, or an exact/close floor name to expand "
+                    "to every area on that floor."
+                ),
             ),
         ] = None,
         limit: Annotated[

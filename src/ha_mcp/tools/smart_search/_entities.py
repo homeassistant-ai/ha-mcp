@@ -4,15 +4,12 @@ import asyncio
 import logging
 from typing import Any
 
-from fastmcp.exceptions import ToolError
-
-from ...errors import ErrorCode, create_error_response
-from ...utils.fuzzy_search import calculate_partial_ratio
+from ...utils.fuzzy_search import calculate_partial_ratio, calculate_ratio
 from ...visibility.resolver import (
     device_registry_needed_for_visibility,
     load_hidden_set,
 )
-from ..helpers import exception_to_structured_error, raise_tool_error
+from ..helpers import exception_to_structured_error
 from ..util_helpers import merge_visibility_warnings
 from ._base import _SearchBase
 
@@ -408,9 +405,10 @@ class EntitySearchMixin(_SearchBase):
         """
         Get entities grouped by area/room using the HA registries for accurate area resolution.
 
-        Uses entity registry, device registry, and area registry to determine
-        which area each entity belongs to. Fuzzy matches the query against
-        area names, IDs, and area-registry aliases to find the target area(s).
+        Uses the entity, device, area, and floor registries to determine which
+        area each entity belongs to. Exact area names, IDs, and aliases take
+        precedence. An exact floor match expands to every area on that floor;
+        otherwise the query is fuzzy-matched against areas.
 
         Args:
             area_query: Area/room name (or alias) to search for
@@ -422,6 +420,10 @@ class EntitySearchMixin(_SearchBase):
 
         Returns:
             Dictionary with area-grouped entities
+
+        Raises:
+            ToolError: If mandatory Home Assistant state retrieval fails or an
+                unexpected search error occurs.
         """
         try:
             # Fetch all registries and states in parallel
@@ -471,47 +473,20 @@ class EntitySearchMixin(_SearchBase):
             area_registry = self._parse_area_registry(results[1], registry_warnings)
             entity_reg_map = self._parse_entity_reg_map(results[2], registry_warnings)
             device_area_map = self._parse_device_area_map(results[3], registry_warnings)
+            floor_registry_available = isinstance(results[4], (list, dict)) and not (
+                isinstance(results[4], dict)
+                and results[4].get("success", True) is False
+            )
             floor_registry = self._parse_floor_registry(results[4], registry_warnings)
             degraded_warnings = registry_warnings + visibility_warnings
 
-            area_query_lower = area_query.lower().strip()
-            exact_area_ids = self._match_exact_registry_ids(
-                area_registry, "area_id", area_query_lower
+            matched_area_ids, resolution_warnings = self._resolve_area_query(
+                area_registry,
+                floor_registry,
+                area_query,
+                floor_registry_available=floor_registry_available,
             )
-            if exact_area_ids:
-                matched_area_ids = exact_area_ids
-            else:
-                matched_floor_ids = self._match_exact_registry_ids(
-                    floor_registry, "floor_id", area_query_lower
-                )
-                if matched_floor_ids:
-                    matched_floors = [
-                        floor_registry[floor_id]
-                        for floor_id in sorted(matched_floor_ids)
-                    ]
-                    floor_names = [
-                        floor.get("name", floor.get("floor_id", ""))
-                        for floor in matched_floors
-                    ]
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            f"area_filter '{area_query}' identifies floor "
-                            f"'{floor_names[0]}', not an area",
-                            suggestions=[
-                                "Use ha_list_floors_areas to list the floor's areas, "
-                                "then call ha_search once per area_id"
-                            ],
-                            context={
-                                "parameter": "area_filter",
-                                "value": area_query,
-                                "matched_floor_ids": sorted(matched_floor_ids),
-                                "matched_floor_names": floor_names,
-                            },
-                        )
-                    )
-                matched_area_ids = self._match_area_ids(area_registry, area_query_lower)
-
+            degraded_warnings.extend(resolution_warnings)
             if not matched_area_ids:
                 return merge_visibility_warnings(
                     {
@@ -550,8 +525,6 @@ class EntitySearchMixin(_SearchBase):
                 degraded_warnings,
             )
 
-        except ToolError:
-            raise
         except Exception as e:
             logger.error(f"Error in get_entities_by_area: {e}")
             exception_to_structured_error(
@@ -644,55 +617,167 @@ class EntitySearchMixin(_SearchBase):
                 matches.add(registry_id)
         return matches
 
-    @staticmethod
-    def _match_area_ids(
-        area_registry: dict[str, dict[str, Any]], area_query_lower: str
-    ) -> set[str]:
-        """Resolve the query to area_ids: exact id/name/alias match, else fuzzy.
-
-        Two-pass: pass 1 collects exact id / name / alias matches; if any are
-        found, fuzzy aggregation is skipped entirely. This makes ``area_filter``
-        honor a literal area_id from ``ha_list_floors_areas`` — a query like
-        ``"bedroom_kids"`` would otherwise also fuzzy-match its parent
-        ``"bedroom"`` (partial_ratio=100) and aggregate sibling areas' entities.
-        Aliases (per-area registry, used by HA voice config) mirror the
-        entity-side enrichment in smart_entity_search.
-        """
-        exact_area_ids: set[str] = set()
-        fuzzy_area_ids: set[str] = set()
-
-        for area_id, area_info in area_registry.items():
-            area_name = area_info.get("name", "")
-            area_aliases = area_info.get("aliases", []) or []
-            # Exact match on area_id, name, or any alias (case-insensitive)
-            if (
-                area_query_lower == area_id.lower()
-                or area_query_lower == area_name.lower()
-                or any(
-                    area_query_lower == a.lower()
-                    for a in area_aliases
-                    if isinstance(a, str)
+    @classmethod
+    def _resolve_area_query(
+        cls,
+        area_registry: dict[str, dict[str, Any]],
+        floor_registry: dict[str, dict[str, Any]],
+        area_query: str,
+        *,
+        floor_registry_available: bool,
+    ) -> tuple[set[str], list[str]]:
+        """Resolve an area/floor query with exact-area precedence."""
+        query_lower = area_query.lower().strip()
+        exact_area_ids = cls._match_exact_registry_ids(
+            area_registry, "area_id", query_lower
+        )
+        exact_floor_ids = cls._match_exact_registry_ids(
+            floor_registry, "floor_id", query_lower
+        )
+        if exact_area_ids:
+            warnings = []
+            if exact_floor_ids:
+                warnings.append(
+                    f"'{area_query}' matches both an area and a floor; "
+                    "the exact area match was used."
                 )
-            ):
-                exact_area_ids.add(area_id)
-                continue
-            # Fuzzy match on area name, id, or any alias
+            return exact_area_ids, warnings
+
+        if exact_floor_ids:
+            area_ids, warning = cls._expand_floor_ids(
+                area_registry,
+                floor_registry,
+                exact_floor_ids,
+                area_query,
+                fuzzy_match=False,
+            )
+            return area_ids, [warning]
+
+        if not floor_registry_available:
+            # Without the floor registry, fuzzy area matching could silently
+            # recreate the original floor->partial-area misresolution.
+            return set(), []
+
+        fuzzy_floor_ids, floor_score = cls._match_fuzzy_registry_ids(
+            floor_registry, "floor_id", query_lower
+        )
+        _, area_score = cls._match_fuzzy_registry_ids(
+            area_registry, "area_id", query_lower
+        )
+        if fuzzy_floor_ids and floor_score > area_score:
+            area_ids, warning = cls._expand_floor_ids(
+                area_registry,
+                floor_registry,
+                fuzzy_floor_ids,
+                area_query,
+                fuzzy_match=True,
+            )
+            return area_ids, [warning]
+        return cls._match_area_ids(area_registry, query_lower), []
+
+    @staticmethod
+    def _match_fuzzy_registry_ids(
+        registry: dict[str, dict[str, Any]],
+        id_key: str,
+        query_lower: str,
+    ) -> tuple[set[str], int]:
+        """Return best whole-string registry matches and their score.
+
+        Whole-string similarity distinguishes a typo in a floor name from an
+        area name that merely contains the floor name as one component.
+        """
+        best_ids: set[str] = set()
+        best_score = 0
+        for registry_id, info in registry.items():
+            values = [
+                str(info.get(id_key) or registry_id),
+                str(info.get("name") or ""),
+                *(
+                    alias
+                    for alias in (info.get("aliases", []) or [])
+                    if isinstance(alias, str)
+                ),
+            ]
+            score = max(
+                (
+                    calculate_ratio(query_lower, value.lower())
+                    for value in values
+                    if value
+                ),
+                default=0,
+            )
+            if score > best_score:
+                best_ids = {registry_id}
+                best_score = score
+            elif score == best_score:
+                best_ids.add(registry_id)
+        return (best_ids, best_score) if best_score >= 80 else (set(), best_score)
+
+    @staticmethod
+    def _expand_floor_ids(
+        area_registry: dict[str, dict[str, Any]],
+        floor_registry: dict[str, dict[str, Any]],
+        floor_ids: set[str],
+        area_query: str,
+        *,
+        fuzzy_match: bool,
+    ) -> tuple[set[str], str]:
+        """Expand floor IDs to their areas and build the model-facing warning."""
+        area_ids = {
+            area_id
+            for area_id, area in area_registry.items()
+            if area.get("floor_id") in floor_ids
+        }
+        floor_names = [
+            str(
+                floor_registry[floor_id].get("name")
+                or floor_registry[floor_id].get("floor_id")
+                or ""
+            )
+            for floor_id in sorted(floor_ids)
+        ]
+        floor_label = ", ".join(name for name in floor_names if name)
+        floor_suffix = f" ({floor_label})" if floor_label else ""
+        match_suffix = " from a close spelling" if fuzzy_match else ""
+        warning = (
+            f"'{area_query}' is a floor, not an area — expanded to "
+            f"{len(area_ids)} area(s) on the matched floor(s){floor_suffix}"
+            f"{match_suffix}."
+        )
+        return area_ids, warning
+
+    @classmethod
+    def _match_area_ids(
+        cls, area_registry: dict[str, dict[str, Any]], area_query_lower: str
+    ) -> set[str]:
+        """Resolve the query to area IDs: exact id/name/alias, then fuzzy.
+
+        Exact matches delegate to the shared registry matcher so area and floor
+        precedence use identical case-insensitive semantics.
+        """
+        exact_area_ids = cls._match_exact_registry_ids(
+            area_registry, "area_id", area_query_lower
+        )
+        if exact_area_ids:
+            return exact_area_ids
+
+        fuzzy_area_ids: set[str] = set()
+        for area_id, area_info in area_registry.items():
+            area_name = str(area_info.get("name") or "")
+            area_aliases = area_info.get("aliases", []) or []
             name_score = calculate_partial_ratio(area_query_lower, area_name.lower())
             id_score = calculate_partial_ratio(area_query_lower, area_id.lower())
             alias_score = max(
                 (
-                    calculate_partial_ratio(area_query_lower, a.lower())
-                    for a in area_aliases
-                    if isinstance(a, str)
+                    calculate_partial_ratio(area_query_lower, alias.lower())
+                    for alias in area_aliases
+                    if isinstance(alias, str)
                 ),
                 default=0,
             )
             if max(name_score, id_score, alias_score) >= 80:
                 fuzzy_area_ids.add(area_id)
-
-        # Exact matches win — fuzzy aggregation only runs when no area_query is
-        # itself an area_id / name / alias.
-        return exact_area_ids or fuzzy_area_ids
+        return fuzzy_area_ids
 
     @staticmethod
     def _resolve_entity_areas(

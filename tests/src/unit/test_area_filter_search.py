@@ -9,7 +9,6 @@ names instead of consulting the entity/device/area registries.
 """
 
 import pytest
-from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.smart_search import SmartSearchTools
 
@@ -342,6 +341,7 @@ class TestAreaMatchingLogic:
                     "area_id": "couloir_sous_sol",
                     "name": "Couloir Sous-Sol",
                     "aliases": area_aliases or [],
+                    "floor_id": "sous_sol",
                 }
             ],
             floors=[
@@ -361,31 +361,37 @@ class TestAreaMatchingLogic:
         )
 
     @pytest.mark.asyncio
-    async def test_floor_name_does_not_fuzzy_match_partial_area(self):
-        """A floor name must not silently resolve to a similarly named area."""
-        tools = SmartSearchTools(client=self._basement_client(), fuzzy_threshold=60)
+    async def test_floor_name_expands_to_all_areas_on_floor(self):
+        """An exact floor name expands instead of fuzzy-matching one area."""
+        client = self._basement_client()
+        client.areas.extend(
+            [
+                {"area_id": "cave", "name": "Cave", "floor_id": "sous_sol"},
+                {"area_id": "garage", "name": "Garage", "floor_id": "ground"},
+            ]
+        )
+        tools = SmartSearchTools(client=client, fuzzy_threshold=60)
 
-        with pytest.raises(ToolError) as exc_info:
-            await tools.get_entities_by_area("sous-sol")
+        result = await tools.get_entities_by_area("sous-sol")
 
-        error = str(exc_info.value)
-        assert "Sous-sol" in error
-        assert "floor" in error.lower()
-        assert "ha_list_floors_areas" in error
-
-    @pytest.mark.asyncio
-    async def test_floor_alias_does_not_fuzzy_match_partial_area(self):
-        """An exact floor alias receives the same deterministic rejection."""
-        tools = SmartSearchTools(client=self._basement_client(), fuzzy_threshold=60)
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools.get_entities_by_area("Cave level")
-
-        assert "Sous-sol" in str(exc_info.value)
-        assert "ha_list_floors_areas" in str(exc_info.value)
+        assert result["total_areas_found"] == 2
+        assert set(result["areas"]) == {"couloir_sous_sol", "cave"}
+        assert any("expanded to 2 area(s)" in warning for warning in result["warnings"])
 
     @pytest.mark.asyncio
-    async def test_exact_area_id_still_wins_over_floor_guard(self):
+    async def test_floor_alias_expands_to_areas_on_floor(self):
+        """An exact floor alias follows the same deterministic expansion."""
+        tools = SmartSearchTools(client=self._basement_client(), fuzzy_threshold=60)
+
+        result = await tools.get_entities_by_area("Cave level")
+
+        assert set(result["areas"]) == {"couloir_sous_sol"}
+        assert any(
+            "is a floor, not an area" in warning for warning in result["warnings"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_exact_area_id_still_works(self):
         """A literal area_id from ha_list_floors_areas remains valid."""
         tools = SmartSearchTools(client=self._basement_client(), fuzzy_threshold=60)
 
@@ -406,6 +412,71 @@ class TestAreaMatchingLogic:
 
         assert result["total_areas_found"] == 1
         assert set(result["areas"]) == {"couloir_sous_sol"}
+
+    @pytest.mark.asyncio
+    async def test_exact_area_wins_when_floor_has_same_name(self):
+        """A shared exact area/floor name resolves to the area with a warning."""
+        client = self._basement_client(area_aliases=["Sous-sol"])
+        tools = SmartSearchTools(client=client, fuzzy_threshold=60)
+
+        result = await tools.get_entities_by_area("Sous-sol")
+
+        assert set(result["areas"]) == {"couloir_sous_sol"}
+        assert any("matches both an area and a floor" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_exact_area_id_wins_when_floor_has_same_identifier(self):
+        """An area ID collision also preserves exact-area precedence."""
+        client = self._basement_client()
+        client.areas[0]["area_id"] = "sous_sol"
+        client.entity_registry[0]["area_id"] = "sous_sol"
+        tools = SmartSearchTools(client=client, fuzzy_threshold=60)
+
+        result = await tools.get_entities_by_area("sous_sol")
+
+        assert set(result["areas"]) == {"sous_sol"}
+        assert any("matches both an area and a floor" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_shared_floor_alias_expands_all_matching_floors(self):
+        """Warnings identify every floor matched by a shared exact alias."""
+        client = self._basement_client()
+        client.floors.append(
+            {"floor_id": "lower", "name": None, "aliases": ["Cave level"]}
+        )
+        client.areas.append(
+            {"area_id": "lower_room", "name": "Lower room", "floor_id": "lower"}
+        )
+        tools = SmartSearchTools(client=client, fuzzy_threshold=60)
+
+        result = await tools.get_entities_by_area("Cave level")
+
+        assert set(result["areas"]) == {"couloir_sous_sol", "lower_room"}
+        warning = next(w for w in result["warnings"] if "expanded" in w)
+        assert "Sous-sol" in warning
+        assert "lower" in warning
+
+    @pytest.mark.asyncio
+    async def test_floor_typo_expands_instead_of_returning_partial_area(self):
+        """A close whole-floor spelling expands all areas on the floor."""
+        client = self._basement_client()
+        client.areas.append({"area_id": "cave", "name": "Cave", "floor_id": "sous_sol"})
+        tools = SmartSearchTools(client=client, fuzzy_threshold=60)
+
+        result = await tools.get_entities_by_area("sous-sl")
+
+        assert set(result["areas"]) == {"couloir_sous_sol", "cave"}
+        assert any("close spelling" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_area_typo_still_prefers_closer_area_name(self):
+        """A near area name is not broadened merely because it contains a floor."""
+        tools = SmartSearchTools(client=self._basement_client(), fuzzy_threshold=60)
+
+        result = await tools.get_entities_by_area("Couloir Sous-Sl")
+
+        assert set(result["areas"]) == {"couloir_sous_sol"}
+        assert not any("is a floor" in w for w in result.get("warnings", []))
 
 
 class TestAreaFilterGroupByDomain:
