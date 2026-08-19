@@ -22,9 +22,11 @@ from pydantic import TypeAdapter, ValidationError
 def _get_param_schema(
     register_fn: Callable[..., Any], tool_name: str, param_name: str
 ) -> dict[str, Any]:
+    """Return one parameter schema from a freshly registered MCP tool."""
     from fastmcp import FastMCP
 
     async def _inner() -> dict[str, Any]:
+        """Register the tool and retrieve its parameter schema asynchronously."""
         mcp = FastMCP("test")
         register_fn(mcp, MagicMock(), device_tools=MagicMock())
         tool = await mcp.get_tool(tool_name)
@@ -37,9 +39,11 @@ def _get_param_schema(
 def _get_tool_parameters(
     register_fn: Callable[..., Any], tool_name: str
 ) -> dict[str, Any]:
+    """Return the complete JSON schema for a freshly registered MCP tool."""
     from fastmcp import FastMCP
 
     async def _inner() -> dict[str, Any]:
+        """Register the tool and retrieve its complete schema asynchronously."""
         mcp = FastMCP("test")
         register_fn(mcp, MagicMock(), device_tools=MagicMock())
         tool = await mcp.get_tool(tool_name)

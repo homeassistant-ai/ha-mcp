@@ -360,6 +360,7 @@ class ListingModeClient(RoutingClient):
     """RoutingClient + area/floor registries so the area listing path works."""
 
     def __init__(self) -> None:
+        """Initialize area and floor registry fixtures for listing-mode tests."""
         super().__init__()
         self.floor_rows: list[dict[str, Any]] = []
         self.registry_with_area = {
@@ -379,6 +380,7 @@ class ListingModeClient(RoutingClient):
         }
 
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        """Serve area and floor fixtures before delegating other requests."""
         msg_type = msg.get("type", "")
         if msg_type == "config/area_registry/list":
             self.ws_types[msg_type] += 1

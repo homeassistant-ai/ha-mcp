@@ -30,6 +30,7 @@ class MockClientWithRegistries:
         entity_registry: list[dict] | None = None,
         device_registry: list[dict] | None = None,
     ):
+        """Initialize configurable entity, area, floor, and device registries."""
         self.entities = entities
         self.areas = areas or []
         self.floors = floors or []
@@ -44,6 +45,7 @@ class MockClientWithRegistries:
         return {"version": "2026.1.0"}
 
     async def send_websocket_message(self, message: dict) -> dict:
+        """Return the configured registry payload for a WebSocket request."""
         msg_type = message.get("type", "")
         if msg_type == "config/area_registry/list":
             return _ws_success(self.areas)
@@ -326,6 +328,7 @@ class TestAreaMatchingLogic:
 
     @staticmethod
     def _basement_client(*, area_aliases: list[str] | None = None):
+        """Build registries where a floor name partially resembles an area name."""
         return MockClientWithRegistries(
             entities=[
                 {
