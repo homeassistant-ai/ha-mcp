@@ -277,7 +277,15 @@ def _no_proxy_opener() -> Any:
     """
     import urllib.request
 
-    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+        """Keep the loopback-only shutdown request on its original target."""
+
+        def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), _NoRedirectHandler()
+    )
 
 
 # Shape run_main() writes into ui.url. Doubles as the legacy-migration
@@ -285,6 +293,15 @@ def _no_proxy_opener() -> Any:
 _SIDECAR_URL_RE = re.compile(
     r"http://127\.0\.0\.1:(\d{1,5})(/private_[A-Za-z0-9_-]+)/settings"
 )
+
+
+def _is_trusted_sidecar_url(url: str) -> bool:
+    """Return whether a URL matches the loopback sidecar producer contract."""
+    match = _SIDECAR_URL_RE.fullmatch(url.strip())
+    if match is None:
+        return False
+    port = int(match.group(1))
+    return 1024 <= port <= 65535
 
 
 def _seed_state_from_url(url: str) -> None:
@@ -334,6 +351,13 @@ def _post_shutdown(url: str) -> tuple[bool, bool | None]:
     a pid that will not exit.
     """
     import urllib.error
+
+    if not _is_trusted_sidecar_url(url):
+        logger.warning(
+            "Recorded sidecar URL is invalid; refusing the shutdown request and "
+            "replacing state files only."
+        )
+        return False, None
 
     try:
         import urllib.request

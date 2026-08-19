@@ -280,6 +280,20 @@ class TestRetireSidecar:
             for record in caplog.records
         ), [record.message for record in caplog.records]
 
+    def test_remote_url_is_rejected_before_shutdown_post(
+        self, tmp_data_dir: Path
+    ) -> None:
+        (tmp_data_dir / "ui.url").write_text(
+            "http://example.com:54321/private_cleanup/settings"
+        )
+
+        opener = _fake_opener()
+        with patch.object(sidecar, "_no_proxy_opener", return_value=opener):
+            acknowledged = sidecar.retire_sidecar(tmp_data_dir)
+
+        assert acknowledged is False
+        opener.open.assert_not_called()
+
     def test_unacknowledged_retirement_names_target_and_consequence(
         self, tmp_data_dir: Path, caplog
     ) -> None:
@@ -400,6 +414,47 @@ class TestShutdownExistingSidecar:
             isinstance(h, urllib.request.ProxyHandler) and h.proxies
             for h in sidecar._no_proxy_opener().handlers
         ), "opener must not carry an env-configured ProxyHandler"
+
+    def test_opener_refuses_redirects(self) -> None:
+        """A loopback sidecar must not redirect the shutdown POST off-host."""
+        import urllib.request
+
+        handler = next(
+            h
+            for h in sidecar._no_proxy_opener().handlers
+            if isinstance(h, urllib.request.HTTPRedirectHandler)
+        )
+        assert (
+            handler.redirect_request(
+                None,
+                None,
+                302,
+                "Found",
+                None,
+                "https://example.com/redirected",
+            )
+            is None
+        )
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://example.com:54321/private_xx/settings",
+            "https://127.0.0.1:54321/private_xx/settings",
+            "http://127.0.0.1:80/private_xx/settings",
+            "http://127.0.0.1:54321/private_xx/settings?redirect=1",
+        ],
+    )
+    def test_untrusted_url_is_rejected_before_request(
+        self, tmp_data_dir: Path, url: str
+    ) -> None:
+        (tmp_data_dir / "ui.url").write_text(url)
+        opener = _fake_opener()
+
+        with patch.object(sidecar, "_no_proxy_opener", return_value=opener):
+            sidecar._shutdown_existing_sidecar()
+
+        opener.open.assert_not_called()
 
     def test_no_url_file_is_noop(self, tmp_data_dir: Path) -> None:
         opener = _fake_opener()
