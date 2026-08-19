@@ -347,7 +347,13 @@ class DeviceControlTools:
     }
 
     _DOMAIN_PARAMS: ClassVar[dict[str, list[str]]] = {
-        "light": ["brightness", "color_temp_kelvin", "rgb_color", "effect"],
+        "light": [
+            "brightness",
+            "brightness_pct",
+            "color_temp_kelvin",
+            "rgb_color",
+            "effect",
+        ],
         "climate": ["temperature", "target_temp_high", "target_temp_low", "hvac_mode"],
         "cover": ["position", "tilt_position"],
         "media_player": ["volume_level", "media_content_id", "media_content_type"],
@@ -608,6 +614,33 @@ class DeviceControlTools:
                 logger.warning(f"Bulk control: {error}")
                 err_response = create_error_response(
                     ErrorCode.VALIDATION_MISSING_PARAMETER, error, context={"index": i}
+                )
+                err_response["index"] = i
+                err_response["operation"] = op
+                skipped_operations.append(err_response)
+                continue
+
+            allowed_keys = {
+                "entity_id",
+                "action",
+                "parameters",
+                "timeout_seconds",
+                "validate_first",
+            }
+            obsolete_keys = sorted(set(op) - allowed_keys)
+            if obsolete_keys:
+                key_list = ", ".join(obsolete_keys)
+                error = (
+                    f"Operation at index {i} contains unsupported key(s): {key_list}"
+                )
+                logger.warning(f"Bulk control: {error}")
+                err_response = create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    error,
+                    suggestions=[
+                        "Use entity_id and action; put action data inside parameters"
+                    ],
+                    context={"index": i, "unsupported_keys": obsolete_keys},
                 )
                 err_response["index"] = i
                 err_response["operation"] = op

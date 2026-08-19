@@ -61,20 +61,25 @@ class BulkControlOperation(TypedDict):
 
     entity_id: Annotated[
         str,
-        Field(description="Exact Home Assistant entity ID, e.g. 'light.kitchen'."),
+        Field(
+            min_length=1,
+            description="Exact Home Assistant entity ID, e.g. 'light.kitchen'.",
+        ),
     ]
     action: Annotated[
         str,
         Field(
+            min_length=1,
             description=(
                 "Device action such as 'on', 'off', or 'toggle'. For lights, use "
                 "'off' instead of the ha_call_service form 'turn_off'."
-            )
+            ),
         ),
     ]
     parameters: NotRequired[
         Annotated[
             dict[str, Any],
+            JSON_STRING_COERCION,
             Field(
                 description=(
                     "Optional action parameters, e.g. {'brightness_pct': 30} "
@@ -85,10 +90,14 @@ class BulkControlOperation(TypedDict):
     ]
     timeout_seconds: NotRequired[
         Annotated[
-            int,
+            float,
             Field(
                 ge=0,
-                description="Optional per-operation confirmation timeout in seconds.",
+                description=(
+                    "Optional confirmation timeout. On the component path, all "
+                    "operations share the maximum requested wait (default 10s, "
+                    "capped at 60s); 0 disables confirmation waiting."
+                ),
             ),
         ]
     ]
@@ -96,7 +105,10 @@ class BulkControlOperation(TypedDict):
         Annotated[
             bool,
             Field(
-                description="Validate the entity and action before dispatch; default true."
+                description=(
+                    "Validate that the entity exists before dispatch; default true. "
+                    "The action is always validated."
+                )
             ),
         ]
     ]
@@ -104,7 +116,7 @@ class BulkControlOperation(TypedDict):
 
 # Pydantic reads this runtime config when generating the TypedDict schema. Keep it
 # outside the class body because mypy permits only field declarations there.
-BulkControlOperation.__pydantic_config__ = ConfigDict(extra="forbid")  # type: ignore[attr-defined]
+BulkControlOperation.__pydantic_config__ = ConfigDict(extra="allow")  # type: ignore[attr-defined]
 
 
 class _AmbiguousDispatch:
@@ -1505,20 +1517,14 @@ class ServiceTools:
         parallel: bool = True,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        """Control multiple entities in one request; prefer this over repeated calls.
+        """Control multiple entities in one request; prefer this for one shared action.
 
-        Put every target in the ``operations`` list and call this tool exactly once
-        for a multi-entity action. Each operation uses the device-action schema
-        ``{"entity_id": "light.hall", "action": "off"}``. It does NOT use the
-        ha_call_service schema: never pass ``domain``, ``service``,
-        ``turn_on``, or ``turn_off`` for ordinary light/switch operations.
+        Put every target in ``operations`` and call the tool once. Optional item
+        parameters carry brightness, temperature, position, or other action data.
+        Parallel execution is the default.
 
-        Example — turn off two lights in one tool call:
-        ``operations=[{"entity_id": "light.hall", "action": "off"},
-        {"entity_id": "light.cave", "action": "off"}]``.
-
-        Use optional ``parameters`` inside an item for brightness, temperature,
-        position, or other action data. Parallel execution is the default.
+        When NOT to use: use ``ha_call_service`` for one service call targeting a
+        group or for service-specific payloads that do not fit device actions.
         """
         parallel_bool = parallel
 

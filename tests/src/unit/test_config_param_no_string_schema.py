@@ -23,17 +23,7 @@ def _get_param_schema(
     register_fn: Callable[..., Any], tool_name: str, param_name: str
 ) -> dict[str, Any]:
     """Return one parameter schema from a freshly registered MCP tool."""
-    from fastmcp import FastMCP
-
-    async def _inner() -> dict[str, Any]:
-        """Register the tool and retrieve its parameter schema asynchronously."""
-        mcp = FastMCP("test")
-        register_fn(mcp, MagicMock(), device_tools=MagicMock())
-        tool = await mcp.get_tool(tool_name)
-
-        return tool.parameters["properties"][param_name]  # type: ignore[no-any-return]
-
-    return asyncio.run(_inner())
+    return _get_tool_parameters(register_fn, tool_name)["properties"][param_name]
 
 
 def _get_tool_parameters(
@@ -240,7 +230,9 @@ def test_bulk_operations_schema_names_required_item_fields():
         "timeout_seconds",
         "validate_first",
     } <= set(item_schema["properties"])
-    assert item_schema["additionalProperties"] is False
+    assert item_schema["additionalProperties"] is True
+    assert item_schema["properties"]["entity_id"]["minLength"] == 1
+    assert item_schema["properties"]["action"]["minLength"] == 1
     assert item_schema["properties"]["timeout_seconds"]["minimum"] == 0
     assert "service" not in item_schema["properties"]
     assert "domain" not in item_schema["properties"]
@@ -248,8 +240,10 @@ def test_bulk_operations_schema_names_required_item_fields():
 
 
 @pytest.mark.parametrize("obsolete_key", ["domain", "service"])
-def test_bulk_operations_reject_obsolete_service_keys(obsolete_key: str):
-    """Bulk items reject keys from the incompatible ha_call_service contract."""
+def test_bulk_operation_preserves_obsolete_keys_for_per_item_validation(
+    obsolete_key: str,
+):
+    """Transport validation preserves unknown keys for fail-soft runtime handling."""
     from ha_mcp.tools.tools_service import BulkControlOperation
 
     operation = {
@@ -258,8 +252,23 @@ def test_bulk_operations_reject_obsolete_service_keys(obsolete_key: str):
         obsolete_key: "light" if obsolete_key == "domain" else "turn_off",
     }
 
-    with pytest.raises(ValidationError):
-        TypeAdapter(BulkControlOperation).validate_python(operation)
+    validated = TypeAdapter(BulkControlOperation).validate_python(operation)
+    assert validated[obsolete_key] == operation[obsolete_key]
+
+
+def test_bulk_operation_parameters_coerce_json_object_string():
+    """Nested parameters retain the project's lenient JSON-string compatibility."""
+    from ha_mcp.tools.tools_service import BulkControlOperation
+
+    operation = TypeAdapter(BulkControlOperation).validate_python(
+        {
+            "entity_id": "light.kitchen",
+            "action": "on",
+            "parameters": '{"brightness_pct": 30}',
+        }
+    )
+
+    assert operation["parameters"] == {"brightness_pct": 30}
 
 
 def test_bulk_operation_timeout_rejects_negative_and_accepts_zero():
@@ -275,4 +284,10 @@ def test_bulk_operation_timeout_rejects_negative_and_accepts_zero():
     assert (
         adapter.validate_python({**operation, "timeout_seconds": 0})["timeout_seconds"]
         == 0
+    )
+    assert (
+        adapter.validate_python({**operation, "timeout_seconds": 0.5})[
+            "timeout_seconds"
+        ]
+        == 0.5
     )
