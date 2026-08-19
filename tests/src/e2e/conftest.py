@@ -1793,7 +1793,9 @@ def _prepare_haos_image(
             if inaddon
             else "embedded"
             if haos_embedded
-            else "stdio" if haos_stdio else "external"
+            else "stdio"
+            if haos_stdio
+            else "external"
         ),
         image_path,
     )
@@ -2835,9 +2837,7 @@ async def mcp_client(
         client = _stdio_client(container_info, haos_stdio_config_dir)
         try:
             async with client:
-                logger.debug(
-                    "🔗 FastMCP client connected (stdio subprocess transport)"
-                )
+                logger.debug("🔗 FastMCP client connected (stdio subprocess transport)")
                 yield client
         finally:
             await _retire_stdio_sidecar(haos_stdio_config_dir)
@@ -2982,9 +2982,7 @@ async def stdio_mcp_client(
     client = _stdio_client(container_info, packaging_stdio_config_dir)
     try:
         async with client:
-            logger.debug(
-                "🔗 FastMCP client connected (stdio subprocess transport)"
-            )
+            logger.debug("🔗 FastMCP client connected (stdio subprocess transport)")
             yield client
     finally:
         await _retire_stdio_sidecar(packaging_stdio_config_dir)
