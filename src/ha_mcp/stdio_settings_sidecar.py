@@ -545,8 +545,17 @@ def _wait_for_external_retired_pid(
         time.sleep(_OLD_SIDECAR_EXIT_POLL)
 
 
-def _retire_external_sidecar(config_dir: Path) -> bool:
-    """Run the retire sequence for an externally managed sidecar."""
+def retire_sidecar(config_dir: Path) -> bool:
+    """Best-effort retirement for an externally managed stdio test process.
+
+    This public helper intentionally crosses the process boundary: callers that
+    spawn a real ``ha-mcp`` stdio server otherwise have no handle to its detached
+    settings listener. It uses discovery files in ``config_dir``, reports each
+    failure mode, and returns whether the sidecar acknowledged shutdown.
+
+    The replacement path in ``_shutdown_existing_sidecar`` deliberately remains
+    separate because it seeds global sidecar state and immediately spawns a successor.
+    """
     url = _read_external_retirement_url(config_dir)
     if url is None:
         return False
@@ -576,17 +585,6 @@ def _retire_external_sidecar(config_dir: Path) -> bool:
     logger.info("Retired settings UI sidecar at %s for config dir %s", url, config_dir)
     _wait_for_external_retired_pid(pid, url=url, config_dir=config_dir)
     return True
-
-
-def retire_sidecar(config_dir: Path) -> bool:
-    """Best-effort retirement for an externally managed stdio test process.
-
-    This public helper intentionally crosses the process boundary: callers that
-    spawn a real ``ha-mcp`` stdio server otherwise have no handle to its detached
-    settings listener. It uses discovery files in ``config_dir``, reports each
-    failure mode, and returns whether the sidecar acknowledged shutdown.
-    """
-    return _retire_external_sidecar(config_dir)
 
 
 def _log_shutdown_timeout(exc: BaseException) -> None:
@@ -625,6 +623,9 @@ def _shutdown_existing_sidecar() -> None:
     replacement, so nothing hands out the old URL anymore (if the
     replacement loses the port to that lingering process, it serves on
     an ephemeral fallback instead).
+
+    External test-process cleanup uses ``retire_sidecar``; the sequences stay
+    separate because only this path seeds state and immediately replaces the listener.
     """
     url = read_sidecar_url()
     if url is None:

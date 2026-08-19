@@ -17,6 +17,9 @@ escape hatch — "refuse on contact":
   (a template, an automation body, a service target list), or whose *output* would
   surface one, is refused with a generic ``ENTITY_VISIBILITY_ENFORCED`` error that
   never names the matched id.
+  The whole result is refused rather than token-redacted because adjacent values
+  may still be the hidden entity's data, and generic mutation could corrupt an
+  arbitrary tool schema or diagnostic payload.
 - **Unscannable surfaces are refused wholesale** while enforce is active — sandbox
   code execution and screenshot/pixel output can read arbitrary state that no text
   scan can attribute to an entity.
@@ -335,7 +338,12 @@ class _VisibilityEnforcementBase(Middleware):
             resolver.load_visibility_config, resolver.get_data_dir()
         )
 
-    async def _active_config(self, tool_name: str) -> VisibilityConfig | None:
+    async def _active_config(
+        self,
+        tool_name: str,
+        *,
+        emit_report_issue_diagnostic: bool = False,
+    ) -> VisibilityConfig | None:
         """Return the config when enforce is active, ``None`` when passthrough.
 
         The active-mode gate must not crash the call with an opaque trace on an
@@ -361,11 +369,12 @@ class _VisibilityEnforcementBase(Middleware):
                 )
             else:
                 outcome = "failing closed"
-            logger.warning(
-                "visibility enforce: config load failed; %s",
-                outcome,
-                exc_info=True,
-            )
+            if tool_name != _REPORT_ISSUE_TOOL or emit_report_issue_diagnostic:
+                logger.warning(
+                    "visibility enforce: config load failed; %s",
+                    outcome,
+                    exc_info=True,
+                )
         # ``ha_report_issue`` is an unconditional diagnostic escape hatch while
         # the toggle is off, not only a registry-failure fallback. A missing or
         # corrupt first config load follows that safe default; a last-known-good
@@ -374,7 +383,8 @@ class _VisibilityEnforcementBase(Middleware):
             config is None or not config.restrict_report_issue
         ):
             if (
-                config is not None
+                emit_report_issue_diagnostic
+                and config is not None
                 and config.enabled
                 and config.enforce
                 and config_has_active_hide_dimensions(config)
@@ -417,7 +427,9 @@ class VisibilityInboundEnforcement(_VisibilityEnforcementBase):
         name = context.message.name
         args = context.message.arguments or {}
         effective_name, effective_args = _effective_tool_call(name, args)
-        config = await self._active_config(effective_name)
+        config = await self._active_config(
+            effective_name, emit_report_issue_diagnostic=True
+        )
         if config is None:
             return await call_next(context)
 

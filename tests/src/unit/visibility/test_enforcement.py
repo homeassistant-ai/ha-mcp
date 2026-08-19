@@ -253,9 +253,15 @@ class TestReportIssueRestriction:
                 _returns(text_result("diagnostics mention sensor.hidden")),
             )
 
-        assert any(
-            "restrict_report_issue=false" in record.message for record in caplog.records
-        ), [record.message for record in caplog.records]
+        bypass_messages = [
+            record.message
+            for record in caplog.records
+            if "restrict_report_issue=false" in record.message
+        ]
+        assert bypass_messages == [
+            "visibility enforce: bypassing ha_report_issue because "
+            "restrict_report_issue=false"
+        ]
 
     async def test_default_bypass_is_not_logged_when_enforcement_inactive(
         self, set_config, caplog
@@ -454,9 +460,12 @@ class TestConfigLoadFailure:
         assert result.content[0].text == "diagnostics still available"
         assert client.get_states_calls == 0
         messages = [record.message for record in caplog.records]
-        assert any("allowing ha_report_issue" in message for message in messages), (
-            messages
-        )
+        assert [
+            message for message in messages if "allowing ha_report_issue" in message
+        ] == [
+            "visibility enforce: config load failed; allowing ha_report_issue because "
+            "its diagnostic exemption defaults to unrestricted"
+        ]
         assert not any("failing closed" in message for message in messages), messages
 
     async def test_corrupt_config_after_enforce_off_load_passes_through(
