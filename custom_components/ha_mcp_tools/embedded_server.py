@@ -157,6 +157,33 @@ _PENDING_INSTALL_WAIT_SECONDS = 600.0
 MIN_EMBEDDED_SERVER_VERSION = "7.10.0"
 
 
+def _register_embedded_settings_routes(
+    register_routes: Callable[..., None],
+    mcp: Any,
+    server: Any,
+    secret_path: str,
+) -> None:
+    """Mount embedded settings routes without advertising the direct path."""
+    try:
+        register_routes(
+            mcp,
+            server,
+            secret_path=secret_path,
+            advertise_prefix=False,
+        )
+    except TypeError as err:
+        if "advertise_prefix" not in str(err):
+            raise
+        # The component supports pinned server packages back to 7.10;
+        # advertise_prefix arrived in 7.14. Keep those grandfathered
+        # installs running with their former hint until they update.
+        _LOGGER.warning(
+            "Installed ha-mcp server cannot suppress the embedded settings "
+            "URL hint; update ha-mcp to remove the redundant hint"
+        )
+        register_routes(mcp, server, secret_path=secret_path)
+
+
 def _derive_loopback_url(hass: HomeAssistant) -> tuple[str, bool | None]:
     """Resolve the loopback base URL for HA core from the http integration.
 
@@ -1378,10 +1405,16 @@ class EmbeddedServerManager:
                 "Refusing to start."
             )
 
-        # Parity with the CLI HTTP runner: serve the web settings UI under the
-        # same secret path as the MCP endpoint.
+        # Serve the web settings UI under the same secret path as the MCP
+        # endpoint, but do not advertise that alternate direct-connect path to
+        # MCP clients: embedded users already have the HA sidebar entry (#2236).
         self._note_startup_phase("registering web routes")
-        register_settings_routes(server.mcp, server, secret_path=self._secret_path)
+        _register_embedded_settings_routes(
+            register_settings_routes,
+            server.mcp,
+            server,
+            self._secret_path,
+        )
 
         # Parity with the CLI HTTP runner: answer a browser GET on the MCP path
         # with the friendly landing page (405 + setup guidance) instead of a

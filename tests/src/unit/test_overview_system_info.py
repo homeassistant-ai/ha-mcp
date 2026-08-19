@@ -409,7 +409,7 @@ class TestHaGetOverviewSettingsUrl:
         """No sidecar URL but HTTP settings mounted → a hint points at the
         page (issue #1458).
 
-        In HTTP/Docker/OAuth modes the server binds 0.0.0.0 and can't know its
+        In standalone HTTP/Docker modes the server can't know its
         externally reachable host, so it emits a ``settings_url_hint`` that
         references the mount path + startup logs rather than a guessed URL.
         """

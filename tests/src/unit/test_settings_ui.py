@@ -512,8 +512,10 @@ class TestRouteRegistration:
         assert "/settings" in paths
         assert "/private_x/settings" in paths
         assert "/private_x/api/settings/tools" in paths
-        # The secret-path mount is recorded for ha_get_overview's hint (#1458)
-        assert get_http_settings_prefix() == "/private_x"
+        # Add-on users already have Supervisor ingress's "Open Web UI" button,
+        # so ha_get_overview must not hand MCP clients the alternate direct-path
+        # credential just to advertise a redundant settings-page route (#2236).
+        assert get_http_settings_prefix() is None
 
     def test_secret_path_only_when_not_addon(self, monkeypatch):
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)

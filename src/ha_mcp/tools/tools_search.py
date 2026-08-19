@@ -3396,7 +3396,7 @@ class SearchTools:
                     "tool_discovery, settings_url, settings_url_hint, "
                     "read_only_mode, read_only_mode_hint, ha_mcp_update. Note: "
                     "``settings_url`` (stdio mode), ``settings_url_hint`` "
-                    "(HTTP/Docker/OAuth mode), the ``read_only_mode`` / "
+                    "(standalone HTTP/Docker mode), the ``read_only_mode`` / "
                     "``read_only_mode_hint`` pair (only while Read Only Mode "
                     "is on), and ``ha_mcp_update`` (when an update check applies) "
                     "are emitted regardless of ``fields=`` projection so the "
@@ -3430,7 +3430,7 @@ class SearchTools:
         minimize the response) but only when the sidecar URL file
         actually exists.
 
-        In HTTP / Docker / OAuth modes there is no sidecar URL file and the
+        In standalone HTTP / Docker modes there is no sidecar URL file and the
         server can't know its externally reachable host, so the response
         instead carries a ``settings_url_hint`` string telling the user where
         the page is mounted and to read the full URL from the startup logs.
@@ -3512,7 +3512,7 @@ class SearchTools:
         if sidecar_url:
             projected["settings_url"] = sidecar_url
         else:
-            # No stdio sidecar URL file. In HTTP / Docker / OAuth modes hint at
+            # No stdio sidecar URL file. In standalone HTTP / Docker modes hint at
             # the page (and startup-log URL) instead of guessing a wrong absolute URL
             # when bound to 0.0.0.0 (issue #1458).
             from ..settings_ui import get_http_settings_prefix

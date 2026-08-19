@@ -524,11 +524,11 @@ def _ingress_only(handler: _SettingsRoute) -> _SettingsRoute:
 
 
 # Mount prefix the settings UI is served under in long-lived HTTP transports
-# (Docker / standalone ha-mcp-web / OAuth / the add-on's secret-path mount).
-# Recorded by register_settings_routes so ha_get_overview can point users at
-# the settings page in modes that have no stdio sidecar URL file to surface
-# (issue #1458). Stays None in pure stdio mode, where the sidecar writes
-# ~/.ha-mcp/ui.url instead.
+# (Docker / standalone ha-mcp-web). Recorded by register_settings_routes so
+# ha_get_overview can point users at the settings page in modes that have no
+# managed UI entry point or stdio sidecar URL file to surface (issue #1458).
+# Stays None in managed HA deployments and pure stdio mode, where the sidebar /
+# ingress entry point or ~/.ha-mcp/ui.url already provides discovery.
 _http_settings_prefix: str | None = None
 
 
@@ -539,8 +539,8 @@ def get_http_settings_prefix() -> str | None:
     long-lived HTTP server *and* advertising is enabled. ``ha_get_overview``
     reads it to hint at the settings page when there is no stdio sidecar URL to
     hand the user. It is None when the mount is deliberately not advertised
-    (OAuth/OIDC dedicated-secret mode) — use :func:`is_http_settings_mounted`,
-    not this, to tell HTTP from the stdio sidecar.
+    (managed HA or OAuth/OIDC dedicated-secret mode) — use
+    :func:`is_http_settings_mounted`, not this, to tell HTTP from the sidecar.
     """
     return _http_settings_prefix
 
@@ -594,11 +594,12 @@ def register_settings_routes(
             non-add-on mode, the function logs a warning and registers
             nothing rather than expose the routes publicly.
         advertise_prefix: When True (default), record the secret-path mount in
-            ``_http_settings_prefix`` so ``ha_get_overview`` can hint at the
-            settings URL. OAuth/OIDC modes pass False: there the settings UI
-            sits under a *dedicated* secret path that must never be handed to
-            MCP clients (GHSA-mx64-982r-65vg), so the mount happens but the
-            prefix is not recorded.
+            ``_http_settings_prefix`` for unmanaged HTTP deployments so
+            ``ha_get_overview`` can hint at the settings URL. The add-on never
+            records it because Supervisor ingress supplies an "Open Web UI"
+            entry point. Embedded and OAuth/OIDC modes pass False because they
+            already have a sidebar entry point or use a dedicated settings
+            secret, respectively.
     """
     handlers = build_settings_handlers(server)
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
@@ -705,10 +706,11 @@ def register_settings_routes(
         # need the same secret to reach the UI as they do for the MCP
         # endpoint.
         _mount(secret_prefix)
-        if advertise_prefix:
+        if advertise_prefix and not is_addon:
             # Record the mount so ha_get_overview can point users at the
-            # settings page in HTTP transports that have no stdio sidecar URL
-            # file (#1458). Suppressed in OAuth/OIDC modes, where the dedicated
-            # secret path must not leak to MCP clients (GHSA-mx64-982r-65vg).
+            # settings page in unmanaged HTTP transports that have no stdio
+            # sidecar URL file (#1458). The add-on already has Supervisor
+            # ingress discovery; embedded and OAuth/OIDC callers explicitly
+            # suppress advertising as well.
             global _http_settings_prefix
             _http_settings_prefix = secret_prefix
