@@ -16,6 +16,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import TypeAdapter, ValidationError
 
 
 def _get_param_schema(
@@ -235,6 +236,22 @@ def test_bulk_operations_schema_names_required_item_fields():
         "timeout_seconds",
         "validate_first",
     } <= set(item_schema["properties"])
+    assert item_schema["additionalProperties"] is False
     assert "service" not in item_schema["properties"]
     assert "domain" not in item_schema["properties"]
     assert "Use action='off', not service='turn_off'" in operations["description"]
+
+
+@pytest.mark.parametrize("obsolete_key", ["domain", "service"])
+def test_bulk_operations_reject_obsolete_service_keys(obsolete_key: str):
+    """Bulk items reject keys from the incompatible ha_call_service contract."""
+    from ha_mcp.tools.tools_service import BulkControlOperation
+
+    operation = {
+        "entity_id": "light.kitchen",
+        "action": "off",
+        obsolete_key: "light" if obsolete_key == "domain" else "turn_off",
+    }
+
+    with pytest.raises(ValidationError):
+        TypeAdapter(BulkControlOperation).validate_python(operation)

@@ -11,7 +11,7 @@ import httpx
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from ..client.rest_client import (
     HomeAssistantCommandError,
@@ -58,6 +58,8 @@ WS_CALL_SERVICE = "ha_mcp_tools/call_service"
 
 class BulkControlOperation(TypedDict):
     """One entity action in a ha_bulk_control request."""
+
+    __pydantic_config__ = ConfigDict(extra="forbid")
 
     entity_id: Annotated[
         str,
