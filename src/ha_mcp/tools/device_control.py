@@ -360,6 +360,10 @@ class DeviceControlTools:
         "set": "set_temperature",
     }
 
+    # Silent allowlist: _add_domain_params copies only these keys into the
+    # service call and drops everything else without an error, and a domain
+    # absent from this table loses every parameter. Extend it when adding
+    # support for a new parameter, or the parameter vanishes at dispatch.
     _DOMAIN_PARAMS: ClassVar[dict[str, list[str]]] = {
         "light": [
             "brightness",
@@ -487,10 +491,10 @@ class DeviceControlTools:
         """Check status of a device operation, waiting up to ``timeout_seconds`` for completion.
 
         Polls the in-memory operation registry (mutated by the WebSocket
-        listener as state changes arrive) every 0.2s while the operation is
-        pending, up to ``timeout_seconds``. Returns the final structured status
-        — completed/failed/timeout/pending — produced by
-        ``control_device_smart``.
+        listener as state changes arrive) while the operation is pending, at
+        0.2s intervals except for a final shorter poll that lands exactly on
+        the deadline. Returns the final structured status —
+        completed/failed/timeout/pending — produced by ``control_device_smart``.
         """
         operation = get_operation_from_memory(operation_id)
 

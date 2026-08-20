@@ -83,7 +83,10 @@ class BulkControlOperation(TypedDict):
             Field(
                 description=(
                     "Optional action parameters, e.g. {'brightness_pct': 30} "
-                    "when action='on'."
+                    "when action='on'. Each domain has a fixed allowlist of "
+                    "supported keys; keys outside it are ignored rather than "
+                    "rejected. Use ha_call_service for parameters this tool "
+                    "does not carry."
                 )
             ),
         ]
@@ -112,8 +115,10 @@ class BulkControlOperation(TypedDict):
             Field(
                 strict=True,
                 description=(
-                    "Validate that the entity exists before dispatch; default true. "
-                    "The action is always validated."
+                    "Report an ENTITY_NOT_FOUND failure when the target entity "
+                    "does not exist; default true. On the component batch path "
+                    "this is detected from the captured pre-state rather than by "
+                    "preventing dispatch. The action is always validated."
                 ),
             ),
         ]

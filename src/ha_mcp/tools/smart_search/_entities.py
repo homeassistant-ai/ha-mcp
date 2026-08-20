@@ -777,7 +777,10 @@ class EntitySearchMixin(_SearchBase):
         """Resolve the query to area IDs: exact id/name/alias, then fuzzy.
 
         Exact matches delegate to the shared registry matcher so area and floor
-        precedence use identical case-insensitive semantics.
+        precedence use identical case-insensitive semantics. Exact must win
+        outright: a query like "bedroom_kids" partial-matches its parent
+        "bedroom" at ratio 100, so falling through to the fuzzy pass would
+        aggregate every sibling area's entities under an exact hit.
         """
         exact_area_ids = cls._match_exact_registry_ids(
             area_registry, "area_id", area_query_lower
