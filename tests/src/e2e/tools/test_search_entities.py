@@ -10,7 +10,12 @@ import uuid
 
 import pytest
 
-from ..utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
+from ..utilities.assertions import (
+    MCPAssertions,
+    assert_mcp_success,
+    parse_mcp_result,
+    safe_call_tool,
+)
 from ..utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
@@ -2300,25 +2305,21 @@ async def floor_with_two_areas(mcp_client):
     """Create a floor with two empty areas for exact-floor expansion testing."""
     suffix = uuid.uuid4().hex[:8]
     floor_name = f"e2e floor {suffix}"
-    floor_data = assert_mcp_success(
-        await mcp_client.call_tool(
+    async with MCPAssertions(mcp_client) as mcp:
+        floor_data = await mcp.call_tool_success(
             "ha_set_area_or_floor",
             {"kind": "floor", "name": floor_name, "level": 7},
-        ),
-        "create expansion floor",
-    )
+        )
     floor_id = floor_data["floor_id"]
     area_ids: list[str] = []
     area_names = [f"e2e floor room A {suffix}", f"e2e floor room B {suffix}"]
     try:
         for area_name in area_names:
-            area_data = assert_mcp_success(
-                await mcp_client.call_tool(
+            async with MCPAssertions(mcp_client) as mcp:
+                area_data = await mcp.call_tool_success(
                     "ha_set_area_or_floor",
                     {"kind": "area", "name": area_name, "floor_id": floor_id},
-                ),
-                f"create {area_name}",
-            )
+                )
             area_ids.append(area_data["area_id"])
         yield {"floor_name": floor_name, "area_names": area_names}
     finally:
@@ -2341,10 +2342,10 @@ async def test_exact_floor_filter_expands_to_all_floor_areas(
 ):
     """An exact floor name expands through the public ha_search tool."""
     fixture = floor_with_two_areas
-    result = await mcp_client.call_tool(
-        "ha_search", {"area_filter": fixture["floor_name"], "limit": 50}
-    )
-    data = assert_mcp_success(result, "exact floor expansion")
+    async with MCPAssertions(mcp_client) as mcp:
+        data = await mcp.call_tool_success(
+            "ha_search", {"area_filter": fixture["floor_name"], "limit": 50}
+        )
 
     assert set(data["area_names"]) == set(fixture["area_names"])
     assert any("expanded to 2 area(s)" in warning for warning in data["warnings"])

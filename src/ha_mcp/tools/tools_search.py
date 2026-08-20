@@ -1698,9 +1698,10 @@ class SearchTools:
             Field(
                 default=None,
                 description=(
-                    "Narrow entity-registry results to an area (id, name, or alias) "
-                    "or an exact floor (id, name, or alias), which expands to all "
-                    "areas on that floor. Does not affect configuration search."
+                    "Narrow entity-registry results to an area (id, name, or alias), "
+                    "an exact floor (id, name, or alias), or an unambiguous "
+                    "close-spelling floor match; a floor match expands to all areas "
+                    "on that floor. Does not affect configuration search."
                 ),
             ),
         ] = None,

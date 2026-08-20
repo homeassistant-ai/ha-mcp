@@ -40,7 +40,14 @@ class _SearchBase:
             logger.debug(f"Could not fetch {label}: {result}")
             cause = str(result) or type(result).__name__
         elif isinstance(result, dict) and result.get("success"):
-            registry = result.get("result", [])
+            payload = result.get("result", [])
+            if isinstance(payload, list):
+                registry = payload
+            else:
+                cause = (
+                    "malformed result payload: expected list, "
+                    f"got {type(payload).__name__}"
+                )
         elif isinstance(result, dict):
             cause = str(result.get("error") or "request failed")
         else:

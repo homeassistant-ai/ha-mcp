@@ -406,9 +406,9 @@ class EntitySearchMixin(_SearchBase):
         Get entities grouped by area/room using the HA registries for accurate area resolution.
 
         Uses the entity, device, area, and floor registries to determine which
-        area each entity belongs to. Exact area names, IDs, and aliases take
-        precedence. An exact floor match expands to every area on that floor;
-        otherwise the query is fuzzy-matched against areas.
+        area each entity belongs to. Resolution tries an exact area first,
+        then an exact or unambiguous close-spelling floor (expanded to every
+        area on that floor), and finally falls back to fuzzy area matching.
 
         Args:
             area_query: Area/room name (or alias) to search for
@@ -473,11 +473,13 @@ class EntitySearchMixin(_SearchBase):
             area_registry = self._parse_area_registry(results[1], registry_warnings)
             entity_reg_map = self._parse_entity_reg_map(results[2], registry_warnings)
             device_area_map = self._parse_device_area_map(results[3], registry_warnings)
-            floor_registry_available = isinstance(results[4], (list, dict)) and not (
-                isinstance(results[4], dict)
-                and results[4].get("success", True) is False
+            floor_result = results[4]
+            floor_registry_available = isinstance(floor_result, list) or (
+                isinstance(floor_result, dict)
+                and floor_result.get("success") is True
+                and isinstance(floor_result.get("result"), list)
             )
-            floor_registry = self._parse_floor_registry(results[4], registry_warnings)
+            floor_registry = self._parse_floor_registry(floor_result, registry_warnings)
             degraded_warnings = registry_warnings + visibility_warnings
 
             matched_area_ids, resolution_warnings = self._resolve_area_query(
@@ -626,7 +628,7 @@ class EntitySearchMixin(_SearchBase):
         *,
         floor_registry_available: bool,
     ) -> tuple[set[str], list[str]]:
-        """Resolve an area/floor query with exact-area precedence."""
+        """Resolve exact area first, then exact/fuzzy floor, then fuzzy area."""
         query_lower = area_query.lower().strip()
         exact_area_ids = cls._match_exact_registry_ids(
             area_registry, "area_id", query_lower
