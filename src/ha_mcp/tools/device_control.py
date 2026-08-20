@@ -52,6 +52,13 @@ logger = logging.getLogger(__name__)
 # out of sync with what models are told they may send.
 _BULK_OPERATION_KEYS: frozenset[str] = frozenset(BulkControlOperation.__annotations__)
 
+# The row shape models get wrong most often is a service-style row, so this
+# leads every suggestion list a rejected bulk batch produces.
+_BULK_ROW_SHAPE_SUGGESTION = (
+    "Use entity_id and action (e.g. action='off', not service='turn_off'); "
+    "send no domain or service keys and put action data in parameters"
+)
+
 # The ha_mcp_tools/bulk_call_service WS command (Phase 3, D5a): the BATCH write
 # capability. When the component advertises ``bulk_call_service`` the consumer
 # resolves every op's domain/service server-side (D6), sends one register-before-fire
@@ -822,8 +829,24 @@ class DeviceControlTools:
                 f"mode={'parallel' if parallel else 'sequential'}",
             )
             if not valid_operations:
-                return self._build_bulk_response(
-                    operations, results, operation_ids, skipped_operations, parallel
+                # Nothing dispatched, so nothing to fail soft for: the batch
+                # carve-out from "all tool-level failures raise" exists to
+                # protect successful siblings, and there are none. Raising
+                # before the component probe keeps the no-dispatch guarantee.
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"All {len(operations)} operation(s) failed validation; "
+                        "nothing was dispatched",
+                        suggestions=[
+                            _BULK_ROW_SHAPE_SUGGESTION,
+                            "Each operation requires 'entity_id' and 'action'",
+                            "Check skipped_details for the per-operation reason",
+                            "Example: {'entity_id': 'light.living_room', "
+                            "'action': 'on'}",
+                        ],
+                        context={"skipped_details": skipped_operations},
+                    )
                 )
 
             # Route through the component's bulk_call_service capability when
@@ -1437,6 +1460,7 @@ class DeviceControlTools:
         if skipped_operations:
             response["skipped_details"] = skipped_operations
             response["suggestions"] = [
+                _BULK_ROW_SHAPE_SUGGESTION,
                 "Some operations were skipped due to validation errors",
                 "Each operation requires 'entity_id' and 'action' fields",
                 "Check skipped_details for specific errors",

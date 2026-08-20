@@ -10,6 +10,13 @@ from ha_mcp.errors import ErrorCode, create_error_response
 from ha_mcp.tools.device_control import DeviceControlTools
 
 
+def _all_invalid_payload(exc_info) -> dict:
+    """Parse the structured payload of an all-invalid batch ToolError."""
+    payload = json.loads(str(exc_info.value))
+    assert payload["success"] is False
+    return payload
+
+
 class TestBulkDeviceControlValidation:
     """Test bulk_device_control validation logic."""
 
@@ -30,32 +37,35 @@ class TestBulkDeviceControlValidation:
 
     @pytest.mark.asyncio
     async def test_missing_entity_id_reports_error(self, device_control_tools):
-        """Operations missing entity_id are reported in skipped_operations."""
+        """A batch where every row is invalid fails the call, not just the rows."""
         device_control_tools._bulk_via_component = AsyncMock()
         operations = [
             {"action": "on"},  # Missing entity_id
         ]
-        result = await device_control_tools.bulk_device_control(operations)
 
-        assert result["total_operations"] == 1
-        assert result["skipped_operations"] == 1
-        assert len(result["skipped_details"]) == 1
-        assert "entity_id" in result["skipped_details"][0]["error"]["message"]
-        assert result["skipped_details"][0]["index"] == 0
+        with pytest.raises(ToolError) as exc_info:
+            await device_control_tools.bulk_device_control(operations)
+
+        payload = _all_invalid_payload(exc_info)
+        assert "All 1 operation(s) failed validation" in payload["error"]["message"]
+        assert len(payload["skipped_details"]) == 1
+        assert "entity_id" in payload["skipped_details"][0]["error"]["message"]
+        assert payload["skipped_details"][0]["index"] == 0
         device_control_tools._bulk_via_component.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_missing_action_reports_error(self, device_control_tools):
-        """Operations missing action are reported in skipped_operations."""
+        """The missing field is named in the raised payload's skipped_details."""
         operations = [
             {"entity_id": "light.test"},  # Missing action
         ]
-        result = await device_control_tools.bulk_device_control(operations)
 
-        assert result["total_operations"] == 1
-        assert result["skipped_operations"] == 1
-        assert len(result["skipped_details"]) == 1
-        assert "action" in result["skipped_details"][0]["error"]["message"]
+        with pytest.raises(ToolError) as exc_info:
+            await device_control_tools.bulk_device_control(operations)
+
+        payload = _all_invalid_payload(exc_info)
+        assert len(payload["skipped_details"]) == 1
+        assert "action" in payload["skipped_details"][0]["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_missing_both_fields_reports_both(self, device_control_tools):
@@ -63,10 +73,12 @@ class TestBulkDeviceControlValidation:
         operations = [
             {},  # Missing both entity_id and action
         ]
-        result = await device_control_tools.bulk_device_control(operations)
 
-        assert result["skipped_operations"] == 1
-        error_msg = result["skipped_details"][0]["error"]["message"]
+        with pytest.raises(ToolError) as exc_info:
+            await device_control_tools.bulk_device_control(operations)
+
+        payload = _all_invalid_payload(exc_info)
+        error_msg = payload["skipped_details"][0]["error"]["message"]
         assert "entity_id" in error_msg
         assert "action" in error_msg
 
@@ -78,12 +90,14 @@ class TestBulkDeviceControlValidation:
             123,
             None,
         ]
-        result = await device_control_tools.bulk_device_control(operations)
 
-        assert result["total_operations"] == 3
-        assert result["skipped_operations"] == 3
-        assert len(result["skipped_details"]) == 3
-        for detail in result["skipped_details"]:
+        with pytest.raises(ToolError) as exc_info:
+            await device_control_tools.bulk_device_control(operations)
+
+        payload = _all_invalid_payload(exc_info)
+        assert "All 3 operation(s) failed validation" in payload["error"]["message"]
+        assert len(payload["skipped_details"]) == 3
+        for detail in payload["skipped_details"]:
             assert "not a dict" in detail["error"]["message"]
 
     @pytest.mark.slow
@@ -142,15 +156,18 @@ class TestBulkDeviceControlValidation:
 
     @pytest.mark.asyncio
     async def test_all_invalid_operations_has_suggestions(self, device_control_tools):
-        """When operations are skipped, response includes suggestions."""
+        """The raised payload carries the actionable row-shape guidance."""
         operations = [
             {"action": "on"},  # Invalid
         ]
-        result = await device_control_tools.bulk_device_control(operations)
 
-        assert "suggestions" in result
-        assert any("entity_id" in s for s in result["suggestions"])
-        assert any("action" in s for s in result["suggestions"])
+        with pytest.raises(ToolError) as exc_info:
+            await device_control_tools.bulk_device_control(operations)
+
+        suggestions = _all_invalid_payload(exc_info)["error"]["suggestions"]
+        assert any("entity_id" in s for s in suggestions)
+        assert any("action" in s for s in suggestions)
+        assert any("service='turn_off'" in s for s in suggestions)
 
     @pytest.mark.asyncio
     async def test_skipped_details_includes_original_operation(
@@ -158,25 +175,26 @@ class TestBulkDeviceControlValidation:
     ):
         """Skipped details include the original operation for debugging."""
         original_op = {"action": "on", "parameters": {"brightness": 100}}
-        operations = [original_op]
-        result = await device_control_tools.bulk_device_control(operations)
 
-        assert result["skipped_details"][0]["operation"] == original_op
+        with pytest.raises(ToolError) as exc_info:
+            await device_control_tools.bulk_device_control([original_op])
+
+        payload = _all_invalid_payload(exc_info)
+        assert payload["skipped_details"][0]["operation"] == original_op
 
     @pytest.mark.asyncio
     async def test_sequential_execution_validates_operations(
         self, device_control_tools
     ):
-        """Sequential execution mode also validates operations."""
+        """Sequential execution mode validates before it reaches the mode split."""
         operations = [
             {"action": "on"},  # Missing entity_id
         ]
-        result = await device_control_tools.bulk_device_control(
-            operations, parallel=False
-        )
 
-        assert result["skipped_operations"] == 1
-        assert result["execution_mode"] == "sequential"
+        with pytest.raises(ToolError) as exc_info:
+            await device_control_tools.bulk_device_control(operations, parallel=False)
+
+        assert len(_all_invalid_payload(exc_info)["skipped_details"]) == 1
 
 
 class TestRegisteredBulkToolCompatibility:

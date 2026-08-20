@@ -1535,7 +1535,8 @@ class ServiceTools:
 
         Caveats: put every target in ``operations`` and call the tool once. Parallel
         execution is the default, and invalid items are reported without aborting
-        valid operations in the same batch.
+        valid operations in the same batch. A batch in which every item fails
+        validation dispatches nothing and fails the call.
         """
         parallel_bool = parallel
 
