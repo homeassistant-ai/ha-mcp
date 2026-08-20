@@ -272,13 +272,20 @@ class TestRegisteredBulkToolCompatibility:
                         "action": "off",
                         "validate_first": "false",
                     },
+                    # float(True) is 1.0, so a bool must be rejected outright
+                    # rather than silently becoming a one-second timeout.
+                    {
+                        "entity_id": "light.bool_timeout",
+                        "action": "off",
+                        "timeout_seconds": True,
+                    },
                 ]
             }
         )
 
         data = result.structured_content
         assert data["successful_commands"] == 1
-        assert data["skipped_operations"] == 7
+        assert data["skipped_operations"] == 8
         assert [detail["index"] for detail in data["skipped_details"]] == [
             0,
             1,
@@ -287,13 +294,13 @@ class TestRegisteredBulkToolCompatibility:
             4,
             6,
             7,
+            8,
         ]
         messages = [detail["error"]["message"] for detail in data["skipped_details"]]
         assert any("required fields" in message for message in messages)
-        assert any("timeout_seconds" in message for message in messages)
         assert any("invalid JSON parameters" in message for message in messages)
         assert sum("validate_first" in message for message in messages) == 3
-        assert sum("timeout_seconds" in message for message in messages) == 2
+        assert sum("timeout_seconds" in message for message in messages) == 3
         tools.control_device_smart.assert_awaited_once()
 
     @pytest.mark.asyncio

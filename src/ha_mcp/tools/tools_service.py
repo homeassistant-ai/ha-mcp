@@ -94,6 +94,10 @@ class BulkControlOperation(TypedDict):
             Field(
                 ge=0,
                 allow_inf_nan=False,
+                # ``strict`` for the same reason validate_first carries it:
+                # lax mode coerces ``true`` to 1.0, so a bool would land
+                # downstream as a silent one-second timeout.
+                strict=True,
                 description=(
                     "Optional confirmation timeout. On the component path, all "
                     "operations share the maximum requested wait (default 10s, "
@@ -1559,14 +1563,21 @@ class ServiceTools:
             )
 
         operations_list: list[Any] = []
-        for operation in parsed_operations:
+        for index, operation in enumerate(parsed_operations):
             try:
                 operations_list.append(
                     _BULK_CONTROL_OPERATION_ADAPTER.validate_python(operation)
                 )
-            except ValidationError:
+            except ValidationError as exc:
                 # Preserve malformed rows for the runtime batch validator, which
                 # reports them in skipped_details instead of rejecting the call.
+                # The schema's reason is richer than the runtime validator's and
+                # is the only place it survives, so log it here.
+                logger.warning(
+                    "ha_bulk_control operation %d failed schema validation: %s",
+                    index,
+                    exc,
+                )
                 operations_list.append(operation)
 
         result = await self._device_tools.bulk_device_control(

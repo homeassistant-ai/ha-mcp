@@ -625,19 +625,21 @@ class DeviceControlTools:
         return value, None
 
     @staticmethod
-    def _normalize_bulk_timeout(value: Any) -> tuple[float | None, bool]:
-        """Normalize an optional non-negative finite timeout."""
-        if value is None:
-            return None, True
+    def _normalize_bulk_timeout(value: Any) -> float | None:
+        """Normalize a non-negative finite timeout, or ``None`` when invalid.
+
+        Bools are rejected before ``float()`` sees them: ``float(True)`` is 1.0,
+        which would silently accept ``timeout_seconds: true`` as a one-second
+        wait. ``None`` is invalid here too — the caller only calls this when the
+        key is present, and a present-but-null timeout is a malformed row.
+        """
+        if isinstance(value, bool) or value is None:
+            return None
         try:
             timeout = float(value)
         except (TypeError, ValueError):
-            return None, False
-        return (
-            (timeout, True)
-            if math.isfinite(timeout) and timeout >= 0
-            else (None, False)
-        )
+            return None
+        return timeout if math.isfinite(timeout) and timeout >= 0 else None
 
     @staticmethod
     def _normalized_bulk_operation(
@@ -749,23 +751,19 @@ class DeviceControlTools:
                 )
                 continue
 
-            timeout = None
-            timeout_valid = "timeout_seconds" not in op
-            if not timeout_valid:
-                timeout, timeout_valid = cls._normalize_bulk_timeout(
-                    op["timeout_seconds"]
-                )
-                timeout_valid = timeout_valid and timeout is not None
-            if not timeout_valid:
-                cls._skip_bulk_operation(
-                    skipped_operations,
-                    op,
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Operation at index {i} timeout_seconds must be a "
-                    "non-negative number",
-                    {"index": i},
-                )
-                continue
+            timeout: float | None = None
+            if "timeout_seconds" in op:
+                timeout = cls._normalize_bulk_timeout(op["timeout_seconds"])
+                if timeout is None:
+                    cls._skip_bulk_operation(
+                        skipped_operations,
+                        op,
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Operation at index {i} timeout_seconds must be a "
+                        "non-negative number",
+                        {"index": i},
+                    )
+                    continue
 
             if "validate_first" in op and not isinstance(op["validate_first"], bool):
                 cls._skip_bulk_operation(
