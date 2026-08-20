@@ -469,6 +469,27 @@ class TestAreaMatchingLogic:
         assert any("close spelling" in w for w in result["warnings"])
 
     @pytest.mark.asyncio
+    async def test_ambiguous_floor_typo_does_not_expand_multiple_floors(self):
+        """A tied close-spelling match requires a more specific floor query."""
+        client = self._basement_client()
+        client.floors = [
+            {"floor_id": "east", "name": "East Wing", "aliases": []},
+            {"floor_id": "west", "name": "West Wing", "aliases": []},
+        ]
+        client.areas = [
+            {"area_id": "east_room", "name": "East room", "floor_id": "east"},
+            {"area_id": "west_room", "name": "West room", "floor_id": "west"},
+        ]
+        tools = SmartSearchTools(client=client, fuzzy_threshold=60)
+
+        result = await tools.get_entities_by_area("st Wing")
+
+        assert result["total_areas_found"] == 0
+        warning = next(w for w in result["warnings"] if "ambiguously" in w)
+        assert "East Wing" in warning
+        assert "West Wing" in warning
+
+    @pytest.mark.asyncio
     async def test_area_typo_still_prefers_closer_area_name(self):
         """A near area name is not broadened merely because it contains a floor."""
         tools = SmartSearchTools(client=self._basement_client(), fuzzy_threshold=60)

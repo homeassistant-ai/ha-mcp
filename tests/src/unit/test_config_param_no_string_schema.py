@@ -291,3 +291,22 @@ def test_bulk_operation_timeout_rejects_negative_and_accepts_zero():
         ]
         == 0.5
     )
+
+
+@pytest.mark.parametrize("invalid_value", [None, 0, 1, "false", "true"])
+def test_bulk_operation_validate_first_requires_a_strict_boolean(invalid_value):
+    """Only JSON booleans satisfy the advertised validate_first contract."""
+    from ha_mcp.tools.tools_service import BulkControlOperation
+
+    adapter = TypeAdapter(BulkControlOperation)
+    operation = {"entity_id": "light.kitchen", "action": "off"}
+
+    with pytest.raises(ValidationError):
+        adapter.validate_python({**operation, "validate_first": invalid_value})
+
+    assert (
+        adapter.validate_python({**operation, "validate_first": False})[
+            "validate_first"
+        ]
+        is False
+    )

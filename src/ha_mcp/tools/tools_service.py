@@ -105,10 +105,11 @@ class BulkControlOperation(TypedDict):
         Annotated[
             bool,
             Field(
+                strict=True,
                 description=(
                     "Validate that the entity exists before dispatch; default true. "
                     "The action is always validated."
-                )
+                ),
             ),
         ]
     ]

@@ -666,7 +666,20 @@ class EntitySearchMixin(_SearchBase):
         _, area_score = cls._match_fuzzy_registry_ids(
             area_registry, "area_id", query_lower
         )
-        if fuzzy_floor_ids and floor_score > area_score:
+        if len(fuzzy_floor_ids) > 1 and floor_score > area_score:
+            floor_names = sorted(
+                str(
+                    floor_registry[floor_id].get("name")
+                    or floor_registry[floor_id].get("floor_id")
+                    or floor_id
+                )
+                for floor_id in fuzzy_floor_ids
+            )
+            return set(), [
+                f"'{area_query}' ambiguously matches multiple floors: "
+                f"{', '.join(floor_names)}. Use an exact floor name or ID."
+            ]
+        if len(fuzzy_floor_ids) == 1 and floor_score > area_score:
             area_ids, warning = cls._expand_floor_ids(
                 area_registry,
                 floor_registry,
