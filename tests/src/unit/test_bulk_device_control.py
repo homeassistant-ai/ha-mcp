@@ -325,6 +325,47 @@ class TestRegisteredBulkToolCompatibility:
         tools.control_device_smart.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_non_string_identifiers_and_non_object_parameters_are_skipped(self):
+        """Two branches the mixed-row test never reached.
+
+        A numeric ``entity_id`` is truthy, so it clears the missing-fields
+        check and lands on the string-type check; a ``parameters`` string that
+        parses to a list clears the JSON decode and lands on the object check.
+        Both differ from the malformed-JSON case already covered.
+        """
+        tools = DeviceControlTools(client=MagicMock())
+        tools._bulk_via_component = AsyncMock(return_value=None)
+        tools.control_device_smart = AsyncMock(
+            return_value={
+                "entity_id": "light.valid",
+                "command_sent": True,
+                "operation_id": "op-valid",
+            }
+        )
+        tool = await self._registered_tool(tools)
+
+        result = await tool.run(
+            {
+                "operations": [
+                    {"entity_id": 123, "action": "off"},
+                    {
+                        "entity_id": "light.list_parameters",
+                        "action": "on",
+                        "parameters": "[1, 2]",
+                    },
+                    {"entity_id": "light.valid", "action": "off"},
+                ]
+            }
+        )
+
+        data = result.structured_content
+        assert data["successful_commands"] == 1
+        assert [detail["index"] for detail in data["skipped_details"]] == [0, 1]
+        messages = [detail["error"]["message"] for detail in data["skipped_details"]]
+        assert "requires string entity_id and action" in messages[0]
+        assert "parameters must be a JSON object" in messages[1]
+
+    @pytest.mark.asyncio
     async def test_nested_json_parameters_round_trip_through_registered_tool(self):
         tools = DeviceControlTools(client=MagicMock())
         tools._bulk_via_component = AsyncMock(return_value=None)

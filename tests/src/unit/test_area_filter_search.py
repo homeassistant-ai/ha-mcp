@@ -360,6 +360,16 @@ class TestAreaMatchingLogic:
             ],
         )
 
+    @staticmethod
+    def _entity_ids(result: dict) -> set[str]:
+        """Collect every entity id across a domain-grouped area result."""
+        return {
+            record["entity_id"]
+            for area in result["areas"].values()
+            for records in area["entities"].values()
+            for record in records
+        }
+
     @pytest.mark.asyncio
     async def test_floor_name_expands_to_all_areas_on_floor(self):
         """An exact floor name expands instead of fuzzy-matching one area."""
@@ -370,13 +380,45 @@ class TestAreaMatchingLogic:
                 {"area_id": "garage", "name": "Garage", "floor_id": "ground"},
             ]
         )
+        # A second area on the floor needs its own entity, or the expansion
+        # could aggregate zero entities from it and still look correct.
+        client.entities.append(
+            {
+                "entity_id": "light.cave_lamp",
+                "attributes": {"friendly_name": "Cave Lamp"},
+                "state": "off",
+            }
+        )
+        client.entity_registry.append(
+            {"entity_id": "light.cave_lamp", "area_id": "cave", "device_id": None}
+        )
         tools = SmartSearchTools(client=client, fuzzy_threshold=60)
 
         result = await tools.get_entities_by_area("sous-sol")
 
         assert result["total_areas_found"] == 2
         assert set(result["areas"]) == {"couloir_sous_sol", "cave"}
+        assert self._entity_ids(result) == {"light.basement_hall", "light.cave_lamp"}
+        assert result["total_entities"] == 2
         assert any("expanded to 2 area(s)" in warning for warning in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_bare_floor_id_expands_to_all_areas_on_floor(self):
+        """A literal floor_id expands the same way the floor's name does.
+
+        The collision test below renames an AREA to ``sous_sol``; nothing else
+        covered passing the floor's own identifier while it stays unique.
+        """
+        client = self._basement_client()
+        client.areas.append({"area_id": "cave", "name": "Cave", "floor_id": "sous_sol"})
+        tools = SmartSearchTools(client=client, fuzzy_threshold=60)
+
+        result = await tools.get_entities_by_area("sous_sol")
+
+        assert set(result["areas"]) == {"couloir_sous_sol", "cave"}
+        assert any(
+            "is a floor, not an area" in warning for warning in result["warnings"]
+        )
 
     @pytest.mark.asyncio
     async def test_floor_alias_expands_to_areas_on_floor(self):
