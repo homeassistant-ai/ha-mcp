@@ -31,7 +31,7 @@ from tests.src.haos_runtime import (
 )
 
 from ..conftest import _wait_for_embedded_webhook_ready
-from ..utilities.assertions import parse_mcp_result, safe_call_tool
+from ..utilities.assertions import MCPAssertions, safe_call_tool
 from .test_manage_addon_modes import (
     NODERED_NAME,
     _resolve_slug,
@@ -50,26 +50,17 @@ def _require_tls_ca_path() -> str:
     return ca_path
 
 
-def _assert_manage_success(payload: dict[str, Any], operation: str) -> None:
-    """Accept the two successful Supervisor config/action result shapes."""
-    assert (
-        payload.get("success") is True or payload.get("status") == "pending_restart"
-    ), f"{operation} failed: {payload}"
-
-
-async def _set_front_door(mcp: Client, slug: str, enabled: bool) -> None:
+async def _set_front_door(
+    mcp: Client, assertions: MCPAssertions, slug: str, enabled: bool
+) -> None:
     """Set Node-RED direct auth, restart it, and wait for the live state."""
-    configured = parse_mcp_result(
-        await mcp.call_tool(
-            "ha_manage_app",
-            {"slug": slug, "options": {"leave_front_door_open": enabled}},
-        )
+    await assertions.call_tool_success(
+        "ha_manage_app",
+        {"slug": slug, "options": {"leave_front_door_open": enabled}},
     )
-    _assert_manage_success(configured, f"set leave_front_door_open={enabled}")
-    restarted = parse_mcp_result(
-        await mcp.call_tool("ha_manage_app", {"slug": slug, "action": "restart"})
+    await assertions.call_tool_success(
+        "ha_manage_app", {"slug": slug, "action": "restart"}
     )
-    _assert_manage_success(restarted, "restart Node-RED")
     await _wait_addon_running(mcp, slug)
 
 
@@ -127,15 +118,15 @@ async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(
         promote_home_assistant_http_config(https_base_url, token, verify_ssl=False)
 
         transport = StreamableHttpTransport(url=https_webhook_url, verify=False)
-        async with Client(transport) as mcp:
+        async with (
+            Client(transport) as mcp,
+            MCPAssertions(mcp) as assertions,
+        ):
             slug = await _resolve_slug(mcp, NODERED_NAME)
             await _wait_addon_running(mcp, slug)
             detail = (
-                parse_mcp_result(await mcp.call_tool("ha_get_app", {"slug": slug})).get(
-                    "addon"
-                )
-                or {}
-            )
+                await assertions.call_tool_success("ha_get_app", {"slug": slug})
+            ).get("addon") or {}
             options = detail.get("options") or {}
             assert isinstance(options, dict), detail
             assert "leave_front_door_open" in options, detail
@@ -174,11 +165,9 @@ async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(
             assert "IP address mismatch" in mismatch, mismatch
             assert "127.0.0.1" in mismatch, mismatch
 
-            fixed_ingress = parse_mcp_result(
-                await mcp.call_tool(
-                    "ha_manage_app",
-                    {"slug": slug, "path": "/flows", "method": "GET"},
-                )
+            fixed_ingress = await assertions.call_tool_success(
+                "ha_manage_app",
+                {"slug": slug, "path": "/flows", "method": "GET"},
             )
             assert fixed_ingress.get("success") is True, fixed_ingress
             assert fixed_ingress.get("status_code") == 200, fixed_ingress
@@ -186,7 +175,7 @@ async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(
 
             try:
                 front_door_touched = True
-                await _set_front_door(mcp, slug, False)
+                await _set_front_door(mcp, assertions, slug, False)
                 locked = await safe_call_tool(
                     mcp,
                     "ha_manage_app",
@@ -210,24 +199,22 @@ async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(
 
                 # Follow the hint with the same management tool, then prove the
                 # formerly rejected direct request works on the real add-on.
-                await _set_front_door(mcp, slug, True)
-                opened = parse_mcp_result(
-                    await mcp.call_tool(
-                        "ha_manage_app",
-                        {
-                            "slug": slug,
-                            "path": "/flows",
-                            "method": "GET",
-                            "port": 1880,
-                        },
-                    )
+                await _set_front_door(mcp, assertions, slug, True)
+                opened = await assertions.call_tool_success(
+                    "ha_manage_app",
+                    {
+                        "slug": slug,
+                        "path": "/flows",
+                        "method": "GET",
+                        "port": 1880,
+                    },
                 )
                 assert opened.get("success") is True, opened
                 assert opened.get("status_code") == 200, opened
                 assert isinstance(opened.get("response"), list), opened
             finally:
                 if front_door_touched:
-                    await _set_front_door(mcp, slug, original_front_door)
+                    await _set_front_door(mcp, assertions, slug, original_front_door)
     finally:
         # If the configure socket closed while Core accepted the command, the
         # assignment above may not have observed readiness. Probe briefly; if

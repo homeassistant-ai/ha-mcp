@@ -27,7 +27,13 @@ from __future__ import annotations
 import json
 
 from tests.src.e2e.error_handling.test_network_errors import _hard_failures
-from tests.src.e2e.utilities.assertions import parse_mcp_result
+from tests.src.e2e.utilities.assertions import assert_mcp_success, parse_mcp_result
+
+
+def test_pending_restart_is_a_successful_mcp_result() -> None:
+    assert assert_mcp_success({"status": "pending_restart"}) == {
+        "status": "pending_restart"
+    }
 
 
 class _TextBlock:

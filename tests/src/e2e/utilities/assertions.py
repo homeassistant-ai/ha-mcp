@@ -144,6 +144,7 @@ def assert_mcp_success(result, operation_name: str = "operation"):
     # Handle different success indicators
     success_indicators = [
         data.get("success") is True,
+        data.get("status") == "pending_restart",
         # If no explicit success field but has data and no error, consider success
         ("data" in data and data.get("error") is None and data.get("success") is None),
         # Bulk operations success: has operational data without explicit success field

@@ -847,6 +847,10 @@ class TestCallAddonApiErrors:
         suggestion = result["suggestion"]
         if front_door:
             assert "options={'leave_front_door_open': True}" not in suggestion
+            assert "app's own authentication" in suggestion
+            assert "access-control" in suggestion
+            assert "ingress session" not in suggestion.lower()
+            assert "HA token" not in suggestion
         else:
             assert result["addon_config"]["options"]["leave_front_door_open"] is False
             assert "leave_front_door_open" in suggestion
@@ -1512,6 +1516,10 @@ class TestCallAddonWsErrors:
         joined = " ".join(suggestions).lower()
         if front_door:
             assert "options={'leave_front_door_open': true}" not in joined
+            assert "app's own authentication" in joined
+            assert "access-control" in joined
+            assert "ingress session" not in joined
+            assert "ha token" not in joined
         else:
             assert "leave_front_door_open" in joined, suggestions
             assert "ha_manage_app" in joined, suggestions

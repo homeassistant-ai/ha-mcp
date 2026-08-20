@@ -1038,8 +1038,11 @@ def _ws_auth_error_suggestions(
 ) -> list[str]:
     """Return route-appropriate guidance for a rejected WS handshake."""
     options = addon.get("options") or {}
-    if port and options.get("leave_front_door_open") is False:
-        primary = _direct_port_auth_suggestion(slug)
+    if port:
+        if options.get("leave_front_door_open") is False:
+            primary = _direct_port_auth_suggestion(slug)
+        else:
+            primary = _direct_port_rejection_suggestion()
     else:
         primary = (
             "The ingress session may have expired or your HA token may lack the "
@@ -1600,6 +1603,14 @@ def _direct_port_auth_suggestion(slug: str) -> str:
     )
 
 
+def _direct_port_rejection_suggestion() -> str:
+    """Explain authentication that remains after direct access is enabled."""
+    return (
+        "The app rejected this direct-port request. Check the app's own "
+        "authentication and access-control settings, IP allowlist, and logs."
+    )
+
+
 def _add_http_error_hints(
     result: dict[str, Any],
     response: httpx.Response,
@@ -1612,9 +1623,12 @@ def _add_http_error_hints(
         result["error"] = f"Add-on API returned HTTP {response.status_code}"
         if response.status_code == 401:
             options = addon.get("options") or {}
-            if direct_port and options.get("leave_front_door_open") is False:
+            if direct_port:
                 result["addon_config"] = _addon_config_for_http_hint(addon)
-                result["suggestion"] = _direct_port_auth_suggestion(slug)
+                if options.get("leave_front_door_open") is False:
+                    result["suggestion"] = _direct_port_auth_suggestion(slug)
+                else:
+                    result["suggestion"] = _direct_port_rejection_suggestion()
             else:
                 # An ingress 401 is a credential/session problem. Keep network
                 # configuration out of that result so the caller fixes the HA
@@ -1637,8 +1651,11 @@ def _add_http_error_hints(
             options = addon.get("options") or {}
             example_proto = unmapped[0] if unmapped else ""
             example_port = example_proto.split("/", 1)[0] if example_proto else ""
-            if direct_port and options.get("leave_front_door_open") is False:
-                result["suggestion"] = _direct_port_auth_suggestion(slug_val)
+            if direct_port:
+                if options.get("leave_front_door_open") is False:
+                    result["suggestion"] = _direct_port_auth_suggestion(slug_val)
+                else:
+                    result["suggestion"] = _direct_port_rejection_suggestion()
             elif unmapped and example_port.isdigit():
                 addon_label = addon.get("name") or slug_val
                 result["suggestion"] = (
