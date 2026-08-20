@@ -620,16 +620,26 @@ class DeviceControlTools:
     @staticmethod
     def _normalize_bulk_parameters(
         value: Any,
-    ) -> tuple[dict[str, Any] | None, ErrorCode | None]:
-        """Normalize optional bulk parameters and identify invalid values."""
+    ) -> tuple[dict[str, Any] | None, ErrorCode | None, str]:
+        """Normalize optional bulk parameters and identify invalid values.
+
+        Returns ``(parameters, error_code, detail)``. ``detail`` carries the
+        decoder's own reason and offset for a JSON failure — without it the
+        caller can only say "invalid JSON", which does not tell the sender
+        where its string went wrong. It is empty for every other outcome.
+        """
         if isinstance(value, str):
             try:
                 value = json.loads(value)
-            except json.JSONDecodeError:
-                return None, ErrorCode.VALIDATION_INVALID_JSON
+            except json.JSONDecodeError as exc:
+                return (
+                    None,
+                    ErrorCode.VALIDATION_INVALID_JSON,
+                    f"{exc.msg} at position {exc.pos}",
+                )
         if value is not None and not isinstance(value, dict):
-            return None, ErrorCode.VALIDATION_INVALID_PARAMETER
-        return value, None
+            return None, ErrorCode.VALIDATION_INVALID_PARAMETER, ""
+        return value, None, ""
 
     @staticmethod
     def _normalize_bulk_timeout(value: Any) -> float | None:
@@ -711,9 +721,7 @@ class DeviceControlTools:
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     f"Operation at index {i} contains unsupported key(s): {key_list}",
                     {"index": i, "unsupported_keys": obsolete_keys},
-                    suggestions=[
-                        "Use entity_id and action; put action data inside parameters"
-                    ],
+                    suggestions=[_BULK_ROW_SHAPE_SUGGESTION],
                 )
                 continue
 
@@ -743,17 +751,21 @@ class DeviceControlTools:
                 )
                 continue
 
-            parameters, parameter_error = cls._normalize_bulk_parameters(
-                op.get("parameters")
+            parameters, parameter_error, parameter_detail = (
+                cls._normalize_bulk_parameters(op.get("parameters"))
             )
             if parameter_error is not None:
+                parameter_message = (
+                    f"Operation at index {i} has invalid JSON parameters: "
+                    f"{parameter_detail}"
+                    if parameter_error == ErrorCode.VALIDATION_INVALID_JSON
+                    else f"Operation at index {i} parameters must be a JSON object"
+                )
                 cls._skip_bulk_operation(
                     skipped_operations,
                     op,
                     parameter_error,
-                    f"Operation at index {i} has invalid JSON parameters"
-                    if parameter_error == ErrorCode.VALIDATION_INVALID_JSON
-                    else f"Operation at index {i} parameters must be a JSON object",
+                    parameter_message,
                     {"index": i},
                 )
                 continue

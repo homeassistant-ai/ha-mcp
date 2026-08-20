@@ -316,7 +316,10 @@ class TestRegisteredBulkToolCompatibility:
         ]
         messages = [detail["error"]["message"] for detail in data["skipped_details"]]
         assert any("required fields" in message for message in messages)
-        assert any("invalid JSON parameters" in message for message in messages)
+        # The decoder's own reason and offset ride along, so the sender can see
+        # where its string went wrong rather than just that it did.
+        json_message = next(m for m in messages if "invalid JSON parameters" in m)
+        assert "at position 1" in json_message
         assert sum("validate_first" in message for message in messages) == 3
         assert sum("timeout_seconds" in message for message in messages) == 3
         tools.control_device_smart.assert_awaited_once()
