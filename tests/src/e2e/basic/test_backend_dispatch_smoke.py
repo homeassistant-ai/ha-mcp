@@ -87,14 +87,17 @@ _SKIP_CEILING_PER_LANE = {
     # intentional marker-gated additions rather than runtime skips. A new lane
     # starts at its observed count plus the five-item buffer described above;
     # subsequent additions consume that buffer explicitly.
-    "container": 74,  # was 73; +1 HAOS stdio visibility e2e (haos_stdio_only)
-    "haos": 49,  # was 48; +1 HAOS stdio visibility e2e (haos_stdio_only)
+    # #2241's final same-VM Core-TLS scenario runs only on haos_embedded. Its
+    # haos_tls marker deliberately adds one collection-time skip everywhere
+    # else, consuming one ceiling slot on each of those lanes.
+    "container": 75,
+    "haos": 50,
     # HAOS stdio is the external HAOS set plus ``external_only`` tests, whose
     # test-process monkeypatches cannot reach the subprocess server. The first
     # full lane run on 2026-08-18 observed 103 collection-time marker skips
     # (plus 9 runtime skips); keep the same five-item buffer as established lanes.
-    "haos_stdio": 108,
-    "haos_inaddon": 77,  # was 76; +1 visibility e2e (haos_stdio_only)
+    "haos_stdio": 109,
+    "haos_inaddon": 78,
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
     # lane's marker-skips PLUS two embedded-specific additions:
     #   - haos_only + inaddon_only tests skip on embedded just like on container
@@ -103,12 +106,12 @@ _SKIP_CEILING_PER_LANE = {
     #     by test-process env/monkeypatch — same reason as inaddon), plus the
     #     workflows/embedded smoke test (not_on_embedded).
     # Static def-level derivation (Docker-less, so parametrize item-inflation isn't
-    # visible locally): haos_only 52 + inaddon_only-outside-haos 11 + external_only
+    # visible locally): haos_only 53 + inaddon_only-outside-haos 11 + external_only
     # 36 (auto_backup 19, supervisor_mock 15, self_update_notice 1, file_operations
-    # 1) + not_on_embedded 2 = 101. Parametrize inflates that to the CI-observed
+    # 1) + not_on_embedded 2 = 102. Parametrize inflates that to the CI-observed
     # count of 133 in the 2026-08-18 CI run (132 before the self-restart e2e).
     # Read future changes from CI instead of deriving them.
-    "embedded": 134,  # was 133; +1 visibility e2e (haos_stdio_only)
+    "embedded": 135,
     # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it
     # skips the SAME set as the external HAOS lane (container_only + inaddon_only)
     # PLUS two haos_embedded-specific additions:

@@ -1,6 +1,7 @@
 """Unit tests for add-on tools (AddOnTools, manage_addon, _validate_addon_access, _call_addon_api, _call_addon_ws, list_addons)."""
 
 import json
+import ssl
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -49,6 +50,7 @@ def _make_mock_client() -> MagicMock:
     client = MagicMock()
     client.base_url = "http://localhost:8123"
     client.token = "test-token"
+    client.verify_ssl = True
     return client
 
 
@@ -800,6 +802,91 @@ class TestCallAddonApiErrors:
         assert "addon_config" not in result, result
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [401, 403])
+    async def test_http_direct_port_auth_hints_at_app_option(self, status):
+        """A direct-port 401 surfaces the app option the tool can change."""
+        client = _make_mock_client()
+        addon_info = {
+            "success": True,
+            "addon": {
+                **_RUNNING_ADDON_INFO["addon"],
+                "options": {"leave_front_door_open": False},
+                "ports": {"1880/tcp": 1880},
+            },
+        }
+
+        async def fake_request(*, method, url, headers, content):
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = status
+            response.json.return_value = {}
+            response.text = "{}"
+            return response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=addon_info,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = fake_request
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "test_addon", "/flows", port=1880)
+
+        assert result["status_code"] == status
+        assert result["addon_config"]["options"]["leave_front_door_open"] is False
+        suggestion = result["suggestion"]
+        assert "leave_front_door_open" in suggestion
+        assert "ha_manage_app" in suggestion
+        assert "restart" in suggestion.lower()
+        assert "action='restart'" in suggestion
+        assert "security" in suggestion.lower()
+
+    @pytest.mark.asyncio
+    async def test_http_proxy_propagates_tls_verification(self, mock_ingress_session):
+        """The add-on proxy must honor the HA client's TLS verification setting."""
+        client = _make_mock_client()
+        client.base_url = "https://ha.local:8123"
+        client.verify_ssl = False
+
+        response = MagicMock()
+        response.headers = {"content-type": "application/json"}
+        response.status_code = 200
+        response.json.return_value = {}
+        response.text = "{}"
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.return_value = response
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "test_addon", "/flows")
+
+        assert result["success"] is True
+        assert mock_httpx.call_args.kwargs["verify"] is False
+
+    @pytest.mark.asyncio
     async def test_http_403_response_hints_at_ip_restriction(
         self, mock_ingress_session
     ):
@@ -1275,6 +1362,38 @@ class TestCallAddonWsErrors:
         assert result["closed_by"] == "server_closed"
 
     @pytest.mark.asyncio
+    async def test_ws_proxy_propagates_disabled_tls_verification(
+        self, mock_ingress_session
+    ):
+        """WSS proxy calls honor HA_VERIFY_SSL=false via an SSL context."""
+        client = _make_mock_client()
+        client.base_url = "https://ha.local:8123"
+        client.verify_ssl = False
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(client, "test_addon", "/ws")
+
+        assert result["success"] is True
+        ssl_context = mock_ws_connect.call_args.kwargs["ssl"]
+        assert isinstance(ssl_context, ssl.SSLContext)
+        assert ssl_context.check_hostname is False
+        assert ssl_context.verify_mode == ssl.CERT_NONE
+
+    @pytest.mark.asyncio
     async def test_ws_addon_not_running(self):
         """Should raise ToolError when add-on is not running."""
         client = _make_mock_client()
@@ -1346,6 +1465,51 @@ class TestCallAddonWsErrors:
         assert not any("supports WebSocket on this path" in s for s in suggestions), (
             suggestions
         )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [401, 403])
+    async def test_ws_direct_port_auth_hints_at_app_option(self, status):
+        """Direct-port WS auth failures surface the configurable app option."""
+        from ha_mcp._vendor.websockets.datastructures import Headers
+        from ha_mcp._vendor.websockets.http11 import Response
+
+        client = _make_mock_client()
+        addon_info = {
+            "success": True,
+            "addon": {
+                **_RUNNING_ADDON_INFO_WS["addon"],
+                "options": {"leave_front_door_open": False},
+                "ports": {"1880/tcp": 1880},
+            },
+        }
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=addon_info,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            response = Response(status, "Unauthorized", Headers())
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(
+                side_effect=InvalidStatus(response),
+            )
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_ws(client, "test_addon", "/compile", port=1880)
+
+        result = _parse_tool_error(exc_info)
+        suggestions = result["error"].get("suggestions", [])
+        joined = " ".join(suggestions).lower()
+        assert "leave_front_door_open" in joined, suggestions
+        assert "ha_manage_app" in joined, suggestions
+        assert "restart" in joined, suggestions
+        assert "action='restart'" in joined, suggestions
+        assert "security" in joined, suggestions
 
     @pytest.mark.asyncio
     async def test_ws_handshake_404_keeps_path_hint(self, mock_ingress_session):

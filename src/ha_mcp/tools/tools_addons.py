@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import re
+import ssl
 import time
 from typing import Annotated, Any, ClassVar, Literal, NoReturn
 from urllib.parse import unquote, urlsplit
@@ -900,6 +901,7 @@ async def _run_ws_session(
     timeout: int,
     wait_for_close: bool,
     caller_capped: bool,
+    verify_ssl: bool,
 ) -> tuple[list[str], int, str, float]:
     """Connect to a WebSocket URL, optionally send body, collect messages.
 
@@ -908,6 +910,12 @@ async def _run_ws_session(
     the caller, which maps them to structured ToolErrors.
     """
     start_time = time.monotonic()
+    ssl_context: ssl.SSLContext | None = None
+    if ws_url.startswith("wss://"):
+        ssl_context = ssl.create_default_context()
+        if not verify_ssl:
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
     async with websockets.connect(
         ws_url,
         additional_headers=headers,
@@ -916,6 +924,7 @@ async def _run_ws_session(
         max_size=5 * 1024 * 1024,  # 5MB max per message
         open_timeout=10,
         close_timeout=5,
+        ssl=ssl_context,
     ) as ws:
         if body is not None:
             await ws.send(json.dumps(body) if isinstance(body, dict) else str(body))
@@ -1124,6 +1133,7 @@ async def _call_addon_ws(
             timeout,
             wait_for_close,
             caller_capped=message_limit is not None,
+            verify_ssl=client.verify_ssl,
         )
     except websockets.exceptions.InvalidHandshake as e:
         suggestions = [
@@ -1134,12 +1144,19 @@ async def _call_addon_ws(
         if isinstance(e, websockets.exceptions.InvalidStatus):
             status = e.response.status_code
             if status in (401, 403):
-                suggestions = [
-                    "The ingress session may have expired or your HA token "
-                    "may lack the required scope. Verify the token has admin "
-                    "rights and try again.",
-                    f"Status {status} from the WebSocket handshake.",
-                ]
+                options = addon.get("options") or {}
+                if port and "leave_front_door_open" in options:
+                    suggestions = [
+                        _direct_port_auth_suggestion(slug),
+                        f"Status {status} from the WebSocket handshake.",
+                    ]
+                else:
+                    suggestions = [
+                        "The ingress session may have expired or your HA token "
+                        "may lack the required scope. Verify the token has admin "
+                        "rights and try again.",
+                        f"Status {status} from the WebSocket handshake.",
+                    ]
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
@@ -1553,42 +1570,70 @@ def _build_http_result(
     return result
 
 
+def _addon_config_for_http_hint(addon: dict[str, Any]) -> dict[str, Any]:
+    """Return the app settings that can explain direct-access failures."""
+    return {
+        "options": addon.get("options"),
+        "ports": addon.get("network") or addon.get("ports") or None,
+        "host_network": addon.get("host_network"),
+        "ingress_port": addon.get("ingress_port"),
+    }
+
+
+def _direct_port_auth_suggestion(slug: str) -> str:
+    """Explain the configurable direct-access auth trade-off."""
+    return (
+        "The app rejected this direct-port request. Its "
+        "'leave_front_door_open' option controls direct-access authentication. "
+        "If the user accepts the security trade-off, use "
+        f"ha_manage_app(slug='{slug}', "
+        "options={'leave_front_door_open': True}), then "
+        f"ha_manage_app(slug='{slug}', action='restart'), and retry. Prefer "
+        "Ingress when possible; enabling this option removes authentication from "
+        "the app's direct-access surface for hosts that can reach the mapped port."
+    )
+
+
 def _add_http_error_hints(
     result: dict[str, Any],
     response: httpx.Response,
     addon: dict[str, Any],
     slug: str,
+    direct_port: bool,
 ) -> None:
     """Mutate result to add an error key for 4xx/5xx responses, with tailored suggestions for 401 and 403."""
     if response.status_code >= 400:
         result["error"] = f"Add-on API returned HTTP {response.status_code}"
         if response.status_code == 401:
-            # 401 is a credential/session problem — addon_config is not attached
-            # because the network layout is irrelevant; the caller needs to fix
-            # their token or re-establish the ingress session, not reconfigure ports.
-            result["suggestion"] = (
-                "Authentication failed. The ingress session may have expired, "
-                "or your HA token may lack the required scope. Verify the "
-                "token has admin rights and try again."
-            )
+            options = addon.get("options") or {}
+            if direct_port and "leave_front_door_open" in options:
+                result["addon_config"] = _addon_config_for_http_hint(addon)
+                result["suggestion"] = _direct_port_auth_suggestion(slug)
+            else:
+                # An ingress 401 is a credential/session problem. Keep network
+                # configuration out of that result so the caller fixes the HA
+                # token or ingress session instead of weakening app authentication.
+                result["suggestion"] = (
+                    "Authentication failed. The ingress session may have expired, "
+                    "or your HA token may lack the required scope. Verify the "
+                    "token has admin rights and try again."
+                )
         elif response.status_code == 403:
             # 403 is typically an Nginx IP ACL blocking direct access — a
             # network configuration problem. Attach addon_config so the LLM
             # can see the port mapping and suggest the correct port override.
             ports_dict = addon.get("network") or addon.get("ports") or {}
             unmapped = sorted(k for k, v in ports_dict.items() if v is None)
-            result["addon_config"] = {
-                "options": addon.get("options"),
-                "ports": ports_dict or None,
-                "host_network": addon.get("host_network"),
-                "ingress_port": addon.get("ingress_port"),
-            }
+            result["addon_config"] = _addon_config_for_http_hint(addon)
             # Prefer the caller-resolved slug (authoritative); fall back to the
             # addon dict, then a placeholder only if neither is populated.
             slug_val = slug or addon.get("slug") or "<slug>"
+            options = addon.get("options") or {}
             example_proto = unmapped[0] if unmapped else ""
             example_port = example_proto.split("/", 1)[0] if example_proto else ""
-            if unmapped and example_port.isdigit():
+            if direct_port and "leave_front_door_open" in options:
+                result["suggestion"] = _direct_port_auth_suggestion(slug_val)
+            elif unmapped and example_port.isdigit():
                 addon_label = addon.get("name") or slug_val
                 result["suggestion"] = (
                     f"Map {example_proto} to a host port in the HA UI "
@@ -1714,7 +1759,10 @@ async def _call_addon_api(
         request_content = None
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as http_client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout),
+            verify=client.verify_ssl,
+        ) as http_client:
             response = await http_client.request(
                 method=method.upper(),
                 url=url,
@@ -1786,7 +1834,7 @@ async def _call_addon_api(
         transformed,
         truncated,
     )
-    _add_http_error_hints(result, response, addon, slug)
+    _add_http_error_hints(result, response, addon, slug, direct_port=bool(port))
     return result
 
 
@@ -2884,7 +2932,10 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             int | None,
             Field(
                 description="Proxy mode only. Connect to this port instead of the Ingress port. "
-                "Use ha_get_app(slug='...') to find available ports.",
+                "Use ha_get_app(slug='...') to find available ports. Some apps, including "
+                "Node-RED, reject direct access unless their leave_front_door_open option is "
+                "enabled and the app is restarted; related errors include an actionable, "
+                "security-qualified ha_manage_app options command.",
                 default=None,
             ),
         ] = None,
@@ -3086,7 +3137,11 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         proxy by default (works on HAOS, Supervised, and off-host PyPI/uvx
         installs). Pass `port=...` to bypass Ingress and connect directly to
         an add-on's container port — that mode requires the MCP host to
-        share Home Assistant's container network (i.e. only the HAOS addon).
+        share Home Assistant's container network. Apps such as Node-RED may
+        reject direct requests unless `leave_front_door_open` is enabled in
+        their options and the app is restarted. Authentication errors name
+        the exact `ha_manage_app(options=...)` remedy and its security tradeoff;
+        prefer Ingress when it works.
 
         **ESPHome Device Builder dashboard (current rewrite):** config and log
         access is a WebSocket JSON-command API, NOT REST. The legacy endpoints
@@ -3148,7 +3203,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         - Change host port: ha_manage_app(slug="...", network={"5800/tcp": 8082})
         - Set boot mode: ha_manage_app(slug="...", boot="manual")
         - Call HTTP API: ha_manage_app(slug="...", path="/api/events")
-        - Direct port: ha_manage_app(slug="...", path="/flows", port=1880)
+        - Direct Node-RED port after an auth rejection: ha_manage_app(slug="...", options={"leave_front_door_open": True}), then ha_manage_app(slug="...", action="restart"), then ha_manage_app(slug="...", path="/flows", port=1880). This disables authentication on the reachable direct port; prefer Ingress.
         - ESPHome list devices (HTTP): ha_manage_app(slug="<prefix>_esphome", path="/devices")
         - ESPHome read a device's YAML (WS one-shot): ha_manage_app(slug="<prefix>_esphome", path="/ws", websocket=True, wait_for_close=False, message_limit=2, body={"command": "devices/get_config", "message_id": "1", "args": {"configuration": "device.yaml"}})
         - ESPHome live logs (WS, bounded): ha_manage_app(slug="<prefix>_esphome", path="/ws", websocket=True, wait_for_close=False, message_limit=60, body={"command": "devices/logs", "message_id": "1", "args": {"configuration": "device.yaml", "port": "OTA"}})
