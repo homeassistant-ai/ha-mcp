@@ -859,7 +859,7 @@ class DeviceControlTools:
                             "Each operation requires 'entity_id' and 'action'",
                             "Check skipped_details for the per-operation reason",
                             "Example: {'entity_id': 'light.living_room', "
-                            "'action': 'on'}",
+                            + "'action': 'on'}",
                         ],
                         context={"skipped_details": skipped_operations},
                     )
