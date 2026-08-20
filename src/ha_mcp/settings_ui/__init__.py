@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
-from .._version import is_running_in_addon
+from .._version import is_embedded, is_running_in_addon
 from ..transforms import DEFAULT_PINNED_TOOLS
 from ..utils.data_paths import get_data_dir
 from ._handlers_advanced import build_advanced_handlers
@@ -524,11 +524,11 @@ def _ingress_only(handler: _SettingsRoute) -> _SettingsRoute:
 
 
 # Mount prefix the settings UI is served under in long-lived HTTP transports
-# (Docker / standalone ha-mcp-web / OAuth / the add-on's secret-path mount).
-# Recorded by register_settings_routes so ha_get_overview can point users at
-# the settings page in modes that have no stdio sidecar URL file to surface
-# (issue #1458). Stays None in pure stdio mode, where the sidecar writes
-# ~/.ha-mcp/ui.url instead.
+# (Docker / standalone ha-mcp-web). Recorded by register_settings_routes so
+# ha_get_overview can point users at the settings page in modes that have no
+# managed UI entry point or stdio sidecar URL file to surface (issue #1458).
+# Stays None in managed HA deployments and pure stdio mode, where the sidebar /
+# ingress entry point or ~/.ha-mcp/ui.url already provides discovery.
 _http_settings_prefix: str | None = None
 
 
@@ -539,8 +539,8 @@ def get_http_settings_prefix() -> str | None:
     long-lived HTTP server *and* advertising is enabled. ``ha_get_overview``
     reads it to hint at the settings page when there is no stdio sidecar URL to
     hand the user. It is None when the mount is deliberately not advertised
-    (OAuth/OIDC dedicated-secret mode) — use :func:`is_http_settings_mounted`,
-    not this, to tell HTTP from the stdio sidecar.
+    (managed HA or OAuth/OIDC dedicated-secret mode) — use
+    :func:`is_http_settings_mounted`, not this, to tell HTTP from the sidecar.
     """
     return _http_settings_prefix
 
@@ -594,12 +594,18 @@ def register_settings_routes(
             non-add-on mode, the function logs a warning and registers
             nothing rather than expose the routes publicly.
         advertise_prefix: When True (default), record the secret-path mount in
-            ``_http_settings_prefix`` so ``ha_get_overview`` can hint at the
-            settings URL. OAuth/OIDC modes pass False: there the settings UI
-            sits under a *dedicated* secret path that must never be handed to
-            MCP clients (GHSA-mx64-982r-65vg), so the mount happens but the
-            prefix is not recorded.
+            ``_http_settings_prefix`` for unmanaged HTTP deployments so
+            ``ha_get_overview`` can hint at the settings URL. The managed app
+            (add-on) and embedded deployments never record it because Home Assistant
+            supplies their settings entry points. OAuth/OIDC callers pass False
+            because they use a dedicated settings secret.
     """
+    global _http_settings_mounted, _http_settings_prefix
+
+    # Never let a rejected or non-advertised registration inherit another
+    # server's credential-bearing hint.
+    _http_settings_prefix = None
+
     handlers = build_settings_handlers(server)
     secret_prefix = secret_path.rstrip("/") if secret_path else ""
     if secret_prefix and ("{" in secret_prefix or "}" in secret_prefix):
@@ -627,7 +633,6 @@ def register_settings_routes(
     # Past this point at least one HTTP mount happens (add-on root and/or the
     # secret path). Record that so consumers can distinguish HTTP from the stdio
     # sidecar even when the prefix itself is not advertised (advertise_prefix=False).
-    global _http_settings_mounted
     _http_settings_mounted = True
 
     # Every route this function mounts except the add-on-only root mount is defined
@@ -705,10 +710,10 @@ def register_settings_routes(
         # need the same secret to reach the UI as they do for the MCP
         # endpoint.
         _mount(secret_prefix)
-        if advertise_prefix:
+        if advertise_prefix and not is_addon and not is_embedded():
             # Record the mount so ha_get_overview can point users at the
-            # settings page in HTTP transports that have no stdio sidecar URL
-            # file (#1458). Suppressed in OAuth/OIDC modes, where the dedicated
-            # secret path must not leak to MCP clients (GHSA-mx64-982r-65vg).
-            global _http_settings_prefix
+            # settings page in unmanaged HTTP transports that have no stdio
+            # sidecar URL file (#1458). The managed app (add-on) and embedded deployments
+            # already have Home Assistant settings entry points; OAuth/OIDC
+            # callers suppress their dedicated settings secret explicitly.
             _http_settings_prefix = secret_prefix

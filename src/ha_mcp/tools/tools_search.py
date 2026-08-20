@@ -3408,7 +3408,7 @@ class SearchTools:
                     "tool_discovery, settings_url, settings_url_hint, "
                     "read_only_mode, read_only_mode_hint, ha_mcp_update. Note: "
                     "``settings_url`` (stdio mode), ``settings_url_hint`` "
-                    "(HTTP/Docker/OAuth mode), the ``read_only_mode`` / "
+                    "(standalone HTTP/Docker mode), the ``read_only_mode`` / "
                     "``read_only_mode_hint`` pair (only while Read Only Mode "
                     "is on), and ``ha_mcp_update`` (when an update check applies) "
                     "are emitted regardless of ``fields=`` projection so the "
@@ -3442,10 +3442,11 @@ class SearchTools:
         minimize the response) but only when the sidecar URL file
         actually exists.
 
-        In HTTP / Docker / OAuth modes there is no sidecar URL file and the
-        server can't know its externally reachable host, so the response
-        instead carries a ``settings_url_hint`` string telling the user where
-        the page is mounted and to read the full URL from the startup logs.
+        In standalone HTTP / Docker modes, when an HTTP settings prefix is
+        advertised, there is no sidecar URL file and the server can't know its
+        externally reachable host. The response instead carries a
+        ``settings_url_hint`` string telling the user where the page is mounted
+        and how to find or construct the full URL.
         Hand whichever of the two fields is present to the user.
 
         The response also carries an ``ha_mcp_update`` object
@@ -3524,7 +3525,7 @@ class SearchTools:
         if sidecar_url:
             projected["settings_url"] = sidecar_url
         else:
-            # No stdio sidecar URL file. In HTTP / Docker / OAuth modes hint at
+            # No stdio sidecar URL file. In standalone HTTP / Docker modes hint at
             # the page (and startup-log URL) instead of guessing a wrong absolute URL
             # when bound to 0.0.0.0 (issue #1458).
             from ..settings_ui import get_http_settings_prefix
@@ -3536,8 +3537,10 @@ class SearchTools:
                     "The settings page (enable/disable/pin tools, feature "
                     "flags, advanced settings, backups, tool-approval) is "
                     f"served at '{settings_path}' on this MCP server. Find the "
-                    "full URL in the ha-mcp startup logs, or append it to the "
-                    "base URL your client connects to."
+                    "full URL in the ha-mcp startup logs. For a direct connection, "
+                    "use the MCP endpoint's scheme, host, and port with this "
+                    "settings path (replace the endpoint path rather than "
+                    "appending to it)."
                 )
 
         # Surface Read Only Mode after projection so the flag survives any
