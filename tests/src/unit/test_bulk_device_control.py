@@ -118,6 +118,7 @@ class TestBulkDeviceControlValidation:
     @pytest.mark.asyncio
     async def test_obsolete_key_skips_only_that_operation(self, device_control_tools):
         """A service-style key fails one row without rejecting the batch."""
+        device_control_tools._bulk_via_component = AsyncMock(return_value=None)
         device_control_tools.control_device_smart = AsyncMock(
             return_value={
                 "entity_id": "light.valid",
@@ -137,6 +138,7 @@ class TestBulkDeviceControlValidation:
         message = result["skipped_details"][0]["error"]["message"]
         assert "service" in message
         assert result["skipped_details"][0]["index"] == 0
+        device_control_tools._bulk_via_component.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_all_invalid_operations_has_suggestions(self, device_control_tools):
