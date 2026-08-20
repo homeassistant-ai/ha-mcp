@@ -249,6 +249,16 @@ class TestRegisteredBulkToolCompatibility:
                         "action": "on",
                         "parameters": "{not-json",
                     },
+                    {
+                        "entity_id": "light.null_timeout",
+                        "action": "off",
+                        "timeout_seconds": None,
+                    },
+                    {
+                        "entity_id": "light.null_validation",
+                        "action": "off",
+                        "validate_first": None,
+                    },
                     {"entity_id": "light.valid", "action": "off"},
                 ]
             }
@@ -256,12 +266,20 @@ class TestRegisteredBulkToolCompatibility:
 
         data = result.structured_content
         assert data["successful_commands"] == 1
-        assert data["skipped_operations"] == 3
-        assert [detail["index"] for detail in data["skipped_details"]] == [0, 1, 2]
+        assert data["skipped_operations"] == 5
+        assert [detail["index"] for detail in data["skipped_details"]] == [
+            0,
+            1,
+            2,
+            3,
+            4,
+        ]
         messages = [detail["error"]["message"] for detail in data["skipped_details"]]
         assert any("required fields" in message for message in messages)
         assert any("timeout_seconds" in message for message in messages)
         assert any("invalid JSON parameters" in message for message in messages)
+        assert any("validate_first" in message for message in messages)
+        assert sum("timeout_seconds" in message for message in messages) == 2
         tools.control_device_smart.assert_awaited_once()
 
     @pytest.mark.asyncio

@@ -502,9 +502,10 @@ class DeviceControlTools:
         if operation.status.value == "pending" and timeout_seconds > 0:
             deadline = time.monotonic() + timeout_seconds
             while operation.status.value == "pending":
-                if time.monotonic() >= deadline:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     break
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(min(0.2, remaining))
                 refreshed = get_operation_from_memory(operation_id)
                 if refreshed is None:
                     raise_tool_error(
@@ -740,9 +741,13 @@ class DeviceControlTools:
                 skipped_operations.append(err_response)
                 continue
 
-            timeout, timeout_valid = cls._normalize_bulk_timeout(
-                op.get("timeout_seconds")
-            )
+            timeout = None
+            timeout_valid = "timeout_seconds" not in op
+            if not timeout_valid:
+                timeout, timeout_valid = cls._normalize_bulk_timeout(
+                    op["timeout_seconds"]
+                )
+                timeout_valid = timeout_valid and timeout is not None
             if not timeout_valid:
                 error = (
                     f"Operation at index {i} timeout_seconds must be a "
@@ -759,8 +764,7 @@ class DeviceControlTools:
                 skipped_operations.append(err_response)
                 continue
 
-            validate_first = op.get("validate_first")
-            if type(validate_first) not in (type(None), bool):
+            if "validate_first" in op and type(op["validate_first"]) is not bool:
                 error = f"Operation at index {i} validate_first must be a boolean"
                 logger.warning(f"Bulk control: {error}")
                 err_response = create_error_response(

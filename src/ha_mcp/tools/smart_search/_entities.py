@@ -474,7 +474,7 @@ class EntitySearchMixin(_SearchBase):
             entity_reg_map = self._parse_entity_reg_map(results[2], registry_warnings)
             device_area_map = self._parse_device_area_map(results[3], registry_warnings)
             floor_result = results[4]
-            floor_registry_available = isinstance(floor_result, list) or (
+            floor_registry_available = (
                 isinstance(floor_result, dict)
                 and floor_result.get("success") is True
                 and isinstance(floor_result.get("result"), list)

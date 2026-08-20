@@ -153,6 +153,35 @@ async def test_returns_pending_when_timeout_expires() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fractional_timeout_bounds_polling_sleep() -> None:
+    """A polling sleep never exceeds the remaining timeout window."""
+    pending = _make_operation(OperationStatus.PENDING)
+    tools = DeviceControlTools(client=_client())
+    clock = {"t": 0.0}
+    sleep_calls: list[float] = []
+
+    def fake_monotonic() -> float:
+        return clock["t"]
+
+    async def advance_clock(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        clock["t"] += seconds
+
+    with (
+        patch(
+            "ha_mcp.tools.device_control.get_operation_from_memory",
+            return_value=pending,
+        ),
+        patch("ha_mcp.tools.device_control.time.monotonic", new=fake_monotonic),
+        patch.object(asyncio, "sleep", new=advance_clock),
+    ):
+        result = await tools.get_device_operation_status("op-1", timeout_seconds=0.05)
+
+    assert result["status"] == "pending"
+    assert sleep_calls == [pytest.approx(0.05)]
+
+
+@pytest.mark.asyncio
 async def test_initial_not_found_raises_resource_not_found() -> None:
     """Initial fetch returning None must raise RESOURCE_NOT_FOUND, not a generic error."""
     tools = DeviceControlTools(client=_client())

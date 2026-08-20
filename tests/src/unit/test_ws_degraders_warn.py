@@ -193,6 +193,31 @@ class TestAreaSearchReportsSkippedEnrichment:
         assert any("floor registry unavailable" in w for w in response["warnings"])
 
     @pytest.mark.asyncio
+    async def test_bare_list_floor_registry_is_unavailable(self) -> None:
+        """A bare list must not enable fuzzy area fallback after parser rejection."""
+        client = _make_client(failing=set())
+
+        async def _ws(message: dict[str, Any]) -> Any:
+            if message.get("type") == _FLOOR_LIST:
+                return []
+            if message.get("type") == _AREA_LIST:
+                return {
+                    "success": True,
+                    "result": [
+                        {"area_id": "couloir_sous_sol", "name": "Couloir Sous-Sol"}
+                    ],
+                }
+            return {"success": True, "result": []}
+
+        client.send_websocket_message = AsyncMock(side_effect=_ws)
+        tools = SmartSearchTools(client=client)
+
+        response = await tools.get_entities_by_area("sous-sol")
+
+        assert response["total_areas_found"] == 0
+        assert any("floor registry unavailable" in w for w in response["warnings"])
+
+    @pytest.mark.asyncio
     async def test_healthy_registries_produce_no_registry_warning(self) -> None:
         tools = SmartSearchTools(client=_make_client(failing=set()))
 
