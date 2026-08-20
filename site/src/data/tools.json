@@ -2922,7 +2922,7 @@
           "default": null
         },
         "area_filter": {
-          "type": "Annotated[str | None, Field(default=None, description='Narrow entity-registry results to an area (id or name). Does not affect configuration search.')]",
+          "type": "Annotated[str | None, Field(default=None, description='Narrow entity-registry results to an area (id, name, or alias), an exact floor (id, name, or alias), or an unambiguous close-spelling floor match; a floor match expands to all areas on that floor. Does not affect configuration search.')]",
           "default": null
         },
         "search_types": {
@@ -2988,11 +2988,11 @@
   {
     "name": "ha_bulk_control",
     "title": "Bulk Control",
-    "description": "Control multiple devices with bulk operation support and WebSocket tracking.",
+    "description": "Manage multiple entity actions in one request.\n\nWhen NOT to use: use ``ha_call_service`` for one service call targeting a\ngroup or for service-specific payloads that do not fit device actions.\n\nUse this when one request should apply actions to multiple independent\nentities. Optional item parameters carry brightness, temperature, position,\nor other action data.\n\nCaveats: put every target in ``operations`` and call the tool once. Parallel\nexecution is the default, and invalid items are reported without aborting\nvalid operations in the same batch.",
     "inputSchema": {
       "properties": {
         "operations": {
-          "type": "Annotated[list[dict[str, Any]], JSON_STRING_COERCION]"
+          "type": "Annotated[list[SkipValidation[BulkControlOperation]], JSON_STRING_COERCION, Field(description=\"All entity operations to execute in this single tool call. Each item requires entity_id and action. Use action='off', not service='turn_off'; do not include domain or service. Example: [{'entity_id': 'light.hall', 'action': 'off'}, {'entity_id': 'light.cave', 'action': 'off'}]\")]"
         },
         "parallel": {
           "type": "bool",
@@ -3107,7 +3107,7 @@
           "type": "Annotated[str | list[str], JSON_STRING_COERCION, Field(description='Single operation ID or list of operation IDs to check. Use a single string for one operation, or a list for bulk status checks.')]"
         },
         "timeout_seconds": {
-          "type": "int",
+          "type": "Annotated[float, Field(ge=0, allow_inf_nan=False)]",
           "default": 10
         }
       },

@@ -631,7 +631,7 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 - `ha_search` — Search for entities (lights, sensors, switches, climate, etc.) by name, domain, or area — AND inside automation/script/scene/helper/dashboard configurations — in one call.
 
 ### Service & Device Control
-- `ha_bulk_control` — Control multiple devices with bulk operation support and WebSocket tracking.
+- `ha_bulk_control` — Manage multiple entity actions in one request.
 - `ha_call_event` — Execute a custom event on the Home Assistant event bus.
 - `ha_call_service` — Execute Home Assistant services to control entities and trigger automations.
 - `ha_get_operation_status` — Get the status of one or more device operations with real-time WebSocket verification.
