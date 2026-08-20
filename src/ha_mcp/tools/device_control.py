@@ -42,9 +42,15 @@ from .helpers import (
     safe_info,
     safe_progress,
 )
+from .tools_service import BulkControlOperation
 from .util_helpers import _SERVICE_TO_STATE
 
 logger = logging.getLogger(__name__)
+
+# The bulk row contract is declared once, on the advertised transport schema.
+# Reading its keys back here keeps the runtime batch validator from drifting
+# out of sync with what models are told they may send.
+_BULK_OPERATION_KEYS: frozenset[str] = frozenset(BulkControlOperation.__annotations__)
 
 # The ha_mcp_tools/bulk_call_service WS command (Phase 3, D5a): the BATCH write
 # capability. When the component advertises ``bulk_call_service`` the consumer
@@ -647,6 +653,28 @@ class DeviceControlTools:
             normalized["timeout_seconds"] = timeout
         return normalized
 
+    @staticmethod
+    def _skip_bulk_operation(
+        skipped_operations: list[dict[str, Any]],
+        op: Any,
+        code: ErrorCode,
+        error: str,
+        context: dict[str, Any],
+        suggestions: list[str] | None = None,
+    ) -> None:
+        """Log one rejected bulk row and record its structured skip entry.
+
+        ``create_error_response`` lifts every ``context`` key to the top level,
+        so ``index`` needs no separate write; ``operation`` is not a context
+        key and is attached here so callers can see the row they sent.
+        """
+        logger.warning(f"Bulk control: {error}")
+        err_response = create_error_response(
+            code, error, suggestions=suggestions, context=context
+        )
+        err_response["operation"] = op
+        skipped_operations.append(err_response)
+
     @classmethod
     def _validate_bulk_operations(
         cls,
@@ -656,41 +684,28 @@ class DeviceControlTools:
         valid: list[tuple[int, dict[str, Any], str, str]] = []
         for i, op in enumerate(operations):
             if not isinstance(op, dict):
-                error = f"Operation at index {i} is not a dict: {type(op).__name__}"
-                logger.warning(f"Bulk control: {error}")
-                err_response = create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER, error, context={"index": i}
+                cls._skip_bulk_operation(
+                    skipped_operations,
+                    op,
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    f"Operation at index {i} is not a dict: {type(op).__name__}",
+                    {"index": i},
                 )
-                err_response["index"] = i
-                err_response["operation"] = op
-                skipped_operations.append(err_response)
                 continue
 
-            allowed_keys = {
-                "entity_id",
-                "action",
-                "parameters",
-                "timeout_seconds",
-                "validate_first",
-            }
-            obsolete_keys = sorted(set(op) - allowed_keys)
+            obsolete_keys = sorted(set(op) - _BULK_OPERATION_KEYS)
             if obsolete_keys:
                 key_list = ", ".join(obsolete_keys)
-                error = (
-                    f"Operation at index {i} contains unsupported key(s): {key_list}"
-                )
-                logger.warning(f"Bulk control: {error}")
-                err_response = create_error_response(
+                cls._skip_bulk_operation(
+                    skipped_operations,
+                    op,
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    error,
+                    f"Operation at index {i} contains unsupported key(s): {key_list}",
+                    {"index": i, "unsupported_keys": obsolete_keys},
                     suggestions=[
                         "Use entity_id and action; put action data inside parameters"
                     ],
-                    context={"index": i, "unsupported_keys": obsolete_keys},
                 )
-                err_response["index"] = i
-                err_response["operation"] = op
-                skipped_operations.append(err_response)
                 continue
 
             entity_id = op.get("entity_id")
@@ -698,47 +713,40 @@ class DeviceControlTools:
             missing = [f for f in ("entity_id", "action") if not op.get(f)]
 
             if missing:
-                error = f"Operation at index {i} missing required fields: {', '.join(missing)}"
-                logger.warning(f"Bulk control: {error}")
-                err_response = create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER, error, context={"index": i}
+                cls._skip_bulk_operation(
+                    skipped_operations,
+                    op,
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    f"Operation at index {i} missing required fields: "
+                    f"{', '.join(missing)}",
+                    {"index": i},
                 )
-                err_response["index"] = i
-                err_response["operation"] = op
-                skipped_operations.append(err_response)
                 continue
 
             if not isinstance(entity_id, str) or not isinstance(action, str):
-                error = f"Operation at index {i} requires string entity_id and action fields"
-                logger.warning(f"Bulk control: {error}")
-                err_response = create_error_response(
+                cls._skip_bulk_operation(
+                    skipped_operations,
+                    op,
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    error,
-                    context={"index": i},
+                    f"Operation at index {i} requires string entity_id and "
+                    "action fields",
+                    {"index": i},
                 )
-                err_response["index"] = i
-                err_response["operation"] = op
-                skipped_operations.append(err_response)
                 continue
 
             parameters, parameter_error = cls._normalize_bulk_parameters(
                 op.get("parameters")
             )
             if parameter_error is not None:
-                error = (
+                cls._skip_bulk_operation(
+                    skipped_operations,
+                    op,
+                    parameter_error,
                     f"Operation at index {i} has invalid JSON parameters"
                     if parameter_error == ErrorCode.VALIDATION_INVALID_JSON
-                    else f"Operation at index {i} parameters must be a JSON object"
+                    else f"Operation at index {i} parameters must be a JSON object",
+                    {"index": i},
                 )
-                logger.warning(f"Bulk control: {error}")
-                err_response = create_error_response(
-                    parameter_error,
-                    error,
-                    context={"index": i},
-                )
-                err_response["index"] = i
-                err_response["operation"] = op
-                skipped_operations.append(err_response)
                 continue
 
             timeout = None
@@ -749,32 +757,24 @@ class DeviceControlTools:
                 )
                 timeout_valid = timeout_valid and timeout is not None
             if not timeout_valid:
-                error = (
-                    f"Operation at index {i} timeout_seconds must be a "
-                    "non-negative number"
-                )
-                logger.warning(f"Bulk control: {error}")
-                err_response = create_error_response(
+                cls._skip_bulk_operation(
+                    skipped_operations,
+                    op,
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    error,
-                    context={"index": i},
+                    f"Operation at index {i} timeout_seconds must be a "
+                    "non-negative number",
+                    {"index": i},
                 )
-                err_response["index"] = i
-                err_response["operation"] = op
-                skipped_operations.append(err_response)
                 continue
 
-            if "validate_first" in op and type(op["validate_first"]) is not bool:
-                error = f"Operation at index {i} validate_first must be a boolean"
-                logger.warning(f"Bulk control: {error}")
-                err_response = create_error_response(
+            if "validate_first" in op and not isinstance(op["validate_first"], bool):
+                cls._skip_bulk_operation(
+                    skipped_operations,
+                    op,
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    error,
-                    context={"index": i},
+                    f"Operation at index {i} validate_first must be a boolean",
+                    {"index": i},
                 )
-                err_response["index"] = i
-                err_response["operation"] = op
-                skipped_operations.append(err_response)
                 continue
 
             normalized_op = cls._normalized_bulk_operation(op, parameters, timeout)
