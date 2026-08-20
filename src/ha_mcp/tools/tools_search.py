@@ -321,6 +321,13 @@ def _finalize_partial_state(
     if partial_local:
         response["partial"] = True
         response["errors"].extend(errors_local)
+        local_reason = "; ".join(
+            f"{error['surface']}: {error['error']}" for error in errors_local
+        )
+        existing_reason = response.get("partial_reason")
+        response["partial_reason"] = (
+            f"{existing_reason}; {local_reason}" if existing_reason else local_reason
+        )
 
 
 def _compute_eligibility(
@@ -1691,8 +1698,10 @@ class SearchTools:
             Field(
                 default=None,
                 description=(
-                    "Narrow entity-registry results to an area (id or name). "
-                    "Does not affect configuration search."
+                    "Narrow entity-registry results to an area (id, name, or alias), "
+                    "an exact floor (id, name, or alias), or an unambiguous "
+                    "close-spelling floor match; a floor match expands to all areas "
+                    "on that floor. Does not affect configuration search."
                 ),
             ),
         ] = None,
@@ -2255,7 +2264,10 @@ class SearchTools:
             str | None,
             Field(
                 default=None,
-                description="Limit to entities in a specific area (area ID or name).",
+                description=(
+                    "Limit to an area, or an exact/close floor name to expand "
+                    "to every area on that floor."
+                ),
             ),
         ] = None,
         limit: Annotated[

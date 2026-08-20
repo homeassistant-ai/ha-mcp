@@ -14,7 +14,9 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
+from ha_mcp.errors import ErrorCode, create_error_response
 from ha_mcp.tools.tools_search import register_search_tools
 
 
@@ -105,6 +107,40 @@ class TestDeepSearchErrorHandling:
         suggestions = err["error"]["suggestions"]
         assert "Check Home Assistant connection" in suggestions
         assert "Try simpler search terms" in suggestions
+
+    @pytest.mark.asyncio
+    async def test_operational_entities_tool_error_remains_partial(
+        self, mock_smart_tools, ha_search_tool
+    ):
+        """An operational entity failure is captured, not re-raised as validation."""
+        mock_smart_tools.smart_entity_search = AsyncMock(
+            side_effect=ToolError(
+                json.dumps(
+                    create_error_response(
+                        ErrorCode.CONNECTION_FAILED,
+                        "entity registry unavailable",
+                    )
+                )
+            )
+        )
+        mock_smart_tools.deep_search = AsyncMock(
+            return_value={
+                "success": True,
+                "automations": [],
+                "scripts": [],
+                "scenes": [],
+                "helpers": [],
+                "warnings": [],
+                "errors": [],
+                "partial": False,
+            }
+        )
+
+        response = await ha_search_tool(query="test_query", exact_match=False)
+
+        assert response["partial"] is True
+        assert any(e["surface"] == "entities" for e in response["errors"])
+        assert any("incomplete results" in w for w in response["warnings"])
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

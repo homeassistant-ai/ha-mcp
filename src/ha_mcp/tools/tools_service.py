@@ -5,13 +5,13 @@ This module provides service execution and WebSocket-enabled operation monitorin
 """
 
 import logging
-from typing import Annotated, Any, NoReturn, cast
+from typing import Annotated, Any, NoReturn, NotRequired, TypedDict, cast
 
 import httpx
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
-from pydantic import Field
+from pydantic import ConfigDict, Field, SkipValidation, TypeAdapter, ValidationError
 
 from ..client.rest_client import (
     HomeAssistantCommandError,
@@ -54,6 +54,72 @@ from .util_helpers import (
 # REST POST + hardcoded ``_SERVICE_TO_STATE`` guess + WS-subscribe verification.
 # Named once so the routing helper and its tests agree on the wire string.
 WS_CALL_SERVICE = "ha_mcp_tools/call_service"
+
+
+class BulkControlOperation(TypedDict):
+    """One entity action in a ha_bulk_control request."""
+
+    entity_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            description="Exact Home Assistant entity ID, e.g. 'light.kitchen'.",
+        ),
+    ]
+    action: Annotated[
+        str,
+        Field(
+            min_length=1,
+            description=(
+                "Device action such as 'on', 'off', or 'toggle'. For lights, use "
+                "'off' instead of the ha_call_service form 'turn_off'."
+            ),
+        ),
+    ]
+    parameters: NotRequired[
+        Annotated[
+            dict[str, Any],
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Optional action parameters, e.g. {'brightness_pct': 30} "
+                    "when action='on'."
+                )
+            ),
+        ]
+    ]
+    timeout_seconds: NotRequired[
+        Annotated[
+            float,
+            Field(
+                ge=0,
+                allow_inf_nan=False,
+                description=(
+                    "Optional confirmation timeout. On the component path, all "
+                    "operations share the maximum requested wait (default 10s, "
+                    "capped at 60s); 0 disables confirmation waiting."
+                ),
+            ),
+        ]
+    ]
+    validate_first: NotRequired[
+        Annotated[
+            bool,
+            Field(
+                strict=True,
+                description=(
+                    "Validate that the entity exists before dispatch; default true. "
+                    "The action is always validated."
+                ),
+            ),
+        ]
+    ]
+
+
+# Pydantic reads this runtime config when generating the TypedDict schema. Keep it
+# outside the class body because mypy permits only field declarations there.
+BulkControlOperation.__pydantic_config__ = ConfigDict(extra="forbid")  # type: ignore[attr-defined]
+_BULK_CONTROL_OPERATION_ADAPTER = TypeAdapter(BulkControlOperation)
 
 
 class _AmbiguousDispatch:
@@ -1384,7 +1450,7 @@ class ServiceTools:
                 ),
             ),
         ],
-        timeout_seconds: int = 10,
+        timeout_seconds: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 10,
     ) -> dict[str, Any]:
         """
         Get the status of one or more device operations with real-time WebSocket verification.
@@ -1438,15 +1504,40 @@ class ServiceTools:
     @log_tool_usage
     async def ha_bulk_control(
         self,
-        operations: Annotated[list[dict[str, Any]], JSON_STRING_COERCION],
+        operations: Annotated[
+            list[SkipValidation[BulkControlOperation]],
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "All entity operations to execute in this single tool call. "
+                    "Each item requires entity_id and action. Use action='off', not "
+                    "service='turn_off'; do not include domain or service. Example: "
+                    "[{'entity_id': 'light.hall', 'action': 'off'}, "
+                    "{'entity_id': 'light.cave', 'action': 'off'}]"
+                )
+            ),
+        ],
         parallel: bool = True,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        """Control multiple devices with bulk operation support and WebSocket tracking."""
+        """Manage multiple entity actions in one request.
+
+        When NOT to use: use ``ha_call_service`` for one service call targeting a
+        group or for service-specific payloads that do not fit device actions.
+
+        Use this when one request should apply actions to multiple independent
+        entities. Optional item parameters carry brightness, temperature, position,
+        or other action data.
+
+        Caveats: put every target in ``operations`` and call the tool once. Parallel
+        execution is the default, and invalid items are reported without aborting
+        valid operations in the same batch.
+        """
         parallel_bool = parallel
 
-        # FastMCP validates operations as list[dict] before this runs.
-        # parse_json_param is kept as a defensive passthrough for the list case.
+        # FastMCP validates the outer list but deliberately defers item failures so
+        # one malformed row cannot abort valid operations in the same batch.
+        # parse_json_param remains a defensive passthrough for the list case.
         try:
             parsed_operations = parse_json_param(operations, "operations")
         except ValueError as e:
@@ -1467,7 +1558,17 @@ class ServiceTools:
                 )
             )
 
-        operations_list = cast(list[dict[str, Any]], parsed_operations)
+        operations_list: list[Any] = []
+        for operation in parsed_operations:
+            try:
+                operations_list.append(
+                    _BULK_CONTROL_OPERATION_ADAPTER.validate_python(operation)
+                )
+            except ValidationError:
+                # Preserve malformed rows for the runtime batch validator, which
+                # reports them in skipped_details instead of rejecting the call.
+                operations_list.append(operation)
+
         result = await self._device_tools.bulk_device_control(
             operations=operations_list, parallel=parallel_bool, ctx=ctx
         )

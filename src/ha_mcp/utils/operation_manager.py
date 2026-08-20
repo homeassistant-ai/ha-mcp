@@ -41,7 +41,7 @@ class DeviceOperation:
     expected_state: dict[str, Any] | None = None
     result_state: dict[str, Any] | None = None
     error_message: str | None = None
-    timeout_ms: int = 10000  # 10 second default timeout
+    timeout_ms: float = 10000  # 10 second default timeout
 
     @property
     def elapsed_ms(self) -> float:
@@ -84,7 +84,7 @@ class OperationManager:
         service_name: str,
         service_data: dict[str, Any],
         expected_state: dict[str, Any] | None = None,
-        timeout_ms: int = 10000,
+        timeout_ms: float = 10000,
     ) -> str:
         """Create a new device operation.
 
@@ -364,7 +364,7 @@ def store_pending_operation(
     service_name: str,
     service_data: dict[str, Any],
     expected_state: dict[str, Any] | None = None,
-    timeout_ms: int = 10000,
+    timeout_ms: float = 10000,
 ) -> str:
     """Store a new pending operation."""
     manager = get_operation_manager()

@@ -31,6 +31,7 @@ class TestBulkDeviceControlValidation:
     @pytest.mark.asyncio
     async def test_missing_entity_id_reports_error(self, device_control_tools):
         """Operations missing entity_id are reported in skipped_operations."""
+        device_control_tools._bulk_via_component = AsyncMock()
         operations = [
             {"action": "on"},  # Missing entity_id
         ]
@@ -41,6 +42,7 @@ class TestBulkDeviceControlValidation:
         assert len(result["skipped_details"]) == 1
         assert "entity_id" in result["skipped_details"][0]["error"]["message"]
         assert result["skipped_details"][0]["index"] == 0
+        device_control_tools._bulk_via_component.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_missing_action_reports_error(self, device_control_tools):
@@ -114,6 +116,31 @@ class TestBulkDeviceControlValidation:
         assert 2 in skipped_indices  # Missing action
 
     @pytest.mark.asyncio
+    async def test_obsolete_key_skips_only_that_operation(self, device_control_tools):
+        """A service-style key fails one row without rejecting the batch."""
+        device_control_tools._bulk_via_component = AsyncMock(return_value=None)
+        device_control_tools.control_device_smart = AsyncMock(
+            return_value={
+                "entity_id": "light.valid",
+                "command_sent": True,
+                "operation_id": "op-valid",
+            }
+        )
+        operations = [
+            {"entity_id": "light.invalid", "action": "off", "service": "turn_off"},
+            {"entity_id": "light.valid", "action": "off"},
+        ]
+
+        result = await device_control_tools.bulk_device_control(operations)
+
+        assert result["skipped_operations"] == 1
+        assert result["successful_commands"] == 1
+        message = result["skipped_details"][0]["error"]["message"]
+        assert "service" in message
+        assert result["skipped_details"][0]["index"] == 0
+        device_control_tools._bulk_via_component.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_all_invalid_operations_has_suggestions(self, device_control_tools):
         """When operations are skipped, response includes suggestions."""
         operations = [
@@ -150,6 +177,153 @@ class TestBulkDeviceControlValidation:
 
         assert result["skipped_operations"] == 1
         assert result["execution_mode"] == "sequential"
+
+
+class TestRegisteredBulkToolCompatibility:
+    """Pin transport validation and model-facing fail-soft responses together."""
+
+    @staticmethod
+    async def _registered_tool(device_tools):
+        from fastmcp import FastMCP
+
+        from ha_mcp.tools.tools_service import register_service_tools
+
+        mcp = FastMCP("test")
+        register_service_tools(mcp, MagicMock(), device_tools=device_tools)
+        return await mcp.get_tool("ha_bulk_control")
+
+    @pytest.mark.asyncio
+    async def test_obsolete_key_names_key_and_valid_row_still_executes(self):
+        tools = DeviceControlTools(client=MagicMock())
+        tools._bulk_via_component = AsyncMock(return_value=None)
+        tools.control_device_smart = AsyncMock(
+            return_value={
+                "entity_id": "light.valid",
+                "command_sent": True,
+                "operation_id": "op-valid",
+            }
+        )
+        tool = await self._registered_tool(tools)
+
+        result = await tool.run(
+            {
+                "operations": [
+                    {
+                        "entity_id": "light.invalid",
+                        "action": "off",
+                        "service": "turn_off",
+                    },
+                    {"entity_id": "light.valid", "action": "off"},
+                ]
+            }
+        )
+
+        data = result.structured_content
+        assert data["successful_commands"] == 1
+        assert data["skipped_operations"] == 1
+        assert "service" in data["skipped_details"][0]["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_mixed_schema_invalid_rows_are_reported_without_aborting(self):
+        """Transport validation defers malformed rows to skipped_details."""
+        tools = DeviceControlTools(client=MagicMock())
+        tools._bulk_via_component = AsyncMock(return_value=None)
+        tools.control_device_smart = AsyncMock(
+            return_value={
+                "entity_id": "light.valid",
+                "command_sent": True,
+                "operation_id": "op-valid",
+            }
+        )
+        tool = await self._registered_tool(tools)
+
+        result = await tool.run(
+            {
+                "operations": [
+                    {"entity_id": "", "action": "off"},
+                    {
+                        "entity_id": "light.negative_timeout",
+                        "action": "off",
+                        "timeout_seconds": -0.5,
+                    },
+                    {
+                        "entity_id": "light.bad_parameters",
+                        "action": "on",
+                        "parameters": "{not-json",
+                    },
+                    {
+                        "entity_id": "light.null_timeout",
+                        "action": "off",
+                        "timeout_seconds": None,
+                    },
+                    {
+                        "entity_id": "light.null_validation",
+                        "action": "off",
+                        "validate_first": None,
+                    },
+                    {"entity_id": "light.valid", "action": "off"},
+                    {
+                        "entity_id": "light.integer_validation",
+                        "action": "off",
+                        "validate_first": 1,
+                    },
+                    {
+                        "entity_id": "light.string_validation",
+                        "action": "off",
+                        "validate_first": "false",
+                    },
+                ]
+            }
+        )
+
+        data = result.structured_content
+        assert data["successful_commands"] == 1
+        assert data["skipped_operations"] == 7
+        assert [detail["index"] for detail in data["skipped_details"]] == [
+            0,
+            1,
+            2,
+            3,
+            4,
+            6,
+            7,
+        ]
+        messages = [detail["error"]["message"] for detail in data["skipped_details"]]
+        assert any("required fields" in message for message in messages)
+        assert any("timeout_seconds" in message for message in messages)
+        assert any("invalid JSON parameters" in message for message in messages)
+        assert sum("validate_first" in message for message in messages) == 3
+        assert sum("timeout_seconds" in message for message in messages) == 2
+        tools.control_device_smart.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_nested_json_parameters_round_trip_through_registered_tool(self):
+        tools = DeviceControlTools(client=MagicMock())
+        tools._bulk_via_component = AsyncMock(return_value=None)
+        tools.control_device_smart = AsyncMock(
+            return_value={
+                "entity_id": "light.kitchen",
+                "command_sent": True,
+                "operation_id": "op-1",
+            }
+        )
+        tool = await self._registered_tool(tools)
+
+        await tool.run(
+            {
+                "operations": [
+                    {
+                        "entity_id": "light.kitchen",
+                        "action": "on",
+                        "parameters": '{"brightness_pct": 42}',
+                    }
+                ]
+            }
+        )
+
+        assert tools.control_device_smart.await_args.kwargs["parameters"] == {
+            "brightness_pct": 42
+        }
 
 
 class TestBulkExecutionErrorHandling:
@@ -218,7 +392,7 @@ class TestBulkExecutionErrorHandling:
 
         operations = [
             {"entity_id": "light.ok", "action": "on"},
-            {"entity_id": "light.bad", "action": "on", "parameters": "{not-json"},
+            {"entity_id": "light.bad", "action": "on"},
         ]
         result = await tools_with_mock_control.bulk_device_control(
             operations, parallel=True
@@ -230,3 +404,16 @@ class TestBulkExecutionErrorHandling:
         assert (
             result["results"][1]["error"]["code"] == ErrorCode.VALIDATION_INVALID_JSON
         )
+
+
+class TestLightParameterForwarding:
+    """Light action parameters must survive service-call construction."""
+
+    def test_brightness_pct_is_forwarded(self):
+        tools = DeviceControlTools(client=MagicMock())
+
+        service_call = tools._build_service_call(
+            "light.kitchen", "light", "on", {"brightness_pct": 37}
+        )
+
+        assert service_call["data"]["brightness_pct"] == 37

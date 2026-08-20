@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import ValidationError as FastMCPValidationError
 
 from ha_mcp.tools.device_control import DeviceControlTools
 from ha_mcp.utils.operation_manager import DeviceOperation, OperationStatus
@@ -153,6 +154,35 @@ async def test_returns_pending_when_timeout_expires() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fractional_timeout_bounds_polling_sleep() -> None:
+    """A polling sleep never exceeds the remaining timeout window."""
+    pending = _make_operation(OperationStatus.PENDING)
+    tools = DeviceControlTools(client=_client())
+    clock = {"t": 0.0}
+    sleep_calls: list[float] = []
+
+    def fake_monotonic() -> float:
+        return clock["t"]
+
+    async def advance_clock(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        clock["t"] += seconds
+
+    with (
+        patch(
+            "ha_mcp.tools.device_control.get_operation_from_memory",
+            return_value=pending,
+        ),
+        patch("ha_mcp.tools.device_control.time.monotonic", new=fake_monotonic),
+        patch.object(asyncio, "sleep", new=advance_clock),
+    ):
+        result = await tools.get_device_operation_status("op-1", timeout_seconds=0.05)
+
+    assert result["status"] == "pending"
+    assert sleep_calls == [pytest.approx(0.05)]
+
+
+@pytest.mark.asyncio
 async def test_initial_not_found_raises_resource_not_found() -> None:
     """Initial fetch returning None must raise RESOURCE_NOT_FOUND, not a generic error."""
     tools = DeviceControlTools(client=_client())
@@ -242,3 +272,53 @@ async def test_failed_mid_poll_raises_service_call_failed() -> None:
     err_text = str(exc_info.value)
     assert "SERVICE_CALL_FAILED" in err_text
     assert "device unreachable" in err_text
+
+
+@pytest.mark.asyncio
+async def test_registered_status_tool_accepts_fractional_timeout() -> None:
+    """The MCP boundary preserves a fractional timeout for follow-up calls."""
+    from fastmcp import FastMCP
+
+    from ha_mcp.tools.tools_service import register_service_tools
+
+    device_tools = MagicMock()
+    device_tools.get_device_operation_status = AsyncMock(
+        return_value={
+            "success": True,
+            "operation_id": "op-1",
+            "status": "pending",
+        }
+    )
+    mcp = FastMCP("test")
+    register_service_tools(mcp, MagicMock(), device_tools=device_tools)
+    tool = await mcp.get_tool("ha_get_operation_status")
+
+    result = await tool.run({"operation_id": "op-1", "timeout_seconds": 0.5})
+
+    assert result.structured_content["operation_id"] == "op-1"
+    device_tools.get_device_operation_status.assert_awaited_once_with(
+        operation_id="op-1",
+        timeout_seconds=0.5,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_timeout", [float("inf"), "inf", float("nan")])
+async def test_registered_status_tool_rejects_non_finite_timeout(
+    invalid_timeout: float | str,
+) -> None:
+    """The public polling window must always have a finite deadline."""
+    from fastmcp import FastMCP
+
+    from ha_mcp.tools.tools_service import register_service_tools
+
+    device_tools = MagicMock()
+    device_tools.get_device_operation_status = AsyncMock()
+    mcp = FastMCP("test")
+    register_service_tools(mcp, MagicMock(), device_tools=device_tools)
+    tool = await mcp.get_tool("ha_get_operation_status")
+
+    with pytest.raises(FastMCPValidationError):
+        await tool.run({"operation_id": "op-1", "timeout_seconds": invalid_timeout})
+
+    device_tools.get_device_operation_status.assert_not_awaited()

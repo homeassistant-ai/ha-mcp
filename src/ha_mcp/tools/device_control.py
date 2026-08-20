@@ -8,6 +8,7 @@ and async operation verification through WebSocket monitoring.
 import asyncio
 import json
 import logging
+import math
 import time
 from typing import Any, ClassVar
 
@@ -88,7 +89,7 @@ class DeviceControlTools:
         entity_id: str,
         action: str,
         parameters: dict[str, Any] | None = None,
-        timeout_seconds: int = 10,
+        timeout_seconds: float = 10,
         validate_first: bool = True,
     ) -> dict[str, Any]:
         """
@@ -347,7 +348,13 @@ class DeviceControlTools:
     }
 
     _DOMAIN_PARAMS: ClassVar[dict[str, list[str]]] = {
-        "light": ["brightness", "color_temp_kelvin", "rgb_color", "effect"],
+        "light": [
+            "brightness",
+            "brightness_pct",
+            "color_temp_kelvin",
+            "rgb_color",
+            "effect",
+        ],
         "climate": ["temperature", "target_temp_high", "target_temp_low", "hvac_mode"],
         "cover": ["position", "tilt_position"],
         "media_player": ["volume_level", "media_content_id", "media_content_type"],
@@ -462,7 +469,7 @@ class DeviceControlTools:
         return expected if expected else None
 
     async def get_device_operation_status(
-        self, operation_id: str, timeout_seconds: int = 10
+        self, operation_id: str, timeout_seconds: float = 10
     ) -> dict[str, Any]:
         """Check status of a device operation, waiting up to ``timeout_seconds`` for completion.
 
@@ -495,9 +502,10 @@ class DeviceControlTools:
         if operation.status.value == "pending" and timeout_seconds > 0:
             deadline = time.monotonic() + timeout_seconds
             while operation.status.value == "pending":
-                if time.monotonic() >= deadline:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     break
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(min(0.2, remaining))
                 refreshed = get_operation_from_memory(operation_id)
                 if refreshed is None:
                     raise_tool_error(
@@ -597,8 +605,52 @@ class DeviceControlTools:
             }
 
     @staticmethod
+    def _normalize_bulk_parameters(
+        value: Any,
+    ) -> tuple[dict[str, Any] | None, ErrorCode | None]:
+        """Normalize optional bulk parameters and identify invalid values."""
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return None, ErrorCode.VALIDATION_INVALID_JSON
+        if value is not None and not isinstance(value, dict):
+            return None, ErrorCode.VALIDATION_INVALID_PARAMETER
+        return value, None
+
+    @staticmethod
+    def _normalize_bulk_timeout(value: Any) -> tuple[float | None, bool]:
+        """Normalize an optional non-negative finite timeout."""
+        if value is None:
+            return None, True
+        try:
+            timeout = float(value)
+        except (TypeError, ValueError):
+            return None, False
+        return (
+            (timeout, True)
+            if math.isfinite(timeout) and timeout >= 0
+            else (None, False)
+        )
+
+    @staticmethod
+    def _normalized_bulk_operation(
+        operation: dict[str, Any],
+        parameters: dict[str, Any] | None,
+        timeout: float | None,
+    ) -> dict[str, Any]:
+        """Return one normalized valid bulk operation."""
+        normalized = dict(operation)
+        if parameters is not None:
+            normalized["parameters"] = parameters
+        if timeout is not None:
+            normalized["timeout_seconds"] = timeout
+        return normalized
+
+    @classmethod
     def _validate_bulk_operations(
-        operations: list[dict[str, Any]],
+        cls,
+        operations: list[Any],
         skipped_operations: list[dict[str, Any]],
     ) -> list[tuple[int, dict[str, Any], str, str]]:
         valid: list[tuple[int, dict[str, Any], str, str]] = []
@@ -608,6 +660,33 @@ class DeviceControlTools:
                 logger.warning(f"Bulk control: {error}")
                 err_response = create_error_response(
                     ErrorCode.VALIDATION_MISSING_PARAMETER, error, context={"index": i}
+                )
+                err_response["index"] = i
+                err_response["operation"] = op
+                skipped_operations.append(err_response)
+                continue
+
+            allowed_keys = {
+                "entity_id",
+                "action",
+                "parameters",
+                "timeout_seconds",
+                "validate_first",
+            }
+            obsolete_keys = sorted(set(op) - allowed_keys)
+            if obsolete_keys:
+                key_list = ", ".join(obsolete_keys)
+                error = (
+                    f"Operation at index {i} contains unsupported key(s): {key_list}"
+                )
+                logger.warning(f"Bulk control: {error}")
+                err_response = create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    error,
+                    suggestions=[
+                        "Use entity_id and action; put action data inside parameters"
+                    ],
+                    context={"index": i, "unsupported_keys": obsolete_keys},
                 )
                 err_response["index"] = i
                 err_response["operation"] = op
@@ -627,13 +706,85 @@ class DeviceControlTools:
                 err_response["index"] = i
                 err_response["operation"] = op
                 skipped_operations.append(err_response)
-            else:
-                valid.append((i, op, str(entity_id), str(action)))
+                continue
+
+            if not isinstance(entity_id, str) or not isinstance(action, str):
+                error = f"Operation at index {i} requires string entity_id and action fields"
+                logger.warning(f"Bulk control: {error}")
+                err_response = create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    error,
+                    context={"index": i},
+                )
+                err_response["index"] = i
+                err_response["operation"] = op
+                skipped_operations.append(err_response)
+                continue
+
+            parameters, parameter_error = cls._normalize_bulk_parameters(
+                op.get("parameters")
+            )
+            if parameter_error is not None:
+                error = (
+                    f"Operation at index {i} has invalid JSON parameters"
+                    if parameter_error == ErrorCode.VALIDATION_INVALID_JSON
+                    else f"Operation at index {i} parameters must be a JSON object"
+                )
+                logger.warning(f"Bulk control: {error}")
+                err_response = create_error_response(
+                    parameter_error,
+                    error,
+                    context={"index": i},
+                )
+                err_response["index"] = i
+                err_response["operation"] = op
+                skipped_operations.append(err_response)
+                continue
+
+            timeout = None
+            timeout_valid = "timeout_seconds" not in op
+            if not timeout_valid:
+                timeout, timeout_valid = cls._normalize_bulk_timeout(
+                    op["timeout_seconds"]
+                )
+                timeout_valid = timeout_valid and timeout is not None
+            if not timeout_valid:
+                error = (
+                    f"Operation at index {i} timeout_seconds must be a "
+                    "non-negative number"
+                )
+                logger.warning(f"Bulk control: {error}")
+                err_response = create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    error,
+                    context={"index": i},
+                )
+                err_response["index"] = i
+                err_response["operation"] = op
+                skipped_operations.append(err_response)
+                continue
+
+            if "validate_first" in op and type(op["validate_first"]) is not bool:
+                error = f"Operation at index {i} validate_first must be a boolean"
+                logger.warning(f"Bulk control: {error}")
+                err_response = create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    error,
+                    context={"index": i},
+                )
+                err_response["index"] = i
+                err_response["operation"] = op
+                skipped_operations.append(err_response)
+                continue
+
+            normalized_op = cls._normalized_bulk_operation(op, parameters, timeout)
+            valid.append((i, normalized_op, entity_id, action))
+
         return valid
 
     async def bulk_device_control(
         self,
-        operations: list[dict[str, Any]],
+        operations: list[Any],
         parallel: bool = True,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
@@ -672,6 +823,10 @@ class DeviceControlTools:
                 f"{len(skipped_operations)} skipped, "
                 f"mode={'parallel' if parallel else 'sequential'}",
             )
+            if not valid_operations:
+                return self._build_bulk_response(
+                    operations, results, operation_ids, skipped_operations, parallel
+                )
 
             # Route through the component's bulk_call_service capability when
             # advertised (D5a): one register-before-fire batch frame confirms every
@@ -904,7 +1059,7 @@ class DeviceControlTools:
 
     async def _bulk_via_component(
         self,
-        operations: list[dict[str, Any]],
+        operations: list[Any],
         valid_operations: list[tuple[int, dict[str, Any], str, str]],
         skipped_operations: list[dict[str, Any]],
         parallel: bool,
@@ -1111,7 +1266,7 @@ class DeviceControlTools:
 
     def _build_ambiguous_bulk_response(
         self,
-        operations: list[dict[str, Any]],
+        operations: list[Any],
         valid_operations: list[tuple[int, dict[str, Any], str, str]],
         rows: list[dict[str, Any]],
         skipped_operations: list[dict[str, Any]],
@@ -1246,7 +1401,7 @@ class DeviceControlTools:
 
     def _build_bulk_response(
         self,
-        operations: list[dict[str, Any]],
+        operations: list[Any],
         results: list[dict[str, Any]],
         operation_ids: list[str],
         skipped_operations: list[dict[str, Any]],
@@ -1293,7 +1448,7 @@ class DeviceControlTools:
         return response
 
     async def get_bulk_operation_status(
-        self, operation_ids: list[str], timeout_seconds: int = 10
+        self, operation_ids: list[str], timeout_seconds: float = 10
     ) -> dict[str, Any]:
         """
         Check status of multiple operations.

@@ -360,7 +360,12 @@ class ListingModeClient(RoutingClient):
     """RoutingClient + area/floor registries so the area listing path works."""
 
     def __init__(self) -> None:
+        """Initialize area and floor registry fixtures for listing-mode tests."""
         super().__init__()
+        self.floor_rows: list[dict[str, Any]] = []
+        self.area_rows: list[dict[str, Any]] = [
+            {"area_id": "kitchen", "name": "Kitchen"}
+        ]
         self.registry_with_area = {
             "success": True,
             "result": [
@@ -378,16 +383,17 @@ class ListingModeClient(RoutingClient):
         }
 
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        """Serve area and floor fixtures before delegating other requests."""
         msg_type = msg.get("type", "")
         if msg_type == "config/area_registry/list":
             self.ws_types[msg_type] += 1
             return {
                 "success": True,
-                "result": [{"area_id": "kitchen", "name": "Kitchen"}],
+                "result": self.area_rows,
             }
         if msg_type == "config/floor_registry/list":
             self.ws_types[msg_type] += 1
-            return {"success": True, "result": []}
+            return {"success": True, "result": self.floor_rows}
         if msg_type == "config/entity_registry/list":
             self.ws_types[msg_type] += 1
             return self.registry_with_area
@@ -652,6 +658,32 @@ class TestListingModesBypassComponent:
         assert not ws.send_command.await_count, (
             "component must not be consulted for area-scoped queries"
         )
+
+    @pytest.mark.asyncio
+    async def test_floor_filter_expands_from_public_ha_search(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The public tool expands an exact floor to all of its areas."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        client = ListingModeClient()
+        client.floor_rows = [
+            {"floor_id": "sous_sol", "name": "Sous-sol", "aliases": ["Basement"]}
+        ]
+        client.area_rows = [
+            {"area_id": "kitchen", "name": "Kitchen"},
+            {"area_id": "cave", "name": "Cave", "floor_id": "sous_sol"},
+        ]
+        client.registry_with_area["result"][0]["area_id"] = "cave"
+        ha_search = _build_ha_search(client)
+        ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result={})
+
+        with patch_ws(ws, tools_search):
+            data = await ha_search(area_filter="Sous-sol", domain_filter="light")
+
+        assert data["area_names"] == ["Cave"]
+        assert [entity["entity_id"] for entity in data["entities"]] == ["light.kitchen"]
+        assert any("expanded to 1 area(s)" in warning for warning in data["warnings"])
+        assert not ws.send_command.await_count
 
     @pytest.mark.asyncio
     async def test_state_filter_only_bypasses_component(
