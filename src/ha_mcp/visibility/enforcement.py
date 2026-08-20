@@ -342,7 +342,7 @@ class _VisibilityEnforcementBase(Middleware):
         self,
         tool_name: str,
         *,
-        emit_report_issue_diagnostic: bool = False,
+        emit_diagnostics: bool = False,
     ) -> VisibilityConfig | None:
         """Return the config when enforce is active, ``None`` when passthrough.
 
@@ -353,6 +353,9 @@ class _VisibilityEnforcementBase(Middleware):
         loaded successfully — for the common non-enforce install that preserves
         availability, and for an enforce install it preserves the boundary.
         With no good load ever, fail CLOSED like PolicyMiddleware does.
+
+        The inbound half owns diagnostics for the split middleware pair so one
+        call cannot emit the same config-load traceback twice.
         """
         config: VisibilityConfig | None
         try:
@@ -369,7 +372,7 @@ class _VisibilityEnforcementBase(Middleware):
                 )
             else:
                 outcome = "failing closed"
-            if tool_name != _REPORT_ISSUE_TOOL or emit_report_issue_diagnostic:
+            if emit_diagnostics:
                 logger.warning(
                     "visibility enforce: config load failed; %s",
                     outcome,
@@ -383,7 +386,7 @@ class _VisibilityEnforcementBase(Middleware):
             config is None or not config.restrict_report_issue
         ):
             if (
-                emit_report_issue_diagnostic
+                emit_diagnostics
                 and config is not None
                 and config.enabled
                 and config.enforce
@@ -427,9 +430,7 @@ class VisibilityInboundEnforcement(_VisibilityEnforcementBase):
         name = context.message.name
         args = context.message.arguments or {}
         effective_name, effective_args = _effective_tool_call(name, args)
-        config = await self._active_config(
-            effective_name, emit_report_issue_diagnostic=True
-        )
+        config = await self._active_config(effective_name, emit_diagnostics=True)
         if config is None:
             return await call_next(context)
 
