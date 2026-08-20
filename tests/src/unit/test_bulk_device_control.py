@@ -297,13 +297,20 @@ class TestRegisteredBulkToolCompatibility:
                         "action": "off",
                         "timeout_seconds": True,
                     },
+                    # The advertised schema is strict, so a numeric string must
+                    # not be quietly coerced at runtime either.
+                    {
+                        "entity_id": "light.string_timeout",
+                        "action": "off",
+                        "timeout_seconds": "10",
+                    },
                 ]
             }
         )
 
         data = result.structured_content
         assert data["successful_commands"] == 1
-        assert data["skipped_operations"] == 8
+        assert data["skipped_operations"] == 9
         assert [detail["index"] for detail in data["skipped_details"]] == [
             0,
             1,
@@ -313,6 +320,7 @@ class TestRegisteredBulkToolCompatibility:
             6,
             7,
             8,
+            9,
         ]
         messages = [detail["error"]["message"] for detail in data["skipped_details"]]
         assert any("required fields" in message for message in messages)
@@ -321,7 +329,7 @@ class TestRegisteredBulkToolCompatibility:
         json_message = next(m for m in messages if "invalid JSON parameters" in m)
         assert "at position 1" in json_message
         assert sum("validate_first" in message for message in messages) == 3
-        assert sum("timeout_seconds" in message for message in messages) == 3
+        assert sum("timeout_seconds" in message for message in messages) == 4
         tools.control_device_smart.assert_awaited_once()
 
     @pytest.mark.asyncio

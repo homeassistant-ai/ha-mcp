@@ -651,10 +651,13 @@ class DeviceControlTools:
 
         Bools are rejected before ``float()`` sees them: ``float(True)`` is 1.0,
         which would silently accept ``timeout_seconds: true`` as a one-second
-        wait. ``None`` is invalid here too — the caller only calls this when the
-        key is present, and a present-but-null timeout is a malformed row.
+        wait. Strings are rejected for the same reason — the advertised schema
+        is ``strict``, so coercing ``"10"`` here would silently accept what the
+        schema tells the model is invalid. ``None`` is invalid here too — the
+        caller only calls this when the key is present, and a present-but-null
+        timeout is a malformed row.
         """
-        if isinstance(value, bool) or value is None:
+        if isinstance(value, (bool, str)) or value is None:
             return None
         try:
             timeout = float(value)
