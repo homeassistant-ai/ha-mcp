@@ -960,6 +960,7 @@ def _build_addon_http_client(
         )
     except OSError as e:
         _tls_setup_error(e, slug)
+        return None  # py/mixed-returns: unreachable, _tls_setup_error raises
 
 
 def _raise_connect_failure(

@@ -132,13 +132,14 @@ def test_promote_home_assistant_http_config_commits_pending_slot(
         lambda *args, **kwargs: websocket,
     )
 
-    result = haos_runtime.promote_home_assistant_http_config(
+    # No result binding: the wrapper is a procedure (it raises on any
+    # non-None promote result — see the negative test below).
+    haos_runtime.promote_home_assistant_http_config(
         "https://127.0.0.1:18123",
         "token",
         verify_ssl=False,
     )
 
-    assert result is None
     assert websocket.sent == [
         {"type": "auth", "access_token": "token"},
         {"id": 1, "type": "http/config/promote"},

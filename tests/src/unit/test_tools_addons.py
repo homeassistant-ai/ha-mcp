@@ -1542,6 +1542,37 @@ class TestCallAddonWsErrors:
         assert ssl_context.verify_mode == ssl.CERT_REQUIRED
 
     @pytest.mark.asyncio
+    async def test_ws_direct_port_uses_no_ssl_context(self):
+        """A plaintext ws:// direct-port route must pass ssl=None.
+
+        websockets.connect rejects any SSL context on a ws:// URI, so always
+        building one would break every direct-port call.
+        """
+        client = _make_mock_client()
+        client.base_url = "https://ha.local:8123"
+        client.verify_ssl = True
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(client, "test_addon", "/ws", port=1880)
+
+        assert result["success"] is True
+        assert mock_ws_connect.call_args.kwargs["ssl"] is None
+
+    @pytest.mark.asyncio
     async def test_ws_proxy_classifies_tls_verification_failure(
         self, mock_ingress_session
     ):
