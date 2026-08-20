@@ -230,7 +230,7 @@ def test_bulk_operations_schema_names_required_item_fields():
         "timeout_seconds",
         "validate_first",
     } <= set(item_schema["properties"])
-    assert item_schema["additionalProperties"] is True
+    assert item_schema["additionalProperties"] is False
     assert item_schema["properties"]["entity_id"]["minLength"] == 1
     assert item_schema["properties"]["action"]["minLength"] == 1
     assert item_schema["properties"]["timeout_seconds"]["minimum"] == 0
@@ -240,10 +240,10 @@ def test_bulk_operations_schema_names_required_item_fields():
 
 
 @pytest.mark.parametrize("obsolete_key", ["domain", "service"])
-def test_bulk_operation_preserves_obsolete_keys_for_per_item_validation(
+def test_bulk_operation_schema_rejects_obsolete_keys(
     obsolete_key: str,
 ):
-    """Transport validation preserves unknown keys for fail-soft runtime handling."""
+    """The advertised item contract rejects obsolete service-style keys."""
     from ha_mcp.tools.tools_service import BulkControlOperation
 
     operation = {
@@ -252,8 +252,8 @@ def test_bulk_operation_preserves_obsolete_keys_for_per_item_validation(
         obsolete_key: "light" if obsolete_key == "domain" else "turn_off",
     }
 
-    validated = TypeAdapter(BulkControlOperation).validate_python(operation)
-    assert validated[obsolete_key] == operation[obsolete_key]
+    with pytest.raises(ValidationError):
+        TypeAdapter(BulkControlOperation).validate_python(operation)
 
 
 def test_bulk_operation_parameters_coerce_json_object_string():

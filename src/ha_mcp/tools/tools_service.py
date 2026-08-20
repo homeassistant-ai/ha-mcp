@@ -116,7 +116,7 @@ class BulkControlOperation(TypedDict):
 
 # Pydantic reads this runtime config when generating the TypedDict schema. Keep it
 # outside the class body because mypy permits only field declarations there.
-BulkControlOperation.__pydantic_config__ = ConfigDict(extra="allow")  # type: ignore[attr-defined]
+BulkControlOperation.__pydantic_config__ = ConfigDict(extra="forbid")  # type: ignore[attr-defined]
 _BULK_CONTROL_OPERATION_ADAPTER = TypeAdapter(BulkControlOperation)
 
 

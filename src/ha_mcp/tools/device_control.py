@@ -819,6 +819,10 @@ class DeviceControlTools:
                 f"{len(skipped_operations)} skipped, "
                 f"mode={'parallel' if parallel else 'sequential'}",
             )
+            if not valid_operations:
+                return self._build_bulk_response(
+                    operations, results, operation_ids, skipped_operations, parallel
+                )
 
             # Route through the component's bulk_call_service capability when
             # advertised (D5a): one register-before-fire batch frame confirms every

@@ -31,6 +31,7 @@ class TestBulkDeviceControlValidation:
     @pytest.mark.asyncio
     async def test_missing_entity_id_reports_error(self, device_control_tools):
         """Operations missing entity_id are reported in skipped_operations."""
+        device_control_tools._bulk_via_component = AsyncMock()
         operations = [
             {"action": "on"},  # Missing entity_id
         ]
@@ -41,6 +42,7 @@ class TestBulkDeviceControlValidation:
         assert len(result["skipped_details"]) == 1
         assert "entity_id" in result["skipped_details"][0]["error"]["message"]
         assert result["skipped_details"][0]["index"] == 0
+        device_control_tools._bulk_via_component.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_missing_action_reports_error(self, device_control_tools):
