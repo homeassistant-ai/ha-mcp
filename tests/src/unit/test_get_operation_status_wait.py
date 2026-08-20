@@ -303,8 +303,8 @@ async def test_registered_status_tool_accepts_fractional_timeout() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("invalid_timeout", [float("inf"), "inf"])
-async def test_registered_status_tool_rejects_positive_infinity(
+@pytest.mark.parametrize("invalid_timeout", [float("inf"), "inf", float("nan")])
+async def test_registered_status_tool_rejects_non_finite_timeout(
     invalid_timeout: float | str,
 ) -> None:
     """The public polling window must always have a finite deadline."""

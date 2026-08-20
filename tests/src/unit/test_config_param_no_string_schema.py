@@ -281,7 +281,7 @@ def test_bulk_operation_timeout_rejects_negative_and_accepts_zero():
     with pytest.raises(ValidationError):
         adapter.validate_python({**operation, "timeout_seconds": -1})
 
-    for invalid_value in (float("inf"), "inf"):
+    for invalid_value in (float("inf"), "inf", float("nan")):
         with pytest.raises(ValidationError):
             adapter.validate_python({**operation, "timeout_seconds": invalid_value})
 
