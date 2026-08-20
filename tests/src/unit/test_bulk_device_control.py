@@ -220,6 +220,49 @@ class TestRegisteredBulkToolCompatibility:
         assert "service" in data["skipped_details"][0]["error"]["message"]
 
     @pytest.mark.asyncio
+    async def test_mixed_schema_invalid_rows_are_reported_without_aborting(self):
+        """Transport validation defers malformed rows to skipped_details."""
+        tools = DeviceControlTools(client=MagicMock())
+        tools._bulk_via_component = AsyncMock(return_value=None)
+        tools.control_device_smart = AsyncMock(
+            return_value={
+                "entity_id": "light.valid",
+                "command_sent": True,
+                "operation_id": "op-valid",
+            }
+        )
+        tool = await self._registered_tool(tools)
+
+        result = await tool.run(
+            {
+                "operations": [
+                    {"entity_id": "", "action": "off"},
+                    {
+                        "entity_id": "light.negative_timeout",
+                        "action": "off",
+                        "timeout_seconds": -0.5,
+                    },
+                    {
+                        "entity_id": "light.bad_parameters",
+                        "action": "on",
+                        "parameters": "{not-json",
+                    },
+                    {"entity_id": "light.valid", "action": "off"},
+                ]
+            }
+        )
+
+        data = result.structured_content
+        assert data["successful_commands"] == 1
+        assert data["skipped_operations"] == 3
+        assert [detail["index"] for detail in data["skipped_details"]] == [0, 1, 2]
+        messages = [detail["error"]["message"] for detail in data["skipped_details"]]
+        assert any("required fields" in message for message in messages)
+        assert any("timeout_seconds" in message for message in messages)
+        assert any("invalid JSON parameters" in message for message in messages)
+        tools.control_device_smart.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_nested_json_parameters_round_trip_through_registered_tool(self):
         tools = DeviceControlTools(client=MagicMock())
         tools._bulk_via_component = AsyncMock(return_value=None)
@@ -315,7 +358,7 @@ class TestBulkExecutionErrorHandling:
 
         operations = [
             {"entity_id": "light.ok", "action": "on"},
-            {"entity_id": "light.bad", "action": "on", "parameters": "{not-json"},
+            {"entity_id": "light.bad", "action": "on"},
         ]
         result = await tools_with_mock_control.bulk_device_control(
             operations, parallel=True

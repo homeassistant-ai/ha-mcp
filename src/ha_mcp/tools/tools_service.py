@@ -11,7 +11,7 @@ import httpx
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, SkipValidation, TypeAdapter, ValidationError
 
 from ..client.rest_client import (
     HomeAssistantCommandError,
@@ -117,6 +117,7 @@ class BulkControlOperation(TypedDict):
 # Pydantic reads this runtime config when generating the TypedDict schema. Keep it
 # outside the class body because mypy permits only field declarations there.
 BulkControlOperation.__pydantic_config__ = ConfigDict(extra="allow")  # type: ignore[attr-defined]
+_BULK_CONTROL_OPERATION_ADAPTER = TypeAdapter(BulkControlOperation)
 
 
 class _AmbiguousDispatch:
@@ -1447,7 +1448,7 @@ class ServiceTools:
                 ),
             ),
         ],
-        timeout_seconds: int = 10,
+        timeout_seconds: Annotated[float, Field(ge=0)] = 10,
     ) -> dict[str, Any]:
         """
         Get the status of one or more device operations with real-time WebSocket verification.
@@ -1502,7 +1503,7 @@ class ServiceTools:
     async def ha_bulk_control(
         self,
         operations: Annotated[
-            list[BulkControlOperation],
+            list[SkipValidation[BulkControlOperation]],
             JSON_STRING_COERCION,
             Field(
                 description=(
@@ -1517,18 +1518,23 @@ class ServiceTools:
         parallel: bool = True,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        """Control multiple entities in one request; prefer this for one shared action.
-
-        Put every target in ``operations`` and call the tool once. Optional item
-        parameters carry brightness, temperature, position, or other action data.
-        Parallel execution is the default.
+        """Manage multiple entity actions in one request.
 
         When NOT to use: use ``ha_call_service`` for one service call targeting a
         group or for service-specific payloads that do not fit device actions.
+
+        Use this when one request should apply actions to multiple independent
+        entities. Optional item parameters carry brightness, temperature, position,
+        or other action data.
+
+        Caveats: put every target in ``operations`` and call the tool once. Parallel
+        execution is the default, and invalid items are reported without aborting
+        valid operations in the same batch.
         """
         parallel_bool = parallel
 
-        # FastMCP validates the TypedDict item contract before this runs.
+        # FastMCP validates the outer list but deliberately defers item failures so
+        # one malformed row cannot abort valid operations in the same batch.
         # parse_json_param remains a defensive passthrough for the list case.
         try:
             parsed_operations = parse_json_param(operations, "operations")
@@ -1550,7 +1556,17 @@ class ServiceTools:
                 )
             )
 
-        operations_list = cast(list[dict[str, Any]], parsed_operations)
+        operations_list: list[Any] = []
+        for operation in parsed_operations:
+            try:
+                operations_list.append(
+                    _BULK_CONTROL_OPERATION_ADAPTER.validate_python(operation)
+                )
+            except ValidationError:
+                # Preserve malformed rows for the runtime batch validator, which
+                # reports them in skipped_details instead of rejecting the call.
+                operations_list.append(operation)
+
         result = await self._device_tools.bulk_device_control(
             operations=operations_list, parallel=parallel_bool, ctx=ctx
         )

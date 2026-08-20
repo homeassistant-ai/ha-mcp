@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -242,3 +242,31 @@ async def test_failed_mid_poll_raises_service_call_failed() -> None:
     err_text = str(exc_info.value)
     assert "SERVICE_CALL_FAILED" in err_text
     assert "device unreachable" in err_text
+
+
+@pytest.mark.asyncio
+async def test_registered_status_tool_accepts_fractional_timeout() -> None:
+    """The MCP boundary preserves a fractional timeout for follow-up calls."""
+    from fastmcp import FastMCP
+
+    from ha_mcp.tools.tools_service import register_service_tools
+
+    device_tools = MagicMock()
+    device_tools.get_device_operation_status = AsyncMock(
+        return_value={
+            "success": True,
+            "operation_id": "op-1",
+            "status": "pending",
+        }
+    )
+    mcp = FastMCP("test")
+    register_service_tools(mcp, MagicMock(), device_tools=device_tools)
+    tool = await mcp.get_tool("ha_get_operation_status")
+
+    result = await tool.run({"operation_id": "op-1", "timeout_seconds": 0.5})
+
+    assert result.structured_content["operation_id"] == "op-1"
+    device_tools.get_device_operation_status.assert_awaited_once_with(
+        operation_id="op-1",
+        timeout_seconds=0.5,
+    )
