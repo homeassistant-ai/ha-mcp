@@ -41,6 +41,15 @@ from .test_manage_addon_modes import (
 pytestmark = [pytest.mark.haos_only]
 
 
+def _require_tls_ca_path() -> str:
+    """Return the staged host CA path before entering async test work."""
+    ca_path = os.environ.get("HAOS_TEST_TLS_CA_PATH")
+    assert ca_path and os.path.isfile(ca_path), (
+        "HAOS embedded setup did not stage the issue #2241 TLS certificate"
+    )
+    return ca_path
+
+
 def _assert_manage_success(payload: dict[str, Any], operation: str) -> None:
     """Accept the two successful Supervisor config/action result shapes."""
     assert (
@@ -86,10 +95,7 @@ async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(
     assert http_base_url.startswith("http://"), container
     token = str(container.get("token", ""))
     assert token, container
-    ca_path = os.environ.get("HAOS_TEST_TLS_CA_PATH")
-    assert ca_path and os.path.isfile(ca_path), (
-        "HAOS embedded setup did not stage the issue #2241 TLS certificate"
-    )
+    ca_path = _require_tls_ca_path()
 
     http_state = get_home_assistant_http_config(http_base_url, token)
     stable = http_state.get("stable")
@@ -111,10 +117,10 @@ async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(
             "Core did not schedule the HTTP-to-HTTPS restart"
         )
         _wait_http_ok(f"{https_base_url}/manifest.json", timeout=300, verify_ssl=False)
-        https_ready = True
         assert _wait_for_embedded_webhook_ready(
             https_webhook_url, timeout=180, verify=False
         ), "Embedded MCP webhook did not return after the Core TLS restart"
+        https_ready = True
         # Cancel Core's five-minute pending-config auto-revert before the
         # deliberately thorough Node-RED sequence. The final block stages and
         # promotes the original HTTP config again.
@@ -232,7 +238,11 @@ async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(
                 _wait_http_ok(
                     f"{https_base_url}/manifest.json", timeout=30, verify_ssl=False
                 )
-                https_ready = True
+                https_ready = _wait_for_embedded_webhook_ready(
+                    https_webhook_url, timeout=180, verify=False
+                )
+                if not https_ready:
+                    _wait_http_ok(f"{http_base_url}/manifest.json", timeout=330)
             except TimeoutError:
                 _wait_http_ok(f"{http_base_url}/manifest.json", timeout=330)
         if tls_requested and https_ready:

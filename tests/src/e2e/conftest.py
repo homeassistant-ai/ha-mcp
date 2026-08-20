@@ -31,6 +31,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import warnings
 from collections.abc import AsyncGenerator
 from functools import partial
 from pathlib import Path
@@ -39,6 +40,7 @@ from typing import Any
 import pytest
 import requests
 from testcontainers.core.container import DockerContainer
+from urllib3.exceptions import InsecureRequestWarning
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
@@ -243,6 +245,12 @@ def _move_haos_tls_items_last(items: list[Any]) -> None:
     items[:] = [*ordinary, *tls]
 
 
+def _apply_haos_tls_skip(item: Any, enabled: bool, skip_marker: Any) -> None:
+    """Keep the main collection hook below its complexity ceiling."""
+    if "haos_tls" in item.keywords and not enabled:
+        item.add_marker(skip_marker)
+
+
 def pytest_collection_modifyitems(config, items):
     """Enforce backend markers and auto-apply ``haos_only`` to its dir.
 
@@ -326,8 +334,7 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_inaddon_only)
         if "haos_stdio_only" in keywords and not haos_stdio:
             item.add_marker(skip_haos_stdio_only)
-        if "haos_tls" in keywords and not haos_embedded:
-            item.add_marker(skip_haos_tls)
+        _apply_haos_tls_skip(item, haos_embedded, skip_haos_tls)
         # ``external_only`` skips on any tier where the server is NOT in the
         # pytest process: the inaddon HAOS addon AND the embedded backend's
         # in-process MCP server (both #1527). The name is historical (from
@@ -349,7 +356,7 @@ def pytest_collection_modifyitems(config, items):
         # cannot observe pytest-process env changes, monkeypatches, or in-process
         # mocks. The same tests retain coverage on container/external HAOS lanes.
         #
-        elif "external_only" in keywords and (
+        if "external_only" in keywords and (
             inaddon or embedded or haos_embedded or haos_stdio
         ):
             item.add_marker(skip_external_only)
@@ -1022,13 +1029,19 @@ def _wait_for_embedded_webhook_ready(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            resp = requests.post(
-                webhook_url,
-                headers=headers,
-                data=json.dumps(payload),
-                timeout=30,
-                verify=verify,
-            )
+            with warnings.catch_warnings():
+                if not verify:
+                    # This test deliberately uses Core's hostname-mismatched
+                    # loopback certificate. Keep the suite's warnings-as-errors
+                    # policy for every warning except this expected one.
+                    warnings.simplefilter("ignore", InsecureRequestWarning)
+                resp = requests.post(
+                    webhook_url,
+                    headers=headers,
+                    data=json.dumps(payload),
+                    timeout=30,
+                    verify=verify,
+                )
             if resp.status_code == 200:
                 parsed = _embedded_mcp_result(resp)
                 if parsed is not None and "result" in parsed:

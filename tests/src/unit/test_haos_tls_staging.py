@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import tests.src.haos_runtime as haos_runtime
+from tests.src import haos_runtime
 
 
 def test_build_home_assistant_tls_config_preserves_runtime_settings() -> None:

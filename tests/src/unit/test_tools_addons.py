@@ -803,14 +803,15 @@ class TestCallAddonApiErrors:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status", [401, 403])
-    async def test_http_direct_port_auth_hints_at_app_option(self, status):
-        """A direct-port 401 surfaces the app option the tool can change."""
+    @pytest.mark.parametrize("front_door", [False, True])
+    async def test_http_direct_port_auth_hints_at_app_option(self, status, front_door):
+        """Direct auth errors suggest changing the option only when disabled."""
         client = _make_mock_client()
         addon_info = {
             "success": True,
             "addon": {
                 **_RUNNING_ADDON_INFO["addon"],
-                "options": {"leave_front_door_open": False},
+                "options": {"leave_front_door_open": front_door},
                 "ports": {"1880/tcp": 1880},
             },
         }
@@ -843,13 +844,16 @@ class TestCallAddonApiErrors:
             result = await _call_addon_api(client, "test_addon", "/flows", port=1880)
 
         assert result["status_code"] == status
-        assert result["addon_config"]["options"]["leave_front_door_open"] is False
         suggestion = result["suggestion"]
-        assert "leave_front_door_open" in suggestion
-        assert "ha_manage_app" in suggestion
-        assert "restart" in suggestion.lower()
-        assert "action='restart'" in suggestion
-        assert "security" in suggestion.lower()
+        if front_door:
+            assert "options={'leave_front_door_open': True}" not in suggestion
+        else:
+            assert result["addon_config"]["options"]["leave_front_door_open"] is False
+            assert "leave_front_door_open" in suggestion
+            assert "ha_manage_app" in suggestion
+            assert "restart" in suggestion.lower()
+            assert "action='restart'" in suggestion
+            assert "security" in suggestion.lower()
 
     @pytest.mark.asyncio
     async def test_http_proxy_propagates_tls_verification(self, mock_ingress_session):
@@ -1468,8 +1472,9 @@ class TestCallAddonWsErrors:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status", [401, 403])
-    async def test_ws_direct_port_auth_hints_at_app_option(self, status):
-        """Direct-port WS auth failures surface the configurable app option."""
+    @pytest.mark.parametrize("front_door", [False, True])
+    async def test_ws_direct_port_auth_hints_at_app_option(self, status, front_door):
+        """Direct WS errors suggest changing the option only when disabled."""
         from ha_mcp._vendor.websockets.datastructures import Headers
         from ha_mcp._vendor.websockets.http11 import Response
 
@@ -1478,7 +1483,7 @@ class TestCallAddonWsErrors:
             "success": True,
             "addon": {
                 **_RUNNING_ADDON_INFO_WS["addon"],
-                "options": {"leave_front_door_open": False},
+                "options": {"leave_front_door_open": front_door},
                 "ports": {"1880/tcp": 1880},
             },
         }
@@ -1505,11 +1510,14 @@ class TestCallAddonWsErrors:
         result = _parse_tool_error(exc_info)
         suggestions = result["error"].get("suggestions", [])
         joined = " ".join(suggestions).lower()
-        assert "leave_front_door_open" in joined, suggestions
-        assert "ha_manage_app" in joined, suggestions
-        assert "restart" in joined, suggestions
-        assert "action='restart'" in joined, suggestions
-        assert "security" in joined, suggestions
+        if front_door:
+            assert "options={'leave_front_door_open': true}" not in joined
+        else:
+            assert "leave_front_door_open" in joined, suggestions
+            assert "ha_manage_app" in joined, suggestions
+            assert "restart" in joined, suggestions
+            assert "action='restart'" in joined, suggestions
+            assert "security" in joined, suggestions
 
     @pytest.mark.asyncio
     async def test_ws_handshake_404_keeps_path_hint(self, mock_ingress_session):

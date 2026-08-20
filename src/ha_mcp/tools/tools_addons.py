@@ -1033,6 +1033,24 @@ def _build_ws_result(
     return result
 
 
+def _ws_auth_error_suggestions(
+    addon: dict[str, Any], slug: str, port: int | None, status: int
+) -> list[str]:
+    """Return route-appropriate guidance for a rejected WS handshake."""
+    options = addon.get("options") or {}
+    if port and options.get("leave_front_door_open") is False:
+        primary = _direct_port_auth_suggestion(slug)
+    else:
+        primary = (
+            "The ingress session may have expired or your HA token may lack the "
+            "required scope. Verify the token has admin rights and try again."
+        )
+    return [
+        primary,
+        f"Status {status} from the WebSocket handshake.",
+    ]
+
+
 async def _call_addon_ws(
     client: HomeAssistantClient,
     slug: str,
@@ -1144,19 +1162,7 @@ async def _call_addon_ws(
         if isinstance(e, websockets.exceptions.InvalidStatus):
             status = e.response.status_code
             if status in (401, 403):
-                options = addon.get("options") or {}
-                if port and "leave_front_door_open" in options:
-                    suggestions = [
-                        _direct_port_auth_suggestion(slug),
-                        f"Status {status} from the WebSocket handshake.",
-                    ]
-                else:
-                    suggestions = [
-                        "The ingress session may have expired or your HA token "
-                        "may lack the required scope. Verify the token has admin "
-                        "rights and try again.",
-                        f"Status {status} from the WebSocket handshake.",
-                    ]
+                suggestions = _ws_auth_error_suggestions(addon, slug, port, status)
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
@@ -1606,7 +1612,7 @@ def _add_http_error_hints(
         result["error"] = f"Add-on API returned HTTP {response.status_code}"
         if response.status_code == 401:
             options = addon.get("options") or {}
-            if direct_port and "leave_front_door_open" in options:
+            if direct_port and options.get("leave_front_door_open") is False:
                 result["addon_config"] = _addon_config_for_http_hint(addon)
                 result["suggestion"] = _direct_port_auth_suggestion(slug)
             else:
@@ -1631,7 +1637,7 @@ def _add_http_error_hints(
             options = addon.get("options") or {}
             example_proto = unmapped[0] if unmapped else ""
             example_port = example_proto.split("/", 1)[0] if example_proto else ""
-            if direct_port and "leave_front_door_open" in options:
+            if direct_port and options.get("leave_front_door_open") is False:
                 result["suggestion"] = _direct_port_auth_suggestion(slug_val)
             elif unmapped and example_port.isdigit():
                 addon_label = addon.get("name") or slug_val
