@@ -502,7 +502,9 @@ class TestRouteRegistration:
         return [call.args[0] for call in mcp.custom_route.call_args_list]
 
     def test_registers_root_in_addon_mode(self, monkeypatch):
+        monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", "/stale")
         mcp = MagicMock()
         mcp.custom_route = MagicMock(return_value=lambda fn: fn)
         register_settings_routes(mcp, MagicMock(), secret_path="/private_x")
@@ -512,10 +514,13 @@ class TestRouteRegistration:
         assert "/settings" in paths
         assert "/private_x/settings" in paths
         assert "/private_x/api/settings/tools" in paths
-        # The secret-path mount is recorded for ha_get_overview's hint (#1458)
-        assert get_http_settings_prefix() == "/private_x"
+        # App (add-on) users already have Supervisor ingress's "Open Web UI" button,
+        # so ha_get_overview must not hand MCP clients the alternate direct-path
+        # credential just to advertise a redundant settings-page route (#2236).
+        assert get_http_settings_prefix() is None
 
     def test_secret_path_only_when_not_addon(self, monkeypatch):
+        monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         mcp = MagicMock()
         mcp.custom_route = MagicMock(return_value=lambda fn: fn)
@@ -527,6 +532,21 @@ class TestRouteRegistration:
         assert "/mcp/settings" in paths
         assert "/mcp/api/settings/tools" in paths
         assert get_http_settings_prefix() == "/mcp"
+
+    def test_embedded_mount_is_not_advertised(self, monkeypatch):
+        # Embedded runs inside HA Core and has HA-managed settings entry points.
+        # HAOS Core also carries SUPERVISOR_TOKEN, so set both markers to pin the
+        # real deployment shape while keeping the direct settings route mounted.
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", "/stale")
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(return_value=lambda fn: fn)
+        register_settings_routes(mcp, MagicMock(), secret_path="/private_x")
+        paths = self._collect_paths(mcp)
+        assert "/settings" not in paths
+        assert "/private_x/settings" in paths
+        assert get_http_settings_prefix() is None
 
     def test_no_routes_when_no_addon_and_no_secret(self, monkeypatch):
         # Refuse to mount publicly: no auth → no routes.
@@ -549,11 +569,12 @@ class TestRouteRegistration:
         assert mcp.custom_route.call_count == 0
         assert get_http_settings_prefix() is None
 
-    def test_advertise_prefix_false_mounts_but_does_not_record(self, monkeypatch):
+    def test_advertise_prefix_false_clears_stale_hint_but_mounts(self, monkeypatch):
         # OAuth/OIDC dedicated-secret mount: routes are served, but the secret
         # prefix must NOT be recorded — otherwise ha_get_overview would leak it
         # to every connected MCP client (GHSA-mx64-982r-65vg).
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", "/stale")
         mcp = MagicMock()
         mcp.custom_route = MagicMock(return_value=lambda fn: fn)
         register_settings_routes(
