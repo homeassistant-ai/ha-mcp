@@ -87,15 +87,17 @@ _SKIP_CEILING_PER_LANE = {
     # intentional marker-gated additions rather than runtime skips. A new lane
     # starts at its observed count plus the five-item buffer described above;
     # subsequent additions consume that buffer explicitly.
-    # #2241's final same-VM Core-TLS scenario runs only on haos_embedded. Its
-    # haos_tls marker deliberately adds one collection-time skip everywhere
-    # else, consuming one ceiling slot on each of those lanes.
+    # #2241's final same-VM Core-TLS scenario runs only on haos_embedded and
+    # deliberately adds one collection-time skip on every other lane — via
+    # haos_tls on the HAOS lanes, and via haos_only on container/embedded,
+    # which already skip its directory.
     "container": 75,
     "haos": 50,
     # HAOS stdio is the external HAOS set plus ``external_only`` tests, whose
     # test-process monkeypatches cannot reach the subprocess server. The first
     # full lane run on 2026-08-18 observed 103 collection-time marker skips
-    # (plus 9 runtime skips); keep the same five-item buffer as established lanes.
+    # (plus 9 runtime skips); keep the same five-item buffer as established
+    # lanes (108), +1 #2241 haos_tls scenario.
     "haos_stdio": 109,
     "haos_inaddon": 78,
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
@@ -109,7 +111,9 @@ _SKIP_CEILING_PER_LANE = {
     # visible locally): haos_only 53 + inaddon_only-outside-haos 11 + external_only
     # 36 (auto_backup 19, supervisor_mock 15, self_update_notice 1, file_operations
     # 1) + not_on_embedded 2 = 102. Parametrize inflates that to the CI-observed
-    # count of 133 in the 2026-08-18 CI run (132 before the self-restart e2e).
+    # count of 133 in the 2026-08-18 CI run (132 before the self-restart e2e);
+    # +1 visibility e2e (haos_stdio_only) and +1 #2241 haos_tls scenario
+    # (haos_only) bridge 133 -> 135.
     # Read future changes from CI instead of deriving them.
     "embedded": 135,
     # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it

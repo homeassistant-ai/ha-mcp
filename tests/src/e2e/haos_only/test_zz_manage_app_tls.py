@@ -4,11 +4,15 @@ This module intentionally contains exactly one test. The collection hook moves
 its ``haos_tls`` item to the end, and xdist ``loadscope`` therefore schedules
 this one-test module only after an existing embedded worker drains its ordinary
 modules. Core is restarted in that worker's current VM, never a second lane.
+The ``zz`` filename prefix is belt-and-braces: it puts the module last in
+collection order even if the hook is ever bypassed.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 from typing import Any
 
 import httpx
@@ -38,16 +42,46 @@ from .test_manage_addon_modes import (
     _wait_addon_running,
 )
 
-pytestmark = [pytest.mark.haos_only]
-
 
 def _require_tls_ca_path() -> str:
-    """Return the staged host CA path before entering async test work."""
+    """Return the staged host CA path, failing fast before Core is touched."""
     ca_path = os.environ.get("HAOS_TEST_TLS_CA_PATH")
     assert ca_path and os.path.isfile(ca_path), (
         "HAOS embedded setup did not stage the issue #2241 TLS certificate"
     )
     return ca_path
+
+
+_DIRECT_PORT_READY_TIMEOUT_S = 240.0
+
+
+async def _direct_flows_request(mcp: Client, slug: str) -> dict[str, Any]:
+    """Call Node-RED's direct port, retrying while its HTTP server binds.
+
+    Supervisor reports ``started`` before the app's nginx binds the mapped
+    direct port (CONNECTION_FAILED), and nginx binds before Node-RED itself
+    listens on its upstream socket (502/503/504 with the front door open).
+    Retry only those transient shapes until the app answers with a settled
+    status; every other outcome goes back to the caller's assertions
+    unchanged.
+    """
+    deadline = time.monotonic() + _DIRECT_PORT_READY_TIMEOUT_S
+    while True:
+        payload = await safe_call_tool(
+            mcp,
+            "ha_manage_app",
+            {"slug": slug, "path": "/flows", "method": "GET", "port": 1880},
+        )
+        error = payload.get("error")
+        code = error.get("code") if isinstance(error, dict) else None
+        transient = code == "CONNECTION_FAILED" or payload.get("status_code") in (
+            502,
+            503,
+            504,
+        )
+        if not transient or time.monotonic() >= deadline:
+            return payload
+        await asyncio.sleep(3)
 
 
 async def _set_front_door(
@@ -129,8 +163,10 @@ async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(
             ).get("addon") or {}
             options = detail.get("options") or {}
             assert isinstance(options, dict), detail
-            assert "leave_front_door_open" in options, detail
-            original_front_door = bool(options["leave_front_door_open"])
+            # Stock installs carry leave_front_door_open in the schema only
+            # (the bake sets it True); absent means disabled, exactly as the
+            # app treats it.
+            original_front_door = bool(options.get("leave_front_door_open", False))
             front_door_touched = False
 
             # Resolve the real Ingress route with the same production helper.
@@ -145,6 +181,12 @@ async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(
                 ingress_url, ingress_headers = await _resolve_http_route(
                     legacy_ha_client, detail, "flows", None
                 )
+                # The legacy reproduction runs in the pytest host process:
+                # SSL_CERT_FILE makes it trust the staged DNS-only CA (it
+                # stays set for the rest of the test — later calls are
+                # http:// or verify=False, so only this request cares), and
+                # NO_PROXY keeps an ambient HTTPS_PROXY from intercepting the
+                # request and masking the certificate/IP mismatch.
                 monkeypatch.setenv("SSL_CERT_FILE", ca_path)
                 monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
                 with pytest.raises(httpx.ConnectError) as legacy_error:
@@ -173,19 +215,17 @@ async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(
             assert fixed_ingress.get("status_code") == 200, fixed_ingress
             assert isinstance(fixed_ingress.get("response"), list), fixed_ingress
 
+            if original_front_door:
+                # Direct-port baseline: prove port 1880 answers at all on this
+                # lane before any flip, so a later refusal reads as a restart
+                # readiness race rather than an unreachable port.
+                baseline = await _direct_flows_request(mcp, slug)
+                assert baseline.get("status_code") == 200, baseline
+
             try:
                 front_door_touched = True
                 await _set_front_door(mcp, assertions, slug, False)
-                locked = await safe_call_tool(
-                    mcp,
-                    "ha_manage_app",
-                    {
-                        "slug": slug,
-                        "path": "/flows",
-                        "method": "GET",
-                        "port": 1880,
-                    },
-                )
+                locked = await _direct_flows_request(mcp, slug)
                 assert locked.get("success") is False, locked
                 assert locked.get("status_code") == 401, locked
                 locked_options = (locked.get("addon_config") or {}).get("options") or {}
@@ -200,15 +240,7 @@ async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(
                 # Follow the hint with the same management tool, then prove the
                 # formerly rejected direct request works on the real add-on.
                 await _set_front_door(mcp, assertions, slug, True)
-                opened = await assertions.call_tool_success(
-                    "ha_manage_app",
-                    {
-                        "slug": slug,
-                        "path": "/flows",
-                        "method": "GET",
-                        "port": 1880,
-                    },
-                )
+                opened = await _direct_flows_request(mcp, slug)
                 assert opened.get("success") is True, opened
                 assert opened.get("status_code") == 200, opened
                 assert isinstance(opened.get("response"), list), opened

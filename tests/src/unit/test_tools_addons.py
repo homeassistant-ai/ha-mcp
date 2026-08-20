@@ -44,6 +44,23 @@ _RUNNING_ADDON_INFO = {
 
 _INGRESS_SESSION_TOKEN = "test-ingress-session"
 
+_FRONT_DOOR_SCHEMA = [
+    {"name": "leave_front_door_open", "type": "boolean", "optional": True}
+]
+
+
+def _front_door_fixture(front_door) -> tuple[dict, list]:
+    """Return (options, schema) for one leave_front_door_open state.
+
+    False/True: option saved with that value. "absent": exposed in the schema
+    but never saved (stock install). "unexposed": app without the option.
+    """
+    if front_door == "unexposed":
+        return {}, []
+    if front_door == "absent":
+        return {}, list(_FRONT_DOOR_SCHEMA)
+    return {"leave_front_door_open": front_door}, list(_FRONT_DOOR_SCHEMA)
+
 
 def _make_mock_client() -> MagicMock:
     """Create a mock HomeAssistantClient."""
@@ -803,15 +820,22 @@ class TestCallAddonApiErrors:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status", [401, 403])
-    @pytest.mark.parametrize("front_door", [False, True])
+    @pytest.mark.parametrize("front_door", [False, True, "absent", "unexposed"])
     async def test_http_direct_port_auth_hints_at_app_option(self, status, front_door):
-        """Direct auth errors suggest changing the option only when disabled."""
+        """Direct auth errors suggest the option only when it is off.
+
+        "absent" mirrors a stock install: the option lives in the schema but
+        was never saved, so Supervisor omits it from options — the app treats
+        that as disabled. "unexposed" is an app without the option at all.
+        """
+        options, schema = _front_door_fixture(front_door)
         client = _make_mock_client()
         addon_info = {
             "success": True,
             "addon": {
                 **_RUNNING_ADDON_INFO["addon"],
-                "options": {"leave_front_door_open": front_door},
+                "options": options,
+                "schema": schema,
                 "ports": {"1880/tcp": 1880},
             },
         }
@@ -845,14 +869,14 @@ class TestCallAddonApiErrors:
 
         assert result["status_code"] == status
         suggestion = result["suggestion"]
-        if front_door:
+        if front_door in (True, "unexposed"):
             assert "options={'leave_front_door_open': True}" not in suggestion
             assert "app's own authentication" in suggestion
             assert "access-control" in suggestion
             assert "ingress session" not in suggestion.lower()
             assert "HA token" not in suggestion
         else:
-            assert result["addon_config"]["options"]["leave_front_door_open"] is False
+            assert result["addon_config"]["options"] == options
             assert "leave_front_door_open" in suggestion
             assert "ha_manage_app" in suggestion
             assert "restart" in suggestion.lower()
@@ -893,6 +917,90 @@ class TestCallAddonApiErrors:
 
         assert result["success"] is True
         assert mock_httpx.call_args.kwargs["verify"] is False
+
+    @pytest.mark.asyncio
+    async def test_http_proxy_keeps_tls_verification_by_default(
+        self, mock_ingress_session
+    ):
+        """verify_ssl=True must reach httpx unchanged — the secure default."""
+        client = _make_mock_client()
+        client.base_url = "https://ha.local:8123"
+        client.verify_ssl = True
+
+        response = MagicMock()
+        response.headers = {"content-type": "application/json"}
+        response.status_code = 200
+        response.json.return_value = {}
+        response.text = "{}"
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.return_value = response
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "test_addon", "/flows")
+
+        assert result["success"] is True
+        assert mock_httpx.call_args.kwargs["verify"] is True
+
+    @pytest.mark.asyncio
+    async def test_http_proxy_classifies_tls_verification_failure(
+        self, mock_ingress_session
+    ):
+        """A cert failure with verification on names the TLS remedy."""
+        client = _make_mock_client()
+        client.base_url = "https://ha.local:8123"
+        client.verify_ssl = True
+
+        connect_error = httpx.ConnectError("All connection attempts failed")
+        connect_error.__cause__ = ssl.SSLCertVerificationError(
+            "certificate verify failed: IP address mismatch"
+        )
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = connect_error
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_api(client, "test_addon", "/flows")
+
+        result = _parse_tool_error(exc_info)
+        assert "TLS verification failed" in result["error"]["message"]
+        # A single suggestion lands under the singular key.
+        joined = " ".join(
+            [
+                result["error"].get("suggestion", ""),
+                *result["error"].get("suggestions", []),
+            ]
+        )
+        assert "HA_VERIFY_SSL" in joined
+        # The generic network suggestions would misdirect here.
+        assert "network connectivity" not in joined.lower()
 
     @pytest.mark.asyncio
     async def test_http_403_response_hints_at_ip_restriction(
@@ -1402,6 +1510,78 @@ class TestCallAddonWsErrors:
         assert ssl_context.verify_mode == ssl.CERT_NONE
 
     @pytest.mark.asyncio
+    async def test_ws_proxy_keeps_tls_verification_by_default(
+        self, mock_ingress_session
+    ):
+        """verify_ssl=True keeps the default secure WSS context."""
+        client = _make_mock_client()
+        client.base_url = "https://ha.local:8123"
+        client.verify_ssl = True
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(client, "test_addon", "/ws")
+
+        assert result["success"] is True
+        ssl_context = mock_ws_connect.call_args.kwargs["ssl"]
+        assert isinstance(ssl_context, ssl.SSLContext)
+        assert ssl_context.check_hostname is True
+        assert ssl_context.verify_mode == ssl.CERT_REQUIRED
+
+    @pytest.mark.asyncio
+    async def test_ws_proxy_classifies_tls_verification_failure(
+        self, mock_ingress_session
+    ):
+        """A WSS cert failure with verification on names the TLS remedy."""
+        client = _make_mock_client()
+        client.base_url = "https://ha.local:8123"
+        client.verify_ssl = True
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(
+                side_effect=ssl.SSLCertVerificationError(
+                    "certificate verify failed: IP address mismatch"
+                )
+            )
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_ws(client, "test_addon", "/ws")
+
+        result = _parse_tool_error(exc_info)
+        assert "TLS verification failed" in result["error"]["message"]
+        joined = " ".join(
+            [
+                result["error"].get("suggestion", ""),
+                *result["error"].get("suggestions", []),
+            ]
+        )
+        assert "HA_VERIFY_SSL" in joined
+        assert "network connectivity" not in joined.lower()
+
+    @pytest.mark.asyncio
     async def test_ws_addon_not_running(self):
         """Should raise ToolError when add-on is not running."""
         client = _make_mock_client()
@@ -1476,18 +1656,25 @@ class TestCallAddonWsErrors:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status", [401, 403])
-    @pytest.mark.parametrize("front_door", [False, True])
+    @pytest.mark.parametrize("front_door", [False, True, "absent", "unexposed"])
     async def test_ws_direct_port_auth_hints_at_app_option(self, status, front_door):
-        """Direct WS errors suggest changing the option only when disabled."""
+        """Direct WS errors suggest the option only when it is off.
+
+        Same four option states as the HTTP variant: saved False/True,
+        exposed-but-unsaved ("absent", the stock install), and an app without
+        the option ("unexposed").
+        """
         from ha_mcp._vendor.websockets.datastructures import Headers
         from ha_mcp._vendor.websockets.http11 import Response
 
+        options, schema = _front_door_fixture(front_door)
         client = _make_mock_client()
         addon_info = {
             "success": True,
             "addon": {
                 **_RUNNING_ADDON_INFO_WS["addon"],
-                "options": {"leave_front_door_open": front_door},
+                "options": options,
+                "schema": schema,
                 "ports": {"1880/tcp": 1880},
             },
         }
@@ -1514,7 +1701,7 @@ class TestCallAddonWsErrors:
         result = _parse_tool_error(exc_info)
         suggestions = result["error"].get("suggestions", [])
         joined = " ".join(suggestions).lower()
-        if front_door:
+        if front_door in (True, "unexposed"):
             assert "options={'leave_front_door_open': true}" not in joined
             assert "app's own authentication" in joined
             assert "access-control" in joined

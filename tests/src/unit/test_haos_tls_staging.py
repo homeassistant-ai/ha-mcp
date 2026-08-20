@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from tests.src import haos_runtime
 
 
 def test_build_home_assistant_tls_config_preserves_runtime_settings() -> None:
     """A pending TLS trial keeps proxy/port settings and drops storage metadata."""
-    assert hasattr(haos_runtime, "build_home_assistant_tls_config")
     stable = {
         "server_port": 8123,
         "use_x_forwarded_for": True,
@@ -38,10 +39,14 @@ def test_build_home_assistant_tls_config_preserves_runtime_settings() -> None:
 
 
 class _FakeWebSocket:
-    def __init__(self, result: Any) -> None:
+    def __init__(
+        self, result: Any, *, frames: list[dict[str, Any]] | None = None
+    ) -> None:
         self.sent: list[dict[str, Any]] = []
         self._frames = iter(
-            [
+            frames
+            if frames is not None
+            else [
                 {"type": "auth_required"},
                 {"type": "auth_ok"},
                 {
@@ -71,7 +76,6 @@ def test_configure_home_assistant_http_requests_in_place_core_restart(
     monkeypatch: Any,
 ) -> None:
     """The runtime switch uses Core's supported pending-config restart API."""
-    assert hasattr(haos_runtime, "configure_home_assistant_http")
     websocket = _FakeWebSocket({"restart": True})
     monkeypatch.setattr(
         "websockets.sync.client.connect",
@@ -96,7 +100,6 @@ def test_configure_home_assistant_http_requests_in_place_core_restart(
 
 def test_get_home_assistant_http_config_reads_stable_slot(monkeypatch: Any) -> None:
     """The runtime switch derives its TLS trial from Core's active store."""
-    assert hasattr(haos_runtime, "get_home_assistant_http_config")
     expected = {
         "stable": {"server_port": 8123, "use_x_forwarded_for": True},
         "pending": None,
@@ -123,7 +126,6 @@ def test_promote_home_assistant_http_config_commits_pending_slot(
     monkeypatch: Any,
 ) -> None:
     """The live TLS/HTTP trial is promoted before its auto-revert deadline."""
-    assert hasattr(haos_runtime, "promote_home_assistant_http_config")
     websocket = _FakeWebSocket(None)
     monkeypatch.setattr(
         "websockets.sync.client.connect",
@@ -143,11 +145,98 @@ def test_promote_home_assistant_http_config_commits_pending_slot(
     ]
 
 
-def test_move_haos_tls_item_last() -> None:
-    """The destructive TLS/Core-restart scenario runs after ordinary work."""
-    from tests.src.e2e import conftest as e2e_conftest
+def _patch_ws_connect(monkeypatch: Any, websocket: _FakeWebSocket) -> None:
+    monkeypatch.setattr(
+        "websockets.sync.client.connect",
+        lambda *args, **kwargs: websocket,
+    )
 
-    assert hasattr(e2e_conftest, "_move_haos_tls_items_last")
+
+def test_ws_command_requires_the_auth_required_handshake(monkeypatch: Any) -> None:
+    """A socket that skips auth_required fails loudly instead of proceeding."""
+    _patch_ws_connect(monkeypatch, _FakeWebSocket(None, frames=[{"type": "auth_ok"}]))
+
+    with pytest.raises(RuntimeError, match="expected auth_required"):
+        haos_runtime.get_home_assistant_http_config("http://127.0.0.1:18123", "token")
+
+
+def test_ws_command_rejected_auth_fails_loudly(monkeypatch: Any) -> None:
+    """An auth_invalid reply never falls through to the command send."""
+    _patch_ws_connect(
+        monkeypatch,
+        _FakeWebSocket(
+            None, frames=[{"type": "auth_required"}, {"type": "auth_invalid"}]
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="auth rejected"):
+        haos_runtime.get_home_assistant_http_config("http://127.0.0.1:18123", "token")
+
+
+def test_ws_command_unsuccessful_result_fails_loudly(monkeypatch: Any) -> None:
+    """A success=False result frame raises with Core's error payload."""
+    _patch_ws_connect(
+        monkeypatch,
+        _FakeWebSocket(
+            None,
+            frames=[
+                {"type": "auth_required"},
+                {"type": "auth_ok"},
+                {
+                    "id": 1,
+                    "type": "result",
+                    "success": False,
+                    "error": {"code": "unknown_command"},
+                },
+            ],
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="unknown_command"):
+        haos_runtime.get_home_assistant_http_config("http://127.0.0.1:18123", "token")
+
+
+def test_get_home_assistant_http_config_rejects_non_object_result(
+    monkeypatch: Any,
+) -> None:
+    """A non-dict http/config result is a contract break, not data."""
+    _patch_ws_connect(monkeypatch, _FakeWebSocket("not-a-config"))
+
+    with pytest.raises(RuntimeError, match="non-object result"):
+        haos_runtime.get_home_assistant_http_config("http://127.0.0.1:18123", "token")
+
+
+def test_configure_home_assistant_http_rejects_invalid_result(
+    monkeypatch: Any,
+) -> None:
+    """A configure result without a boolean restart flag fails loudly."""
+    _patch_ws_connect(monkeypatch, _FakeWebSocket({"restart": "yes"}))
+
+    with pytest.raises(RuntimeError, match="invalid result"):
+        haos_runtime.configure_home_assistant_http(
+            "http://127.0.0.1:18123", "token", {"server_port": 8123}
+        )
+
+
+def test_promote_home_assistant_http_config_rejects_unexpected_result(
+    monkeypatch: Any,
+) -> None:
+    """A non-None promote result means the API shape changed underneath us."""
+    _patch_ws_connect(monkeypatch, _FakeWebSocket({"promoted": True}))
+
+    with pytest.raises(RuntimeError, match="unexpected result"):
+        haos_runtime.promote_home_assistant_http_config(
+            "http://127.0.0.1:18123", "token"
+        )
+
+
+def test_move_haos_tls_item_last() -> None:
+    """The hook reorders collection so the haos_tls item is last.
+
+    The scheduling consequence (Core restarts only after a worker's ordinary
+    work) is documented on ``_move_haos_tls_items_last`` itself.
+    """
+    from tests.src.e2e import conftest as e2e_conftest
 
     class Item:
         def __init__(self, name: str, *, tls: bool = False) -> None:
@@ -159,3 +248,57 @@ def test_move_haos_tls_item_last() -> None:
     e2e_conftest._move_haos_tls_items_last(items)
 
     assert [item.name for item in items] == ["first", "last", "tls"]
+
+
+def test_apply_haos_tls_skip_gates_on_the_embedded_lane() -> None:
+    """The TLS scenario is skipped exactly where it is disabled.
+
+    An inverted condition would silently stop the #2241 regression proof from
+    running anywhere, under the skip ceilings' radar.
+    """
+    from tests.src.e2e import conftest as e2e_conftest
+
+    class Item:
+        def __init__(self, *, tls: bool) -> None:
+            self.keywords = {"haos_tls": True} if tls else {}
+            self.markers: list[Any] = []
+
+        def add_marker(self, marker: Any) -> None:
+            self.markers.append(marker)
+
+    marker = object()
+
+    disabled = Item(tls=True)
+    e2e_conftest._apply_haos_tls_skip(disabled, False, marker)
+    assert disabled.markers == [marker]
+
+    enabled = Item(tls=True)
+    e2e_conftest._apply_haos_tls_skip(enabled, True, marker)
+    assert enabled.markers == []
+
+    ordinary = Item(tls=False)
+    e2e_conftest._apply_haos_tls_skip(ordinary, False, marker)
+    assert ordinary.markers == []
+
+
+def test_tls_module_contains_exactly_one_test() -> None:
+    """The end-of-queue scheduling guarantee needs a one-test module.
+
+    ``loadscope`` schedules whole modules; a second test here would make the
+    TLS scope larger than the other one-test scopes and let the reorder sort
+    schedule the destructive Core restart mid-suite.
+    """
+    import ast
+    from pathlib import Path
+
+    module = (
+        Path(__file__).parents[1] / "e2e" / "haos_only" / "test_zz_manage_app_tls.py"
+    )
+    tree = ast.parse(module.read_text())
+    test_defs = [
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        and node.name.startswith("test_")
+    ]
+    assert test_defs == ["test_manage_app_reproduces_legacy_tls_failure_then_uses_fix"]

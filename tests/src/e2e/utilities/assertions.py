@@ -144,7 +144,16 @@ def assert_mcp_success(result, operation_name: str = "operation"):
     # Handle different success indicators
     success_indicators = [
         data.get("success") is True,
-        data.get("status") == "pending_restart",
+        # ha_manage_app's options/network write returns
+        # {"status": "pending_restart"} with no success key — the write was
+        # accepted, the app just needs a restart (tools_addons.py). The extra
+        # guards keep an explicit failure from riding in on the status string,
+        # hence "is not False" rather than "is True".
+        (
+            data.get("status") == "pending_restart"
+            and data.get("success") is not False
+            and data.get("error") is None
+        ),
         # If no explicit success field but has data and no error, consider success
         ("data" in data and data.get("error") is None and data.get("success") is None),
         # Bulk operations success: has operational data without explicit success field

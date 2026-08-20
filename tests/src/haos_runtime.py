@@ -1051,7 +1051,13 @@ def stage_home_assistant_tls_in_qcow2(image_path: Path) -> Path:
     exact IP-address-mismatch failure when the legacy app proxy uses HTTPX's
     default verification. The final E2E enables it at runtime through Core's
     supported HTTP configuration API, in the worker's already-running VM.
+
+    Returns the host-side certificate path — the caller exports it as
+    ``HAOS_TEST_TLS_CA_PATH`` so the test can trust it via ``SSL_CERT_FILE``.
+    That trust path is also why the self-signed cert carries
+    ``basicConstraints=CA:TRUE``: the host uses the same file as its CA.
     """
+    import atexit
     import shutil
     import tempfile
 
@@ -1068,8 +1074,11 @@ def stage_home_assistant_tls_in_qcow2(image_path: Path) -> Path:
                 "rsa:2048",
                 "-sha256",
                 "-nodes",
+                # Staging reruns per image prep, but VM clock drift or an
+                # image reused across a day boundary would turn a 1-day cert
+                # into a confusing "certificate has expired" failure.
                 "-days",
-                "1",
+                "30",
                 "-subj",
                 "/CN=haos-e2e.local",
                 "-addext",
@@ -1124,6 +1133,9 @@ def stage_home_assistant_tls_in_qcow2(image_path: Path) -> Path:
             f"Failed to stage Home Assistant TLS files into {image_path}: {exc}"
         ) from exc
     LOG.info("Staged HA Core TLS files into %s (host CA: %s)", image_path, certificate)
+    # The caller reads the certificate as a trust anchor for the rest of the
+    # session, so remove the workdir (and its private key) only at exit.
+    atexit.register(shutil.rmtree, workdir, ignore_errors=True)
     return certificate
 
 
@@ -1308,7 +1320,12 @@ def configure_home_assistant_http(
     timeout: float = 60.0,
     verify_ssl: bool = True,
 ) -> bool:
-    """Stage an HTTP config and return whether Core scheduled its restart."""
+    """Stage an HTTP config and return whether Core scheduled its restart.
+
+    The underlying ``http/config/configure`` WS command requires an admin
+    token and a Core in ``CoreState.running`` — mid-restart Core rejects it
+    with ``not_running``, which surfaces here as ``RuntimeError``.
+    """
     result = _home_assistant_ws_command(
         base_url,
         token,

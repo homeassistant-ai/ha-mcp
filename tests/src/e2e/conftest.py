@@ -234,11 +234,15 @@ def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
 def _move_haos_tls_items_last(items: list[Any]) -> None:
     """Make the one destructive Core-restart scope the final xdist work unit.
 
-    ``loadscope`` groups tests by module, sorts scopes by descending size, and
-    preserves collection order for equal-sized scopes. The TLS module contains
-    exactly one test; moving its item to the end makes it the final one-test
-    scope. Whichever existing worker receives it has therefore drained its
-    ordinary work before Core is restarted in that worker's already-running VM.
+    ``loadscope`` groups tests into scopes by module (or module::class). With
+    xdist's default ``--loadscope-reorder`` the scopes are sorted by
+    descending size with a stable sort, so the one-test TLS module moved to
+    the end stays last among the one-test scopes; with ``--no-loadscope-reorder``
+    plain collection order keeps it last outright. The FIFO workqueue then
+    dispatches it as the final unit. The worker that receives it may still
+    hold up to two queued ordinary tests (xdist tops nodes up at <=2 pending)
+    but executes units in dispatch order, so Core is restarted in that
+    worker's already-running VM only after its ordinary work has run.
     """
     ordinary = [item for item in items if "haos_tls" not in item.keywords]
     tls = [item for item in items if "haos_tls" in item.keywords]
@@ -246,7 +250,11 @@ def _move_haos_tls_items_last(items: list[Any]) -> None:
 
 
 def _apply_haos_tls_skip(item: Any, enabled: bool, skip_marker: Any) -> None:
-    """Keep the main collection hook below its complexity ceiling."""
+    """Skip a ``haos_tls`` item on every lane where the scenario is disabled.
+
+    Kept out-of-line so ``pytest_collection_modifyitems`` stays under the
+    repo-wide C901 ceiling — inlining this branch trips it.
+    """
     if "haos_tls" in item.keywords and not enabled:
         item.add_marker(skip_marker)
 
@@ -335,6 +343,11 @@ def pytest_collection_modifyitems(config, items):
         if "haos_stdio_only" in keywords and not haos_stdio:
             item.add_marker(skip_haos_stdio_only)
         _apply_haos_tls_skip(item, haos_embedded, skip_haos_tls)
+        # Deliberate: inserting the haos_tls dispatch above broke the old
+        # ``elif`` chain into this ``if``. An item carrying several gate
+        # markers now collects one skip marker per gate instead of the first
+        # only — still one skipped item, same counts; only the reported
+        # reason (first marker added) could differ.
         # ``external_only`` skips on any tier where the server is NOT in the
         # pytest process: the inaddon HAOS addon AND the embedded backend's
         # in-process MCP server (both #1527). The name is historical (from
@@ -1011,6 +1024,8 @@ def _wait_for_embedded_webhook_ready(
     A valid JSON-RPC ``result`` means the in-process MCP server has installed
     itself, started its worker thread, and registered the webhook. Returns False
     on timeout so the caller can dump diagnostics and fail with context.
+    ``verify=False`` lets the TLS scenario poll the ``https://`` webhook while
+    Core runs its trial certificate.
     """
     payload = {
         "jsonrpc": "2.0",
@@ -1885,10 +1900,21 @@ def _prepare_haos_image(
     if inaddon:
         refresh_dev_addon_source_in_qcow2(image_path)
     if haos_embedded:
-        certificate = stage_home_assistant_tls_in_qcow2(image_path)
-        # Do not alter process-wide trust during ordinary tests. The final TLS
-        # scenario trusts this cert only while reproducing the legacy mismatch.
-        os.environ["HAOS_TEST_TLS_CA_PATH"] = str(certificate)
+        # Best-effort like the wheel staging above: only the final TLS scenario
+        # consumes this certificate, and it asserts on HAOS_TEST_TLS_CA_PATH —
+        # a staging failure should fail that one test, not abort the lane.
+        try:
+            certificate = stage_home_assistant_tls_in_qcow2(image_path)
+        except RuntimeError:
+            logger.warning(
+                "HAOS Core TLS staging failed; the TLS scenario will report it",
+                exc_info=True,
+            )
+        else:
+            # Do not alter process-wide trust during ordinary tests. The final
+            # TLS scenario trusts this cert only while reproducing the legacy
+            # mismatch.
+            os.environ["HAOS_TEST_TLS_CA_PATH"] = str(certificate)
     return image_path
 
 
