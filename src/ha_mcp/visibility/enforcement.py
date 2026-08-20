@@ -49,6 +49,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from fastmcp.exceptions import ToolError
@@ -71,6 +72,10 @@ if TYPE_CHECKING:
     from fastmcp.tools.tool import ToolResult
 
 logger = logging.getLogger(__name__)
+
+_config_load_warning_emitted: ContextVar[bool | None] = ContextVar(
+    "visibility_config_load_warning_emitted", default=None
+)
 
 # The resolved hidden set is cached with a short TTL so a burst of tool calls
 # does not re-fetch the registry each time; a config edit invalidates it sooner
@@ -342,7 +347,7 @@ class _VisibilityEnforcementBase(Middleware):
         self,
         tool_name: str,
         *,
-        emit_diagnostics: bool = False,
+        emit_report_issue_diagnostic: bool = False,
     ) -> VisibilityConfig | None:
         """Return the config when enforce is active, ``None`` when passthrough.
 
@@ -354,8 +359,9 @@ class _VisibilityEnforcementBase(Middleware):
         availability, and for an enforce install it preserves the boundary.
         With no good load ever, fail CLOSED like PolicyMiddleware does.
 
-        The inbound half owns diagnostics for the split middleware pair so one
-        call cannot emit the same config-load traceback twice.
+        Each half diagnoses a distinct config-load failure. A context-local
+        marker suppresses only the second traceback when both halves fail during
+        the same call.
         """
         config: VisibilityConfig | None
         try:
@@ -372,12 +378,15 @@ class _VisibilityEnforcementBase(Middleware):
                 )
             else:
                 outcome = "failing closed"
-            if emit_diagnostics:
+            warning_emitted = _config_load_warning_emitted.get()
+            if warning_emitted is not True:
                 logger.warning(
                     "visibility enforce: config load failed; %s",
                     outcome,
                     exc_info=True,
                 )
+                if warning_emitted is not None:
+                    _config_load_warning_emitted.set(True)
         # ``ha_report_issue`` is an unconditional diagnostic escape hatch while
         # the toggle is off, not only a registry-failure fallback. A missing or
         # corrupt first config load follows that safe default; a last-known-good
@@ -386,7 +395,7 @@ class _VisibilityEnforcementBase(Middleware):
             config is None or not config.restrict_report_issue
         ):
             if (
-                emit_diagnostics
+                emit_report_issue_diagnostic
                 and config is not None
                 and config.enabled
                 and config.enforce
@@ -427,10 +436,21 @@ class VisibilityInboundEnforcement(_VisibilityEnforcementBase):
     async def on_call_tool(
         self, context: MiddlewareContext, call_next: CallNext
     ) -> Any:
+        token = _config_load_warning_emitted.set(False)
+        try:
+            return await self._on_call_tool(context, call_next)
+        finally:
+            _config_load_warning_emitted.reset(token)
+
+    async def _on_call_tool(
+        self, context: MiddlewareContext, call_next: CallNext
+    ) -> Any:
         name = context.message.name
         args = context.message.arguments or {}
         effective_name, effective_args = _effective_tool_call(name, args)
-        config = await self._active_config(effective_name, emit_diagnostics=True)
+        config = await self._active_config(
+            effective_name, emit_report_issue_diagnostic=True
+        )
         if config is None:
             return await call_next(context)
 

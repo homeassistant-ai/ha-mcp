@@ -497,6 +497,42 @@ class TestConfigLoadFailure:
         ]
         assert warnings[0].exc_info is not None
 
+    async def test_outbound_only_config_load_failure_logs(
+        self, breakable_config, monkeypatch, caplog
+    ):
+        mw = make_mw(get_client=FakeClient)
+        await mw.on_call_tool(
+            make_context("ha_get_state", {"entity_id": "light.any"}),
+            _returns(text_result("prime")),
+        )
+        calls = 0
+
+        def _load(_d):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return breakable_config["config"]
+            raise ValueError("entity_visibility.json changed during the call")
+
+        monkeypatch.setattr(resolver, "load_visibility_config", _load)
+        caplog.clear()
+        with caplog.at_level("WARNING", logger="ha_mcp.visibility.enforcement"):
+            result = await mw.on_call_tool(
+                make_context("ha_get_state", {"entity_id": "light.any"}),
+                _returns(text_result("second")),
+            )
+
+        assert result.content[0].text == "second"
+        warnings = [
+            record
+            for record in caplog.records
+            if "config load failed" in record.message
+        ]
+        assert [record.message for record in warnings] == [
+            "visibility enforce: config load failed; using last-known-good config"
+        ]
+        assert warnings[0].exc_info is not None
+
     async def test_corrupt_config_after_enforce_on_load_stays_enforced(
         self, breakable_config
     ):

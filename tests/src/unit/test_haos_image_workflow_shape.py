@@ -9,6 +9,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 _CACHE_KEY_CONSUMER_FLOOR = 5
 _CACHE_KEY_OUTPUT_MARKER = "cache-key=haos-image-"
+_HAOS_IMAGE_CACHE_PATH = "/tmp/haos-test-image.qcow2"
+_CACHE_ACTIONS = {
+    "actions/cache",
+    "actions/cache/restore",
+    "actions/cache/save",
+}
 _CACHE_KEY_COMMAND = """hash=$(git ls-tree -r HEAD \\
   tests/haos_image_build \\
   tests/initial_test_state \\
@@ -41,12 +47,18 @@ def _cache_key_steps(path: Path) -> list[dict[str, Any]]:
     ]
 
 
-def _cache_key_consumers() -> list[Path]:
-    paths = [
-        path
-        for path in sorted(_WORKFLOW_DIR.glob("*.yml"))
-        if _cache_key_steps(path)
-    ]
+def _uses_haos_image_cache(path: Path) -> bool:
+    return any(
+        str(step.get("uses", "")).partition("@")[0] in _CACHE_ACTIONS
+        and _HAOS_IMAGE_CACHE_PATH
+        in str(step.get("with", {}).get("path", "")).splitlines()
+        for step in _workflow_steps(path)
+    )
+
+
+def _cache_key_consumers(workflow_dir: Path = _WORKFLOW_DIR) -> list[Path]:
+    workflow_paths = sorted((*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")))
+    paths = [path for path in workflow_paths if _uses_haos_image_cache(path)]
     assert len(paths) >= _CACHE_KEY_CONSUMER_FLOOR, (
         "expected at least "
         f"{_CACHE_KEY_CONSUMER_FLOOR} HAOS image cache-key consumers, found "
@@ -75,3 +87,21 @@ def _cache_key_command(path: Path) -> str:
 def test_haos_image_cache_key_command_matches_every_consumer() -> None:
     for path in _cache_key_consumers():
         assert _cache_key_command(path) == _CACHE_KEY_COMMAND, path.name
+
+
+def test_cache_key_consumer_discovery_is_marker_independent(tmp_path: Path) -> None:
+    workflow = """jobs:
+  lane:
+    steps:
+      - uses: actions/cache/restore@pinned
+        with:
+          path: /tmp/haos-test-image.qcow2
+          key: shared
+"""
+    expected = []
+    for index in range(_CACHE_KEY_CONSUMER_FLOOR):
+        path = tmp_path / f"lane-{index}.yaml"
+        path.write_text(workflow, encoding="utf-8")
+        expected.append(path)
+
+    assert _cache_key_consumers(tmp_path) == expected
