@@ -164,6 +164,12 @@ class TestAreaSearchReportsSkippedEnrichment:
 
         assert response["total_areas_found"] == 0
         assert any("floor registry unavailable" in w for w in response["warnings"])
+        # The fetch warning says what broke; the resolution warning must say
+        # what that cost this query, or "no match" reads as "no such area".
+        assert any(
+            "close-spelling matching was skipped" in w and "'sous-sol'" in w
+            for w in response["warnings"]
+        ), response["warnings"]
 
     @pytest.mark.asyncio
     async def test_malformed_floor_registry_does_not_fuzzy_match_partial_area(
@@ -191,6 +197,9 @@ class TestAreaSearchReportsSkippedEnrichment:
 
         assert response["total_areas_found"] == 0
         assert any("floor registry unavailable" in w for w in response["warnings"])
+        assert any(
+            "close-spelling matching was skipped" in w for w in response["warnings"]
+        ), response["warnings"]
 
     @pytest.mark.asyncio
     async def test_bare_list_floor_registry_is_unavailable(self) -> None:
@@ -216,6 +225,9 @@ class TestAreaSearchReportsSkippedEnrichment:
 
         assert response["total_areas_found"] == 0
         assert any("floor registry unavailable" in w for w in response["warnings"])
+        assert any(
+            "close-spelling matching was skipped" in w for w in response["warnings"]
+        ), response["warnings"]
 
     @pytest.mark.asyncio
     async def test_healthy_registries_produce_no_registry_warning(self) -> None:

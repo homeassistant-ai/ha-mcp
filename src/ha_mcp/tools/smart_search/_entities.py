@@ -473,13 +473,15 @@ class EntitySearchMixin(_SearchBase):
             area_registry = self._parse_area_registry(results[1], registry_warnings)
             entity_reg_map = self._parse_entity_reg_map(results[2], registry_warnings)
             device_area_map = self._parse_device_area_map(results[3], registry_warnings)
-            floor_result = results[4]
-            floor_registry_available = (
-                isinstance(floor_result, dict)
-                and floor_result.get("success") is True
-                and isinstance(floor_result.get("result"), list)
-            )
-            floor_registry = self._parse_floor_registry(floor_result, registry_warnings)
+            # Availability is read back OUT of the parse rather than re-derived
+            # from the raw payload: the parser already decides what counts as
+            # usable floor data, and a second predicate here drifted from it
+            # once. An empty warnings list means the parser accepted the
+            # payload; anything else disables the fuzzy floor/area fallback.
+            floor_warnings: list[str] = []
+            floor_registry = self._parse_floor_registry(results[4], floor_warnings)
+            floor_registry_available = not floor_warnings
+            registry_warnings.extend(floor_warnings)
             degraded_warnings = registry_warnings + visibility_warnings
 
             matched_area_ids, resolution_warnings = self._resolve_area_query(
@@ -657,8 +659,15 @@ class EntitySearchMixin(_SearchBase):
 
         if not floor_registry_available:
             # Without the floor registry, fuzzy area matching could silently
-            # recreate the original floor->partial-area misresolution.
-            return set(), []
+            # recreate the original floor->partial-area misresolution. The
+            # fetch warning names the outage; this one names what the outage
+            # cost the caller, so "no match" is not read as "no such area".
+            return set(), [
+                f"Floor data is unavailable, so '{area_query}' was matched only "
+                "against exact area IDs, names, and aliases; close-spelling "
+                "matching was skipped. Retry, or pass an exact area_id from "
+                "ha_list_floors_areas."
+            ]
 
         fuzzy_floor_ids, floor_score = cls._match_fuzzy_registry_ids(
             floor_registry, "floor_id", query_lower
