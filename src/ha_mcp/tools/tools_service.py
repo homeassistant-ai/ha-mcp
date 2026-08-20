@@ -93,6 +93,7 @@ class BulkControlOperation(TypedDict):
             float,
             Field(
                 ge=0,
+                allow_inf_nan=False,
                 description=(
                     "Optional confirmation timeout. On the component path, all "
                     "operations share the maximum requested wait (default 10s, "
@@ -1449,7 +1450,7 @@ class ServiceTools:
                 ),
             ),
         ],
-        timeout_seconds: Annotated[float, Field(ge=0)] = 10,
+        timeout_seconds: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 10,
     ) -> dict[str, Any]:
         """
         Get the status of one or more device operations with real-time WebSocket verification.

@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import ValidationError as FastMCPValidationError
 
 from ha_mcp.tools.device_control import DeviceControlTools
 from ha_mcp.utils.operation_manager import DeviceOperation, OperationStatus
@@ -299,3 +300,25 @@ async def test_registered_status_tool_accepts_fractional_timeout() -> None:
         operation_id="op-1",
         timeout_seconds=0.5,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_timeout", [float("inf"), "inf"])
+async def test_registered_status_tool_rejects_positive_infinity(
+    invalid_timeout: float | str,
+) -> None:
+    """The public polling window must always have a finite deadline."""
+    from fastmcp import FastMCP
+
+    from ha_mcp.tools.tools_service import register_service_tools
+
+    device_tools = MagicMock()
+    device_tools.get_device_operation_status = AsyncMock()
+    mcp = FastMCP("test")
+    register_service_tools(mcp, MagicMock(), device_tools=device_tools)
+    tool = await mcp.get_tool("ha_get_operation_status")
+
+    with pytest.raises(FastMCPValidationError):
+        await tool.run({"operation_id": "op-1", "timeout_seconds": invalid_timeout})
+
+    device_tools.get_device_operation_status.assert_not_awaited()
