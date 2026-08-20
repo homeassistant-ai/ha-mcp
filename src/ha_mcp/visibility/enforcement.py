@@ -49,6 +49,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from fastmcp.exceptions import ToolError
@@ -71,6 +72,10 @@ if TYPE_CHECKING:
     from fastmcp.tools.tool import ToolResult
 
 logger = logging.getLogger(__name__)
+
+_config_load_warning_emitted: ContextVar[bool | None] = ContextVar(
+    "visibility_config_load_warning_emitted", default=None
+)
 
 # The resolved hidden set is cached with a short TTL so a burst of tool calls
 # does not re-fetch the registry each time; a config edit invalidates it sooner
@@ -353,6 +358,10 @@ class _VisibilityEnforcementBase(Middleware):
         loaded successfully — for the common non-enforce install that preserves
         availability, and for an enforce install it preserves the boundary.
         With no good load ever, fail CLOSED like PolicyMiddleware does.
+
+        Each half diagnoses a distinct config-load failure. A context-local
+        marker suppresses only the second traceback when both halves fail during
+        the same call.
         """
         config: VisibilityConfig | None
         try:
@@ -369,12 +378,15 @@ class _VisibilityEnforcementBase(Middleware):
                 )
             else:
                 outcome = "failing closed"
-            if tool_name != _REPORT_ISSUE_TOOL or emit_report_issue_diagnostic:
+            warning_emitted = _config_load_warning_emitted.get()
+            if warning_emitted is not True:
                 logger.warning(
                     "visibility enforce: config load failed; %s",
                     outcome,
                     exc_info=True,
                 )
+                if warning_emitted is not None:
+                    _config_load_warning_emitted.set(True)
         # ``ha_report_issue`` is an unconditional diagnostic escape hatch while
         # the toggle is off, not only a registry-failure fallback. A missing or
         # corrupt first config load follows that safe default; a last-known-good
@@ -422,6 +434,15 @@ class VisibilityInboundEnforcement(_VisibilityEnforcementBase):
     """
 
     async def on_call_tool(
+        self, context: MiddlewareContext, call_next: CallNext
+    ) -> Any:
+        token = _config_load_warning_emitted.set(False)
+        try:
+            return await self._on_call_tool(context, call_next)
+        finally:
+            _config_load_warning_emitted.reset(token)
+
+    async def _on_call_tool(
         self, context: MiddlewareContext, call_next: CallNext
     ) -> Any:
         name = context.message.name
