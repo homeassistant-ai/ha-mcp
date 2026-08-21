@@ -8,9 +8,12 @@ on ``has_more``/``next_offset``, and the budget-exhaustion ``partial`` flag.
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.tools import tools_search
 from ha_mcp.tools.smart_search._deep import DeepSearchMixin
 from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
 from ha_mcp.tools.tools_search import (
@@ -502,9 +505,28 @@ def test_finalize_partial_state_appends_existing_reason() -> None:
         errors_local=[{"surface": "entities", "error": "ws closed"}],
     )
 
+    # Routed through _merge_partial_reason like every other writer, so the
+    # separator and the de-duplication are the module's, not this call site's.
     assert response["partial_reason"] == (
-        "config: budget exhausted; entities: ws closed"
+        "config: budget exhausted ; entities: ws closed"
     )
+
+
+def test_finalize_partial_state_does_not_repeat_an_identical_reason() -> None:
+    """The shared merger de-dups; the inline concat it replaced did not."""
+    response = {
+        "partial": True,
+        "partial_reason": "entities: ws closed",
+        "errors": [],
+    }
+
+    _finalize_partial_state(
+        response,
+        partial_local=True,
+        errors_local=[{"surface": "entities", "error": "ws closed"}],
+    )
+
+    assert response["partial_reason"] == "entities: ws closed"
 
 
 def test_finalize_partial_state_noop_when_no_branch_raised() -> None:
@@ -518,6 +540,48 @@ def test_finalize_partial_state_noop_when_no_branch_raised() -> None:
     _finalize_partial_state(response, partial_local=False, errors_local=[])
     assert response["partial"] is True
     assert response["errors"] == [{"surface": "config-internal", "code": "BUDGET"}]
+
+
+def _entities_only_request() -> tools_search._ResolvedSearch:
+    """A resolved request that fans out to the entity branch only."""
+    return tools_search._ResolvedSearch(
+        query="lamp",
+        query_text="lamp",
+        domain_filter=None,
+        area_filter=None,
+        state_filter=None,
+        parsed_search_types=None,
+        parsed_fields=None,
+        result_fields=None,
+        limit=10,
+        offset=0,
+        exact_match=False,
+        include_hidden=False,
+        include_config=False,
+        group_by_domain=False,
+        per_domain_limit=None,
+        config_time_budget=None,
+        registry_eligible=True,
+        body_eligible=False,
+        body_skipped_by_intent_gate=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_branch_exception_without_a_message_reports_its_type() -> None:
+    """``str(TimeoutError())`` is "", which used to yield ``"entities: "``."""
+    tools = tools_search.SearchTools(MagicMock(), MagicMock())
+
+    async def _time_out(**kwargs: object) -> dict:
+        raise TimeoutError
+
+    tools._ha_search_entities = _time_out  # type: ignore[method-assign]
+
+    response = await tools._legacy_ha_search(_entities_only_request(), None)
+
+    assert response["partial"] is True
+    assert response["errors"] == [{"surface": "entities", "error": "TimeoutError"}]
+    assert response["partial_reason"] == "entities: TimeoutError"
 
 
 # Entity-intent skip warning emission ------------------------------------

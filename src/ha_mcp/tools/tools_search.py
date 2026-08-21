@@ -321,12 +321,11 @@ def _finalize_partial_state(
     if partial_local:
         response["partial"] = True
         response["errors"].extend(errors_local)
-        local_reason = "; ".join(
-            f"{error['surface']}: {error['error']}" for error in errors_local
-        )
-        existing_reason = response.get("partial_reason")
-        response["partial_reason"] = (
-            f"{existing_reason}; {local_reason}" if existing_reason else local_reason
+        _merge_partial_reason(
+            response,
+            "; ".join(
+                f"{error['surface']}: {error['error']}" for error in errors_local
+            ),
         )
 
 
@@ -2217,7 +2216,11 @@ class SearchTools:
                 raise outcome
             if isinstance(outcome, Exception):
                 partial = True
-                errors.append({"surface": label, "error": str(outcome)})
+                # ``str(asyncio.TimeoutError())`` is "" — fall back to the type
+                # name so partial_reason never reads "entities: ".
+                errors.append(
+                    {"surface": label, "error": str(outcome) or type(outcome).__name__}
+                )
                 logger.warning("ha_search %s branch failed: %r", label, outcome)
                 continue
             _apply_search_outcome(response, label, outcome)

@@ -281,7 +281,9 @@ def test_bulk_operation_timeout_rejects_negative_and_accepts_zero():
     with pytest.raises(ValidationError):
         adapter.validate_python({**operation, "timeout_seconds": -1})
 
-    for invalid_value in (float("inf"), "inf", float("nan")):
+    # ``True`` is the trap: ``float(True)`` is 1.0, so a bool that slips past
+    # the schema reads downstream as a one-second timeout.
+    for invalid_value in (float("inf"), "inf", float("nan"), True, False):
         with pytest.raises(ValidationError):
             adapter.validate_python({**operation, "timeout_seconds": invalid_value})
 

@@ -83,7 +83,10 @@ class BulkControlOperation(TypedDict):
             Field(
                 description=(
                     "Optional action parameters, e.g. {'brightness_pct': 30} "
-                    "when action='on'."
+                    "when action='on'. Each domain has a fixed allowlist of "
+                    "supported keys; keys outside it are ignored rather than "
+                    "rejected. Use ha_call_service for parameters this tool "
+                    "does not carry."
                 )
             ),
         ]
@@ -94,6 +97,10 @@ class BulkControlOperation(TypedDict):
             Field(
                 ge=0,
                 allow_inf_nan=False,
+                # ``strict`` for the same reason validate_first carries it:
+                # lax mode coerces ``true`` to 1.0, so a bool would land
+                # downstream as a silent one-second timeout.
+                strict=True,
                 description=(
                     "Optional confirmation timeout. On the component path, all "
                     "operations share the maximum requested wait (default 10s, "
@@ -108,8 +115,10 @@ class BulkControlOperation(TypedDict):
             Field(
                 strict=True,
                 description=(
-                    "Validate that the entity exists before dispatch; default true. "
-                    "The action is always validated."
+                    "Report an ENTITY_NOT_FOUND failure when the target entity "
+                    "does not exist; default true. On the component batch path "
+                    "this is detected from the captured pre-state rather than by "
+                    "preventing dispatch. The action is always validated."
                 ),
             ),
         ]
@@ -1531,7 +1540,8 @@ class ServiceTools:
 
         Caveats: put every target in ``operations`` and call the tool once. Parallel
         execution is the default, and invalid items are reported without aborting
-        valid operations in the same batch.
+        valid operations in the same batch. A batch in which every item fails
+        validation dispatches nothing and fails the call.
         """
         parallel_bool = parallel
 
@@ -1559,14 +1569,24 @@ class ServiceTools:
             )
 
         operations_list: list[Any] = []
-        for operation in parsed_operations:
+        for index, operation in enumerate(parsed_operations):
             try:
                 operations_list.append(
                     _BULK_CONTROL_OPERATION_ADAPTER.validate_python(operation)
                 )
-            except ValidationError:
+            except ValidationError as exc:
                 # Preserve malformed rows for the runtime batch validator, which
                 # reports them in skipped_details instead of rejecting the call.
+                # The schema's reason is richer than the runtime validator's and
+                # is the only place it survives, so log it here.
+                # include_input=False: a malformed row can carry sensitive
+                # values (lock or alarm codes in a mistyped field), and
+                # str(exc) would write them to persistent server logs.
+                logger.warning(
+                    "ha_bulk_control operation %d failed schema validation: %s",
+                    index,
+                    exc.errors(include_url=False, include_input=False),
+                )
                 operations_list.append(operation)
 
         result = await self._device_tools.bulk_device_control(

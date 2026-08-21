@@ -164,6 +164,12 @@ class TestAreaSearchReportsSkippedEnrichment:
 
         assert response["total_areas_found"] == 0
         assert any("floor registry unavailable" in w for w in response["warnings"])
+        # The fetch warning says what broke; the resolution warning must say
+        # what that cost this query, or "no match" reads as "no such area".
+        assert any(
+            "close-spelling matching was skipped" in w and "'sous-sol'" in w
+            for w in response["warnings"]
+        ), response["warnings"]
 
     @pytest.mark.asyncio
     async def test_malformed_floor_registry_does_not_fuzzy_match_partial_area(
@@ -191,6 +197,42 @@ class TestAreaSearchReportsSkippedEnrichment:
 
         assert response["total_areas_found"] == 0
         assert any("floor registry unavailable" in w for w in response["warnings"])
+        assert any(
+            "close-spelling matching was skipped" in w for w in response["warnings"]
+        ), response["warnings"]
+
+    @pytest.mark.asyncio
+    async def test_missing_result_key_floor_registry_is_unavailable(self) -> None:
+        """A success envelope with no result key is an outage, not an empty registry.
+
+        A legitimate zero-floor instance sends ``"result": []``; an absent key
+        must not mark the floor registry available-and-empty, which would
+        re-enable the fuzzy floor-to-partial-area misresolution.
+        """
+        client = _make_client(failing=set())
+
+        async def _ws(message: dict[str, Any]) -> dict[str, Any]:
+            if message.get("type") == _FLOOR_LIST:
+                return {"success": True}
+            if message.get("type") == _AREA_LIST:
+                return {
+                    "success": True,
+                    "result": [
+                        {"area_id": "couloir_sous_sol", "name": "Couloir Sous-Sol"}
+                    ],
+                }
+            return {"success": True, "result": []}
+
+        client.send_websocket_message = AsyncMock(side_effect=_ws)
+        tools = SmartSearchTools(client=client)
+
+        response = await tools.get_entities_by_area("sous-sol")
+
+        assert response["total_areas_found"] == 0
+        assert any("result key missing" in w for w in response["warnings"])
+        assert any(
+            "close-spelling matching was skipped" in w for w in response["warnings"]
+        ), response["warnings"]
 
     @pytest.mark.asyncio
     async def test_bare_list_floor_registry_is_unavailable(self) -> None:
@@ -216,6 +258,9 @@ class TestAreaSearchReportsSkippedEnrichment:
 
         assert response["total_areas_found"] == 0
         assert any("floor registry unavailable" in w for w in response["warnings"])
+        assert any(
+            "close-spelling matching was skipped" in w for w in response["warnings"]
+        ), response["warnings"]
 
     @pytest.mark.asyncio
     async def test_healthy_registries_produce_no_registry_warning(self) -> None:
