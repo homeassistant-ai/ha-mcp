@@ -497,6 +497,22 @@ class TestRequirementForcesConflict:
             self._VIOLATION,
         )
 
+    def test_excluded_successor_does_not_empty_the_probes(self):
+        """CodeRabbit on #2245: step past a pointwise-excluded successor.
+
+        ``mcp>1.24,!=1.24.0.1`` rejects the named seed and the first
+        synthesized step; the chain's next step is still compliant, so the
+        compatible ``mcp>=1`` integration stays innocent.
+        """
+        excluded_successor = DependencyViolation(
+            package="mcp",
+            installed="1.24",
+            requirement="mcp>1.24,!=1.24.0.1",
+            required_by="something 1.0",
+        )
+        assert not requirement_forces_conflict("mcp>=1", excluded_successor)
+        assert requirement_forces_conflict("mcp==1.24", excluded_successor)
+
     def test_missing_package_judged_by_probes_alone(self):
         missing = DependencyViolation(
             package="mcp",

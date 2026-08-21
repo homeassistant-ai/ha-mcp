@@ -53,6 +53,12 @@ from packaging.version import InvalidVersion, Version
 # clause, which would read as a package named "(requested)".
 REQUESTED_BY = "(requested)"
 
+# Synthesized compliance-probe successors chained per seed, so a pointwise
+# exclusion of one step does not empty the probe list. Small on purpose:
+# every realistic exclusion names one or two points, and past those a range
+# is doing the excluding, where an empty list is the honest answer.
+_SUCCESSOR_STEPS = 3
+
 
 @dataclass(frozen=True, slots=True)
 class DependencyViolation:
@@ -351,7 +357,20 @@ def _compliance_probes(violated: str) -> list[str]:
         except InvalidVersion:
             continue
         named.append(base)
-        synthesized.append(_successor(parsed))
+        # A bounded chain rather than one successor: a pointwise ``!=``
+        # exclusion of the first synthesized step must not empty the probe
+        # list (CodeRabbit on #2245). A RANGE that excludes the whole
+        # neighborhood still yields nothing, and the caller's conservative
+        # verdict is then correct — the compliant region may genuinely sit
+        # beyond anything these seeds can name.
+        step = parsed
+        for _ in range(_SUCCESSOR_STEPS):
+            candidate = _successor(step)
+            synthesized.append(candidate)
+            try:
+                step = Version(candidate)
+            except InvalidVersion:
+                break
 
     def _surviving(candidates: list[str]) -> list[str]:
         # contains() answers False for a candidate it cannot parse (the
