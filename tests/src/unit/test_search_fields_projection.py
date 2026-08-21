@@ -621,6 +621,26 @@ class TestHaSearchEntitiesPerDomainLimit(_SearchToolFixture):
         assert "light" in by_domain
         assert len(by_domain["light"]) <= 1
 
+    @pytest.mark.asyncio
+    async def test_domain_listing_member_only_projection_keeps_group_signal(
+        self, search_tool
+    ):
+        """Member-only domain grouping retains the group discriminator."""
+        result = await search_tool(
+            domain_filter="light",
+            group_by_domain=True,
+            result_fields=["member_entity_ids"],
+            limit=20,
+        )
+
+        expected_group = {
+            "is_group": True,
+            "member_entity_ids": ["light.member_one", "light.member_two"],
+        }
+        assert expected_group in result["entities"]
+        assert expected_group in result["by_domain"]["light"]
+        assert {"is_group": False} in result["by_domain"]["light"]
+
 
 class TestHaSearchEntitiesStateFilter(_SearchToolFixture):
     """Tests for state_filter= normalization and per-branch behavior (issue #1199)."""

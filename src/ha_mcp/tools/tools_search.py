@@ -1389,7 +1389,7 @@ def _build_domain_only_by_domain(
     """Build the by_domain dict for domain-listing mode (all results are one domain)."""
     items = results[:per_domain_limit] if per_domain_limit is not None else results
     if parsed_result_fields is not None:
-        items = _project_records(items, parsed_result_fields)
+        items = _project_records(items, _effective_result_fields(parsed_result_fields))
     return {domain: items}
 
 
