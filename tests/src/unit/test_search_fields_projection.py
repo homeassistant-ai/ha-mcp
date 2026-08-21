@@ -253,7 +253,13 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
                 {
                     "entity_id": "light.kitchen",
                     "state": "on",
-                    "attributes": {"friendly_name": "Kitchen Light"},
+                    "attributes": {
+                        "friendly_name": "Kitchen Light",
+                        "group_entities": [
+                            "light.member_two",
+                            "light.member_one",
+                        ],
+                    },
                 },
                 {
                     "entity_id": "light.living_room",
@@ -284,6 +290,13 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
                                     "friendly_name": "Kitchen Light",
                                     "state": "on",
                                     "_hidden_by": None,
+                                    "_attributes": {
+                                        "friendly_name": "Kitchen Light",
+                                        "group_entities": [
+                                            "light.member_two",
+                                            "light.member_one",
+                                        ],
+                                    },
                                 }
                             ],
                         },
@@ -377,6 +390,52 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
         assert not leaked, f"internal fields leaked into area-only results: {leaked}"
 
     @pytest.mark.asyncio
+    async def test_membership_fields_cover_area_domain_and_state_modes(
+        self,
+        search_tool_populated,
+        mock_smart_tools_populated,
+    ):
+        """Every legacy listing/area branch exposes the same opt-in contract."""
+        kwargs = {"result_fields": ["entity_id", "is_group", "member_entity_ids"]}
+        area_query = await search_tool_populated(
+            query="kitchen", area_filter="kitchen", **kwargs
+        )
+        area_only = await search_tool_populated(area_filter="kitchen", **kwargs)
+        domain = await search_tool_populated(domain_filter="light", **kwargs)
+        state = await search_tool_populated(state_filter="on", **kwargs)
+
+        expected = {
+            "entity_id": "light.kitchen",
+            "is_group": True,
+            "member_entity_ids": ["light.member_one", "light.member_two"],
+        }
+        assert area_query["entities"] == [expected]
+        assert area_only["entities"] == [expected]
+        assert domain["entities"][0] == expected
+        assert state["entities"] == [expected]
+        assert all(
+            call.kwargs["include_membership"] is True
+            for call in mock_smart_tools_populated.get_entities_by_area.await_args_list
+        )
+
+    @pytest.mark.asyncio
+    async def test_membership_stays_absent_by_default_across_legacy_modes(
+        self, search_tool_populated
+    ):
+        """Branch plumbing never expands the default six-field record."""
+        responses = [
+            await search_tool_populated(query="kitchen", area_filter="kitchen"),
+            await search_tool_populated(area_filter="kitchen"),
+            await search_tool_populated(domain_filter="light"),
+            await search_tool_populated(state_filter="on"),
+        ]
+        for response in responses:
+            assert all(
+                "is_group" not in record and "member_entity_ids" not in record
+                for record in response["entities"]
+            )
+
+    @pytest.mark.asyncio
     async def test_area_only_empty_branch_projects(self, search_tool_empty):
         """The end-pass projects the area-only empty branch: the non-always-keep
         ``entities`` bucket (``[]`` on this branch) is retained when requested
@@ -433,7 +492,13 @@ _MULTI_ENTITY_STATES = [
     {
         "entity_id": "light.kitchen",
         "state": "on",
-        "attributes": {"friendly_name": "Kitchen Light"},
+        "attributes": {
+            "friendly_name": "Kitchen Light",
+            "group_entities": [
+                "light.member_two",
+                "light.member_one",
+            ],
+        },
     },
     {
         "entity_id": "light.bedroom",
@@ -686,6 +751,67 @@ class TestHaSearchEntitiesResultFields(_SearchToolFixture):
         ), f"healthy enrichment must not warn; got {data.get('warnings')}"
 
 
+class TestHaSearchMembershipFuzzy(_SearchToolFixture):
+    """Opt-in membership survives the legacy fuzzy projection seam."""
+
+    @pytest.fixture
+    def mock_smart_tools(self):
+        smart = MagicMock()
+        smart.smart_entity_search = AsyncMock(
+            return_value={
+                "results": [
+                    {
+                        "entity_id": "light.group",
+                        "friendly_name": "Group",
+                        "domain": "light",
+                        "state": "on",
+                        "attributes": {"entity_id": {"light.two", "light.one"}},
+                        "score": 100,
+                        "match_type": "exact_name",
+                    }
+                ],
+                "total_matches": 1,
+                "has_more": False,
+                "offset": 0,
+                "limit": 10,
+                "count": 1,
+            }
+        )
+        smart.deep_search = AsyncMock(
+            return_value={
+                "success": True,
+                "automations": [],
+                "scripts": [],
+                "scenes": [],
+                "helpers": [],
+                "warnings": [],
+            }
+        )
+        return smart
+
+    @pytest.mark.asyncio
+    async def test_fuzzy_membership_is_normalized_and_attributes_are_private(
+        self, search_tool, mock_smart_tools
+    ):
+        result = await search_tool(
+            query="group",
+            exact_match=False,
+            result_fields=["entity_id", "is_group", "member_entity_ids"],
+        )
+
+        assert result["entities"] == [
+            {
+                "entity_id": "light.group",
+                "is_group": True,
+                "member_entity_ids": ["light.one", "light.two"],
+            }
+        ]
+        call = mock_smart_tools.smart_entity_search.await_args
+        assert call.kwargs["include_attributes"] is True
+        assert call.kwargs["include_membership"] is True
+        assert "attributes" not in result["entities"][0]
+
+
 class TestHaSearchEnrichmentDegraded(_SearchToolFixture):
     """A failed registry read during result_fields enrichment surfaces a top-level
     warning and logs, instead of silently emitting null area/floor/labels
@@ -879,6 +1005,13 @@ class TestHaSearchAreaQueryPrefetchFailure(_SearchToolFixture):
                                     "friendly_name": "Kitchen Light",
                                     "state": "on",
                                     "_hidden_by": None,
+                                    "_attributes": {
+                                        "friendly_name": "Kitchen Light",
+                                        "group_entities": [
+                                            "light.member_two",
+                                            "light.member_one",
+                                        ],
+                                    },
                                 }
                             ],
                         },

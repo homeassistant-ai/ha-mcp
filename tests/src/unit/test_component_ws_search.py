@@ -726,6 +726,7 @@ class TestInfo:
         assert info["component_version"] == COMPONENT_VERSION
         assert info["capabilities"] == [
             "search",
+            "search_entity_membership",
             "overview",
             "helpers_list",
             "states",
@@ -1937,6 +1938,24 @@ class TestSchemaValidation:
         assert out["include_config"] is False
         assert out["limit"] == wsapi.DEFAULT_LIMIT
         assert out["offset"] == 0
+        assert "result_fields" not in out
+
+    def test_membership_result_fields_are_allowlisted(self, monkeypatch):
+        schema = self._schema(monkeypatch)
+        out = schema(
+            {
+                "type": wsapi.WS_SEARCH,
+                "result_fields": ["is_group", "member_entity_ids"],
+            }
+        )
+        assert out["result_fields"] == ["is_group", "member_entity_ids"]
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(
+                {
+                    "type": wsapi.WS_SEARCH,
+                    "result_fields": ["hue_type"],
+                }
+            )
 
     @pytest.mark.parametrize(
         "bad",

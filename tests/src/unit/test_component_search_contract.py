@@ -345,7 +345,12 @@ def _resolved_result_fields(result_fields) -> _ResolvedSearch:
     )
 
 
-def _enrichment_component_result(monkeypatch):
+def _enrichment_component_result(
+    monkeypatch,
+    *,
+    membership: bool = False,
+    members: object = frozenset({"light.two", "light.one"}),
+):
     """Real ``_do_search`` output for one entity carrying a full registry join."""
     view = make_view(
         entity={
@@ -362,7 +367,14 @@ def _enrichment_component_result(monkeypatch):
     )
     monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
     hass = FakeHass(
-        states=[FakeState("light.enrichmarker", "on", friendly_name="Enrichmarker")]
+        states=[
+            FakeState(
+                "light.enrichmarker",
+                "on",
+                friendly_name="Enrichmarker",
+                **({"group_entities": members} if members is not None else {}),
+            )
+        ]
     )
     return wsapi._do_search(
         hass,
@@ -374,8 +386,32 @@ def _enrichment_component_result(monkeypatch):
             "include_config": False,
             "limit": 10,
             "offset": 0,
+            **(
+                {"result_fields": ["is_group", "member_entity_ids"]}
+                if membership
+                else {}
+            ),
         },
     )
+
+
+def test_component_skips_membership_work_by_default(monkeypatch) -> None:
+    """The default component path pays no membership-normalization cost."""
+    original = wsapi._normalize_member_entity_ids
+    calls: list[object] = []
+
+    def tracking_normalizer(attributes):
+        calls.append(attributes)
+        return original(attributes)
+
+    monkeypatch.setattr(wsapi, "_normalize_member_entity_ids", tracking_normalizer)
+    default = _enrichment_component_result(monkeypatch)
+    assert calls == []
+    assert "is_group" not in default["entities"][0]
+
+    requested = _enrichment_component_result(monkeypatch, membership=True)
+    assert len(calls) == 1
+    assert requested["entities"][0]["is_group"] is True
 
 
 def test_result_fields_default_shape_unchanged(monkeypatch) -> None:
@@ -401,6 +437,96 @@ def test_result_fields_enrichment_additive(monkeypatch) -> None:
         "labels": ["Favorites"],
         "aliases": ["desk"],
     }
+
+
+def test_result_fields_membership_additive(monkeypatch) -> None:
+    """Explicit HA membership is generic, deterministic, and opt-in."""
+    result = _enrichment_component_result(monkeypatch, membership=True)
+    shaped = _shape_component_search_response(
+        _resolved_result_fields(["entity_id", "is_group", "member_entity_ids"]),
+        result,
+    )
+    assert shaped["entities"][0] == {
+        "entity_id": "light.enrichmarker",
+        "is_group": True,
+        "member_entity_ids": ["light.one", "light.two"],
+    }
+
+
+def test_result_fields_leaf_omits_member_ids(monkeypatch) -> None:
+    """Leaf records use is_group=False; absence is not rewritten to null."""
+    result = _enrichment_component_result(monkeypatch, membership=True, members=None)
+    shaped = _shape_component_search_response(
+        _resolved_result_fields(["entity_id", "is_group", "member_entity_ids"]),
+        result,
+    )
+    assert shaped["entities"][0] == {
+        "entity_id": "light.enrichmarker",
+        "is_group": False,
+    }
+
+
+def test_result_fields_empty_group_is_explicit(monkeypatch) -> None:
+    """An explicitly empty collection remains distinguishable from a leaf."""
+    result = _enrichment_component_result(monkeypatch, membership=True, members=[])
+    shaped = _shape_component_search_response(
+        _resolved_result_fields(["entity_id", "is_group", "member_entity_ids"]),
+        result,
+    )
+    assert shaped["entities"][0] == {
+        "entity_id": "light.enrichmarker",
+        "is_group": True,
+        "member_entity_ids": [],
+    }
+
+
+def test_result_fields_membership_keys_are_independently_projectable(
+    monkeypatch,
+) -> None:
+    """Callers pay only for the membership signal they request."""
+    result = _enrichment_component_result(monkeypatch, membership=True)
+    is_group = _shape_component_search_response(
+        _resolved_result_fields(["entity_id", "is_group"]), result
+    )
+    members = _shape_component_search_response(
+        _resolved_result_fields(["entity_id", "member_entity_ids"]), result
+    )
+    assert is_group["entities"][0] == {
+        "entity_id": "light.enrichmarker",
+        "is_group": True,
+    }
+    assert members["entities"][0] == {
+        "entity_id": "light.enrichmarker",
+        "member_entity_ids": ["light.one", "light.two"],
+    }
+
+
+def test_component_member_redaction_covers_visibility_and_hidden_registry() -> None:
+    """Member IDs honor both hard visibility and include_hidden=False."""
+    view = make_view(
+        entity={
+            "light.hidden": FakeRegEntry("light.hidden", hidden_by="user"),
+            "light.denied": FakeRegEntry("light.denied"),
+        }
+    )
+    visibility_record = {
+        "is_group": True,
+        "member_entity_ids": ["light.denied", "light.visible"],
+    }
+    hidden_record = {
+        "is_group": True,
+        "member_entity_ids": ["light.hidden", "light.visible"],
+    }
+
+    wsapi._redact_hidden_members(
+        [visibility_record], {"light.denied"}, view=view, include_hidden=True
+    )
+    wsapi._redact_hidden_members(
+        [hidden_record], set(), view=view, include_hidden=False
+    )
+
+    assert visibility_record == {"is_group": True}
+    assert hidden_record == {"is_group": True}
 
 
 def test_envelope_matches_legacy_keys(monkeypatch) -> None:
