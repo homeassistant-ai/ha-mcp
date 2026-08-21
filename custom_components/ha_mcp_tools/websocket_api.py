@@ -654,6 +654,7 @@ def _visibility_param_schema() -> Any:
 
 
 def _search_schema() -> dict[Any, Any]:
+    """Build the schema for search WebSocket requests."""
     return {
         vol.Required("type"): WS_SEARCH,
         vol.Optional("query"): vol.Any(str, None),
@@ -1592,6 +1593,7 @@ def _normalize_member_entity_ids(attributes: Any) -> list[str] | None:
 
 
 def _is_entity_id(value: Any) -> bool:
+    """Return whether a value has the Home Assistant entity ID shape."""
     if not isinstance(value, str) or value.count(".") != 1:
         return False
     domain, object_id = value.split(".", 1)

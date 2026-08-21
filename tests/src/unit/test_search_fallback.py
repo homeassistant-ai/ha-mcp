@@ -104,6 +104,7 @@ class TestExactMatchSearch:
 
         class HiddenMemberClient(MockClient):
             async def send_websocket_message(self, payload: dict) -> dict:
+                """Return visibility metadata that hides one group member."""
                 return {
                     "success": True,
                     "result": [

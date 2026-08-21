@@ -402,6 +402,7 @@ def test_component_skips_membership_work_by_default(monkeypatch) -> None:
     calls: list[object] = []
 
     def tracking_normalizer(attributes):
+        """Record attributes passed through the shared membership normalizer."""
         calls.append(attributes)
         return original(attributes)
 
