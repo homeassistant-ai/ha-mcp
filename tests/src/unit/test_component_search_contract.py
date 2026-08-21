@@ -35,6 +35,7 @@ from ha_mcp.tools.tools_search import (
     _ResolvedSearch,
     _shape_component_search_response,
 )
+from ha_mcp.utils.entity_membership import normalize_member_entity_ids
 
 from .test_component_ws_search import (
     FakeArea,
@@ -412,6 +413,18 @@ def test_component_skips_membership_work_by_default(monkeypatch) -> None:
     requested = _enrichment_component_result(monkeypatch, membership=True)
     assert len(calls) == 1
     assert requested["entities"][0]["is_group"] is True
+
+
+def test_membership_normalizers_share_malformed_modern_fallback_semantics() -> None:
+    """Both deployment artifacts reject malformed modern data before fallback."""
+    attributes = {
+        "group_entities": ["light.valid", "not-an-entity"],
+        "entity_id": ["light.legacy_two", "light.legacy_one"],
+    }
+    expected = ["light.legacy_one", "light.legacy_two"]
+
+    assert normalize_member_entity_ids(attributes) == expected
+    assert wsapi._normalize_member_entity_ids(attributes) == expected
 
 
 def test_result_fields_default_shape_unchanged(monkeypatch) -> None:
