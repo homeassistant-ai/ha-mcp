@@ -451,6 +451,18 @@ class TestRequirementForcesConflict:
         assert not requirement_forces_conflict("mcp>=1.0.dev1", excluded_dev)
         assert requirement_forces_conflict("mcp==1.0.dev1", excluded_dev)
 
+    def test_direct_url_requirement_stays_attributable(self):
+        """Codex on #2245: a URL reference reinstalls its artifact on every
+        setup and its version cannot be inspected — never acquit it as a
+        bare name, but an inactive marker still proves innocence first."""
+        assert requirement_forces_conflict(
+            "mcp @ https://host.invalid/mcp-1.14.1.whl", self._VIOLATION
+        )
+        assert not requirement_forces_conflict(
+            'mcp @ https://host.invalid/mcp-1.14.1.whl ; python_version < "3"',
+            self._VIOLATION,
+        )
+
     def test_missing_package_judged_by_probes_alone(self):
         missing = DependencyViolation(
             package="mcp",

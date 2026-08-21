@@ -2090,6 +2090,24 @@ class TestAuditDistName:
         monkeypatch.setattr(es, "_dist_installed", lambda name: True)
         assert mgr._audit_dist_name() == DIST_NAME_STABLE
 
+    def test_bare_url_override_prefers_the_installed_known_dist(
+        self, tmp_path, monkeypatch
+    ):
+        """A dev wheel URL installs ha-mcp-dev; audit what is actually there.
+
+        Hardcoding stable for every bare URL would report a phantom missing
+        ha-mcp on each healthy bring-up of such an install (Codex on #2245).
+        """
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={
+                OPT_CHANNEL: CHANNEL_DEV,
+                OPT_PIP_SPEC: "https://example.invalid/ha-mcp-dev.whl",
+            },
+        )
+        monkeypatch.setattr(es, "_dist_installed", lambda name: name == DIST_NAME_DEV)
+        assert mgr._audit_dist_name() == DIST_NAME_DEV
+
     def test_named_url_override_audits_its_own_distribution(
         self, tmp_path, monkeypatch
     ):

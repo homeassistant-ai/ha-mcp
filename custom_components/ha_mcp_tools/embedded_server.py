@@ -1336,7 +1336,20 @@ class EmbeddedServerManager:
         if self._pip_spec_override:
             named = _override_dist_name(self._pip_spec)
             if named is None and _spec_names_no_distribution(self._pip_spec):
-                named = DIST_NAME_STABLE
+                # A bare URL names nothing: prefer stable (a repository
+                # tarball installs as ha-mcp on every channel) but accept
+                # whichever known distribution actually has metadata — a
+                # dev wheel URL installs ha-mcp-dev, and auditing the
+                # absent stable would report a phantom missing root on
+                # every healthy bring-up (Codex on #2245).
+                named = next(
+                    (
+                        dist
+                        for dist in (DIST_NAME_STABLE, DIST_NAME_DEV)
+                        if _dist_installed(dist)
+                    ),
+                    DIST_NAME_STABLE,
+                )
             if named is not None:
                 return named
         preferred = dist_for_channel(self._channel)

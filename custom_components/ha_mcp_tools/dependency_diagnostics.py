@@ -257,6 +257,12 @@ def requirement_forces_conflict(
         return True
     if _marker_inactive(parsed.marker):
         return False
+    if parsed.url is not None:
+        # A direct reference reinstalls its artifact on every setup (HA's
+        # is-installed check answers False for any URL requirement), and the
+        # artifact's version cannot be inspected here — conservatively
+        # attributable, never acquitted as a bare name.
+        return True
     if not list(parsed.specifier):
         return False
     if violation.installed is not None:
@@ -554,11 +560,17 @@ def _violation_sentence(violation: DependencyViolation) -> str:
 
 
 def _pinner_sentence(pinner: PinningIntegration) -> str:
-    """One sentence naming a pinning integration and why the pin keeps coming back."""
+    """One sentence naming a pinning integration and why the pin keeps coming back.
+
+    "Whenever ... is set up" rather than "at every startup": the manifest
+    scan is directory-wide, and a dormant integration's requirement is only
+    enforced once something sets it up — the softer claim is truthful for
+    both the configured culprit and a leftover directory.
+    """
     return (
         f"The custom integration '{pinner.name}' ({pinner.domain}) pins "
-        f"'{pinner.requirement}' in its manifest and Home Assistant reinstalls "
-        f"that version at every startup."
+        f"'{pinner.requirement}' in its manifest, and Home Assistant "
+        f"reinstalls that requirement whenever the integration is set up."
     )
 
 
@@ -568,9 +580,16 @@ def _action_sentence(
     """The closing instruction, scaled to how much the diagnosis identified."""
     if pinners:
         subject = "integration" if len(pinners) == 1 else "integrations"
+        # The reinstall clause is load-bearing on the no-install fast path
+        # (a pinned server spec, or auto-update off): removing the
+        # integration deletes its pin but restores nothing, and the next
+        # bring-up re-resolves no dependencies (Codex on #2245).
         return (
             f"Update or uninstall the conflicting {subject}, then restart "
-            "Home Assistant."
+            "Home Assistant. If the same failure returns after the restart, "
+            "also reinstall or update the HA-MCP server package so its "
+            "dependencies are resolved again — removing the integration "
+            "does not restore the downgraded package by itself."
         )
     if violations:
         return (
