@@ -401,3 +401,73 @@ class TestWsCommandEscapeHatch:
             evaluate("ha_call_service", {"ws_command": "repairs/ignore_issue"}, p)
             == Verdict.REQUIRE_APPROVAL
         )
+
+
+class TestBulkSelectorFailSafe:
+    """Structural selectors cannot bypass operation-shaped approval rules."""
+
+    def test_operations_rule_force_gates_selector(self):
+        """A selector is gated when its eventual leaves cannot be inspected yet."""
+        policy = Policy(
+            rules=[
+                Rule(
+                    tool_name="ha_bulk_control",
+                    when=[
+                        Predicate(
+                            path="args.operations.*.entity_id",
+                            op="regex",
+                            value=r"^lock\\.",
+                        )
+                    ],
+                )
+            ]
+        )
+
+        assert (
+            evaluate(
+                "ha_bulk_control",
+                {"selector": {"domain": "light", "area_ids": ["salon"]}},
+                policy,
+            )
+            == Verdict.REQUIRE_APPROVAL
+        )
+
+    def test_selector_remains_allowed_without_applicable_rules(self):
+        """Unrelated or absent rules preserve the policy engine's allow default."""
+        selector_args = {"selector": {"domain": "light", "area_ids": ["salon"]}}
+
+        assert evaluate("ha_bulk_control", selector_args, Policy()) == Verdict.ALLOW
+        assert (
+            evaluate(
+                "ha_bulk_control",
+                selector_args,
+                Policy(rules=[Rule(tool_name="ha_config_set_dashboard")]),
+            )
+            == Verdict.ALLOW
+        )
+
+    def test_operations_calls_keep_normal_predicate_semantics(self):
+        """The selector fail-safe does not broaden ordinary operations calls."""
+        policy = Policy(
+            rules=[
+                Rule(
+                    tool_name="ha_bulk_control",
+                    when=[
+                        Predicate(
+                            path="args.operations.*.entity_id",
+                            op="regex",
+                            value=r"^lock\\.",
+                        )
+                    ],
+                )
+            ]
+        )
+
+        assert (
+            evaluate(
+                "ha_bulk_control",
+                {"operations": [{"entity_id": "light.sofa", "action": "off"}]},
+                policy,
+            )
+            == Verdict.ALLOW
+        )

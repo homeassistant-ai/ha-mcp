@@ -2988,20 +2988,41 @@
   {
     "name": "ha_bulk_control",
     "title": "Bulk Control",
-    "description": "Manage multiple entity actions in one request.\n\nWhen NOT to use: use ``ha_call_service`` for one service call targeting a\ngroup or for service-specific payloads that do not fit device actions.\n\nUse this when one request should apply actions to multiple independent\nentities. Optional item parameters carry brightness, temperature, position,\nor other action data.\n\nCaveats: put every target in ``operations`` and call the tool once. Parallel\nexecution is the default, and invalid items are reported without aborting\nvalid operations in the same batch. A batch in which every item fails\nvalidation dispatches nothing and fails the call.",
+    "description": "Manage explicit operations or one deterministic structural bulk action.\n\nWhen NOT to use: use ``ha_call_service`` for service-specific payloads or\nbackend-native group targeting, and ``ha_search`` for fuzzy name discovery.\n\nUse selector mode with exact area or floor IDs when exclusions must be\napplied after recursively expanding generic aggregate membership.\n\nCaveats: selector mode resolves a frozen visible leaf set before dispatch;\nit is not transactional, so Home Assistant may still report per-leaf failures.\nSet ``dry_run`` to preview the resolved set without changing state.",
     "inputSchema": {
       "properties": {
         "operations": {
-          "type": "Annotated[list[SkipValidation[BulkControlOperation]], JSON_STRING_COERCION, Field(description=\"All entity operations to execute in this single tool call. Each item requires entity_id and action. Use action='off', not service='turn_off'; do not include domain or service. Example: [{'entity_id': 'light.hall', 'action': 'off'}, {'entity_id': 'light.cave', 'action': 'off'}]\")]"
+          "type": "Annotated[list[SkipValidation[BulkControlOperation]], JSON_STRING_COERCION, Field(description=\"Explicit entity operations. Use this or selector, never both. Each item requires exact entity_id and action. Use action='off', not service='turn_off'.\")]"
         },
         "parallel": {
           "type": "bool",
           "default": true
+        },
+        "selector": {
+          "type": "Annotated[SkipValidation[BulkControlSelector] | None, JSON_STRING_COERCION, Field(description='Optional exact structural scope using domain plus area_ids and/or floor_ids, with optional exclude_entity_ids.')]",
+          "default": null
+        },
+        "action": {
+          "type": "Annotated[str | None, Field(description='One device action applied to every resolved leaf.')]",
+          "default": null
+        },
+        "parameters": {
+          "type": "Annotated[dict[str, Any] | None, JSON_STRING_COERCION, Field(description='Optional action parameters for selector mode.')]",
+          "default": null
+        },
+        "timeout_seconds": {
+          "type": "Annotated[float | None, Field(ge=0, le=60, allow_inf_nan=False, strict=True)]",
+          "default": null
+        },
+        "validate_first": {
+          "type": "Annotated[bool, Field(strict=True)]",
+          "default": true
+        },
+        "dry_run": {
+          "type": "Annotated[bool, Field(strict=True)]",
+          "default": false
         }
-      },
-      "required": [
-        "operations"
-      ]
+      }
     },
     "annotations": {
       "openWorldHint": false,

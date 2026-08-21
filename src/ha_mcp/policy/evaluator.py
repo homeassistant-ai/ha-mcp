@@ -163,4 +163,14 @@ def evaluate(tool_name: str, args: dict[str, Any], policy: Policy) -> Verdict:
         and any(rule.tool_name in ("ha_call_service", "*") for rule in policy.rules)
     ):
         return Verdict.REQUIRE_APPROVAL
+    # Structural selectors are resolved inside the tool, after this middleware.
+    # A pre-existing rule that inspects args.operations.* therefore cannot inspect
+    # the eventual leaf targets. Fail safe whenever an operator configured any
+    # rule applicable to ha_bulk_control; selector-aware rules still match above.
+    if (
+        tool_name == "ha_bulk_control"
+        and args.get("selector") is not None
+        and any(rule.tool_name in ("ha_bulk_control", "*") for rule in policy.rules)
+    ):
+        return Verdict.REQUIRE_APPROVAL
     return Verdict.ALLOW

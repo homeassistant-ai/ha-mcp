@@ -24,6 +24,7 @@ from ..errors import (
     create_error_response,
     create_validation_error,
 )
+from .bulk_selector import BulkSelectorValidationError, resolve_bulk_selector
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -129,6 +130,77 @@ class BulkControlOperation(TypedDict):
 # outside the class body because mypy permits only field declarations there.
 BulkControlOperation.__pydantic_config__ = ConfigDict(extra="forbid")  # type: ignore[attr-defined]
 _BULK_CONTROL_OPERATION_ADAPTER = TypeAdapter(BulkControlOperation)
+
+
+class BulkControlSelector(TypedDict):
+    """Exact structural scope for one deterministic bulk action."""
+
+    domain: Annotated[
+        str,
+        Field(description="Exact Home Assistant domain, e.g. 'light'."),
+    ]
+    area_ids: NotRequired[
+        Annotated[
+            list[str],
+            Field(description="Exact Home Assistant area IDs to include."),
+        ]
+    ]
+    floor_ids: NotRequired[
+        Annotated[
+            list[str],
+            Field(description="Exact Home Assistant floor IDs to include."),
+        ]
+    ]
+    exclude_entity_ids: NotRequired[
+        Annotated[
+            list[str],
+            Field(
+                description=(
+                    "Exact entity or aggregate IDs to exclude after recursive "
+                    "membership expansion."
+                )
+            ),
+        ]
+    ]
+
+
+BulkControlSelector.__pydantic_config__ = ConfigDict(extra="forbid")  # type: ignore[attr-defined]
+
+
+def _parse_bulk_operations(operations: Any) -> list[Any]:
+    """Parse explicit bulk rows while preserving per-row runtime failures."""
+    try:
+        parsed_operations = parse_json_param(operations, "operations")
+    except ValueError as exc:
+        raise_tool_error(
+            create_validation_error(
+                f"Invalid operations parameter: {exc}",
+                parameter="operations",
+                invalid_json=True,
+            )
+        )
+    if not isinstance(parsed_operations, list):
+        raise_tool_error(
+            create_validation_error(
+                "Operations parameter must be a list",
+                parameter="operations",
+                details=f"Received type: {type(parsed_operations).__name__}",
+            )
+        )
+    operations_list: list[Any] = []
+    for index, operation in enumerate(parsed_operations):
+        try:
+            operations_list.append(
+                _BULK_CONTROL_OPERATION_ADAPTER.validate_python(operation)
+            )
+        except ValidationError as exc:
+            logger.warning(
+                "ha_bulk_control operation %d failed schema validation: %s",
+                index,
+                exc.errors(include_url=False, include_input=False),
+            )
+            operations_list.append(operation)
+    return operations_list
 
 
 class _AmbiguousDispatch:
@@ -1518,79 +1590,116 @@ class ServiceTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "All entity operations to execute in this single tool call. "
-                    "Each item requires entity_id and action. Use action='off', not "
-                    "service='turn_off'; do not include domain or service. Example: "
-                    "[{'entity_id': 'light.hall', 'action': 'off'}, "
-                    "{'entity_id': 'light.cave', 'action': 'off'}]"
+                    "Explicit entity operations. Use this or selector, never both. "
+                    "Each item requires exact entity_id and action. Use "
+                    "action='off', not service='turn_off'."
                 )
             ),
-        ],
+        ] = cast(Any, None),
         parallel: bool = True,
         ctx: Context | None = None,
+        selector: Annotated[
+            SkipValidation[BulkControlSelector] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Optional exact structural scope using domain plus area_ids "
+                    "and/or floor_ids, with optional exclude_entity_ids."
+                )
+            ),
+        ] = None,
+        action: Annotated[
+            str | None,
+            Field(description="One device action applied to every resolved leaf."),
+        ] = None,
+        parameters: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(description="Optional action parameters for selector mode."),
+        ] = None,
+        timeout_seconds: Annotated[
+            float | None,
+            Field(ge=0, le=60, allow_inf_nan=False, strict=True),
+        ] = None,
+        validate_first: Annotated[bool, Field(strict=True)] = True,
+        dry_run: Annotated[bool, Field(strict=True)] = False,
     ) -> dict[str, Any]:
-        """Manage multiple entity actions in one request.
+        """Manage explicit operations or one deterministic structural bulk action.
 
-        When NOT to use: use ``ha_call_service`` for one service call targeting a
-        group or for service-specific payloads that do not fit device actions.
+        When NOT to use: use ``ha_call_service`` for service-specific payloads or
+        backend-native group targeting, and ``ha_search`` for fuzzy name discovery.
 
-        Use this when one request should apply actions to multiple independent
-        entities. Optional item parameters carry brightness, temperature, position,
-        or other action data.
+        Use selector mode with exact area or floor IDs when exclusions must be
+        applied after recursively expanding generic aggregate membership.
 
-        Caveats: put every target in ``operations`` and call the tool once. Parallel
-        execution is the default, and invalid items are reported without aborting
-        valid operations in the same batch. A batch in which every item fails
-        validation dispatches nothing and fails the call.
+        Caveats: selector mode resolves a frozen visible leaf set before dispatch;
+        it is not transactional, so Home Assistant may still report per-leaf failures.
+        Set ``dry_run`` to preview the resolved set without changing state.
         """
-        parallel_bool = parallel
-
-        # FastMCP validates the outer list but deliberately defers item failures so
-        # one malformed row cannot abort valid operations in the same batch.
-        # parse_json_param remains a defensive passthrough for the list case.
-        try:
-            parsed_operations = parse_json_param(operations, "operations")
-        except ValueError as e:
+        if (operations is None) == (selector is None):
             raise_tool_error(
                 create_validation_error(
-                    f"Invalid operations parameter: {e}",
+                    "Provide exactly one of operations or selector",
                     parameter="operations",
-                    invalid_json=True,
                 )
             )
 
-        if not isinstance(parsed_operations, list):
-            raise_tool_error(
-                create_validation_error(
-                    "Operations parameter must be a list",
-                    parameter="operations",
-                    details=f"Received type: {type(parsed_operations).__name__}",
+        if selector is not None:
+            if action is None:
+                raise_tool_error(
+                    create_validation_error(
+                        "Selector mode requires action", parameter="action"
+                    )
                 )
-            )
-
-        operations_list: list[Any] = []
-        for index, operation in enumerate(parsed_operations):
             try:
-                operations_list.append(
-                    _BULK_CONTROL_OPERATION_ADAPTER.validate_python(operation)
+                parsed_selector = parse_json_param(
+                    cast(dict[str, Any], selector), "selector"
                 )
-            except ValidationError as exc:
-                # Preserve malformed rows for the runtime batch validator, which
-                # reports them in skipped_details instead of rejecting the call.
-                # The schema's reason is richer than the runtime validator's and
-                # is the only place it survives, so log it here.
-                # include_input=False: a malformed row can carry sensitive
-                # values (lock or alarm codes in a mistyped field), and
-                # str(exc) would write them to persistent server logs.
-                logger.warning(
-                    "ha_bulk_control operation %d failed schema validation: %s",
-                    index,
-                    exc.errors(include_url=False, include_input=False),
+                if not isinstance(parsed_selector, dict):
+                    raise BulkSelectorValidationError("selector must be a JSON object")
+                resolution = await resolve_bulk_selector(
+                    self._client,
+                    parsed_selector,
+                    action=action,
+                    parameters=parameters,
+                    timeout_seconds=timeout_seconds,
+                    validate_first=validate_first,
                 )
-                operations_list.append(operation)
+            except (ValueError, BulkSelectorValidationError) as exc:
+                parameter = getattr(exc, "parameter", "selector")
+                raise_tool_error(create_validation_error(str(exc), parameter=parameter))
+            if dry_run:
+                return {
+                    "success": True,
+                    "dry_run": True,
+                    "dispatched": False,
+                    "resolution": resolution.summary(),
+                }
+            result = await self._device_tools.bulk_device_control(
+                operations=resolution.operations,
+                parallel=parallel,
+                ctx=ctx,
+            )
+            response = cast(dict[str, Any], result)
+            response["resolution"] = resolution.summary()
+            return response
+
+        if (
+            any(value is not None for value in (action, parameters, timeout_seconds))
+            or validate_first is not True
+            or dry_run
+        ):
+            raise_tool_error(
+                create_validation_error(
+                    "Selector-only parameters require selector mode",
+                    parameter="selector",
+                )
+            )
+
+        operations_list = _parse_bulk_operations(operations)
 
         result = await self._device_tools.bulk_device_control(
-            operations=operations_list, parallel=parallel_bool, ctx=ctx
+            operations=operations_list, parallel=parallel, ctx=ctx
         )
         return cast(dict[str, Any], result)
 

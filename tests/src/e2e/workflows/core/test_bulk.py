@@ -9,6 +9,7 @@ each containing 'entity_id' and 'action' keys.
 """
 
 import logging
+from uuid import uuid4
 
 import pytest
 
@@ -44,6 +45,57 @@ def _extract_bulk_boolean_entity_id(data: dict) -> str | None:
 @pytest.mark.core
 class TestBulkControl:
     """Test ha_bulk_control tool functionality."""
+
+    async def test_selector_dry_run_resolves_area_and_exclusion(
+        self, mcp_client, cleanup_tracker
+    ):
+        """Preview exact area leaves after applying an entity exclusion."""
+        suffix = uuid4().hex[:8]
+        area_result = await mcp_client.call_tool(
+            "ha_set_area_or_floor",
+            {"kind": "area", "name": f"Bulk selector {suffix}"},
+        )
+        area_data = assert_mcp_success(area_result, "Create selector area")
+        area_id = area_data["area_id"]
+        cleanup_tracker.track("area", area_id)
+
+        entity_ids = []
+        for label in ("included", "excluded"):
+            create_result = await mcp_client.call_tool(
+                "ha_config_set_helper",
+                {
+                    "helper_type": "input_boolean",
+                    "name": f"Bulk selector {label} {suffix}",
+                },
+            )
+            create_data = assert_mcp_success(create_result, "Create selector helper")
+            entity_id = _extract_bulk_boolean_entity_id(create_data)
+            assert entity_id, f"Missing helper entity_id: {create_data}"
+            cleanup_tracker.track("input_boolean", entity_id)
+            entity_ids.append(entity_id)
+            assign_result = await mcp_client.call_tool(
+                "ha_set_entity", {"entity_id": entity_id, "area_id": area_id}
+            )
+            assert_mcp_success(assign_result, "Assign selector helper to area")
+
+        result = await mcp_client.call_tool(
+            "ha_bulk_control",
+            {
+                "selector": {
+                    "domain": "input_boolean",
+                    "area_ids": [area_id],
+                    "exclude_entity_ids": [entity_ids[1]],
+                },
+                "action": "off",
+                "dry_run": True,
+            },
+        )
+        data = assert_mcp_success(result, "Preview structural bulk selection")
+
+        assert data["dry_run"] is True
+        assert data["dispatched"] is False
+        assert data["resolution"]["resolved_entity_ids"] == [entity_ids[0]]
+        assert data["resolution"]["excluded_entity_ids"] == [entity_ids[1]]
 
     async def test_bulk_turn_on_single_light(self, mcp_client, test_light_entity):
         """Test bulk_control with a single light entity."""
