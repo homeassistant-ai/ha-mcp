@@ -2078,7 +2078,9 @@ class TestReadinessProbe:
         mgr, hass, _entry = _manager(tmp_path)
         hass.loop.time = MagicMock(return_value=0.0)
         mgr._thread_exc = RuntimeError("bind failed")
-        with pytest.raises(es.EmbeddedServerError, match="failed to start"):
+        # _worker_startup_failure wraps a non-EmbeddedServerError crash; the
+        # "failed to start" prefix moved to embedded_setup's log line (#2239).
+        with pytest.raises(es.EmbeddedServerError, match="worker thread crashed"):
             await mgr._async_wait_until_ready()
 
     async def test_wait_ready_raises_when_thread_exited(self, tmp_path):
