@@ -91,15 +91,19 @@ _SKIP_CEILING_PER_LANE = {
     # deliberately adds one collection-time skip on every other lane — via
     # haos_tls on the HAOS lanes, and via haos_only on container/embedded,
     # which already skip its directory.
+    # #2239's dependency-conflict scenario
+    # (tests/src/e2e/workflows/embedded/test_embedded_dependency_conflict.py)
+    # is ``container_only``: its 3 tests RUN on the container and embedded
+    # lanes and SKIP on all four HAOS lanes, so those four each gain 3.
     "container": 75,
-    "haos": 50,
+    "haos": 53,
     # HAOS stdio is the external HAOS set plus ``external_only`` tests, whose
     # test-process monkeypatches cannot reach the subprocess server. The first
     # full lane run on 2026-08-18 observed 103 collection-time marker skips
     # (plus 9 runtime skips); keep the same five-item buffer as established
-    # lanes (108), +1 #2241 haos_tls scenario.
-    "haos_stdio": 109,
-    "haos_inaddon": 78,
+    # lanes (108), +1 #2241 haos_tls scenario, +3 #2239 dependency conflict.
+    "haos_stdio": 112,
+    "haos_inaddon": 81,
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
     # lane's marker-skips PLUS two embedded-specific additions:
     #   - haos_only + inaddon_only tests skip on embedded just like on container
@@ -132,7 +136,7 @@ _SKIP_CEILING_PER_LANE = {
     # container_only). Parametrize inflates that to the CI-observed count of
     # 107 in the 2026-08-18 CI run (106 before the self-restart e2e).
     # Read future changes from CI instead of deriving them.
-    "haos_embedded": 108,  # was 107; +1 visibility e2e (haos_stdio_only)
+    "haos_embedded": 111,  # was 108; +3 #2239 dependency conflict (container_only)
 }
 
 
