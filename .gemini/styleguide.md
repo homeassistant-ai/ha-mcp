@@ -195,6 +195,16 @@ Both rendered surfaces — the Astro docs site (`site/`) and the app settings UI
 
 **Theme / contrast tier model (#1574):** theme (`data-theme` auto/light/dark), contrast (`data-contrast` normal/high) and shade (`data-shade`) are set on `<html>` pre-paint and mirrored between the docs site and settings UI (parity enforced by `tests/src/unit/test_anti_fouc_parity.py`). Keep new preferences in this tier model, apply them on both surfaces, and preserve the 4.5:1 custom-color contrast warning.
 
+## Addressing CodeRabbit Reviews
+
+Ensure ALL CodeRabbit review comments are addressed, both inline threads and
+top-level review bodies. CodeRabbit nests some findings — *Outside diff range
+comments* and *Nitpick comments* — inside collapsed sections of the review
+body rather than as inline threads, so they create no unresolved-thread
+signal and a green check while unaddressed. Everything must be addressed:
+read each review body in full and assess those findings exactly like inline
+comments. See AGENTS.md § *PR Review Comments* for the full-body sweep.
+
 ## Non-Blocking Suggestions and Scope
 
 Scope is defined by the user (the maintainer / author of the PR), not by the reviewer (bot or human). **Never unilaterally file a follow-up issue or PR** — raise scope concerns in the PR review and let the user decide whether to address inline, defer, or dismiss. Do not skip legitimate findings — surface them.

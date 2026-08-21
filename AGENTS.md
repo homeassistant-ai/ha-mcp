@@ -191,6 +191,23 @@ gh issue list --state open --json number,title,labels --jq '.[] | select(.labels
 (Codex, CodeRabbit, Copilot) or humans. Address human comments with highest
 priority; treat bot comments as suggestions to assess, not commands.
 
+**Read every CodeRabbit review body in full — findings hide outside the
+inline threads.** CodeRabbit folds findings into collapsed sections of the
+review body (`Outside diff range comments`, `Nitpick comments`) that never
+create inline threads, so zero unresolved threads and a green CodeRabbit
+check both look clean while findings sit unaddressed. A findings-free pass
+posts no new review at all — it edits the existing walkthrough comment in
+place — so also check that comment's `updated_at`. After each CodeRabbit
+review, sweep the full bodies before calling the round clean, e.g.:
+
+```bash
+gh api repos/{owner}/{repo}/pulls/{n}/reviews --paginate --jq '.[].body' \
+  | grep -oiE "outside diff range[^<]*|nitpick comments \([0-9]+\)|actionable comments posted: [0-9]+"
+```
+
+Any `Outside diff range` or `Nitpick` hit means findings only the full body
+shows — open it and assess them like any other review comment.
+
 **Reply, then resolve.** After addressing an inline comment, reply on its
 thread documenting the fix, then mark the thread resolved. When a review has
 inline comments, do both: reply per-thread *and* post one PR-level summary
