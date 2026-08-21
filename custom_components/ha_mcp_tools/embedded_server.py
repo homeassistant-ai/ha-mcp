@@ -91,6 +91,7 @@ from .dependency_diagnostics import (
     audit_dependency_graph,
     describe_dependency_failure,
     find_pinning_integrations,
+    requirement_forces_conflict,
     root_import_failure,
 )
 
@@ -1314,13 +1315,18 @@ class EmbeddedServerManager:
     def _audit_dist_name(self) -> str:
         """Distribution whose requirement graph the audit walks (blocking).
 
-        The configured channel's distribution, falling back to the other
-        channel's when only that one has metadata: a pip-spec override installs
-        whichever distribution its requirement names, regardless of the channel
-        selector, and auditing a root that is not installed reports that root
-        as the only violation instead of the real conflict.
+        The distribution the EFFECTIVE spec installs by name
+        (:meth:`_replaced_dist_name` — an override pin on ``ha-mcp`` names
+        the stable distribution whatever the channel selector says), then
+        the channel's, then whichever of the two has metadata at all: an
+        override install skips the conflicting-channel removal, so stale
+        metadata for the unselected distribution can coexist with the one
+        actually running, and auditing the stale graph would miss the real
+        conflict. A root that is not installed at all would likewise be
+        reported as the only violation instead of the real conflict.
         """
-        preferred = dist_for_channel(self._channel)
+        named = self._replaced_dist_name()
+        preferred = named or dist_for_channel(self._channel)
         if _dist_installed(preferred):
             return preferred
         other = DIST_NAME_STABLE if preferred == DIST_NAME_DEV else DIST_NAME_DEV
@@ -1329,16 +1335,29 @@ class EmbeddedServerManager:
     def _pinning_integrations(
         self, violations: list[DependencyViolation]
     ) -> list[PinningIntegration]:
-        """Find the custom integrations pinning each violating package (blocking).
+        """Find the custom integrations forcing each violation (blocking).
 
-        This component's own domain is excluded: it declares the server
-        requirement legitimately and is never the pin to remove.
+        The manifest scan matches by package name; the
+        :func:`requirement_forces_conflict` filter then drops integrations
+        whose requirement is compatible with what the violated specifier
+        needs — naming those would send the user to uninstall an innocent
+        integration. This component's own domain is excluded outright: it
+        declares the server requirement legitimately and is never the pin
+        to remove.
         """
         pinners: list[PinningIntegration] = []
-        for package in dict.fromkeys(violation.package for violation in violations):
+        by_package: dict[str, list[DependencyViolation]] = {}
+        for violation in violations:
+            by_package.setdefault(violation.package, []).append(violation)
+        for package, package_violations in by_package.items():
             pinners.extend(
-                find_pinning_integrations(
+                pinner
+                for pinner in find_pinning_integrations(
                     self._hass_config_dir, package, exclude_domains=(DOMAIN,)
+                )
+                if any(
+                    requirement_forces_conflict(pinner.requirement, violation)
+                    for violation in package_violations
                 )
             )
         return pinners

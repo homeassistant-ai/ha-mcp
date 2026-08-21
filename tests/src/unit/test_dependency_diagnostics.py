@@ -35,6 +35,7 @@ from custom_components.ha_mcp_tools.dependency_diagnostics import (  # noqa: E40
     audit_dependency_graph,
     describe_dependency_failure,
     find_pinning_integrations,
+    requirement_forces_conflict,
     root_import_failure,
 )
 
@@ -299,6 +300,72 @@ class TestFindPinningIntegrations:
     def test_missing_custom_components_directory_is_tolerated(self, tmp_path):
         assert find_pinning_integrations(str(tmp_path / "nowhere"), "mcp") == []
         assert find_pinning_integrations(str(tmp_path), "mcp") == []
+
+
+class TestRequirementForcesConflict:
+    """Only requirements that can actually force the violation count as pinners."""
+
+    _VIOLATION = DependencyViolation(
+        package="mcp",
+        installed=_PINNED_MCP,
+        requirement=_FASTMCP_FLOOR,
+        required_by="fastmcp-slim 3.4.6",
+    )
+
+    def test_the_incident_pin_forces_it(self):
+        assert requirement_forces_conflict(f"mcp=={_PINNED_MCP}", self._VIOLATION)
+
+    def test_a_compatible_floor_is_innocent(self):
+        """The Codex-review case: ``mcp>=1`` admits compliant versions.
+
+        Home Assistant never reinstalls a requirement the installed version
+        already satisfies, so this integration cannot downgrade anything —
+        blaming it points the user at the wrong uninstall.
+        """
+        assert not requirement_forces_conflict("mcp>=1", self._VIOLATION)
+
+    def test_an_upper_bound_below_the_floor_forces_it(self):
+        assert requirement_forces_conflict("mcp<1.20", self._VIOLATION)
+
+    def test_a_bare_name_is_innocent(self):
+        assert not requirement_forces_conflict("mcp", self._VIOLATION)
+
+    def test_a_pin_that_never_admitted_the_installed_version_is_innocent(self):
+        """A pin on a COMPLIANT version cannot have produced the bad state."""
+        assert not requirement_forces_conflict("mcp==1.26.0", self._VIOLATION)
+
+    def test_unparseable_requirement_stays_reported(self):
+        assert requirement_forces_conflict("!!!", self._VIOLATION)
+
+    def test_unprobeable_violated_spec_keeps_the_report(self):
+        """An upper-bound-only violated spec yields no probe: stay conservative."""
+        upper_only = DependencyViolation(
+            package="mcp",
+            installed=_PINNED_MCP,
+            requirement="mcp<1.0",
+            required_by="something 1.0",
+        )
+        assert requirement_forces_conflict(f"mcp=={_PINNED_MCP}", upper_only)
+
+    def test_wildcard_floor_still_probes(self):
+        wildcard = DependencyViolation(
+            package="mcp",
+            installed="1.9.0",
+            requirement="mcp==1.24.*",
+            required_by="something 1.0",
+        )
+        assert not requirement_forces_conflict("mcp>=1", wildcard)
+        assert requirement_forces_conflict("mcp==1.9.0", wildcard)
+
+    def test_missing_package_judged_by_probes_alone(self):
+        missing = DependencyViolation(
+            package="mcp",
+            installed=None,
+            requirement=_FASTMCP_FLOOR,
+            required_by="fastmcp-slim 3.4.6",
+        )
+        assert not requirement_forces_conflict("mcp>=1", missing)
+        assert requirement_forces_conflict(f"mcp=={_PINNED_MCP}", missing)
 
 
 class TestRootImportFailure:

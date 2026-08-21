@@ -176,7 +176,9 @@ def find_pinning_integrations(
     Matching is on the canonicalized project name, so ``Mcp == 1.14.1`` and
     ``mcp[cli]==1.14.1`` are found for ``package="mcp"``. Every requirement on
     the package is reported, not only exact pins: a range that excludes the
-    version we need conflicts just as effectively.
+    version we need conflicts just as effectively. This is the raw scan —
+    callers attributing a concrete violation drop the innocent matches with
+    :func:`requirement_forces_conflict`.
 
     ``exclude_domains`` drops known-innocent domains — this component's own,
     above all, which legitimately declares the same dependency.
@@ -220,6 +222,78 @@ def find_pinning_integrations(
                 )
             )
     return pinners
+
+
+def requirement_forces_conflict(
+    requirement: str, violation: DependencyViolation
+) -> bool:
+    """Whether enforcing ``requirement`` can produce or preserve ``violation``.
+
+    Home Assistant reinstalls a manifest requirement only when the installed
+    version does not satisfy it, so an integration whose requirement admits
+    the versions the violated specifier needs never forces the conflict —
+    blaming it sends the user to uninstall the wrong integration. Two
+    innocence proofs, either sufficient:
+
+    * the requirement did not admit the violating installed version, so it
+      cannot have produced this state, or
+    * the requirement also admits every compliance probe (the version
+      literals a compliant install could sit at, read from the violated
+      specifier's own lower-bound clauses), so enforcing it never moves a
+      compliant install.
+
+    Unjudgeable inputs — an unparseable requirement, a violated specifier
+    with no probeable clause — count as forcing: a culprit hidden by a parse
+    gap is worse than one report too many, which the user can dismiss.
+    A bare name with no specifier is always innocent; it is satisfied by
+    whatever is installed.
+    """
+    try:
+        parsed = Requirement(requirement)
+    except InvalidRequirement:
+        return True
+    if not list(parsed.specifier):
+        return False
+    if violation.installed is not None:
+        try:
+            Version(violation.installed)
+        except InvalidVersion:
+            pass
+        else:
+            if not parsed.specifier.contains(violation.installed, prereleases=True):
+                return False
+    probes = _compliance_probes(violation.requirement)
+    if not probes:
+        return True
+    return not all(
+        parsed.specifier.contains(probe, prereleases=True) for probe in probes
+    )
+
+
+def _compliance_probes(violated: str) -> list[str]:
+    """Version literals a compliant install could sit at, read from ``violated``.
+
+    The lower-bound-ish clauses (``>=``, ``==``, ``===``, ``~=``, ``>``) name
+    the versions the dependent actually needs; upper bounds only exclude. A
+    wildcard pin's trailing ``.*`` is stripped so the probe parses as a
+    version. Probing the ``>`` bound itself is a deliberate approximation —
+    a requirement that admits the bound admits its neighborhood.
+    """
+    try:
+        specifier = Requirement(violated).specifier
+    except InvalidRequirement:
+        return []
+    probes: list[str] = []
+    for clause in specifier:
+        if clause.operator not in (">=", "==", "===", "~=", ">"):
+            continue
+        candidate = clause.version.rstrip(".*").rstrip(".")
+        try:
+            Version(candidate)
+        except InvalidVersion:
+            continue
+        probes.append(candidate)
+    return probes
 
 
 def root_import_failure(exc: BaseException) -> BaseException:

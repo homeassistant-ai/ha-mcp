@@ -2052,6 +2052,39 @@ class TestRevokeCredentials:
 # ---------------------------------------------------------------------------
 
 
+class TestAuditDistName:
+    """The dependency audit walks the graph of the dist actually installed."""
+
+    def test_override_names_the_audit_root_over_the_channel(
+        self, tmp_path, monkeypatch
+    ):
+        """Dev channel + a stable-dist override: audit the override's dist.
+
+        An override install skips the conflicting-channel removal, so stale
+        ``ha-mcp-dev`` metadata can coexist with the ``ha-mcp`` the override
+        just installed — the channel preference would then audit the stale
+        graph (Codex review on #2245).
+        """
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV, OPT_PIP_SPEC: "ha-mcp==9.9.9"},
+        )
+        monkeypatch.setattr(es, "_dist_installed", lambda name: True)
+        assert mgr._audit_dist_name() == DIST_NAME_STABLE
+
+    def test_channel_dist_wins_without_an_override(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path, options={OPT_CHANNEL: CHANNEL_DEV})
+        monkeypatch.setattr(es, "_dist_installed", lambda name: True)
+        assert mgr._audit_dist_name() == DIST_NAME_DEV
+
+    def test_falls_back_to_the_installed_dist(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path, options={OPT_CHANNEL: CHANNEL_DEV})
+        monkeypatch.setattr(
+            es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
+        )
+        assert mgr._audit_dist_name() == DIST_NAME_STABLE
+
+
 class TestReadinessProbe:
     async def test_probe_port_true_on_connect(self, tmp_path, monkeypatch):
         mgr, _hass, _entry = _manager(tmp_path)
