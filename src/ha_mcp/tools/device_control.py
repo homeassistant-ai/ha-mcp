@@ -731,7 +731,9 @@ class DeviceControlTools:
                 )
                 continue
 
-            obsolete_keys = sorted(set(op) - _BULK_OPERATION_KEYS)
+            # str() before sorting: a direct Python caller can pass non-string
+            # keys, and mixed key types make sorted()/join() raise mid-batch.
+            obsolete_keys = sorted(str(key) for key in set(op) - _BULK_OPERATION_KEYS)
             if obsolete_keys:
                 key_list = ", ".join(obsolete_keys)
                 cls._skip_bulk_operation(

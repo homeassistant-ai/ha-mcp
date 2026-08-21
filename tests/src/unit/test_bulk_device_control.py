@@ -330,13 +330,20 @@ class TestRegisteredBulkToolCompatibility:
                         "action": "off",
                         "parameters": "[" * 50_000 + "]" * 50_000,
                     },
+                    # A direct Python caller can pass a non-string key; mixed
+                    # key types must not make sorted()/join() abort the batch.
+                    {
+                        "entity_id": "light.int_key",
+                        "action": "off",
+                        1: "x",
+                    },
                 ]
             }
         )
 
         data = result.structured_content
         assert data["successful_commands"] == 1
-        assert data["skipped_operations"] == 13
+        assert data["skipped_operations"] == 14
         assert [detail["index"] for detail in data["skipped_details"]] == [
             0,
             1,
@@ -351,6 +358,7 @@ class TestRegisteredBulkToolCompatibility:
             11,
             12,
             13,
+            14,
         ]
         messages = [detail["error"]["message"] for detail in data["skipped_details"]]
         assert any("required fields" in message for message in messages)
@@ -362,6 +370,7 @@ class TestRegisteredBulkToolCompatibility:
         assert sum("timeout_seconds" in message for message in messages) == 5
         assert sum("must be a JSON object" in message for message in messages) == 2
         assert any("nested too deeply" in message for message in messages)
+        assert any("unsupported key(s): 1" in message for message in messages)
         tools.control_device_smart.assert_awaited_once()
 
     @pytest.mark.asyncio
