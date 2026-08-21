@@ -625,7 +625,7 @@ class DeviceControlTools:
     def _normalize_bulk_parameters(
         value: Any,
     ) -> tuple[dict[str, Any] | None, ErrorCode | None, str]:
-        """Normalize optional bulk parameters and identify invalid values.
+        """Normalize a present ``parameters`` value and identify invalid ones.
 
         Returns ``(parameters, error_code, detail)``. ``detail`` carries the
         decoder's own reason and offset for a JSON failure — without it the
@@ -641,7 +641,9 @@ class DeviceControlTools:
                     ErrorCode.VALIDATION_INVALID_JSON,
                     f"{exc.msg} at position {exc.pos}",
                 )
-        if value is not None and not isinstance(value, dict):
+        if not isinstance(value, dict):
+            # A present-but-null value is malformed, same as timeout_seconds
+            # and validate_first; an absent key never reaches this helper.
             return None, ErrorCode.VALIDATION_INVALID_PARAMETER, ""
         return value, None, ""
 
@@ -715,7 +717,7 @@ class DeviceControlTools:
                 cls._skip_bulk_operation(
                     skipped_operations,
                     op,
-                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
                     f"Operation at index {i} is not a dict: {type(op).__name__}",
                     {"index": i},
                 )
@@ -761,7 +763,9 @@ class DeviceControlTools:
                 continue
 
             parameters, parameter_error, parameter_detail = (
-                cls._normalize_bulk_parameters(op.get("parameters"))
+                cls._normalize_bulk_parameters(op["parameters"])
+                if "parameters" in op
+                else (None, None, "")
             )
             if parameter_error is not None:
                 parameter_message = (

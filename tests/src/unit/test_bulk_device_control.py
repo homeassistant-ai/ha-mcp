@@ -304,6 +304,18 @@ class TestRegisteredBulkToolCompatibility:
                         "action": "off",
                         "timeout_seconds": "10",
                     },
+                    # Present-but-null parameters are malformed rows, matching
+                    # timeout_seconds and validate_first — in both spellings.
+                    {
+                        "entity_id": "light.null_parameters",
+                        "action": "off",
+                        "parameters": None,
+                    },
+                    {
+                        "entity_id": "light.json_null_parameters",
+                        "action": "off",
+                        "parameters": "null",
+                    },
                     # float() of an int this size raises OverflowError, which
                     # must skip the row rather than abort the whole batch.
                     {
@@ -317,7 +329,7 @@ class TestRegisteredBulkToolCompatibility:
 
         data = result.structured_content
         assert data["successful_commands"] == 1
-        assert data["skipped_operations"] == 10
+        assert data["skipped_operations"] == 12
         assert [detail["index"] for detail in data["skipped_details"]] == [
             0,
             1,
@@ -329,6 +341,8 @@ class TestRegisteredBulkToolCompatibility:
             8,
             9,
             10,
+            11,
+            12,
         ]
         messages = [detail["error"]["message"] for detail in data["skipped_details"]]
         assert any("required fields" in message for message in messages)
@@ -338,6 +352,7 @@ class TestRegisteredBulkToolCompatibility:
         assert "at position 1" in json_message
         assert sum("validate_first" in message for message in messages) == 3
         assert sum("timeout_seconds" in message for message in messages) == 5
+        assert sum("must be a JSON object" in message for message in messages) == 2
         tools.control_device_smart.assert_awaited_once()
 
     @pytest.mark.asyncio
