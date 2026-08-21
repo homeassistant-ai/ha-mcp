@@ -1,6 +1,7 @@
 """Unit tests for bulk_device_control validation in device_control module."""
 
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -240,6 +241,37 @@ class TestRegisteredBulkToolCompatibility:
         assert data["successful_commands"] == 1
         assert data["skipped_operations"] == 1
         assert "service" in data["skipped_details"][0]["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_schema_validation_log_redacts_input_values(self, caplog):
+        """The validation warning never writes a malformed row's values to logs."""
+        tools = DeviceControlTools(client=MagicMock())
+        tools._bulk_via_component = AsyncMock(return_value=None)
+        tools.control_device_smart = AsyncMock(
+            return_value={
+                "entity_id": "light.valid",
+                "command_sent": True,
+                "operation_id": "op-valid",
+            }
+        )
+        tool = await self._registered_tool(tools)
+
+        with caplog.at_level(logging.WARNING):
+            await tool.run(
+                {
+                    "operations": [
+                        {"entity_id": "light.valid", "action": "off"},
+                        {
+                            "entity_id": "light.alarm",
+                            "action": "off",
+                            "service_data": {"code": "SENTINEL-SECRET-1234"},
+                        },
+                    ]
+                }
+            )
+
+        assert "failed schema validation" in caplog.text
+        assert "SENTINEL-SECRET-1234" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_mixed_schema_invalid_rows_are_reported_without_aborting(self):

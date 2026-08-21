@@ -1579,10 +1579,13 @@ class ServiceTools:
                 # reports them in skipped_details instead of rejecting the call.
                 # The schema's reason is richer than the runtime validator's and
                 # is the only place it survives, so log it here.
+                # include_input=False: a malformed row can carry sensitive
+                # values (lock or alarm codes in a mistyped field), and
+                # str(exc) would write them to persistent server logs.
                 logger.warning(
                     "ha_bulk_control operation %d failed schema validation: %s",
                     index,
-                    exc,
+                    exc.errors(include_url=False, include_input=False),
                 )
                 operations_list.append(operation)
 
