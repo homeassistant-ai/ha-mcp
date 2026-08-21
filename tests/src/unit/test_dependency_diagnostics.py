@@ -394,6 +394,22 @@ class TestRequirementForcesConflict:
         assert requirement_forces_conflict("mcp==1.24", boundary)
         assert not requirement_forces_conflict("mcp>=1", boundary)
 
+    def test_floor_exclusion_still_yields_a_probe(self):
+        """CodeRabbit on #2245: ``>=1.24,!=1.24`` must not empty the probes.
+
+        The ``!=`` exclusion rejects the ``>=`` seed itself; without the
+        successor candidate the empty probe list would blame the compatible
+        ``mcp>=1`` integration.
+        """
+        excluded_floor = DependencyViolation(
+            package="mcp",
+            installed="1.24",
+            requirement="mcp>=1.24,!=1.24",
+            required_by="something 1.0",
+        )
+        assert not requirement_forces_conflict("mcp>=1", excluded_floor)
+        assert requirement_forces_conflict("mcp==1.24", excluded_floor)
+
     def test_missing_package_judged_by_probes_alone(self):
         missing = DependencyViolation(
             package="mcp",

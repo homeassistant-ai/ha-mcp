@@ -2072,6 +2072,24 @@ class TestAuditDistName:
         monkeypatch.setattr(es, "_dist_installed", lambda name: True)
         assert mgr._audit_dist_name() == DIST_NAME_STABLE
 
+    def test_bare_url_override_audits_the_stable_dist(self, tmp_path, monkeypatch):
+        """A repository tarball installs as ha-mcp whatever the channel says.
+
+        A bare URL parses as no requirement, so _replaced_dist_name() is
+        None — without the explicit stable preference, stale ha-mcp-dev
+        metadata would win the audit root on the dev channel (CodeRabbit
+        outside-diff-range finding on #2245).
+        """
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={
+                OPT_CHANNEL: CHANNEL_DEV,
+                OPT_PIP_SPEC: "https://example.invalid/ha-mcp.tar.gz",
+            },
+        )
+        monkeypatch.setattr(es, "_dist_installed", lambda name: True)
+        assert mgr._audit_dist_name() == DIST_NAME_STABLE
+
     def test_channel_dist_wins_without_an_override(self, tmp_path, monkeypatch):
         mgr, _hass, _entry = _manager(tmp_path, options={OPT_CHANNEL: CHANNEL_DEV})
         monkeypatch.setattr(es, "_dist_installed", lambda name: True)

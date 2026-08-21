@@ -294,15 +294,17 @@ def _compliance_probes(violated: str) -> list[str]:
     """Version literals a compliant install could sit at, read from ``violated``.
 
     The lower-bound-ish clauses (``>=``, ``==``, ``===``, ``~=``, ``>``) seed
-    the candidates (the version itself, plus a nearby higher one for an
-    exclusive bound); upper bounds only exclude. A wildcard pin's trailing
-    ``.*`` is stripped so the candidate parses as a version. Every candidate
-    is then checked against the FULL violated specifier before it may serve
-    as a probe: an exclusive floor's own bound does not satisfy it, and a
-    probe that violates the specifier would acquit exactly the pin that
-    preserves the conflict (CodeRabbit on #2245: probing ``>1.24`` with
-    ``1.24`` judged a ``==1.24`` pinner innocent). Candidates the specifier
-    rejects are dropped; when none survive the caller stays conservative.
+    the candidates — the version itself plus a nearby higher successor, so a
+    seed the specifier itself rejects (an exclusive ``>`` bound, a ``!=``
+    exclusion sitting on the floor) still leaves a compliant probe; upper
+    bounds only exclude. A wildcard pin's trailing ``.*`` is stripped so the
+    candidate parses as a version. Every candidate is then checked against
+    the FULL violated specifier before it may serve as a probe: a probe that
+    violates the specifier would acquit exactly the pin that preserves the
+    conflict, and an empty probe list flips the caller conservative, blaming
+    integrations that are compatible (both CodeRabbit on #2245: ``>1.24``
+    probed with ``1.24`` acquitted a ``==1.24`` pinner, and
+    ``>=1.24,!=1.24`` yielded no probe at all).
     """
     try:
         specifier = Requirement(violated).specifier
@@ -313,11 +315,9 @@ def _compliance_probes(violated: str) -> list[str]:
         if clause.operator not in (">=", "==", "===", "~=", ">"):
             continue
         base = clause.version.rstrip(".*").rstrip(".")
-        candidates.append(base)
-        if clause.operator == ">":
-            # The smallest PEP 440 step above the bound that any upper bound
-            # tighter than one release segment still admits.
-            candidates.append(base + ".0.1")
+        # The successor is the smallest PEP 440 step above the seed that an
+        # upper bound tighter than one release segment still admits.
+        candidates += [base, base + ".0.1"]
     probes: list[str] = []
     for candidate in candidates:
         try:

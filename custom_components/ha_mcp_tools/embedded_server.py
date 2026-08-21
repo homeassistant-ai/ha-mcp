@@ -1326,6 +1326,13 @@ class EmbeddedServerManager:
         reported as the only violation instead of the real conflict.
         """
         named = self._replaced_dist_name()
+        if named is None and _spec_names_no_distribution(self._pip_spec):
+            # A bare URL names no distribution, but a repository tarball
+            # installs as ha-mcp whatever channel is selected (see
+            # _replaced_dist_name) — the dev channel's dist would otherwise
+            # win here on stale metadata alone and the audit would walk the
+            # wrong graph.
+            named = DIST_NAME_STABLE
         preferred = named or dist_for_channel(self._channel)
         if _dist_installed(preferred):
             return preferred
@@ -2301,6 +2308,22 @@ def _pin_moves_off_installed(spec: str, installed_version: str) -> bool:
         # real, whatever version it names.
         return False
     return not requirement.specifier.contains(installed_version, prereleases=True)
+
+
+def _spec_names_no_distribution(spec: str) -> bool:
+    """True when ``spec`` does not parse as a PEP 508 requirement at all.
+
+    A bare URL (or any unparseable spec) names no distribution of its own;
+    the same conservative shape test :func:`_scoped_install_flags` routes
+    on. A ``name @ url`` form parses and is therefore False here — its name
+    is already what :meth:`EmbeddedServerManager._replaced_dist_name`
+    reports.
+    """
+    try:
+        Requirement(spec)
+    except InvalidRequirement:
+        return True
+    return False
 
 
 def _spec_is_url_requirement(spec: str) -> bool:
