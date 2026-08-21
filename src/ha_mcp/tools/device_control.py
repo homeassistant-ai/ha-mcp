@@ -641,6 +641,14 @@ class DeviceControlTools:
                     ErrorCode.VALIDATION_INVALID_JSON,
                     f"{exc.msg} at position {exc.pos}",
                 )
+            except RecursionError:
+                # json.loads recurses per nesting level; a pathologically
+                # nested string must skip the row, not abort the batch.
+                return (
+                    None,
+                    ErrorCode.VALIDATION_INVALID_JSON,
+                    "JSON nested too deeply",
+                )
         if not isinstance(value, dict):
             # A present-but-null value is malformed, same as timeout_seconds
             # and validate_first; an absent key never reaches this helper.

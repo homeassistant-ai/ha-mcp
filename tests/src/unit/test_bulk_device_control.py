@@ -323,13 +323,20 @@ class TestRegisteredBulkToolCompatibility:
                         "action": "off",
                         "timeout_seconds": 10**400,
                     },
+                    # json.loads raises RecursionError past the interpreter
+                    # depth limit; that too must skip the row, not the batch.
+                    {
+                        "entity_id": "light.deep_parameters",
+                        "action": "off",
+                        "parameters": "[" * 50_000 + "]" * 50_000,
+                    },
                 ]
             }
         )
 
         data = result.structured_content
         assert data["successful_commands"] == 1
-        assert data["skipped_operations"] == 12
+        assert data["skipped_operations"] == 13
         assert [detail["index"] for detail in data["skipped_details"]] == [
             0,
             1,
@@ -343,6 +350,7 @@ class TestRegisteredBulkToolCompatibility:
             10,
             11,
             12,
+            13,
         ]
         messages = [detail["error"]["message"] for detail in data["skipped_details"]]
         assert any("required fields" in message for message in messages)
@@ -353,6 +361,7 @@ class TestRegisteredBulkToolCompatibility:
         assert sum("validate_first" in message for message in messages) == 3
         assert sum("timeout_seconds" in message for message in messages) == 5
         assert sum("must be a JSON object" in message for message in messages) == 2
+        assert any("nested too deeply" in message for message in messages)
         tools.control_device_smart.assert_awaited_once()
 
     @pytest.mark.asyncio
