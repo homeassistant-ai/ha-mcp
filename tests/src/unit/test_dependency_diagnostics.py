@@ -432,6 +432,16 @@ class TestRequirementForcesConflict:
         assert not requirement_forces_conflict("mcp<=1.24.0", inclusive_ceiling)
         assert requirement_forces_conflict(f"mcp=={_PINNED_MCP}", inclusive_ceiling)
 
+    def test_floor_exclusion_admitting_a_synthesized_probe_is_innocent(self):
+        """Patch76 on #2245: named and synthesized probes are one pool.
+
+        ``mcp!=1.24.0`` rejects the lone named floor of the incident spec
+        while admitting the synthesized successor and every real release
+        above — it cannot hold the package below the floor, and ranking
+        named probes above synthesized ones got it blamed.
+        """
+        assert not requirement_forces_conflict("mcp!=1.24.0", self._VIOLATION)
+
     def test_inactive_environment_marker_is_innocent(self):
         """CodeRabbit on #2245: HA never installs a marker-inactive requirement."""
         assert not requirement_forces_conflict(

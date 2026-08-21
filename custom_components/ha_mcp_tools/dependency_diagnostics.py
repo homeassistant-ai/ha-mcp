@@ -301,12 +301,12 @@ def requirement_forces_conflict(
     probes = _compliance_probes(violation.requirement)
     if not probes:
         return True
-    # ANY admitted probe proves innocence: the requirement's admissible set
-    # intersects the compliant region, so enforcing it can land compliant —
-    # and a requirement the installed version already satisfies installs
-    # nothing at all (the earlier return). Demanding ALL probes blamed
-    # mcp<=1.24.0 for rejecting an INCLUSIVE ceiling's probe while admitting
-    # the floor it can never hold the package below (Patch76 on #2245).
+    # ANY admitted probe proves innocence: every probe satisfies the full
+    # violated specifier, so an admitted one shows the requirement's
+    # admissible set meets the compliant region and enforcing it can land
+    # compliant. Demanding ALL probes blamed mcp<=1.24.0 for rejecting an
+    # INCLUSIVE ceiling's probe while admitting the floor it can never hold
+    # the package below (Patch76 on #2245).
     return not any(
         parsed.specifier.contains(probe, prereleases=True) for probe in probes
     )
@@ -337,67 +337,60 @@ def _compliance_probes(violated: str) -> list[str]:
     finite exclusion set can never empty the probes (CodeRabbit on #2245,
     three rounds of it: ``>1.24`` probed with ``1.24`` acquitted a
     ``==1.24`` pinner; ``>=1.24,!=1.24`` yielded no probe; a four-exclusion
-    spec exhausted a fixed chain). A STRICT upper bound contributes candidates
-    the filter drops; an inclusive ceiling survives as a named probe, which
-    is one reason innocence needs only one admitted probe. A wildcard pin's trailing ``.*`` is stripped so the
-    candidate parses as a version, and every candidate is checked against
-    the FULL violated specifier before it may serve as a probe: a probe
-    that violates the specifier would acquit exactly the pin that preserves
-    the conflict, and an empty probe list flips the caller conservative,
-    blaming integrations that are compatible. A compliant region reachable
-    only strictly between adjacent named points remains conservatively
-    unprobed — the stated boundary of this scheme.
+    spec exhausted a fixed chain). A STRICT upper bound contributes
+    candidates the filter drops; an inclusive ceiling survives as a probe.
+    A wildcard pin's trailing ``.*`` is stripped so the candidate parses as
+    a version, and every candidate is checked against the FULL violated
+    specifier before it may serve as a probe: a probe that violates the
+    specifier would acquit exactly the pin that preserves the conflict, and
+    an empty probe list flips the caller conservative, blaming integrations
+    that are compatible. A compliant region reachable only strictly between
+    adjacent named points remains conservatively unprobed — the stated
+    boundary of this scheme.
 
-    NAMED versions outrank synthesized ones: when any seed the violated
-    specifier itself names survives the filter, only those serve as probes,
-    and the nearby higher successors stand in solely when none do (an
-    exclusive ``>`` bound, a floor exclusion). A verdict must never be
-    decided by a version the probe invented while a named one exists —
-    ``mcp<=1.24.0`` admits the named floor of ``mcp<2.0,>=1.24.0`` and
-    cannot hold the package below it, but rejecting the synthesized
-    ``1.24.0.0.1`` used to get it blamed (Patch76 review on #2245).
+    Named and synthesized candidates are one pool: under one-admitted-probe
+    innocence, a synthesized survivor is the same proof of intersection as
+    a named one, and ranking named ones above it re-created the false-blame
+    class — ``mcp!=1.24.0`` rejects the lone named floor of
+    ``mcp<2.0,>=1.24.0`` while admitting the synthesized ``1.24.0.0.1`` and
+    every real release above (Patch76 review on #2245; the precedence
+    served the retired every-probe rule and lost its purpose with it).
     """
     try:
         specifier = Requirement(violated).specifier
     except InvalidRequirement:
         return []
-    named: list[str] = []
-    synthesized: list[str] = []
+    candidates: list[str] = []
     for clause in specifier:
         base = clause.version.rstrip(".*").rstrip(".")
         try:
             parsed = Version(base)
         except InvalidVersion:
             continue
-        named.append(base)
+        candidates.append(base)
         if clause.version.endswith(".*"):
             # A wildcard names a PREFIX; every in-prefix successor shares
             # its fate under a ``!=X.*`` exclusion, so the prefix seeds its
             # own escape — the next release after it (CodeRabbit on #2245:
             # ``>=1.24,!=1.24.*`` emptied the probes while 1.25 complied).
-            synthesized.append(_next_release(parsed))
+            candidates.append(_next_release(parsed))
         step = parsed
         for _ in range(_SUCCESSOR_STEPS):
             candidate = _successor(step)
-            synthesized.append(candidate)
+            candidates.append(candidate)
             try:
                 step = Version(candidate)
             except InvalidVersion:
                 break
 
-    def _surviving(candidates: list[str]) -> list[str]:
-        # contains() answers False for a candidate it cannot parse (the
-        # same quirk _specifier_allows documents), so a successor shape
-        # that fails to parse is filtered here, never raised.
-        probes: list[str] = []
-        for candidate in candidates:
-            if candidate not in probes and specifier.contains(
-                candidate, prereleases=True
-            ):
-                probes.append(candidate)
-        return probes
-
-    return _surviving(named) or _surviving(synthesized)
+    # contains() answers False for a candidate it cannot parse (the same
+    # quirk _specifier_allows documents), so a successor shape that fails
+    # to parse is filtered here, never raised.
+    probes: list[str] = []
+    for candidate in candidates:
+        if candidate not in probes and specifier.contains(candidate, prereleases=True):
+            probes.append(candidate)
+    return probes
 
 
 def _next_release(version: Version) -> str:
