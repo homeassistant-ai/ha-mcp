@@ -612,7 +612,14 @@ def _apply_result_fields_to_response(
         return
     orig = data["results"]
     data["results"] = _project_records(orig, parsed_result_fields)
-    _warn = _result_fields_warning(orig, data["results"], parsed_result_fields)
+    warning_fields = [
+        field for field in parsed_result_fields if field not in _MEMBERSHIP_FIELDS
+    ]
+    _warn = (
+        _result_fields_warning(orig, data["results"], warning_fields)
+        if warning_fields
+        else None
+    )
     if _warn:
         data.setdefault("warnings", []).append(_warn)
 
@@ -3356,11 +3363,12 @@ class SearchTools:
         _normalize_regular_search_result(
             result, search_type, domain_filter, offset, limit
         )
-        membership_fields = _requested_membership(parsed_result_fields)
-        for record in result.get("results", []):
-            _add_membership_fields(
-                record, record.pop("attributes", None), membership_fields
-            )
+        if search_type == "fuzzy_search":
+            membership_fields = _requested_membership(parsed_result_fields)
+            for record in result.get("results", []):
+                _add_membership_fields(
+                    record, record.pop("attributes", None), membership_fields
+                )
 
         # Apply state_filter to fuzzy results BEFORE grouping so by_domain
         # stays consistent with results[]. For fuzzy_search, state_filter is

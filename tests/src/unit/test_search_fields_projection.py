@@ -750,9 +750,56 @@ class TestHaSearchEntitiesResultFields(_SearchToolFixture):
             "enrichment incomplete" in w for w in data.get("warnings", [])
         ), f"healthy enrichment must not warn; got {data.get('warnings')}"
 
+    @pytest.mark.asyncio
+    async def test_member_only_projection_of_leaf_does_not_warn(self, search_tool):
+        result = await search_tool(
+            query="fan",
+            result_fields=["member_entity_ids"],
+        )
+
+        assert result["entities"] == [{}]
+        assert not any(
+            "matched no record keys" in warning
+            for warning in result.get("warnings", [])
+        )
+
 
 class TestHaSearchMembershipFuzzy(_SearchToolFixture):
     """Opt-in membership survives the legacy fuzzy projection seam."""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        client.get_states = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "light.group",
+                    "state": "on",
+                    "attributes": {
+                        "friendly_name": "Group",
+                        "group_entities": [
+                            "light.hidden_member",
+                            "light.visible_member",
+                        ],
+                    },
+                }
+            ]
+        )
+
+        async def send_websocket_message(payload):
+            if payload.get("type") == "config/entity_registry/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {"entity_id": "light.hidden_member", "hidden_by": "user"}
+                    ],
+                }
+            return {"success": True, "result": []}
+
+        client.send_websocket_message = AsyncMock(side_effect=send_websocket_message)
+        return client
 
     @pytest.fixture
     def mock_smart_tools(self):
@@ -810,6 +857,21 @@ class TestHaSearchMembershipFuzzy(_SearchToolFixture):
         assert call.kwargs["include_attributes"] is True
         assert call.kwargs["include_membership"] is True
         assert "attributes" not in result["entities"][0]
+
+    @pytest.mark.asyncio
+    async def test_exact_search_preserves_redacted_group_indicator(self, search_tool):
+        result = await search_tool(
+            query="group",
+            include_hidden=False,
+            result_fields=["entity_id", "is_group", "member_entity_ids"],
+        )
+
+        assert result["entities"] == [
+            {
+                "entity_id": "light.group",
+                "is_group": True,
+            }
+        ]
 
 
 class TestHaSearchEnrichmentDegraded(_SearchToolFixture):
