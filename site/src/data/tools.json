@@ -2988,7 +2988,7 @@
   {
     "name": "ha_bulk_control",
     "title": "Bulk Control",
-    "description": "Manage multiple entity actions in one request.\n\nWhen NOT to use: use ``ha_call_service`` for one service call targeting a\ngroup or for service-specific payloads that do not fit device actions.\n\nUse this when one request should apply actions to multiple independent\nentities. Optional item parameters carry brightness, temperature, position,\nor other action data.\n\nCaveats: put every target in ``operations`` and call the tool once. Parallel\nexecution is the default, and invalid items are reported without aborting\nvalid operations in the same batch.",
+    "description": "Manage multiple entity actions in one request.\n\nWhen NOT to use: use ``ha_call_service`` for one service call targeting a\ngroup or for service-specific payloads that do not fit device actions.\n\nUse this when one request should apply actions to multiple independent\nentities. Optional item parameters carry brightness, temperature, position,\nor other action data.\n\nCaveats: put every target in ``operations`` and call the tool once. Parallel\nexecution is the default, and invalid items are reported without aborting\nvalid operations in the same batch. A batch in which every item fails\nvalidation dispatches nothing and fails the call.",
     "inputSchema": {
       "properties": {
         "operations": {
