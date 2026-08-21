@@ -31,6 +31,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import warnings
 from collections.abc import AsyncGenerator
 from functools import partial
 from pathlib import Path
@@ -39,6 +40,7 @@ from typing import Any
 import pytest
 import requests
 from testcontainers.core.container import DockerContainer
+from urllib3.exceptions import InsecureRequestWarning
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
@@ -67,6 +69,7 @@ from haos_runtime import (
     set_default_backup_password,
     stage_embedded_server_feature_flags_in_qcow2,
     stage_embedded_server_wheel_in_qcow2,
+    stage_home_assistant_tls_in_qcow2,
     trigger_dev_addon_update,
     wait_for_addon_ha_link_ready,
     wait_for_addon_mcp_ready,
@@ -228,6 +231,34 @@ def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
     _READINESS_TIMINGS.append({"gate": gate, "elapsed_s": elapsed_s, **extras})
 
 
+def _move_haos_tls_items_last(items: list[Any]) -> None:
+    """Make the one destructive Core-restart scope the final xdist work unit.
+
+    ``loadscope`` groups tests into scopes by module (or module::class). With
+    xdist's default ``--loadscope-reorder`` the scopes are sorted by
+    descending size with a stable sort, so the one-test TLS module moved to
+    the end stays last among the one-test scopes; with ``--no-loadscope-reorder``
+    plain collection order keeps it last outright. The FIFO workqueue then
+    dispatches it as the final unit. The worker that receives it may still
+    hold up to two queued ordinary tests (xdist tops nodes up at <=2 pending)
+    but executes units in dispatch order, so Core is restarted in that
+    worker's already-running VM only after its ordinary work has run.
+    """
+    ordinary = [item for item in items if "haos_tls" not in item.keywords]
+    tls = [item for item in items if "haos_tls" in item.keywords]
+    items[:] = [*ordinary, *tls]
+
+
+def _apply_haos_tls_skip(item: Any, enabled: bool, skip_marker: Any) -> None:
+    """Skip a ``haos_tls`` item on every lane where the scenario is disabled.
+
+    Kept out-of-line so ``pytest_collection_modifyitems`` stays under the
+    repo-wide C901 ceiling — inlining this branch trips it.
+    """
+    if "haos_tls" in item.keywords and not enabled:
+        item.add_marker(skip_marker)
+
+
 def pytest_collection_modifyitems(config, items):
     """Enforce backend markers and auto-apply ``haos_only`` to its dir.
 
@@ -249,6 +280,8 @@ def pytest_collection_modifyitems(config, items):
       exercised). Skipped on external mode and on testcontainer.
     - ``haos_stdio_only``: HAOS stdio mode only (``mcp_client`` launches the
       installed ``ha-mcp`` command and uses real stdio JSON-RPC framing).
+    - ``haos_tls``: final HAOS-embedded scenario. It restarts Core with HTTPS,
+      exercises the same VM, and restores HTTP before session teardown.
     """
     del config
     haos = is_haos_backend_selected()
@@ -281,6 +314,9 @@ def pytest_collection_modifyitems(config, items):
     skip_haos_stdio_only = pytest.mark.skip(
         reason="HAOS stdio mode required (set HAOS_TEST_MODE=stdio)"
     )
+    skip_haos_tls = pytest.mark.skip(
+        reason="final Core TLS scenario runs only in the existing HAOS embedded worker"
+    )
     skip_external_only = pytest.mark.skip(
         reason="out-of-process server (stdio/inaddon/embedded); test needs an "
         "in-process server it can reconfigure via env/monkeypatch or reach an "
@@ -306,6 +342,12 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_inaddon_only)
         if "haos_stdio_only" in keywords and not haos_stdio:
             item.add_marker(skip_haos_stdio_only)
+        _apply_haos_tls_skip(item, haos_embedded, skip_haos_tls)
+        # Deliberate: inserting the haos_tls dispatch above broke the old
+        # ``elif`` chain into this ``if``. An item carrying several gate
+        # markers now collects one skip marker per gate instead of the first
+        # only — still one skipped item, same counts; only the reported
+        # reason (first marker added) could differ.
         # ``external_only`` skips on any tier where the server is NOT in the
         # pytest process: the inaddon HAOS addon AND the embedded backend's
         # in-process MCP server (both #1527). The name is historical (from
@@ -327,7 +369,7 @@ def pytest_collection_modifyitems(config, items):
         # cannot observe pytest-process env changes, monkeypatches, or in-process
         # mocks. The same tests retain coverage on container/external HAOS lanes.
         #
-        elif "external_only" in keywords and (
+        if "external_only" in keywords and (
             inaddon or embedded or haos_embedded or haos_stdio
         ):
             item.add_marker(skip_external_only)
@@ -347,6 +389,7 @@ def pytest_collection_modifyitems(config, items):
         # the sole thing exercising the in-process server).
         if "not_on_haos_embedded" in keywords and haos_embedded:
             item.add_marker(skip_not_on_haos_embedded)
+    _move_haos_tls_items_last(items)
 
 
 # Fail fast on a doomed run, on EVERY e2e lane (this conftest is shared by the
@@ -973,12 +1016,16 @@ def _embedded_mcp_result(resp: requests.Response) -> dict[str, Any] | None:
     return parse_mcp_response(resp.headers.get("Content-Type", ""), resp.content)
 
 
-def _wait_for_embedded_webhook_ready(webhook_url: str, timeout: int) -> bool:
+def _wait_for_embedded_webhook_ready(
+    webhook_url: str, timeout: int, *, verify: bool = True
+) -> bool:
     """Poll the embedded server's ingress webhook until MCP ``initialize`` works.
 
     A valid JSON-RPC ``result`` means the in-process MCP server has installed
     itself, started its worker thread, and registered the webhook. Returns False
     on timeout so the caller can dump diagnostics and fail with context.
+    ``verify=False`` lets the TLS scenario poll the ``https://`` webhook while
+    Core runs its trial certificate.
     """
     payload = {
         "jsonrpc": "2.0",
@@ -997,9 +1044,19 @@ def _wait_for_embedded_webhook_ready(webhook_url: str, timeout: int) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            resp = requests.post(
-                webhook_url, headers=headers, data=json.dumps(payload), timeout=30
-            )
+            with warnings.catch_warnings():
+                if not verify:
+                    # This test deliberately uses Core's hostname-mismatched
+                    # loopback certificate. Keep the suite's warnings-as-errors
+                    # policy for every warning except this expected one.
+                    warnings.simplefilter("ignore", InsecureRequestWarning)
+                resp = requests.post(
+                    webhook_url,
+                    headers=headers,
+                    data=json.dumps(payload),
+                    timeout=30,
+                    verify=verify,
+                )
             if resp.status_code == 200:
                 parsed = _embedded_mcp_result(resp)
                 if parsed is not None and "result" in parsed:
@@ -1842,6 +1899,22 @@ def _prepare_haos_image(
     # below applies it via Docker layer cache (#1349 item 7).
     if inaddon:
         refresh_dev_addon_source_in_qcow2(image_path)
+    if haos_embedded:
+        # Best-effort like the wheel staging above: only the final TLS scenario
+        # consumes this certificate, and it asserts on HAOS_TEST_TLS_CA_PATH —
+        # a staging failure should fail that one test, not abort the lane.
+        try:
+            certificate = stage_home_assistant_tls_in_qcow2(image_path)
+        except RuntimeError:
+            logger.warning(
+                "HAOS Core TLS staging failed; the TLS scenario will report it",
+                exc_info=True,
+            )
+        else:
+            # Do not alter process-wide trust during ordinary tests. The final
+            # TLS scenario trusts this cert only while reproducing the legacy
+            # mismatch.
+            os.environ["HAOS_TEST_TLS_CA_PATH"] = str(certificate)
     return image_path
 
 

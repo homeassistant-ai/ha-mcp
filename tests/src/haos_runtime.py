@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import socket
+import ssl
 import subprocess
 import time
 import urllib.error
@@ -1014,6 +1015,128 @@ def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
 # runtime); kept in step with the container backend's ``_EMBEDDED_SERVER_CONFIG_SUBDIR``.
 _HAOS_CONFIG_DIR = "/supervisor/homeassistant"
 _HAOS_EMBEDDED_SERVER_DATA_DIR = f"{_HAOS_CONFIG_DIR}/.ha_mcp"
+_HAOS_TLS_DIR = f"{_HAOS_CONFIG_DIR}/ssl"
+_HAOS_TLS_CERT_NAME = "haos-e2e-cert.pem"
+_HAOS_TLS_KEY_NAME = "haos-e2e-key.pem"
+HAOS_TLS_CERTIFICATE_PATH = f"/config/ssl/{_HAOS_TLS_CERT_NAME}"
+HAOS_TLS_KEY_PATH = f"/config/ssl/{_HAOS_TLS_KEY_NAME}"
+_HA_HTTP_CONFIG_META_KEYS = frozenset({"created_at", "error", "error_message"})
+
+
+def clean_home_assistant_http_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Strip read-only metadata from an HTTP config returned by Core."""
+    return {
+        key: value
+        for key, value in config.items()
+        if key not in _HA_HTTP_CONFIG_META_KEYS
+    }
+
+
+def build_home_assistant_tls_config(
+    stable: dict[str, Any], *, certificate_path: str, key_path: str
+) -> dict[str, Any]:
+    """Build a pending TLS trial while preserving the active HTTP settings."""
+    return {
+        **clean_home_assistant_http_config(stable),
+        "ssl_certificate": certificate_path,
+        "ssl_key": key_path,
+    }
+
+
+def stage_home_assistant_tls_in_qcow2(image_path: Path) -> Path:
+    """Stage a hostname-only Core certificate without enabling TLS yet.
+
+    The certificate is deliberately valid for ``haos-e2e.local`` but not
+    ``127.0.0.1``. Trusting it from the host therefore reproduces issue #2241's
+    exact IP-address-mismatch failure when the legacy app proxy uses HTTPX's
+    default verification. The final E2E enables it at runtime through Core's
+    supported HTTP configuration API, in the worker's already-running VM.
+
+    Returns the host-side certificate path — the caller exports it as
+    ``HAOS_TEST_TLS_CA_PATH`` so the test can trust it via ``SSL_CERT_FILE``.
+    That trust path is also why the self-signed cert carries
+    ``basicConstraints=CA:TRUE``: the host uses the same file as its CA.
+    """
+    import atexit
+    import shutil
+    import tempfile
+
+    workdir = Path(tempfile.mkdtemp(prefix="haos-core-tls-"))
+    certificate = workdir / _HAOS_TLS_CERT_NAME
+    key = workdir / _HAOS_TLS_KEY_NAME
+    try:
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-sha256",
+                "-nodes",
+                # Staging reruns per image prep, but VM clock drift or an
+                # image reused across a day boundary would turn a 1-day cert
+                # into a confusing "certificate has expired" failure.
+                "-days",
+                "30",
+                "-subj",
+                "/CN=haos-e2e.local",
+                "-addext",
+                "subjectAltName=DNS:haos-e2e.local",
+                "-addext",
+                "basicConstraints=critical,CA:TRUE",
+                "-addext",
+                "keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign",
+                "-addext",
+                "extendedKeyUsage=serverAuth",
+                "-keyout",
+                str(key),
+                "-out",
+                str(certificate),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        subprocess.run(
+            [
+                "guestfish",
+                "--rw",
+                "-a",
+                str(image_path),
+                "run",
+                ":",
+                "mount",
+                "/dev/sda8",
+                "/",
+                ":",
+                "mkdir-p",
+                _HAOS_TLS_DIR,
+                ":",
+                "copy-in",
+                str(certificate),
+                _HAOS_TLS_DIR,
+                ":",
+                "copy-in",
+                str(key),
+                _HAOS_TLS_DIR,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        shutil.rmtree(workdir, ignore_errors=True)
+        raise RuntimeError(
+            f"Failed to stage Home Assistant TLS files into {image_path}: {exc}"
+        ) from exc
+    LOG.info("Staged HA Core TLS files into %s (host CA: %s)", image_path, certificate)
+    # The caller reads the certificate as a trust anchor for the rest of the
+    # session, so remove the workdir (and its private key) only at exit.
+    atexit.register(shutil.rmtree, workdir, ignore_errors=True)
+    return certificate
 
 
 def stage_embedded_server_feature_flags_in_qcow2(
@@ -1106,6 +1229,136 @@ def stage_embedded_server_feature_flags_in_qcow2(
         )
     finally:
         _shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _home_assistant_ws_command(
+    base_url: str,
+    token: str,
+    command: dict[str, Any],
+    *,
+    timeout: float = 60.0,
+    verify_ssl: bool = True,
+) -> Any:
+    """Run one authenticated Home Assistant WebSocket command."""
+    import websockets.sync.client
+
+    ws_url = (
+        base_url.replace("http://", "ws://").replace("https://", "wss://")
+        + "/api/websocket"
+    )
+    ssl_context: ssl.SSLContext | None = None
+    if ws_url.startswith("wss://"):
+        ssl_context = ssl.create_default_context()
+        if not verify_ssl:
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+
+    with websockets.sync.client.connect(
+        ws_url,
+        max_size=None,
+        open_timeout=min(timeout, 30.0),
+        ssl=ssl_context,
+    ) as ws:
+        first = json.loads(ws.recv())
+        if first.get("type") != "auth_required":
+            raise RuntimeError(f"WS handshake: expected auth_required, got {first!r}")
+        ws.send(json.dumps({"type": "auth", "access_token": token}))
+        auth_resp = json.loads(ws.recv())
+        if auth_resp.get("type") != "auth_ok":
+            raise RuntimeError(f"WS auth rejected: {auth_resp}")
+
+        msg_id = 1
+        ws.send(json.dumps({"id": msg_id, **command}))
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                raw = ws.recv(timeout=max(deadline - time.monotonic(), 1.0))
+            except TimeoutError:
+                continue
+            if not isinstance(raw, str):
+                raw = raw.decode()
+            response = json.loads(raw)
+            if response.get("id") != msg_id:
+                continue
+            if not response.get("success", False):
+                raise RuntimeError(
+                    f"Home Assistant WS command {command.get('type')!r} failed: "
+                    f"{response.get('error') or response!r}"
+                )
+            return response.get("result")
+    raise TimeoutError(
+        f"Home Assistant WS command {command.get('type')!r} got no response "
+        f"within {timeout}s"
+    )
+
+
+def get_home_assistant_http_config(
+    base_url: str,
+    token: str,
+    *,
+    timeout: float = 60.0,
+    verify_ssl: bool = True,
+) -> dict[str, Any]:
+    """Read Core's stable, pending, default, and active HTTP config slots."""
+    result = _home_assistant_ws_command(
+        base_url,
+        token,
+        {"type": "http/config"},
+        timeout=timeout,
+        verify_ssl=verify_ssl,
+    )
+    if not isinstance(result, dict):
+        raise RuntimeError(f"http/config returned a non-object result: {result!r}")
+    return result
+
+
+def configure_home_assistant_http(
+    base_url: str,
+    token: str,
+    config: dict[str, Any],
+    *,
+    timeout: float = 60.0,
+    verify_ssl: bool = True,
+) -> bool:
+    """Stage an HTTP config and return whether Core scheduled its restart.
+
+    The underlying ``http/config/configure`` WS command requires an admin
+    token and a Core in ``CoreState.running`` — mid-restart Core rejects it
+    with ``not_running``, which surfaces here as ``RuntimeError``.
+    """
+    result = _home_assistant_ws_command(
+        base_url,
+        token,
+        {"type": "http/config/configure", "config": config},
+        timeout=timeout,
+        verify_ssl=verify_ssl,
+    )
+    if not isinstance(result, dict) or not isinstance(result.get("restart"), bool):
+        raise RuntimeError(
+            f"http/config/configure returned an invalid result: {result!r}"
+        )
+    return result["restart"]
+
+
+def promote_home_assistant_http_config(
+    base_url: str,
+    token: str,
+    *,
+    timeout: float = 60.0,
+    verify_ssl: bool = True,
+) -> None:
+    """Promote Core's live pending HTTP config to the stable slot."""
+    result = _home_assistant_ws_command(
+        base_url,
+        token,
+        {"type": "http/config/promote"},
+        timeout=timeout,
+        verify_ssl=verify_ssl,
+    )
+    if result is not None:
+        raise RuntimeError(
+            f"http/config/promote returned an unexpected result: {result!r}"
+        )
 
 
 def enable_config_entry(
@@ -1730,12 +1983,17 @@ def _wait_port(port: int, host: str = "127.0.0.1", timeout: float = 180.0) -> No
     raise TimeoutError(f"{host}:{port} did not open within {timeout}s")
 
 
-def _wait_http_ok(url: str, timeout: float = 300.0) -> None:
+def _wait_http_ok(url: str, timeout: float = 300.0, *, verify_ssl: bool = True) -> None:
     deadline = time.monotonic() + timeout
     last_err: Exception | None = None
+    context: ssl.SSLContext | None = None
+    if url.startswith("https://") and not verify_ssl:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=5.0) as resp:
+            with urllib.request.urlopen(url, timeout=5.0, context=context) as resp:
                 if resp.status == 200:
                     return
         except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
