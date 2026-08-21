@@ -153,7 +153,19 @@ def audit_dependency_graph(
                 ] = None
                 continue
             version = _dist_version(child_dist)
-            if version is not None and not _specifier_allows(requirement, version):
+            # A direct reference has no specifier to judge, but an installed
+            # dist with NO PEP 610 origin record was definitively installed
+            # from an index, not the referenced artifact — a sound origin
+            # mismatch with no fragile URL comparison (Codex on #2245; a
+            # present-but-different origin stays unjudged, since pip
+            # normalizes URLs and a re-hosted identical artifact is fine).
+            if requirement.url is not None:
+                unsatisfied = not _dist_has_direct_url(child_dist)
+            else:
+                unsatisfied = version is not None and not _specifier_allows(
+                    requirement, version
+                )
+            if unsatisfied:
                 found[
                     DependencyViolation(
                         package=child,
@@ -499,6 +511,19 @@ def _specifier_allows(requirement: Requirement, version: str) -> bool:
     except InvalidVersion:
         return True
     return requirement.specifier.contains(version, prereleases=True)
+
+
+def _dist_has_direct_url(dist: Distribution) -> bool:
+    """Whether ``dist`` records a PEP 610 direct-URL install origin.
+
+    Unreadable metadata answers True: absence is the only signal strong
+    enough to prove an origin mismatch, and "could not read" must not be
+    mistaken for "provably from an index".
+    """
+    try:
+        return dist.read_text("direct_url.json") is not None
+    except Exception:
+        return True
 
 
 def _dist_version(dist: Distribution) -> str | None:

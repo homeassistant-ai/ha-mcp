@@ -208,6 +208,30 @@ class TestAuditDependencyGraph:
 
         assert audit_dependency_graph("ha-mcp", search_path=[str(site)]) == []
 
+    def test_direct_reference_edge_flags_an_index_installed_dist(self, tmp_path):
+        """Codex on #2245: a direct-ref edge has no specifier to judge, but a
+        dist with NO PEP 610 origin record provably came from an index, not
+        the referenced artifact. A present-but-different origin stays
+        unjudged on purpose — URL comparison is normalization-fragile."""
+        site = _site(tmp_path, "direct-ref-index")
+        _write_dist(
+            site, "ha-mcp", "7.0.0", requires=["dep @ https://host.invalid/d.whl"]
+        )
+        _write_dist(site, "dep", "1.0")
+
+        violations = audit_dependency_graph("ha-mcp", search_path=[str(site)])
+        assert [(v.package, v.installed) for v in violations] == [("dep", "1.0")]
+
+        site2 = _site(tmp_path, "direct-ref-origin")
+        _write_dist(
+            site2, "ha-mcp", "7.0.0", requires=["dep @ https://host.invalid/d.whl"]
+        )
+        _write_dist(site2, "dep", "1.0")
+        (site2 / "dep-1.0.dist-info" / "direct_url.json").write_text(
+            '{"url": "https://elsewhere.invalid/other.whl"}', encoding="utf-8"
+        )
+        assert audit_dependency_graph("ha-mcp", search_path=[str(site2)]) == []
+
     def test_missing_root_distribution_is_reported_as_requested(self, tmp_path):
         site = _site(tmp_path, "no-root")
 
