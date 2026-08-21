@@ -591,9 +591,45 @@ def test_component_body_search_types_lockstep() -> None:
 @pytest.mark.parametrize(
     ("attributes", "expected"),
     [
-        ({"group_entities": ["light.two", "light.one"]}, ["light.one", "light.two"]),
+        (
+            {
+                "group_entities": ["light.two", "light.one", "light.two"],
+                "entity_id": ["light.legacy"],
+            },
+            ["light.one", "light.two"],
+        ),
+        ({"entity_id": ("light.two", "light.one")}, ["light.one", "light.two"]),
         ({"group_entities": [], "entity_id": ["light.legacy"]}, []),
         ({"entity_id": "light.reference"}, None),
+        ({"entity_id": b"light.reference"}, None),
+        ({"entity_id": bytearray(b"light.reference")}, None),
+        ({"group_entities": {"light.member": True}}, None),
+        (
+            {"group_entities": frozenset({"light.two", "light.one"})},
+            ["light.one", "light.two"],
+        ),
+        ({"entity_id": ["light.Not_Valid"]}, None),
+        ({"entity_id": ["light.not-valid"]}, None),
+        ({"entity_id": ["light.lämp"]}, None),
+        ({"group_entities": ["light.valid", "not-an-entity"]}, None),
+        (
+            {
+                "group_entities": ["light.valid", "not-an-entity"],
+                "entity_id": ["light.legacy"],
+            },
+            ["light.legacy"],
+        ),
+        (
+            {
+                "group_entities": ["light.modern"],
+                "entity_id": ["light.legacy"],
+            },
+            ["light.modern"],
+        ),
+        (
+            {"group_entities": ["light.group", "light.member"]},
+            ["light.group", "light.member"],
+        ),
         ({"group_members": ["light.not_supported"]}, None),
     ],
 )
@@ -604,7 +640,7 @@ def test_component_body_search_types_lockstep() -> None:
 def test_membership_normalizer_artifacts_remain_in_lockstep(
     normalizer, attributes, expected
 ) -> None:
-    """Keep server and component normalization aligned across edge cases."""
+    """Keep server and component normalization aligned across all edge cases."""
     assert normalizer(attributes) == expected
 
 

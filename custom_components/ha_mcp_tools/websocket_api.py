@@ -1588,11 +1588,13 @@ def _normalize_member_entity_ids(attributes: Any) -> list[str] | None:
         if not isinstance(raw, Collection):
             continue
         members: set[str] = set()
+        valid = True
         for value in raw:
             if not _is_entity_id(value):
+                valid = False
                 break
             members.add(value)
-        else:
+        if valid:
             return sorted(members)
     return None
 

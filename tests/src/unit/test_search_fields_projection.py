@@ -839,7 +839,7 @@ class TestHaSearchMembershipFuzzy(_SearchToolFixture):
         return client
 
     @pytest.fixture
-    def mock_smart_tools(self, mock_client):
+    def real_smart_tools(self, mock_client):
         """Use the real smart-search transform chain for membership redaction."""
         smart = SmartSearchTools(mock_client)
         smart.deep_search = AsyncMock(
@@ -854,9 +854,15 @@ class TestHaSearchMembershipFuzzy(_SearchToolFixture):
         )
         return smart
 
+    @pytest.fixture
+    def search_tool(self, mock_mcp, mock_client, real_smart_tools):
+        """Register ha_search with the real smart-search fixture."""
+        register_search_tools(mock_mcp, mock_client, smart_tools=real_smart_tools)
+        return self.registered_tools["ha_search"]
+
     @pytest.mark.asyncio
     async def test_fuzzy_search_redacts_hidden_member_but_keeps_group(
-        self, search_tool, mock_smart_tools
+        self, search_tool
     ):
         result = await search_tool(
             query="group",

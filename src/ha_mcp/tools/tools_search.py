@@ -761,9 +761,9 @@ _ENTITY_RECORD_KEYS = (
 _ENRICHMENT_FIELDS: tuple[str, ...] = ("area", "floor", "labels", "aliases")
 _MEMBERSHIP_FIELDS: tuple[str, ...] = ("is_group", "member_entity_ids")
 
-# Every field name result_fields= accepts — base record keys plus the opt-in
-# enrichment keys. A requested name outside this set is rejected up front with the
-# standard validation error rather than silently projecting to empty records.
+# Every field name result_fields= accepts — base record keys plus opt-in
+# enrichment and membership keys. Unknown names are rejected up front rather
+# than silently projecting to empty records.
 _ALLOWED_RESULT_FIELDS: frozenset[str] = (
     frozenset(_ENTITY_RECORD_KEYS)
     | frozenset(_ENRICHMENT_FIELDS)
@@ -1134,12 +1134,10 @@ def _shape_component_search_response(
 
     if req.registry_eligible:
         parsed_result_fields = _parse_component_result_fields(req.result_fields)
-        # Base record is the six documented keys. result_fields may additionally
-        # request enrichment fields (area/floor/labels/aliases) that the component
-        # already computed per hit via its registry join — retain exactly those
-        # requested keys before the result_fields projection so the enrichment
-        # survives it, while a search that requests none still emits the default
-        # six-key shape (parity with the legacy path).
+        # Base records contain the six documented keys. Requested enrichment
+        # fields retain the component's area/floor/labels/aliases registry join;
+        # requested membership fields append its opt-in state-derived metadata.
+        # With neither class requested, the default six-key shape is unchanged.
         record_keys = (
             *_ENTITY_RECORD_KEYS,
             *_requested_enrichment(parsed_result_fields),
@@ -2472,7 +2470,7 @@ class SearchTools:
                     'E.g. ["entity_id", "state"] returns slim entity records. '
                     "None = full records (default). "
                     "Base keys: entity_id, friendly_name, domain, state, score, match_type. "
-                    "Opt-in enrichment/membership keys (computed on request): area, floor, labels, aliases. "
+                    "Opt-in enrichment/membership keys (computed on request): area, floor, labels, aliases, is_group, member_entity_ids. "
                     "An unknown key is rejected."
                 ),
             ),
