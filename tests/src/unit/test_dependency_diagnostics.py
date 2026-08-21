@@ -656,6 +656,31 @@ class TestDescribeDependencyFailure:
 
         assert message.startswith("The underlying failure is: ImportError.")
 
+    def test_credentialed_url_requirements_are_redacted(self):
+        """CodeRabbit on #2245: repair details get pasted into public issues."""
+        message = describe_dependency_failure(
+            None,
+            [
+                DependencyViolation(
+                    package="mcp",
+                    installed=_PINNED_MCP,
+                    requirement="mcp@ https://user:vsecret@host.invalid/m.whl?vsig=1",
+                    required_by="something 1.0",
+                )
+            ],
+            [
+                PinningIntegration(
+                    domain="p",
+                    name="P",
+                    requirement="mcp @ https://user:psecret@host.invalid/m.whl?ptok=2",
+                )
+            ],
+        )
+
+        for leaked in ("vsecret", "psecret", "vsig=1", "ptok=2", "user:"):
+            assert leaked not in message
+        assert "host.invalid" in message
+
     def test_nothing_found_says_so(self):
         assert (
             describe_dependency_failure(None, [], [])

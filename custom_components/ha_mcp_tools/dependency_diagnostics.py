@@ -36,6 +36,7 @@ inside an error handler replaces the failure it was meant to explain.
 from __future__ import annotations
 
 import json
+import re
 from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -546,31 +547,48 @@ def _exception_text(exc: BaseException) -> str:
 
 def _violation_sentence(violation: DependencyViolation) -> str:
     """One sentence naming an unsatisfied requirement and who declared it."""
+    requirement = _redact_requirement(violation.requirement)
     if violation.installed is None:
         if violation.required_by == REQUESTED_BY:
             return f"Package {violation.package} is not installed."
         return (
             f"Package {violation.package} is not installed, but "
-            f"'{violation.requirement}' is required by {violation.required_by}."
+            f"'{requirement}' is required by {violation.required_by}."
         )
     return (
         f"Installed {violation.package} {violation.installed} does not satisfy "
-        f"'{violation.requirement}' required by {violation.required_by}."
+        f"'{requirement}' required by {violation.required_by}."
     )
+
+
+def _redact_requirement(raw: str) -> str:
+    """``raw`` with URL credentials and query parameters removed.
+
+    Requirement strings reach user-facing warnings and repair issues —
+    text users paste into public bug reports — and a direct reference may
+    embed tokens (``mcp @ https://user:token@host/pkg.whl?sig=...``).
+    Textual redaction rather than URL parsing keeps this total: an input
+    no parser accepts still comes back with its userinfo and query gone.
+    """
+    if "://" not in raw:
+        return raw
+    redacted = re.sub(r"://[^/@\s]*@", "://", raw)
+    return re.sub(r"\?\S*", "", redacted)
 
 
 def _pinner_sentence(pinner: PinningIntegration) -> str:
     """One sentence naming a pinning integration and why the pin keeps coming back.
 
-    "Whenever ... is set up" rather than "at every startup": the manifest
-    scan is directory-wide, and a dormant integration's requirement is only
-    enforced once something sets it up — the softer claim is truthful for
-    both the configured culprit and a leftover directory.
+    The enforcement claim is conditional on purpose: the manifest scan is
+    directory-wide, a dormant integration's requirement is only processed
+    once something sets it up, and even then Home Assistant reinstalls it
+    only when the installed version does not satisfy it.
     """
     return (
         f"The custom integration '{pinner.name}' ({pinner.domain}) pins "
-        f"'{pinner.requirement}' in its manifest, and Home Assistant "
-        f"reinstalls that requirement whenever the integration is set up."
+        f"'{_redact_requirement(pinner.requirement)}' in its manifest, and "
+        f"Home Assistant may reinstall that requirement when the "
+        f"integration's setup finds it unsatisfied."
     )
 
 
