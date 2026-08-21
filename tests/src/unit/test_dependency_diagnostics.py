@@ -66,14 +66,22 @@ def _write_dist(
     *,
     requires: Sequence[str] = (),
     extras: Sequence[str] = (),
+    omit_version: bool = False,
 ) -> None:
-    """Write a minimal but real ``.dist-info`` directory into ``site``."""
+    """Write a minimal but real ``.dist-info`` directory into ``site``.
+
+    ``omit_version`` drops the METADATA Version line (the directory name
+    keeps one — importlib.metadata needs it to match) so a test can model
+    a dist whose version cannot be read back.
+    """
     # The wheel naming convention importlib.metadata matches on: the directory
     # stem is split at the FIRST hyphen, so the name part must use underscores
     # or "fastmcp-slim" would be looked up as "fastmcp".
     dist_info = site / f"{name.replace('-', '_')}-{version}.dist-info"
     dist_info.mkdir(parents=True, exist_ok=True)
-    lines = ["Metadata-Version: 2.1", f"Name: {name}", f"Version: {version}"]
+    lines = ["Metadata-Version: 2.1", f"Name: {name}"]
+    if not omit_version:
+        lines.append(f"Version: {version}")
     lines += [f"Provides-Extra: {extra}" for extra in extras]
     lines += [f"Requires-Dist: {requirement}" for requirement in requires]
     (dist_info / "METADATA").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -231,6 +239,22 @@ class TestAuditDependencyGraph:
             '{"url": "https://elsewhere.invalid/other.whl"}', encoding="utf-8"
         )
         assert audit_dependency_graph("ha-mcp", search_path=[str(site2)]) == []
+
+    def test_direct_reference_edge_needs_a_readable_version(self, tmp_path):
+        """Patch76 on #2245: the version gate on this branch was unpinned.
+
+        A dist whose METADATA yields no version must not be reported on the
+        direct-reference branch — the shared violation record would carry
+        ``installed=None`` and render as "not installed" for a dist that IS
+        installed.
+        """
+        site = _site(tmp_path, "direct-ref-versionless")
+        _write_dist(
+            site, "ha-mcp", "7.0.0", requires=["dep @ https://host.invalid/d.whl"]
+        )
+        _write_dist(site, "dep", "1.0", omit_version=True)
+
+        assert audit_dependency_graph("ha-mcp", search_path=[str(site)]) == []
 
     def test_missing_root_distribution_is_reported_as_requested(self, tmp_path):
         site = _site(tmp_path, "no-root")
@@ -390,6 +414,23 @@ class TestRequirementForcesConflict:
         integration that cannot be the culprit.
         """
         assert not requirement_forces_conflict("mcp<=1.24.0", self._VIOLATION)
+
+    def test_inclusive_ceiling_probe_cannot_convict_alone(self):
+        """Patch76 on #2245: an inclusive ceiling survives as a named probe.
+
+        Under ``mcp<=2.0,>=1.24.0`` the probes are 1.24.0 AND 2.0; demanding
+        both blamed ``mcp<=1.24.0`` for the ceiling although it admits the
+        floor and can never hold the package below it. One admitted probe
+        proves innocence.
+        """
+        inclusive_ceiling = DependencyViolation(
+            package="mcp",
+            installed=_PINNED_MCP,
+            requirement="mcp<=2.0,>=1.24.0",
+            required_by="something 1.0",
+        )
+        assert not requirement_forces_conflict("mcp<=1.24.0", inclusive_ceiling)
+        assert requirement_forces_conflict(f"mcp=={_PINNED_MCP}", inclusive_ceiling)
 
     def test_inactive_environment_marker_is_innocent(self):
         """CodeRabbit on #2245: HA never installs a marker-inactive requirement."""

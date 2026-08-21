@@ -263,10 +263,9 @@ def requirement_forces_conflict(
 
     * the requirement did not admit the violating installed version, so it
       cannot have produced this state, or
-    * the requirement also admits every compliance probe (the version
-      literals a compliant install could sit at, read from the violated
-      specifier's own lower-bound clauses), so enforcing it never moves a
-      compliant install.
+    * the requirement admits a compliance probe (a version a compliant
+      install could sit at, derived from the violated specifier's own
+      clauses), so enforcing it can leave the package compliant.
 
     Unjudgeable inputs — an unparseable requirement, a violated specifier
     with no probeable clause — count as forcing: a culprit hidden by a parse
@@ -302,7 +301,13 @@ def requirement_forces_conflict(
     probes = _compliance_probes(violation.requirement)
     if not probes:
         return True
-    return not all(
+    # ANY admitted probe proves innocence: the requirement's admissible set
+    # intersects the compliant region, so enforcing it can land compliant —
+    # and a requirement the installed version already satisfies installs
+    # nothing at all (the earlier return). Demanding ALL probes blamed
+    # mcp<=1.24.0 for rejecting an INCLUSIVE ceiling's probe while admitting
+    # the floor it can never hold the package below (Patch76 on #2245).
+    return not any(
         parsed.specifier.contains(probe, prereleases=True) for probe in probes
     )
 
@@ -332,8 +337,9 @@ def _compliance_probes(violated: str) -> list[str]:
     finite exclusion set can never empty the probes (CodeRabbit on #2245,
     three rounds of it: ``>1.24`` probed with ``1.24`` acquitted a
     ``==1.24`` pinner; ``>=1.24,!=1.24`` yielded no probe; a four-exclusion
-    spec exhausted a fixed chain). Upper bounds contribute candidates the
-    filter drops. A wildcard pin's trailing ``.*`` is stripped so the
+    spec exhausted a fixed chain). A STRICT upper bound contributes candidates
+    the filter drops; an inclusive ceiling survives as a named probe, which
+    is one reason innocence needs only one admitted probe. A wildcard pin's trailing ``.*`` is stripped so the
     candidate parses as a version, and every candidate is checked against
     the FULL violated specifier before it may serve as a probe: a probe
     that violates the specifier would acquit exactly the pin that preserves
