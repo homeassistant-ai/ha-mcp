@@ -53,10 +53,12 @@ from packaging.version import InvalidVersion, Version
 # clause, which would read as a package named "(requested)".
 REQUESTED_BY = "(requested)"
 
-# Synthesized compliance-probe successors chained per seed, so a pointwise
-# exclusion of one step does not empty the probe list. Small on purpose:
-# every realistic exclusion names one or two points, and past those a range
-# is doing the excluding, where an empty list is the honest answer.
+# Synthesized compliance-probe successors chained per seed. Seeds include
+# every clause's version — a ``!=`` exclusion names the exact point to step
+# past, so any finite set of pointwise exclusions is defeated by
+# construction (each excluded point seeds its own successor); the chain
+# depth only helps mixed shapes. Past that, a RANGE is doing the excluding,
+# where an empty probe list is the honest answer.
 _SUCCESSOR_STEPS = 3
 
 
@@ -323,15 +325,22 @@ def _marker_inactive(marker: Marker | None) -> bool:
 def _compliance_probes(violated: str) -> list[str]:
     """Version literals a compliant install could sit at, read from ``violated``.
 
-    The lower-bound-ish clauses (``>=``, ``==``, ``===``, ``~=``, ``>``) seed
-    the candidates; upper bounds only exclude. A wildcard pin's trailing
-    ``.*`` is stripped so the candidate parses as a version, and every
-    candidate is checked against the FULL violated specifier before it may
-    serve as a probe: a probe that violates the specifier would acquit
-    exactly the pin that preserves the conflict, and an empty probe list
-    flips the caller conservative, blaming integrations that are compatible
-    (both CodeRabbit on #2245: ``>1.24`` probed with ``1.24`` acquitted a
-    ``==1.24`` pinner, and ``>=1.24,!=1.24`` yielded no probe at all).
+    EVERY clause seeds candidates — its version plus a bounded successor
+    chain. Lower bounds name the floor; a ``!=`` exclusion names the exact
+    point to step past, which is what terminates the pointwise-exclusion
+    family for good: each excluded point seeds its own successor, so a
+    finite exclusion set can never empty the probes (CodeRabbit on #2245,
+    three rounds of it: ``>1.24`` probed with ``1.24`` acquitted a
+    ``==1.24`` pinner; ``>=1.24,!=1.24`` yielded no probe; a four-exclusion
+    spec exhausted a fixed chain). Upper bounds contribute candidates the
+    filter drops. A wildcard pin's trailing ``.*`` is stripped so the
+    candidate parses as a version, and every candidate is checked against
+    the FULL violated specifier before it may serve as a probe: a probe
+    that violates the specifier would acquit exactly the pin that preserves
+    the conflict, and an empty probe list flips the caller conservative,
+    blaming integrations that are compatible. A compliant region reachable
+    only strictly between adjacent named points remains conservatively
+    unprobed — the stated boundary of this scheme.
 
     NAMED versions outrank synthesized ones: when any seed the violated
     specifier itself names survives the filter, only those serve as probes,
@@ -349,20 +358,12 @@ def _compliance_probes(violated: str) -> list[str]:
     named: list[str] = []
     synthesized: list[str] = []
     for clause in specifier:
-        if clause.operator not in (">=", "==", "===", "~=", ">"):
-            continue
         base = clause.version.rstrip(".*").rstrip(".")
         try:
             parsed = Version(base)
         except InvalidVersion:
             continue
         named.append(base)
-        # A bounded chain rather than one successor: a pointwise ``!=``
-        # exclusion of the first synthesized step must not empty the probe
-        # list (CodeRabbit on #2245). A RANGE that excludes the whole
-        # neighborhood still yields nothing, and the caller's conservative
-        # verdict is then correct — the compliant region may genuinely sit
-        # beyond anything these seeds can name.
         step = parsed
         for _ in range(_SUCCESSOR_STEPS):
             candidate = _successor(step)

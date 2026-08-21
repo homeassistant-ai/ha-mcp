@@ -513,6 +513,19 @@ class TestRequirementForcesConflict:
         assert not requirement_forces_conflict("mcp>=1", excluded_successor)
         assert requirement_forces_conflict("mcp==1.24", excluded_successor)
 
+    def test_many_pointwise_exclusions_cannot_exhaust_the_probes(self):
+        """CodeRabbit on #2245: each excluded point seeds its own successor,
+        so a finite exclusion set can never empty the probe list however
+        long it grows."""
+        exhausted = DependencyViolation(
+            package="mcp",
+            installed="1.24",
+            requirement="mcp>=1.24,!=1.24,!=1.24.0.1,!=1.24.0.2,!=1.24.0.3",
+            required_by="something 1.0",
+        )
+        assert not requirement_forces_conflict("mcp>=1", exhausted)
+        assert requirement_forces_conflict("mcp==1.24", exhausted)
+
     def test_missing_package_judged_by_probes_alone(self):
         missing = DependencyViolation(
             package="mcp",
