@@ -17,10 +17,9 @@ that tree.
 
 The embedded lane's session container is the only one that has it: the plain
 container lane runs the server inside the pytest process and never installs
-ha-mcp into the HA image at all. So this is a runtime skip on every other
-backend rather than a marker — the same trade its neighbour
-``test_embedded_no_stomp.py`` makes, with the same tripwire, because a runtime
-skip is invisible to the suite's mass-skip detector.
+ha-mcp into the HA image at all. Gated by the ``embedded_only`` collection
+marker (like its neighbour ``test_embedded_no_stomp.py``), so the mass-skip
+ceilings account for the skip on every other lane.
 """
 
 from __future__ import annotations
@@ -69,33 +68,7 @@ print(
 )
 """
 
-# Backend labels conftest can hand out. An UNKNOWN one fails loudly instead of
-# skipping: a runtime skip is invisible to the mass-skip detector, so a renamed
-# label would otherwise disable this guard forever with nothing noticing. Copied
-# from test_embedded_no_stomp.py, which makes the same trade for the same
-# reason — keep the two lists in step.
-_KNOWN_BACKENDS = {
-    "container",
-    "embedded",
-    "haos",
-    "haos_stdio",
-    "haos_inaddon",
-    "haos_embedded",
-}
-
-
-def _skip_unless_embedded(info) -> None:
-    backend = info.get("backend")
-    assert backend in _KNOWN_BACKENDS, (
-        f"unknown backend label {backend!r} — the conftest's backend names "
-        "changed; update this guard so it keeps running on the embedded lane"
-    )
-    if backend != "embedded":
-        pytest.skip(
-            "only the embedded testcontainer backend installs ha-mcp into the "
-            "Home Assistant image, which is the tree this audit is about "
-            "(E2E_BACKEND=embedded)"
-        )
+pytestmark = pytest.mark.embedded_only
 
 
 def _run_audit_probe(container) -> dict:
@@ -117,8 +90,6 @@ def test_dependency_audit_finds_nothing_on_a_healthy_embedded_install(
     ha_container_with_fresh_config,
 ):
     info = ha_container_with_fresh_config
-    _skip_unless_embedded(info)
-
     report = _run_audit_probe(info["container"])
 
     # Without an installed root the audit reports that root as its only

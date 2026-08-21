@@ -357,6 +357,43 @@ class TestRequirementForcesConflict:
         assert not requirement_forces_conflict("mcp>=1", wildcard)
         assert requirement_forces_conflict("mcp==1.9.0", wildcard)
 
+    def test_inactive_environment_marker_is_innocent(self):
+        """CodeRabbit on #2245: HA never installs a marker-inactive requirement."""
+        assert not requirement_forces_conflict(
+            f'mcp=={_PINNED_MCP}; python_version < "3"', self._VIOLATION
+        )
+
+    def test_active_environment_marker_still_forces(self):
+        assert requirement_forces_conflict(
+            f'mcp=={_PINNED_MCP}; python_version >= "3"', self._VIOLATION
+        )
+
+    def test_extra_scoped_marker_is_innocent(self):
+        """``extra`` evaluates to the empty string outside an extras install.
+
+        pip installing a manifest requirement never activates extras, so an
+        ``extra == "cli"``-scoped pin is never enforced — packaging answers
+        a clean False rather than raising, and innocent is the right verdict.
+        """
+        assert not requirement_forces_conflict(
+            f'mcp=={_PINNED_MCP}; extra == "cli"', self._VIOLATION
+        )
+
+    def test_exclusive_floor_boundary_pin_forces(self):
+        """CodeRabbit on #2245: the ``>`` bound itself is not a compliant probe.
+
+        With ``mcp>1.24`` violated and 1.24 installed, a ``mcp==1.24`` pin
+        preserves the conflict — probing with 1.24 would acquit it.
+        """
+        boundary = DependencyViolation(
+            package="mcp",
+            installed="1.24",
+            requirement="mcp>1.24",
+            required_by="something 1.0",
+        )
+        assert requirement_forces_conflict("mcp==1.24", boundary)
+        assert not requirement_forces_conflict("mcp>=1", boundary)
+
     def test_missing_package_judged_by_probes_alone(self):
         missing = DependencyViolation(
             package="mcp",

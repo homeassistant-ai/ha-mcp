@@ -246,12 +246,17 @@ def requirement_forces_conflict(
     with no probeable clause — count as forcing: a culprit hidden by a parse
     gap is worse than one report too many, which the user can dismiss.
     A bare name with no specifier is always innocent; it is satisfied by
-    whatever is installed.
+    whatever is installed. So is a requirement whose environment marker is
+    inactive on this interpreter: Home Assistant evaluates the marker and
+    never installs the requirement at all. A marker that cannot be evaluated
+    keeps the conservative path — the specifier is still judged.
     """
     try:
         parsed = Requirement(requirement)
     except InvalidRequirement:
         return True
+    if _marker_inactive(parsed.marker):
+        return False
     if not list(parsed.specifier):
         return False
     if violation.installed is not None:
@@ -270,29 +275,59 @@ def requirement_forces_conflict(
     )
 
 
+def _marker_inactive(marker: Marker | None) -> bool:
+    """Whether ``marker`` provably does NOT apply on this interpreter.
+
+    Only a clean False evaluation proves inactivity; no marker, a True one,
+    and one that cannot be evaluated all return False so the caller keeps
+    judging the specifier — the conservative direction.
+    """
+    if marker is None:
+        return False
+    try:
+        return not marker.evaluate()
+    except (UndefinedComparison, UndefinedEnvironmentName):
+        return False
+
+
 def _compliance_probes(violated: str) -> list[str]:
     """Version literals a compliant install could sit at, read from ``violated``.
 
-    The lower-bound-ish clauses (``>=``, ``==``, ``===``, ``~=``, ``>``) name
-    the versions the dependent actually needs; upper bounds only exclude. A
-    wildcard pin's trailing ``.*`` is stripped so the probe parses as a
-    version. Probing the ``>`` bound itself is a deliberate approximation —
-    a requirement that admits the bound admits its neighborhood.
+    The lower-bound-ish clauses (``>=``, ``==``, ``===``, ``~=``, ``>``) seed
+    the candidates (the version itself, plus a nearby higher one for an
+    exclusive bound); upper bounds only exclude. A wildcard pin's trailing
+    ``.*`` is stripped so the candidate parses as a version. Every candidate
+    is then checked against the FULL violated specifier before it may serve
+    as a probe: an exclusive floor's own bound does not satisfy it, and a
+    probe that violates the specifier would acquit exactly the pin that
+    preserves the conflict (CodeRabbit on #2245: probing ``>1.24`` with
+    ``1.24`` judged a ``==1.24`` pinner innocent). Candidates the specifier
+    rejects are dropped; when none survive the caller stays conservative.
     """
     try:
         specifier = Requirement(violated).specifier
     except InvalidRequirement:
         return []
-    probes: list[str] = []
+    candidates: list[str] = []
     for clause in specifier:
         if clause.operator not in (">=", "==", "===", "~=", ">"):
             continue
-        candidate = clause.version.rstrip(".*").rstrip(".")
+        base = clause.version.rstrip(".*").rstrip(".")
+        candidates.append(base)
+        if clause.operator == ">":
+            # The smallest PEP 440 step above the bound that any upper bound
+            # tighter than one release segment still admits.
+            candidates.append(base + ".0.1")
+    probes: list[str] = []
+    for candidate in candidates:
         try:
             Version(candidate)
         except InvalidVersion:
             continue
-        probes.append(candidate)
+        if candidate in probes:
+            continue
+        if specifier.contains(candidate, prereleases=True):
+            probes.append(candidate)
     return probes
 
 
