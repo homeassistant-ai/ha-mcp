@@ -335,17 +335,23 @@ def _compliance_probes(violated: str) -> list[str]:
 def _successor(version: Version) -> str:
     """A nearby strictly-higher version sharing ``version``'s PEP 440 shape.
 
-    A prerelease steps its prerelease number (``1.0rc1`` -> ``1.0rc2``):
-    release segments cannot follow a prerelease tag, so the release form's
-    ``.0.1`` suffix would not parse and an excluded prerelease floor would
-    lose its probe (CodeRabbit on #2245). Every other shape gains a trailing
-    ``.0.1`` release segment — the smallest step an upper bound tighter than
-    one release segment still admits. Shapes where that suffix does not
-    parse either (post/dev releases) are dropped by the caller's filter.
+    The TERMINAL segment steps — dev, then post, then prerelease number —
+    because release segments cannot follow any of those tags, so the release
+    form's ``.0.1`` suffix would not parse and an excluded dev/post/
+    prerelease floor would lose its probe (CodeRabbit on #2245, both the
+    prerelease and the post/dev shapes). A plain release gains a trailing
+    ``.0.1`` segment — the smallest step an upper bound tighter than one
+    release segment still admits.
     """
+    epoch = f"{version.epoch}!" if version.epoch else ""
+    release = ".".join(str(part) for part in version.release)
+    pre = f"{version.pre[0]}{version.pre[1]}" if version.pre is not None else ""
+    if version.dev is not None:
+        post = f".post{version.post}" if version.post is not None else ""
+        return f"{epoch}{release}{pre}{post}.dev{version.dev + 1}"
+    if version.post is not None:
+        return f"{epoch}{release}{pre}.post{version.post + 1}"
     if version.pre is not None:
-        epoch = f"{version.epoch}!" if version.epoch else ""
-        release = ".".join(str(part) for part in version.release)
         return f"{epoch}{release}{version.pre[0]}{version.pre[1] + 1}"
     return f"{version}.0.1"
 

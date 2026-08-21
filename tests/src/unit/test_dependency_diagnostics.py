@@ -426,6 +426,31 @@ class TestRequirementForcesConflict:
         assert not requirement_forces_conflict("mcp>=1.0rc1", excluded_rc)
         assert requirement_forces_conflict("mcp==1.0rc1", excluded_rc)
 
+    def test_excluded_post_and_dev_floors_still_yield_probes(self):
+        """CodeRabbit on #2245: post/dev seeds need same-shape successors.
+
+        ``1.0.post1.0.1`` and ``1.0.dev1.0.1`` are not valid PEP 440
+        versions, so without stepping the terminal segment these excluded
+        floors would lose every probe and blame compatible integrations.
+        """
+        excluded_post = DependencyViolation(
+            package="mcp",
+            installed="1.0.post1",
+            requirement="mcp>=1.0.post1,!=1.0.post1",
+            required_by="something 1.0",
+        )
+        assert not requirement_forces_conflict("mcp>=1", excluded_post)
+        assert requirement_forces_conflict("mcp==1.0.post1", excluded_post)
+
+        excluded_dev = DependencyViolation(
+            package="mcp",
+            installed="1.0.dev1",
+            requirement="mcp>=1.0.dev1,!=1.0.dev1",
+            required_by="something 1.0",
+        )
+        assert not requirement_forces_conflict("mcp>=1.0.dev1", excluded_dev)
+        assert requirement_forces_conflict("mcp==1.0.dev1", excluded_dev)
+
     def test_missing_package_judged_by_probes_alone(self):
         missing = DependencyViolation(
             package="mcp",

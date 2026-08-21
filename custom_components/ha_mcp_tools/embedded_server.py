@@ -1315,11 +1315,12 @@ class EmbeddedServerManager:
     def _audit_dist_name(self) -> str:
         """Distribution whose requirement graph the audit walks (blocking).
 
-        A pip-spec OVERRIDE names its root explicitly — by the distribution
-        its requirement installs (:meth:`_replaced_dist_name`: a pin on
-        ``ha-mcp`` names the stable distribution whatever the channel
-        selector says), or as ``ha-mcp`` for a bare URL, since a repository
-        tarball installs under that name on every channel. An explicit root
+        A pip-spec OVERRIDE names its root explicitly — the literal
+        distribution its requirement installs (:func:`_override_dist_name`:
+        a pin on ``ha-mcp``, or any ``name @ url`` form, names that
+        distribution whatever the channel selector says), or ``ha-mcp`` for
+        a bare URL, since a repository tarball installs under that name on
+        every channel. An explicit root
         is returned even with its metadata missing: auditing it then
         reports that root as the violation — the true story when its
         install failed — where any fallback would walk a stale graph
@@ -1333,7 +1334,7 @@ class EmbeddedServerManager:
         instead of the real conflict.
         """
         if self._pip_spec_override:
-            named = self._replaced_dist_name()
+            named = _override_dist_name(self._pip_spec)
             if named is None and _spec_names_no_distribution(self._pip_spec):
                 named = DIST_NAME_STABLE
             if named is not None:
@@ -2313,6 +2314,22 @@ def _pin_moves_off_installed(spec: str, installed_version: str) -> bool:
         # real, whatever version it names.
         return False
     return not requirement.specifier.contains(installed_version, prereleases=True)
+
+
+def _override_dist_name(spec: str) -> str | None:
+    """Distribution name a pip-spec override installs, or None for a bare URL.
+
+    Unlike :meth:`EmbeddedServerManager._replaced_dist_name` — which maps
+    onto the two known channel distributions for the replaced-source
+    checks — the audit needs the LITERAL name: an override may install an
+    arbitrary distribution (``acme-ha-mcp @ file:///pkg.whl``), and that
+    distribution's graph is the one the worker imports (CodeRabbit on
+    #2245).
+    """
+    try:
+        return Requirement(spec).name
+    except InvalidRequirement:
+        return None
 
 
 def _spec_names_no_distribution(spec: str) -> bool:

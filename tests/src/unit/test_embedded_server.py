@@ -2090,6 +2090,25 @@ class TestAuditDistName:
         monkeypatch.setattr(es, "_dist_installed", lambda name: True)
         assert mgr._audit_dist_name() == DIST_NAME_STABLE
 
+    def test_named_url_override_audits_its_own_distribution(
+        self, tmp_path, monkeypatch
+    ):
+        """An override may install an ARBITRARY distribution; audit that one.
+
+        ``name @ url`` parses, so the bare-URL stable fallback never fires,
+        and mapping onto the two channel dists would fall back to the
+        channel's stale graph (CodeRabbit on #2245).
+        """
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={
+                OPT_CHANNEL: CHANNEL_DEV,
+                OPT_PIP_SPEC: "acme-ha-mcp @ file:///package.whl",
+            },
+        )
+        monkeypatch.setattr(es, "_dist_installed", lambda name: True)
+        assert mgr._audit_dist_name() == "acme-ha-mcp"
+
     def test_explicit_root_survives_missing_metadata(self, tmp_path, monkeypatch):
         """An explicit root is audited even when its metadata is absent.
 

@@ -201,8 +201,12 @@ place — so also check that comment's `updated_at`. After each CodeRabbit
 review, sweep the full bodies before calling the round clean, e.g.:
 
 ```bash
+# Findings hidden in review bodies (positive counts only):
 gh api repos/{owner}/{repo}/pulls/{n}/reviews --paginate --jq '.[].body' \
-  | grep -oiE "outside diff range[^<]*|nitpick comments \([0-9]+\)|actionable comments posted: [0-9]+"
+  | grep -oiE "(outside diff range|nitpick) comments \([1-9][0-9]*\)|actionable comments posted: [1-9][0-9]*"
+# In-place walkthrough edits (a findings-free pass posts no review row):
+gh api repos/{owner}/{repo}/issues/{n}/comments --paginate \
+  --jq '.[] | select(.user.login=="coderabbitai[bot]") | .updated_at'
 ```
 
 Any `Outside diff range` or `Nitpick` hit means findings only the full body
