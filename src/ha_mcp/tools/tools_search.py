@@ -2459,8 +2459,10 @@ class SearchTools:
                     area_filter,
                     group_by_domain=True,
                     include_hidden=include_hidden_bool,
-                    include_membership=bool(
-                        _requested_membership(parsed_result_fields)
+                    **(
+                        {"include_membership": True}
+                        if _requested_membership(parsed_result_fields)
+                        else {}
                     ),
                 )
                 if query and query.strip():
@@ -3316,8 +3318,10 @@ class SearchTools:
                     include_attributes=bool(
                         _requested_membership(parsed_result_fields)
                     ),
-                    include_membership=bool(
-                        _requested_membership(parsed_result_fields)
+                    **(
+                        {"include_membership": True}
+                        if _requested_membership(parsed_result_fields)
+                        else {}
                     ),
                     prefetched_states=prefetched_states,
                     prefetched_registry=prefetched_registry,
