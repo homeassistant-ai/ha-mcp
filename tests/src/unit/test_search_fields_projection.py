@@ -704,6 +704,16 @@ class TestHaSearchEntitiesStateFilter(_SearchToolFixture):
 class TestHaSearchEntitiesResultFields(_SearchToolFixture):
     """Tests for result_fields= per-record projection (issue #1199)."""
 
+    def test_tool_description_guides_exclusion_safe_membership_request(
+        self, search_tool
+    ):
+        """Tell models to opt into membership before exclusionary control."""
+        description = search_tool.__doc__ or ""
+
+        assert 'control requests with exclusions such as "except"' in description
+        assert "include `is_group` and `member_entity_ids`" in description
+        assert "prefer leaf entities" in description
+
     @pytest.mark.asyncio
     async def test_result_fields_projects_entity_records(self, search_tool):
         """result_fields=['entity_id','state'] limits each record to those keys."""

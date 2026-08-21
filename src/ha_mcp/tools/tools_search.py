@@ -1932,6 +1932,11 @@ class SearchTools:
         Use this whenever you need to find something in HA without deciding
         entity-name vs config-body search up front.
 
+        For control requests with exclusions such as "except", "excluding", or
+        "but not", include `is_group` and `member_entity_ids` in `result_fields`.
+        Do not control an aggregate whose members include an excluded entity;
+        prefer leaf entities when the exception cannot be verified safely.
+
         When NOT to use:
           - To read a known entity_id's state: use `ha_get_state` (cheaper).
           - To inspect one automation/script/scene config by id: use the
@@ -1962,6 +1967,10 @@ class SearchTools:
         Examples:
             - List sensors in an area: ha_search(domain_filter="sensor", area_filter="Living Room")
             - Find a light by name: ha_search("kitchen", domain_filter="light")
+            - Find lights safely before an "all except one" control request:
+              ha_search("living room", domain_filter="light",
+              result_fields=["entity_id", "friendly_name", "is_group",
+              "member_entity_ids"])
             - Which automations use an entity: ha_search("light.bed_light")
             - Scenes touching a light: ha_search("light.kitchen", search_types=["scene"])
             - Narrow the response to the entity bucket: ha_search("kitchen", fields=["entities"])
