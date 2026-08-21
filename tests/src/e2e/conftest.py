@@ -259,7 +259,9 @@ def _apply_haos_tls_skip(item: Any, enabled: bool, skip_marker: Any) -> None:
         item.add_marker(skip_marker)
 
 
-def _apply_embedded_only_skip(item, embedded_selected, skip_marker):
+def _apply_embedded_only_skip(
+    item: Any, embedded_selected: bool, skip_marker: Any
+) -> None:
     """Skip an ``embedded_only`` item everywhere but the embedded lane.
 
     Split out of ``pytest_collection_modifyitems`` for the same reason as

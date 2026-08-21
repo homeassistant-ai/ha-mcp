@@ -160,7 +160,12 @@ def audit_dependency_graph(
             # present-but-different origin stays unjudged, since pip
             # normalizes URLs and a re-hosted identical artifact is fine).
             if requirement.url is not None:
-                unsatisfied = not _dist_has_direct_url(child_dist)
+                # version non-None on this branch too: a dist whose METADATA
+                # yields no version would otherwise render as "not installed"
+                # in the violation sentence (Patch76 review on #2245).
+                unsatisfied = version is not None and not _dist_has_direct_url(
+                    child_dist
+                )
             else:
                 unsatisfied = version is not None and not _specifier_allows(
                     requirement, version
@@ -313,23 +318,30 @@ def _compliance_probes(violated: str) -> list[str]:
     """Version literals a compliant install could sit at, read from ``violated``.
 
     The lower-bound-ish clauses (``>=``, ``==``, ``===``, ``~=``, ``>``) seed
-    the candidates — the version itself plus a nearby higher successor, so a
-    seed the specifier itself rejects (an exclusive ``>`` bound, a ``!=``
-    exclusion sitting on the floor) still leaves a compliant probe; upper
-    bounds only exclude. A wildcard pin's trailing ``.*`` is stripped so the
-    candidate parses as a version. Every candidate is then checked against
-    the FULL violated specifier before it may serve as a probe: a probe that
-    violates the specifier would acquit exactly the pin that preserves the
-    conflict, and an empty probe list flips the caller conservative, blaming
-    integrations that are compatible (both CodeRabbit on #2245: ``>1.24``
-    probed with ``1.24`` acquitted a ``==1.24`` pinner, and
-    ``>=1.24,!=1.24`` yielded no probe at all).
+    the candidates; upper bounds only exclude. A wildcard pin's trailing
+    ``.*`` is stripped so the candidate parses as a version, and every
+    candidate is checked against the FULL violated specifier before it may
+    serve as a probe: a probe that violates the specifier would acquit
+    exactly the pin that preserves the conflict, and an empty probe list
+    flips the caller conservative, blaming integrations that are compatible
+    (both CodeRabbit on #2245: ``>1.24`` probed with ``1.24`` acquitted a
+    ``==1.24`` pinner, and ``>=1.24,!=1.24`` yielded no probe at all).
+
+    NAMED versions outrank synthesized ones: when any seed the violated
+    specifier itself names survives the filter, only those serve as probes,
+    and the nearby higher successors stand in solely when none do (an
+    exclusive ``>`` bound, a floor exclusion). A verdict must never be
+    decided by a version the probe invented while a named one exists —
+    ``mcp<=1.24.0`` admits the named floor of ``mcp<2.0,>=1.24.0`` and
+    cannot hold the package below it, but rejecting the synthesized
+    ``1.24.0.0.1`` used to get it blamed (Patch76 review on #2245).
     """
     try:
         specifier = Requirement(violated).specifier
     except InvalidRequirement:
         return []
-    candidates: list[str] = []
+    named: list[str] = []
+    synthesized: list[str] = []
     for clause in specifier:
         if clause.operator not in (">=", "==", "===", "~=", ">"):
             continue
@@ -338,17 +350,22 @@ def _compliance_probes(violated: str) -> list[str]:
             parsed = Version(base)
         except InvalidVersion:
             continue
-        candidates += [base, _successor(parsed)]
-    probes: list[str] = []
-    for candidate in candidates:
-        if candidate in probes:
-            continue
+        named.append(base)
+        synthesized.append(_successor(parsed))
+
+    def _surviving(candidates: list[str]) -> list[str]:
         # contains() answers False for a candidate it cannot parse (the
         # same quirk _specifier_allows documents), so a successor shape
         # that fails to parse is filtered here, never raised.
-        if specifier.contains(candidate, prereleases=True):
-            probes.append(candidate)
-    return probes
+        probes: list[str] = []
+        for candidate in candidates:
+            if candidate not in probes and specifier.contains(
+                candidate, prereleases=True
+            ):
+                probes.append(candidate)
+        return probes
+
+    return _surviving(named) or _surviving(synthesized)
 
 
 def _successor(version: Version) -> str:
@@ -622,7 +639,11 @@ def _action_sentence(
 ) -> str:
     """The closing instruction, scaled to how much the diagnosis identified."""
     if pinners:
-        subject = "integration" if len(pinners) == 1 else "integrations"
+        # Distinct domains, not entries: one integration pinning two
+        # violated packages is still one integration to update or remove
+        # (Patch76 review on #2245).
+        domains = {pinner.domain for pinner in pinners}
+        subject = "integration" if len(domains) == 1 else "integrations"
         # The reinstall clause is load-bearing on the no-install fast path
         # (a pinned server spec, or auto-update off): removing the
         # integration deletes its pin but restores nothing, and the next

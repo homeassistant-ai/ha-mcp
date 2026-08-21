@@ -2185,6 +2185,27 @@ class TestReadinessProbe:
         with pytest.raises(es.EmbeddedServerError, match="worker thread crashed"):
             await mgr._async_wait_until_ready()
 
+    async def test_wait_ready_surfaces_worker_composed_error_verbatim(self, tmp_path):
+        """A worker-composed EmbeddedServerError passes through UNWRAPPED.
+
+        The passthrough branch of _worker_startup_failure carries the
+        dependency diagnosis and its failure kind; re-wrapping is what
+        produced the doubled "failed to start:" prefix (#2239, Patch76
+        review: this branch had no test that goes red on regression).
+        """
+        mgr, hass, _entry = _manager(tmp_path)
+        hass.loop.time = MagicMock(return_value=0.0)
+        composed = es.EmbeddedServerError(
+            "Installed mcp 1.14.1 does not satisfy 'mcp>=1.24.0'.",
+            kind="package",
+        )
+        mgr._thread_exc = composed
+        with pytest.raises(es.EmbeddedServerError) as excinfo:
+            await mgr._async_wait_until_ready()
+        assert excinfo.value is composed
+        assert excinfo.value.kind == "package"
+        assert "failed to start" not in str(excinfo.value)
+
     async def test_wait_ready_raises_when_thread_exited(self, tmp_path):
         mgr, hass, _entry = _manager(tmp_path)
         hass.loop.time = MagicMock(return_value=0.0)

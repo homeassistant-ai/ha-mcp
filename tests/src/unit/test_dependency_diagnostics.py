@@ -381,6 +381,16 @@ class TestRequirementForcesConflict:
         assert not requirement_forces_conflict("mcp>=1", wildcard)
         assert requirement_forces_conflict("mcp==1.9.0", wildcard)
 
+    def test_upper_bound_admitting_the_named_floor_is_innocent(self):
+        """Patch76 review on #2245: a named probe outranks a synthesized one.
+
+        ``mcp<=1.24.0`` admits the violated spec's own floor, so enforcing
+        it can never hold the package below that floor — blaming it for
+        rejecting the invented successor 1.24.0.0.1 pointed the user at an
+        integration that cannot be the culprit.
+        """
+        assert not requirement_forces_conflict("mcp<=1.24.0", self._VIOLATION)
+
     def test_inactive_environment_marker_is_innocent(self):
         """CodeRabbit on #2245: HA never installs a marker-inactive requirement."""
         assert not requirement_forces_conflict(
@@ -667,6 +677,23 @@ class TestDescribeDependencyFailure:
         assert "conflicting integrations" in message
         assert "one" in message
         assert "two" in message
+
+    def test_one_domain_with_two_pins_reads_as_singular(self):
+        """Patch76 review on #2245: one integration pinning two violated
+        packages is still one integration to update or remove."""
+        message = describe_dependency_failure(
+            None,
+            [],
+            [
+                PinningIntegration(domain="one", name="One", requirement="mcp==1.0"),
+                PinningIntegration(
+                    domain="one", name="One", requirement="websockets==9.0"
+                ),
+            ],
+        )
+
+        assert "conflicting integration," in message
+        assert "conflicting integrations" not in message
 
     def test_root_exception_alone_still_yields_an_action(self):
         message = describe_dependency_failure(ImportError(_ICON_IMPORT_ERROR), [], [])
