@@ -6,6 +6,7 @@ This module provides entity search, system overview, deep search, and state retr
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, cast
 
@@ -597,10 +598,20 @@ def _apply_by_domain_grouping(
         by_domain = {d: ents[:per_domain_limit_int] for d, ents in by_domain.items()}
     if parsed_result_fields is not None:
         by_domain = {
-            d: _project_records(ents, parsed_result_fields)
+            d: _project_records(ents, _effective_result_fields(parsed_result_fields))
             for d, ents in by_domain.items()
         }
     data["by_domain"] = by_domain
+
+
+def _effective_result_fields(parsed_result_fields: list[str]) -> list[str]:
+    """Retain is_group whenever member_entity_ids is projected."""
+    if (
+        "member_entity_ids" in parsed_result_fields
+        and "is_group" not in parsed_result_fields
+    ):
+        return [*parsed_result_fields, "is_group"]
+    return parsed_result_fields
 
 
 def _apply_result_fields_to_response(
@@ -611,9 +622,11 @@ def _apply_result_fields_to_response(
     if parsed_result_fields is None or "results" not in data:
         return
     orig = data["results"]
-    data["results"] = _project_records(orig, parsed_result_fields)
+    data["results"] = _project_records(
+        orig, _effective_result_fields(parsed_result_fields)
+    )
     warning_fields = [
-        field for field in parsed_result_fields if field not in _MEMBERSHIP_FIELDS
+        field for field in parsed_result_fields if field != "member_entity_ids"
     ]
     _warn = (
         _result_fields_warning(orig, data["results"], warning_fields)
@@ -802,10 +815,16 @@ def _requested_enrichment(parsed_result_fields: list[str] | None) -> tuple[str, 
 
 
 def _requested_membership(parsed_result_fields: list[str] | None) -> tuple[str, ...]:
-    """Membership fields named by the caller, in canonical order."""
+    """Return requested membership fields, retaining the group discriminator.
+
+    A member-only projection still includes is_group so a redacted group,
+    an empty group, and a leaf entity remain distinguishable.
+    """
     if not parsed_result_fields:
         return ()
     requested = set(parsed_result_fields)
+    if "member_entity_ids" in requested:
+        requested.add("is_group")
     return tuple(field for field in _MEMBERSHIP_FIELDS if field in requested)
 
 
@@ -813,14 +832,21 @@ def _add_membership_fields(
     record: dict[str, Any],
     attributes: Any,
     requested: tuple[str, ...],
-    denied_member_ids: set[str] | None = None,
+    *,
+    denied_member_ids: set[str],
 ) -> None:
-    """Add requested generic membership metadata to one search record."""
+    """Add requested generic membership metadata to one search record.
+
+    Smart-search paths may mark attributes in _redact_hidden_memberships before
+    this final projection. Callers that consume that sentinel pass an explicit
+    empty denied set.
+    """
     if not requested:
         return
     members = normalize_member_entity_ids(attributes)
     redacted = bool(
-        isinstance(attributes, dict) and attributes.get("_ha_mcp_membership_redacted")
+        isinstance(attributes, Mapping)
+        and attributes.get("_ha_mcp_membership_redacted")
     ) or bool(
         members is not None
         and denied_member_ids
@@ -1119,8 +1145,13 @@ def _shape_component_search_response(
             *_requested_enrichment(parsed_result_fields),
             *_requested_membership(parsed_result_fields),
         )
+        conditional_keys = set(_requested_membership(parsed_result_fields))
         entities = [
-            {key: rec[key] for key in record_keys if key in rec}
+            {
+                key: rec[key] if key in conditional_keys else rec.get(key)
+                for key in record_keys
+                if key not in conditional_keys or key in rec
+            }
             for rec in _as_record_list(component_result.get("entities"))
         ]
         entity_has_more = bool(component_result.get("entity_has_more", False))
@@ -1539,7 +1570,9 @@ def _match_exact_search_entity(
     visibility_hidden: set[str],
     hidden_ids: set[str],
     include_hidden: bool,
+    *,
     membership_fields: tuple[str, ...] = (),
+    denied_member_ids: set[str],
 ) -> dict[str, Any] | None:
     """Score a single entity for ``_exact_match_search``, or None if it's excluded/no match."""
     entity_id = entity.get("entity_id", "")
@@ -1575,10 +1608,12 @@ def _match_exact_search_entity(
         "score": score,
         "match_type": "exact_match",
     }
-    denied_member_ids = visibility_hidden | (
-        hidden_ids if not include_hidden else set()
+    _add_membership_fields(
+        record,
+        attributes,
+        membership_fields,
+        denied_member_ids=denied_member_ids,
     )
-    _add_membership_fields(record, attributes, membership_fields, denied_member_ids)
     return record
 
 
@@ -1662,6 +1697,9 @@ async def _exact_match_search(
     )
 
     query_lower = query.lower().strip()
+    denied_member_ids = visibility_hidden | (
+        hidden_ids if not include_hidden else set()
+    )
 
     results = []
     for entity in all_entities:
@@ -1672,7 +1710,8 @@ async def _exact_match_search(
             visibility_hidden,
             hidden_ids,
             include_hidden,
-            membership_fields,
+            membership_fields=membership_fields,
+            denied_member_ids=denied_member_ids,
         )
         if match is not None:
             results.append(match)
@@ -1864,12 +1903,14 @@ class SearchTools:
                     "Project each entity-registry record to only the specified "
                     'keys (e.g. ["entity_id", "state"]). None = full records. '
                     "Base keys: entity_id, friendly_name, domain, state, score, "
-                    "match_type. Opt-in enrichment keys (joined on request): "
+                    "match_type. Opt-in enrichment/membership keys (computed on request): "
                     "area, floor, labels, aliases, is_group, member_entity_ids. "
                     "Membership is recognized only when HA explicitly exposes a "
                     "valid group_entities or legacy entity_id collection; "
                     "member IDs are sorted, direct (not recursively expanded), "
                     "and omitted if visibility/include_hidden excludes a member. "
+                    "is_group remains true when member IDs are withheld; requesting "
+                    "member_entity_ids also retains is_group. "
                     "An unknown key is rejected."
                 ),
             ),
@@ -1936,6 +1977,8 @@ class SearchTools:
         "but not", include `is_group` and `member_entity_ids` in `result_fields`.
         Do not control an aggregate whose members include an excluded entity;
         prefer leaf entities when the exception cannot be verified safely.
+        A withheld member list still returns is_group=true; absence of
+        member_entity_ids must not be interpreted as a leaf entity.
 
         When NOT to use:
           - To read a known entity_id's state: use `ha_get_state` (cheaper).
@@ -2429,7 +2472,7 @@ class SearchTools:
                     'E.g. ["entity_id", "state"] returns slim entity records. '
                     "None = full records (default). "
                     "Base keys: entity_id, friendly_name, domain, state, score, match_type. "
-                    "Opt-in enrichment keys (joined on request): area, floor, labels, aliases. "
+                    "Opt-in enrichment/membership keys (computed on request): area, floor, labels, aliases. "
                     "An unknown key is rejected."
                 ),
             ),
@@ -2864,8 +2907,13 @@ class SearchTools:
             for entity in all_area_entities
         }
         for record in results:
+            # smart_entity_search already applied visibility redaction and
+            # preserved its sentinel on the private attributes payload.
             _add_membership_fields(
-                record, attributes_by_id.get(record["entity_id"]), membership_fields
+                record,
+                attributes_by_id.get(record["entity_id"]),
+                membership_fields,
+                denied_member_ids=set(),
             )
 
         if state_filter:
@@ -2951,8 +2999,13 @@ class SearchTools:
 
         membership_fields = _requested_membership(parsed_result_fields)
         for record in all_results:
+            # search_entities_by_area already applied visibility redaction and
+            # preserved its sentinel on the private attributes payload.
             _add_membership_fields(
-                record, record.pop("attributes", None), membership_fields
+                record,
+                record.pop("attributes", None),
+                membership_fields,
+                denied_member_ids=set(),
             )
         all_results.sort(key=lambda x: (-x["score"], x["entity_id"]))
         if state_filter:
@@ -3127,6 +3180,10 @@ class SearchTools:
             and eid not in visibility_hidden
             and (include_hidden_bool or eid not in hidden_ids)
         ]
+        membership_fields = _requested_membership(parsed_result_fields)
+        denied_member_ids = visibility_hidden | (
+            hidden_ids if not include_hidden_bool else set()
+        )
 
         # Score: 100 baseline for domain membership (exact, not fuzzy);
         # penalised for hidden entries so they sort below visible peers.
@@ -3148,8 +3205,8 @@ class SearchTools:
             _add_membership_fields(
                 record,
                 attributes,
-                _requested_membership(parsed_result_fields),
-                visibility_hidden | (hidden_ids if not include_hidden_bool else set()),
+                membership_fields,
+                denied_member_ids=denied_member_ids,
             )
             scored_entities.append(record)
         scored_entities.sort(key=lambda x: (-x["score"], x["entity_id"]))
@@ -3221,6 +3278,10 @@ class SearchTools:
             and _state_matches(e, state_filter)
             and (include_hidden_bool or eid not in hidden_ids)
         ]
+        membership_fields = _requested_membership(parsed_result_fields)
+        denied_member_ids = visibility_hidden | (
+            hidden_ids if not include_hidden_bool else set()
+        )
 
         # Score: 100 baseline for state membership (exact, not fuzzy); penalised
         # for hidden entries so they sort below visible peers. ``domain`` is
@@ -3243,8 +3304,8 @@ class SearchTools:
             _add_membership_fields(
                 record,
                 attributes,
-                _requested_membership(parsed_result_fields),
-                visibility_hidden | (hidden_ids if not include_hidden_bool else set()),
+                membership_fields,
+                denied_member_ids=denied_member_ids,
             )
             scored_entities.append(record)
         scored_entities.sort(key=lambda x: (-x["score"], x["entity_id"]))
@@ -3375,8 +3436,13 @@ class SearchTools:
         if search_type == "fuzzy_search":
             membership_fields = _requested_membership(parsed_result_fields)
             for record in result.get("results", []):
+                # smart_entity_search already applied visibility redaction and
+                # preserved its sentinel on the private attributes payload.
                 _add_membership_fields(
-                    record, record.pop("attributes", None), membership_fields
+                    record,
+                    record.pop("attributes", None),
+                    membership_fields,
+                    denied_member_ids=set(),
                 )
 
         # Apply state_filter to fuzzy results BEFORE grouping so by_domain

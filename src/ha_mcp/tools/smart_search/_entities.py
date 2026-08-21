@@ -15,11 +15,22 @@ from ..helpers import exception_to_structured_error
 from ..util_helpers import merge_visibility_warnings
 from ._base import _SearchBase
 
+logger = logging.getLogger(__name__)
+
+# Bounds the per-frame response size of config/entity_registry/get_entries
+# (extended entries, ~1KB typical each) so alias enrichment can't produce an
+# over-cap WebSocket frame on large instances (#1721).
+_GET_ENTRIES_CHUNK_SIZE = 500
+
 
 def _redact_hidden_memberships(
     entities: list[dict[str, Any]], visibility_hidden: set[str]
 ) -> list[dict[str, Any]]:
-    """Mark membership whose direct IDs intersect the visibility deny-set."""
+    """Mark membership whose direct IDs intersect the visibility deny-set.
+
+    tools_search._add_membership_fields consumes this private sentinel after
+    smart-search projection, preserving is_group while withholding member IDs.
+    """
     if not visibility_hidden:
         return entities
     redacted: list[dict[str, Any]] = []
@@ -39,14 +50,6 @@ def _redact_hidden_memberships(
         else:
             redacted.append(entity)
     return redacted
-
-
-logger = logging.getLogger(__name__)
-
-# Bounds the per-frame response size of config/entity_registry/get_entries
-# (extended entries, ~1KB typical each) so alias enrichment can't produce an
-# over-cap WebSocket frame on large instances (#1721).
-_GET_ENTRIES_CHUNK_SIZE = 500
 
 
 class EntitySearchMixin(_SearchBase):
@@ -78,7 +81,7 @@ class EntitySearchMixin(_SearchBase):
                 set in the entity registry are still returned but receive
                 a score penalty so they sort below comparable visible
                 matches. Pass False to filter them out entirely.
-            include_membership: Whether to preserve explicit member metadata
+            include_membership: Whether to retain membership attributes and redaction markers
                 for opt-in search result fields.
             prefetched_states: Pre-fetched ``get_states()`` list shared by the
                 ha_search orchestrator when both search branches run; ``None``
@@ -367,16 +370,16 @@ class EntitySearchMixin(_SearchBase):
             registry_result, states_result, self.client, device_result
         )
         registry_slim = self._build_registry_slim(registry_result)
-        denied_member_ids = visibility_hidden | (
-            {
-                entity_id
-                for entity_id, entry in registry_slim.items()
-                if entry.get("hidden_by")
-            }
-            if not include_hidden
-            else set()
-        )
         if include_membership:
+            denied_member_ids = visibility_hidden | (
+                {
+                    entity_id
+                    for entity_id, entry in registry_slim.items()
+                    if entry.get("hidden_by") is not None
+                }
+                if not include_hidden
+                else set()
+            )
             entities = _redact_hidden_memberships(entities, denied_member_ids)
         survivor_ids, survivor_states = self._filter_hidden_entities(
             entities, registry_slim, include_hidden, visibility_hidden
@@ -463,7 +466,7 @@ class EntitySearchMixin(_SearchBase):
                 set in the entity registry are still grouped under their
                 area but receive a score penalty when ranked. Pass False
                 to filter them out entirely.
-            include_membership: Whether to preserve explicit member metadata
+            include_membership: Whether to retain membership attributes and redaction markers
                 for opt-in search result fields.
 
         Returns:
@@ -557,16 +560,16 @@ class EntitySearchMixin(_SearchBase):
             entity_area_resolved, hidden_entity_ids = self._resolve_entity_areas(
                 entity_reg_map, device_area_map, include_hidden, visibility_hidden
             )
-            denied_member_ids = visibility_hidden | (
-                {
-                    entity_id
-                    for entity_id, entry in entity_reg_map.items()
-                    if entry.get("hidden_by") is not None
-                }
-                if not include_hidden
-                else set()
-            )
             if include_membership:
+                denied_member_ids = visibility_hidden | (
+                    {
+                        entity_id
+                        for entity_id, entry in entity_reg_map.items()
+                        if entry.get("hidden_by") is not None
+                    }
+                    if not include_hidden
+                    else set()
+                )
                 entities = _redact_hidden_memberships(entities, denied_member_ids)
             state_map = self._build_state_map(entities)
             formatted_areas, total_entities = self._format_area_entities(

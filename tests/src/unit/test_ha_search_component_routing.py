@@ -175,6 +175,7 @@ async def test_component_fast_path_skips_legacy_fetches(tmp_path, monkeypatch) -
         c for c in ws.send_command.call_args_list if c.args[0] == "ha_mcp_tools/search"
     ]
     assert len(search_calls) == 1
+    assert "result_fields" not in search_calls[0].kwargs
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.tools_search import _entity_enrichment_fields, register_search_tools
+from ha_mcp.tools.smart_search import SmartSearchTools
+from ha_mcp.tools.tools_search import (
+    _add_membership_fields,
+    _entity_enrichment_fields,
+    register_search_tools,
+)
 from ha_mcp.tools.util_helpers import project_fields
 
 
@@ -761,13 +766,15 @@ class TestHaSearchEntitiesResultFields(_SearchToolFixture):
         ), f"healthy enrichment must not warn; got {data.get('warnings')}"
 
     @pytest.mark.asyncio
-    async def test_member_only_projection_of_leaf_does_not_warn(self, search_tool):
+    async def test_member_only_projection_retains_group_discriminator(
+        self, search_tool
+    ):
         result = await search_tool(
             query="fan",
             result_fields=["member_entity_ids"],
         )
 
-        assert result["entities"] == [{}]
+        assert result["entities"] == [{"is_group": False}]
         assert not any(
             "matched no record keys" in warning
             for warning in result.get("warnings", [])
@@ -812,28 +819,9 @@ class TestHaSearchMembershipFuzzy(_SearchToolFixture):
         return client
 
     @pytest.fixture
-    def mock_smart_tools(self):
-        smart = MagicMock()
-        smart.smart_entity_search = AsyncMock(
-            return_value={
-                "results": [
-                    {
-                        "entity_id": "light.group",
-                        "friendly_name": "Group",
-                        "domain": "light",
-                        "state": "on",
-                        "attributes": {"entity_id": {"light.two", "light.one"}},
-                        "score": 100,
-                        "match_type": "exact_name",
-                    }
-                ],
-                "total_matches": 1,
-                "has_more": False,
-                "offset": 0,
-                "limit": 10,
-                "count": 1,
-            }
-        )
+    def mock_smart_tools(self, mock_client):
+        """Use the real smart-search transform chain for membership redaction."""
+        smart = SmartSearchTools(mock_client)
         smart.deep_search = AsyncMock(
             return_value={
                 "success": True,
@@ -847,12 +835,13 @@ class TestHaSearchMembershipFuzzy(_SearchToolFixture):
         return smart
 
     @pytest.mark.asyncio
-    async def test_fuzzy_membership_is_normalized_and_attributes_are_private(
+    async def test_fuzzy_search_redacts_hidden_member_but_keeps_group(
         self, search_tool, mock_smart_tools
     ):
         result = await search_tool(
             query="group",
             exact_match=False,
+            include_hidden=False,
             result_fields=["entity_id", "is_group", "member_entity_ids"],
         )
 
@@ -860,12 +849,9 @@ class TestHaSearchMembershipFuzzy(_SearchToolFixture):
             {
                 "entity_id": "light.group",
                 "is_group": True,
-                "member_entity_ids": ["light.one", "light.two"],
             }
         ]
-        call = mock_smart_tools.smart_entity_search.await_args
-        assert call.kwargs["include_attributes"] is True
-        assert call.kwargs["include_membership"] is True
+
         assert "attributes" not in result["entities"][0]
 
     @pytest.mark.asyncio
@@ -1113,3 +1099,70 @@ class TestHaSearchAreaQueryPrefetchFailure(_SearchToolFixture):
         assert any(
             "result_fields_enrichment_failed" in r.getMessage() for r in caplog.records
         )
+
+
+@pytest.mark.asyncio
+async def test_area_search_real_chain_redacts_hidden_group_member() -> None:
+    """Exercise area membership redaction through the real smart-search mixin."""
+    client = MagicMock()
+    client.get_states = AsyncMock(
+        return_value=[
+            {
+                "entity_id": "light.area_group",
+                "state": "on",
+                "attributes": {
+                    "friendly_name": "Area Group",
+                    "group_entities": ["light.visible", "light.hidden"],
+                },
+            },
+            {
+                "entity_id": "light.visible",
+                "state": "on",
+                "attributes": {"friendly_name": "Visible"},
+            },
+            {
+                "entity_id": "light.hidden",
+                "state": "on",
+                "attributes": {"friendly_name": "Hidden"},
+            },
+        ]
+    )
+
+    async def send(payload):
+        registry_type = payload["type"]
+        if registry_type == "config/area_registry/list":
+            result = [{"area_id": "living", "name": "Living"}]
+        elif registry_type == "config/entity_registry/list":
+            result = [
+                {"entity_id": "light.area_group", "area_id": "living"},
+                {"entity_id": "light.visible", "area_id": "living"},
+                {
+                    "entity_id": "light.hidden",
+                    "area_id": "living",
+                    "hidden_by": "user",
+                },
+            ]
+        else:
+            result = []
+        return {"success": True, "result": result}
+
+    client.send_websocket_message = AsyncMock(side_effect=send)
+    smart = SmartSearchTools(client)
+    result = await smart.get_entities_by_area(
+        "Living",
+        include_hidden=False,
+        include_membership=True,
+    )
+    group = next(
+        record
+        for record in result["areas"]["living"]["entities"]["light"]
+        if record["entity_id"] == "light.area_group"
+    )
+    record: dict = {}
+    _add_membership_fields(
+        record,
+        group["_attributes"],
+        ("is_group", "member_entity_ids"),
+        denied_member_ids=set(),
+    )
+    assert record == {"is_group": True}

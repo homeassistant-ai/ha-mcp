@@ -1,5 +1,7 @@
 """Tests for generic entity-membership normalization."""
 
+from types import MappingProxyType
+
 from ha_mcp.tools.smart_search._entities import _redact_hidden_memberships
 from ha_mcp.tools.tools_search import _add_membership_fields
 from ha_mcp.utils.entity_membership import normalize_member_entity_ids
@@ -48,8 +50,8 @@ def test_invalid_modern_value_can_fall_back_to_valid_legacy_membership() -> None
     ) == ["light.legacy"]
 
 
-def test_self_reference_is_not_recursively_expanded() -> None:
-    """Normalize explicit members without attempting recursive expansion."""
+def test_member_ids_are_returned_as_an_opaque_collection() -> None:
+    """Return explicit member IDs without interpreting their relationship."""
     assert normalize_member_entity_ids(
         {"group_entities": ["light.group", "light.member"]}
     ) == ["light.group", "light.member"]
@@ -79,6 +81,7 @@ def test_visibility_denied_member_withholds_ids_but_keeps_group_signal() -> None
         record,
         redacted[0]["attributes"],
         ("is_group", "member_entity_ids"),
+        denied_member_ids=set(),
     )
 
     assert record == {"is_group": True}
@@ -101,3 +104,28 @@ def test_valid_modern_membership_takes_precedence_over_legacy() -> None:
             "entity_id": ["light.legacy"],
         }
     ) == ["light.modern"]
+
+
+def test_mapping_redaction_sentinel_is_honored() -> None:
+    """Accept immutable Mapping attributes when smart search marks redaction."""
+    attributes = MappingProxyType(
+        {
+            "group_entities": ["light.visible", "light.denied"],
+            "_ha_mcp_membership_redacted": True,
+        }
+    )
+    record: dict = {}
+    _add_membership_fields(
+        record,
+        attributes,
+        ("is_group", "member_entity_ids"),
+        denied_member_ids=set(),
+    )
+    assert record == {"is_group": True}
+
+
+def test_group_members_attribute_is_not_membership() -> None:
+    """Ignore similarly named attributes outside HA's explicit conventions."""
+    assert (
+        normalize_member_entity_ids({"group_members": ["light.not_supported"]}) is None
+    )

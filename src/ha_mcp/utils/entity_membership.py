@@ -11,10 +11,15 @@ def normalize_member_entity_ids(
 ) -> list[str] | None:
     """Return deterministic member IDs exposed by Home Assistant, if valid.
 
-    ``group_entities`` is Home Assistant's current group capability.  The
-    historical group implementations expose the same information through
-    ``entity_id``.  Strings are deliberately rejected: several non-group
-    entities use a scalar ``entity_id`` attribute for an unrelated reference.
+    group_entities is Home Assistant's current group capability; valid modern
+    membership takes precedence. Historical implementations expose the same
+    information through entity_id, which is also the fallback when the modern
+    value is absent or malformed.
+
+    None means no valid membership was exposed; an empty list means an explicitly
+    empty group. Strings are rejected because non-group entities may use a scalar
+    entity_id for an unrelated reference. Similarly named attributes such as
+    group_members are deliberately ignored.
     """
     if not isinstance(attributes, Mapping):
         return None

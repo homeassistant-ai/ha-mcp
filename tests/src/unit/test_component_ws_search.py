@@ -1567,7 +1567,13 @@ class TestScorerParity:
                 "state": "on",
             }
             match = _match_exact_search_entity(
-                entity, query_lower, None, set(), _PARITY_HIDDEN, True
+                entity,
+                query_lower,
+                None,
+                set(),
+                _PARITY_HIDDEN,
+                True,
+                denied_member_ids=set(),
             )
             if match:
                 ranked.append((match["entity_id"], match["score"]))

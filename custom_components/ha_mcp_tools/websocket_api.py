@@ -2,10 +2,10 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. It registers twenty-two commands (twenty-five capabilities —
-``dashboards_doc_search``, ``search_visibility``, and
-``search_entity_membership`` are flags on existing commands; ``info`` itself
-carries no capability entry):
+capability gate. It registers twenty-three commands. It advertises twenty-five
+capabilities: twenty-two command capabilities plus three additive flags
+(dashboards_doc_search, search_visibility, and search_entity_membership);
+the info handshake carries no capability entry:
 
 * ``ha_mcp_tools/info`` — the handshake: ``schema_version`` + ``capabilities[]``
   + ``component_version`` + advisory ``limits`` + the instance ``timezone``
@@ -14,6 +14,7 @@ carries no capability entry):
   negotiation, NOT a version floor).
 * ``ha_mcp_tools/search`` — a unified in-process search over live registries and
   states, joined and scored, mirroring today's ``ha_search`` response envelope.
+  The search_entity_membership flag gates opt-in generic group metadata.
 * ``ha_mcp_tools/overview`` — the raw in-process reads the server's
   ``get_system_overview`` + ``ha_get_overview`` wrapper consume (states,
   services, entity/device/area registries, ``hass.config``, persistent
@@ -337,7 +338,7 @@ WS_BULK_CALL_SERVICE = f"{WS_API_PREFIX}/bulk_call_service"
 # bump it (the server checks ``schema_version >= N`` before using a new shape).
 SCHEMA_VERSION = 1
 
-# Which commands exist. Grows one entry per shipped command; the server gates
+# Advertised command support and additive feature flags; the server gates
 # each consumer on ``capability in caps.capabilities``. Never remove an entry
 # without a major bump. (``info`` is always present in 1.1.0+, so it carries no
 # capability key of its own.)
@@ -1540,7 +1541,11 @@ def _project_entity(
         "aliases": rec["aliases"],
         "score": rec["score"],
         "match_type": rec["match_type"],
-        **({"is_group": rec["is_group"]} if include_membership else {}),
+        **(
+            {"is_group": rec["is_group"]}
+            if include_membership and "is_group" in rec
+            else {}
+        ),
         **(
             {"member_entity_ids": rec["member_entity_ids"]}
             if include_membership and "member_entity_ids" in rec

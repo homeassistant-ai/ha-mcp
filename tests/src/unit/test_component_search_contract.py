@@ -29,6 +29,8 @@ entity-id KEYS of ``states`` (here ``light.contractmarker_lamp``).
 
 from __future__ import annotations
 
+import pytest
+
 from ha_mcp.tools.tools_search import (
     _COMPONENT_BODY_SEARCH_TYPES,
     _VALID_SEARCH_TYPES,
@@ -402,7 +404,7 @@ def test_component_skips_membership_work_by_default(monkeypatch) -> None:
     calls: list[object] = []
 
     def tracking_normalizer(attributes):
-        """Record attributes passed through the shared membership normalizer."""
+        """Record attributes passed through the component membership normalizer."""
         calls.append(attributes)
         return original(attributes)
 
@@ -494,10 +496,10 @@ def test_result_fields_empty_group_is_explicit(monkeypatch) -> None:
     }
 
 
-def test_result_fields_membership_keys_are_independently_projectable(
+def test_member_projection_also_retains_group_discriminator(
     monkeypatch,
 ) -> None:
-    """Callers pay only for the membership signal they request."""
+    """Member IDs never lose the group/leaf discriminator."""
     result = _enrichment_component_result(monkeypatch, membership=True)
     is_group = _shape_component_search_response(
         _resolved_result_fields(["entity_id", "is_group"]), result
@@ -511,6 +513,7 @@ def test_result_fields_membership_keys_are_independently_projectable(
     }
     assert members["entities"][0] == {
         "entity_id": "light.enrichmarker",
+        "is_group": True,
         "member_entity_ids": ["light.one", "light.two"],
     }
 
@@ -583,3 +586,97 @@ def test_component_body_search_types_lockstep() -> None:
     # Every public search_types value is either component-served or on the
     # deliberate legacy-only list.
     assert {"dashboard"} == _VALID_SEARCH_TYPES - _COMPONENT_BODY_SEARCH_TYPES
+
+
+@pytest.mark.parametrize(
+    ("attributes", "expected"),
+    [
+        ({"group_entities": ["light.two", "light.one"]}, ["light.one", "light.two"]),
+        ({"group_entities": [], "entity_id": ["light.legacy"]}, []),
+        ({"entity_id": "light.reference"}, None),
+        ({"group_members": ["light.not_supported"]}, None),
+    ],
+)
+@pytest.mark.parametrize(
+    "normalizer",
+    [normalize_member_entity_ids, wsapi._normalize_member_entity_ids],
+)
+def test_membership_normalizer_artifacts_remain_in_lockstep(
+    normalizer, attributes, expected
+) -> None:
+    """Keep server and component normalization aligned across edge cases."""
+    assert normalizer(attributes) == expected
+
+
+def test_component_projection_keeps_missing_base_and_enrichment_keys(
+    monkeypatch,
+) -> None:
+    """Base and requested enrichment fields use a stable null-bearing shape."""
+    result = _enrichment_component_result(monkeypatch)
+    record = result["entities"][0]
+    record.pop("state")
+    record.pop("area")
+    shaped = _shape_component_search_response(
+        _resolved_result_fields(["entity_id", "state", "area"]),
+        result,
+    )
+    assert shaped["entities"][0] == {
+        "entity_id": "light.enrichmarker",
+        "state": None,
+        "area": None,
+    }
+
+
+def test_component_search_redacts_denied_members_through_public_projection(
+    monkeypatch,
+) -> None:
+    """Exercise visibility redaction through the real component search chain."""
+    view = make_view(
+        entity={
+            "light.membership_group": FakeRegEntry("light.membership_group"),
+            "light.visible": FakeRegEntry("light.visible"),
+            "light.denied": FakeRegEntry("light.denied"),
+        }
+    )
+    monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
+    hass = FakeHass(
+        states=[
+            FakeState(
+                "light.membership_group",
+                "on",
+                friendly_name="Membership marker",
+                group_entities=["light.visible", "light.denied"],
+            ),
+            FakeState("light.visible", "on", friendly_name="Visible"),
+            FakeState("light.denied", "on", friendly_name="Denied"),
+        ]
+    )
+    result = wsapi._do_search(
+        hass,
+        {
+            "query": "membership marker",
+            "search_types": ["entity"],
+            "exact": True,
+            "include_hidden": False,
+            "include_config": False,
+            "result_fields": ["is_group", "member_entity_ids"],
+            "visibility": {"deny_entity_ids": ["light.denied"]},
+            "limit": 10,
+            "offset": 0,
+        },
+    )
+    assert result["entities"] == [
+        {
+            "entity_id": "light.membership_group",
+            "friendly_name": "Membership marker",
+            "domain": "light",
+            "state": "on",
+            "area": None,
+            "floor": None,
+            "labels": [],
+            "aliases": [],
+            "score": 100,
+            "match_type": "exact_match",
+            "is_group": True,
+        }
+    ]
