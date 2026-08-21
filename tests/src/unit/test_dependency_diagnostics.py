@@ -410,6 +410,22 @@ class TestRequirementForcesConflict:
         assert not requirement_forces_conflict("mcp>=1", excluded_floor)
         assert requirement_forces_conflict("mcp==1.24", excluded_floor)
 
+    def test_excluded_prerelease_floor_still_yields_a_probe(self):
+        """CodeRabbit on #2245: a prerelease seed needs a prerelease successor.
+
+        ``1.0rc1.0.1`` is not a valid PEP 440 version, so without stepping
+        the prerelease number the excluded floor would lose every probe and
+        blame the compatible integration.
+        """
+        excluded_rc = DependencyViolation(
+            package="mcp",
+            installed="1.0rc1",
+            requirement="mcp>=1.0rc1,!=1.0rc1",
+            required_by="something 1.0",
+        )
+        assert not requirement_forces_conflict("mcp>=1.0rc1", excluded_rc)
+        assert requirement_forces_conflict("mcp==1.0rc1", excluded_rc)
+
     def test_missing_package_judged_by_probes_alone(self):
         missing = DependencyViolation(
             package="mcp",

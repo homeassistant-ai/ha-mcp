@@ -2090,6 +2090,20 @@ class TestAuditDistName:
         monkeypatch.setattr(es, "_dist_installed", lambda name: True)
         assert mgr._audit_dist_name() == DIST_NAME_STABLE
 
+    def test_explicit_root_survives_missing_metadata(self, tmp_path, monkeypatch):
+        """An explicit root is audited even when its metadata is absent.
+
+        Swapping to the other channel's installed dist would walk a stale
+        graph; auditing the explicit root instead reports it as missing —
+        the true story when its install failed (CodeRabbit on #2245).
+        """
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV, OPT_PIP_SPEC: "ha-mcp==9.9.9"},
+        )
+        monkeypatch.setattr(es, "_dist_installed", lambda name: name == DIST_NAME_DEV)
+        assert mgr._audit_dist_name() == DIST_NAME_STABLE
+
     def test_channel_dist_wins_without_an_override(self, tmp_path, monkeypatch):
         mgr, _hass, _entry = _manager(tmp_path, options={OPT_CHANNEL: CHANNEL_DEV})
         monkeypatch.setattr(es, "_dist_installed", lambda name: True)

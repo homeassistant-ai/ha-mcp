@@ -1315,25 +1315,30 @@ class EmbeddedServerManager:
     def _audit_dist_name(self) -> str:
         """Distribution whose requirement graph the audit walks (blocking).
 
-        The distribution the EFFECTIVE spec installs by name
-        (:meth:`_replaced_dist_name` — an override pin on ``ha-mcp`` names
-        the stable distribution whatever the channel selector says), then
-        the channel's, then whichever of the two has metadata at all: an
-        override install skips the conflicting-channel removal, so stale
-        metadata for the unselected distribution can coexist with the one
-        actually running, and auditing the stale graph would miss the real
-        conflict. A root that is not installed at all would likewise be
-        reported as the only violation instead of the real conflict.
+        A pip-spec OVERRIDE names its root explicitly — by the distribution
+        its requirement installs (:meth:`_replaced_dist_name`: a pin on
+        ``ha-mcp`` names the stable distribution whatever the channel
+        selector says), or as ``ha-mcp`` for a bare URL, since a repository
+        tarball installs under that name on every channel. An explicit root
+        is returned even with its metadata missing: auditing it then
+        reports that root as the violation — the true story when its
+        install failed — where any fallback would walk a stale graph
+        instead. Override installs skip the conflicting-channel removal, so
+        stale metadata for the unselected distribution can coexist with the
+        one actually running.
+
+        Without an override the channel's distribution is the root, falling
+        back to the other channel's when only that one has metadata —
+        auditing a root that is not installed reports the root itself
+        instead of the real conflict.
         """
-        named = self._replaced_dist_name()
-        if named is None and _spec_names_no_distribution(self._pip_spec):
-            # A bare URL names no distribution, but a repository tarball
-            # installs as ha-mcp whatever channel is selected (see
-            # _replaced_dist_name) — the dev channel's dist would otherwise
-            # win here on stale metadata alone and the audit would walk the
-            # wrong graph.
-            named = DIST_NAME_STABLE
-        preferred = named or dist_for_channel(self._channel)
+        if self._pip_spec_override:
+            named = self._replaced_dist_name()
+            if named is None and _spec_names_no_distribution(self._pip_spec):
+                named = DIST_NAME_STABLE
+            if named is not None:
+                return named
+        preferred = dist_for_channel(self._channel)
         if _dist_installed(preferred):
             return preferred
         other = DIST_NAME_STABLE if preferred == DIST_NAME_DEV else DIST_NAME_DEV

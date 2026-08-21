@@ -315,20 +315,39 @@ def _compliance_probes(violated: str) -> list[str]:
         if clause.operator not in (">=", "==", "===", "~=", ">"):
             continue
         base = clause.version.rstrip(".*").rstrip(".")
-        # The successor is the smallest PEP 440 step above the seed that an
-        # upper bound tighter than one release segment still admits.
-        candidates += [base, base + ".0.1"]
-    probes: list[str] = []
-    for candidate in candidates:
         try:
-            Version(candidate)
+            parsed = Version(base)
         except InvalidVersion:
             continue
+        candidates += [base, _successor(parsed)]
+    probes: list[str] = []
+    for candidate in candidates:
         if candidate in probes:
             continue
+        # contains() answers False for a candidate it cannot parse (the
+        # same quirk _specifier_allows documents), so a successor shape
+        # that fails to parse is filtered here, never raised.
         if specifier.contains(candidate, prereleases=True):
             probes.append(candidate)
     return probes
+
+
+def _successor(version: Version) -> str:
+    """A nearby strictly-higher version sharing ``version``'s PEP 440 shape.
+
+    A prerelease steps its prerelease number (``1.0rc1`` -> ``1.0rc2``):
+    release segments cannot follow a prerelease tag, so the release form's
+    ``.0.1`` suffix would not parse and an excluded prerelease floor would
+    lose its probe (CodeRabbit on #2245). Every other shape gains a trailing
+    ``.0.1`` release segment — the smallest step an upper bound tighter than
+    one release segment still admits. Shapes where that suffix does not
+    parse either (post/dev releases) are dropped by the caller's filter.
+    """
+    if version.pre is not None:
+        epoch = f"{version.epoch}!" if version.epoch else ""
+        release = ".".join(str(part) for part in version.release)
+        return f"{epoch}{release}{version.pre[0]}{version.pre[1] + 1}"
+    return f"{version}.0.1"
 
 
 def root_import_failure(exc: BaseException) -> BaseException:
