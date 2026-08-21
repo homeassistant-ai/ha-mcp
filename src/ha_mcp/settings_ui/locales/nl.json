@@ -470,7 +470,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Bulkbediening",
-      "description": "Bedien meerdere apparaten met ondersteuning voor bulkbewerkingen en WebSocket-tracking."
+      "description": "Beheer meerdere entiteitsacties in één verzoek."
     },
     "ha_call_event": {
       "title": "Roep Gebeurtenis aan",

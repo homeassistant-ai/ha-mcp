@@ -470,7 +470,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Amasa Kontrolo",
-      "description": "Kontrolu plurajn aparatojn kun subteno por amasa operacio kaj WebSocket-spurado."
+      "description": "Mastrumi plurajn entajn agojn en unu peto."
     },
     "ha_call_event": {
       "title": "Voki Eventon",

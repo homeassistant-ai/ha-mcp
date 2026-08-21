@@ -470,7 +470,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Sterowanie zbiorcze",
-      "description": "Steruj wieloma urządzeniami z obsługą operacji zbiorczych i śledzeniem WebSocket."
+      "description": "Zarządzaj wieloma akcjami encji w jednym żądaniu."
     },
     "ha_call_event": {
       "title": "Wywołaj zdarzenie",

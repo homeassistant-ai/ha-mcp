@@ -470,7 +470,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Hromadné ovládání",
-      "description": "Ovládejte více zařízení s podporou hromadných operací a sledováním přes WebSocket."
+      "description": "Správa více akcí entit v jednom požadavku."
     },
     "ha_call_event": {
       "title": "Vyvolat událost",

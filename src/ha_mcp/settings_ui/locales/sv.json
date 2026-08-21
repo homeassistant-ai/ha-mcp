@@ -470,7 +470,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Masskontroll",
-      "description": "Kontrollera flera enheter med stöd för massoperationer och WebSocket-spårning."
+      "description": "Hantera flera entitetsåtgärder i en enda begäran."
     },
     "ha_call_event": {
       "title": "Anropa Händelse",

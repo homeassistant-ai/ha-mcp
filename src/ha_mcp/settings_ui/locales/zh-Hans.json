@@ -501,7 +501,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "批量控制",
-      "description": "支持批量操作与 WebSocket 跟踪，同时控制多个设备。"
+      "description": "在单个请求中管理多个实体操作。"
     },
     "ha_call_event": {
       "title": "调用事件",

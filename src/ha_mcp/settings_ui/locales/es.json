@@ -501,7 +501,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Control en bloque",
-      "description": "Controla varios dispositivos a la vez con seguimiento por WebSocket."
+      "description": "Gestiona múltiples acciones de entidades en una sola solicitud."
     },
     "ha_call_event": {
       "title": "Lanzar evento",

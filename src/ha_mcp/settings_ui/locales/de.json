@@ -501,7 +501,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Massensteuerung",
-      "description": "Steuere mehrere Geräte mit Unterstützung für Massenoperationen und WebSocket-Verfolgung."
+      "description": "Verwalte mehrere Entitätsaktionen in einer Anfrage."
     },
     "ha_call_event": {
       "title": "Ereignis aufrufen",
