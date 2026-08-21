@@ -304,13 +304,20 @@ class TestRegisteredBulkToolCompatibility:
                         "action": "off",
                         "timeout_seconds": "10",
                     },
+                    # float() of an int this size raises OverflowError, which
+                    # must skip the row rather than abort the whole batch.
+                    {
+                        "entity_id": "light.oversized_timeout",
+                        "action": "off",
+                        "timeout_seconds": 10**400,
+                    },
                 ]
             }
         )
 
         data = result.structured_content
         assert data["successful_commands"] == 1
-        assert data["skipped_operations"] == 9
+        assert data["skipped_operations"] == 10
         assert [detail["index"] for detail in data["skipped_details"]] == [
             0,
             1,
@@ -321,6 +328,7 @@ class TestRegisteredBulkToolCompatibility:
             7,
             8,
             9,
+            10,
         ]
         messages = [detail["error"]["message"] for detail in data["skipped_details"]]
         assert any("required fields" in message for message in messages)
@@ -329,7 +337,7 @@ class TestRegisteredBulkToolCompatibility:
         json_message = next(m for m in messages if "invalid JSON parameters" in m)
         assert "at position 1" in json_message
         assert sum("validate_first" in message for message in messages) == 3
-        assert sum("timeout_seconds" in message for message in messages) == 4
+        assert sum("timeout_seconds" in message for message in messages) == 5
         tools.control_device_smart.assert_awaited_once()
 
     @pytest.mark.asyncio

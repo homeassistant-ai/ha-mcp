@@ -661,7 +661,9 @@ class DeviceControlTools:
             return None
         try:
             timeout = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: an int too large for float must skip the row,
+            # not abort the batch through the generic exception handler.
             return None
         return timeout if math.isfinite(timeout) and timeout >= 0 else None
 
