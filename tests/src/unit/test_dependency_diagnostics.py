@@ -526,6 +526,18 @@ class TestRequirementForcesConflict:
         assert not requirement_forces_conflict("mcp>=1", exhausted)
         assert requirement_forces_conflict("mcp==1.24", exhausted)
 
+    def test_wildcard_exclusion_seeds_the_next_release_probe(self):
+        """CodeRabbit on #2245: ``!=1.24.*`` dooms every in-prefix successor,
+        so the excluded prefix seeds its own escape (1.25)."""
+        wildcard_excluded = DependencyViolation(
+            package="mcp",
+            installed="1.24",
+            requirement="mcp>=1.24,!=1.24.*",
+            required_by="something 1.0",
+        )
+        assert not requirement_forces_conflict("mcp>=1", wildcard_excluded)
+        assert requirement_forces_conflict("mcp==1.24", wildcard_excluded)
+
     def test_missing_package_judged_by_probes_alone(self):
         missing = DependencyViolation(
             package="mcp",

@@ -364,6 +364,12 @@ def _compliance_probes(violated: str) -> list[str]:
         except InvalidVersion:
             continue
         named.append(base)
+        if clause.version.endswith(".*"):
+            # A wildcard names a PREFIX; every in-prefix successor shares
+            # its fate under a ``!=X.*`` exclusion, so the prefix seeds its
+            # own escape — the next release after it (CodeRabbit on #2245:
+            # ``>=1.24,!=1.24.*`` emptied the probes while 1.25 complied).
+            synthesized.append(_next_release(parsed))
         step = parsed
         for _ in range(_SUCCESSOR_STEPS):
             candidate = _successor(step)
@@ -386,6 +392,14 @@ def _compliance_probes(violated: str) -> list[str]:
         return probes
 
     return _surviving(named) or _surviving(synthesized)
+
+
+def _next_release(version: Version) -> str:
+    """The release right after ``version``'s prefix (``1.24`` -> ``1.25``)."""
+    release = list(version.release)
+    release[-1] += 1
+    epoch = f"{version.epoch}!" if version.epoch else ""
+    return epoch + ".".join(str(part) for part in release)
 
 
 def _successor(version: Version) -> str:
