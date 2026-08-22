@@ -31,22 +31,6 @@ def _error_message(data: dict) -> str:
     return error.get("message", str(error)) if isinstance(error, dict) else str(error)
 
 
-def _server_is_out_of_process() -> bool:
-    """Return whether pytest cannot mutate the server process's environment.
-
-    The stdio subprocess and the embedded/in-addon servers all have their own
-    Settings singleton. ``monkeypatch.setenv`` plus ``_reset_global_settings``
-    only changes the pytest process, so it cannot reconfigure those servers.
-    """
-    if os.environ.get("E2E_BACKEND", "").strip().lower() == "embedded":
-        return True
-    return os.environ.get("HAOS_TEST_MODE", "external") in (
-        "embedded",
-        "inaddon",
-        "stdio",
-    )
-
-
 @pytest.mark.convenience
 class TestBackupTools:
     """Test backup tools for configuration safety."""
@@ -447,19 +431,19 @@ class TestSnapshotDelete:
         )
         assert "days" in _error_message(data).lower()
 
+    @pytest.mark.external_only
     async def test_delete_succeeds_with_age_floor_disabled(
         self, mcp_client, monkeypatch
     ):
         """Full happy path: with the age floor disabled, an old-enough
-        (non-newest) ad-hoc backup can actually be deleted end-to-end."""
-        if _server_is_out_of_process():
-            pytest.skip(
-                "monkeypatch.setenv cannot reach an out-of-process server "
-                "(container-embedded / HAOS embedded / HAOS inaddon / "
-                "HAOS stdio); the guard-rejection tests above already "
-                "exercise the real delete path end-to-end under those "
-                "backends"
-            )
+        (non-newest) ad-hoc backup can actually be deleted end-to-end.
+
+        ``external_only``: monkeypatch.setenv cannot reach an out-of-process
+        server (container-embedded / HAOS embedded / inaddon / stdio); the
+        guard-rejection tests above already exercise the real delete path
+        end-to-end under those backends. Collection-time marker rather than
+        a runtime skip so the mass-skip ceilings account for it (#2245).
+        """
         logger.info("🗑️ Testing snapshot delete success path...")
 
         from ha_mcp.config import _reset_global_settings

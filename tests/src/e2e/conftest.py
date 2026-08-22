@@ -259,6 +259,18 @@ def _apply_haos_tls_skip(item: Any, enabled: bool, skip_marker: Any) -> None:
         item.add_marker(skip_marker)
 
 
+def _apply_embedded_only_skip(
+    item: Any, embedded_selected: bool, skip_marker: Any
+) -> None:
+    """Skip an ``embedded_only`` item everywhere but the embedded lane.
+
+    Split out of ``pytest_collection_modifyitems`` for the same reason as
+    ``_apply_haos_tls_skip``: the dispatcher sits at ruff's C901 ceiling.
+    """
+    if "embedded_only" in item.keywords and not embedded_selected:
+        item.add_marker(skip_marker)
+
+
 def pytest_collection_modifyitems(config, items):
     """Enforce backend markers and auto-apply ``haos_only`` to its dir.
 
@@ -270,6 +282,9 @@ def pytest_collection_modifyitems(config, items):
       (``HAOS_TEST_IMAGE_PATH`` set). Auto-applied to anything under
       ``tests/src/e2e/haos_only/``.
     - ``container_only``: only runs on the testcontainer backend.
+    - ``embedded_only``: only runs on the embedded testcontainer backend
+      (``E2E_BACKEND=embedded``) — the one lane whose session container has
+      ha-mcp installed inside the HA image.
     - ``external_only``: any tier where the server-under-test lives IN the
       pytest process — plain testcontainer AND HAOS external (``mcp_client``
       is an in-process FastMCP server talking HTTP to HAOS). Skipped on stdio,
@@ -322,6 +337,10 @@ def pytest_collection_modifyitems(config, items):
         "in-process server it can reconfigure via env/monkeypatch or reach an "
         "in-process mock"
     )
+    skip_embedded_only = pytest.mark.skip(
+        reason="embedded testcontainer backend required (E2E_BACKEND=embedded); "
+        "only that lane installs ha-mcp inside the HA image"
+    )
     skip_not_on_embedded = pytest.mark.skip(
         reason="redundant on the embedded backend (the lane's own session "
         "backend already exercises this path)"
@@ -338,6 +357,7 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_haos)
         elif "container_only" in keywords and haos:
             item.add_marker(skip_container)
+        _apply_embedded_only_skip(item, embedded, skip_embedded_only)
         if "inaddon_only" in keywords and not inaddon:
             item.add_marker(skip_inaddon_only)
         if "haos_stdio_only" in keywords and not haos_stdio:

@@ -85,6 +85,15 @@ from .const import (
     SERVER_USER_NAME,
     dist_for_channel,
 )
+from .dependency_diagnostics import (
+    DependencyViolation,
+    PinningIntegration,
+    audit_dependency_graph,
+    describe_dependency_failure,
+    find_pinning_integrations,
+    requirement_forces_conflict,
+    root_import_failure,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -217,6 +226,24 @@ class EmbeddedServerError(Exception):
         self.kind = kind
 
 
+def _worker_startup_failure(exc: BaseException) -> EmbeddedServerError:
+    """Return the bring-up error to surface for a worker-thread crash ``exc``.
+
+    An :class:`EmbeddedServerError` composed inside the worker — the dependency
+    diagnosis, the SystemExit unwrap, the sentinel-connection refusal — is
+    surfaced verbatim: it already carries both its message and its failure
+    ``kind``, and re-wrapping it is what left the caller logging
+    "failed to start: HA-MCP in-process server failed to start: ...".
+    """
+    if isinstance(exc, EmbeddedServerError):
+        return exc
+    failure = EmbeddedServerError(f"the worker thread crashed: {exc}")
+    # Chained here rather than with ``raise ... from``: the caller raises this
+    # object as-is, and the branch above must not chain an error to itself.
+    failure.__cause__ = exc
+    return failure
+
+
 class EmbeddedServerManager:
     """Manage the lifecycle of the in-process ha-mcp server for one config entry."""
 
@@ -264,6 +291,10 @@ class EmbeddedServerManager:
         self._pip_spec: str = self._resolve_pip_spec()
         self._secret_path: str = str(entry.data.get(DATA_SECRET_PATH, ""))
         self._config_dir: str = hass.config.path(SERVER_CONFIG_SUBDIR)
+        # Home Assistant's own configuration directory, captured here on the
+        # event loop: the dependency diagnosis scans custom_components/ from
+        # the WORKER thread, which must never touch hass.
+        self._hass_config_dir: str = hass.config.config_dir
 
         # Worker-thread state. ``_loop`` and ``_stop_event`` are created in the
         # thread before its loop runs, so a stop request can always reach them.
@@ -334,6 +365,7 @@ class EmbeddedServerManager:
         ready_version = await self._async_ensure_package(
             defer_mutations=_prune_and_check_importing_workers()
         )
+        await self._async_warn_on_dependency_conflicts()
         access_token = await self._async_provision_token()
         await self._hass.async_add_executor_job(self._prepare_config_dir)
 
@@ -1208,6 +1240,154 @@ class EmbeddedServerManager:
         """Create the server's persistent data directory (blocking)."""
         os.makedirs(self._config_dir, exist_ok=True)
 
+    # -- dependency diagnostics --------------------------------------------
+
+    async def _async_warn_on_dependency_conflicts(self) -> None:
+        """Log the dependency diagnosis when the installed graph is already broken.
+
+        Runs between the install step and the worker's first ``ha_mcp`` import,
+        so a conflict a third-party integration reintroduces at every startup
+        (issue #2239: a manifest pinning ``mcp==1.14.1`` drags the shared
+        package below fastmcp's floor) is named in the log even when the import
+        that follows still succeeds — it does whenever a good copy is already
+        cached in ``sys.modules`` from before the downgrade.
+
+        Advisory only: no repair issue, no failure, and a diagnosis that itself
+        fails is logged at debug and dropped. Bring-up continues either way.
+        """
+        try:
+            report = await self._hass.async_add_executor_job(
+                self._dependency_conflict_report
+            )
+        except Exception:
+            _LOGGER.debug("HA-MCP dependency pre-flight audit failed", exc_info=True)
+            return
+        if report is not None:
+            _LOGGER.warning(
+                "HA-MCP in-process server: the installed dependency tree is "
+                "inconsistent. %s",
+                report,
+            )
+
+    def _dependency_conflict_report(self) -> str | None:
+        """Describe the installed graph's violations, or None when it is sound.
+
+        Blocking (metadata + manifest reads): call from an executor job or the
+        worker thread, never from the event loop.
+        """
+        violations = audit_dependency_graph(self._audit_dist_name())
+        if not violations:
+            return None
+        return describe_dependency_failure(
+            None, violations, self._pinning_integrations(violations)
+        )
+
+    def _dependency_failure(self, err: BaseException) -> EmbeddedServerError | None:
+        """Re-diagnose an import crash as a dependency conflict (blocking).
+
+        Returns None when ``err``'s chain holds no ``ImportError`` — every
+        other crash keeps its own error untouched. The chain, not the outermost
+        exception, decides: fastmcp catches the real import failure and
+        re-raises its generic "FastMCP server support is not installed" hint,
+        which names neither the package nor the version that moved.
+
+        Best-effort by construction: the diagnosis must never replace the
+        failure it explains, so any error inside it degrades to the root
+        ``ImportError`` text — still strictly better than the outer hint.
+        """
+        root = root_import_failure(err)
+        if not isinstance(root, ImportError):
+            return None
+        try:
+            violations = audit_dependency_graph(self._audit_dist_name())
+            detail = describe_dependency_failure(
+                root, violations, self._pinning_integrations(violations)
+            )
+        except Exception:
+            _LOGGER.warning(
+                "HA-MCP dependency diagnostics failed; reporting the import "
+                "error itself",
+                exc_info=True,
+            )
+            detail = f"The server package failed to import: {root}"
+        return EmbeddedServerError(detail, kind="package")
+
+    def _audit_dist_name(self) -> str:
+        """Distribution whose requirement graph the audit walks (blocking).
+
+        A pip-spec OVERRIDE names its root explicitly — the literal
+        distribution its requirement installs (:func:`_override_dist_name`:
+        a pin on ``ha-mcp``, or any ``name @ url`` form, names that
+        distribution whatever the channel selector says), or ``ha-mcp`` for
+        a bare URL, since a repository tarball installs under that name on
+        every channel. An explicit root
+        is returned even with its metadata missing: auditing it then
+        reports that root as the violation — the true story when its
+        install failed — where any fallback would walk a stale graph
+        instead. Override installs skip the conflicting-channel removal, so
+        stale metadata for the unselected distribution can coexist with the
+        one actually running.
+
+        Without an override the channel's distribution is the root, falling
+        back to the other channel's when only that one has metadata —
+        auditing a root that is not installed reports the root itself
+        instead of the real conflict.
+        """
+        if self._pip_spec_override:
+            named = _override_dist_name(self._pip_spec)
+            if named is None and _spec_names_no_distribution(self._pip_spec):
+                # A bare URL names nothing: prefer stable (a repository
+                # tarball installs as ha-mcp on every channel) but accept
+                # whichever known distribution actually has metadata — a
+                # dev wheel URL installs ha-mcp-dev, and auditing the
+                # absent stable would report a phantom missing root on
+                # every healthy bring-up (Codex on #2245).
+                named = next(
+                    (
+                        dist
+                        for dist in (DIST_NAME_STABLE, DIST_NAME_DEV)
+                        if _dist_installed(dist)
+                    ),
+                    DIST_NAME_STABLE,
+                )
+            if named is not None:
+                return named
+        preferred = dist_for_channel(self._channel)
+        if _dist_installed(preferred):
+            return preferred
+        other = DIST_NAME_STABLE if preferred == DIST_NAME_DEV else DIST_NAME_DEV
+        return other if _dist_installed(other) else preferred
+
+    def _pinning_integrations(
+        self, violations: list[DependencyViolation]
+    ) -> list[PinningIntegration]:
+        """Find the custom integrations forcing each violation (blocking).
+
+        The manifest scan matches by package name; the
+        :func:`requirement_forces_conflict` filter then drops integrations
+        whose requirement is compatible with what the violated specifier
+        needs — naming those would send the user to uninstall an innocent
+        integration. This component's own domain is excluded outright: it
+        declares the server requirement legitimately and is never the pin
+        to remove.
+        """
+        pinners: list[PinningIntegration] = []
+        by_package: dict[str, list[DependencyViolation]] = {}
+        for violation in violations:
+            by_package.setdefault(violation.package, []).append(violation)
+        for package, package_violations in by_package.items():
+            pinners.extend(
+                pinner
+                for pinner in find_pinning_integrations(
+                    self._hass_config_dir, package, exclude_domains=(DOMAIN,)
+                )
+                if any(
+                    requirement_forces_conflict(pinner.requirement, violation)
+                    for violation in package_violations
+                )
+            )
+        return pinners
+
     # -- worker thread -----------------------------------------------------
 
     def _note_startup_phase(self, phase: str) -> None:
@@ -1266,8 +1446,12 @@ class EmbeddedServerManager:
                 detail,
             )
         except Exception as err:
-            self._thread_exc = err
             _LOGGER.exception("HA-MCP in-process server thread crashed")
+            # Published LAST, after the (blocking) diagnosis: the readiness
+            # poll surfaces _thread_exc the moment it is set, so assigning the
+            # raw error first would race the enriched one out of the repair
+            # issue.
+            self._thread_exc = self._dependency_failure(err) or err
         finally:
             with _IMPORTING_WORKERS_LOCK:
                 _IMPORTING_WORKERS.discard(threading.current_thread())
@@ -1518,9 +1702,7 @@ class EmbeddedServerManager:
         last_signature = self._progress_signature()
         while True:
             if self._thread_exc is not None:
-                raise EmbeddedServerError(
-                    f"HA-MCP in-process server failed to start: {self._thread_exc}"
-                ) from self._thread_exc
+                raise _worker_startup_failure(self._thread_exc)
             if self._thread is not None and not self._thread.is_alive():
                 raise EmbeddedServerError(
                     "HA-MCP in-process server thread exited during startup."
@@ -2145,6 +2327,38 @@ def _pin_moves_off_installed(spec: str, installed_version: str) -> bool:
         # real, whatever version it names.
         return False
     return not requirement.specifier.contains(installed_version, prereleases=True)
+
+
+def _override_dist_name(spec: str) -> str | None:
+    """Distribution name a pip-spec override installs, or None for a bare URL.
+
+    Unlike :meth:`EmbeddedServerManager._replaced_dist_name` — which maps
+    onto the two known channel distributions for the replaced-source
+    checks — the audit needs the LITERAL name: an override may install an
+    arbitrary distribution (``acme-ha-mcp @ file:///pkg.whl``), and that
+    distribution's graph is the one the worker imports (CodeRabbit on
+    #2245).
+    """
+    try:
+        return Requirement(spec).name
+    except InvalidRequirement:
+        return None
+
+
+def _spec_names_no_distribution(spec: str) -> bool:
+    """True when ``spec`` does not parse as a PEP 508 requirement at all.
+
+    A bare URL (or any unparseable spec) names no distribution of its own;
+    the same conservative shape test :func:`_scoped_install_flags` routes
+    on. A ``name @ url`` form parses and is therefore False here — its name
+    is already what :meth:`EmbeddedServerManager._replaced_dist_name`
+    reports.
+    """
+    try:
+        Requirement(spec)
+    except InvalidRequirement:
+        return True
+    return False
 
 
 def _spec_is_url_requirement(spec: str) -> bool:

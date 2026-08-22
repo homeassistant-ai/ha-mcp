@@ -72,6 +72,11 @@ pytestmark = [pytest.mark.haos_only]
 # for cache-cold runners; 2s poll matches sibling lifecycle helpers.
 _ADDON_RUNNING_TIMEOUT_S = 120.0
 _ADDON_RUNNING_POLL_S = 2.0
+# States _wait_addon_running recovers from with a start, and how often.
+# "unknown" is deliberately absent: Supervisor reports it mid-transition,
+# where a competing start would race the one already in flight.
+_DEAD_ADDON_STATES: frozenset[str] = frozenset({"stopped", "boot_fail", "error"})
+_ADDON_START_RECOVERIES = 2
 
 
 # Display names as they appear in build_image.py's ADDONS tuple — slugs
@@ -137,9 +142,18 @@ async def _wait_addon_running(
     ``AttributeError`` / ``KeyError`` / ``AssertionError``) propagate.
     The deadline still fires; transient errors can't mask a wedged
     addon forever.
+
+    A DEAD state gets a bounded start recovery instead of the wait: the
+    bake's ``start=True`` already happened, so an addon at ``error`` /
+    ``boot_fail`` / ``stopped`` never exits that state on its own and
+    waiting turns a recoverable first-boot failure into a lane failure
+    (#2245: Node-RED at ``error`` on the HAOS embedded lane, healthy on
+    the very next start). ``safe_call_tool`` absorbs a start that races
+    Supervisor mid-transition; the poll re-observes the state either way.
     """
     deadline = time.monotonic() + timeout
     last_state: str | None = None
+    recoveries = 0
     while True:
         try:
             detail_raw = await mcp_client.call_tool("ha_get_app", {"slug": slug})
@@ -150,10 +164,20 @@ async def _wait_addon_running(
             last_state = f"<transient: {str(e)[:60]}>"
         if last_state == "started":
             return
+        if last_state in _DEAD_ADDON_STATES and recoveries < _ADDON_START_RECOVERIES:
+            recoveries += 1
+            logger.warning(
+                f"⚠️ Addon {slug!r} is {last_state!r}; issuing start "
+                f"(recovery {recoveries}/{_ADDON_START_RECOVERIES})"
+            )
+            await safe_call_tool(
+                mcp_client, "ha_manage_app", {"slug": slug, "action": "start"}
+            )
         if time.monotonic() >= deadline:
             pytest.fail(
                 f"Addon {slug!r} did not reach state=started within "
-                f"{timeout:.0f}s (last state: {last_state!r})"
+                f"{timeout:.0f}s (last state: {last_state!r}, start "
+                f"recoveries attempted: {recoveries})"
             )
         await asyncio.sleep(_ADDON_RUNNING_POLL_S)
 
