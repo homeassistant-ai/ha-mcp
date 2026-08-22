@@ -146,12 +146,23 @@ class PolicyMiddleware(Middleware):
 
         # find_or_create serialises the create — two concurrent calls with
         # the same args_hash share one pending entry, so the user only sees
-        # one approval row and approving it releases every waiter.
-        pending = await self._queue.find_or_create(
-            name,
-            args_hash,
-            args,
-            ttl_minutes=policy.approval_ttl_minutes,
+        # one approval row and approving it releases every waiter. Dynamic
+        # selector calls must NOT share a pending entry: two concurrent
+        # identical calls can still resolve to different (or overlapping)
+        # target sets by the time each one dispatches, so folding them onto
+        # one approval would let a single click authorize more executions
+        # than the user saw. Skip the sharing and always mint a fresh entry.
+        pending = (
+            self._queue.create(
+                name, args_hash, args, ttl_minutes=policy.approval_ttl_minutes
+            )
+            if dynamic_targets
+            else await self._queue.find_or_create(
+                name,
+                args_hash,
+                args,
+                ttl_minutes=policy.approval_ttl_minutes,
+            )
         )
 
         wait = (

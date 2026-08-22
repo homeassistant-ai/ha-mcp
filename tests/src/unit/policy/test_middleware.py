@@ -141,6 +141,43 @@ async def test_dynamic_bulk_selector_approval_is_not_remembered(queue):
 
 
 @pytest.mark.anyio
+async def test_concurrent_dynamic_selector_calls_get_independent_approvals(queue):
+    """Two concurrent identical selector calls must not share one pending entry.
+
+    Sharing (via ``find_or_create``'s dedup) would let a single approval
+    click release both waiters, so one click could dispatch the selector
+    twice — or against two different resolutions if topology changed
+    between them. Each invocation must mint its own pending approval.
+    """
+    args = {
+        "selector": {"domain": "lock", "area_ids": ["entry"]},
+        "action": "lock",
+    }
+    policy = Policy(rules=[Rule(tool_name="ha_bulk_control")])
+    middleware = PolicyMiddleware(
+        policy_provider=lambda: policy,
+        queue=queue,
+        wait_seconds=0,
+    )
+    call_next = AsyncMock()
+
+    async def call():
+        with pytest.raises(ToolError):
+            await middleware.on_call_tool(
+                make_context("ha_bulk_control", dict(args)), call_next
+            )
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(call)
+        tg.start_soon(call)
+
+    pending = queue.list_pending()
+    assert len(pending) == 2
+    assert pending[0].token != pending[1].token
+    call_next.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_pre_approved_entry_consumed_and_call_proceeds(queue):
     pol = Policy(rules=[Rule(tool_name="ha_call_service")])
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)

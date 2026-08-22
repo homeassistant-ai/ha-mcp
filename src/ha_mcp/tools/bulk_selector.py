@@ -62,6 +62,24 @@ def _registry_rows(result: Any, label: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _validate_device_registry_rows(device_rows: list[dict[str, Any]]) -> None:
+    """Fail closed on a device row missing ``id``.
+
+    ``visibility.resolver._parse_device_registry`` silently skips any device
+    entry without an ``id`` even when the hidden-set resolver runs
+    ``strict=True`` (see ``_load_hidden_entities``), so a malformed row would
+    otherwise let a device-derived exclusion (area/label inherited by its
+    entities) drop out of the hidden set without warning. Mirrors the
+    per-entry validation ``_refresh_hidden_set`` in
+    ``visibility/enforcement.py`` applies before calling the same strict
+    resolver.
+    """
+    if any(not row.get("id") for row in device_rows):
+        raise BulkSelectorValidationError(
+            "Home Assistant device registry returned a malformed entry"
+        )
+
+
 def _string_list(selector: Mapping[str, Any], key: str) -> list[str]:
     """Read one optional exact-ID list without accepting scalar coercion."""
     raw = selector.get(key, [])
@@ -308,6 +326,7 @@ async def resolve_bulk_selector(
         )
     entity_rows = _registry_rows(entity_result, "entity registry")
     device_rows = _registry_rows(device_result, "device registry")
+    _validate_device_registry_rows(device_rows)
     selected_areas = _select_area_ids(
         _registry_rows(area_result, "area registry"),
         _registry_rows(floor_result, "floor registry"),
@@ -330,11 +349,20 @@ async def resolve_bulk_selector(
     hidden = await _load_hidden_entities(
         client, entity_result, states_result, device_result, entity_registry
     )
+    # A root only needs to LIVE in the selected area; it does not need to be
+    # of the target domain itself. A `group`/other-domain aggregate assigned
+    # to the area (e.g. `group.living_room_lights`) is included here too, so
+    # its membership expansion below can surface `light.*` leaves that have
+    # no individual area assignment of their own. The target-domain filter
+    # is re-applied to the expanded leaves further down.
     matching_roots = {
         entity_id
-        for entity_id in states
-        if entity_id.startswith(f"{domain}.")
-        and _entity_area_id(entity_id, entity_registry, device_areas) in selected_areas
+        for entity_id, state in states.items()
+        if _entity_area_id(entity_id, entity_registry, device_areas) in selected_areas
+        and (
+            entity_id.startswith(f"{domain}.")
+            or normalize_member_entity_ids(state.get("attributes")) is not None
+        )
     }
     directly_hidden = matching_roots & hidden
     candidate_roots = sorted(matching_roots - hidden)

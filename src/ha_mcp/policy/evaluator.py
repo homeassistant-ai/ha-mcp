@@ -142,6 +142,25 @@ def find_matching_rule(
     return None
 
 
+def _rule_needs_resolved_operations(rule: Rule) -> bool:
+    """Whether ``rule`` inspects fields only known after selector resolution.
+
+    A selector-mode ``ha_bulk_control`` call carries ``args.selector``, not
+    ``args.operations`` — the leaf targets don't exist yet, they're resolved
+    inside the tool after this middleware runs. A rule predicate path rooted
+    at ``args.operations`` can therefore never match a selector call via
+    ordinary evaluation and needs the fail-safe below. A rule whose
+    predicates only reference selector-inspectable fields (e.g.
+    ``args.selector.domain``) already got a fair, precise match attempt in
+    ``find_matching_rule`` and must not be broadened into an unconditional
+    gate.
+    """
+    return any(
+        p.path == "args.operations" or p.path.startswith("args.operations.")
+        for p in rule.when
+    )
+
+
 def evaluate(tool_name: str, args: dict[str, Any], policy: Policy) -> Verdict:
     if find_matching_rule(tool_name, args, policy) is not None:
         return Verdict.REQUIRE_APPROVAL
@@ -165,12 +184,19 @@ def evaluate(tool_name: str, args: dict[str, Any], policy: Policy) -> Verdict:
         return Verdict.REQUIRE_APPROVAL
     # Structural selectors are resolved inside the tool, after this middleware.
     # A pre-existing rule that inspects args.operations.* therefore cannot inspect
-    # the eventual leaf targets. Fail safe whenever an operator configured any
-    # rule applicable to ha_bulk_control; selector-aware rules still match above.
+    # the eventual leaf targets. Fail safe only for rules that actually depend on
+    # that unresolved data — a rule fully expressed over selector-inspectable
+    # fields (e.g. args.selector.domain) already had its precise shot at matching
+    # above, and broadening it here would defeat a deliberately conditional rule
+    # (a rule scoped to selector.domain == "lock" must not gate a "light" call).
     if (
         tool_name == "ha_bulk_control"
         and args.get("selector") is not None
-        and any(rule.tool_name in ("ha_bulk_control", "*") for rule in policy.rules)
+        and any(
+            rule.tool_name in ("ha_bulk_control", "*")
+            and _rule_needs_resolved_operations(rule)
+            for rule in policy.rules
+        )
     ):
         return Verdict.REQUIRE_APPROVAL
     return Verdict.ALLOW

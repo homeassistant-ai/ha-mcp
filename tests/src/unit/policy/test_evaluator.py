@@ -479,3 +479,40 @@ class TestBulkSelectorFailSafe:
             )
             == Verdict.REQUIRE_APPROVAL
         )
+
+    def test_nonmatching_selector_only_rule_stays_allowed(self):
+        """A rule fully expressed over selector fields keeps its condition.
+
+        The fail-safe must only widen rules that depend on unresolved
+        ``args.operations`` data. A rule scoped to
+        ``args.selector.domain == "lock"`` already got a precise match
+        attempt in ``find_matching_rule``; a "light" selector call must not
+        be swept into approval just because a same-named rule exists.
+        """
+        policy = Policy(
+            rules=[
+                Rule(
+                    tool_name="ha_bulk_control",
+                    when=[
+                        Predicate(path="args.selector.domain", op="eq", value="lock")
+                    ],
+                )
+            ]
+        )
+
+        assert (
+            evaluate(
+                "ha_bulk_control",
+                {"selector": {"domain": "light", "area_ids": ["salon"]}},
+                policy,
+            )
+            == Verdict.ALLOW
+        )
+        assert (
+            evaluate(
+                "ha_bulk_control",
+                {"selector": {"domain": "lock", "area_ids": ["salon"]}},
+                policy,
+            )
+            == Verdict.REQUIRE_APPROVAL
+        )

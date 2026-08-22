@@ -234,6 +234,69 @@ async def test_directly_hidden_matching_root_is_counted(
 
 
 @pytest.mark.asyncio
+async def test_cross_domain_aggregate_root_expands_into_target_domain_leaves() -> None:
+    """An area-assigned aggregate of a different domain still expands.
+
+    ``group.living_room_lights`` is not itself a ``light.*`` entity, so it
+    must not be excluded from the root candidates just because its own
+    domain doesn't match the selector. Its ungrouped ``light.*`` members
+    (no individual area assignment) must still be discovered via membership
+    expansion, then filtered to the requested domain.
+    """
+    client = SelectorClient(
+        states=[
+            _state("group.living_room_lights", ["light.ceiling", "light.lamp"]),
+            _state("light.ceiling"),
+            _state("light.lamp"),
+        ],
+        entities=[
+            {"entity_id": "group.living_room_lights", "area_id": "salon"},
+            {"entity_id": "light.ceiling", "area_id": None},
+            {"entity_id": "light.lamp", "area_id": None},
+        ],
+    )
+
+    result = await resolve_bulk_selector(
+        client,
+        {"domain": "light", "area_ids": ["salon"]},
+        action="off",
+        parameters=None,
+        timeout_seconds=None,
+        validate_first=True,
+    )
+
+    assert result.resolved_entity_ids == ["light.ceiling", "light.lamp"]
+
+
+@pytest.mark.asyncio
+async def test_device_registry_entry_missing_id_fails_closed() -> None:
+    """A malformed device row must fail closed, not silently drop a device.
+
+    ``visibility.resolver._parse_device_registry`` skips a device entry
+    without an ``id`` even under the strict resolver, so a well-formed
+    device registry is what keeps a device-derived hidden dimension from
+    silently dropping out. This mirrors the per-entry validation
+    ``_refresh_hidden_set`` in ``visibility/enforcement.py`` applies before
+    calling the same strict resolver.
+    """
+    client = SelectorClient(
+        states=[_state("light.one")],
+        entities=[{"entity_id": "light.one", "area_id": "salon"}],
+        devices=[{"area_id": "salon"}],
+    )
+
+    with pytest.raises(BulkSelectorValidationError, match="device registry"):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "light", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_action_is_normalized_case_insensitively() -> None:
     """Action normalization accepts surrounding whitespace and mixed case."""
     client = SelectorClient(
