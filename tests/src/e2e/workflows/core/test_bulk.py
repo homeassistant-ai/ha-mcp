@@ -71,6 +71,7 @@ class TestBulkControl:
                     {
                         "helper_type": "input_boolean",
                         "name": f"Bulk selector {label} {suffix}",
+                        "initial": False,
                     },
                 )
                 create_data = assert_mcp_success(
