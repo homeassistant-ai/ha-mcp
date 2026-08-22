@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from enum import StrEnum
 from typing import Any
 
+from ..tools.util_helpers import _loads_if_json_container_str
 from .model import Policy, Predicate, Rule
 
 logger = logging.getLogger(__name__)
@@ -14,6 +15,56 @@ logger = logging.getLogger(__name__)
 class Verdict(StrEnum):
     ALLOW = "allow"
     REQUIRE_APPROVAL = "require_approval"
+
+
+def normalize_stringified_containers(value: Any) -> Any:
+    """Recursively parse JSON-encoded object/array strings into real containers.
+
+    Some MCP client stacks (Claude Desktop stdio among them — see
+    ``tools/util_helpers.py``'s ``JSON_STRING_COERCION``) pass model-emitted
+    stringified objects through unrepaired, e.g. sending
+    ``{"selector": "{\\"domain\\": \\"light\\"}"}`` instead of a nested
+    object. Pydantic's ``JSON_STRING_COERCION`` ``BeforeValidator`` repairs
+    this, but only when the tool's own parameter validation runs — INSIDE
+    ``call_next``, after policy evaluation. ``iter_path_values`` only
+    descends into ``dict``/``list``, so a still-stringified value makes a
+    predicate targeting a nested field (``args.selector.domain``,
+    ``args.operations.*.entity_id``) silently yield nothing: no rule
+    matches, and — for ``ha_bulk_control`` — ``args.get("selector")`` still
+    sees a truthy string, so the selector fail-safe's own dynamic-call
+    detection still fires, but nothing inside it can be inspected either.
+    Applying the same repair here, once, before evaluation and hashing,
+    closes that gap for both plain predicate rules and the fail-safe, and
+    makes ``compute_args_hash`` key on the same logical value regardless of
+    which wire shape the client sent.
+
+    Malformed JSON that merely looks like a container is left as the raw
+    string (not raised): policy evaluation is not the place to surface a
+    JSON syntax error — the tool's own validation does that, with a
+    properly attributed parameter name.
+    """
+    if isinstance(value, str):
+        try:
+            return _loads_if_json_container_str(value)
+        except ValueError:
+            return value
+    if isinstance(value, dict):
+        return {key: normalize_stringified_containers(v) for key, v in value.items()}
+    if isinstance(value, list):
+        return [normalize_stringified_containers(v) for v in value]
+    return value
+
+
+def has_dynamic_selector_targets(name: str, args: dict[str, Any]) -> bool:
+    """Return whether identical arguments can resolve to different targets later.
+
+    Single source of truth for the ``ha_bulk_control`` selector-mode predicate:
+    both ``PolicyMiddleware`` (approval-sharing/remembering gates) and
+    ``evaluate()`` below (the operations fail-safe) must agree on exactly
+    which calls are "dynamic", or a future rename/extension of this check in
+    one place silently stops applying to the other.
+    """
+    return name == "ha_bulk_control" and args.get("selector") is not None
 
 
 def iter_path_values(args: dict[str, Any], path: str) -> Iterator[Any]:
@@ -142,6 +193,52 @@ def find_matching_rule(
     return None
 
 
+def _predicate_reaches_operations(path: str) -> bool:
+    """Whether ``path`` can walk into ``args.operations`` under ``iter_path_values``.
+
+    ``operations`` sits directly under ``args``, so only the first two
+    segments after stripping the implicit ``args`` prefix matter. A literal
+    ``operations`` first segment obviously reaches it. A leading ``*`` reaches
+    it too — a wildcard segment fans out over EVERY value at that level (see
+    ``iter_path_values``), landing on the `operations` list value exactly as
+    readily as any other top-level key — but ``operations`` is a *list*, so a
+    literal segment right after that wildcard (e.g. ``domain`` in
+    ``args.*.domain``) can only ever match a *dict* value at that level (like
+    ``selector``) — ``walk()`` requires ``isinstance(cur, dict)`` for a
+    literal head, so it silently yields nothing against a list and can never
+    reach an operation row. Only a SECOND wildcard (``args.*.*...``, as in
+    ``args.*.*.entity_id``) or no further segment at all (bare ``args.*``,
+    which yields the raw ``operations`` list value itself) can actually reach
+    into the list. Any other concrete first segment (e.g. ``selector``) can
+    only ever address selector-inspectable fields and is precisely excluded.
+    """
+    parts = path.split(".")
+    if parts and parts[0] == "args":
+        parts = parts[1:]
+    if not parts:
+        return False
+    if parts[0] == "operations":
+        return True
+    return parts[0] == "*" and (len(parts) == 1 or parts[1] == "*")
+
+
+def _rule_needs_resolved_operations(rule: Rule) -> bool:
+    """Whether ``rule`` inspects fields only known after selector resolution.
+
+    A selector-mode ``ha_bulk_control`` call carries ``args.selector``, not
+    ``args.operations`` — the leaf targets don't exist yet, they're resolved
+    inside the tool after this middleware runs. A rule predicate that can
+    reach ``args.operations`` (exact, prefixed, or via a leading wildcard —
+    see ``_predicate_reaches_operations``) can therefore never get a fair
+    match attempt against a selector call and needs the fail-safe below. A
+    rule whose predicates only ever address selector-inspectable fields
+    (e.g. ``args.selector.domain``) already got a fair, precise match
+    attempt in ``find_matching_rule`` and must not be broadened into an
+    unconditional gate.
+    """
+    return any(_predicate_reaches_operations(p.path) for p in rule.when)
+
+
 def evaluate(tool_name: str, args: dict[str, Any], policy: Policy) -> Verdict:
     if find_matching_rule(tool_name, args, policy) is not None:
         return Verdict.REQUIRE_APPROVAL
@@ -161,6 +258,19 @@ def evaluate(tool_name: str, args: dict[str, Any], policy: Policy) -> Verdict:
         tool_name == "ha_call_service"
         and args.get("ws_command")
         and any(rule.tool_name in ("ha_call_service", "*") for rule in policy.rules)
+    ):
+        return Verdict.REQUIRE_APPROVAL
+    # Structural selectors are resolved inside the tool, after this middleware.
+    # A pre-existing rule that inspects args.operations.* therefore cannot inspect
+    # the eventual leaf targets. Fail safe only for rules that actually depend on
+    # that unresolved data — a rule fully expressed over selector-inspectable
+    # fields (e.g. args.selector.domain) already had its precise shot at matching
+    # above, and broadening it here would defeat a deliberately conditional rule
+    # (a rule scoped to selector.domain == "lock" must not gate a "light" call).
+    if has_dynamic_selector_targets(tool_name, args) and any(
+        rule.tool_name in ("ha_bulk_control", "*")
+        and _rule_needs_resolved_operations(rule)
+        for rule in policy.rules
     ):
         return Verdict.REQUIRE_APPROVAL
     return Verdict.ALLOW

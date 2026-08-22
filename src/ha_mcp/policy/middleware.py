@@ -15,7 +15,13 @@ from ..errors import ErrorCode, create_error_response
 from ..renamed_tools import current_tool_name
 from ..tools.helpers import raise_tool_error, safe_progress
 from .approval_queue import ApprovalQueue, PendingApproval, compute_args_hash
-from .evaluator import Verdict, evaluate, find_matching_rule
+from .evaluator import (
+    Verdict,
+    evaluate,
+    find_matching_rule,
+    has_dynamic_selector_targets,
+    normalize_stringified_containers,
+)
 from .model import Policy, Rule
 
 logger = logging.getLogger(__name__)
@@ -110,7 +116,15 @@ class PolicyMiddleware(Middleware):
         # name, and ``evaluate`` returns ALLOW when nothing matches, so a gate
         # reading a stale name lets the call through.
         name = current_tool_name(context.message.name)
-        args = context.message.arguments or {}
+        # Normalize stringified JSON containers (a client like Claude Desktop
+        # stdio can send a nested parameter, e.g. `selector`, as a JSON
+        # string rather than an object) before any evaluation/hashing below
+        # — the tool's own Pydantic coercion happens only later, inside
+        # call_next, which is too late for a predicate path or the selector
+        # fail-safe to see the real structure. This only affects the local
+        # copy used for gating; `context` itself is untouched, so the actual
+        # tool call still receives the client's original wire shape.
+        args = normalize_stringified_containers(context.message.arguments or {})
 
         if _passes_ungated(name, args):
             return await call_next(context)
@@ -120,15 +134,41 @@ class PolicyMiddleware(Middleware):
 
         rule = find_matching_rule(name, args, policy)
         args_hash = compute_args_hash(args)
+        dynamic_targets = has_dynamic_selector_targets(name, args)
+        remember_minutes = (
+            0 if dynamic_targets else rule.remember_minutes if rule else 0
+        )
 
-        if self._queue.is_remembered(name, args_hash):
+        if not dynamic_targets and self._queue.is_remembered(name, args_hash):
             return await call_next(context)
 
-        existing = self._queue.find(name, args_hash)
+        # A dynamic selector call must never consume an entry it did not
+        # itself create and is not itself still waiting on. Two reachable
+        # ways an unguarded lookup here breaks the "approve once, dispatch
+        # once, against fresh topology" invariant: (1) a race -- decide()
+        # flips a waiter's own PendingApproval.decision before the waiter's
+        # task is rescheduled, so a second, concurrent call's find() can
+        # observe "approved" and consume-and-dispatch before the original
+        # waiter wakes and does the same from its own reference, executing
+        # the click twice; (2) a later, non-racy call -- the original call
+        # times out and is told to re-call, the user approves afterwards,
+        # and ANY later identical call within approval_ttl_minutes claims
+        # that stale approval and dispatches against topology re-resolved
+        # at that later moment -- exactly the reuse-across-a-time-gap this
+        # PR disables `remember_minutes` to prevent, just via a different
+        # mechanism. Binding a dynamic entry to its creating invocation
+        # closes both: only the call that created a pending entry ever
+        # observes it (via its own `pending` reference after its own wait,
+        # below), so every other call -- concurrent or a later retry --
+        # unconditionally mints its own independent entry and wait window.
+        # The accepted cost is that a retry never silently rides an earlier
+        # approval: each blocked call gets its own approval row, and only
+        # approving the row for the CURRENTLY-blocked call has any effect.
+        existing = None if dynamic_targets else self._queue.find(name, args_hash)
         if existing and existing.decision == "approved":
             self._queue.consume_and_maybe_remember(
                 existing,
-                remember_minutes=rule.remember_minutes if rule else 0,
+                remember_minutes=remember_minutes,
             )
             return await call_next(context)
         if existing and existing.decision == "denied":
@@ -137,12 +177,23 @@ class PolicyMiddleware(Middleware):
 
         # find_or_create serialises the create — two concurrent calls with
         # the same args_hash share one pending entry, so the user only sees
-        # one approval row and approving it releases every waiter.
-        pending = await self._queue.find_or_create(
-            name,
-            args_hash,
-            args,
-            ttl_minutes=policy.approval_ttl_minutes,
+        # one approval row and approving it releases every waiter. Dynamic
+        # selector calls must NOT share a pending entry: two concurrent
+        # identical calls can still resolve to different (or overlapping)
+        # target sets by the time each one dispatches, so folding them onto
+        # one approval would let a single click authorize more executions
+        # than the user saw. Skip the sharing and always mint a fresh entry.
+        pending = (
+            self._queue.create(
+                name, args_hash, args, ttl_minutes=policy.approval_ttl_minutes
+            )
+            if dynamic_targets
+            else await self._queue.find_or_create(
+                name,
+                args_hash,
+                args,
+                ttl_minutes=policy.approval_ttl_minutes,
+            )
         )
 
         wait = (
@@ -155,7 +206,7 @@ class PolicyMiddleware(Middleware):
         if pending.decision == "approved":
             self._queue.consume_and_maybe_remember(
                 pending,
-                remember_minutes=rule.remember_minutes if rule else 0,
+                remember_minutes=remember_minutes,
             )
             return await call_next(context)
         if pending.decision == "denied":
