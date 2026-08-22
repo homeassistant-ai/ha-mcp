@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from enum import StrEnum
 from typing import Any
 
+from ..tools.util_helpers import _loads_if_json_container_str
 from .model import Policy, Predicate, Rule
 
 logger = logging.getLogger(__name__)
@@ -14,6 +15,56 @@ logger = logging.getLogger(__name__)
 class Verdict(StrEnum):
     ALLOW = "allow"
     REQUIRE_APPROVAL = "require_approval"
+
+
+def normalize_stringified_containers(value: Any) -> Any:
+    """Recursively parse JSON-encoded object/array strings into real containers.
+
+    Some MCP client stacks (Claude Desktop stdio among them — see
+    ``tools/util_helpers.py``'s ``JSON_STRING_COERCION``) pass model-emitted
+    stringified objects through unrepaired, e.g. sending
+    ``{"selector": "{\\"domain\\": \\"light\\"}"}`` instead of a nested
+    object. Pydantic's ``JSON_STRING_COERCION`` ``BeforeValidator`` repairs
+    this, but only when the tool's own parameter validation runs — INSIDE
+    ``call_next``, after policy evaluation. ``iter_path_values`` only
+    descends into ``dict``/``list``, so a still-stringified value makes a
+    predicate targeting a nested field (``args.selector.domain``,
+    ``args.operations.*.entity_id``) silently yield nothing: no rule
+    matches, and — for ``ha_bulk_control`` — ``args.get("selector")`` still
+    sees a truthy string, so the selector fail-safe's own dynamic-call
+    detection still fires, but nothing inside it can be inspected either.
+    Applying the same repair here, once, before evaluation and hashing,
+    closes that gap for both plain predicate rules and the fail-safe, and
+    makes ``compute_args_hash`` key on the same logical value regardless of
+    which wire shape the client sent.
+
+    Malformed JSON that merely looks like a container is left as the raw
+    string (not raised): policy evaluation is not the place to surface a
+    JSON syntax error — the tool's own validation does that, with a
+    properly attributed parameter name.
+    """
+    if isinstance(value, str):
+        try:
+            return _loads_if_json_container_str(value)
+        except ValueError:
+            return value
+    if isinstance(value, dict):
+        return {key: normalize_stringified_containers(v) for key, v in value.items()}
+    if isinstance(value, list):
+        return [normalize_stringified_containers(v) for v in value]
+    return value
+
+
+def has_dynamic_selector_targets(name: str, args: dict[str, Any]) -> bool:
+    """Return whether identical arguments can resolve to different targets later.
+
+    Single source of truth for the ``ha_bulk_control`` selector-mode predicate:
+    both ``PolicyMiddleware`` (approval-sharing/remembering gates) and
+    ``evaluate()`` below (the operations fail-safe) must agree on exactly
+    which calls are "dynamic", or a future rename/extension of this check in
+    one place silently stops applying to the other.
+    """
+    return name == "ha_bulk_control" and args.get("selector") is not None
 
 
 def iter_path_values(args: dict[str, Any], path: str) -> Iterator[Any]:
@@ -216,14 +267,10 @@ def evaluate(tool_name: str, args: dict[str, Any], policy: Policy) -> Verdict:
     # fields (e.g. args.selector.domain) already had its precise shot at matching
     # above, and broadening it here would defeat a deliberately conditional rule
     # (a rule scoped to selector.domain == "lock" must not gate a "light" call).
-    if (
-        tool_name == "ha_bulk_control"
-        and args.get("selector") is not None
-        and any(
-            rule.tool_name in ("ha_bulk_control", "*")
-            and _rule_needs_resolved_operations(rule)
-            for rule in policy.rules
-        )
+    if has_dynamic_selector_targets(tool_name, args) and any(
+        rule.tool_name in ("ha_bulk_control", "*")
+        and _rule_needs_resolved_operations(rule)
+        for rule in policy.rules
     ):
         return Verdict.REQUIRE_APPROVAL
     return Verdict.ALLOW

@@ -21,10 +21,16 @@ from ..client.rest_client import (
 from ..client.websocket_client import get_websocket_client
 from ..errors import (
     ErrorCode,
+    create_connection_error,
     create_error_response,
     create_validation_error,
 )
-from .bulk_selector import BulkSelectorValidationError, resolve_bulk_selector
+from .bulk_selector import (
+    BulkControlSelector,
+    BulkSelectorInfrastructureError,
+    BulkSelectorValidationError,
+    resolve_bulk_selector,
+)
 from .component_api import (
     component_supports,
     get_component_caps,
@@ -132,41 +138,6 @@ BulkControlOperation.__pydantic_config__ = ConfigDict(extra="forbid")  # type: i
 _BULK_CONTROL_OPERATION_ADAPTER = TypeAdapter(BulkControlOperation)
 
 
-class BulkControlSelector(TypedDict):
-    """Exact structural scope for one deterministic bulk action."""
-
-    domain: Annotated[
-        str,
-        Field(description="Exact Home Assistant domain, e.g. 'light'."),
-    ]
-    area_ids: NotRequired[
-        Annotated[
-            list[str],
-            Field(description="Exact Home Assistant area IDs to include."),
-        ]
-    ]
-    floor_ids: NotRequired[
-        Annotated[
-            list[str],
-            Field(description="Exact Home Assistant floor IDs to include."),
-        ]
-    ]
-    exclude_entity_ids: NotRequired[
-        Annotated[
-            list[str],
-            Field(
-                description=(
-                    "Exact entity or aggregate IDs to exclude after recursive "
-                    "membership expansion."
-                )
-            ),
-        ]
-    ]
-
-
-BulkControlSelector.__pydantic_config__ = ConfigDict(extra="forbid")  # type: ignore[attr-defined]
-
-
 def _parse_bulk_operations(operations: Any) -> list[Any]:
     """Parse explicit bulk rows while preserving per-row runtime failures."""
     try:
@@ -194,13 +165,50 @@ def _parse_bulk_operations(operations: Any) -> list[Any]:
                 _BULK_CONTROL_OPERATION_ADAPTER.validate_python(operation)
             )
         except ValidationError as exc:
+            # include_input=False: a malformed row can carry a lock or alarm
+            # code in its `parameters`, and str(exc) would otherwise write
+            # that value to persistent logs.
             logger.warning(
                 "ha_bulk_control operation %d failed schema validation: %s",
                 index,
                 exc.errors(include_url=False, include_input=False),
             )
+            # The malformed row is deliberately preserved (not dropped) so
+            # the runtime batch validator downstream still reports it as a
+            # per-operation failure with its own diagnostics, instead of it
+            # silently vanishing from the batch.
             operations_list.append(operation)
     return operations_list
+
+
+def _selector_only_parameter_offender(
+    *,
+    action: str | None,
+    parameters: dict[str, Any] | None,
+    timeout_seconds: float | None,
+    validate_first: bool,
+    dry_run: bool,
+) -> str | None:
+    """Name the one selector-only parameter set on an operations-mode call.
+
+    Five distinct mistakes (action, parameters, timeout_seconds,
+    validate_first, dry_run) used to share one message that always blamed
+    "selector" — the one parameter that was demonstrably absent, since this
+    is only reached when ``selector is None``. Naming the actual offender
+    lets the caller fix the real mistake on the first try.
+    """
+    for name, value in (
+        ("action", action),
+        ("parameters", parameters),
+        ("timeout_seconds", timeout_seconds),
+    ):
+        if value is not None:
+            return name
+    if validate_first is not True:
+        return "validate_first"
+    if dry_run:
+        return "dry_run"
+    return None
 
 
 class _AmbiguousDispatch:
@@ -1595,6 +1603,10 @@ class ServiceTools:
                     "action='off', not service='turn_off'."
                 )
             ),
+            # Declared type stays `list[...]` (not `| None`) so the generated
+            # tool schema shows `operations` as always a list; `cast(Any, None)`
+            # supplies the runtime default without a `| None` mypy would then
+            # require type-narrowing for at every use below `selector is None`.
         ] = cast(Any, None),
         parallel: bool = True,
         ctx: Context | None = None,
@@ -1636,73 +1648,46 @@ class ServiceTools:
         it is not transactional, so Home Assistant may still report per-leaf failures.
         Set ``dry_run`` to preview the resolved set without changing state.
         """
-        if (operations is None) == (selector is None):
+        if operations is None and selector is None:
             raise_tool_error(
                 create_validation_error(
-                    "Provide exactly one of operations or selector",
+                    "Provide exactly one of operations or selector; neither was given",
                     parameter="operations",
+                )
+            )
+        if operations is not None and selector is not None:
+            raise_tool_error(
+                create_validation_error(
+                    "Provide exactly one of operations or selector; both were given",
+                    parameter="selector",
                 )
             )
 
         if selector is not None:
-            if action is None:
-                raise_tool_error(
-                    create_validation_error(
-                        "Selector mode requires action", parameter="action"
-                    )
-                )
-            try:
-                parsed_selector = parse_json_param(
-                    cast(dict[str, Any], selector), "selector"
-                )
-                if not isinstance(parsed_selector, dict):
-                    raise BulkSelectorValidationError("selector must be a JSON object")
-            except (ValueError, BulkSelectorValidationError) as exc:
-                parameter = getattr(exc, "parameter", "selector")
-                raise_tool_error(create_validation_error(str(exc), parameter=parameter))
-            try:
-                resolution = await resolve_bulk_selector(
-                    self._client,
-                    parsed_selector,
-                    action=action,
-                    parameters=parameters,
-                    timeout_seconds=timeout_seconds,
-                    validate_first=validate_first,
-                )
-            except BulkSelectorValidationError as exc:
-                parameter = getattr(exc, "parameter", "selector")
-                raise_tool_error(create_validation_error(str(exc), parameter=parameter))
-            except Exception as exc:
-                exception_to_structured_error(
-                    exc,
-                    context={"operation": "resolve bulk selector"},
-                )
-                raise  # unreachable: exception_to_structured_error always raises
-            if dry_run:
-                return {
-                    "success": True,
-                    "dry_run": True,
-                    "dispatched": False,
-                    "resolution": resolution.summary(),
-                }
-            result = await self._device_tools.bulk_device_control(
-                operations=resolution.operations,
+            return await self._run_bulk_selector(
+                cast(dict[str, Any], selector),
+                action=action,
+                parameters=parameters,
+                timeout_seconds=timeout_seconds,
+                validate_first=validate_first,
+                dry_run=dry_run,
                 parallel=parallel,
                 ctx=ctx,
             )
-            response = cast(dict[str, Any], result)
-            response["resolution"] = resolution.summary()
-            return response
 
-        if (
-            any(value is not None for value in (action, parameters, timeout_seconds))
-            or validate_first is not True
-            or dry_run
-        ):
+        offending_parameter = _selector_only_parameter_offender(
+            action=action,
+            parameters=parameters,
+            timeout_seconds=timeout_seconds,
+            validate_first=validate_first,
+            dry_run=dry_run,
+        )
+        if offending_parameter is not None:
             raise_tool_error(
                 create_validation_error(
-                    "Selector-only parameters require selector mode",
-                    parameter="selector",
+                    f"'{offending_parameter}' is a selector-only parameter and "
+                    "requires selector mode",
+                    parameter=offending_parameter,
                 )
             )
 
@@ -1712,6 +1697,110 @@ class ServiceTools:
             operations=operations_list, parallel=parallel, ctx=ctx
         )
         return cast(dict[str, Any], result)
+
+    async def _run_bulk_selector(
+        self,
+        selector: dict[str, Any],
+        *,
+        action: str | None,
+        parameters: dict[str, Any] | None,
+        timeout_seconds: float | None,
+        validate_first: bool,
+        dry_run: bool,
+        parallel: bool,
+        ctx: Context | None,
+    ) -> dict[str, Any]:
+        """Resolve one structural selector and, unless ``dry_run``, dispatch it.
+
+        Split out of ``ha_bulk_control`` to keep that tool's own McCabe
+        complexity under the repo's C901 threshold (AGENTS.md — no per-file
+        exemptions).
+        """
+        if action is None:
+            raise_tool_error(
+                create_validation_error(
+                    "Selector mode requires action", parameter="action"
+                )
+            )
+        try:
+            parsed_selector = parse_json_param(selector, "selector")
+            if not isinstance(parsed_selector, dict):
+                raise BulkSelectorValidationError("selector must be a JSON object")
+        except (ValueError, BulkSelectorValidationError) as exc:
+            parameter = getattr(exc, "parameter", "selector")
+            raise_tool_error(create_validation_error(str(exc), parameter=parameter))
+        try:
+            resolution = await resolve_bulk_selector(
+                self._client,
+                parsed_selector,
+                action=action,
+                parameters=parameters,
+                timeout_seconds=timeout_seconds,
+                validate_first=validate_first,
+            )
+        except BulkSelectorValidationError as exc:
+            # Caller-fixable: the selector itself is wrong.
+            parameter = getattr(exc, "parameter", "selector")
+            raise_tool_error(create_validation_error(str(exc), parameter=parameter))
+        except BulkSelectorInfrastructureError as exc:
+            # NOT caller-fixable: Home Assistant's registries/visibility data
+            # were unavailable or malformed. Routed through
+            # create_connection_error (not create_validation_error) so an
+            # agent is told to check HA connectivity instead of rewriting a
+            # selector that was never the problem.
+            logger.warning(
+                "ha_bulk_control: selector resolution infrastructure failure: %s",
+                exc,
+            )
+            raise_tool_error(
+                create_connection_error(
+                    "Could not resolve the selector because Home Assistant "
+                    "data was unavailable",
+                    details=str(exc),
+                )
+            )
+        except Exception as exc:
+            exception_to_structured_error(
+                exc,
+                context={"operation": "resolve bulk selector"},
+            )
+            raise  # unreachable: exception_to_structured_error always raises
+
+        if dry_run:
+            return {
+                "success": True,
+                "dry_run": True,
+                "dispatched": False,
+                "resolution": resolution.summary(),
+            }
+        try:
+            result = await self._device_tools.bulk_device_control(
+                operations=resolution.operations,
+                parallel=parallel,
+                ctx=ctx,
+            )
+        except Exception as exc:
+            # Attach the frozen resolution to the error context: a
+            # non-transactional, partially-executed bulk write must leave a
+            # record of which entities were resolved and attempted, in the
+            # response the agent sees, not just in whatever
+            # bulk_device_control itself logged.
+            logger.warning(
+                "ha_bulk_control: dispatch failed after resolving %d entities: %s",
+                len(resolution.resolved_entity_ids),
+                exc,
+            )
+            exception_to_structured_error(
+                exc,
+                context={
+                    "operation": "bulk device control",
+                    "resolution": resolution.summary(),
+                },
+            )
+            raise  # unreachable: exception_to_structured_error always raises
+        response = cast(dict[str, Any], result)
+        response["resolution"] = resolution.summary()
+        return response
 
     @tool(
         name="ha_call_event",

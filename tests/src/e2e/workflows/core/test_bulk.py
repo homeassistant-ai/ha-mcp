@@ -122,6 +122,94 @@ class TestBulkControl:
                     {"kind": "area", "id": area_id},
                 )
 
+    async def test_selector_dispatch_turns_off_included_and_spares_excluded(
+        self, mcp_client
+    ):
+        """A real (non-dry-run) dispatch actually spares the excluded entity.
+
+        The dry-run test above only asserts the PREVIEW names the right
+        entities; it never observes a real dispatch or the excluded
+        entity's actual post-dispatch state. This is the guarantee the PR
+        exists to make -- so turn both helpers on, dispatch for real, and
+        confirm the excluded one's live state never moved.
+        """
+        suffix = uuid4().hex[:8]
+        area_id: str | None = None
+        entity_ids: list[str] = []
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                area_data = await mcp.call_tool_success(
+                    "ha_set_area_or_floor",
+                    {"kind": "area", "name": f"Bulk dispatch {suffix}"},
+                )
+                area_id = area_data["area_id"]
+
+                for label in ("included", "excluded"):
+                    create_data = await mcp.call_tool_success(
+                        "ha_config_set_helper",
+                        {
+                            "helper_type": "input_boolean",
+                            "name": f"Bulk dispatch {label} {suffix}",
+                            "initial": True,
+                        },
+                    )
+                    entity_id = _extract_bulk_boolean_entity_id(create_data)
+                    assert entity_id, f"Missing helper entity_id: {create_data}"
+                    entity_ids.append(entity_id)
+                    await mcp.call_tool_success(
+                        "ha_set_entity",
+                        {"entity_id": entity_id, "area_id": area_id},
+                    )
+
+                for entity_id in entity_ids:
+                    assert await wait_for_entity_state(mcp_client, entity_id, "on"), (
+                        f"Bulk dispatch helper {entity_id} was not registered in time"
+                    )
+
+                included_id, excluded_id = entity_ids
+                data = await mcp.call_tool_success(
+                    "ha_bulk_control",
+                    {
+                        "selector": {
+                            "domain": "input_boolean",
+                            "area_ids": [area_id],
+                            "exclude_entity_ids": [excluded_id],
+                        },
+                        "action": "off",
+                    },
+                )
+
+            assert data.get("dry_run") is None
+            assert data["resolution"]["resolved_entity_ids"] == [included_id]
+            assert data["resolution"]["excluded_entity_ids"] == [excluded_id]
+            assert await wait_for_entity_state(mcp_client, included_id, "off"), (
+                f"Included helper {included_id} was not turned off by the dispatch"
+            )
+            excluded_state = await mcp_client.call_tool(
+                "ha_get_state", {"entity_id": excluded_id}
+            )
+            excluded_data = parse_mcp_result(excluded_state)
+            assert excluded_data.get("data", {}).get("state") == "on", (
+                f"Excluded helper's real state must never move: got {excluded_data}"
+            )
+        finally:
+            for entity_id in entity_ids:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_remove_helpers_integrations",
+                    {
+                        "helper_type": "input_boolean",
+                        "target": entity_id,
+                        "confirm": True,
+                    },
+                )
+            if area_id is not None:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_remove_area_or_floor",
+                    {"kind": "area", "id": area_id},
+                )
+
     async def test_bulk_turn_on_single_light(self, mcp_client, test_light_entity):
         """Test bulk_control with a single light entity."""
         logger.info(f"Testing ha_bulk_control turn_on with {test_light_entity}")

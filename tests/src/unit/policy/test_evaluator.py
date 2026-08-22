@@ -7,6 +7,7 @@ from ha_mcp.policy.evaluator import (
     iter_path_values,
     match_predicate,
     match_rule,
+    normalize_stringified_containers,
 )
 from ha_mcp.policy.model import Policy, Predicate, Rule
 
@@ -100,6 +101,52 @@ class TestMatchPredicate:
         assert match_predicate(p_gt, {"x": "not-a-number"}) is False
         p_lt = Predicate(path="args.x", op="lt", value=5)
         assert match_predicate(p_lt, {"x": "not-a-number"}) is False
+
+
+# --- normalize_stringified_containers ---
+class TestNormalizeStringifiedContainers:
+    def test_top_level_json_object_string_is_parsed(self):
+        assert normalize_stringified_containers(
+            {"selector": '{"domain": "light"}'}
+        ) == {"selector": {"domain": "light"}}
+
+    def test_json_array_string_is_parsed(self):
+        assert normalize_stringified_containers({"area_ids": '["salon"]'}) == {
+            "area_ids": ["salon"]
+        }
+
+    def test_nested_stringified_value_is_also_parsed(self):
+        assert normalize_stringified_containers(
+            {"selector": {"area_ids": '["salon"]'}}
+        ) == {"selector": {"area_ids": ["salon"]}}
+
+    def test_stringified_value_inside_a_list_is_parsed(self):
+        assert normalize_stringified_containers(
+            {"operations": ['{"entity_id": "light.one"}']}
+        ) == {"operations": [{"entity_id": "light.one"}]}
+
+    def test_plain_string_passes_through_unchanged(self):
+        assert normalize_stringified_containers({"action": "off"}) == {"action": "off"}
+
+    def test_jinja_template_string_passes_through_unchanged(self):
+        template = "{{ states('sensor.x') }}"
+        assert normalize_stringified_containers({"template": template}) == {
+            "template": template
+        }
+
+    def test_malformed_container_like_string_left_alone_not_raised(self):
+        """Policy evaluation is not the place to surface a JSON syntax
+        error -- that belongs to the tool's own validation, with a properly
+        attributed parameter name."""
+        malformed = '{"domain": "light"'
+        assert normalize_stringified_containers({"selector": malformed}) == {
+            "selector": malformed
+        }
+
+    def test_non_string_scalars_pass_through_unchanged(self):
+        assert normalize_stringified_containers(
+            {"validate_first": True, "timeout_seconds": 5, "extra": None}
+        ) == {"validate_first": True, "timeout_seconds": 5, "extra": None}
 
 
 # --- match_rule ---
@@ -523,6 +570,34 @@ class TestBulkSelectorFailSafe:
             )
             == Verdict.REQUIRE_APPROVAL
         )
+
+    def test_stringified_selector_argument_would_bypass_rules_pre_normalization(self):
+        """Documents the exact bypass a raw ``evaluate()`` call is vulnerable to.
+
+        This is what ``evaluate()`` sees BEFORE ``PolicyMiddleware`` applies
+        ``normalize_stringified_containers`` (see test_middleware.py's
+        end-to-end coverage) -- a client that sends ``selector`` as a JSON
+        string (Claude Desktop stdio does this; see
+        ``tools/util_helpers.py``'s ``JSON_STRING_COERCION``) makes
+        ``args.selector.domain`` yield nothing, so a rule scoped to
+        ``selector.domain == "lock"`` never matches even for a lock
+        selector. This test pins that ``evaluate()`` itself has no
+        opinion on wire shape -- normalization is the middleware's job,
+        not this pure function's.
+        """
+        policy = Policy(
+            rules=[
+                Rule(
+                    tool_name="ha_bulk_control",
+                    when=[
+                        Predicate(path="args.selector.domain", op="eq", value="lock")
+                    ],
+                )
+            ]
+        )
+        stringified_args = {"selector": '{"domain": "lock", "area_ids": ["entry"]}'}
+
+        assert evaluate("ha_bulk_control", stringified_args, policy) == Verdict.ALLOW
 
     def test_selector_remains_allowed_without_applicable_rules(self):
         """Unrelated or absent rules preserve the policy engine's allow default."""

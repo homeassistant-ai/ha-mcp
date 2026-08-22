@@ -9,6 +9,7 @@ import pytest
 
 from ha_mcp.tools import bulk_selector
 from ha_mcp.tools.bulk_selector import (
+    BulkSelectorInfrastructureError,
     BulkSelectorValidationError,
     resolve_bulk_selector,
 )
@@ -89,8 +90,8 @@ async def test_excluded_leaf_inside_nested_aggregate_is_never_an_operation() -> 
         validate_first=True,
     )
 
-    assert result.resolved_entity_ids == ["light.sofa", "light.table"]
-    assert result.excluded_entity_ids == ["light.vitrine"]
+    assert result.resolved_entity_ids == ("light.sofa", "light.table")
+    assert result.excluded_entity_ids == ("light.vitrine",)
     assert {row["entity_id"] for row in result.operations} == {
         "light.sofa",
         "light.table",
@@ -123,7 +124,7 @@ async def test_floor_and_device_area_inheritance_resolve_exactly() -> None:
         validate_first=True,
     )
 
-    assert result.selected_area_ids == ["salon"]
+    assert result.selected_area_ids == ("salon",)
     assert result.operations == [
         {
             "entity_id": "light.inherited",
@@ -197,8 +198,8 @@ async def test_visibility_filters_positive_leaf_but_keeps_exclusion_private(
         validate_first=True,
     )
 
-    assert result.resolved_entity_ids == ["light.visible"]
-    assert result.excluded_entity_ids == []
+    assert result.resolved_entity_ids == ("light.visible",)
+    assert result.excluded_entity_ids == ()
     assert result.hidden_entity_count == 2
 
 
@@ -229,7 +230,7 @@ async def test_directly_hidden_matching_root_is_counted(
         validate_first=True,
     )
 
-    assert result.resolved_entity_ids == ["light.visible"]
+    assert result.resolved_entity_ids == ("light.visible",)
     assert result.hidden_entity_count == 1
 
 
@@ -265,7 +266,237 @@ async def test_cross_domain_aggregate_root_expands_into_target_domain_leaves() -
         validate_first=True,
     )
 
-    assert result.resolved_entity_ids == ["light.ceiling", "light.lamp"]
+    assert result.resolved_entity_ids == ("light.ceiling", "light.lamp")
+
+
+@pytest.mark.asyncio
+async def test_scene_in_selected_area_does_not_contribute_leaves() -> None:
+    """A scene's entity_id attribute names controlled targets, not members.
+
+    HA's native scene platform sets its own `entity_id` state attribute to
+    the entities the scene CONFIGURES (homeassistant/components/
+    homeassistant/scene.py), which routinely live elsewhere in the house.
+    A scene assigned to a selected area must never be treated as an
+    aggregate root -- doing so would pull an out-of-area (or no-area)
+    entity into the dispatch, defeating the exclusion invariant this
+    feature exists to guarantee.
+    """
+    client = SelectorClient(
+        states=[
+            _state("scene.movie_night", ["light.bedroom_lamp"]),
+            _state("light.salon_ceiling"),
+            _state("light.bedroom_lamp"),
+        ],
+        entities=[
+            {"entity_id": "scene.movie_night", "area_id": "salon"},
+            {"entity_id": "light.salon_ceiling", "area_id": "salon"},
+            {"entity_id": "light.bedroom_lamp", "area_id": "bedroom"},
+        ],
+        areas=[
+            {"area_id": "salon", "name": "Salon", "floor_id": None},
+            {"area_id": "bedroom", "name": "Bedroom", "floor_id": None},
+        ],
+    )
+
+    result = await resolve_bulk_selector(
+        client,
+        {"domain": "light", "area_ids": ["salon"]},
+        action="off",
+        parameters=None,
+        timeout_seconds=None,
+        validate_first=True,
+    )
+
+    assert result.resolved_entity_ids == ("light.salon_ceiling",)
+
+
+@pytest.mark.asyncio
+async def test_unknown_domain_fails_closed_with_a_clear_message() -> None:
+    """A domain typo (e.g. 'lights') must not silently resolve to nothing.
+
+    `get_domain_handler` returns the generic default handler for any
+    unrecognized domain, so a typo'd domain can pass both the domain-shape
+    check and the action-validity check (the default handler's
+    valid_actions happens to include "off") and previously fell through to
+    the generic "no visible leaf entities" message -- which wrongly points
+    the caller at their (correct) exclusions/areas instead of the actual
+    typo.
+    """
+    client = SelectorClient(
+        states=[_state("light.one")],
+        entities=[{"entity_id": "light.one", "area_id": "salon"}],
+    )
+
+    with pytest.raises(
+        BulkSelectorValidationError, match="No entities of domain 'lights'"
+    ):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "lights", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_valid_domain_absent_from_selected_area_names_the_area_not_exclusions() -> (
+    None
+):
+    """A real domain with zero entities in the selected area gets its own message.
+
+    Distinct from both the domain-typo case above (no entities of that
+    domain ANYWHERE) and the all-excluded-or-hidden case below (candidates
+    existed but none survived) -- this is "the domain is real, but not in
+    this area", which used to share the same generic "no visible leaf
+    entities after exclusions" wording as the all-excluded-or-hidden case.
+    """
+    client = SelectorClient(
+        states=[_state("light.elsewhere")],
+        entities=[{"entity_id": "light.elsewhere", "area_id": "bedroom"}],
+        areas=[
+            {"area_id": "salon", "name": "Salon", "floor_id": None},
+            {"area_id": "bedroom", "name": "Bedroom", "floor_id": None},
+        ],
+    )
+
+    with pytest.raises(
+        BulkSelectorValidationError,
+        match="No entities of domain 'light' exist in the selected area",
+    ):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "light", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_all_matches_excluded_names_exclusion_not_area() -> None:
+    """Candidates existed in-area but all were excluded: a distinct message
+    from "domain not in area" above -- this is the caller's exclusion (or
+    visibility) eating the whole result, not a wrong area/domain."""
+    client = SelectorClient(
+        states=[_state("light.only")],
+        entities=[{"entity_id": "light.only", "area_id": "salon"}],
+    )
+
+    with pytest.raises(BulkSelectorValidationError, match="excluded or hidden"):
+        await resolve_bulk_selector(
+            client,
+            {
+                "domain": "light",
+                "area_ids": ["salon"],
+                "exclude_entity_ids": ["light.only"],
+            },
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_area_ids_strips_whitespace_padding() -> None:
+    """A padded area_id (e.g. from copy-paste) is used verbatim, not silently
+    ignored -- `_string_list` strips before returning, so it can only fix a
+    typo, never mask a real (deliberately whitespace-containing) value,
+    since HA IDs are never legitimately whitespace-padded."""
+    client = SelectorClient(
+        states=[_state("light.one")],
+        entities=[{"entity_id": "light.one", "area_id": "salon"}],
+    )
+
+    result = await resolve_bulk_selector(
+        client,
+        {"domain": "light", "area_ids": [" salon "]},
+        action="off",
+        parameters=None,
+        timeout_seconds=None,
+        validate_first=True,
+    )
+
+    assert result.resolved_entity_ids == ("light.one",)
+
+
+@pytest.mark.asyncio
+async def test_topology_fetch_failure_propagates_without_orphaning_tasks() -> None:
+    """One failed registry fetch must surface, not vanish behind a bare gather.
+
+    Mirrors ``tools_areas.py``'s registry-fetch pattern: ``return_exceptions=True``
+    plus an explicit re-raise means a failure on any of the five concurrent
+    fetches is reported, instead of a bare ``asyncio.gather`` where the first
+    exception propagates while the other in-flight awaitables are neither
+    cancelled nor retrieved (surfacing later as an unattributed "Task
+    exception was never retrieved").
+    """
+
+    class FailingClient(SelectorClient):
+        async def send_websocket_message(
+            self, message: dict[str, Any]
+        ) -> dict[str, Any]:
+            if message["type"] == "config/device_registry/list":
+                raise ConnectionError("websocket dropped")
+            return await super().send_websocket_message(message)
+
+    client = FailingClient(
+        states=[_state("light.one")],
+        entities=[{"entity_id": "light.one", "area_id": "salon"}],
+    )
+
+    with pytest.raises(ConnectionError, match="websocket dropped"):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "light", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_visibility_data_unavailable_is_infrastructure_not_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A strict-resolver visibility failure is HA's fault, not the selector's.
+
+    Preserves and surfaces the underlying VisibilityDataUnavailable message
+    (one of four distinct causes in visibility/resolver.py) rather than a
+    fixed generic sentence, and raises the infrastructure-class exception so
+    the caller is routed to check HA connectivity, not rewrite a fine
+    selector.
+    """
+    monkeypatch.setattr(
+        bulk_selector,
+        "load_hidden_set",
+        AsyncMock(
+            side_effect=bulk_selector.VisibilityDataUnavailable(
+                "entity visibility config could not be loaded"
+            )
+        ),
+    )
+    client = SelectorClient(
+        states=[_state("light.one")],
+        entities=[{"entity_id": "light.one", "area_id": "salon"}],
+    )
+
+    with pytest.raises(
+        BulkSelectorInfrastructureError,
+        match="entity visibility config could not be loaded",
+    ):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "light", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
 
 
 @pytest.mark.asyncio
@@ -285,7 +516,7 @@ async def test_device_registry_entry_missing_id_fails_closed() -> None:
         devices=[{"area_id": "salon"}],
     )
 
-    with pytest.raises(BulkSelectorValidationError, match="device registry"):
+    with pytest.raises(BulkSelectorInfrastructureError, match="device registry"):
         await resolve_bulk_selector(
             client,
             {"domain": "light", "area_ids": ["salon"]},
@@ -294,6 +525,49 @@ async def test_device_registry_entry_missing_id_fails_closed() -> None:
             timeout_seconds=None,
             validate_first=True,
         )
+
+
+@pytest.mark.asyncio
+async def test_excluding_an_aggregate_excludes_every_expanded_member() -> None:
+    """``exclude_entity_ids`` naming a GROUP, not just a leaf, must expand too.
+
+    A narrowed implementation that subtracts ``set(excluded_roots)`` directly
+    (skipping membership expansion on the excluded side) passes every other
+    test in this file, since none of them exclude an aggregate -- only
+    already-a-leaf entities. This is the case from the PR's own Problem
+    section: excluding a group must turn off none of its members.
+    """
+    client = SelectorClient(
+        states=[
+            _state("light.spare_group", ["light.member_one", "light.member_two"]),
+            _state("light.member_one"),
+            _state("light.member_two"),
+            _state("light.unrelated"),
+        ],
+        entities=[
+            {"entity_id": "light.spare_group", "area_id": "salon"},
+            {"entity_id": "light.member_one", "area_id": None},
+            {"entity_id": "light.member_two", "area_id": None},
+            {"entity_id": "light.unrelated", "area_id": "salon"},
+        ],
+    )
+
+    result = await resolve_bulk_selector(
+        client,
+        {
+            "domain": "light",
+            "area_ids": ["salon"],
+            "exclude_entity_ids": ["light.spare_group"],
+        },
+        action="off",
+        parameters=None,
+        timeout_seconds=None,
+        validate_first=True,
+    )
+
+    assert result.resolved_entity_ids == ("light.unrelated",)
+    assert "light.member_one" not in result.resolved_entity_ids
+    assert "light.member_two" not in result.resolved_entity_ids
 
 
 @pytest.mark.asyncio

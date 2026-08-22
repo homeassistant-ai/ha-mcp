@@ -210,6 +210,10 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
         "Check documentation for required fields",
         "Ensure all required parameters are provided",
     ],
+    ErrorCode.VALIDATION_FAILED: [
+        "Check the parameter values and format against the tool documentation",
+        "Review the message and details fields for the specific constraint that failed",
+    ],
     ErrorCode.VALIDATION_INVALID_JSON: [
         "Ensure the parameter is valid JSON",
         "Check for syntax errors in JSON",
