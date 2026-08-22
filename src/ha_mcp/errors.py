@@ -314,10 +314,21 @@ def create_connection_error(
     details: str | None = None,
     timeout: bool = False,
     context: dict[str, Any] | None = None,
+    suggestions: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Create a connection error response."""
+    """Create a connection error response.
+
+    ``suggestions`` overrides ``DEFAULT_SUGGESTIONS[CONNECTION_FAILED/TIMEOUT]``
+    (network/URL/connectivity checks) for a caller whose failure is
+    CONNECTION_FAILED-shaped (unavailable, not the caller's fault to fix by
+    editing input) but not actually a network problem — e.g. malformed local
+    registry data or an unloadable local config file, where "check your
+    HOMEASSISTANT_URL" is not an actionable next step.
+    """
     code = ErrorCode.CONNECTION_TIMEOUT if timeout else ErrorCode.CONNECTION_FAILED
-    return create_error_response(code, message, details, context=context)
+    return create_error_response(
+        code, message, details, suggestions=suggestions, context=context
+    )
 
 
 # Authentication-error suggestions for Home Assistant add-on installs. On the

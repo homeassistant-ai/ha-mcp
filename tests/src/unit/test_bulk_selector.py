@@ -161,6 +161,34 @@ async def test_membership_cycle_fails_before_returning_operations() -> None:
 
 
 @pytest.mark.asyncio
+async def test_dangling_member_error_names_the_referencing_aggregate() -> None:
+    """A stale member ID must name WHICH aggregate's member list is stale.
+
+    ``_expand_entity``'s ``referenced_by`` attribution (``path[-1]``) is the
+    only thing that lets an operator find the actual misconfigured
+    aggregate -- "light.gone does not exist" alone gives no way to locate
+    which entity's member list needs fixing.
+    """
+    client = SelectorClient(
+        states=[_state("light.group", ["light.gone"])],
+        entities=[{"entity_id": "light.group", "area_id": "salon"}],
+    )
+
+    with pytest.raises(
+        BulkSelectorValidationError,
+        match=r"'light\.gone' does not exist.*referenced by 'light\.group'",
+    ):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "light", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_visibility_filters_positive_leaf_but_keeps_exclusion_private(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -208,16 +236,69 @@ async def test_directly_hidden_matching_root_is_counted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A hidden entity assigned directly to the area contributes to the count."""
-    monkeypatch.setattr(
-        bulk_selector,
-        "load_hidden_set",
-        AsyncMock(return_value=({"light.hidden"}, [])),
-    )
+    mock_load_hidden_set = AsyncMock(return_value=({"light.hidden"}, []))
+    monkeypatch.setattr(bulk_selector, "load_hidden_set", mock_load_hidden_set)
     client = SelectorClient(
         states=[_state("light.visible"), _state("light.hidden")],
         entities=[
             {"entity_id": "light.visible", "area_id": "salon"},
             {"entity_id": "light.hidden", "area_id": "salon"},
+        ],
+    )
+
+    result = await resolve_bulk_selector(
+        client,
+        {"domain": "light", "area_ids": ["salon"]},
+        action="off",
+        parameters=None,
+        timeout_seconds=None,
+        validate_first=True,
+    )
+
+    assert result.resolved_entity_ids == ("light.visible",)
+    assert result.hidden_entity_count == 1
+    # The resolver must ask the real resolver for the FAIL-CLOSED behavior
+    # (strict=True): the mock accepts and discards kwargs, so nothing else
+    # in this file would notice if `_load_hidden_entities` stopped passing
+    # it -- silently falling back to strict's default (False, fail-OPEN)
+    # would dispatch to hidden entities whenever the visibility config
+    # fails to load, with this whole suite still green.
+    assert mock_load_hidden_set.await_args.kwargs["strict"] is True
+    # The resolver itself (not just the tool layer, which some tests
+    # exercise with a hand-constructed BulkSelectorResolution(warnings=...))
+    # must be the one producing this warning.
+    assert result.warnings != ()
+
+
+@pytest.mark.asyncio
+async def test_registry_hidden_by_excludes_even_with_visibility_filter_disabled() -> (
+    None
+):
+    """An entity hidden via HA's own registry (`hidden_by`, e.g. the user
+    hid it in the HA UI) must be excluded even when ha-mcp's own opt-in
+    visibility filter is off/unconfigured.
+
+    This is NOT covered by the module's autouse mock (`load_hidden_set` ->
+    `(set(), [])`): registry_hidden in `_load_hidden_entities` is computed
+    directly from the entity registry's own `hidden_by` field, independent
+    of whatever `load_hidden_set` returns. `config.exclude_hidden` (the
+    opt-in filter's own hidden-respecting dimension) defaults to False, so
+    on a default ha-mcp install with the visibility filter never
+    configured, this is the ONLY thing honoring HA's native "hide this
+    entity" toggle for bulk selectors -- deleting it would let a selector
+    dispatch to an entity the user explicitly hid in the HA UI, with the
+    rest of this suite (all of which uses entities with no `hidden_by`)
+    staying green.
+    """
+    client = SelectorClient(
+        states=[_state("light.visible"), _state("light.hidden_by_user")],
+        entities=[
+            {"entity_id": "light.visible", "area_id": "salon"},
+            {
+                "entity_id": "light.hidden_by_user",
+                "area_id": "salon",
+                "hidden_by": "user",
+            },
         ],
     )
 
@@ -341,6 +422,32 @@ async def test_unknown_domain_fails_closed_with_a_clear_message() -> None:
 
 
 @pytest.mark.asyncio
+async def test_invalid_action_for_a_real_domain_names_valid_actions() -> None:
+    """An action typo against an otherwise-real, present domain is rejected
+    by ``_validate_selector`` itself, before any registry/state fetch --
+    distinct from the domain-typo case above (a bad *domain*), this
+    exercises the action/domain cross-check with a domain that IS real.
+    """
+    client = SelectorClient(
+        states=[_state("light.one")],
+        entities=[{"entity_id": "light.one", "area_id": "salon"}],
+    )
+
+    with pytest.raises(
+        BulkSelectorValidationError,
+        match="Invalid action 'explode' for domain 'light'",
+    ):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "light", "area_ids": ["salon"]},
+            action="explode",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_valid_domain_absent_from_selected_area_names_the_area_not_exclusions() -> (
     None
 ):
@@ -376,16 +483,69 @@ async def test_valid_domain_absent_from_selected_area_names_the_area_not_exclusi
 
 
 @pytest.mark.asyncio
+async def test_cross_domain_aggregate_with_no_matching_leaves_names_the_domain() -> (
+    None
+):
+    """A fourth, distinct empty-result cause: a non-scene aggregate of a
+    DIFFERENT domain qualifies as a root (matching_roots is non-empty), but
+    none of its expanded leaves are the target domain -- neither exclusion
+    nor visibility ever entered into it. Must not be misreported as "all
+    matching entities were excluded or hidden", which would send the user
+    to audit an empty exclude_entity_ids list and a visibility config
+    doing nothing.
+    """
+    client = SelectorClient(
+        states=[
+            _state("group.living_room", ["switch.a", "switch.b"]),
+            _state("switch.a"),
+            _state("switch.b"),
+            # Elsewhere in the house, so 'light' is a real domain (passes
+            # the earlier domain-known-at-all check) but never a candidate
+            # here: different area, not part of this aggregate.
+            _state("light.elsewhere"),
+        ],
+        entities=[
+            {"entity_id": "group.living_room", "area_id": "salon"},
+            {"entity_id": "switch.a", "area_id": None},
+            {"entity_id": "switch.b", "area_id": None},
+            {"entity_id": "light.elsewhere", "area_id": "bedroom"},
+        ],
+        areas=[
+            {"area_id": "salon", "name": "Salon", "floor_id": None},
+            {"area_id": "bedroom", "name": "Bedroom", "floor_id": None},
+        ],
+    )
+
+    with pytest.raises(
+        BulkSelectorValidationError,
+        match="No entities of domain 'light' exist in the selected area",
+    ):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "light", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_all_matches_excluded_names_exclusion_not_area() -> None:
     """Candidates existed in-area but all were excluded: a distinct message
     from "domain not in area" above -- this is the caller's exclusion (or
-    visibility) eating the whole result, not a wrong area/domain."""
+    visibility) eating the whole result, not a wrong area/domain. The
+    message also carries a visibility-safe count breakdown (never entity
+    IDs) so the user knows there was exactly one exclusion, not a wrong
+    guess at how many."""
     client = SelectorClient(
         states=[_state("light.only")],
         entities=[{"entity_id": "light.only", "area_id": "salon"}],
     )
 
-    with pytest.raises(BulkSelectorValidationError, match="excluded or hidden"):
+    with pytest.raises(
+        BulkSelectorValidationError, match=r"excluded or hidden \(1 excluded\)"
+    ):
         await resolve_bulk_selector(
             client,
             {
@@ -488,7 +648,7 @@ async def test_visibility_data_unavailable_is_infrastructure_not_validation(
     with pytest.raises(
         BulkSelectorInfrastructureError,
         match="entity visibility config could not be loaded",
-    ):
+    ) as exc_info:
         await resolve_bulk_selector(
             client,
             {"domain": "light", "area_ids": ["salon"]},
@@ -497,6 +657,41 @@ async def test_visibility_data_unavailable_is_infrastructure_not_validation(
             timeout_seconds=None,
             validate_first=True,
         )
+    # "visibility_config", not the connectivity default: this cause routes
+    # to settings-UI/config-file guidance, not "check your HOMEASSISTANT_URL".
+    assert exc_info.value.cause == "visibility_config"
+
+
+@pytest.mark.asyncio
+async def test_registry_unavailable_defaults_to_connectivity_cause() -> None:
+    """A genuinely unavailable HA registry keeps the default "connectivity"
+    cause -- distinct from the malformed-device-registry and
+    visibility-config causes, which route to different (non-network)
+    suggestions in tools_service.py."""
+
+    class UnavailableClient(SelectorClient):
+        async def send_websocket_message(
+            self, message: dict[str, Any]
+        ) -> dict[str, Any]:
+            if message["type"] == "config/entity_registry/list":
+                return {"success": False}
+            return await super().send_websocket_message(message)
+
+    client = UnavailableClient(
+        states=[_state("light.one")],
+        entities=[{"entity_id": "light.one", "area_id": "salon"}],
+    )
+
+    with pytest.raises(BulkSelectorInfrastructureError) as exc_info:
+        await resolve_bulk_selector(
+            client,
+            {"domain": "light", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+    assert exc_info.value.cause == "connectivity"
 
 
 @pytest.mark.asyncio
@@ -516,7 +711,9 @@ async def test_device_registry_entry_missing_id_fails_closed() -> None:
         devices=[{"area_id": "salon"}],
     )
 
-    with pytest.raises(BulkSelectorInfrastructureError, match="device registry"):
+    with pytest.raises(
+        BulkSelectorInfrastructureError, match="device registry"
+    ) as exc_info:
         await resolve_bulk_selector(
             client,
             {"domain": "light", "area_ids": ["salon"]},
@@ -525,6 +722,9 @@ async def test_device_registry_entry_missing_id_fails_closed() -> None:
             timeout_seconds=None,
             validate_first=True,
         )
+    # "malformed_device_registry", not the connectivity default: this is
+    # HA's own registry data being malformed, not a network problem.
+    assert exc_info.value.cause == "malformed_device_registry"
 
 
 @pytest.mark.asyncio
@@ -689,6 +889,71 @@ async def test_selector_entity_limit_fails_closed() -> None:
             timeout_seconds=None,
             validate_first=True,
         )
+
+
+@pytest.mark.asyncio
+async def test_selector_entity_limit_boundary_allows_exactly_max() -> None:
+    """Exactly ``MAX_SELECTOR_ENTITIES`` (100) must dispatch, not fail closed.
+
+    The check is ``len(resolved_entity_ids) > MAX_SELECTOR_ENTITIES``; 101
+    (one over) is covered by ``test_selector_entity_limit_fails_closed``
+    above, but nothing pinned the boundary itself -- an off-by-one flip to
+    ``>=`` would reject exactly 100 and still pass every other test here.
+    """
+    entity_ids = [f"light.entity_{index}" for index in range(100)]
+    client = SelectorClient(
+        states=[_state(entity_id) for entity_id in entity_ids],
+        entities=[
+            {"entity_id": entity_id, "area_id": "salon"} for entity_id in entity_ids
+        ],
+    )
+
+    result = await resolve_bulk_selector(
+        client,
+        {"domain": "light", "area_ids": ["salon"]},
+        action="off",
+        parameters=None,
+        timeout_seconds=None,
+        validate_first=True,
+    )
+
+    assert len(result.resolved_entity_ids) == 100
+
+
+@pytest.mark.asyncio
+async def test_malformed_registry_response_shape_fails_closed() -> None:
+    """``_registry_rows`` has two failure branches: unavailable/no-success
+    (covered by ``test_registry_unavailable_defaults_to_connectivity_cause``)
+    and a ``success: True`` reply whose ``result`` isn't a list-of-dicts --
+    a genuinely malformed shape rather than an absent one. Only the first
+    was exercised anywhere in this file.
+    """
+
+    class MalformedShapeClient(SelectorClient):
+        async def send_websocket_message(
+            self, message: dict[str, Any]
+        ) -> dict[str, Any]:
+            if message["type"] == "config/area_registry/list":
+                return {"success": True, "result": "not-a-list"}
+            return await super().send_websocket_message(message)
+
+    client = MalformedShapeClient(
+        states=[_state("light.one")],
+        entities=[{"entity_id": "light.one", "area_id": "salon"}],
+    )
+
+    with pytest.raises(
+        BulkSelectorInfrastructureError, match="unexpected response"
+    ) as exc_info:
+        await resolve_bulk_selector(
+            client,
+            {"domain": "light", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+    assert exc_info.value.cause == "connectivity"
 
 
 @pytest.mark.asyncio

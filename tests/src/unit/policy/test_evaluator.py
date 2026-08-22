@@ -148,6 +148,23 @@ class TestNormalizeStringifiedContainers:
             {"validate_first": True, "timeout_seconds": 5, "extra": None}
         ) == {"validate_first": True, "timeout_seconds": 5, "extra": None}
 
+    def test_deeply_nested_input_does_not_crash_with_recursion_error(self):
+        """A RecursionError from this function's OWN dict/list recursion
+        (not json.loads's, which loads_if_json_container_str already
+        guards) must be caught rather than propagate and crash policy
+        evaluation -- mirrors loads_if_json_container_str's own
+        RecursionError handling by leaving the whole value unrepaired.
+        """
+        import sys
+
+        nested: object = "leaf"
+        for _ in range(sys.getrecursionlimit() + 100):
+            nested = {"nested": nested}
+
+        result = normalize_stringified_containers({"selector": nested})
+
+        assert result == {"selector": nested}
+
 
 # --- match_rule ---
 class TestMatchRule:
@@ -642,6 +659,42 @@ class TestBulkSelectorFailSafe:
             evaluate(
                 "ha_bulk_control",
                 {"operations": [{"entity_id": "lock.front", "action": "lock"}]},
+                policy,
+            )
+            == Verdict.REQUIRE_APPROVAL
+        )
+
+    def test_wildcard_tool_rule_force_gates_selector(self):
+        """A "*" rule counts too, not just one scoped to ha_bulk_control by name.
+
+        ``match_rule`` treats ``tool_name="*"`` as applying to every tool, so
+        an operator-wide rule that reaches unresolved operation rows (e.g.
+        ``args.operations.*.entity_id``) signals MORE caution than a
+        service-scoped one, not less. Every other test in this class uses
+        ``tool_name="ha_bulk_control"`` explicitly, leaving the fail-safe's
+        own ``rule.tool_name in ("ha_bulk_control", "*")`` "*" arm unexercised
+        -- a regression there (e.g. dropping the "*" case) would let a
+        selector call bypass a broad operator-wide gate silently.
+        """
+        policy = Policy(
+            rules=[
+                Rule(
+                    tool_name="*",
+                    when=[
+                        Predicate(
+                            path="args.operations.*.entity_id",
+                            op="regex",
+                            value=r"^lock\.",
+                        )
+                    ],
+                )
+            ]
+        )
+
+        assert (
+            evaluate(
+                "ha_bulk_control",
+                {"selector": {"domain": "light", "area_ids": ["salon"]}},
                 policy,
             )
             == Verdict.REQUIRE_APPROVAL

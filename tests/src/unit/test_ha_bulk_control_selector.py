@@ -155,8 +155,15 @@ async def test_selector_dispatches_only_frozen_leaf_operations(
         parallel=False,
     )
 
+    # A literal, hand-built expected payload -- not `resolution.operations`
+    # called again -- so this independently pins the actual row shape.
+    # Comparing against a second call to the same property would still pass
+    # even if `.operations` itself computed the wrong shape, since both
+    # sides of the assertion would share the identical bug.
     device_tools.bulk_device_control.assert_awaited_once_with(
-        operations=resolution.operations,
+        operations=[
+            {"entity_id": "light.sofa", "action": "off", "validate_first": True}
+        ],
         parallel=False,
         ctx=None,
     )
@@ -252,6 +259,50 @@ async def test_operations_mode_rejects_dry_run() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "offender"),
+    [
+        ({"action": "off"}, "action"),
+        ({"parameters": {"brightness_pct": 30}}, "parameters"),
+        ({"timeout_seconds": 5.0}, "timeout_seconds"),
+        ({"validate_first": False}, "validate_first"),
+    ],
+)
+async def test_operations_mode_rejects_every_selector_only_parameter(
+    kwargs: dict[str, object], offender: str
+) -> None:
+    """Every selector-only parameter must name itself as the offender, not
+    just ``dry_run`` (see ``test_operations_mode_rejects_dry_run``). These
+    five used to share one message that always blamed "selector" -- the one
+    parameter the caller demonstrably did not pass, since this branch is
+    only reached when ``selector is None``.
+    """
+    tools = ServiceTools(MagicMock(), MagicMock())
+
+    with pytest.raises(ToolError, match=f"'{offender}' is a selector-only parameter"):
+        await tools.ha_bulk_control(
+            operations=[{"entity_id": "light.one", "action": "off"}],
+            **kwargs,
+        )
+
+
+@pytest.mark.asyncio
+async def test_selector_mode_requires_action() -> None:
+    """Selector mode with no ``action`` must fail before any registry read,
+    naming ``action`` as the missing parameter -- not fall through to
+    ``resolve_bulk_selector`` with ``action=None``, which would instead
+    surface a confusing "Invalid action ''" message from deep inside
+    selector validation.
+    """
+    tools = ServiceTools(MagicMock(), MagicMock())
+
+    with pytest.raises(ToolError, match="Selector mode requires action"):
+        await tools.ha_bulk_control(
+            selector={"domain": "light", "area_ids": ["salon"]},
+        )
+
+
+@pytest.mark.asyncio
 async def test_selector_transport_failure_is_structured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -308,3 +359,36 @@ async def test_selector_infrastructure_failure_is_connection_error_not_validatio
     body = str(exc_info.value)
     assert "CONNECTION_FAILED" in body
     assert "VALIDATION_FAILED" not in body
+
+
+@pytest.mark.asyncio
+async def test_infrastructure_error_suggestions_match_the_actual_cause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CONNECTION_FAILED's default suggestions (check HA is running / verify
+    HOMEASSISTANT_URL / check network) are actively unhelpful for a
+    malformed local device-registry row or a corrupt local visibility
+    config -- neither is a network problem. The routed suggestions must
+    reflect the actual cause, not the connectivity boilerplate.
+    """
+    monkeypatch.setattr(
+        "ha_mcp.tools.tools_service.resolve_bulk_selector",
+        AsyncMock(
+            side_effect=BulkSelectorInfrastructureError(
+                "Home Assistant device registry returned a malformed entry",
+                cause="malformed_device_registry",
+            )
+        ),
+    )
+    tools = ServiceTools(MagicMock(), MagicMock())
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_bulk_control(
+            selector={"domain": "light", "area_ids": ["salon"]},
+            action="off",
+        )
+
+    body = str(exc_info.value)
+    assert "device registry" in body.lower()
+    assert "HOMEASSISTANT_URL" not in body
+    assert "network connectivity" not in body.lower()

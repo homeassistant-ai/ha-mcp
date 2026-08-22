@@ -212,6 +212,45 @@ def _selector_only_parameter_offender(
     return None
 
 
+# Per-cause (message, suggestions) for BulkSelectorInfrastructureError (see
+# its docstring in bulk_selector.py). Not every infrastructure failure is a
+# network problem -- CONNECTION_FAILED's own DEFAULT_SUGGESTIONS
+# (check HA is running / verify HOMEASSISTANT_URL / check network) are
+# actively unhelpful for a malformed local registry row or a corrupt local
+# visibility config file, so those causes get their own actionable text
+# instead of inheriting the connectivity defaults.
+_INFRASTRUCTURE_ERROR_SUGGESTIONS: dict[str, tuple[str, list[str]]] = {
+    "connectivity": (
+        "Could not resolve the selector because Home Assistant data was unavailable",
+        [
+            "Check if Home Assistant is running and accessible",
+            "Retry the request; this may be a transient registry read failure",
+        ],
+    ),
+    "malformed_device_registry": (
+        "Could not resolve the selector because Home Assistant's device "
+        "registry returned a malformed entry",
+        [
+            "This indicates malformed data in Home Assistant's own device "
+            "registry, not a problem with the selector",
+            "Check Home Assistant's logs for device-registry errors, or "
+            "restart Home Assistant if the issue persists",
+        ],
+    ),
+    "visibility_config": (
+        "Could not resolve the selector because the entity visibility "
+        "filter could not be evaluated safely",
+        [
+            "Check the Entity Visibility tab in the ha-mcp settings UI -- "
+            "entity_visibility.json may be corrupt or invalid",
+            "If the config looks fine, this may be a temporary Home "
+            "Assistant registry issue -- check Home Assistant is running "
+            "and retry",
+        ],
+    ),
+}
+
+
 def _attach_resolution_to_response(
     response: dict[str, Any], resolution: BulkSelectorResolution
 ) -> None:
@@ -1662,12 +1701,20 @@ class ServiceTools:
         When NOT to use: use ``ha_call_service`` for service-specific payloads or
         backend-native group targeting, and ``ha_search`` for fuzzy name discovery.
 
-        Use selector mode with exact area or floor IDs when exclusions must be
-        applied after recursively expanding generic aggregate membership.
+        **Operations mode** (``operations``, no ``selector``): put every target in
+        this one call. Parallel execution is the default, and invalid items are
+        reported without aborting valid operations in the same batch — but a batch
+        in which every item fails validation dispatches nothing and fails the call.
 
-        Caveats: selector mode resolves a frozen visible leaf set before dispatch;
-        it is not transactional, so Home Assistant may still report per-leaf failures.
-        Set ``dry_run`` to preview the resolved set without changing state.
+        **Selector mode** (``selector`` + ``action``): use exact area or floor IDs
+        when exclusions must be applied after recursively expanding generic
+        aggregate membership. Resolves a frozen visible leaf set before dispatch;
+        it is not transactional, so Home Assistant may still report per-leaf
+        failures. A selector resolving to more than 100 entities
+        (``MAX_SELECTOR_ENTITIES``) fails closed instead of dispatching a
+        partial/oversized batch — narrow it (a more specific area/floor, or add
+        ``exclude_entity_ids``) and retry. Set ``dry_run`` to preview the resolved
+        set without changing state.
         """
         if operations is None and selector is None:
             raise_tool_error(
@@ -1707,7 +1754,10 @@ class ServiceTools:
             raise_tool_error(
                 create_validation_error(
                     f"'{offending_parameter}' is a selector-only parameter and "
-                    "requires selector mode",
+                    "cannot be used with operations. Either remove "
+                    f"'{offending_parameter}' from this call, or switch to "
+                    "selector mode by replacing 'operations' with 'selector' "
+                    "(+ 'action').",
                     parameter=offending_parameter,
                 )
             )
@@ -1762,24 +1812,28 @@ class ServiceTools:
                 validate_first=validate_first,
             )
         except BulkSelectorValidationError as exc:
-            # Caller-fixable: the selector itself is wrong.
-            parameter = getattr(exc, "parameter", "selector")
-            raise_tool_error(create_validation_error(str(exc), parameter=parameter))
+            # Caller-fixable: the selector itself is wrong. Unlike the
+            # `except ValueError` above (which also catches plain ValueErrors
+            # with no `.parameter`), every BulkSelectorValidationError sets
+            # one (default "selector") -- no getattr fallback needed.
+            raise_tool_error(create_validation_error(str(exc), parameter=exc.parameter))
         except BulkSelectorInfrastructureError as exc:
-            # NOT caller-fixable: Home Assistant's registries/visibility data
-            # were unavailable or malformed. Routed through
+            # NOT caller-fixable by editing the selector. Routed through
             # create_connection_error (not create_validation_error) so an
-            # agent is told to check HA connectivity instead of rewriting a
-            # selector that was never the problem.
+            # agent doesn't try to rewrite a selector that was never the
+            # problem -- but the specific next step depends on exc.cause,
+            # since not every cause is actually a connectivity problem.
             logger.warning(
-                "ha_bulk_control: selector resolution infrastructure failure: %s",
+                "ha_bulk_control: selector resolution infrastructure failure (%s): %s",
+                exc.cause,
                 exc,
+            )
+            message, suggestions = _INFRASTRUCTURE_ERROR_SUGGESTIONS.get(
+                exc.cause, _INFRASTRUCTURE_ERROR_SUGGESTIONS["connectivity"]
             )
             raise_tool_error(
                 create_connection_error(
-                    "Could not resolve the selector because Home Assistant "
-                    "data was unavailable",
-                    details=str(exc),
+                    message, details=str(exc), suggestions=suggestions
                 )
             )
         except Exception as exc:

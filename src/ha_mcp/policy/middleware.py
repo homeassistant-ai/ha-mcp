@@ -87,6 +87,17 @@ class PolicyMiddleware(Middleware):
     async def on_call_tool(
         self, context: MiddlewareContext, call_next: CallNext
     ) -> Any:
+        """Gate one tool call against the policy, blocking on approval if required.
+
+        Loads the policy, evaluates the call, and -- when approval is
+        required -- finds or creates a pending queue entry and waits up to
+        the configured window for a decision. A dynamic selector call
+        (``has_dynamic_selector_targets``) never shares or reuses another
+        call's pending entry, and is never reissued on TTL eviction: see
+        the inline comments above the ``existing =``, ``pending =``, and
+        eviction-reissue assignments below for why binding it to this one
+        invocation is a correctness requirement, not just extra caution.
+        """
         try:
             # Hoist sync file read off the event loop — a slow FS shouldn't
             # pause the fastmcp request handler's task.
@@ -218,7 +229,13 @@ class PolicyMiddleware(Middleware):
         # the pending row no longer exists in the UI so the LLM is being
         # told to re-call with a dead token. Issue a fresh entry so the
         # next re-call wakes a real pending row.
-        if self._queue.get(pending.token) is None:
+        #
+        # NOT for dynamic calls: a dynamic entry is only ever consumable by
+        # the invocation that created it (see the creator-only binding
+        # above), so no future re-call can ever "wake" a reissued row
+        # either -- reissuing here would just mint a second, equally
+        # unreachable row and burn a queue slot for nothing.
+        if not dynamic_targets and self._queue.get(pending.token) is None:
             old_token = pending.token
             pending = self._queue.create(
                 pending.tool_name,
@@ -233,7 +250,7 @@ class PolicyMiddleware(Middleware):
                 pending.token,
                 name,
             )
-        self._raise_pending_error(pending, rule)
+        self._raise_pending_error(pending, rule, dynamic_targets=dynamic_targets)
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     async def _wait_for_decision(
@@ -274,8 +291,21 @@ class PolicyMiddleware(Middleware):
         )
 
     def _raise_pending_error(
-        self, pending: PendingApproval, rule: Rule | None = None
+        self,
+        pending: PendingApproval,
+        rule: Rule | None = None,
+        *,
+        dynamic_targets: bool = False,
     ) -> NoReturn:
+        """Raise the structured USER_APPROVAL_REQUIRED error for one pending entry.
+
+        ``dynamic_targets`` switches both the message and suggestions: a
+        dynamic selector entry is bound to the single invocation that
+        created it (see the creator-only binding in ``on_call_tool``) and
+        can never be picked up by a later re-call, so its wording must not
+        promise the normal "re-call after the user approves" recovery path
+        the non-dynamic case uses.
+        """
         # Time-remaining, not total TTL: an LLM that re-calls a minute
         # before expiry should see "~60s left", not the original 300s.
         remaining = max(
@@ -293,19 +323,53 @@ class PolicyMiddleware(Middleware):
                 "tool_name": rule.tool_name,
                 "when": [p.model_dump() for p in rule.when],
             }
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.USER_APPROVAL_REQUIRED,
+        if dynamic_targets:
+            # "Re-call after the user approves" is false for a dynamic
+            # entry: it is bound to THIS invocation only (see the
+            # creator-only binding above the call site), so a re-call can
+            # never consume this pending row -- it always mints its own,
+            # independent one. Telling the agent to re-call anyway produces
+            # an approve-and-be-asked-again loop: the user approves the row
+            # they can see, the re-call ignores it and creates another. The
+            # only window in which THIS approval can succeed is while this
+            # call is still actively blocked (up to expires_in_seconds from
+            # now); once it elapses, this specific request is dead and a
+            # fresh call is a genuinely new request, not a retry of this one.
+            message = (
+                "User approval required. This approval request is single-use "
+                "and bound to this specific call only (see token above) -- it "
+                "cannot be approved after the fact by re-calling. Tell the "
+                "user to approve or deny it in the ha-mcp settings UI, Tool "
+                "Security Policies tab, right now, before this call's wait "
+                "window closes. If it closes unapproved, re-calling starts a "
+                "brand-new independent request rather than resuming this one."
+            )
+            suggestions = [
+                "Tell the user to approve or deny THIS pending request (the "
+                "token above) in the Tool Security Policies tab immediately "
+                "-- it will not still work after this call has already timed "
+                "out.",
+                "Do not re-call expecting this approval to be picked up; a "
+                "re-call creates its own separate request with its own "
+                "approval window instead.",
+            ]
+        else:
+            message = (
                 "User approval required. Tell the user to open the ha-mcp "
                 "settings UI, go to the Tool Security Policies tab, and "
                 "approve or deny the pending request. Re-call this tool "
-                "with the same arguments after the user approves.",
-                suggestions=[
-                    "Tell the user to open the Tool Security Policies tab in "
-                    + "the ha-mcp settings UI and approve the pending request.",
-                    "Re-call this tool with the same arguments after the user "
-                    + "approves.",
-                ],
+                "with the same arguments after the user approves."
+            )
+            suggestions = [
+                "Tell the user to open the Tool Security Policies tab in "
+                "the ha-mcp settings UI and approve the pending request.",
+                "Re-call this tool with the same arguments after the user approves.",
+            ]
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.USER_APPROVAL_REQUIRED,
+                message,
+                suggestions=suggestions,
                 context=context,
             )
         )

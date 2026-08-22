@@ -635,6 +635,91 @@ async def test_swept_pending_during_wait_is_reissued_with_fresh_token(queue):
     assert queue.get(original_token) is None
 
 
+@pytest.mark.anyio
+async def test_dynamic_selector_pending_error_does_not_promise_a_working_recall(queue):
+    """A dynamic selector's timeout error must not tell the agent to
+    re-call after approval -- that instruction is false for a dynamic
+    entry (creator-only binding means a re-call can never consume it) and
+    following it produces an approve-and-be-asked-again loop: the user
+    approves the row they can see, the re-call ignores it and mints a new
+    one instead.
+    """
+    args = {
+        "selector": {"domain": "lock", "area_ids": ["entry"]},
+        "action": "lock",
+    }
+    policy = Policy(rules=[Rule(tool_name="ha_bulk_control")])
+    middleware = PolicyMiddleware(
+        policy_provider=lambda: policy,
+        queue=queue,
+        wait_seconds=0,
+    )
+    call_next = AsyncMock()
+
+    with pytest.raises(ToolError) as ei:
+        await middleware.on_call_tool(make_context("ha_bulk_control", args), call_next)
+
+    body = json.loads(ei.value.args[0])
+    assert body["error"]["code"] == "USER_APPROVAL_REQUIRED"
+    full_text = body["error"]["message"] + " ".join(body["error"]["suggestions"])
+    assert "Re-call this tool with the same arguments after the user approves" not in (
+        full_text
+    )
+    assert "single-use" in full_text or "bound to this specific call" in full_text
+
+
+@pytest.mark.anyio
+async def test_dynamic_selector_evicted_during_wait_is_not_reissued(
+    queue, monkeypatch: pytest.MonkeyPatch
+):
+    """Unlike a static tool's pending entry, a swept dynamic entry must NOT
+    be reissued -- no future re-call can ever discover a dynamic entry by
+    lookup (creator-only binding), so a reissued row would be just as
+    unreachable as the one it replaced, silently burning a queue slot.
+
+    Forces the eviction by wrapping the queue's own create() to immediately
+    expire whatever it just created -- the middleware has no seam to
+    pre-create its own dynamic entry the way the static-path sibling test
+    (test_swept_pending_during_wait_is_reissued_with_fresh_token) does.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    args = {
+        "selector": {"domain": "lock", "area_ids": ["entry"]},
+        "action": "lock",
+    }
+    policy = Policy(rules=[Rule(tool_name="ha_bulk_control")])
+    middleware = PolicyMiddleware(
+        policy_provider=lambda: policy,
+        queue=queue,
+        wait_seconds=0,
+    )
+    call_next = AsyncMock()
+
+    real_create = queue.create
+    created_tokens: list[str] = []
+
+    def _create_then_expire(*args_: object, **kwargs: object):
+        entry = real_create(*args_, **kwargs)
+        entry.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        created_tokens.append(entry.token)
+        return entry
+
+    monkeypatch.setattr(queue, "create", _create_then_expire)
+
+    with pytest.raises(ToolError) as ei:
+        await middleware.on_call_tool(make_context("ha_bulk_control", args), call_next)
+
+    body = json.loads(ei.value.args[0])
+    assert body["error"]["code"] == "USER_APPROVAL_REQUIRED"
+    # Exactly one entry was ever created for this call -- the reissue
+    # branch, if it fired, would have called create() a second time.
+    assert len(created_tokens) == 1
+    assert body["token"] == created_tokens[0]
+    assert queue.get(created_tokens[0]) is None
+    call_next.assert_not_awaited()
+
+
 class TestApprovalManagementExemption:
     """Queue-management dev-tool actions must never themselves be gated.
 

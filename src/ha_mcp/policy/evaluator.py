@@ -42,6 +42,27 @@ def normalize_stringified_containers(value: Any) -> Any:
     string (not raised): policy evaluation is not the place to surface a
     JSON syntax error — the tool's own validation does that, with a
     properly attributed parameter name.
+
+    Deeply-nested input (real nested dicts/lists, or a stringified
+    container that decodes into deeply nested containers) is likewise left
+    unrepaired rather than crashing the call: unlike ``json.loads``, this
+    function's own dict/list recursion has no built-in depth floor, so a
+    ``RecursionError`` here is caught at the top level and the whole
+    (unrepaired) value is returned, mirroring ``loads_if_json_container_str``'s
+    own ``RecursionError`` handling.
+    """
+    try:
+        return _normalize_stringified_containers(value)
+    except RecursionError:
+        return value
+
+
+def _normalize_stringified_containers(value: Any) -> Any:
+    """Unbounded recursive worker for ``normalize_stringified_containers``.
+
+    Split out so the public function's ``RecursionError`` guard wraps a
+    single top-level call instead of needing a try/except at every
+    recursive frame.
     """
     if isinstance(value, str):
         try:
@@ -49,9 +70,9 @@ def normalize_stringified_containers(value: Any) -> Any:
         except ValueError:
             return value
     if isinstance(value, dict):
-        return {key: normalize_stringified_containers(v) for key, v in value.items()}
+        return {key: _normalize_stringified_containers(v) for key, v in value.items()}
     if isinstance(value, list):
-        return [normalize_stringified_containers(v) for v in value]
+        return [_normalize_stringified_containers(v) for v in value]
     return value
 
 
@@ -240,6 +261,18 @@ def _rule_needs_resolved_operations(rule: Rule) -> bool:
 
 
 def evaluate(tool_name: str, args: dict[str, Any], policy: Policy) -> Verdict:
+    """Decide whether one tool call requires approval under ``policy``.
+
+    A normal rule match (``find_matching_rule``) decides most calls. Two
+    fail-safes broaden approval beyond an exact predicate match, each only
+    when the operator has SOME rule that could plausibly apply: an
+    unmatched ``ha_call_service`` ``ws_command`` call (no ``domain``/
+    ``service`` args for a domain/service-keyed rule to match), and an
+    ``ha_bulk_control`` selector call whose matching rule needs fields
+    (``args.operations.*``) that don't exist yet at gate time, resolved
+    only later inside the tool. See the fail-safe blocks below for the
+    full reasoning behind each.
+    """
     if find_matching_rule(tool_name, args, policy) is not None:
         return Verdict.REQUIRE_APPROVAL
     # ha_call_service exposes a raw WebSocket escape hatch (``ws_command``) that

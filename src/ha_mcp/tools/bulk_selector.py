@@ -120,7 +120,15 @@ class BulkSelectorResolution:
     expanded_group_ids: tuple[str, ...]
     hidden_entity_count: int
     warnings: tuple[str, ...] = field(default_factory=tuple)
-    _operation_common: dict[str, Any] = field(default_factory=dict)
+    # repr=False: `_operation_common["parameters"]` can carry a lock or alarm
+    # code (selector mode's `parameters` argument, e.g. `lock.open` with a
+    # keypad code). The default dataclass __repr__ would otherwise write it
+    # to logs/tracebacks anywhere a resolution is printed or logged unredacted.
+    # compare=False: it is dispatch-only plumbing, not part of what makes two
+    # resolutions the "same" resolved plan.
+    _operation_common: dict[str, Any] = field(
+        default_factory=dict, repr=False, compare=False
+    )
 
     @property
     def operations(self) -> list[dict[str, Any]]:
@@ -180,7 +188,21 @@ class BulkSelectorInfrastructureError(RuntimeError):
     ``VALIDATION_FAILED``: an agent that sees "selector is invalid" will
     rewrite a selector that was fine and retry against an HA outage no
     selector can fix.
+
+    ``cause`` distinguishes actionable next steps for the response's
+    ``suggestions``: not every infrastructure failure is a network problem.
+    ``"connectivity"`` (default) covers a genuinely unavailable/malformed HA
+    registry or state response -- "check HA is running" is the right advice.
+    ``"malformed_device_registry"`` and ``"visibility_config"`` are local,
+    user-fixable data problems (a device-registry row missing ``id``; a
+    corrupt/unloadable ``entity_visibility.json``) where network suggestions
+    are actively unhelpful -- see ``tools_service.py``'s
+    ``_INFRASTRUCTURE_ERROR_SUGGESTIONS``.
     """
+
+    def __init__(self, message: str, *, cause: str = "connectivity") -> None:
+        super().__init__(message)
+        self.cause = cause
 
 
 def _registry_rows(result: Any, label: str) -> list[dict[str, Any]]:
@@ -210,7 +232,8 @@ def _validate_device_registry_rows(device_rows: list[dict[str, Any]]) -> None:
     """
     if any(not row.get("id") for row in device_rows):
         raise BulkSelectorInfrastructureError(
-            "Home Assistant device registry returned a malformed entry"
+            "Home Assistant device registry returned a malformed entry",
+            cause="malformed_device_registry",
         )
 
 
@@ -355,7 +378,7 @@ async def _load_topology(client: Any) -> _Topology:
     unattributed "Task exception was never retrieved" with no tool or call
     context once the event loop garbage-collects them.
     """
-    results = await asyncio.gather(
+    results: tuple[Any, Any, Any, Any, Any] = await asyncio.gather(
         client.get_states(),
         client.send_websocket_message({"type": "config/entity_registry/list"}),
         client.send_websocket_message({"type": "config/device_registry/list"}),
@@ -363,10 +386,51 @@ async def _load_topology(client: Any) -> _Topology:
         client.send_websocket_message({"type": "config/floor_registry/list"}),
         return_exceptions=True,
     )
-    for item in results:
-        if isinstance(item, BaseException):
-            raise item
-    return _Topology(*results)
+    states, entities, devices, areas, floors = results
+    failures = [result for result in results if isinstance(result, BaseException)]
+    if failures:
+        # Log every failed fetch, not just the one that gets raised: the
+        # caller's own `except Exception` handler only ever logs the single
+        # exception this raises, so with two+ concurrent fetches failing
+        # (e.g. both the entity and device registry reads), every failure
+        # after the first would otherwise vanish without a trace.
+        for failure in failures[1:]:
+            logger.warning(
+                "bulk selector: topology fetch failed (additional failure): %s",
+                failure,
+            )
+        raise failures[0]
+    # Keyword construction, not `_Topology(*results)`: the NamedTuple exists
+    # specifically so a reordered gather() call can't mislabel a registry
+    # silently -- unpacking the gather() result and re-splatting it
+    # positionally here would carry the exact risk it was written to avoid.
+    return _Topology(
+        states=states, entities=entities, devices=devices, areas=areas, floors=floors
+    )
+
+
+def _require_domain_known(domain: str, states: Mapping[str, Any]) -> None:
+    """Fail fast when no entity of this domain exists anywhere in the
+    instance -- catches a domain typo (e.g. "lights") independently of
+    area selection. Distinct from the later matching_roots-empty check,
+    which reports "not in the selected area(s)" for a domain that IS real."""
+    if not any(entity_id.startswith(f"{domain}.") for entity_id in states):
+        raise BulkSelectorValidationError(
+            f"No entities of domain '{domain}' exist in this Home Assistant instance",
+            parameter="selector.domain",
+        )
+
+
+def _all_excluded_or_hidden_message(*, excluded_count: int, hidden_count: int) -> str:
+    """Build the final empty-result message with a visibility-safe count
+    breakdown (never entity IDs) when available."""
+    counts = []
+    if excluded_count:
+        counts.append(f"{excluded_count} excluded")
+    if hidden_count:
+        counts.append(f"{hidden_count} hidden")
+    detail = f" ({', '.join(counts)})" if counts else ""
+    return f"All matching entities were excluded or hidden{detail}"
 
 
 def _select_area_ids(
@@ -423,10 +487,21 @@ async def _load_hidden_entities(
     states_result: list[dict[str, Any]],
     device_result: Any,
     entity_registry: Mapping[str, Mapping[str, Any]],
-) -> set[str]:
-    """Load visibility policy strictly and include registry-hidden entities."""
+) -> tuple[set[str], list[str]]:
+    """Load visibility policy strictly and include registry-hidden entities.
+
+    Returns ``(hidden_ids, warnings)``. The warnings are operator-facing
+    visibility-config notes (e.g. an unknown ``exclude_categories`` entry)
+    that ``load_hidden_set`` still returns even under ``strict=True`` --
+    per its own docstring, "benign notes ... still warn, never raise" is
+    orthogonal to the strict/fail-closed behavior, which only covers
+    degradations that would otherwise leak entities. Threaded into the
+    resolution's own ``warnings`` by the caller rather than discarded, so
+    whoever owns ``entity_visibility.json`` learns about a config problem
+    this resolution surfaced on their behalf.
+    """
     try:
-        visibility_hidden, _warnings = await load_hidden_set(
+        visibility_hidden, warnings = await load_hidden_set(
             entity_result,
             states_result,
             client,
@@ -441,14 +516,22 @@ async def _load_hidden_entities(
         # actually happened, and nothing else records it server-side.
         logger.warning("bulk selector: visibility resolution failed: %s", exc)
         raise BulkSelectorInfrastructureError(
-            f"Entity visibility could not be resolved safely: {exc}"
+            f"Entity visibility could not be resolved safely: {exc}",
+            # "visibility_config", not the "connectivity" default: one of
+            # the four VisibilityDataUnavailable causes this wraps is a
+            # corrupt/unloadable entity_visibility.json in the user's own
+            # data dir -- not distinguished from the other three (HA
+            # registry/Assist-data unavailable) here, so the routed
+            # suggestions below hedge across both rather than confidently
+            # pointing at the wrong one.
+            cause="visibility_config",
         ) from exc
     registry_hidden = {
         entity_id
         for entity_id, row in entity_registry.items()
         if row.get("hidden_by") is not None
     }
-    return visibility_hidden | registry_hidden
+    return visibility_hidden | registry_hidden, warnings
 
 
 async def resolve_bulk_selector(
@@ -473,7 +556,14 @@ async def resolve_bulk_selector(
     not integration identity.
     """
     validated = _validate_selector(selector, action)
-    domain, action, area_ids, floor_ids, excluded_roots = validated
+    # Attribute access, not a positional unpack: `_ValidatedSelector` exists
+    # specifically so a reordering of its fields can't swap two `list[str]`
+    # slots silently -- unpacking it positionally here would defeat that.
+    domain = validated.domain
+    action = validated.action
+    area_ids = validated.area_ids
+    floor_ids = validated.floor_ids
+    excluded_roots = validated.excluded_roots
     try:
         topology = await _load_topology(client)
     except Exception as exc:
@@ -499,11 +589,7 @@ async def resolve_bulk_selector(
         for state in topology.states
         if isinstance(state.get("entity_id"), str)
     }
-    if not any(entity_id.startswith(f"{domain}.") for entity_id in states):
-        raise BulkSelectorValidationError(
-            f"No entities of domain '{domain}' exist in this Home Assistant instance",
-            parameter="selector.domain",
-        )
+    _require_domain_known(domain, states)
     entity_registry = {
         str(row["entity_id"]): row
         for row in entity_rows
@@ -512,7 +598,7 @@ async def resolve_bulk_selector(
     device_areas = {
         str(row["id"]): row.get("area_id") for row in device_rows if row.get("id")
     }
-    hidden = await _load_hidden_entities(
+    hidden, visibility_warnings = await _load_hidden_entities(
         client, topology.entities, topology.states, topology.devices, entity_registry
     )
     # A root only needs to LIVE in the selected area; it does not need to be
@@ -554,7 +640,7 @@ async def resolve_bulk_selector(
     expanded_groups: set[str] = set()
     excluded_expanded_groups: set[str] = set()
     expansion_cache: dict[str, _ExpansionEntry] = {}
-    selected_leaves = _expand_roots(
+    expanded_leaves = _expand_roots(
         candidate_roots, states, expanded_groups, expansion_cache, "selector"
     )
     excluded_leaves = _expand_roots(
@@ -565,8 +651,19 @@ async def resolve_bulk_selector(
         "selector.exclude_entity_ids",
     )
     selected_leaves = {
-        entity_id for entity_id in selected_leaves if entity_id.startswith(f"{domain}.")
+        entity_id for entity_id in expanded_leaves if entity_id.startswith(f"{domain}.")
     }
+    if not selected_leaves:
+        # A fourth, distinct empty-result cause: matching_roots was
+        # non-empty (a non-scene aggregate of a DIFFERENT domain qualified
+        # as a root, e.g. a `group.living_room` whose members are all
+        # `switch.*`), so expansion ran, but none of its resulting leaves
+        # were the target domain -- neither exclusion nor visibility ever
+        # entered into it. Caught here, before either subtraction below,
+        # so it can never be misreported as "excluded or hidden".
+        raise BulkSelectorValidationError(
+            f"No entities of domain '{domain}' exist in the selected area(s)"
+        )
     effective_excluded = selected_leaves & excluded_leaves
     selected_leaves.difference_update(excluded_leaves)
     hidden_selected = selected_leaves & hidden
@@ -574,7 +671,10 @@ async def resolve_bulk_selector(
     resolved_entity_ids = sorted(selected_leaves)
     if not resolved_entity_ids:
         raise BulkSelectorValidationError(
-            "All matching entities were excluded or hidden"
+            _all_excluded_or_hidden_message(
+                excluded_count=len(effective_excluded),
+                hidden_count=len(directly_hidden | hidden_selected),
+            )
         )
     if len(resolved_entity_ids) > MAX_SELECTOR_ENTITIES:
         raise BulkSelectorValidationError(
@@ -591,7 +691,7 @@ async def resolve_bulk_selector(
         operation_common["timeout_seconds"] = timeout_seconds
     excluded_and_hidden = effective_excluded & hidden
     hidden_count = len(directly_hidden | hidden_selected | excluded_and_hidden)
-    warnings: list[str] = []
+    warnings: list[str] = list(visibility_warnings)
     if hidden_count:
         # AGENTS.md "Return Values": a degraded result belongs in the
         # top-level warnings list, not just a bare count the caller has no
