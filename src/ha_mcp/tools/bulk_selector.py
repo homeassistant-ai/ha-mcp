@@ -132,10 +132,17 @@ class BulkSelectorResolution:
         the dry-run preview reports, silently making the preview disagree
         with what actually dispatches.
         """
-        return [
-            {"entity_id": entity_id, **self._operation_common}
-            for entity_id in self.resolved_entity_ids
-        ]
+        operations: list[dict[str, Any]] = []
+        for entity_id in self.resolved_entity_ids:
+            row = {"entity_id": entity_id, **self._operation_common}
+            if "parameters" in row:
+                # `**self._operation_common` only shallow-copies: every row
+                # would otherwise share the SAME "parameters" dict object,
+                # so an in-place mutation of one row's parameters (e.g. by
+                # the dispatcher) would silently leak into every other row.
+                row["parameters"] = dict(row["parameters"])
+            operations.append(row)
+        return operations
 
     def summary(self) -> dict[str, Any]:
         """Return the stable, visibility-safe resolution report."""
@@ -538,7 +545,14 @@ async def resolve_bulk_selector(
         )
     directly_hidden = matching_roots & hidden
     candidate_roots = sorted(matching_roots - hidden)
+    # Separate accumulators: expanded_group_ids in the final resolution must
+    # report only aggregates discovered while expanding the SELECTION side.
+    # An excluded aggregate (and any of its own nested sub-groups) is not
+    # something that fed the dispatch -- reporting it in the same set would
+    # misleadingly suggest it did. The memoization cache stays shared: an
+    # entity referenced by both sides should still only be expanded once.
     expanded_groups: set[str] = set()
+    excluded_expanded_groups: set[str] = set()
     expansion_cache: dict[str, _ExpansionEntry] = {}
     selected_leaves = _expand_roots(
         candidate_roots, states, expanded_groups, expansion_cache, "selector"
@@ -546,7 +560,7 @@ async def resolve_bulk_selector(
     excluded_leaves = _expand_roots(
         excluded_roots,
         states,
-        expanded_groups,
+        excluded_expanded_groups,
         expansion_cache,
         "selector.exclude_entity_ids",
     )

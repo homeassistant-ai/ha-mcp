@@ -571,6 +571,85 @@ async def test_excluding_an_aggregate_excludes_every_expanded_member() -> None:
 
 
 @pytest.mark.asyncio
+async def test_operations_parameters_are_independent_per_row() -> None:
+    """Each operation row's `parameters` dict must be its own object.
+
+    `operations` builds every row from the same `_operation_common` dict via
+    `**` unpacking, which only shallow-copies -- without a per-row copy of
+    the nested `parameters` mapping, every row would share the SAME dict
+    object, so mutating one row's parameters (e.g. a dispatcher normalizing
+    a value in place) would silently leak into every other row.
+    """
+    client = SelectorClient(
+        states=[_state("light.one"), _state("light.two")],
+        entities=[
+            {"entity_id": "light.one", "area_id": "salon"},
+            {"entity_id": "light.two", "area_id": "salon"},
+        ],
+    )
+
+    result = await resolve_bulk_selector(
+        client,
+        {"domain": "light", "area_ids": ["salon"]},
+        action="on",
+        parameters={"brightness_pct": 50},
+        timeout_seconds=None,
+        validate_first=True,
+    )
+
+    operations = result.operations
+    assert len(operations) == 2
+    assert operations[0]["parameters"] is not operations[1]["parameters"]
+    operations[0]["parameters"]["brightness_pct"] = 10
+    assert operations[1]["parameters"]["brightness_pct"] == 50
+
+
+@pytest.mark.asyncio
+async def test_excluded_aggregate_not_reported_in_expanded_group_ids() -> None:
+    """An aggregate referenced only by exclude_entity_ids must not appear in
+    expanded_group_ids -- that field reports groups that fed the SELECTION,
+    and an excluded group (or its nested sub-groups) never did.
+
+    ``light.excluded_group`` is deliberately NOT assigned to the selected
+    area: exclude_entity_ids roots are expanded directly by ID regardless
+    of area, but if it WERE in the selected area it would also be a
+    legitimate selection-side root in its own right (matching_roots doesn't
+    consult exclude_entity_ids), which would confound this test with a
+    second, unrelated reason for it to appear in expanded_group_ids.
+    """
+    client = SelectorClient(
+        states=[
+            _state("light.selected_group", ["light.a"]),
+            _state("light.a"),
+            _state("light.excluded_group", ["light.b"]),
+            _state("light.b"),
+        ],
+        entities=[
+            {"entity_id": "light.selected_group", "area_id": "salon"},
+            {"entity_id": "light.a", "area_id": None},
+            {"entity_id": "light.excluded_group", "area_id": None},
+            {"entity_id": "light.b", "area_id": None},
+        ],
+    )
+
+    result = await resolve_bulk_selector(
+        client,
+        {
+            "domain": "light",
+            "area_ids": ["salon"],
+            "exclude_entity_ids": ["light.excluded_group"],
+        },
+        action="off",
+        parameters=None,
+        timeout_seconds=None,
+        validate_first=True,
+    )
+
+    assert result.expanded_group_ids == ("light.selected_group",)
+    assert "light.excluded_group" not in result.expanded_group_ids
+
+
+@pytest.mark.asyncio
 async def test_action_is_normalized_case_insensitively() -> None:
     """Action normalization accepts surrounding whitespace and mixed case."""
     client = SelectorClient(

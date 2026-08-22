@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from enum import StrEnum
 from typing import Any
 
-from ..tools.util_helpers import _loads_if_json_container_str
+from ..tools.util_helpers import loads_if_json_container_str
 from .model import Policy, Predicate, Rule
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ def normalize_stringified_containers(value: Any) -> Any:
     """
     if isinstance(value, str):
         try:
-            return _loads_if_json_container_str(value)
+            return loads_if_json_container_str(value)
         except ValueError:
             return value
     if isinstance(value, dict):

@@ -1747,7 +1747,9 @@ class ServiceTools:
             parsed_selector = parse_json_param(selector, "selector")
             if not isinstance(parsed_selector, dict):
                 raise BulkSelectorValidationError("selector must be a JSON object")
-        except (ValueError, BulkSelectorValidationError) as exc:
+        except ValueError as exc:
+            # BulkSelectorValidationError subclasses ValueError; catching it
+            # separately alongside ValueError was redundant.
             parameter = getattr(exc, "parameter", "selector")
             raise_tool_error(create_validation_error(str(exc), parameter=parameter))
         try:
