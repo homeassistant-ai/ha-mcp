@@ -164,6 +164,37 @@ async def test_selector_dispatches_only_frozen_leaf_operations(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_tool_error_propagates_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    resolution: BulkSelectorResolution,
+) -> None:
+    """A ToolError raised by bulk_device_control itself (e.g. "every
+    operation failed validation") must pass through unchanged, not get
+    re-classified by exception_to_structured_error into a generic error
+    that discards its real code/message/suggestions.
+    """
+    original = ToolError(
+        '{"success": false, "error": {"code": "VALIDATION_FAILED", '
+        '"message": "All operations failed validation"}}'
+    )
+    monkeypatch.setattr(
+        "ha_mcp.tools.tools_service.resolve_bulk_selector",
+        AsyncMock(return_value=resolution),
+    )
+    device_tools = MagicMock()
+    device_tools.bulk_device_control = AsyncMock(side_effect=original)
+    tools = ServiceTools(MagicMock(), device_tools)
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_bulk_control(
+            selector={"domain": "light", "area_ids": ["salon"]},
+            action="off",
+        )
+
+    assert str(exc_info.value) == str(original)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "arguments",
     [

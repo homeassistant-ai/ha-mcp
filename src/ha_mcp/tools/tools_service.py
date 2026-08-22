@@ -1803,6 +1803,14 @@ class ServiceTools:
                 parallel=parallel,
                 ctx=ctx,
             )
+        except ToolError:
+            # bulk_device_control already raises a fully structured ToolError
+            # (e.g. "every operation failed validation" -- see its own
+            # raise_tool_error call sites) -- re-raise it untouched. Without
+            # this guard, the except Exception below would catch it too and
+            # re-classify it via exception_to_structured_error, discarding
+            # its real code/message/suggestions for a generic one.
+            raise
         except Exception as exc:
             # Attach the frozen resolution to the error context: a
             # non-transactional, partially-executed bulk write must leave a
