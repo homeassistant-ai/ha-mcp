@@ -2052,6 +2052,108 @@ class TestRevokeCredentials:
 # ---------------------------------------------------------------------------
 
 
+class TestAuditDistName:
+    """The dependency audit walks the graph of the dist actually installed."""
+
+    def test_override_names_the_audit_root_over_the_channel(
+        self, tmp_path, monkeypatch
+    ):
+        """Dev channel + a stable-dist override: audit the override's dist.
+
+        An override install skips the conflicting-channel removal, so stale
+        ``ha-mcp-dev`` metadata can coexist with the ``ha-mcp`` the override
+        just installed — the channel preference would then audit the stale
+        graph (Codex review on #2245).
+        """
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV, OPT_PIP_SPEC: "ha-mcp==9.9.9"},
+        )
+        monkeypatch.setattr(es, "_dist_installed", lambda name: True)
+        assert mgr._audit_dist_name() == DIST_NAME_STABLE
+
+    def test_bare_url_override_audits_the_stable_dist(self, tmp_path, monkeypatch):
+        """A repository tarball installs as ha-mcp whatever the channel says.
+
+        A bare URL parses as no requirement, so _replaced_dist_name() is
+        None — without the explicit stable preference, stale ha-mcp-dev
+        metadata would win the audit root on the dev channel (CodeRabbit
+        outside-diff-range finding on #2245).
+        """
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={
+                OPT_CHANNEL: CHANNEL_DEV,
+                OPT_PIP_SPEC: "https://example.invalid/ha-mcp.tar.gz",
+            },
+        )
+        monkeypatch.setattr(es, "_dist_installed", lambda name: True)
+        assert mgr._audit_dist_name() == DIST_NAME_STABLE
+
+    def test_bare_url_override_prefers_the_installed_known_dist(
+        self, tmp_path, monkeypatch
+    ):
+        """A dev wheel URL installs ha-mcp-dev; audit what is actually there.
+
+        Hardcoding stable for every bare URL would report a phantom missing
+        ha-mcp on each healthy bring-up of such an install (Codex on #2245).
+        """
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={
+                OPT_CHANNEL: CHANNEL_DEV,
+                OPT_PIP_SPEC: "https://example.invalid/ha-mcp-dev.whl",
+            },
+        )
+        monkeypatch.setattr(es, "_dist_installed", lambda name: name == DIST_NAME_DEV)
+        assert mgr._audit_dist_name() == DIST_NAME_DEV
+
+    def test_named_url_override_audits_its_own_distribution(
+        self, tmp_path, monkeypatch
+    ):
+        """An override may install an ARBITRARY distribution; audit that one.
+
+        ``name @ url`` parses, so the bare-URL stable fallback never fires,
+        and mapping onto the two channel dists would fall back to the
+        channel's stale graph (CodeRabbit on #2245).
+        """
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={
+                OPT_CHANNEL: CHANNEL_DEV,
+                OPT_PIP_SPEC: "acme-ha-mcp @ file:///package.whl",
+            },
+        )
+        monkeypatch.setattr(es, "_dist_installed", lambda name: True)
+        assert mgr._audit_dist_name() == "acme-ha-mcp"
+
+    def test_explicit_root_survives_missing_metadata(self, tmp_path, monkeypatch):
+        """An explicit root is audited even when its metadata is absent.
+
+        Swapping to the other channel's installed dist would walk a stale
+        graph; auditing the explicit root instead reports it as missing —
+        the true story when its install failed (CodeRabbit on #2245).
+        """
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV, OPT_PIP_SPEC: "ha-mcp==9.9.9"},
+        )
+        monkeypatch.setattr(es, "_dist_installed", lambda name: name == DIST_NAME_DEV)
+        assert mgr._audit_dist_name() == DIST_NAME_STABLE
+
+    def test_channel_dist_wins_without_an_override(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path, options={OPT_CHANNEL: CHANNEL_DEV})
+        monkeypatch.setattr(es, "_dist_installed", lambda name: True)
+        assert mgr._audit_dist_name() == DIST_NAME_DEV
+
+    def test_falls_back_to_the_installed_dist(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path, options={OPT_CHANNEL: CHANNEL_DEV})
+        monkeypatch.setattr(
+            es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
+        )
+        assert mgr._audit_dist_name() == DIST_NAME_STABLE
+
+
 class TestReadinessProbe:
     async def test_probe_port_true_on_connect(self, tmp_path, monkeypatch):
         mgr, _hass, _entry = _manager(tmp_path)
@@ -2078,8 +2180,31 @@ class TestReadinessProbe:
         mgr, hass, _entry = _manager(tmp_path)
         hass.loop.time = MagicMock(return_value=0.0)
         mgr._thread_exc = RuntimeError("bind failed")
-        with pytest.raises(es.EmbeddedServerError, match="failed to start"):
+        # _worker_startup_failure wraps a non-EmbeddedServerError crash; the
+        # "failed to start" prefix moved to embedded_setup's log line (#2239).
+        with pytest.raises(es.EmbeddedServerError, match="worker thread crashed"):
             await mgr._async_wait_until_ready()
+
+    async def test_wait_ready_surfaces_worker_composed_error_verbatim(self, tmp_path):
+        """A worker-composed EmbeddedServerError passes through UNWRAPPED.
+
+        The passthrough branch of _worker_startup_failure carries the
+        dependency diagnosis and its failure kind; re-wrapping is what
+        produced the doubled "failed to start:" prefix (#2239, Patch76
+        review: this branch had no test that goes red on regression).
+        """
+        mgr, hass, _entry = _manager(tmp_path)
+        hass.loop.time = MagicMock(return_value=0.0)
+        composed = es.EmbeddedServerError(
+            "Installed mcp 1.14.1 does not satisfy 'mcp>=1.24.0'.",
+            kind="package",
+        )
+        mgr._thread_exc = composed
+        with pytest.raises(es.EmbeddedServerError) as excinfo:
+            await mgr._async_wait_until_ready()
+        assert excinfo.value is composed
+        assert excinfo.value.kind == "package"
+        assert "failed to start" not in str(excinfo.value)
 
     async def test_wait_ready_raises_when_thread_exited(self, tmp_path):
         mgr, hass, _entry = _manager(tmp_path)
