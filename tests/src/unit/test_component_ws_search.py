@@ -719,6 +719,7 @@ def empty_view(monkeypatch):
 # =============================================================================
 class TestInfo:
     def test_shape(self):
+        """Advertise the complete component capability contract."""
         # Drift guard: info must advertise EVERY shipped capability (the server
         # gates each consumer on membership) and mirror CAPABILITIES exactly.
         info = wsapi._do_info(FakeHass(config=FakeConfig(time_zone="America/New_York")))
@@ -726,6 +727,7 @@ class TestInfo:
         assert info["component_version"] == COMPONENT_VERSION
         assert info["capabilities"] == [
             "search",
+            "search_entity_membership",
             "overview",
             "helpers_list",
             "states",
@@ -1565,7 +1567,13 @@ class TestScorerParity:
                 "state": "on",
             }
             match = _match_exact_search_entity(
-                entity, query_lower, None, set(), _PARITY_HIDDEN, True
+                entity,
+                query_lower,
+                None,
+                set(),
+                _PARITY_HIDDEN,
+                True,
+                denied_member_ids=set(),
             )
             if match:
                 ranked.append((match["entity_id"], match["score"]))
@@ -1930,6 +1938,7 @@ class TestSchemaValidation:
         return _REAL_VOL.Schema(wsapi._search_schema())
 
     def test_valid_params_apply_defaults(self, monkeypatch):
+        """Apply stable defaults to valid search parameters."""
         schema = self._schema(monkeypatch)
         out = schema({"type": wsapi.WS_SEARCH, "query": "kitchen"})
         assert out["exact"] is True
@@ -1937,6 +1946,25 @@ class TestSchemaValidation:
         assert out["include_config"] is False
         assert out["limit"] == wsapi.DEFAULT_LIMIT
         assert out["offset"] == 0
+        assert "result_fields" not in out
+
+    def test_membership_result_fields_are_allowlisted(self, monkeypatch):
+        """Accept only the public aggregate-membership result fields."""
+        schema = self._schema(monkeypatch)
+        out = schema(
+            {
+                "type": wsapi.WS_SEARCH,
+                "result_fields": ["is_group", "member_entity_ids"],
+            }
+        )
+        assert out["result_fields"] == ["is_group", "member_entity_ids"]
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(
+                {
+                    "type": wsapi.WS_SEARCH,
+                    "result_fields": ["hue_type"],
+                }
+            )
 
     @pytest.mark.parametrize(
         "bad",

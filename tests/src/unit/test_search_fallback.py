@@ -74,6 +74,81 @@ class TestExactMatchSearch:
         assert result["results"][0]["match_type"] == "exact_match"
 
     @pytest.mark.asyncio
+    async def test_exact_match_opt_in_membership(self, sample_entities):
+        """Legacy exact search normalizes explicit membership only on request."""
+        sample_entities[0]["attributes"]["entity_id"] = {
+            "light.member_two",
+            "light.member_one",
+        }
+        client = MockClient(sample_entities)
+
+        default = await _exact_match_search(client, "living", None, 10)
+        requested = await _exact_match_search(
+            client,
+            "living",
+            None,
+            10,
+            membership_fields=("is_group", "member_entity_ids"),
+        )
+
+        assert "is_group" not in default["results"][0]
+        assert requested["results"][0]["is_group"] is True
+        assert requested["results"][0]["member_entity_ids"] == [
+            "light.member_one",
+            "light.member_two",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_exact_match_withholds_hidden_member_when_excluded(self):
+        """include_hidden=False applies to IDs nested in membership metadata."""
+
+        class HiddenMemberClient(MockClient):
+            async def send_websocket_message(self, payload: dict) -> dict:
+                """Return visibility metadata that hides one group member."""
+                return {
+                    "success": True,
+                    "result": [
+                        {"entity_id": "light.hidden_member", "hidden_by": "user"}
+                    ],
+                }
+
+        client = HiddenMemberClient(
+            [
+                {
+                    "entity_id": "light.group",
+                    "attributes": {
+                        "friendly_name": "Group",
+                        "group_entities": [
+                            "light.hidden_member",
+                            "light.visible_member",
+                        ],
+                    },
+                    "state": "on",
+                }
+            ]
+        )
+        result = await _exact_match_search(
+            client,
+            "group",
+            None,
+            10,
+            include_hidden=False,
+            membership_fields=("is_group", "member_entity_ids"),
+        )
+
+        assert result["results"] == [
+            {
+                "entity_id": "light.group",
+                "friendly_name": "Group",
+                "domain": "light",
+                "state": "on",
+                "score": 100,
+                "match_type": "exact_match",
+                "is_group": True,
+            }
+        ]
+
+    @pytest.mark.asyncio
     async def test_exact_match_finds_friendly_name_substring(self, sample_entities):
         """Exact match finds entities by friendly_name substring."""
         client = MockClient(sample_entities)
