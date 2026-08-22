@@ -13,7 +13,13 @@ from uuid import uuid4
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    assert_mcp_success,
+    parse_mcp_result,
+    safe_call_tool,
+)
+from ...utilities.wait_helpers import wait_for_entity_state
 
 logger = logging.getLogger(__name__)
 
@@ -46,56 +52,78 @@ def _extract_bulk_boolean_entity_id(data: dict) -> str | None:
 class TestBulkControl:
     """Test ha_bulk_control tool functionality."""
 
-    async def test_selector_dry_run_resolves_area_and_exclusion(
-        self, mcp_client, cleanup_tracker
-    ):
+    async def test_selector_dry_run_resolves_area_and_exclusion(self, mcp_client):
         """Preview exact area leaves after applying an entity exclusion."""
         suffix = uuid4().hex[:8]
-        area_result = await mcp_client.call_tool(
-            "ha_set_area_or_floor",
-            {"kind": "area", "name": f"Bulk selector {suffix}"},
-        )
-        area_data = assert_mcp_success(area_result, "Create selector area")
-        area_id = area_data["area_id"]
-        cleanup_tracker.track("area", area_id)
-
-        entity_ids = []
-        for label in ("included", "excluded"):
-            create_result = await mcp_client.call_tool(
-                "ha_config_set_helper",
-                {
-                    "helper_type": "input_boolean",
-                    "name": f"Bulk selector {label} {suffix}",
-                },
+        area_id: str | None = None
+        entity_ids: list[str] = []
+        try:
+            area_result = await mcp_client.call_tool(
+                "ha_set_area_or_floor",
+                {"kind": "area", "name": f"Bulk selector {suffix}"},
             )
-            create_data = assert_mcp_success(create_result, "Create selector helper")
-            entity_id = _extract_bulk_boolean_entity_id(create_data)
-            assert entity_id, f"Missing helper entity_id: {create_data}"
-            cleanup_tracker.track("input_boolean", entity_id)
-            entity_ids.append(entity_id)
-            assign_result = await mcp_client.call_tool(
-                "ha_set_entity", {"entity_id": entity_id, "area_id": area_id}
-            )
-            assert_mcp_success(assign_result, "Assign selector helper to area")
+            area_data = assert_mcp_success(area_result, "Create selector area")
+            area_id = area_data["area_id"]
 
-        result = await mcp_client.call_tool(
-            "ha_bulk_control",
-            {
-                "selector": {
-                    "domain": "input_boolean",
-                    "area_ids": [area_id],
-                    "exclude_entity_ids": [entity_ids[1]],
-                },
-                "action": "off",
-                "dry_run": True,
-            },
-        )
-        data = assert_mcp_success(result, "Preview structural bulk selection")
+            for label in ("included", "excluded"):
+                create_result = await mcp_client.call_tool(
+                    "ha_config_set_helper",
+                    {
+                        "helper_type": "input_boolean",
+                        "name": f"Bulk selector {label} {suffix}",
+                    },
+                )
+                create_data = assert_mcp_success(
+                    create_result, "Create selector helper"
+                )
+                entity_id = _extract_bulk_boolean_entity_id(create_data)
+                assert entity_id, f"Missing helper entity_id: {create_data}"
+                entity_ids.append(entity_id)
+                assign_result = await mcp_client.call_tool(
+                    "ha_set_entity", {"entity_id": entity_id, "area_id": area_id}
+                )
+                assert_mcp_success(assign_result, "Assign selector helper to area")
 
-        assert data["dry_run"] is True
-        assert data["dispatched"] is False
-        assert data["resolution"]["resolved_entity_ids"] == [entity_ids[0]]
-        assert data["resolution"]["excluded_entity_ids"] == [entity_ids[1]]
+            for entity_id in entity_ids:
+                assert await wait_for_entity_state(mcp_client, entity_id, "off"), (
+                    f"Selector helper {entity_id} was not registered in time"
+                )
+
+            async with MCPAssertions(mcp_client) as mcp:
+                data = await mcp.call_tool_success(
+                    "ha_bulk_control",
+                    {
+                        "selector": {
+                            "domain": "input_boolean",
+                            "area_ids": [area_id],
+                            "exclude_entity_ids": [entity_ids[1]],
+                        },
+                        "action": "off",
+                        "dry_run": True,
+                    },
+                )
+
+            assert data["dry_run"] is True
+            assert data["dispatched"] is False
+            assert data["resolution"]["resolved_entity_ids"] == [entity_ids[0]]
+            assert data["resolution"]["excluded_entity_ids"] == [entity_ids[1]]
+        finally:
+            for entity_id in entity_ids:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_remove_helpers_integrations",
+                    {
+                        "helper_type": "input_boolean",
+                        "target": entity_id,
+                        "confirm": True,
+                    },
+                )
+            if area_id is not None:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_remove_area_or_floor",
+                    {"kind": "area", "id": area_id},
+                )
 
     async def test_bulk_turn_on_single_light(self, mcp_client, test_light_entity):
         """Test bulk_control with a single light entity."""

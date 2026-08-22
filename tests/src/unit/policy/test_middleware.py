@@ -93,6 +93,54 @@ async def test_remembered_approval_passes_through(queue):
 
 
 @pytest.mark.anyio
+async def test_remembered_approval_never_bypasses_dynamic_bulk_selector(queue):
+    """Selector membership changes require a fresh approval for every call."""
+    args = {
+        "selector": {"domain": "lock", "area_ids": ["entry"]},
+        "action": "lock",
+    }
+    policy = Policy(rules=[Rule(tool_name="ha_bulk_control", remember_minutes=5)])
+    queue.remember("ha_bulk_control", compute_args_hash(args), minutes=5)
+    middleware = PolicyMiddleware(
+        policy_provider=lambda: policy,
+        queue=queue,
+        wait_seconds=0,
+    )
+    call_next = AsyncMock()
+
+    with pytest.raises(ToolError):
+        await middleware.on_call_tool(make_context("ha_bulk_control", args), call_next)
+
+    call_next.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_dynamic_bulk_selector_approval_is_not_remembered(queue):
+    """Approving one frozen selector resolution does not authorize later topology."""
+    args = {
+        "selector": {"domain": "lock", "area_ids": ["entry"]},
+        "action": "lock",
+    }
+    args_hash = compute_args_hash(args)
+    policy = Policy(rules=[Rule(tool_name="ha_bulk_control", remember_minutes=5)])
+    entry = queue.create("ha_bulk_control", args_hash, args, ttl_minutes=5)
+    queue.approve(entry.token)
+    middleware = PolicyMiddleware(
+        policy_provider=lambda: policy,
+        queue=queue,
+        wait_seconds=0,
+    )
+    call_next = AsyncMock(return_value="ok")
+
+    result = await middleware.on_call_tool(
+        make_context("ha_bulk_control", args), call_next
+    )
+
+    assert result == "ok"
+    assert not queue.is_remembered("ha_bulk_control", args_hash)
+
+
+@pytest.mark.anyio
 async def test_pre_approved_entry_consumed_and_call_proceeds(queue):
     pol = Policy(rules=[Rule(tool_name="ha_call_service")])
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)

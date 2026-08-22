@@ -124,3 +124,33 @@ async def test_existing_operations_call_shape_remains_supported() -> None:
         parallel=False,
         ctx=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_operations_mode_rejects_dry_run() -> None:
+    """Selector-only dry-run cannot silently alter legacy operations mode."""
+    tools = ServiceTools(MagicMock(), MagicMock())
+
+    with pytest.raises(ToolError, match="Selector-only parameters"):
+        await tools.ha_bulk_control(
+            operations=[{"entity_id": "light.one", "action": "off"}],
+            dry_run=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_selector_transport_failure_is_structured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Topology transport failures become structured tool errors."""
+    monkeypatch.setattr(
+        "ha_mcp.tools.tools_service.resolve_bulk_selector",
+        AsyncMock(side_effect=RuntimeError("connection unavailable")),
+    )
+    tools = ServiceTools(MagicMock(), MagicMock())
+
+    with pytest.raises(ToolError, match="CONNECTION_FAILED"):
+        await tools.ha_bulk_control(
+            selector={"domain": "light", "area_ids": ["salon"]},
+            action="off",
+        )

@@ -203,12 +203,89 @@ async def test_visibility_filters_positive_leaf_but_keeps_exclusion_private(
 
 
 @pytest.mark.asyncio
+async def test_directly_hidden_matching_root_is_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hidden entity assigned directly to the area contributes to the count."""
+    monkeypatch.setattr(
+        bulk_selector,
+        "load_hidden_set",
+        AsyncMock(return_value=({"light.hidden"}, [])),
+    )
+    client = SelectorClient(
+        states=[_state("light.visible"), _state("light.hidden")],
+        entities=[
+            {"entity_id": "light.visible", "area_id": "salon"},
+            {"entity_id": "light.hidden", "area_id": "salon"},
+        ],
+    )
+
+    result = await resolve_bulk_selector(
+        client,
+        {"domain": "light", "area_ids": ["salon"]},
+        action="off",
+        parameters=None,
+        timeout_seconds=None,
+        validate_first=True,
+    )
+
+    assert result.resolved_entity_ids == ["light.visible"]
+    assert result.hidden_entity_count == 1
+
+
+@pytest.mark.asyncio
+async def test_action_is_normalized_case_insensitively() -> None:
+    """Action normalization accepts surrounding whitespace and mixed case."""
+    client = SelectorClient(
+        states=[_state("light.one")],
+        entities=[{"entity_id": "light.one", "area_id": "salon"}],
+    )
+
+    result = await resolve_bulk_selector(
+        client,
+        {"domain": "light", "area_ids": ["salon"]},
+        action=" OFF ",
+        parameters=None,
+        timeout_seconds=None,
+        validate_first=True,
+    )
+
+    assert result.operations[0]["action"] == "off"
+
+
+@pytest.mark.asyncio
+async def test_selector_entity_limit_fails_closed() -> None:
+    """An oversized resolved target set is rejected before dispatch."""
+    entity_ids = [f"light.entity_{index}" for index in range(101)]
+    client = SelectorClient(
+        states=[_state(entity_id) for entity_id in entity_ids],
+        entities=[
+            {"entity_id": entity_id, "area_id": "salon"} for entity_id in entity_ids
+        ],
+    )
+
+    with pytest.raises(BulkSelectorValidationError, match="maximum is 100"):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "light", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("selector", "message"),
     [
         ({"domain": "light", "area_ids": ["unknown"]}, "unknown area_ids"),
         ({"domain": "light", "floor_ids": ["unknown"]}, "unknown floor_ids"),
         ({"domain": "light"}, "at least one"),
+        (
+            {"domain": "light", "area_ids": ["salon"], "name": "Salon"},
+            "unsupported fields: name",
+        ),
     ],
 )
 async def test_invalid_structural_ids_fail_closed(

@@ -64,6 +64,11 @@ def _passes_ungated(name: str, args: dict[str, Any]) -> bool:
     return name in PROXY_META_TOOLS or _is_approval_management(name, args)
 
 
+def _has_dynamic_selector_targets(name: str, args: dict[str, Any]) -> bool:
+    """Return whether identical arguments can resolve to different targets later."""
+    return name == "ha_bulk_control" and args.get("selector") is not None
+
+
 class PolicyMiddleware(Middleware):
     """Gate tool calls against a Policy, blocking with progress heartbeats."""
 
@@ -120,15 +125,19 @@ class PolicyMiddleware(Middleware):
 
         rule = find_matching_rule(name, args, policy)
         args_hash = compute_args_hash(args)
+        dynamic_targets = _has_dynamic_selector_targets(name, args)
+        remember_minutes = (
+            0 if dynamic_targets else rule.remember_minutes if rule else 0
+        )
 
-        if self._queue.is_remembered(name, args_hash):
+        if not dynamic_targets and self._queue.is_remembered(name, args_hash):
             return await call_next(context)
 
         existing = self._queue.find(name, args_hash)
         if existing and existing.decision == "approved":
             self._queue.consume_and_maybe_remember(
                 existing,
-                remember_minutes=rule.remember_minutes if rule else 0,
+                remember_minutes=remember_minutes,
             )
             return await call_next(context)
         if existing and existing.decision == "denied":
@@ -155,7 +164,7 @@ class PolicyMiddleware(Middleware):
         if pending.decision == "approved":
             self._queue.consume_and_maybe_remember(
                 pending,
-                remember_minutes=rule.remember_minutes if rule else 0,
+                remember_minutes=remember_minutes,
             )
             return await call_next(context)
         if pending.decision == "denied":

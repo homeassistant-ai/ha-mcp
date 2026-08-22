@@ -416,7 +416,7 @@ class TestBulkSelectorFailSafe:
                         Predicate(
                             path="args.operations.*.entity_id",
                             op="regex",
-                            value=r"^lock\\.",
+                            value=r"^lock\.",
                         )
                     ],
                 )
@@ -456,7 +456,7 @@ class TestBulkSelectorFailSafe:
                         Predicate(
                             path="args.operations.*.entity_id",
                             op="regex",
-                            value=r"^lock\\.",
+                            value=r"^lock\.",
                         )
                     ],
                 )
@@ -470,4 +470,12 @@ class TestBulkSelectorFailSafe:
                 policy,
             )
             == Verdict.ALLOW
+        )
+        assert (
+            evaluate(
+                "ha_bulk_control",
+                {"operations": [{"entity_id": "lock.front", "action": "lock"}]},
+                policy,
+            )
+            == Verdict.REQUIRE_APPROVAL
         )

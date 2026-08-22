@@ -96,9 +96,20 @@ def _expand_entity(
     *,
     path: tuple[str, ...],
     expanded_groups: set[str],
+    cache: dict[str, tuple[frozenset[str], frozenset[str]]],
     parameter: str,
 ) -> set[str]:
     """Expand generic membership recursively and reject incomplete graph walks."""
+    if entity_id in path:
+        cycle_start = path.index(entity_id)
+        cycle = " -> ".join((*path[cycle_start:], entity_id))
+        raise BulkSelectorValidationError(
+            f"Aggregate membership cycle detected: {cycle}"
+        )
+    if cached := cache.get(entity_id):
+        cached_leaves, cached_groups = cached
+        expanded_groups.update(cached_groups)
+        return set(cached_leaves)
     state = states.get(entity_id)
     if state is None:
         raise BulkSelectorValidationError(
@@ -107,27 +118,29 @@ def _expand_entity(
         )
     members = normalize_member_entity_ids(state.get("attributes"))
     if members is None:
+        cache[entity_id] = (frozenset({entity_id}), frozenset())
         return {entity_id}
-    if entity_id in path:
-        cycle_start = path.index(entity_id)
-        cycle = " -> ".join((*path[cycle_start:], entity_id))
-        raise BulkSelectorValidationError(
-            f"Aggregate membership cycle detected: {cycle}"
-        )
     expanded_groups.add(entity_id)
     if not members:
+        cache[entity_id] = (frozenset(), frozenset({entity_id}))
         return set()
     leaves: set[str] = set()
+    nested_groups: set[str] = {entity_id}
     for member_id in members:
+        member_groups: set[str] = set()
         leaves.update(
             _expand_entity(
                 member_id,
                 states,
                 path=(*path, entity_id),
-                expanded_groups=expanded_groups,
+                expanded_groups=member_groups,
+                cache=cache,
                 parameter=parameter,
             )
         )
+        nested_groups.update(member_groups)
+    expanded_groups.update(nested_groups)
+    cache[entity_id] = (frozenset(leaves), frozenset(nested_groups))
     return leaves
 
 
@@ -149,7 +162,7 @@ def _validate_selector(
             parameter="selector.domain",
         )
     domain = domain.strip().lower()
-    normalized_action = action.strip() if isinstance(action, str) else ""
+    normalized_action = action.strip().lower() if isinstance(action, str) else ""
     valid_actions = get_domain_handler(domain).get(
         "valid_actions", ["on", "off", "toggle"]
     )
@@ -214,6 +227,7 @@ def _expand_roots(
     roots: list[str],
     states: Mapping[str, Mapping[str, Any]],
     expanded_groups: set[str],
+    cache: dict[str, tuple[frozenset[str], frozenset[str]]],
     parameter: str,
 ) -> set[str]:
     """Expand a list of aggregate or leaf roots into a deduplicated leaf set."""
@@ -225,6 +239,7 @@ def _expand_roots(
                 states,
                 path=(),
                 expanded_groups=expanded_groups,
+                cache=cache,
                 parameter=parameter,
             )
         )
@@ -315,21 +330,24 @@ async def resolve_bulk_selector(
     hidden = await _load_hidden_entities(
         client, entity_result, states_result, device_result, entity_registry
     )
-    candidate_roots = sorted(
+    matching_roots = {
         entity_id
         for entity_id in states
-        if entity_id not in hidden
-        and entity_id.startswith(f"{domain}.")
+        if entity_id.startswith(f"{domain}.")
         and _entity_area_id(entity_id, entity_registry, device_areas) in selected_areas
-    )
+    }
+    directly_hidden = matching_roots & hidden
+    candidate_roots = sorted(matching_roots - hidden)
     expanded_groups: set[str] = set()
+    expansion_cache: dict[str, tuple[frozenset[str], frozenset[str]]] = {}
     selected_leaves = _expand_roots(
-        candidate_roots, states, expanded_groups, "selector"
+        candidate_roots, states, expanded_groups, expansion_cache, "selector"
     )
     excluded_leaves = _expand_roots(
         excluded_roots,
         states,
         expanded_groups,
+        expansion_cache,
         "selector.exclude_entity_ids",
     )
     selected_leaves = {
@@ -367,5 +385,7 @@ async def resolve_bulk_selector(
         excluded_entity_ids=sorted(effective_excluded - hidden),
         selected_area_ids=sorted(selected_areas),
         expanded_group_ids=sorted(expanded_groups - hidden),
-        hidden_entity_count=len(hidden_selected | (effective_excluded & hidden)),
+        hidden_entity_count=len(
+            directly_hidden | hidden_selected | (effective_excluded & hidden)
+        ),
     )

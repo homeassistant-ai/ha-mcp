@@ -1657,6 +1657,10 @@ class ServiceTools:
                 )
                 if not isinstance(parsed_selector, dict):
                     raise BulkSelectorValidationError("selector must be a JSON object")
+            except (ValueError, BulkSelectorValidationError) as exc:
+                parameter = getattr(exc, "parameter", "selector")
+                raise_tool_error(create_validation_error(str(exc), parameter=parameter))
+            try:
                 resolution = await resolve_bulk_selector(
                     self._client,
                     parsed_selector,
@@ -1665,9 +1669,15 @@ class ServiceTools:
                     timeout_seconds=timeout_seconds,
                     validate_first=validate_first,
                 )
-            except (ValueError, BulkSelectorValidationError) as exc:
+            except BulkSelectorValidationError as exc:
                 parameter = getattr(exc, "parameter", "selector")
                 raise_tool_error(create_validation_error(str(exc), parameter=parameter))
+            except Exception as exc:
+                exception_to_structured_error(
+                    exc,
+                    context={"operation": "resolve bulk selector"},
+                )
+                raise  # unreachable: exception_to_structured_error always raises
             if dry_run:
                 return {
                     "success": True,
