@@ -142,23 +142,40 @@ def find_matching_rule(
     return None
 
 
+def _predicate_reaches_operations(path: str) -> bool:
+    """Whether ``path`` can walk into ``args.operations`` under ``iter_path_values``.
+
+    ``operations`` sits directly under ``args``, so only the first segment
+    after stripping the implicit ``args`` prefix matters. A literal
+    ``operations`` obviously reaches it; a leading ``*`` also does, because a
+    wildcard segment fans out over EVERY value at that level (see
+    ``iter_path_values``) — it lands on ``operations`` exactly as readily as
+    any other top-level key, including in a two-level path like
+    ``args.*.*.entity_id`` that reaches into each operation row's
+    ``entity_id``. Any other concrete first segment (e.g. ``selector``) can
+    only ever address selector-inspectable fields and is precisely excluded.
+    """
+    parts = path.split(".")
+    if parts and parts[0] == "args":
+        parts = parts[1:]
+    return bool(parts) and parts[0] in ("operations", "*")
+
+
 def _rule_needs_resolved_operations(rule: Rule) -> bool:
     """Whether ``rule`` inspects fields only known after selector resolution.
 
     A selector-mode ``ha_bulk_control`` call carries ``args.selector``, not
     ``args.operations`` — the leaf targets don't exist yet, they're resolved
-    inside the tool after this middleware runs. A rule predicate path rooted
-    at ``args.operations`` can therefore never match a selector call via
-    ordinary evaluation and needs the fail-safe below. A rule whose
-    predicates only reference selector-inspectable fields (e.g.
-    ``args.selector.domain``) already got a fair, precise match attempt in
-    ``find_matching_rule`` and must not be broadened into an unconditional
-    gate.
+    inside the tool after this middleware runs. A rule predicate that can
+    reach ``args.operations`` (exact, prefixed, or via a leading wildcard —
+    see ``_predicate_reaches_operations``) can therefore never get a fair
+    match attempt against a selector call and needs the fail-safe below. A
+    rule whose predicates only ever address selector-inspectable fields
+    (e.g. ``args.selector.domain``) already got a fair, precise match
+    attempt in ``find_matching_rule`` and must not be broadened into an
+    unconditional gate.
     """
-    return any(
-        p.path == "args.operations" or p.path.startswith("args.operations.")
-        for p in rule.when
-    )
+    return any(_predicate_reaches_operations(p.path) for p in rule.when)
 
 
 def evaluate(tool_name: str, args: dict[str, Any], policy: Policy) -> Verdict:

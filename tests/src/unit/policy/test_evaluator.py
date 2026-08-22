@@ -432,6 +432,59 @@ class TestBulkSelectorFailSafe:
             == Verdict.REQUIRE_APPROVAL
         )
 
+    def test_wildcard_operations_rule_force_gates_selector(self):
+        """A wildcard path that reaches operations rows is not a literal-prefix dodge.
+
+        ``args.*.*.entity_id`` fans out over every top-level key (including
+        ``operations``) and every item at the next level, so it matches
+        ``operations[i].entity_id`` exactly like ``args.operations.*.entity_id``
+        does — but as a bare string it doesn't start with "args.operations".
+        The fail-safe must recognize the wildcard can reach unresolved
+        operation rows, not just the literal prefix, or a selector call could
+        bypass approval a rule like this would have required.
+        """
+        policy = Policy(
+            rules=[
+                Rule(
+                    tool_name="ha_bulk_control",
+                    when=[
+                        Predicate(
+                            path="args.*.*.entity_id",
+                            op="regex",
+                            value=r"^lock\.",
+                        )
+                    ],
+                )
+            ]
+        )
+
+        assert (
+            evaluate(
+                "ha_bulk_control",
+                {"selector": {"domain": "light", "area_ids": ["salon"]}},
+                policy,
+            )
+            == Verdict.REQUIRE_APPROVAL
+        )
+        # The same wildcard rule keeps its normal, precise semantics for the
+        # operations-mode calls it was actually written to inspect.
+        assert (
+            evaluate(
+                "ha_bulk_control",
+                {"operations": [{"entity_id": "light.sofa", "action": "off"}]},
+                policy,
+            )
+            == Verdict.ALLOW
+        )
+        assert (
+            evaluate(
+                "ha_bulk_control",
+                {"operations": [{"entity_id": "lock.front", "action": "lock"}]},
+                policy,
+            )
+            == Verdict.REQUIRE_APPROVAL
+        )
+
     def test_selector_remains_allowed_without_applicable_rules(self):
         """Unrelated or absent rules preserve the policy engine's allow default."""
         selector_args = {"selector": {"domain": "light", "area_ids": ["salon"]}}
