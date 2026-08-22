@@ -58,39 +58,35 @@ class TestBulkControl:
         area_id: str | None = None
         entity_ids: list[str] = []
         try:
-            area_result = await mcp_client.call_tool(
-                "ha_set_area_or_floor",
-                {"kind": "area", "name": f"Bulk selector {suffix}"},
-            )
-            area_data = assert_mcp_success(area_result, "Create selector area")
-            area_id = area_data["area_id"]
-
-            for label in ("included", "excluded"):
-                create_result = await mcp_client.call_tool(
-                    "ha_config_set_helper",
-                    {
-                        "helper_type": "input_boolean",
-                        "name": f"Bulk selector {label} {suffix}",
-                        "initial": False,
-                    },
-                )
-                create_data = assert_mcp_success(
-                    create_result, "Create selector helper"
-                )
-                entity_id = _extract_bulk_boolean_entity_id(create_data)
-                assert entity_id, f"Missing helper entity_id: {create_data}"
-                entity_ids.append(entity_id)
-                assign_result = await mcp_client.call_tool(
-                    "ha_set_entity", {"entity_id": entity_id, "area_id": area_id}
-                )
-                assert_mcp_success(assign_result, "Assign selector helper to area")
-
-            for entity_id in entity_ids:
-                assert await wait_for_entity_state(mcp_client, entity_id, "off"), (
-                    f"Selector helper {entity_id} was not registered in time"
-                )
-
             async with MCPAssertions(mcp_client) as mcp:
+                area_data = await mcp.call_tool_success(
+                    "ha_set_area_or_floor",
+                    {"kind": "area", "name": f"Bulk selector {suffix}"},
+                )
+                area_id = area_data["area_id"]
+
+                for label in ("included", "excluded"):
+                    create_data = await mcp.call_tool_success(
+                        "ha_config_set_helper",
+                        {
+                            "helper_type": "input_boolean",
+                            "name": f"Bulk selector {label} {suffix}",
+                            "initial": False,
+                        },
+                    )
+                    entity_id = _extract_bulk_boolean_entity_id(create_data)
+                    assert entity_id, f"Missing helper entity_id: {create_data}"
+                    entity_ids.append(entity_id)
+                    await mcp.call_tool_success(
+                        "ha_set_entity",
+                        {"entity_id": entity_id, "area_id": area_id},
+                    )
+
+                for entity_id in entity_ids:
+                    assert await wait_for_entity_state(mcp_client, entity_id, "off"), (
+                        f"Selector helper {entity_id} was not registered in time"
+                    )
+
                 data = await mcp.call_tool_success(
                     "ha_bulk_control",
                     {
