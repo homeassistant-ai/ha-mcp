@@ -406,22 +406,22 @@ class TestRequirementForcesConflict:
         assert requirement_forces_conflict("mcp==1.9.0", wildcard)
 
     def test_upper_bound_admitting_the_named_floor_is_innocent(self):
-        """Patch76 review on #2245: a named probe outranks a synthesized one.
+        """Patch76 review on #2245: one admitted probe proves innocence.
 
-        ``mcp<=1.24.0`` admits the violated spec's own floor, so enforcing
-        it can never hold the package below that floor — blaming it for
-        rejecting the invented successor 1.24.0.0.1 pointed the user at an
-        integration that cannot be the culprit.
+        ``mcp<=1.24.0`` admits the violated spec's own floor — one probe of
+        the four that survive the filter — so enforcing it can never hold
+        the package below that floor, and blaming it would point the user
+        at an integration that cannot be the culprit.
         """
         assert not requirement_forces_conflict("mcp<=1.24.0", self._VIOLATION)
 
     def test_inclusive_ceiling_probe_cannot_convict_alone(self):
-        """Patch76 on #2245: an inclusive ceiling survives as a named probe.
+        """Patch76 on #2245: an inclusive ceiling survives as a probe.
 
-        Under ``mcp<=2.0,>=1.24.0`` the probes are 1.24.0 AND 2.0; demanding
-        both blamed ``mcp<=1.24.0`` for the ceiling although it admits the
-        floor and can never hold the package below it. One admitted probe
-        proves innocence.
+        Under ``mcp<=2.0,>=1.24.0`` the probes include 1.24.0 AND 2.0;
+        demanding every one blamed ``mcp<=1.24.0`` for the ceiling although
+        it admits the floor and can never hold the package below it. One
+        admitted probe proves innocence.
         """
         inclusive_ceiling = DependencyViolation(
             package="mcp",
