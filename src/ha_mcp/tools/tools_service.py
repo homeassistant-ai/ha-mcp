@@ -28,6 +28,7 @@ from ..errors import (
 from .bulk_selector import (
     BulkControlSelector,
     BulkSelectorInfrastructureError,
+    BulkSelectorResolution,
     BulkSelectorValidationError,
     resolve_bulk_selector,
 )
@@ -209,6 +210,26 @@ def _selector_only_parameter_offender(
     if dry_run:
         return "dry_run"
     return None
+
+
+def _attach_resolution_to_response(
+    response: dict[str, Any], resolution: BulkSelectorResolution
+) -> None:
+    """Attach ``resolution.summary()`` to a response, surfacing its warnings
+    at the top level.
+
+    Per AGENTS.md "Return Values", ``warnings`` is always a top-level
+    ``list[str]``, never nested inside another field.
+    ``resolution.summary()`` nests its own warnings (e.g. "N entities were
+    hidden") under ``resolution`` for internal cohesion, so this pops them
+    back out. ``response`` may already carry dispatch-time warnings (e.g.
+    from ``bulk_device_control``) -- those are extended, not overwritten.
+    """
+    summary = resolution.summary()
+    resolution_warnings = summary.pop("warnings", [])
+    response["resolution"] = summary
+    if resolution_warnings:
+        response.setdefault("warnings", []).extend(resolution_warnings)
 
 
 class _AmbiguousDispatch:
@@ -1767,12 +1788,13 @@ class ServiceTools:
             raise  # unreachable: exception_to_structured_error always raises
 
         if dry_run:
-            return {
+            response: dict[str, Any] = {
                 "success": True,
                 "dry_run": True,
                 "dispatched": False,
-                "resolution": resolution.summary(),
             }
+            _attach_resolution_to_response(response, resolution)
+            return response
         try:
             result = await self._device_tools.bulk_device_control(
                 operations=resolution.operations,
@@ -1799,7 +1821,7 @@ class ServiceTools:
             )
             raise  # unreachable: exception_to_structured_error always raises
         response = cast(dict[str, Any], result)
-        response["resolution"] = resolution.summary()
+        _attach_resolution_to_response(response, resolution)
         return response
 
     @tool(

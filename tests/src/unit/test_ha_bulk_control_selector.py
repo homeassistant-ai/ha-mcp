@@ -57,6 +57,83 @@ async def test_selector_dry_run_never_dispatches(
 
 
 @pytest.mark.asyncio
+async def test_dry_run_surfaces_resolution_warnings_at_top_level(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per AGENTS.md, `warnings` must be top-level, never nested under
+    `resolution` -- a consumer that only reads the top-level key must still
+    see a hidden-entity degradation."""
+    resolution_with_warning = BulkSelectorResolution(
+        resolved_entity_ids=("light.sofa",),
+        excluded_entity_ids=(),
+        selected_area_ids=("salon",),
+        expanded_group_ids=(),
+        hidden_entity_count=1,
+        warnings=("1 matching entity was hidden by the entity visibility filter.",),
+        _operation_common={"action": "off", "validate_first": True},
+    )
+    monkeypatch.setattr(
+        "ha_mcp.tools.tools_service.resolve_bulk_selector",
+        AsyncMock(return_value=resolution_with_warning),
+    )
+    tools = ServiceTools(MagicMock(), MagicMock())
+
+    result = await tools.ha_bulk_control(
+        selector={"domain": "light", "area_ids": ["salon"]},
+        action="off",
+        dry_run=True,
+    )
+
+    assert result["warnings"] == [
+        "1 matching entity was hidden by the entity visibility filter."
+    ]
+    assert "warnings" not in result["resolution"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_merges_resolution_warnings_with_dispatch_warnings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dispatch-time warnings from bulk_device_control (per-operation
+    degradations) must be extended with, not overwritten by, the
+    resolution's own warnings -- both belong in the same top-level list."""
+    resolution_with_warning = BulkSelectorResolution(
+        resolved_entity_ids=("light.sofa",),
+        excluded_entity_ids=(),
+        selected_area_ids=("salon",),
+        expanded_group_ids=(),
+        hidden_entity_count=1,
+        warnings=("1 matching entity was hidden by the entity visibility filter.",),
+        _operation_common={"action": "off", "validate_first": True},
+    )
+    monkeypatch.setattr(
+        "ha_mcp.tools.tools_service.resolve_bulk_selector",
+        AsyncMock(return_value=resolution_with_warning),
+    )
+    device_tools = MagicMock()
+    device_tools.bulk_device_control = AsyncMock(
+        return_value={
+            "success": True,
+            "successful": 1,
+            "failed": 0,
+            "warnings": ["light.sofa took longer than expected to confirm"],
+        }
+    )
+    tools = ServiceTools(MagicMock(), device_tools)
+
+    result = await tools.ha_bulk_control(
+        selector={"domain": "light", "area_ids": ["salon"]},
+        action="off",
+    )
+
+    assert result["warnings"] == [
+        "light.sofa took longer than expected to confirm",
+        "1 matching entity was hidden by the entity visibility filter.",
+    ]
+    assert "warnings" not in result["resolution"]
+
+
+@pytest.mark.asyncio
 async def test_selector_dispatches_only_frozen_leaf_operations(
     monkeypatch: pytest.MonkeyPatch,
     resolution: BulkSelectorResolution,

@@ -179,19 +179,19 @@ class TestBulkControl:
                     },
                 )
 
+                assert await wait_for_entity_state(mcp_client, included_id, "off"), (
+                    f"Included helper {included_id} was not turned off by the dispatch"
+                )
+                excluded_data = await mcp.call_tool_success(
+                    "ha_get_state", {"entity_id": excluded_id}
+                )
+                assert excluded_data.get("data", {}).get("state") == "on", (
+                    f"Excluded helper's real state must never move: got {excluded_data}"
+                )
+
             assert data.get("dry_run") is None
             assert data["resolution"]["resolved_entity_ids"] == [included_id]
             assert data["resolution"]["excluded_entity_ids"] == [excluded_id]
-            assert await wait_for_entity_state(mcp_client, included_id, "off"), (
-                f"Included helper {included_id} was not turned off by the dispatch"
-            )
-            excluded_state = await mcp_client.call_tool(
-                "ha_get_state", {"entity_id": excluded_id}
-            )
-            excluded_data = parse_mcp_result(excluded_state)
-            assert excluded_data.get("data", {}).get("state") == "on", (
-                f"Excluded helper's real state must never move: got {excluded_data}"
-            )
         finally:
             for entity_id in entity_ids:
                 await safe_call_tool(
