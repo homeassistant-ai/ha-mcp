@@ -485,6 +485,45 @@ class TestBulkSelectorFailSafe:
             == Verdict.REQUIRE_APPROVAL
         )
 
+    def test_single_wildcard_to_dict_field_stays_conditional(self):
+        """A single-wildcard path landing on a dict field is not operations-sensitive.
+
+        ``args.*.domain`` CAN yield ``args.selector.domain`` (``selector`` is
+        a dict), but it can never yield anything from ``args.operations``
+        (a list) — ``walk()`` only descends into a literal segment like
+        ``domain`` when the current node is a dict. Treating every leading
+        wildcard as operations-sensitive (the bug the previous fix
+        introduced) would force-gate a "light" selector call for a rule that
+        was written to conditionally match only ``selector.domain == "lock"``
+        and, after ``find_matching_rule`` correctly finds no match, has
+        nothing left to reach in ``args.operations`` either.
+        """
+        policy = Policy(
+            rules=[
+                Rule(
+                    tool_name="ha_bulk_control",
+                    when=[Predicate(path="args.*.domain", op="eq", value="lock")],
+                )
+            ]
+        )
+
+        assert (
+            evaluate(
+                "ha_bulk_control",
+                {"selector": {"domain": "light", "area_ids": ["salon"]}},
+                policy,
+            )
+            == Verdict.ALLOW
+        )
+        assert (
+            evaluate(
+                "ha_bulk_control",
+                {"selector": {"domain": "lock", "area_ids": ["salon"]}},
+                policy,
+            )
+            == Verdict.REQUIRE_APPROVAL
+        )
+
     def test_selector_remains_allowed_without_applicable_rules(self):
         """Unrelated or absent rules preserve the policy engine's allow default."""
         selector_args = {"selector": {"domain": "light", "area_ids": ["salon"]}}

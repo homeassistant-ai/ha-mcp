@@ -145,20 +145,30 @@ def find_matching_rule(
 def _predicate_reaches_operations(path: str) -> bool:
     """Whether ``path`` can walk into ``args.operations`` under ``iter_path_values``.
 
-    ``operations`` sits directly under ``args``, so only the first segment
-    after stripping the implicit ``args`` prefix matters. A literal
-    ``operations`` obviously reaches it; a leading ``*`` also does, because a
-    wildcard segment fans out over EVERY value at that level (see
-    ``iter_path_values``) — it lands on ``operations`` exactly as readily as
-    any other top-level key, including in a two-level path like
-    ``args.*.*.entity_id`` that reaches into each operation row's
-    ``entity_id``. Any other concrete first segment (e.g. ``selector``) can
+    ``operations`` sits directly under ``args``, so only the first two
+    segments after stripping the implicit ``args`` prefix matter. A literal
+    ``operations`` first segment obviously reaches it. A leading ``*`` reaches
+    it too — a wildcard segment fans out over EVERY value at that level (see
+    ``iter_path_values``), landing on the `operations` list value exactly as
+    readily as any other top-level key — but ``operations`` is a *list*, so a
+    literal segment right after that wildcard (e.g. ``domain`` in
+    ``args.*.domain``) can only ever match a *dict* value at that level (like
+    ``selector``) — ``walk()`` requires ``isinstance(cur, dict)`` for a
+    literal head, so it silently yields nothing against a list and can never
+    reach an operation row. Only a SECOND wildcard (``args.*.*...``, as in
+    ``args.*.*.entity_id``) or no further segment at all (bare ``args.*``,
+    which yields the raw ``operations`` list value itself) can actually reach
+    into the list. Any other concrete first segment (e.g. ``selector``) can
     only ever address selector-inspectable fields and is precisely excluded.
     """
     parts = path.split(".")
     if parts and parts[0] == "args":
         parts = parts[1:]
-    return bool(parts) and parts[0] in ("operations", "*")
+    if not parts:
+        return False
+    if parts[0] == "operations":
+        return True
+    return parts[0] == "*" and (len(parts) == 1 or parts[1] == "*")
 
 
 def _rule_needs_resolved_operations(rule: Rule) -> bool:
