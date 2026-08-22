@@ -2,8 +2,10 @@
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from typing import Any
 
+from ...utils.entity_membership import normalize_member_entity_ids
 from ...utils.fuzzy_search import calculate_partial_ratio, calculate_ratio
 from ...visibility.resolver import (
     device_registry_needed_for_visibility,
@@ -21,6 +23,35 @@ logger = logging.getLogger(__name__)
 _GET_ENTRIES_CHUNK_SIZE = 500
 
 
+def _redact_hidden_memberships(
+    entities: list[dict[str, Any]], visibility_hidden: set[str]
+) -> list[dict[str, Any]]:
+    """Mark membership whose direct IDs intersect the visibility deny-set.
+
+    tools_search._add_membership_fields consumes this private sentinel after
+    smart-search projection, preserving is_group while withholding member IDs.
+    """
+    if not visibility_hidden:
+        return entities
+    redacted: list[dict[str, Any]] = []
+    for entity in entities:
+        attributes = entity.get("attributes")
+        members = normalize_member_entity_ids(attributes)
+        if members is not None and visibility_hidden.intersection(members):
+            redacted.append(
+                {
+                    **entity,
+                    "attributes": {
+                        **(attributes if isinstance(attributes, Mapping) else {}),
+                        "_ha_mcp_membership_redacted": True,
+                    },
+                }
+            )
+        else:
+            redacted.append(entity)
+    return redacted
+
+
 class EntitySearchMixin(_SearchBase):
     """``smart_entity_search`` and ``get_entities_by_area`` plus helpers."""
 
@@ -33,6 +64,7 @@ class EntitySearchMixin(_SearchBase):
         domain_filter: str | None = None,
         include_hidden: bool = True,
         *,
+        include_membership: bool = False,
         prefetched_states: list[dict[str, Any]] | None = None,
         prefetched_registry: Any = None,
     ) -> dict[str, Any]:
@@ -49,6 +81,8 @@ class EntitySearchMixin(_SearchBase):
                 set in the entity registry are still returned but receive
                 a score penalty so they sort below comparable visible
                 matches. Pass False to filter them out entirely.
+            include_membership: Whether to retain membership attributes and redaction markers
+                for opt-in search result fields.
             prefetched_states: Pre-fetched ``get_states()`` list shared by the
                 ha_search orchestrator when both search branches run; ``None``
                 means fetch here.
@@ -68,6 +102,7 @@ class EntitySearchMixin(_SearchBase):
             entities, visibility_warnings = await self._fetch_search_entities(
                 domain_filter,
                 include_hidden,
+                include_membership=include_membership,
                 prefetched_states=prefetched_states,
                 prefetched_registry=prefetched_registry,
             )
@@ -261,6 +296,7 @@ class EntitySearchMixin(_SearchBase):
         domain_filter: str | None,
         include_hidden: bool,
         *,
+        include_membership: bool = False,
         prefetched_states: list[dict[str, Any]] | None = None,
         prefetched_registry: Any = None,
     ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -334,6 +370,17 @@ class EntitySearchMixin(_SearchBase):
             registry_result, states_result, self.client, device_result
         )
         registry_slim = self._build_registry_slim(registry_result)
+        if include_membership:
+            denied_member_ids = visibility_hidden | (
+                {
+                    entity_id
+                    for entity_id, entry in registry_slim.items()
+                    if entry.get("hidden_by") is not None
+                }
+                if not include_hidden
+                else set()
+            )
+            entities = _redact_hidden_memberships(entities, denied_member_ids)
         survivor_ids, survivor_states = self._filter_hidden_entities(
             entities, registry_slim, include_hidden, visibility_hidden
         )
@@ -401,6 +448,8 @@ class EntitySearchMixin(_SearchBase):
         area_query: str,
         group_by_domain: bool = True,
         include_hidden: bool = True,
+        *,
+        include_membership: bool = False,
     ) -> dict[str, Any]:
         """
         Get entities grouped by area/room using the HA registries for accurate area resolution.
@@ -417,6 +466,8 @@ class EntitySearchMixin(_SearchBase):
                 set in the entity registry are still grouped under their
                 area but receive a score penalty when ranked. Pass False
                 to filter them out entirely.
+            include_membership: Whether to retain membership attributes and redaction markers
+                for opt-in search result fields.
 
         Returns:
             Dictionary with area-grouped entities
@@ -509,6 +560,17 @@ class EntitySearchMixin(_SearchBase):
             entity_area_resolved, hidden_entity_ids = self._resolve_entity_areas(
                 entity_reg_map, device_area_map, include_hidden, visibility_hidden
             )
+            if include_membership:
+                denied_member_ids = visibility_hidden | (
+                    {
+                        entity_id
+                        for entity_id, entry in entity_reg_map.items()
+                        if entry.get("hidden_by") is not None
+                    }
+                    if not include_hidden
+                    else set()
+                )
+                entities = _redact_hidden_memberships(entities, denied_member_ids)
             state_map = self._build_state_map(entities)
             formatted_areas, total_entities = self._format_area_entities(
                 matched_area_ids,
@@ -870,6 +932,7 @@ class EntitySearchMixin(_SearchBase):
             ),
             "state": state_info.get("state", "unknown"),
             "_hidden_by": "hidden" if entity_id in hidden_entity_ids else None,
+            "_attributes": state_info.get("attributes", {}),
         }
         if include_domain:
             record["domain"] = entity_id.split(".", maxsplit=1)[0]
