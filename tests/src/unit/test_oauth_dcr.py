@@ -60,6 +60,31 @@ def test_non_dcr_client_id_rejects():
     assert client_redirect_uris(KEY, "hamcp-dcr-notablob") is None
 
 
+def test_refresh_token_envelope_round_trip_and_binding():
+    """Protect the core token and runtime origin with the DCR signing key."""
+    client_id = mint_client_id(KEY, ["http://127.0.0.1:19876/callback"])
+    envelope = oauth_dcr.mint_refresh_token_envelope(
+        KEY,
+        client_id,
+        "core-refresh-token",
+        "http://127.0.0.1:3118",
+    )
+
+    assert oauth_dcr.unwrap_refresh_token_envelope(KEY, client_id, envelope) == (
+        "core-refresh-token",
+        "http://127.0.0.1:3118",
+    )
+    assert (
+        oauth_dcr.unwrap_refresh_token_envelope(OTHER_KEY, client_id, envelope) is None
+    )
+    assert (
+        oauth_dcr.unwrap_refresh_token_envelope(KEY, f"{client_id}x", envelope) is None
+    )
+    assert (
+        oauth_dcr.unwrap_refresh_token_envelope(KEY, client_id, f"{envelope}x") is None
+    )
+
+
 def _module_is(name: str, root: str) -> bool:
     """Return whether a module name is ``root`` or one of its children."""
     return name == root or name.startswith(f"{root}.")
@@ -346,10 +371,32 @@ async def test_register_ha_auth_advertises_refresh_token(dcr_view_client_factory
     ]
 
 
+async def test_register_ha_auth_advertises_refresh_for_fixed_loopback(
+    dcr_view_client_factory,
+):
+    """A loopback callback with an explicit port has a stable refresh origin."""
+    client = await dcr_view_client_factory(
+        dcr_key=KEY,
+        resource_server=object(),
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/register",
+        json={"redirect_uris": ["http://127.0.0.1:19876/callback"]},
+    )
+
+    assert resp.status == 201
+    assert (await resp.json())["grant_types"] == [
+        "authorization_code",
+        "refresh_token",
+    ]
+
+
 @pytest.mark.parametrize(
     "redirect_uris",
     [
         ["http://127.0.0.1/callback"],
+        ["http://127.0.0.1:19876/callback", "http://127.0.0.1/callback"],
         ["https://a.example/cb", "http://localhost/callback"],
     ],
 )

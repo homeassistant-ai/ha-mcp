@@ -54,6 +54,7 @@ from .oauth_dcr import (
     canonical_origin_url,
     client_redirect_uris,
     normalized_origin,
+    stable_refresh_origin,
 )
 from .oauth_legacy import _is_loopback_host, _is_valid_redirect_uri
 
@@ -236,14 +237,7 @@ def redirect_matches(registered: list[str], redirect_uri: str) -> bool:
 
 
 def stable_translation_origin(registered: list[str]) -> str | None:
-    """The single origin shared by every non-loopback registered redirect.
-
-    None when there is no such origin (no web redirects, or several distinct
-    ones). Loopback redirects are excluded because their runtime origin embeds
-    an ephemeral port (RFC 8252) — they are translated from the presented
-    redirect on the authorize/code legs, but cannot be re-derived here for the
-    redirect_uri-less refresh leg.
-    """
+    """Return the single web origin shared by non-loopback redirects."""
     origins: set[str] = set()
     for uri in registered:
         parsed = urlparse(uri)
@@ -490,11 +484,13 @@ async def translated_client_id_for_refresh(
       keys off the PRESENTED redirect, and the server keeps no record →
       ``UNREPRODUCIBLE`` (a local invalid_grant and a clean re-authorize beat
       forwarding a coin-flip identity into core's failed-login accounting).
-    * Cross-origin identities with exactly one web origin and no loopback
-      entries were translated to that origin on every leg → return it.
+    * Cross-origin identities with one stable origin were translated to that
+      origin on every leg → return it. This includes loopback-only registrations
+      whose callbacks all use the same explicit, nonzero port.
     * Everything else that is VERIFIED — multiple web origins (Gemini
-      Spark-class), loopback-only (Claude Code-class), or hybrid — cannot be
-      re-derived without the redirect: ``UNREPRODUCIBLE``.
+      Spark-class), omitted/ephemeral loopback ports (Claude Code-class), or
+      hybrid registrations — cannot be re-derived without the redirect:
+      ``UNREPRODUCIBLE``.
     """
     registered: list[str] | None = None
     if dcr_key is not None:
@@ -512,9 +508,8 @@ async def translated_client_id_for_refresh(
         return RefreshDisposition.PASSTHROUGH
     if not _refresh_identity_is_reproducible(registered):
         return RefreshDisposition.UNREPRODUCIBLE
-    # Reproducible ⇒ exactly one web origin ⇒ stable_translation_origin cannot
-    # return None (canonical_origin_url is one-to-one over normalized origins).
-    stable = stable_translation_origin(registered)
+    # Reproducible implies exactly one stable origin.
+    stable = stable_refresh_origin(registered)
     assert stable is not None
     # Reproduce what the authorize leg forwarded, or admit we cannot. That
     # leg's fast path keys off the PRESENTED redirect, which the redirect-less

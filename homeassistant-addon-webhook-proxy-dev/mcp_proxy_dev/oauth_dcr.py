@@ -42,6 +42,7 @@ from .oauth import (
 CFG_DCR_SIGNING_KEY = "dcr_signing_key"
 _DCR_VIEW_REGISTERED_KEY = "mcp_proxy_dev_oauth_dcr_view_registered"
 _CLIENT_ID_PREFIX = "hamcp-dcr-"
+_REFRESH_TOKEN_PREFIX = "hamcp-refresh-"
 
 # A conforming registration is a few KB; HA's own 16 MiB client_max_size is
 # no bound for an anonymous endpoint, so cap the read like the sibling CIMD
@@ -82,6 +83,67 @@ def client_redirect_uris(signing_key: bytes, client_id: str) -> list[str] | None
     return uris
 
 
+def mint_refresh_token_envelope(
+    signing_key: bytes,
+    client_id: str,
+    refresh_token: str,
+    origin: str,
+) -> str:
+    """Bind a core refresh token to its authorization-time loopback origin."""
+    client_hash = _b64url_encode(hashlib.sha256(client_id.encode()).digest())
+    payload = {"v": 1, "c": client_hash, "t": refresh_token, "o": origin}
+    body = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
+    signature = hmac.new(signing_key, body.encode("ascii"), hashlib.sha256).digest()
+    return f"{_REFRESH_TOKEN_PREFIX}{body}.{_b64url_encode(signature)}"
+
+
+def unwrap_refresh_token_envelope(
+    signing_key: bytes,
+    client_id: str,
+    envelope: str,
+) -> tuple[str, str] | None:
+    """Return the core token and loopback origin from a valid bound envelope."""
+    if not envelope.startswith(_REFRESH_TOKEN_PREFIX):
+        return None
+    blob = envelope[len(_REFRESH_TOKEN_PREFIX) :]
+    body, separator, signature = blob.rpartition(".")
+    if not separator or not body:
+        return None
+    try:
+        expected = hmac.new(signing_key, body.encode("ascii"), hashlib.sha256).digest()
+        if not hmac.compare_digest(_b64url_decode(signature), expected):
+            return None
+        payload = json.loads(_b64url_decode(body))
+    except (ValueError, binascii.Error, UnicodeEncodeError):
+        return None
+    client_hash = _b64url_encode(hashlib.sha256(client_id.encode()).digest())
+    if (
+        not isinstance(payload, dict)
+        or payload.get("v") != 1
+        or payload.get("c") != client_hash
+        or not isinstance(payload.get("t"), str)
+        or not payload["t"]
+        or not isinstance(payload.get("o"), str)
+    ):
+        return None
+    origin = payload["o"]
+    parsed = urlparse(origin)
+    normalized = normalized_origin(origin)
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname is None
+        or not _is_loopback_host(parsed.hostname)
+        or parsed.path not in ("", "/")
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or normalized is None
+        or canonical_origin_url(normalized) != origin.rstrip("/")
+    ):
+        return None
+    return payload["t"], origin.rstrip("/")
+
+
 def _active_dcr_key(hass: HomeAssistant) -> bytes | None:
     """Return the live signing key, or None when registration is unavailable."""
     domain_data = hass.data.get(DOMAIN)
@@ -120,27 +182,36 @@ def canonical_origin_url(origin: tuple[str, str, int]) -> str:
     return f"{scheme}://{url_host}:{port}"
 
 
-def _non_loopback_origins(redirect_uris: list[str]) -> set[tuple[str, str, int]]:
-    """Return the normalized web origins represented by redirects."""
+def stable_refresh_origin(redirect_uris: list[str]) -> str | None:
+    """Return the one origin that a redirect-less refresh can reproduce."""
     origins: set[tuple[str, str, int]] = set()
+    loopback: bool | None = None
     for uri in redirect_uris:
-        parsed = urlparse(uri)
-        if parsed.hostname is None or _is_loopback_host(parsed.hostname):
-            continue
+        try:
+            parsed = urlparse(uri)
+            port = parsed.port
+        except ValueError:
+            return None
+        if parsed.hostname is None:
+            return None
+        is_loopback = _is_loopback_host(parsed.hostname)
+        if loopback is not None and loopback != is_loopback:
+            return None
+        loopback = is_loopback
+        if is_loopback and port in (None, 0):
+            return None
         origin = normalized_origin(uri)
-        if origin is not None:
-            origins.add(origin)
-    return origins
+        if origin is None:
+            return None
+        origins.add(origin)
+    if len(origins) != 1:
+        return None
+    return canonical_origin_url(origins.pop())
 
 
 def _refresh_identity_is_reproducible(redirect_uris: list[str]) -> bool:
-    """Return whether every callback maps to one stable non-loopback origin."""
-    if len(_non_loopback_origins(redirect_uris)) != 1:
-        return False
-    return not any(
-        (hostname := urlparse(uri).hostname) is None or _is_loopback_host(hostname)
-        for uri in redirect_uris
-    )
+    """Return whether the callback set has one stable refresh origin."""
+    return stable_refresh_origin(redirect_uris) is not None
 
 
 def _redirect_uris_error(value: Any) -> tuple[str, str] | None:

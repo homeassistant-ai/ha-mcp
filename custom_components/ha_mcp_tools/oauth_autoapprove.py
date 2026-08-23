@@ -43,6 +43,7 @@ provider.
 
 from __future__ import annotations
 
+import json
 import secrets
 from typing import TYPE_CHECKING, Any
 
@@ -97,6 +98,133 @@ def _json_error(
     if description is not None:
         body["error_description"] = description
     return web.json_response(body, status=status, headers=_TOKEN_RESPONSE_HEADERS)
+
+
+def _wrap_refresh_token(
+    body: bytes,
+    signing_key: bytes,
+    client_id: str,
+    origin: str,
+) -> bytes:
+    """Wrap a core refresh token with its signed loopback identity."""
+    try:
+        payload = json.loads(body)
+    except (UnicodeDecodeError, ValueError):
+        return body
+    if not isinstance(payload, dict) or not isinstance(
+        payload.get("refresh_token"), str
+    ):
+        return body
+    from .oauth_dcr import mint_refresh_token_envelope
+
+    payload["refresh_token"] = mint_refresh_token_envelope(
+        signing_key,
+        client_id,
+        payload["refresh_token"],
+        origin,
+    )
+    return json.dumps(payload, separators=(",", ":")).encode()
+
+
+def _maybe_wrap_refresh_token(
+    body: bytes,
+    status: int,
+    dcr_key: object,
+    client_id: str,
+    origin: str | None,
+) -> bytes:
+    """Wrap a successful fixed-loopback refresh token when context is valid."""
+    if status != 200 or not isinstance(dcr_key, bytes) or origin is None:
+        return body
+    return _wrap_refresh_token(body, dcr_key, client_id, origin)
+
+
+def _refresh_envelope_origin(
+    grant_type: str,
+    dcr_key: object,
+    client_id: str,
+    redirect_uri: str,
+) -> str | None:
+    """Return the runtime origin to bind for a fixed-loopback code exchange."""
+    if (
+        grant_type != "authorization_code"
+        or not isinstance(dcr_key, bytes)
+        or not client_id
+        or not redirect_uri
+    ):
+        return None
+    from .oauth_dcr import client_redirect_uris, stable_refresh_origin
+    from .oauth_ha_auth import origin_client_id, redirect_matches
+
+    registered = client_redirect_uris(dcr_key, client_id)
+    if registered is None:
+        return None
+    stable = stable_refresh_origin(registered)
+    if not stable or not stable.startswith("http://"):
+        return None
+    if not redirect_matches(registered, redirect_uri):
+        return None
+    return origin_client_id(redirect_uri)
+
+
+async def _refresh_translation(
+    cimd_session: Any,
+    dcr_key: object,
+    client_id: str,
+    refresh_token: str,
+    redirect_uri: str,
+) -> tuple[object, str | None, str | None, str | None]:
+    """Resolve a refresh identity and unwrap a bound loopback token."""
+    if isinstance(dcr_key, bytes):
+        from .oauth_dcr import unwrap_refresh_token_envelope
+
+        wrapped = unwrap_refresh_token_envelope(dcr_key, client_id, refresh_token)
+        if wrapped is not None:
+            core_refresh_token, origin = wrapped
+            if redirect_uri:
+                from .oauth_ha_auth import RefreshDisposition, origin_client_id
+
+                if (
+                    not _is_valid_redirect_uri(redirect_uri)
+                    or origin_client_id(redirect_uri) != origin
+                ):
+                    return (
+                        RefreshDisposition.UNREPRODUCIBLE,
+                        None,
+                        None,
+                        "re-authorize: redirect_uri does not match this refresh "
+                        "token's signed loopback origin",
+                    )
+            return origin, core_refresh_token, origin, None
+    from .oauth_ha_auth import (
+        RefreshDisposition,
+        resolve_forward_client_id,
+        translated_client_id_for_refresh,
+    )
+
+    if redirect_uri:
+        translated = await resolve_forward_client_id(
+            cimd_session, dcr_key, client_id, redirect_uri
+        )
+        return translated, None, None, None
+
+    translated = await translated_client_id_for_refresh(
+        cimd_session,
+        dcr_key,
+        client_id,
+    )
+    refresh_origin = (
+        translated
+        if isinstance(translated, str) and translated.startswith("http://")
+        else None
+    )
+    error_description = (
+        "re-authorize: this client's registration has no single reproducible "
+        "origin, so a refresh without redirect_uri is unavailable"
+        if translated is RefreshDisposition.UNREPRODUCIBLE
+        else None
+    )
+    return translated, None, refresh_origin, error_description
 
 
 def _redirect_with(redirect_uri: str, **params: str) -> web.Response:
@@ -388,7 +516,6 @@ class AutoApproveTokenView(HomeAssistantView):
             RefreshDisposition,
             core_token_base_url,
             resolve_forward_client_id,
-            translated_client_id_for_refresh,
         )
 
         raw_form = await read_form(request)
@@ -405,20 +532,30 @@ class AutoApproveTokenView(HomeAssistantView):
         client_id = str(form.get("client_id", ""))
         redirect_uri = str(form.get("redirect_uri", ""))
         forward_id = client_id
+        refresh_origin: str | None = None
+        dcr_key = cfg.get(CFG_DCR_SIGNING_KEY)
         if client_id:
-            if grant_type == "refresh_token" and not redirect_uri:
-                # refresh_token grant without a redirect_uri on the wire —
-                # re-derive the translation from the registered list alone.
-                translated = await translated_client_id_for_refresh(
+            if grant_type == "refresh_token":
+                (
+                    translated,
+                    core_refresh_token,
+                    refresh_origin,
+                    refresh_error,
+                ) = await _refresh_translation(
                     cfg.get(CFG_CIMD_SESSION),
-                    cfg.get(CFG_DCR_SIGNING_KEY),
+                    dcr_key,
                     client_id,
+                    str(form.get("refresh_token", "")),
+                    redirect_uri,
                 )
+                if core_refresh_token is not None:
+                    form.popall("refresh_token", None)
+                    form["refresh_token"] = core_refresh_token
                 if translated is RefreshDisposition.UNREPRODUCIBLE:
                     # Coupled to oauth_dcr registration semantics: a VERIFIED
                     # identity (DCR blob or fetched CIMD document — #2217
                     # review closed the CIMD half of this guard) whose
-                    # registration has no single reproducible web origin must
+                    # registration has no single reproducible origin must
                     # not advertise refresh_token, because this guard rejects
                     # its redirect-less refresh locally. The token was bound
                     # to an origin we cannot re-derive; answering here avoids
@@ -426,23 +563,22 @@ class AutoApproveTokenView(HomeAssistantView):
                     return _json_error(
                         "invalid_grant",
                         400,
-                        "re-authorize: this client's registration has no "
-                        "single reproducible web origin, so a refresh "
-                        "without redirect_uri is unavailable",
+                        refresh_error,
                     )
                 if translated is not RefreshDisposition.PASSTHROUGH:
                     forward_id = translated
             else:
-                # Authorization-code exchanges — and refreshes that DO carry a
-                # redirect_uri — use the presented redirect, exactly like the
-                # authorize leg (this is what keeps multi-origin identities
-                # refreshable). With no redirect_uri, validation leaves the
-                # client_id untouched for core to reject authoritatively.
+                # Authorization-code exchanges use the presented redirect,
+                # exactly like the authorize leg. With no redirect_uri,
+                # validation leaves the client_id untouched for core to reject.
                 forward_id = await resolve_forward_client_id(
                     cfg.get(CFG_CIMD_SESSION),
-                    cfg.get(CFG_DCR_SIGNING_KEY),
+                    dcr_key,
                     client_id,
                     redirect_uri,
+                )
+                refresh_origin = _refresh_envelope_origin(
+                    grant_type, dcr_key, client_id, redirect_uri
                 )
         if forward_id == client_id:
             # No body rewrite needed, so don't proxy: 307 the client into
@@ -485,6 +621,9 @@ class AutoApproveTokenView(HomeAssistantView):
                 timeout=aiohttp.ClientTimeout(total=25),
             ) as resp:
                 body = await resp.read()
+                body = _maybe_wrap_refresh_token(
+                    body, resp.status, dcr_key, client_id, refresh_origin
+                )
                 return web.Response(
                     status=resp.status,
                     body=body,

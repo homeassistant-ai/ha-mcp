@@ -53,6 +53,10 @@ def test_redirect_matches_loopback_port_agnostic():
     registered = ["http://localhost/callback", "http://127.0.0.1/callback"]
     assert redirect_matches(registered, "http://localhost:61264/callback")
     assert redirect_matches(registered, "http://127.0.0.1:3118/callback")
+    assert redirect_matches(
+        ["http://127.0.0.1:19876/callback"],
+        "http://127.0.0.1:3118/callback",
+    )
     assert not redirect_matches(registered, "http://localhost:61264/other")
     assert not redirect_matches(registered, "http://localhost:61264/callback?next=1")
     assert not redirect_matches(registered, "http://evil.example:80/callback")
@@ -182,6 +186,20 @@ async def test_refresh_translates_single_origin_dcr_client():
     )
 
     assert translated == "https://a.example"
+
+
+@pytest.mark.asyncio
+async def test_refresh_translates_fixed_loopback_dcr_client():
+    """Re-derive an explicitly ported loopback origin on the refresh leg."""
+    client_id = mint_client_id(KEY, ["http://127.0.0.1:19876/callback"])
+
+    translated = await oauth_ha_auth.translated_client_id_for_refresh(
+        session=None,
+        dcr_key=KEY,
+        client_id=client_id,
+    )
+
+    assert translated == "http://127.0.0.1:19876"
 
 
 @pytest.mark.parametrize(

@@ -55,6 +55,9 @@ class _CoreTokenResponse:
     status = 200
     content_type = "application/json"
 
+    def __init__(self, body: bytes = b'{"access_token":"x"}') -> None:
+        self.body = body
+
     async def __aenter__(self):
         return self
 
@@ -62,21 +65,27 @@ class _CoreTokenResponse:
         return None
 
     async def read(self):
-        return b'{"access_token":"x"}'
+        return self.body
 
 
 class _CoreTokenSession:
     """Capture token-forward POSTs and optionally raise a transport error."""
 
-    def __init__(self, *, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        error: Exception | None = None,
+        body: bytes = b'{"access_token":"x"}',
+    ) -> None:
         self.error = error
+        self.body = body
         self.calls = []
 
     def post(self, url, *, data, timeout):
         self.calls.append({"url": url, "data": data, "timeout": timeout})
         if self.error is not None:
             raise self.error
-        return _CoreTokenResponse()
+        return _CoreTokenResponse(self.body)
 
 
 if "yarl" not in sys.modules:
@@ -1058,6 +1067,150 @@ async def test_ha_auth_refresh_loopback_only_dcr_client_gets_invalid_grant(
     assert session.calls == []  # never reached core
 
 
+async def test_ha_auth_refresh_fixed_loopback_dcr_client_forwards_to_core(
+    unified_view_client_factory,
+    monkeypatch,
+):
+    """A fixed loopback registration can reproduce its refresh identity."""
+    session = _CoreTokenSession(
+        body=b'{"access_token":"x","refresh_token":"rotated-refresh"}'
+    )
+    dcr_key = b"d" * 32
+    client_id = oauth_dcr.mint_client_id(
+        dcr_key, ["http://127.0.0.1:19876/mcp/oauth/callback"]
+    )
+    monkeypatch.setattr(
+        oauth_ha_auth,
+        "core_token_base_url",
+        lambda _hass: "https://core.example",
+    )
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=dcr_key
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": "refresh-1",
+            "client_id": client_id,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 200
+    assert len(session.calls) == 1
+    assert session.calls[0]["data"]["client_id"] == "http://127.0.0.1:19876"
+    response_body = await resp.json()
+    assert oauth_dcr.unwrap_refresh_token_envelope(
+        dcr_key, client_id, response_body["refresh_token"]
+    ) == ("rotated-refresh", "http://127.0.0.1:19876")
+
+
+@pytest.mark.parametrize(
+    "redirect_uri",
+    [
+        "http://127.0.0.1:19876/mcp/oauth/callback",
+        "http://127.0.0.1:3118/mcp/oauth/callback",
+    ],
+)
+async def test_ha_auth_fixed_loopback_refresh_tracks_authorization_origin(
+    unified_view_client_factory,
+    monkeypatch,
+    redirect_uri,
+):
+    """A signed envelope reproduces the authorization-time loopback origin."""
+    session = _CoreTokenSession(
+        body=b'{"access_token":"x","refresh_token":"refresh-1"}'
+    )
+    dcr_key = b"d" * 32
+    client_id = oauth_dcr.mint_client_id(
+        dcr_key, ["http://127.0.0.1:19876/mcp/oauth/callback"]
+    )
+    monkeypatch.setattr(
+        oauth_ha_auth,
+        "core_token_base_url",
+        lambda _hass: "https://core.example",
+    )
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=dcr_key
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": "code-1",
+            "code_verifier": "verifier-1",
+            "redirect_uri": redirect_uri,
+            "client_id": client_id,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 200
+    body = await resp.json()
+    envelope = body["refresh_token"]
+    assert envelope != "refresh-1"
+    assert session.calls[0]["data"]["client_id"] == redirect_uri.rsplit("/", 3)[0]
+
+    refresh_data = {
+        "grant_type": "refresh_token",
+        "refresh_token": envelope,
+        "client_id": client_id,
+    }
+    if ":3118/" in redirect_uri:
+        refresh_data["redirect_uri"] = redirect_uri
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data=refresh_data,
+        allow_redirects=False,
+    )
+
+    assert resp.status == 200
+    assert session.calls[1]["data"]["refresh_token"] == "refresh-1"
+    assert session.calls[1]["data"]["client_id"] == redirect_uri.rsplit("/", 3)[0]
+    rotated = (await resp.json())["refresh_token"]
+    assert oauth_dcr.unwrap_refresh_token_envelope(dcr_key, client_id, rotated) == (
+        "refresh-1",
+        redirect_uri.rsplit("/", 3)[0],
+    )
+
+
+@pytest.mark.parametrize(
+    "redirect_uri",
+    [
+        "http://127.0.0.1:19876/mcp/oauth/callback",
+        "http://127.0.0.1:99999/mcp/oauth/callback",
+    ],
+)
+async def test_ha_auth_enveloped_refresh_rejects_invalid_redirect(redirect_uri):
+    """A supplied redirect cannot override the envelope's signed origin."""
+    dcr_key = b"d" * 32
+    client_id = oauth_dcr.mint_client_id(
+        dcr_key, ["http://127.0.0.1:19876/mcp/oauth/callback"]
+    )
+    envelope = oauth_dcr.mint_refresh_token_envelope(
+        dcr_key, client_id, "refresh-1", "http://127.0.0.1:3118"
+    )
+
+    translated, core_token, origin, error_description = await aa._refresh_translation(
+        None,
+        dcr_key,
+        client_id,
+        envelope,
+        redirect_uri,
+    )
+
+    assert translated is oauth_ha_auth.RefreshDisposition.UNREPRODUCIBLE
+    assert core_token is None
+    assert origin is None
+    assert error_description == (
+        "re-authorize: redirect_uri does not match this refresh token's signed "
+        "loopback origin"
+    )
+
+
 async def test_ha_auth_refresh_multi_origin_dcr_client_gets_invalid_grant(
     unified_view_client_factory,
 ):
@@ -1089,7 +1242,7 @@ async def test_ha_auth_refresh_multi_origin_dcr_client_gets_invalid_grant(
     assert await resp.json() == {
         "error": "invalid_grant",
         "error_description": "re-authorize: this client's registration has no "
-        "single reproducible web origin, so a refresh without redirect_uri "
+        "single reproducible origin, so a refresh without redirect_uri "
         "is unavailable",
     }
     assert session.calls == []  # never reached core

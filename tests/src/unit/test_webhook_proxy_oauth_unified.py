@@ -160,6 +160,20 @@ async def test_dcr_ha_auth_keeps_reproducible_refresh(oauth_stack):
     ]
 
 
+async def test_dcr_ha_auth_keeps_fixed_loopback_refresh(oauth_stack):
+    """An explicitly ported loopback callback has a stable refresh origin."""
+    oauth, dcr = oauth_stack.oauth, oauth_stack.dcr
+    response = await dcr.DcrRegisterView(_hass(oauth, oauth.MODE_HA_AUTH)).post(
+        _json_request({"redirect_uris": ["http://127.0.0.1:19876/mcp/oauth/callback"]})
+    )
+
+    assert response.status == 201
+    assert response.json_body["grant_types"] == [
+        "authorization_code",
+        "refresh_token",
+    ]
+
+
 async def test_dcr_preserves_explicit_zero_port_origin(oauth_stack):
     """An explicit port zero remains distinct from the HTTPS default port."""
     oauth, dcr = oauth_stack.oauth, oauth_stack.dcr
@@ -210,6 +224,9 @@ def test_cimd_redirect_matching_includes_loopback_port_variance(oauth_stack):
     )
     assert indirect.redirect_matches(
         ["http://localhost/callback"], "http://localhost:61264/callback"
+    )
+    assert indirect.redirect_matches(
+        ["http://localhost:19876/callback"], "http://localhost:61264/callback"
     )
     assert not indirect.redirect_matches(
         ["http://localhost/callback"], "http://localhost:61264/other"
@@ -352,6 +369,16 @@ async def test_mixed_port_shapes_are_unreproducible(oauth_stack, monkeypatch):
     )
 
     assert refresh_id is indirect.RefreshDisposition.UNREPRODUCIBLE
+
+
+async def test_fixed_loopback_refresh_derives_registered_origin(oauth_stack):
+    """A single explicitly ported loopback callback is reproducible."""
+    dcr, indirect = oauth_stack.dcr, oauth_stack.indirect
+    client_id = dcr.mint_client_id(KEY, ["http://127.0.0.1:19876/mcp/oauth/callback"])
+
+    refresh_id = await indirect.translated_client_id_for_refresh(None, KEY, client_id)
+
+    assert refresh_id == "http://127.0.0.1:19876"
 
 
 async def test_symmetric_explicit_port_passes_through_on_both_legs(
@@ -699,6 +726,180 @@ async def test_ha_auth_refresh_rejects_unreproducible_identity_locally(oauth_sta
 
     assert response.status == 400
     assert response.json_body["error"] == "invalid_grant"
+
+
+async def test_ha_auth_refresh_forwards_fixed_loopback_identity(
+    oauth_stack, monkeypatch
+):
+    """A fixed loopback refresh is forwarded with its registered origin."""
+    oauth, dcr, indirect, autoapprove = (
+        oauth_stack.oauth,
+        oauth_stack.dcr,
+        oauth_stack.indirect,
+        oauth_stack.autoapprove,
+    )
+    client_id = dcr.mint_client_id(KEY, ["http://127.0.0.1:19876/mcp/oauth/callback"])
+    core_response = SimpleNamespace(
+        status=200,
+        content_type="application/json",
+        read=AsyncMock(
+            return_value=b'{"access_token":"core","refresh_token":"rotated-refresh"}'
+        ),
+    )
+
+    class _CoreRequest:
+        async def __aenter__(self):
+            return core_response
+
+        async def __aexit__(self, *_args):
+            return False
+
+    relay_session = SimpleNamespace(post=MagicMock(return_value=_CoreRequest()))
+    hass = _hass(oauth, oauth.MODE_HA_AUTH)
+    hass.data[oauth.DOMAIN]["session"] = relay_session
+    monkeypatch.setattr(
+        indirect, "core_token_base_url", lambda _hass: "https://core.example"
+    )
+
+    response = await autoapprove.AutoApproveTokenView(hass).post(
+        _oauth_request(
+            form={
+                "grant_type": "refresh_token",
+                "refresh_token": "opaque",
+                "client_id": client_id,
+            }
+        )
+    )
+
+    assert response.status == 200
+    forwarded = relay_session.post.call_args.kwargs["data"]
+    assert forwarded["client_id"] == "http://127.0.0.1:19876"
+    response_body = json.loads(response.body)
+    assert dcr.unwrap_refresh_token_envelope(
+        KEY, client_id, response_body["refresh_token"]
+    ) == ("rotated-refresh", "http://127.0.0.1:19876")
+
+
+@pytest.mark.parametrize(
+    "redirect_uri",
+    [
+        "http://127.0.0.1:19876/mcp/oauth/callback",
+        "http://127.0.0.1:3118/mcp/oauth/callback",
+    ],
+)
+async def test_fixed_loopback_refresh_tracks_authorization_origin(
+    oauth_stack, monkeypatch, redirect_uri
+):
+    """A signed envelope reproduces the authorization-time loopback origin."""
+    oauth, dcr, indirect, autoapprove = (
+        oauth_stack.oauth,
+        oauth_stack.dcr,
+        oauth_stack.indirect,
+        oauth_stack.autoapprove,
+    )
+    client_id = dcr.mint_client_id(KEY, ["http://127.0.0.1:19876/mcp/oauth/callback"])
+    core_response = SimpleNamespace(
+        status=200,
+        content_type="application/json",
+        read=AsyncMock(
+            return_value=b'{"access_token":"core","refresh_token":"refresh-1"}'
+        ),
+    )
+
+    class _CoreRequest:
+        async def __aenter__(self):
+            return core_response
+
+        async def __aexit__(self, *_args):
+            return False
+
+    relay_session = SimpleNamespace(post=MagicMock(return_value=_CoreRequest()))
+    hass = _hass(oauth, oauth.MODE_HA_AUTH)
+    hass.data[oauth.DOMAIN]["session"] = relay_session
+    monkeypatch.setattr(
+        indirect, "core_token_base_url", lambda _hass: "https://core.example"
+    )
+
+    response = await autoapprove.AutoApproveTokenView(hass).post(
+        _oauth_request(
+            form={
+                "grant_type": "authorization_code",
+                "code": "code-1",
+                "code_verifier": "verifier-1",
+                "redirect_uri": redirect_uri,
+                "client_id": client_id,
+            }
+        )
+    )
+
+    assert response.status == 200
+    body = json.loads(response.body)
+    envelope = body["refresh_token"]
+    assert envelope != "refresh-1"
+    forwarded = relay_session.post.call_args.kwargs["data"]
+    assert forwarded["client_id"] == redirect_uri.rsplit("/", 3)[0]
+
+    refresh_form = {
+        "grant_type": "refresh_token",
+        "refresh_token": envelope,
+        "client_id": client_id,
+    }
+    if ":3118/" in redirect_uri:
+        refresh_form["redirect_uri"] = redirect_uri
+    response = await autoapprove.AutoApproveTokenView(hass).post(
+        _oauth_request(form=refresh_form)
+    )
+
+    assert response.status == 200
+    forwarded = relay_session.post.call_args.kwargs["data"]
+    assert forwarded["refresh_token"] == "refresh-1"
+    assert forwarded["client_id"] == redirect_uri.rsplit("/", 3)[0]
+    rotated = json.loads(response.body)["refresh_token"]
+    assert dcr.unwrap_refresh_token_envelope(KEY, client_id, rotated) == (
+        "refresh-1",
+        redirect_uri.rsplit("/", 3)[0],
+    )
+
+
+@pytest.mark.parametrize(
+    "redirect_uri",
+    [
+        "http://127.0.0.1:19876/mcp/oauth/callback",
+        "http://127.0.0.1:99999/mcp/oauth/callback",
+    ],
+)
+async def test_enveloped_refresh_rejects_invalid_redirect(oauth_stack, redirect_uri):
+    """A supplied redirect cannot override the envelope's signed origin."""
+    dcr, indirect, autoapprove = (
+        oauth_stack.dcr,
+        oauth_stack.indirect,
+        oauth_stack.autoapprove,
+    )
+    client_id = dcr.mint_client_id(KEY, ["http://127.0.0.1:19876/mcp/oauth/callback"])
+    envelope = dcr.mint_refresh_token_envelope(
+        KEY, client_id, "refresh-1", "http://127.0.0.1:3118"
+    )
+
+    (
+        translated,
+        core_token,
+        origin,
+        error_description,
+    ) = await autoapprove._refresh_translation(
+        None,
+        KEY,
+        client_id,
+        envelope,
+        redirect_uri,
+    )
+
+    assert translated is indirect.RefreshDisposition.UNREPRODUCIBLE
+    assert core_token is None
+    assert origin is None
+    assert error_description == (
+        "re-authorize: redirect_uri does not match this refresh token's signed "
+        "loopback origin"
+    )
 
 
 async def test_ha_auth_refresh_with_redirect_translates_presented_origin(

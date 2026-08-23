@@ -42,6 +42,7 @@ from .oauth_dcr import (
     canonical_origin_url,
     client_redirect_uris,
     normalized_origin,
+    stable_refresh_origin,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -380,7 +381,7 @@ async def translated_client_id_for_refresh(
         return RefreshDisposition.PASSTHROUGH
     if not _refresh_identity_is_reproducible(registered):
         return RefreshDisposition.UNREPRODUCIBLE
-    stable = stable_translation_origin(registered)
+    stable = stable_refresh_origin(registered)
     assert stable is not None
     # Reproduce what the authorize leg forwarded, or admit we cannot. That
     # leg's fast path keys off the PRESENTED redirect, which the redirect-less
