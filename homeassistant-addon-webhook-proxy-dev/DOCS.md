@@ -193,7 +193,7 @@ All three behaviors advertise proxy-owned endpoints under `/api/mcp_proxy_dev/oa
 The same authorize/token URLs behave according to the active mode:
 
 - **None mode:** accepts any valid HTTPS or RFC 8252 loopback redirect, auto-approves without a page, and issues a cosmetic token. DCR registrations advertise only the authorization-code grant.
-- **`ha_auth`:** validates CIMD or signed DCR identities before sending the browser/token exchange into Home Assistant core. DCR advertises refresh only when the registered redirects have one reproducible web origin.
+- **`ha_auth`:** validates CIMD or signed DCR identities before sending the browser/token exchange into Home Assistant core. DCR advertises refresh for every registration: a forwarded token response comes back with its refresh token wrapped in a signed envelope naming the identity core bound it to, so loopback-callback and multi-origin clients refresh without re-authorizing.
 - **`legacy`:** serves the existing consent and credentialed token flow on the scoped URLs. The host-root `/authorize` and `/token` routes remain compatibility aliases but are not advertised; legacy does not advertise DCR.
 
 **Hosted Claude environment requirements:** Hosted Claude surfaces reach your server from Anthropic's backend, not from your browser. Three environment rules apply that no server-side setting can work around:

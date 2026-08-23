@@ -18,6 +18,17 @@ server-side. Two problems this kills:
   and hand core a translated client_id shaped to pass its long-stable
   same-origin IndieAuth rule.
 
+REFRESH IDENTITY (issue #2248): core binds the refresh token to whatever
+client_id the code leg presented, and a redirect_uri-less refresh grant carries
+nothing that re-derives it — a loopback callback's runtime origin embeds an
+ephemeral port (RFC 8252 §7.3), and a multi-origin registration is ambiguous.
+So the identity is RECORDED at mint time instead of guessed later: every
+server-side-forwarded 200 has its ``refresh_token`` replaced by a signed
+envelope (:func:`wrap_refresh_token`) carrying core's real token plus the
+client_id core bound it to, and the refresh leg unwraps it back into the exact
+pair. :func:`translated_client_id_for_refresh` remains for tokens minted before
+the envelope existed.
+
 SECURITY: translation grants nothing new. Core already accepts any
 self-asserted ``client_id == redirect-origin`` pair (that is how claude.ai
 connects today), so rewriting a VALIDATED cross-origin identity into that shape
@@ -38,6 +49,9 @@ loopback and redirect-shape helpers come from ``oauth_legacy.py`` here and
 from __future__ import annotations
 
 import asyncio
+import binascii
+import hashlib
+import hmac
 import ipaddress
 import json
 import logging
@@ -55,7 +69,12 @@ from .oauth_dcr import (
     client_redirect_uris,
     normalized_origin,
 )
-from .oauth_legacy import _is_loopback_host, _is_valid_redirect_uri
+from .oauth_legacy import (
+    _b64url_decode,
+    _b64url_encode,
+    _is_loopback_host,
+    _is_valid_redirect_uri,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -241,8 +260,10 @@ def stable_translation_origin(registered: list[str]) -> str | None:
     None when there is no such origin (no web redirects, or several distinct
     ones). Loopback redirects are excluded because their runtime origin embeds
     an ephemeral port (RFC 8252) — they are translated from the presented
-    redirect on the authorize/code legs, but cannot be re-derived here for the
-    redirect_uri-less refresh leg.
+    redirect on the authorize/code legs, and the redirect_uri-less refresh leg
+    reads that origin back out of the signed envelope instead of deriving it
+    here (#2248). This derivation now serves only refresh tokens minted before
+    the envelope shipped.
     """
     origins: set[str] = set()
     for uri in registered:
@@ -449,6 +470,124 @@ async def resolve_forward_client_id(
     return client_id
 
 
+# Refresh-token envelope (issue #2248). Same shape as the DCR blob — prefix +
+# b64url(compact JSON) + "." + b64url(HMAC-SHA256), signed with the DCR key —
+# but the MAC covers the PREFIX too, where the DCR blob signs the bare body.
+# That one difference is load-bearing: it makes the two blob families
+# cryptographically disjoint, so an envelope can never verify as a client_id
+# registration and a client_id can never verify as a refresh token.
+_REFRESH_ENVELOPE_PREFIX = "hamcp-rt-"
+
+
+def _presented_client_hash(client_id: str) -> str:
+    """Digest of the client_id the envelope was minted for.
+
+    Hashed rather than embedded verbatim: the envelope travels through the
+    client, and a CIMD/DCR identity is long enough to bloat every refresh
+    request for a value only ever compared for equality.
+    """
+    return _b64url_encode(hashlib.sha256(client_id.encode("utf-8")).digest())
+
+
+def wrap_refresh_token(
+    signing_key: bytes,
+    core_refresh_token: str,
+    forward_client_id: str,
+    presented_client_id: str,
+) -> str:
+    """Wrap core's refresh token with the identity core bound it to.
+
+    Recorded at mint time because the refresh leg cannot re-derive it: see the
+    module header's REFRESH IDENTITY note. The presenter digest binds the
+    envelope to the client_id that will be presented alongside it, so an
+    envelope leaked to a different registered client is not usable under that
+    client's own identity.
+    """
+    payload = {
+        "v": 1,
+        "t": core_refresh_token,
+        "c": forward_client_id,
+        "p": _presented_client_hash(presented_client_id),
+    }
+    body = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
+    sig = hmac.new(
+        signing_key,
+        f"{_REFRESH_ENVELOPE_PREFIX}{body}".encode("ascii"),
+        hashlib.sha256,
+    ).digest()
+    return f"{_REFRESH_ENVELOPE_PREFIX}{body}.{_b64url_encode(sig)}"
+
+
+def unwrap_refresh_token(
+    signing_key: bytes, token: str, presented_client_id: str
+) -> tuple[str, str] | None:
+    """Recover ``(core refresh token, forward client_id)``, or None.
+
+    None for anything that is not an intact envelope minted for THIS presenter:
+    a bare core token from before the envelope shipped, a tampered signature, a
+    DCR blob, or garbage. Never raises — this runs on an anonymous view, so a
+    malformed value must fall through to the legacy derivation rather than
+    traceback (the contract ``client_redirect_uris`` states for its own blob).
+    """
+    if not token.startswith(_REFRESH_ENVELOPE_PREFIX):
+        return None
+    blob = token[len(_REFRESH_ENVELOPE_PREFIX) :]
+    body, sep, sig_part = blob.rpartition(".")
+    if not sep or not body:
+        return None
+    try:
+        expected = hmac.new(
+            signing_key,
+            f"{_REFRESH_ENVELOPE_PREFIX}{body}".encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        if not hmac.compare_digest(_b64url_decode(sig_part), expected):
+            return None
+        payload = json.loads(_b64url_decode(body))
+    except (ValueError, binascii.Error, UnicodeEncodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("v") != 1:
+        return None
+    core_refresh_token = payload.get("t")
+    forward_client_id = payload.get("c")
+    presenter = payload.get("p")
+    if not (
+        isinstance(core_refresh_token, str)
+        and isinstance(forward_client_id, str)
+        and isinstance(presenter, str)
+    ):
+        return None
+    if not hmac.compare_digest(presenter, _presented_client_hash(presented_client_id)):
+        return None
+    return core_refresh_token, forward_client_id
+
+
+def rewrite_token_response_body(
+    signing_key: bytes, body: bytes, forward_client_id: str, presented_client_id: str
+) -> bytes:
+    """Replace a core token response's ``refresh_token`` with an envelope.
+
+    Returned unchanged for anything without a string ``refresh_token`` to wrap
+    (core's refresh response is access_token/token_type/expires_in only today).
+    Applied to EVERY server-side-forwarded 200 rather than just the code leg,
+    so a core that starts rotating refresh tokens stays covered without a
+    second change here.
+    """
+    try:
+        parsed = json.loads(body)
+    except (ValueError, RecursionError):
+        return body
+    if not isinstance(parsed, dict):
+        return body
+    core_refresh_token = parsed.get("refresh_token")
+    if not isinstance(core_refresh_token, str):
+        return body
+    parsed["refresh_token"] = wrap_refresh_token(
+        signing_key, core_refresh_token, forward_client_id, presented_client_id
+    )
+    return json.dumps(parsed, separators=(",", ":")).encode()
+
+
 class RefreshDisposition(Enum):
     """Outcomes of refresh-identity derivation that carry no origin string.
 
@@ -460,6 +599,11 @@ class RefreshDisposition(Enum):
     relaying a guaranteed core failure into its failed-login accounting
     (#2217 review — previously only DCR blobs got that answer, so CIMD
     identities of the same shape were 307'd into core on every token expiry).
+    Reachable only for refresh tokens minted before the signed envelope
+    shipped (#2248): an envelope names the identity outright, so the derivation
+    below never runs for one. A single re-authorize migrates such a session to
+    an envelope-carrying token, which refreshes whatever its registration
+    shape.
     """
 
     PASSTHROUGH = "passthrough"
@@ -471,7 +615,12 @@ async def translated_client_id_for_refresh(
     dcr_key: bytes | None,
     client_id: str,
 ) -> str | RefreshDisposition:
-    """Refresh-leg identity: a translated origin, or a disposition.
+    """Refresh-leg identity for a PRE-ENVELOPE token: an origin, or a disposition.
+
+    The caller reaches here only when the presented refresh token is not a
+    signed envelope (:func:`unwrap_refresh_token`) — i.e. it was minted before
+    #2248 shipped, or it was tampered with. Envelope-carrying tokens name their
+    identity outright and never take this path.
 
     Must agree with what the authorize/code legs presented to core, or core
     rejects the refresh (the token is bound to the client_id it was minted
@@ -494,7 +643,9 @@ async def translated_client_id_for_refresh(
       entries were translated to that origin on every leg → return it.
     * Everything else that is VERIFIED — multiple web origins (Gemini
       Spark-class), loopback-only (Claude Code-class), or hybrid — cannot be
-      re-derived without the redirect: ``UNREPRODUCIBLE``.
+      re-derived from a pre-envelope token without the redirect:
+      ``UNREPRODUCIBLE``, which one re-authorize converts into an
+      envelope-carrying session that refreshes indefinitely.
     """
     registered: list[str] | None = None
     if dcr_key is not None:

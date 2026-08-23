@@ -15,12 +15,18 @@ from ._embedded_stubs import install
 install()
 
 from custom_components.ha_mcp_tools import oauth_ha_auth  # noqa: E402
-from custom_components.ha_mcp_tools.oauth_dcr import mint_client_id  # noqa: E402
+from custom_components.ha_mcp_tools.oauth_dcr import (  # noqa: E402
+    client_redirect_uris,
+    mint_client_id,
+)
 from custom_components.ha_mcp_tools.oauth_ha_auth import (  # noqa: E402
     origin_client_id,
     redirect_matches,
     resolve_forward_client_id,
+    rewrite_token_response_body,
     stable_translation_origin,
+    unwrap_refresh_token,
+    wrap_refresh_token,
 )
 
 KEY = b"k" * 32
@@ -193,7 +199,11 @@ async def test_refresh_translates_single_origin_dcr_client():
 )
 @pytest.mark.asyncio
 async def test_refresh_marks_dcr_clients_without_stable_origin(redirect_uris):
-    """Multi-origin and loopback-only DCR identities are UNREPRODUCIBLE."""
+    """Multi-origin and loopback-only DCR identities are UNREPRODUCIBLE.
+
+    Only reachable for refresh tokens minted before the #2248 envelope; the
+    token view consults the envelope first.
+    """
     client_id = mint_client_id(KEY, redirect_uris)
 
     translated = await oauth_ha_auth.translated_client_id_for_refresh(
@@ -419,9 +429,10 @@ async def test_explicit_default_port_translates_on_both_legs(monkeypatch):
 @pytest.mark.asyncio
 async def test_mixed_registration_refresh_derivation_is_unreproducible():
     """#2217 review: hybrid (web + loopback) registrations never derive a
-    refresh identity — the server cannot know which redirect the token used,
-    and the registration is advertised authorization_code-only. Authorize via
-    the web redirect still translates normally."""
+    refresh identity from a pre-envelope token — the server cannot know which
+    redirect the token used. Authorize via the web redirect still translates
+    normally, and #2248 records that translation in the refresh token itself so
+    the derivation below is only reached by tokens minted before it."""
     client_id = mint_client_id(
         KEY,
         ["http://localhost/callback", "https://a.example/cb"],
@@ -893,3 +904,138 @@ def test_cimd_cache_evicts_oldest_not_wholesale():
     assert "https://h1.example/c.json" in oauth_ha_auth._cimd_cache  # rest retained
     assert "https://new.example/c.json" in oauth_ha_auth._cimd_cache
     oauth_ha_auth._cimd_cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# Refresh-token envelope (issue #2248)
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_envelope_round_trips():
+    """Recover core's token and the identity core bound it to."""
+    client_id = mint_client_id(KEY, ["http://127.0.0.1/callback"])
+    envelope = wrap_refresh_token(
+        KEY, "core-refresh-token", "http://127.0.0.1:54321", client_id
+    )
+
+    assert envelope.startswith("hamcp-rt-")
+    assert unwrap_refresh_token(KEY, envelope, client_id) == (
+        "core-refresh-token",
+        "http://127.0.0.1:54321",
+    )
+
+
+def test_refresh_envelope_rejects_a_tampered_signature():
+    """A flipped signature byte invalidates the envelope."""
+    envelope = wrap_refresh_token(KEY, "core-rt", "https://a.example", "cid")
+    body, _, signature = envelope.rpartition(".")
+    tampered = f"{body}.{'B' if signature[0] != 'B' else 'C'}{signature[1:]}"
+
+    assert unwrap_refresh_token(KEY, tampered, "cid") is None
+    assert unwrap_refresh_token(b"x" * 32, envelope, "cid") is None
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "core-opaque-refresh-token",  # pre-#2248 token straight from core
+        "",
+        "hamcp-rt-",  # prefix with no body
+        "hamcp-rt-nodot",
+        "hamcp-rt-.sig",
+        "hamcp-rt-###.###",  # undecodable base64url
+    ],
+)
+def test_refresh_envelope_rejects_non_envelope_tokens(token):
+    """Never raise, and never accept, a token that is not a live envelope."""
+    assert unwrap_refresh_token(KEY, token, "cid") is None
+
+
+def test_refresh_envelope_and_dcr_blob_are_disjoint():
+    """The prefix rides inside the MAC, so neither blob verifies as the other.
+
+    A DCR client_id and a refresh envelope are both HMAC-signed under the same
+    key; signing the prefix (envelope) versus the bare body (DCR) is what keeps
+    a registration from ever being redeemed as a refresh token or vice versa.
+    """
+    blob = mint_client_id(KEY, ["https://a.example/cb"])
+    envelope = wrap_refresh_token(KEY, "core-rt", "https://a.example", "cid")
+
+    assert unwrap_refresh_token(KEY, blob, "cid") is None
+    assert client_redirect_uris(KEY, envelope) is None
+
+
+def test_refresh_envelope_rejects_a_different_presenter():
+    """Bind the envelope to the client_id it was minted alongside."""
+    envelope = wrap_refresh_token(KEY, "core-rt", "https://a.example", "cid-a")
+
+    assert unwrap_refresh_token(KEY, envelope, "cid-b") is None
+    assert unwrap_refresh_token(KEY, envelope, "cid-a") is not None
+
+
+def test_rewrite_token_response_body_wraps_a_string_refresh_token():
+    """Swap core's refresh token for an envelope, leaving the rest intact."""
+    raw = json.dumps(
+        {
+            "access_token": "core-access",
+            "token_type": "Bearer",
+            "expires_in": 1800,
+            "refresh_token": "core-refresh",
+        }
+    ).encode()
+
+    rewritten = json.loads(
+        rewrite_token_response_body(KEY, raw, "http://127.0.0.1:54321", "cid")
+    )
+
+    assert rewritten["access_token"] == "core-access"
+    assert rewritten["expires_in"] == 1800
+    assert unwrap_refresh_token(KEY, rewritten["refresh_token"], "cid") == (
+        "core-refresh",
+        "http://127.0.0.1:54321",
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"access_token":"x","token_type":"Bearer"}',  # core's refresh response
+        b'{"error":"invalid_grant"}',
+        b'{"refresh_token":null}',
+        b'{"refresh_token":42}',
+        b'["not","an","object"]',
+        b"not json at all",
+        b"",
+        b'{"refresh_token":"\xff\xfe"}',  # not UTF-8
+    ],
+)
+def test_rewrite_token_response_body_leaves_other_bodies_byte_identical(body):
+    """Relay anything with no string refresh_token to wrap, byte for byte."""
+    assert rewrite_token_response_body(KEY, body, "https://a.example", "cid") is body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "redirect_uris",
+    [
+        ["http://localhost/callback", "http://127.0.0.1/callback"],
+        ["https://a.example/cb", "https://b.example/cb"],
+        ["https://a.example/cb", "http://localhost/callback"],
+    ],
+)
+async def test_pre_envelope_refresh_derivation_is_unchanged(redirect_uris):
+    """#2248 leaves the pre-envelope derivation exactly as it was.
+
+    The envelope is consulted first by the token view; a refresh token minted
+    before it existed still lands here, and still gets UNREPRODUCIBLE rather
+    than a guessed origin.
+    """
+    client_id = mint_client_id(KEY, redirect_uris)
+
+    translated = await oauth_ha_auth.translated_client_id_for_refresh(
+        session=None,
+        dcr_key=KEY,
+        client_id=client_id,
+    )
+
+    assert translated is oauth_ha_auth.RefreshDisposition.UNREPRODUCIBLE

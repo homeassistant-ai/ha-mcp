@@ -275,7 +275,12 @@ async def test_register_rejects_plain_invalid_json(dcr_view_client_factory):
 
 
 async def test_register_accepts_google_multi_origin_client(dcr_view_client_factory):
-    """Accept Spark's two redirects but omit its unavailable refresh grant."""
+    """Accept Spark's two redirects and promise the refresh grant it now has.
+
+    #2248: the signed refresh envelope records which of the two origins core
+    bound a grant to, so a multi-origin registration is refreshable and the
+    registration response says so.
+    """
     client = await dcr_view_client_factory(dcr_key=KEY, resource_server=object())
 
     resp = await client.post(
@@ -285,28 +290,40 @@ async def test_register_accepts_google_multi_origin_client(dcr_view_client_facto
 
     assert resp.status == 201
     data = await resp.json()
-    assert data["grant_types"] == ["authorization_code"]
+    assert data["grant_types"] == ["authorization_code", "refresh_token"]
     assert client_redirect_uris(KEY, data["client_id"]) == GOOGLE_REDIRECT_URIS
 
 
 async def test_register_preserves_explicit_zero_port_in_web_origin(
     dcr_view_client_factory,
 ):
-    """Treat an explicit port zero as distinct from the HTTPS default port."""
+    """Treat an explicit port zero as distinct from the HTTPS default port.
+
+    Port 0 is falsy, so a normalizer applying the scheme default with ``or``
+    would collapse these two into one origin. The registration round-trips both
+    URIs verbatim and ``normalized_origin`` keeps them apart, which is what the
+    authorize-leg translation keys off.
+    """
     client = await dcr_view_client_factory(dcr_key=KEY, resource_server=object())
+    redirect_uris = ["https://a.example/cb", "https://a.example:0/cb"]
 
     resp = await client.post(
         "/api/ha_mcp_tools/oauth/register",
-        json={
-            "redirect_uris": [
-                "https://a.example/cb",
-                "https://a.example:0/cb",
-            ]
-        },
+        json={"redirect_uris": redirect_uris},
     )
 
     assert resp.status == 201
-    assert (await resp.json())["grant_types"] == ["authorization_code"]
+    assert client_redirect_uris(KEY, (await resp.json())["client_id"]) == redirect_uris
+    assert oauth_dcr.normalized_origin("https://a.example:0/cb") == (
+        "https",
+        "a.example",
+        0,
+    )
+    assert oauth_dcr.normalized_origin("https://a.example/cb") == (
+        "https",
+        "a.example",
+        443,
+    )
 
 
 async def test_register_none_mode_advertises_authorization_code_only(
@@ -353,11 +370,16 @@ async def test_register_ha_auth_advertises_refresh_token(dcr_view_client_factory
         ["https://a.example/cb", "http://localhost/callback"],
     ],
 )
-async def test_register_ha_auth_omits_refresh_when_identity_is_not_reproducible(
+async def test_register_ha_auth_advertises_refresh_for_loopback_registrations(
     dcr_view_client_factory,
     redirect_uris,
 ):
-    """Do not promise refresh when a loopback authorization may be selected."""
+    """Promise refresh even when a loopback authorization may be selected.
+
+    #2248 inverted this: the token leg records the ephemeral loopback origin
+    core bound the grant to in the refresh token itself, so the registration
+    shape no longer decides whether refresh works.
+    """
     client = await dcr_view_client_factory(
         dcr_key=KEY,
         resource_server=object(),
@@ -369,7 +391,10 @@ async def test_register_ha_auth_omits_refresh_when_identity_is_not_reproducible(
     )
 
     assert resp.status == 201
-    assert (await resp.json())["grant_types"] == ["authorization_code"]
+    assert (await resp.json())["grant_types"] == [
+        "authorization_code",
+        "refresh_token",
+    ]
 
 
 def test_canonical_origin_url_rebrackets_ipv6():

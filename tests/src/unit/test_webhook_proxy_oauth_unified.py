@@ -132,25 +132,32 @@ async def test_dcr_none_mode_advertises_authorization_code_only(oauth_stack):
     assert response.json_body["grant_types"] == ["authorization_code"]
 
 
-async def test_dcr_ha_auth_narrows_multi_origin_registration(oauth_stack):
-    """Spark's two web origins register, without an unreproducible refresh."""
+@pytest.mark.parametrize(
+    "redirect_uris",
+    [
+        pytest.param(["https://a.example/cb"], id="single-origin"),
+        pytest.param(GOOGLE_REDIRECT_URIS, id="multi-origin"),
+        pytest.param(
+            ["http://127.0.0.1/callback", "http://localhost/callback"],
+            id="loopback-only",
+        ),
+        pytest.param(
+            ["https://a.example/cb", "http://localhost/callback"], id="hybrid"
+        ),
+    ],
+)
+async def test_dcr_ha_auth_advertises_refresh_for_every_registration(
+    oauth_stack, redirect_uris
+):
+    """#2248: every ha_auth registration is refreshable, whatever its shape.
+
+    The signed refresh envelope records the identity core bound the grant to,
+    so registration no longer has to re-derive an origin — and no longer
+    withholds ``refresh_token`` from loopback or multi-origin clients.
+    """
     oauth, dcr = oauth_stack.oauth, oauth_stack.dcr
     response = await dcr.DcrRegisterView(_hass(oauth, oauth.MODE_HA_AUTH)).post(
-        _json_request({"redirect_uris": GOOGLE_REDIRECT_URIS})
-    )
-
-    assert response.status == 201
-    assert response.json_body["grant_types"] == ["authorization_code"]
-    assert dcr.client_redirect_uris(KEY, response.json_body["client_id"]) == (
-        GOOGLE_REDIRECT_URIS
-    )
-
-
-async def test_dcr_ha_auth_keeps_reproducible_refresh(oauth_stack):
-    """A single stable web origin can be reconstructed on refresh."""
-    oauth, dcr = oauth_stack.oauth, oauth_stack.dcr
-    response = await dcr.DcrRegisterView(_hass(oauth, oauth.MODE_HA_AUTH)).post(
-        _json_request({"redirect_uris": ["https://a.example/cb"]})
+        _json_request({"redirect_uris": redirect_uris})
     )
 
     assert response.status == 201
@@ -158,24 +165,31 @@ async def test_dcr_ha_auth_keeps_reproducible_refresh(oauth_stack):
         "authorization_code",
         "refresh_token",
     ]
+    assert dcr.client_redirect_uris(KEY, response.json_body["client_id"]) == (
+        redirect_uris
+    )
 
 
 async def test_dcr_preserves_explicit_zero_port_origin(oauth_stack):
-    """An explicit port zero remains distinct from the HTTPS default port."""
+    """An explicit port zero remains distinct from the HTTPS default port.
+
+    Port 0 is falsy, so a normalizer applying the scheme default with ``or``
+    would collapse these two into one origin. The registration round-trips both
+    URIs and ``normalized_origin`` keeps them apart, which is what the
+    authorize-leg translation keys off.
+    """
     oauth, dcr = oauth_stack.oauth, oauth_stack.dcr
+    redirect_uris = ["https://a.example/cb", "https://a.example:0/cb"]
     response = await dcr.DcrRegisterView(_hass(oauth, oauth.MODE_HA_AUTH)).post(
-        _json_request(
-            {
-                "redirect_uris": [
-                    "https://a.example/cb",
-                    "https://a.example:0/cb",
-                ]
-            }
-        )
+        _json_request({"redirect_uris": redirect_uris})
     )
 
     assert response.status == 201
-    assert response.json_body["grant_types"] == ["authorization_code"]
+    assert dcr.client_redirect_uris(KEY, response.json_body["client_id"]) == (
+        redirect_uris
+    )
+    assert dcr.normalized_origin("https://a.example:0/cb") == ("https", "a.example", 0)
+    assert dcr.normalized_origin("https://a.example/cb") == ("https", "a.example", 443)
 
 
 async def test_dcr_rejects_non_loopback_http_redirect(oauth_stack):
@@ -678,7 +692,9 @@ async def test_ha_auth_token_307s_passthrough_identity(oauth_stack):
 
 
 async def test_ha_auth_refresh_rejects_unreproducible_identity_locally(oauth_stack):
-    """A multi-origin refresh never enters core's failed-login accounting."""
+    """A pre-#2248 multi-origin refresh never enters core's failed-login
+    accounting. Only tokens minted before the signed envelope reach this
+    guard — an envelope names its identity outright."""
     oauth, dcr, autoapprove = (
         oauth_stack.oauth,
         oauth_stack.dcr,
@@ -747,6 +763,120 @@ async def test_ha_auth_refresh_with_redirect_translates_presented_origin(
     assert response.status == 200
     forwarded = relay_session.post.call_args.kwargs["data"]
     assert forwarded["client_id"] == ("https://oauth-redirect.googleusercontent.com")
+
+
+def _core_relay_session(body: bytes, status: int = 200):
+    """A relay session whose core /auth/token answer is ``body``/``status``."""
+    core_response = SimpleNamespace(
+        status=status,
+        content_type="application/json",
+        read=AsyncMock(return_value=body),
+    )
+
+    class _CoreRequest:
+        async def __aenter__(self):
+            return core_response
+
+        async def __aexit__(self, *_args):
+            return False
+
+    return SimpleNamespace(post=MagicMock(return_value=_CoreRequest()))
+
+
+def test_refresh_envelope_round_trips_and_is_disjoint_from_the_dcr_blob(oauth_stack):
+    """#2248: the envelope survives a round trip and never crosses the blob.
+
+    Both are HMAC-signed under the DCR key; the envelope's MAC covers its
+    prefix and the blob's does not, so neither verifies as the other.
+    """
+    dcr, indirect = oauth_stack.dcr, oauth_stack.indirect
+    client_id = dcr.mint_client_id(KEY, ["http://127.0.0.1/callback"])
+    envelope = indirect.wrap_refresh_token(
+        KEY, "core-refresh", "http://127.0.0.1:54321", client_id
+    )
+
+    assert indirect.unwrap_refresh_token(KEY, envelope, client_id) == (
+        "core-refresh",
+        "http://127.0.0.1:54321",
+    )
+    assert indirect.unwrap_refresh_token(KEY, envelope, "other-client") is None
+    assert indirect.unwrap_refresh_token(KEY, client_id, client_id) is None
+    assert dcr.client_redirect_uris(KEY, envelope) is None
+
+
+async def test_ha_auth_code_leg_wraps_the_core_refresh_token(oauth_stack, monkeypatch):
+    """A loopback client's code exchange comes back with a wrapped token."""
+    oauth, dcr, indirect, autoapprove = (
+        oauth_stack.oauth,
+        oauth_stack.dcr,
+        oauth_stack.indirect,
+        oauth_stack.autoapprove,
+    )
+    client_id = dcr.mint_client_id(KEY, ["http://127.0.0.1/callback"])
+    relay_session = _core_relay_session(
+        b'{"access_token":"core","refresh_token":"core-refresh"}'
+    )
+    hass = _hass(oauth, oauth.MODE_HA_AUTH)
+    hass.data[oauth.DOMAIN]["session"] = relay_session
+    monkeypatch.setattr(
+        indirect, "core_token_base_url", lambda _hass: "https://core.example"
+    )
+
+    response = await autoapprove.AutoApproveTokenView(hass).post(
+        _oauth_request(
+            form={
+                "grant_type": "authorization_code",
+                "code": "code-1",
+                "client_id": client_id,
+                "redirect_uri": "http://127.0.0.1:54321/callback",
+            }
+        )
+    )
+
+    assert response.status == 200
+    body = json.loads(response.body)
+    assert body["access_token"] == "core"
+    assert indirect.unwrap_refresh_token(KEY, body["refresh_token"], client_id) == (
+        "core-refresh",
+        "http://127.0.0.1:54321",
+    )
+
+
+async def test_ha_auth_refresh_envelope_restores_core_token_and_identity(
+    oauth_stack, monkeypatch
+):
+    """A redirect-less loopback refresh proxies with the envelope's pair."""
+    oauth, dcr, indirect, autoapprove = (
+        oauth_stack.oauth,
+        oauth_stack.dcr,
+        oauth_stack.indirect,
+        oauth_stack.autoapprove,
+    )
+    client_id = dcr.mint_client_id(KEY, ["http://127.0.0.1/callback"])
+    envelope = indirect.wrap_refresh_token(
+        KEY, "core-refresh", "http://127.0.0.1:54321", client_id
+    )
+    relay_session = _core_relay_session(b'{"access_token":"core"}')
+    hass = _hass(oauth, oauth.MODE_HA_AUTH)
+    hass.data[oauth.DOMAIN]["session"] = relay_session
+    monkeypatch.setattr(
+        indirect, "core_token_base_url", lambda _hass: "https://core.example"
+    )
+
+    response = await autoapprove.AutoApproveTokenView(hass).post(
+        _oauth_request(
+            form={
+                "grant_type": "refresh_token",
+                "refresh_token": envelope,
+                "client_id": client_id,
+            }
+        )
+    )
+
+    assert response.status == 200
+    forwarded = relay_session.post.call_args.kwargs["data"]
+    assert forwarded["client_id"] == "http://127.0.0.1:54321"
+    assert forwarded["refresh_token"] == "core-refresh"
 
 
 async def test_fast_path_passes_through_malformed_port_client_id(oauth_stack):

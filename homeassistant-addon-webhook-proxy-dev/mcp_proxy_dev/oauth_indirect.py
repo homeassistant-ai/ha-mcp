@@ -8,9 +8,9 @@ client identities into the same-origin form accepted by core.
 MIRROR: this module is the near-verbatim twin of
 ``custom_components/ha_mcp_tools/oauth_ha_auth.py``. Keep behavioural changes
 on the two sides in step. This pair has exactly ONE intended delta and it is
-not behavioural: the loopback and redirect-shape helpers are imported from
-``oauth.py`` here and from ``oauth_legacy.py`` in the component. Those two
-definitions are equivalent today, ``_LOOPBACK_HOSTNAMES`` and
+not behavioural: the loopback, redirect-shape, and base64url helpers are
+imported from ``oauth.py`` here and from ``oauth_legacy.py`` in the component.
+Those definitions are equivalent today, ``_LOOPBACK_HOSTNAMES`` and
 ``_AUTHORITY_CHARS_RE`` included — named here so it is noticed if that ever
 stops being true. Everything else that differs is drift, including the deltas
 the sibling ``oauth_dcr.py`` pair legitimately carries (the
@@ -20,11 +20,20 @@ either file of THIS pair.
 CIMD fetches are HTTPS-only, redirect-free, size- and time-bounded, and pinned
 to prevalidated globally routable DNS answers. Invalid identities pass through
 unchanged so Home Assistant remains the final authority.
+
+Core binds a refresh token to the client_id the code leg presented, and a
+redirect_uri-less refresh grant carries nothing that re-derives it. So the
+identity is recorded at mint time: every server-side-forwarded 200 has its
+``refresh_token`` replaced by a signed envelope naming that client_id, and the
+refresh leg unwraps it back into the exact pair (#2248).
 """
 
 from __future__ import annotations
 
 import asyncio
+import binascii
+import hashlib
+import hmac
 import ipaddress
 import json
 import logging
@@ -36,7 +45,12 @@ from urllib.parse import ParseResult, urlparse, urlunparse
 import aiohttp
 from homeassistant.core import HomeAssistant
 
-from .oauth import _is_loopback_host, _is_valid_redirect_uri
+from .oauth import (
+    _b64url_decode,
+    _b64url_encode,
+    _is_loopback_host,
+    _is_valid_redirect_uri,
+)
 from .oauth_dcr import (
     _refresh_identity_is_reproducible,
     canonical_origin_url,
@@ -181,7 +195,12 @@ def redirect_matches(registered: list[str], redirect_uri: str) -> bool:
 
 
 def stable_translation_origin(registered: list[str]) -> str | None:
-    """Return the one web origin shared by every non-loopback redirect."""
+    """Return the one web origin shared by every non-loopback redirect.
+
+    Loopback redirects are excluded (their runtime origin embeds an ephemeral
+    port), so this now serves only refresh tokens minted before the signed
+    envelope shipped (#2248).
+    """
     origins: set[str] = set()
     for uri in registered:
         parsed = urlparse(uri)
@@ -351,8 +370,118 @@ async def resolve_forward_client_id(
     return client_id
 
 
+# Refresh-token envelope (#2248). Same shape as the DCR blob — prefix +
+# b64url(compact JSON) + "." + b64url(HMAC-SHA256) under the DCR key — but the
+# MAC covers the PREFIX too, where the DCR blob signs the bare body. That makes
+# the two families cryptographically disjoint: an envelope can never verify as
+# a client_id registration, nor a client_id as a refresh token.
+_REFRESH_ENVELOPE_PREFIX = "hamcp-rt-"
+
+
+def _presented_client_hash(client_id: str) -> str:
+    """Digest of the client_id an envelope was minted for."""
+    return _b64url_encode(hashlib.sha256(client_id.encode("utf-8")).digest())
+
+
+def wrap_refresh_token(
+    signing_key: bytes,
+    core_refresh_token: str,
+    forward_client_id: str,
+    presented_client_id: str,
+) -> str:
+    """Wrap core's refresh token with the identity core bound it to.
+
+    The presenter digest binds the envelope to the client_id presented
+    alongside it, so it is not usable under another client's identity.
+    """
+    payload = {
+        "v": 1,
+        "t": core_refresh_token,
+        "c": forward_client_id,
+        "p": _presented_client_hash(presented_client_id),
+    }
+    body = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
+    signature = hmac.new(
+        signing_key,
+        f"{_REFRESH_ENVELOPE_PREFIX}{body}".encode("ascii"),
+        hashlib.sha256,
+    ).digest()
+    return f"{_REFRESH_ENVELOPE_PREFIX}{body}.{_b64url_encode(signature)}"
+
+
+def unwrap_refresh_token(
+    signing_key: bytes, token: str, presented_client_id: str
+) -> tuple[str, str] | None:
+    """Recover ``(core refresh token, forward client_id)``, or None.
+
+    None for anything that is not an intact envelope minted for THIS presenter
+    — a pre-#2248 core token, a tampered signature, a DCR blob, or garbage.
+    Never raises: this runs on an anonymous view.
+    """
+    if not token.startswith(_REFRESH_ENVELOPE_PREFIX):
+        return None
+    blob = token[len(_REFRESH_ENVELOPE_PREFIX) :]
+    body, separator, signature = blob.rpartition(".")
+    if not separator or not body:
+        return None
+    try:
+        expected = hmac.new(
+            signing_key,
+            f"{_REFRESH_ENVELOPE_PREFIX}{body}".encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        if not hmac.compare_digest(_b64url_decode(signature), expected):
+            return None
+        payload = json.loads(_b64url_decode(body))
+    except (ValueError, binascii.Error, UnicodeEncodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("v") != 1:
+        return None
+    core_refresh_token = payload.get("t")
+    forward_client_id = payload.get("c")
+    presenter = payload.get("p")
+    if not (
+        isinstance(core_refresh_token, str)
+        and isinstance(forward_client_id, str)
+        and isinstance(presenter, str)
+    ):
+        return None
+    if not hmac.compare_digest(presenter, _presented_client_hash(presented_client_id)):
+        return None
+    return core_refresh_token, forward_client_id
+
+
+def rewrite_token_response_body(
+    signing_key: bytes, body: bytes, forward_client_id: str, presented_client_id: str
+) -> bytes:
+    """Replace a core token response's ``refresh_token`` with an envelope.
+
+    Returned unchanged when there is no string ``refresh_token`` to wrap.
+    Applied to EVERY forwarded 200, not just the code leg, so a core that
+    starts rotating refresh tokens stays covered.
+    """
+    try:
+        parsed = json.loads(body)
+    except (ValueError, RecursionError):
+        return body
+    if not isinstance(parsed, dict):
+        return body
+    core_refresh_token = parsed.get("refresh_token")
+    if not isinstance(core_refresh_token, str):
+        return body
+    parsed["refresh_token"] = wrap_refresh_token(
+        signing_key, core_refresh_token, forward_client_id, presented_client_id
+    )
+    return json.dumps(parsed, separators=(",", ":")).encode()
+
+
 class RefreshDisposition(Enum):
-    """Refresh identities that have no translated origin string."""
+    """Refresh identities that have no translated origin string.
+
+    Reachable only for refresh tokens minted before the signed envelope
+    shipped (#2248): an envelope names the identity outright. One re-authorize
+    migrates such a session to an envelope-carrying token.
+    """
 
     PASSTHROUGH = "passthrough"
     UNREPRODUCIBLE = "unreproducible"
@@ -363,7 +492,11 @@ async def translated_client_id_for_refresh(
     dcr_key: bytes | None,
     client_id: str,
 ) -> str | RefreshDisposition:
-    """Return a refresh identity, passthrough, or unreproducible disposition."""
+    """Return a PRE-ENVELOPE refresh identity, passthrough, or unreproducible.
+
+    Reached only when the presented refresh token is not a signed envelope
+    (:func:`unwrap_refresh_token`) — minted before #2248, or tampered with.
+    """
     registered: list[str] | None = None
     if dcr_key is not None:
         registered = client_redirect_uris(dcr_key, client_id)

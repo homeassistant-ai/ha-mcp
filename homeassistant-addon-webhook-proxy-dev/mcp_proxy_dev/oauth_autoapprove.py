@@ -34,7 +34,7 @@ secret-URL trust model.
 from __future__ import annotations
 
 import secrets
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 from aiohttp import web
@@ -60,6 +60,9 @@ from .oauth import (
     handle_legacy_token_post,
     read_form,
 )
+
+if TYPE_CHECKING:
+    from multidict import MultiDict
 
 # Dedicated session for anonymous CIMD lookups. Keeping it separate prevents a
 # slow public metadata host from consuming the authenticated relay pool.
@@ -361,6 +364,11 @@ class AutoApproveTokenView(HomeAssistantView):
     proof required. The returned access token is cosmetic (none mode ignores
     bearers), but real and opaque. Only the ``authorization_code`` grant is
     supported — none mode has no refresh cycle.
+
+    ha_auth's forwarded 200s carry a REWRITTEN ``refresh_token`` (#2248): a
+    signed envelope naming the client_id core bound the grant to, which the
+    refresh leg unwraps back into core's own token. That is what keeps
+    loopback-callback and multi-origin clients refreshable.
     """
 
     requires_auth = False
@@ -425,51 +433,26 @@ class AutoApproveTokenView(HomeAssistantView):
     async def _ha_auth_token(
         self, data: dict[str, Any], request: web.Request
     ) -> web.Response:
-        """Redirect unchanged grants to core or proxy translated identities."""
+        """Redirect unchanged grants to core or proxy translated identities.
+
+        Every proxied 200 comes back with its ``refresh_token`` wrapped in the
+        signed envelope that makes the next refresh resolvable (#2248).
+        """
         from multidict import MultiDict
 
         from .oauth_dcr import CFG_DCR_SIGNING_KEY
-        from .oauth_indirect import (
-            RefreshDisposition,
-            core_token_base_url,
-            resolve_forward_client_id,
-            translated_client_id_for_refresh,
-        )
 
         raw_form = await read_form(request)
         if raw_form is None:
             return _json_error("invalid_request", 400)
         form = MultiDict(raw_form)
-        grant_type = str(form.get("grant_type", ""))
+        dcr_key = data.get(CFG_DCR_SIGNING_KEY)
         client_id = str(form.get("client_id", ""))
-        redirect_uri = str(form.get("redirect_uri", ""))
-        forward_id = client_id
-        if client_id:
-            if grant_type == "refresh_token" and not redirect_uri:
-                translated = await translated_client_id_for_refresh(
-                    data.get(CFG_CIMD_SESSION),
-                    data.get(CFG_DCR_SIGNING_KEY),
-                    client_id,
-                )
-                if translated is RefreshDisposition.UNREPRODUCIBLE:
-                    return _json_error(
-                        "invalid_grant",
-                        400,
-                        "re-authorize: this client's registration has no "
-                        "single reproducible web origin, so a refresh "
-                        "without redirect_uri is unavailable",
-                    )
-                if translated is not RefreshDisposition.PASSTHROUGH:
-                    forward_id = translated
-            else:
-                forward_id = await resolve_forward_client_id(
-                    data.get(CFG_CIMD_SESSION),
-                    data.get(CFG_DCR_SIGNING_KEY),
-                    client_id,
-                    redirect_uri,
-                )
-
-        if forward_id == client_id:
+        resolved = await self._ha_auth_forward_identity(data, form, dcr_key)
+        if isinstance(resolved, web.Response):
+            return resolved
+        forward_id, proxy_required = resolved
+        if forward_id == client_id and not proxy_required:
             return web.Response(
                 status=307,
                 headers={"Location": "/auth/token", "Cache-Control": "no-store"},
@@ -477,6 +460,90 @@ class AutoApproveTokenView(HomeAssistantView):
 
         form.popall("client_id", None)
         form["client_id"] = forward_id
+        return await self._proxy_token_to_core(
+            data, form, forward_id, client_id, dcr_key
+        )
+
+    async def _ha_auth_forward_identity(
+        self, data: dict[str, Any], form: MultiDict, dcr_key: bytes | None
+    ) -> tuple[str, bool] | web.Response:
+        """The client_id to present to core, plus whether proxying is forced.
+
+        Returns a ready ``web.Response`` when the grant must be answered
+        locally. Mutates ``form`` in the envelope case: the wire value of
+        ``refresh_token`` is our envelope, and core must receive its own token.
+
+        Envelope first (#2248) — a wrapped token names the client_id core bound
+        it to, so the identity is READ rather than re-derived, and the exchange
+        must be proxied (a 307 would hand core an envelope it cannot redeem).
+        Everything else keeps the pre-#2248 behavior.
+        """
+        from .oauth_indirect import (
+            RefreshDisposition,
+            resolve_forward_client_id,
+            translated_client_id_for_refresh,
+            unwrap_refresh_token,
+        )
+
+        grant_type = str(form.get("grant_type", ""))
+        client_id = str(form.get("client_id", ""))
+        redirect_uri = str(form.get("redirect_uri", ""))
+        if grant_type == "refresh_token" and dcr_key is not None:
+            envelope = unwrap_refresh_token(
+                dcr_key, str(form.get("refresh_token", "")), client_id
+            )
+            if envelope is not None:
+                core_refresh_token, forward_id = envelope
+                form.popall("refresh_token", None)
+                form["refresh_token"] = core_refresh_token
+                return forward_id, True
+        if not client_id:
+            return client_id, False
+        if grant_type == "refresh_token" and not redirect_uri:
+            # A pre-#2248 refresh token (or a tampered envelope): the identity
+            # was never recorded, so re-derive it from the registered list.
+            translated = await translated_client_id_for_refresh(
+                data.get(CFG_CIMD_SESSION),
+                dcr_key,
+                client_id,
+            )
+            if translated is RefreshDisposition.UNREPRODUCIBLE:
+                return _json_error(
+                    "invalid_grant",
+                    400,
+                    "re-authorize once: this refresh token predates the "
+                    "signed identity envelope and its client's registration "
+                    "names no single reproducible web origin, so "
+                    "re-authorizing is what makes the session refreshable",
+                )
+            if translated is RefreshDisposition.PASSTHROUGH:
+                return client_id, False
+            return translated, False
+        forward_id = await resolve_forward_client_id(
+            data.get(CFG_CIMD_SESSION),
+            dcr_key,
+            client_id,
+            redirect_uri,
+        )
+        return forward_id, False
+
+    async def _proxy_token_to_core(
+        self,
+        data: dict[str, Any],
+        form: MultiDict,
+        forward_id: str,
+        client_id: str,
+        dcr_key: bytes | None,
+    ) -> web.Response:
+        """POST the rewritten token form to core and relay its response.
+
+        A 200 has its ``refresh_token`` wrapped before it leaves (#2248) so the
+        client's next refresh carries the identity core bound this grant to.
+        Every other status — and a body with nothing to wrap — is relayed
+        byte-for-byte.
+        """
+        from .oauth_indirect import core_token_base_url, rewrite_token_response_body
+
         session = data.get("session")
         if session is None:
             return _json_error("temporarily_unavailable", 503)
@@ -488,6 +555,10 @@ class AutoApproveTokenView(HomeAssistantView):
                 timeout=aiohttp.ClientTimeout(total=25),
             ) as response:
                 body = await response.read()
+                if response.status == 200 and dcr_key is not None:
+                    body = rewrite_token_response_body(
+                        dcr_key, body, forward_id, client_id
+                    )
                 return web.Response(
                     status=response.status,
                     body=body,
