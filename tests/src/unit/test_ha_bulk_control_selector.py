@@ -825,6 +825,27 @@ async def test_selector_only_action_example_never_duplicates_the_key() -> None:
 
 
 @pytest.mark.asyncio
+async def test_selector_only_parameter_example_uses_a_correctly_typed_sample() -> None:
+    """The worked example's placeholder value must match the offending
+    field's real type -- a bare ``"..."`` string, rendered inside a Python
+    dict literal, is always shown quoted regardless of what type the field
+    actually is. For ``timeout_seconds`` (a ``float``) that taught the
+    model to copy a string where a number belongs.
+    """
+    tools = ServiceTools(MagicMock(), MagicMock())
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_bulk_control(
+            operations=[{"entity_id": "light.one", "action": "off"}],
+            timeout_seconds=5.0,
+        )
+
+    message = json.loads(str(exc_info.value))["error"]["message"]
+    assert "'timeout_seconds': 5" in message, message
+    assert "'timeout_seconds': '...'" not in message, message
+
+
+@pytest.mark.asyncio
 async def test_selector_mode_requires_action() -> None:
     """Selector mode with no ``action`` must fail before any registry read,
     naming ``action`` as the missing parameter -- not fall through to

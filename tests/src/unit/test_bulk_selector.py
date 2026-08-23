@@ -1191,6 +1191,60 @@ async def test_resolution_parameters_survive_caller_mutating_its_own_dict() -> N
 
 
 @pytest.mark.asyncio
+async def test_parameters_copies_are_genuinely_deep_not_shallow() -> None:
+    """Both ``parameters`` copies (the resolution's own stored copy, and
+    each dispatch row's own copy) must be deep, not a shallow ``dict(...)``
+    that only stops top-level key REBINDING while still sharing nested
+    mutable values (e.g. an ``rgb_color`` list) by reference.
+
+    ``test_resolution_parameters_survive_caller_mutating_its_own_dict``
+    above only reassigns a top-level scalar key after the call, which a
+    shallow ``dict(...)`` copy already protects against -- it would keep
+    passing even if either ``copy.deepcopy`` call were reverted. This
+    mutates a NESTED list value instead, at both call sites a caller could
+    plausibly touch:
+
+    1. The caller's own dict, after ``resolve_bulk_selector`` returns --
+       pins the resolution-level store-site copy.
+    2. One already-returned dispatch row, then re-reads ``.operations``
+       fresh -- pins the per-row copy. Both rows trace back to the SAME
+       ``_operation_common["parameters"]`` object via ``**`` spread before
+       their own copy is made, so a shallow per-row copy would let row A's
+       mutation corrupt that shared source and leak into a fresh read of
+       row B.
+    """
+    client = SelectorClient(
+        states=[_state("light.a"), _state("light.b")],
+        entities=[
+            {"entity_id": "light.a", "area_id": "salon"},
+            {"entity_id": "light.b", "area_id": "salon"},
+        ],
+    )
+    caller_parameters = {"rgb_color": [255, 0, 0]}
+
+    result = await resolve_bulk_selector(
+        client,
+        {"domain": "light", "area_ids": ["salon"]},
+        action="on",
+        parameters=caller_parameters,
+        timeout_seconds=None,
+        validate_first=True,
+    )
+    assert len(result.operations) == 2, "test needs 2+ rows to prove no cross-row leak"
+
+    # 1. External mutation, after the call, must never reach the stored copy.
+    caller_parameters["rgb_color"][0] = 111
+    for row in result.operations:
+        assert row["parameters"]["rgb_color"] == [255, 0, 0]
+
+    # 2. Mutating one already-returned row must not corrupt the shared
+    # source a FRESH `.operations` read (a new property call) derives from.
+    result.operations[0]["parameters"]["rgb_color"][0] = -1
+    for row in result.operations:  # freshly recomputed, not the mutated list
+        assert row["parameters"]["rgb_color"] == [255, 0, 0]
+
+
+@pytest.mark.asyncio
 async def test_resolution_equality_is_action_sensitive() -> None:
     """Two resolutions over the identical entity set but OPPOSITE actions
     must not compare equal.

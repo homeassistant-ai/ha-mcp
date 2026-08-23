@@ -12,6 +12,7 @@ from typing import Annotated, Any, NamedTuple, NotRequired, TypedDict
 
 from pydantic import ConfigDict, Field
 
+from ..client.rest_client import HomeAssistantClient
 from ..utils.domain_handlers import get_domain_handler
 from ..utils.entity_membership import normalize_member_entity_ids
 from ..visibility.resolver import VisibilityDataUnavailable, load_hidden_set
@@ -414,7 +415,7 @@ def _validate_selector(selector: Mapping[str, Any], action: str) -> _ValidatedSe
 # ACTUAL registry that failed ("the device registry fetch failed") instead
 # of a generic "a topology fetch failed" that gives an operator nothing to
 # search HA's own logs for.
-async def _load_topology(client: Any) -> _Topology:
+async def _load_topology(client: HomeAssistantClient) -> _Topology:
     """Load the HA state and registry views used by one resolution.
 
     ``return_exceptions=True`` plus an explicit re-raise guard, mirroring
@@ -643,7 +644,7 @@ async def _load_hidden_entities(
 
 
 async def resolve_bulk_selector(
-    client: Any,
+    client: HomeAssistantClient,
     selector: Mapping[str, Any],
     *,
     action: str,

@@ -14,6 +14,7 @@ from fastmcp.tools import tool
 from pydantic import ConfigDict, Field, SkipValidation, TypeAdapter, ValidationError
 
 from ..client.rest_client import (
+    HomeAssistantClient,
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
@@ -312,7 +313,7 @@ def _find_group_member_conflicts(
 
 
 async def _reject_operations_group_member_conflicts(
-    client: Any, operations: list[Any]
+    client: HomeAssistantClient, operations: list[Any]
 ) -> None:
     """Fail closed when an operations-mode batch targets a group/aggregate
     entity together with one or more of its own members.
@@ -464,6 +465,18 @@ _PER_ROW_SELECTOR_ONLY_PARAMETERS = frozenset(
     {"action", "parameters", "timeout_seconds", "validate_first"}
 )
 
+# One representative, correctly-typed sample value per per-row parameter,
+# for the worked example below. A bare "..." placeholder rendered inside a
+# Python dict literal is always a quoted STRING regardless of the field's
+# real type -- for timeout_seconds (a float) that example teaches the
+# model the wrong shape for the exact value it is being told to copy.
+_PER_ROW_PARAMETER_EXAMPLE_VALUES: dict[str, Any] = {
+    "action": "on",
+    "parameters": {"brightness_pct": 30},
+    "timeout_seconds": 5,
+    "validate_first": True,
+}
+
 
 def _selector_only_parameter_message(offending_parameter: str) -> str:
     """Build the remedy for one selector-only parameter used in operations mode.
@@ -483,7 +496,9 @@ def _selector_only_parameter_message(offending_parameter: str) -> str:
         example_row: dict[str, Any] = {"entity_id": "light.kitchen"}
         if offending_parameter != "action":
             example_row["action"] = "on"
-        example_row[offending_parameter] = "..."
+        example_row[offending_parameter] = _PER_ROW_PARAMETER_EXAMPLE_VALUES[
+            offending_parameter
+        ]
         return (
             f"'{offending_parameter}' is a per-operation field in operations "
             f"mode (see BulkControlOperation), not a top-level tool argument "
@@ -746,7 +761,7 @@ def _build_service_suggestions(
 class ServiceTools:
     """Service call and device operation tools for Home Assistant."""
 
-    def __init__(self, client: Any, device_tools: Any) -> None:
+    def __init__(self, client: HomeAssistantClient, device_tools: Any) -> None:
         self._client = client
         self._device_tools = device_tools
 
@@ -910,7 +925,20 @@ class ServiceTools:
         return response
 
     async def _capture_initial_state(self, entity_id: str | None) -> str | None:
-        """Capture the current state of an entity before a service call."""
+        """Capture the current state of an entity before a service call.
+
+        ``entity_id`` stays optional in the signature to match the caller's
+        own ``str | None`` (a service call may target zero entities); the
+        one current call site only reaches this when ``should_wait`` (which
+        embeds an ``entity_id is not None`` check among several AND-ed
+        conditions) is true, so ``entity_id`` is always real there in
+        practice -- but that invariant lives in a boolean a few lines away,
+        not in a form the type checker can see through. Narrowing here
+        instead of trusting the caller keeps ``get_entity_state`` (which
+        genuinely requires a ``str``) honestly typed.
+        """
+        if entity_id is None:
+            return None
         try:
             state_data = await self._client.get_entity_state(entity_id)
             return state_data.get("state") if state_data else None
@@ -2271,7 +2299,9 @@ class ServiceTools:
         }
 
 
-def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+def register_service_tools(
+    mcp: Any, client: HomeAssistantClient, **kwargs: Any
+) -> None:
     """Register service call and operation monitoring tools with the MCP server."""
     device_tools = kwargs.get("device_tools")
     if not device_tools:
