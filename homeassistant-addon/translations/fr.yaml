@@ -30,25 +30,26 @@ configuration:
       '
   enable_tool_search:
     name: Activer la recherche d'outils
-    description: 'Remplace le catalogue complet d''outils par une découverte basée
-      sur la recherche. Réduit le contexte inactif d''environ 90 %, à près de 5K tokens.
-      ⚠️ N''activez PAS ceci dans les clients qui ont leur propre recherche d''outils
-      intégrée / outils différés (claude.ai, Claude Desktop, Claude Code) — les deux
-      couches de recherche entrent en conflit, et la recherche d''outils intégrée
-      du client y est le meilleur choix ; laissez ceci désactivé. Le report des outils
-      dépend de la combinaison client/modèle : utilisez ceci lorsque votre configuration
-      charge le catalogue complet d''emblée — modèles sans outils différés natifs
-      (p. ex. Gemini, modèles locaux compatibles OpenAI, Claude Haiku), clients qui
-      intègrent tous les schémas d''outils quel que soit le modèle (p. ex. GitHub
-      Copilot CLI), ou fenêtres de contexte plus petites. Certains modèles Codex et
-      ChatGPT incluent aussi des outils différés — vérifiez directement auprès de
-      votre client/modèle quelles fonctionnalités il possède pour ne pas laisser ceci
-      activé inutilement. Les outils sont trouvés via ha_search_tools et exécutés
-      via des proxys catégorisés (lecture/écriture/suppression). Nécessite un redémarrage
-      pour prendre effet. Reconnectez ou actualisez ensuite le serveur MCP dans votre
-      client IA pour qu''il recharge la liste des outils. Un redémarrage de l''add-on
-      seul n''actualise PAS la liste d''outils mise en cache d''un client ; ceci s''applique
-      après chaque changement de paramètre ici.'
+    description: 'Remplacer le catalogue complet d''outils par une découverte basée
+      sur la recherche. Réduit le contexte inactif d''environ 90 %, à environ 5K jetons.
+      ⚠️ N''activez PAS cette option dans les clients disposant de leur propre recherche
+      d''outils intégrée / d''outils différés (claude.ai, Claude Desktop, Claude Code)
+      — les deux couches de recherche entrent en conflit, et la recherche d''outils
+      intégrée du client constitue le meilleur choix dans ce cas ; laissez cette option
+      désactivée. Le fait que les outils soient différés dépend de votre association
+      client et modèle : utilisez cette option lorsque votre configuration charge
+      le catalogue complet au départ — modèles sans outils différés natifs (par ex.
+      Gemini, modèles locaux compatibles OpenAI, Claude Haiku), clients qui intègrent
+      tous les schémas d''outils quel que soit le modèle (par ex. GitHub Copilot CLI),
+      ou fenêtres de contexte plus petites. Certains modèles Codex et ChatGPT incluent
+      également des outils différés — vérifiez directement votre client/modèle pour
+      confirmer ses fonctionnalités afin de ne pas laisser cette option activée inutilement.
+      Les outils sont trouvés via ha_search_tools et exécutés via des proxys catégorisés
+      (lecture/écriture/suppression). Nécessite un redémarrage de l''application (add-on)
+      pour prendre effet — puis reconnectez ou actualisez le serveur MCP dans votre
+      client IA afin qu''il recharge la liste des outils. Le seul redémarrage de l''application
+      (add-on) ne met PAS à jour la liste des outils mise en cache par un client ;
+      cela s''applique après la modification de n''importe quel paramètre ici.'
   tool_search_max_results:
     name: Résultats max. de la recherche d'outils
     description: 'Nombre maximum d''outils renvoyés par ha_search_tools lorsque la
@@ -78,22 +79,22 @@ configuration:
   read_only_mode:
     name: Mode lecture seule
     description: Désactive tous les outils d'écriture et supprime la capacité des
-      outils à effectuer des appels d'écriture ou destructeurs. Les outils mixtes
-      lecture/écriture (sauvegardes, add-ons, préférences énergétiques, pipelines
-      vocaux et mode code lorsqu'il est activé) restent disponibles avec leurs opérations
-      d'écriture bloquées. Même bouton que l'onglet Outils de l'interface Web. Désactivé
-      par défaut. Nécessite un redémarrage pour prendre effet.
+      outils d'effectuer des appels d'écriture ou destructifs. Les outils mixtes lecture/écriture
+      — sauvegardes, applications (add-ons), préférences énergétiques, pipelines vocaux
+      et mode code lorsqu'il est activé — restent disponibles avec leurs opérations
+      d'écriture bloquées. Même interrupteur que l'onglet Outils de l'interface Web.
+      Désactivé par défaut. Nécessite un redémarrage pour prendre effet.
   redact_secrets:
     name: Masquer les secrets
     description: Masque les secrets des réponses des outils avant qu'ils n'atteignent
-      l'assistant IA. Les options d'add-on et les champs d'intégration marqués comme
-      mots de passe sont remplacés par un marqueur défini/vide (afin que la question
-      « cette information d'identification est-elle configurée ? » reste répondable),
-      et les autres réponses des outils sont nettoyées des valeurs secrètes que le
-      serveur a déjà vues (les valeurs de moins de 6 caractères sont ignorées, car
-      le remplacement de petits fragments corromprait la sortie non liée). Les champs
-      non marqués comme mots de passe par leur schéma ne peuvent pas être détectés.
-      Désactivé par défaut.
+      l'assistant IA. Les options de l'application (add-on) et les champs d'intégration
+      marqués comme des mots de passe sont remplacés par un marqueur défini/vide (afin
+      que la question "ce secret est-il configuré ?" puisse toujours recevoir une
+      réponse), et les autres réponses des outils sont nettoyées des valeurs secrètes
+      déjà vues par le serveur (les valeurs de moins de 6 caractères sont ignorées,
+      car le remplacement de minuscules fragments corromprait des sorties sans rapport).
+      Les champs non marqués comme mots de passe par leur schéma ne peuvent pas être
+      détectés. Désactivé par défaut.
   enable_mandatory_bps:
     name: Attacher les compétences de bonnes pratiques aux écritures
     description: 'Interrupteur principal pour la fonction de livraison de contenu
@@ -182,10 +183,10 @@ configuration:
       récent et de la sauvegarde planifiée s'appliquent toujours). Par défaut 7.
   verify_ssl:
     name: Vérifier le certificat TLS
-    description: Vérifie le certificat TLS du serveur Home Assistant. L'add-on se
-      connecte via le proxy Supervisor, donc cela n'a normalement aucun effet et doit
-      rester activé. Désactivez uniquement si vous avez reconfiguré l'add-on pour
-      communiquer avec HA via un nom d'hôte HTTPS public avec un certificat auto-signé
-      ou une discordance de nom d'hôte. Désactiver affaiblit la sécurité du transport
-      — laissez activé sauf si vous savez que vous en avez besoin. Nécessite un redémarrage
-      pour prendre effet.
+    description: Vérifier le certificat TLS du serveur Home Assistant. L'application
+      (add-on) se connecte via le proxy du Supervisor, cela n'a donc normalement aucun
+      effet et doit rester activé. Désactivez uniquement si vous avez reconfiguré
+      l'application (add-on) pour communiquer avec HA via un nom d'hôte HTTPS public
+      avec un certificat auto-signé ou une non-correspondance de nom d'hôte. La désactivation
+      affaiblit la sécurité du transport — laissez activé sauf si vous savez que vous
+      en avez besoin. Nécessite un redémarrage pour prendre effet.

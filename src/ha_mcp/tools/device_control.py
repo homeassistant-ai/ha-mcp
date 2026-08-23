@@ -8,6 +8,7 @@ and async operation verification through WebSocket monitoring.
 import asyncio
 import json
 import logging
+import math
 import time
 from typing import Any, ClassVar
 
@@ -41,9 +42,22 @@ from .helpers import (
     safe_info,
     safe_progress,
 )
+from .tools_service import BulkControlOperation
 from .util_helpers import _SERVICE_TO_STATE
 
 logger = logging.getLogger(__name__)
+
+# The bulk row contract is declared once, on the advertised transport schema.
+# Reading its keys back here keeps the runtime batch validator from drifting
+# out of sync with what models are told they may send.
+_BULK_OPERATION_KEYS: frozenset[str] = frozenset(BulkControlOperation.__annotations__)
+
+# The row shape models get wrong most often is a service-style row, so this
+# leads every suggestion list a rejected bulk batch produces.
+_BULK_ROW_SHAPE_SUGGESTION = (
+    "Use entity_id and action (e.g. action='off', not service='turn_off'); "
+    "send no domain or service keys and put action data in parameters"
+)
 
 # The ha_mcp_tools/bulk_call_service WS command (Phase 3, D5a): the BATCH write
 # capability. When the component advertises ``bulk_call_service`` the consumer
@@ -88,7 +102,7 @@ class DeviceControlTools:
         entity_id: str,
         action: str,
         parameters: dict[str, Any] | None = None,
-        timeout_seconds: int = 10,
+        timeout_seconds: float = 10,
         validate_first: bool = True,
     ) -> dict[str, Any]:
         """
@@ -346,8 +360,18 @@ class DeviceControlTools:
         "set": "set_temperature",
     }
 
+    # Silent allowlist: _add_domain_params copies only these keys into the
+    # service call and drops everything else without an error, and a domain
+    # absent from this table loses every parameter. Extend it when adding
+    # support for a new parameter, or the parameter vanishes at dispatch.
     _DOMAIN_PARAMS: ClassVar[dict[str, list[str]]] = {
-        "light": ["brightness", "color_temp_kelvin", "rgb_color", "effect"],
+        "light": [
+            "brightness",
+            "brightness_pct",
+            "color_temp_kelvin",
+            "rgb_color",
+            "effect",
+        ],
         "climate": ["temperature", "target_temp_high", "target_temp_low", "hvac_mode"],
         "cover": ["position", "tilt_position"],
         "media_player": ["volume_level", "media_content_id", "media_content_type"],
@@ -462,15 +486,15 @@ class DeviceControlTools:
         return expected if expected else None
 
     async def get_device_operation_status(
-        self, operation_id: str, timeout_seconds: int = 10
+        self, operation_id: str, timeout_seconds: float = 10
     ) -> dict[str, Any]:
         """Check status of a device operation, waiting up to ``timeout_seconds`` for completion.
 
         Polls the in-memory operation registry (mutated by the WebSocket
-        listener as state changes arrive) every 0.2s while the operation is
-        pending, up to ``timeout_seconds``. Returns the final structured status
-        — completed/failed/timeout/pending — produced by
-        ``control_device_smart``.
+        listener as state changes arrive) while the operation is pending, at
+        0.2s intervals except for a final shorter poll that lands exactly on
+        the deadline. Returns the final structured status —
+        completed/failed/timeout/pending — produced by ``control_device_smart``.
         """
         operation = get_operation_from_memory(operation_id)
 
@@ -495,9 +519,10 @@ class DeviceControlTools:
         if operation.status.value == "pending" and timeout_seconds > 0:
             deadline = time.monotonic() + timeout_seconds
             while operation.status.value == "pending":
-                if time.monotonic() >= deadline:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     break
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(min(0.2, remaining))
                 refreshed = get_operation_from_memory(operation_id)
                 if refreshed is None:
                     raise_tool_error(
@@ -597,21 +622,128 @@ class DeviceControlTools:
             }
 
     @staticmethod
+    def _normalize_bulk_parameters(
+        value: Any,
+    ) -> tuple[dict[str, Any] | None, ErrorCode | None, str]:
+        """Normalize a present ``parameters`` value and identify invalid ones.
+
+        Returns ``(parameters, error_code, detail)``. ``detail`` carries the
+        decoder's own reason and offset for a JSON failure — without it the
+        caller can only say "invalid JSON", which does not tell the sender
+        where its string went wrong. It is empty for every other outcome.
+        """
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError as exc:
+                return (
+                    None,
+                    ErrorCode.VALIDATION_INVALID_JSON,
+                    f"{exc.msg} at position {exc.pos}",
+                )
+            except RecursionError:
+                # json.loads recurses per nesting level; a pathologically
+                # nested string must skip the row, not abort the batch.
+                return (
+                    None,
+                    ErrorCode.VALIDATION_INVALID_JSON,
+                    "JSON nested too deeply",
+                )
+        if not isinstance(value, dict):
+            # A present-but-null value is malformed, same as timeout_seconds
+            # and validate_first; an absent key never reaches this helper.
+            return None, ErrorCode.VALIDATION_INVALID_PARAMETER, ""
+        return value, None, ""
+
+    @staticmethod
+    def _normalize_bulk_timeout(value: Any) -> float | None:
+        """Normalize a non-negative finite timeout, or ``None`` when invalid.
+
+        Bools are rejected before ``float()`` sees them: ``float(True)`` is 1.0,
+        which would silently accept ``timeout_seconds: true`` as a one-second
+        wait. Strings are rejected for the same reason — the advertised schema
+        is ``strict``, so coercing ``"10"`` here would silently accept what the
+        schema tells the model is invalid. ``None`` is invalid here too — the
+        caller only calls this when the key is present, and a present-but-null
+        timeout is a malformed row.
+        """
+        if isinstance(value, (bool, str)) or value is None:
+            return None
+        try:
+            timeout = float(value)
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: an int too large for float must skip the row,
+            # not abort the batch through the generic exception handler.
+            return None
+        return timeout if math.isfinite(timeout) and timeout >= 0 else None
+
+    @staticmethod
+    def _normalized_bulk_operation(
+        operation: dict[str, Any],
+        parameters: dict[str, Any] | None,
+        timeout: float | None,
+    ) -> dict[str, Any]:
+        """Return one normalized valid bulk operation."""
+        normalized = dict(operation)
+        if parameters is not None:
+            normalized["parameters"] = parameters
+        if timeout is not None:
+            normalized["timeout_seconds"] = timeout
+        return normalized
+
+    @staticmethod
+    def _skip_bulk_operation(
+        skipped_operations: list[dict[str, Any]],
+        op: Any,
+        code: ErrorCode,
+        error: str,
+        context: dict[str, Any],
+        suggestions: list[str] | None = None,
+    ) -> None:
+        """Log one rejected bulk row and record its structured skip entry.
+
+        ``create_error_response`` lifts every ``context`` key to the top level,
+        so ``index`` needs no separate write; ``operation`` is not a context
+        key and is attached here so callers can see the row they sent.
+        """
+        logger.warning(f"Bulk control: {error}")
+        err_response = create_error_response(
+            code, error, suggestions=suggestions, context=context
+        )
+        err_response["operation"] = op
+        skipped_operations.append(err_response)
+
+    @classmethod
     def _validate_bulk_operations(
-        operations: list[dict[str, Any]],
+        cls,
+        operations: list[Any],
         skipped_operations: list[dict[str, Any]],
     ) -> list[tuple[int, dict[str, Any], str, str]]:
         valid: list[tuple[int, dict[str, Any], str, str]] = []
         for i, op in enumerate(operations):
             if not isinstance(op, dict):
-                error = f"Operation at index {i} is not a dict: {type(op).__name__}"
-                logger.warning(f"Bulk control: {error}")
-                err_response = create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER, error, context={"index": i}
+                cls._skip_bulk_operation(
+                    skipped_operations,
+                    op,
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Operation at index {i} is not a dict: {type(op).__name__}",
+                    {"index": i},
                 )
-                err_response["index"] = i
-                err_response["operation"] = op
-                skipped_operations.append(err_response)
+                continue
+
+            # str() before sorting: a direct Python caller can pass non-string
+            # keys, and mixed key types make sorted()/join() raise mid-batch.
+            obsolete_keys = sorted(str(key) for key in set(op) - _BULK_OPERATION_KEYS)
+            if obsolete_keys:
+                key_list = ", ".join(obsolete_keys)
+                cls._skip_bulk_operation(
+                    skipped_operations,
+                    op,
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Operation at index {i} contains unsupported key(s): {key_list}",
+                    {"index": i, "unsupported_keys": obsolete_keys},
+                    suggestions=[_BULK_ROW_SHAPE_SUGGESTION],
+                )
                 continue
 
             entity_id = op.get("entity_id")
@@ -619,21 +751,80 @@ class DeviceControlTools:
             missing = [f for f in ("entity_id", "action") if not op.get(f)]
 
             if missing:
-                error = f"Operation at index {i} missing required fields: {', '.join(missing)}"
-                logger.warning(f"Bulk control: {error}")
-                err_response = create_error_response(
-                    ErrorCode.VALIDATION_MISSING_PARAMETER, error, context={"index": i}
+                cls._skip_bulk_operation(
+                    skipped_operations,
+                    op,
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    f"Operation at index {i} missing required fields: "
+                    f"{', '.join(missing)}",
+                    {"index": i},
                 )
-                err_response["index"] = i
-                err_response["operation"] = op
-                skipped_operations.append(err_response)
-            else:
-                valid.append((i, op, str(entity_id), str(action)))
+                continue
+
+            if not isinstance(entity_id, str) or not isinstance(action, str):
+                cls._skip_bulk_operation(
+                    skipped_operations,
+                    op,
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Operation at index {i} requires string entity_id and "
+                    "action fields",
+                    {"index": i},
+                )
+                continue
+
+            parameters, parameter_error, parameter_detail = (
+                cls._normalize_bulk_parameters(op["parameters"])
+                if "parameters" in op
+                else (None, None, "")
+            )
+            if parameter_error is not None:
+                parameter_message = (
+                    f"Operation at index {i} has invalid JSON parameters: "
+                    f"{parameter_detail}"
+                    if parameter_error == ErrorCode.VALIDATION_INVALID_JSON
+                    else f"Operation at index {i} parameters must be a JSON object"
+                )
+                cls._skip_bulk_operation(
+                    skipped_operations,
+                    op,
+                    parameter_error,
+                    parameter_message,
+                    {"index": i},
+                )
+                continue
+
+            timeout: float | None = None
+            if "timeout_seconds" in op:
+                timeout = cls._normalize_bulk_timeout(op["timeout_seconds"])
+                if timeout is None:
+                    cls._skip_bulk_operation(
+                        skipped_operations,
+                        op,
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Operation at index {i} timeout_seconds must be a "
+                        "non-negative number",
+                        {"index": i},
+                    )
+                    continue
+
+            if "validate_first" in op and not isinstance(op["validate_first"], bool):
+                cls._skip_bulk_operation(
+                    skipped_operations,
+                    op,
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Operation at index {i} validate_first must be a boolean",
+                    {"index": i},
+                )
+                continue
+
+            normalized_op = cls._normalized_bulk_operation(op, parameters, timeout)
+            valid.append((i, normalized_op, entity_id, action))
+
         return valid
 
     async def bulk_device_control(
         self,
-        operations: list[dict[str, Any]],
+        operations: list[Any],
         parallel: bool = True,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
@@ -672,6 +863,26 @@ class DeviceControlTools:
                 f"{len(skipped_operations)} skipped, "
                 f"mode={'parallel' if parallel else 'sequential'}",
             )
+            if not valid_operations:
+                # Nothing dispatched, so nothing to fail soft for: the batch
+                # carve-out from "all tool-level failures raise" exists to
+                # protect successful siblings, and there are none. Raising
+                # before the component probe keeps the no-dispatch guarantee.
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"All {len(operations)} operation(s) failed validation; "
+                        "nothing was dispatched",
+                        suggestions=[
+                            _BULK_ROW_SHAPE_SUGGESTION,
+                            "Each operation requires 'entity_id' and 'action'",
+                            "Check skipped_details for the per-operation reason",
+                            "Example: {'entity_id': 'light.living_room', "
+                            + "'action': 'on'}",
+                        ],
+                        context={"skipped_details": skipped_operations},
+                    )
+                )
 
             # Route through the component's bulk_call_service capability when
             # advertised (D5a): one register-before-fire batch frame confirms every
@@ -904,7 +1115,7 @@ class DeviceControlTools:
 
     async def _bulk_via_component(
         self,
-        operations: list[dict[str, Any]],
+        operations: list[Any],
         valid_operations: list[tuple[int, dict[str, Any], str, str]],
         skipped_operations: list[dict[str, Any]],
         parallel: bool,
@@ -959,7 +1170,9 @@ class DeviceControlTools:
         # below so a POST-SEND failure is never misclassified as pre-send.
         try:
             ws = await get_websocket_client(
-                url=self.client.base_url, token=self.client.token
+                url=self.client.base_url,
+                token=self.client.token,
+                verify_ssl=getattr(self.client, "verify_ssl", None),
             )
         except Exception as exc:
             logger.warning(
@@ -1109,7 +1322,7 @@ class DeviceControlTools:
 
     def _build_ambiguous_bulk_response(
         self,
-        operations: list[dict[str, Any]],
+        operations: list[Any],
         valid_operations: list[tuple[int, dict[str, Any], str, str]],
         rows: list[dict[str, Any]],
         skipped_operations: list[dict[str, Any]],
@@ -1244,7 +1457,7 @@ class DeviceControlTools:
 
     def _build_bulk_response(
         self,
-        operations: list[dict[str, Any]],
+        operations: list[Any],
         results: list[dict[str, Any]],
         operation_ids: list[str],
         skipped_operations: list[dict[str, Any]],
@@ -1282,6 +1495,7 @@ class DeviceControlTools:
         if skipped_operations:
             response["skipped_details"] = skipped_operations
             response["suggestions"] = [
+                _BULK_ROW_SHAPE_SUGGESTION,
                 "Some operations were skipped due to validation errors",
                 "Each operation requires 'entity_id' and 'action' fields",
                 "Check skipped_details for specific errors",
@@ -1291,7 +1505,7 @@ class DeviceControlTools:
         return response
 
     async def get_bulk_operation_status(
-        self, operation_ids: list[str], timeout_seconds: int = 10
+        self, operation_ids: list[str], timeout_seconds: float = 10
     ) -> dict[str, Any]:
         """
         Check status of multiple operations.

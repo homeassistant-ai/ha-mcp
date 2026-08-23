@@ -101,7 +101,7 @@ class Addon:
 
 
 # HAOS addon set — chosen for minimum image size while covering every
-# ``ha_manage_addon`` access shape exercised by the E2E tier (closes
+# ``ha_manage_app`` access shape exercised by the E2E tier (closes
 # #1350). Each entry below names the unique shape it contributes; if a
 # new addon doesn't add a shape that no other entry covers, it does not
 # belong here.
@@ -143,12 +143,12 @@ ADDONS: tuple[Addon, ...] = (
     ),
     # Matter Server is in the official ``core`` repo (no repo URL needed) and
     # is one of the very few addons that ship with ``ingress_panel=false``,
-    # which is the canonical "hidden sidebar" shape that ``ha_get_addon``
+    # which is the canonical "hidden sidebar" shape that ``ha_get_app``
     # detail needs coverage for.
     Addon(repo=None, name="Matter Server"),
     # AppDaemon contributes the ``ingress=false`` + ``webui`` shape: a port-
     # based UI advertised through the Supervisor ``webui`` field rather than
-    # Ingress. The wire contract for ``ha_get_addon`` reading ``webui`` and
+    # Ingress. The wire contract for ``ha_get_app`` reading ``webui`` and
     # rendering it as a clickable URL is otherwise uncovered.
     Addon(repo="https://github.com/hassio-addons/repository", name="AppDaemon"),
     # MQTT IO replaces Zigbee2MQTT for start-fail coverage. Its schema
@@ -883,15 +883,15 @@ _ADDON_OPTION_OVERRIDES: dict[str, dict[str, Any]] = {
             # https://raw.githubusercontent.com/hassio-addons/addon-node-red/main/node-red/config.yaml ).
             "ssl": False,
             # ``leave_front_door_open: true`` is required for
-            # ``ha_manage_addon``'s proxy mode to work against this
+            # ``ha_manage_app``'s proxy mode to work against this
             # addon. The proxy path goes Supervisor →
             # ``/addons/{slug}/api/...`` → the addon's DIRECT port,
             # which is fronted by nginx with an ``auth_request``
             # directive that demands HA Supervisor authentication.
-            # The default (false) blocks ha_manage_addon's calls with
+            # The default (false) blocks ha_manage_app's calls with
             # 401; ``true`` removes the auth_request and lets the
             # proxy path through. Aligning the bake's options with
-            # what real users hit when they reach for ha_manage_addon
+            # what real users hit when they reach for ha_manage_app
             # — see node-red/rootfs/etc/nginx/templates/direct.gtpl
             # for the ``{{ if not .leave_front_door_open }}`` block.
             "leave_front_door_open": True,

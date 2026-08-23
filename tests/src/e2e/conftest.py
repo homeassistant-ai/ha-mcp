@@ -31,6 +31,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import warnings
 from collections.abc import AsyncGenerator
 from functools import partial
 from pathlib import Path
@@ -39,6 +40,7 @@ from typing import Any
 import pytest
 import requests
 from testcontainers.core.container import DockerContainer
+from urllib3.exceptions import InsecureRequestWarning
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
@@ -60,12 +62,14 @@ from haos_runtime import (
     is_haos_backend_selected,
     is_haos_embedded_mode,
     is_haos_inaddon_mode,
+    is_haos_stdio_mode,
     login_for_token,
     refresh_dev_addon_source_in_qcow2,
     refresh_recorder_in_qcow2,
     set_default_backup_password,
     stage_embedded_server_feature_flags_in_qcow2,
     stage_embedded_server_wheel_in_qcow2,
+    stage_home_assistant_tls_in_qcow2,
     trigger_dev_addon_update,
     wait_for_addon_ha_link_ready,
     wait_for_addon_mcp_ready,
@@ -227,6 +231,46 @@ def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
     _READINESS_TIMINGS.append({"gate": gate, "elapsed_s": elapsed_s, **extras})
 
 
+def _move_haos_tls_items_last(items: list[Any]) -> None:
+    """Make the one destructive Core-restart scope the final xdist work unit.
+
+    ``loadscope`` groups tests into scopes by module (or module::class). With
+    xdist's default ``--loadscope-reorder`` the scopes are sorted by
+    descending size with a stable sort, so the one-test TLS module moved to
+    the end stays last among the one-test scopes; with ``--no-loadscope-reorder``
+    plain collection order keeps it last outright. The FIFO workqueue then
+    dispatches it as the final unit. The worker that receives it may still
+    hold up to two queued ordinary tests (xdist tops nodes up at <=2 pending)
+    but executes units in dispatch order, so Core is restarted in that
+    worker's already-running VM only after its ordinary work has run.
+    """
+    ordinary = [item for item in items if "haos_tls" not in item.keywords]
+    tls = [item for item in items if "haos_tls" in item.keywords]
+    items[:] = [*ordinary, *tls]
+
+
+def _apply_haos_tls_skip(item: Any, enabled: bool, skip_marker: Any) -> None:
+    """Skip a ``haos_tls`` item on every lane where the scenario is disabled.
+
+    Kept out-of-line so ``pytest_collection_modifyitems`` stays under the
+    repo-wide C901 ceiling — inlining this branch trips it.
+    """
+    if "haos_tls" in item.keywords and not enabled:
+        item.add_marker(skip_marker)
+
+
+def _apply_embedded_only_skip(
+    item: Any, embedded_selected: bool, skip_marker: Any
+) -> None:
+    """Skip an ``embedded_only`` item everywhere but the embedded lane.
+
+    Split out of ``pytest_collection_modifyitems`` for the same reason as
+    ``_apply_haos_tls_skip``: the dispatcher sits at ruff's C901 ceiling.
+    """
+    if "embedded_only" in item.keywords and not embedded_selected:
+        item.add_marker(skip_marker)
+
+
 def pytest_collection_modifyitems(config, items):
     """Enforce backend markers and auto-apply ``haos_only`` to its dir.
 
@@ -238,16 +282,26 @@ def pytest_collection_modifyitems(config, items):
       (``HAOS_TEST_IMAGE_PATH`` set). Auto-applied to anything under
       ``tests/src/e2e/haos_only/``.
     - ``container_only``: only runs on the testcontainer backend.
-    - ``external_only``: HAOS external mode only (``mcp_client`` is an
-      in-process FastMCP server talking HTTP to HAOS). Skipped on the
-      inaddon tier.
+    - ``embedded_only``: only runs on the embedded testcontainer backend
+      (``E2E_BACKEND=embedded``) — the one lane whose session container has
+      ha-mcp installed inside the HA image.
+    - ``external_only``: any tier where the server-under-test lives IN the
+      pytest process — plain testcontainer AND HAOS external (``mcp_client``
+      is an in-process FastMCP server talking HTTP to HAOS). Skipped on stdio,
+      inaddon, container-embedded, and HAOS-embedded. The name is historical and
+      does NOT mean "HAOS external only"; see the skip expression below.
     - ``inaddon_only``: HAOS inaddon mode only (``mcp_client`` is HTTP
       to the addon's MCP endpoint, ``is_running_in_addon()=True`` paths
       exercised). Skipped on external mode and on testcontainer.
+    - ``haos_stdio_only``: HAOS stdio mode only (``mcp_client`` launches the
+      installed ``ha-mcp`` command and uses real stdio JSON-RPC framing).
+    - ``haos_tls``: final HAOS-embedded scenario. It restarts Core with HTTPS,
+      exercises the same VM, and restores HTTP before session teardown.
     """
     del config
     haos = is_haos_backend_selected()
     inaddon = haos and is_haos_inaddon_mode()
+    haos_stdio = haos and is_haos_stdio_mode()
     # The embedded backend (#1527) is a testcontainer variant, so ``haos`` is
     # False here — ``haos_only`` still skips and ``container_only`` still runs on
     # it. What differs is that the in-process server lives INSIDE the container:
@@ -258,10 +312,10 @@ def pytest_collection_modifyitems(config, items):
     # The HAOS embedded lane (#1527) IS a HAOS backend (``haos`` True — qcow2
     # staged), so ``haos_only`` runs and ``container_only`` skips exactly like the
     # other HAOS lanes. Its server-under-test is the in-process MCP server
-    # inside the HAOS core container, driven over its ingress webhook — same
-    # out-of-process constraint as inaddon / container-embedded, so ``external_only``
-    # skips here too; and the haos_only embedded smoke module is redundant with the
-    # lane's own session backend, so it skips via ``not_on_haos_embedded``.
+    # inside the HAOS core container, driven over its ingress webhook — the same
+    # out-of-process constraint as stdio/inaddon/container-embedded, so
+    # ``external_only`` skips here too; the haos_only embedded smoke module is
+    # redundant with the lane's session backend and skips via ``not_on_haos_embedded``.
     haos_embedded = haos and is_haos_embedded_mode()
     skip_haos = pytest.mark.skip(
         reason="HAOS backend not selected (set HAOS_TEST_IMAGE_PATH)"
@@ -272,10 +326,20 @@ def pytest_collection_modifyitems(config, items):
     skip_inaddon_only = pytest.mark.skip(
         reason="inaddon mode required (set HAOS_TEST_MODE=inaddon)"
     )
+    skip_haos_stdio_only = pytest.mark.skip(
+        reason="HAOS stdio mode required (set HAOS_TEST_MODE=stdio)"
+    )
+    skip_haos_tls = pytest.mark.skip(
+        reason="final Core TLS scenario runs only in the existing HAOS embedded worker"
+    )
     skip_external_only = pytest.mark.skip(
-        reason="out-of-process server (inaddon/embedded); test needs an "
+        reason="out-of-process server (stdio/inaddon/embedded); test needs an "
         "in-process server it can reconfigure via env/monkeypatch or reach an "
         "in-process mock"
+    )
+    skip_embedded_only = pytest.mark.skip(
+        reason="embedded testcontainer backend required (E2E_BACKEND=embedded); "
+        "only that lane installs ha-mcp inside the HA image"
     )
     skip_not_on_embedded = pytest.mark.skip(
         reason="redundant on the embedded backend (the lane's own session "
@@ -293,8 +357,17 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_haos)
         elif "container_only" in keywords and haos:
             item.add_marker(skip_container)
+        _apply_embedded_only_skip(item, embedded, skip_embedded_only)
         if "inaddon_only" in keywords and not inaddon:
             item.add_marker(skip_inaddon_only)
+        if "haos_stdio_only" in keywords and not haos_stdio:
+            item.add_marker(skip_haos_stdio_only)
+        _apply_haos_tls_skip(item, haos_embedded, skip_haos_tls)
+        # Deliberate: inserting the haos_tls dispatch above broke the old
+        # ``elif`` chain into this ``if``. An item carrying several gate
+        # markers now collects one skip marker per gate instead of the first
+        # only — still one skipped item, same counts; only the reported
+        # reason (first marker added) could differ.
         # ``external_only`` skips on any tier where the server is NOT in the
         # pytest process: the inaddon HAOS addon AND the embedded backend's
         # in-process MCP server (both #1527). The name is historical (from
@@ -312,7 +385,13 @@ def pytest_collection_modifyitems(config, items):
         # monkeypatch or reach an in-process mock. These tests keep full coverage
         # on the external HAOS lane (where the in-process FastMCP server IS in the
         # test process) and the container lane.
-        elif "external_only" in keywords and (inaddon or embedded or haos_embedded):
+        # haos_stdio is also out-of-process: its installed ha-mcp subprocess
+        # cannot observe pytest-process env changes, monkeypatches, or in-process
+        # mocks. The same tests retain coverage on container/external HAOS lanes.
+        #
+        if "external_only" in keywords and (
+            inaddon or embedded or haos_embedded or haos_stdio
+        ):
             item.add_marker(skip_external_only)
         # ``not_on_embedded`` is applied only where a test is provably redundant
         # with the embedded lane's own session backend (e.g. the workflows/embedded
@@ -330,6 +409,7 @@ def pytest_collection_modifyitems(config, items):
         # the sole thing exercising the in-process server).
         if "not_on_haos_embedded" in keywords and haos_embedded:
             item.add_marker(skip_not_on_haos_embedded)
+    _move_haos_tls_items_last(items)
 
 
 # Fail fast on a doomed run, on EVERY e2e lane (this conftest is shared by the
@@ -956,12 +1036,16 @@ def _embedded_mcp_result(resp: requests.Response) -> dict[str, Any] | None:
     return parse_mcp_response(resp.headers.get("Content-Type", ""), resp.content)
 
 
-def _wait_for_embedded_webhook_ready(webhook_url: str, timeout: int) -> bool:
+def _wait_for_embedded_webhook_ready(
+    webhook_url: str, timeout: int, *, verify: bool = True
+) -> bool:
     """Poll the embedded server's ingress webhook until MCP ``initialize`` works.
 
     A valid JSON-RPC ``result`` means the in-process MCP server has installed
     itself, started its worker thread, and registered the webhook. Returns False
     on timeout so the caller can dump diagnostics and fail with context.
+    ``verify=False`` lets the TLS scenario poll the ``https://`` webhook while
+    Core runs its trial certificate.
     """
     payload = {
         "jsonrpc": "2.0",
@@ -980,9 +1064,19 @@ def _wait_for_embedded_webhook_ready(webhook_url: str, timeout: int) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            resp = requests.post(
-                webhook_url, headers=headers, data=json.dumps(payload), timeout=30
-            )
+            with warnings.catch_warnings():
+                if not verify:
+                    # This test deliberately uses Core's hostname-mismatched
+                    # loopback certificate. Keep the suite's warnings-as-errors
+                    # policy for every warning except this expected one.
+                    warnings.simplefilter("ignore", InsecureRequestWarning)
+                resp = requests.post(
+                    webhook_url,
+                    headers=headers,
+                    data=json.dumps(payload),
+                    timeout=30,
+                    verify=verify,
+                )
             if resp.status_code == 200:
                 parsed = _embedded_mcp_result(resp)
                 if parsed is not None and "result" in parsed:
@@ -1762,7 +1856,7 @@ def _haos_worker_setup(base_image_path: Path) -> Path:
 
 
 def _prepare_haos_image(
-    base_image_path: Path, inaddon: bool, haos_embedded: bool
+    base_image_path: Path, inaddon: bool, haos_embedded: bool, haos_stdio: bool
 ) -> Path:
     """Set up the per-worker qcow2 overlay and stage all pre-boot mutations."""
     # Per-worker port + overlay setup for pytest-xdist parallel HAOS
@@ -1771,7 +1865,15 @@ def _prepare_haos_image(
     image_path = _haos_worker_setup(base_image_path)
     logger.info(
         "HAOS backend selected (mode=%s) — booting qcow2 at %s",
-        "inaddon" if inaddon else "embedded" if haos_embedded else "external",
+        (
+            "inaddon"
+            if inaddon
+            else "embedded"
+            if haos_embedded
+            else "stdio"
+            if haos_stdio
+            else "external"
+        ),
         image_path,
     )
     # Shift the baked recorder timestamps forward so seeded rows fall
@@ -1817,6 +1919,22 @@ def _prepare_haos_image(
     # below applies it via Docker layer cache (#1349 item 7).
     if inaddon:
         refresh_dev_addon_source_in_qcow2(image_path)
+    if haos_embedded:
+        # Best-effort like the wheel staging above: only the final TLS scenario
+        # consumes this certificate, and it asserts on HAOS_TEST_TLS_CA_PATH —
+        # a staging failure should fail that one test, not abort the lane.
+        try:
+            certificate = stage_home_assistant_tls_in_qcow2(image_path)
+        except RuntimeError:
+            logger.warning(
+                "HAOS Core TLS staging failed; the TLS scenario will report it",
+                exc_info=True,
+            )
+        else:
+            # Do not alter process-wide trust during ordinary tests. The final
+            # TLS scenario trusts this cert only while reproducing the legacy
+            # mismatch.
+            os.environ["HAOS_TEST_TLS_CA_PATH"] = str(certificate)
     return image_path
 
 
@@ -2524,7 +2642,10 @@ def ha_container_with_fresh_config(request):
         base_image_path = Path(os.environ[HAOS_IMAGE_ENV])
         inaddon = is_haos_inaddon_mode()
         haos_embedded = is_haos_embedded_mode()
-        image_path = _prepare_haos_image(base_image_path, inaddon, haos_embedded)
+        haos_stdio = is_haos_stdio_mode()
+        image_path = _prepare_haos_image(
+            base_image_path, inaddon, haos_embedded, haos_stdio
+        )
         with boot_haos_qemu(image_path) as base_url:
             token, blueprint_for_haos = _haos_post_boot_setup(base_url, request)
             # Pull setup-time work INTO the try/finally so post-mortem log
@@ -2554,6 +2675,8 @@ def ha_container_with_fresh_config(request):
                         if inaddon
                         else "haos_embedded"
                         if haos_embedded
+                        else "haos_stdio"
+                        if haos_stdio
                         else "haos"
                     ),
                     # Only set on inaddon mode; external/embedded modes leave None.
@@ -2751,10 +2874,15 @@ async def mcp_server(
     server or build an HTTP transport pointing at the out-of-process server.
     """
     container_info = ha_container_with_fresh_config
-    if container_info.get("backend") in ("haos_inaddon", "embedded", "haos_embedded"):
+    if container_info.get("backend") in (
+        "haos_inaddon",
+        "haos_stdio",
+        "embedded",
+        "haos_embedded",
+    ):
         logger.info(
             "%s mode: skipping in-process MCP server "
-            "(tests use the out-of-process server's HTTP endpoint instead)",
+            "(tests use the out-of-process server transport instead)",
             container_info.get("backend"),
         )
         yield None
@@ -2780,12 +2908,14 @@ async def mcp_server(
 
 @pytest.fixture(scope="session")
 async def mcp_client(
-    ha_container_with_fresh_config, mcp_server
+    ha_container_with_fresh_config, mcp_server, haos_stdio_config_dir
 ) -> AsyncGenerator[Client]:
     """Create FastMCP client — in-memory for in-process server, HTTP otherwise.
 
     On testcontainer + HAOS-external: in-memory transport bound to the
     ``mcp_server`` fixture (current behavior).
+    On HAOS-stdio: ``StdioTransport`` launches the installed ``ha-mcp`` command
+    with an isolated config directory and the real HAOS URL/token.
     On HAOS-inaddon: ``StreamableHttpTransport`` pointing at the dev
     addon's MCP endpoint (running inside the booted HAOS).
     On embedded (#1527): ``StreamableHttpTransport`` pointing at the
@@ -2796,6 +2926,16 @@ async def mcp_client(
     """
     container_info = ha_container_with_fresh_config
     backend = container_info.get("backend")
+    if backend == "haos_stdio":
+        client = _stdio_client(container_info, haos_stdio_config_dir)
+        try:
+            async with client:
+                logger.debug("🔗 FastMCP client connected (stdio subprocess transport)")
+                yield client
+        finally:
+            await _retire_stdio_sidecar(haos_stdio_config_dir)
+        return
+
     if backend in ("haos_inaddon", "embedded", "haos_embedded"):
         from fastmcp.client.transports import StreamableHttpTransport
 
@@ -2832,56 +2972,113 @@ async def mcp_client(
         yield client
 
 
+def _stdio_env(container_info: dict[str, Any], config_dir: Path) -> dict[str, str]:
+    """Build the explicit environment for an installed ``ha-mcp`` process."""
+    # StdioTransport's explicit env does not inherit the pytest process. Keep every
+    # load-bearing setting here, including the env-file selector that prevents a
+    # contributor's checkout-root .env from changing subprocess behavior.
+    return {
+        "HOMEASSISTANT_URL": container_info["base_url"],
+        "HOMEASSISTANT_TOKEN": container_info.get("token", TEST_TOKEN),
+        "HA_MCP_CONFIG_DIR": str(config_dir),
+        "HAMCP_ENV_FILE": os.environ.get("HAMCP_ENV_FILE", "tests/.env.test"),
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+        # Fail quickly against a disposable HA if connection setup is broken.
+        "HA_MAX_RETRIES": "1",
+        # Unset also enables the sidecar; spell this out because stdio visibility
+        # E2E requires the web settings endpoint to participate in the sequence.
+        "HA_MCP_DISABLE_SETTINGS_UI": "false",
+        # Beta master plus all packages/*.yaml sub-toggles.
+        "ENABLE_BETA_FEATURES": "true",
+        "ENABLE_YAML_CONFIG_EDITING": "true",
+        "ENABLE_YAML_PACKAGES_AUTOMATION": "true",
+        "ENABLE_YAML_PACKAGES_SCRIPT": "true",
+        "ENABLE_YAML_PACKAGES_SCENE": "true",
+        "HAMCP_ENABLE_FILESYSTEM_TOOLS": "true",
+        # Non-built-in YAML write key used by the success-path coverage (#1887).
+        "HA_MCP_EXTRA_YAML_KEYS": "alert2",
+        # Strict best-practices defaults on with its parent. Pinning it off
+        # preserves the full suite's keyless writes; #1779 enables it explicitly.
+        "ENABLE_STRICT_MANDATORY_BPS": "false",
+        # Production defaults snapshot deletion off; the disposable HAOS guest
+        # may exercise the guarded deletion path.
+        "ENABLE_SNAPSHOT_DELETE": "true",
+    }
+
+
+def _stdio_client(container_info: dict[str, Any], config_dir: Path) -> Client:
+    """Return a FastMCP client backed by the installed stdio entry point."""
+    from fastmcp.client.transports import StdioTransport
+
+    transport = StdioTransport(
+        command="ha-mcp",
+        # FastMCP expects an explicit empty list; omitting args changes its default.
+        args=[],
+        env=_stdio_env(container_info, config_dir),
+        # The fixture owns process lifetime and must run lifespan cancellation.
+        keep_alive=False,
+    )
+    return Client(transport)
+
+
+async def _retire_stdio_sidecar(config_dir: Path) -> None:
+    """Retire the detached listener without blocking the event loop."""
+    from ha_mcp import stdio_settings_sidecar
+
+    # Test config dirs are session/test-scoped and discarded afterwards, so
+    # retirement need not preserve discovery files for a future process.
+    await asyncio.to_thread(stdio_settings_sidecar.retire_sidecar, config_dir)
+
+
+@pytest.fixture(scope="session")
+def haos_stdio_config_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Config for the full-suite HAOS stdio process.
+
+    It stays separate because visibility E2E mutates entity_visibility.json and
+    concurrent stdio processes would collide on ui.url and the sidecar port.
+    """
+    return tmp_path_factory.mktemp("haos-stdio-config")
+
+
+@pytest.fixture(scope="session")
+def packaging_stdio_config_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Config for tests that explicitly request ``stdio_mcp_client``.
+
+    A second directory prevents its process from replacing the HAOS stdio lane's
+    ui.url, sidecar listener, and visibility configuration.
+    """
+    return tmp_path_factory.mktemp("packaging-stdio-config")
+
+
 @pytest.fixture(scope="session")
 async def stdio_mcp_client(
     ha_container_with_fresh_config,
+    packaging_stdio_config_dir,
 ) -> AsyncGenerator[Client]:
     """Spawn ``ha-mcp`` as a subprocess and connect via stdio JSON-RPC.
 
-    Distinct from the default ``mcp_client`` fixture, which uses an
-    in-memory transport (``Client(server.mcp)``) that bypasses subprocess
-    startup, JSON serialization framing, and the installed-wheel side of
-    the contract. This fixture is the only path that validates the
-    transport real users hit when running ha-mcp via Claude Desktop,
-    claude CLI, ``uvx``, or Docker stdio mode.
+    The default ``mcp_client`` also uses this real transport on the HAOS stdio
+    lane. Everywhere else it uses the lane's primary server, so this dedicated
+    fixture supplies installed-entry-point stdio coverage for packaging and
+    launcher-specific tests.
 
-    Catches a different class of bug than the in-memory client:
-    packaging regressions (e.g. skills missing from the installed
-    package — #1280), entry-point startup failures, and JSON
-    serialization issues. Without this fixture, stdio-only regressions
-    can land green on CI.
+    Both paths cover the transport real users hit via Claude Desktop, Claude CLI,
+    ``uvx``, or Docker stdio mode: subprocess startup, JSON serialization
+    framing, and the installed-wheel contract. This fixture specifically catches
+    packaging regressions (for example skills missing from the installed package,
+    #1280), entry-point startup failures, and JSON serialization issues without
+    taking over the full suite outside the dedicated HAOS stdio lane.
     """
 
-    from fastmcp.client.transports import StdioTransport
-
     container_info = ha_container_with_fresh_config
-
-    # Subprocess inherits no env by default — forward only what ha-mcp
-    # actually needs at startup. PATH so the subprocess resolves its
-    # own dependencies via the test venv's site-packages.
-    env = {
-        "HOMEASSISTANT_URL": container_info["base_url"],
-        "HOMEASSISTANT_TOKEN": TEST_TOKEN,
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", ""),
-        # Keep startup snappy — the connection retry is irrelevant here,
-        # the test container is already up by the time this fixture runs.
-        "HA_MAX_RETRIES": "1",
-        # Same pin as the session-server env blocks (#1779): strict mode
-        # defaults ON and would prepend the acknowledgment line to tier-3
-        # skill content, breaking the content == on-disk-bytes assertions.
-        "ENABLE_STRICT_MANDATORY_BPS": "false",
-    }
-
-    # ``args`` is a required positional on the base ``StdioTransport``
-    # (subclasses like ``PythonStdioTransport`` default it to ``None``,
-    # but the base requires ``list[str]``). Pass an explicit empty list
-    # since ``ha-mcp`` takes no positional args in stdio mode.
-    transport = StdioTransport(command="ha-mcp", args=[], env=env)
-    client = Client(transport)
-    async with client:
-        logger.debug("🔗 FastMCP client connected (stdio subprocess transport)")
-        yield client
+    client = _stdio_client(container_info, packaging_stdio_config_dir)
+    try:
+        async with client:
+            logger.debug("🔗 FastMCP client connected (stdio subprocess transport)")
+            yield client
+    finally:
+        await _retire_stdio_sidecar(packaging_stdio_config_dir)
 
 
 # Test session information

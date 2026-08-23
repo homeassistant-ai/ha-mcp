@@ -30,24 +30,25 @@ configuration:
       '
   enable_tool_search:
     name: Tool-Suche aktivieren
-    description: 'Ersetzt den vollständigen Tool-Katalog durch suchbasierte Entdeckung.
-      Reduziert den Leerlauf-Kontext um rund 90 % auf etwa 5K Tokens. ⚠️ Aktiviere
-      dies NICHT in Clients mit eigener integrierter Tool-Suche / aufgeschobenen Tools
-      (claude.ai, Claude Desktop, Claude Code) – die beiden Suchebenen kollidieren,
+    description: 'Ersetze den vollständigen Tool-Katalog durch eine suchend basierte
+      Erkennung. Reduziert den Leerlaufkontext um etwa 90 % auf ca. 5K Token. ⚠️ Aktiviere
+      dies NICHT in Clients mit eigener integrierter Tool-Suche / verzögerten Tools
+      (claude.ai, Claude Desktop, Claude Code) — die beiden Suchschichten kollidieren,
       und die integrierte Tool-Suche des Clients ist dort die bessere Wahl; lasse
-      dies ausgeschaltet. Ob Tools aufgeschoben werden, hängt von der Kombination
-      aus Client und Modell ab: Verwende dies, wenn dein Setup den vollständigen Katalog
-      von Anfang an lädt – Modelle ohne native aufgeschobene Tools (z. B. Gemini,
-      lokale OpenAI-kompatible Modelle, Claude Haiku), Clients, die alle Tool-Schemata
-      unabhängig vom Modell direkt einbetten (z. B. GitHub Copilot CLI), oder kleinere
-      Kontextfenster. Auch einige Codex-Modelle und ChatGPT haben aufgeschobene Tools
-      – prüfe direkt bei deinem Client/Modell, welche Features er hat, damit du dies
-      nicht unnötig aktiviert lässt. Tools werden über ha_search_tools gefunden und
-      über kategorisierte Proxys (read/write/delete) ausgeführt. Erfordert einen Neustart,
-      um wirksam zu werden. Dann neu verbinden oder den MCP-Server in deinem AI-Client
-      aktualisieren, damit er die Tool-Liste neu lädt. Ein Neustart des Add-ons allein
-      aktualisiert NICHT die gecachte Tool-Liste eines Clients; dies gilt nach jeder
-      Einstellungsänderung hier.'
+      dies ausgeschaltet. Ob Tools verzögert werden, hängt von deiner Client- und
+      Modellkombination ab: Verwende dies, wenn dein Setup den vollständigen Katalog
+      im Voraus lädt — Modelle ohne native verzögerte Tools (z. B. Gemini, OpenAI-kompatible
+      lokale Modelle, Claude Haiku), Clients, die alle Tool-Schemas unabhängig vom
+      Modell einbetten (z. B. GitHub Copilot CLI), oder kleinere Kontextfenster. Einige
+      Codex-Modelle und ChatGPT beinhalten ebenfalls verzögerte Tools — überprüfe
+      deinen Client bzw. dein Modell direkt, um dessen Funktionen zu bestätigen, damit
+      du dies nicht unnötig aktiviert lässt. Tools werden über ha_search_tools gefunden
+      und über kategorisierte Proxys (lesen/schreiben/löschen) ausgeführt. Erfordert
+      einen App-(Add-on-)Neustart, um wirksam zu werden — verbinde dich danach neu
+      oder aktualisiere den MCP-Server in deinem KI-Client, damit dieser die Tool-Liste
+      neu lädt. Das alleinige Neustarten der App (des Add-ons) aktualisiert die zwischengespeicherte
+      Tool-Liste eines Clients NICHT; dies gilt nach jeder Änderung einer Einstellung
+      hier.'
   tool_search_max_results:
     name: Max. Tool-Suchergebnisse
     description: 'Maximale Anzahl von Tools, die von ha_search_tools zurückgegeben
@@ -75,23 +76,22 @@ configuration:
       Erfordert einen Neustart, um wirksam zu werden.'
   read_only_mode:
     name: Nur-Lese-Modus
-    description: Schaltet alle Schreibtools aus und nimmt Tools die Möglichkeit, Schreib-
-      oder destruktive Aufrufe zu tätigen. Gemischte Lese-/Schreib-Tools (Backups,
-      Add-ons, Energiepräferenzen, Voice-Pipelines und Code-Modus, wenn aktiviert)
-      bleiben verfügbar, wobei ihre Schreiboperationen blockiert sind. Derselbe Schalter
-      wie im Web-UI-Tab Tools. Standardmäßig ausgeschaltet. Erfordert Neustart, um
-      wirksam zu werden.
+    description: Schaltet alle Schreib-Tools aus und entzieht Tools die Fähigkeit,
+      Schreib- oder destruktive Aufrufe auszuführen. Gemischte Lese-/Schreib-Tools
+      — Backups, Apps (Add-ons), Energieeinstellungen, Sprach-Pipelines und der Code-Modus,
+      wenn aktiviert — bleiben verfügbar, wobei ihre Schreiboperationen blockiert
+      sind. Gleicher Umschalter wie auf dem Web-UI-Tab Tools. Standardmäßig aus. Erfordert
+      einen Neustart, um wirksam zu werden.
   redact_secrets:
     name: Geheimnisse schwärzen
-    description: Schwärzt Geheimnisse aus Tool-Antworten, bevor sie den KI-Assistenten
-      erreichen. Add-on-Optionen und Integrationsfelder, die als Passwörter markiert
-      sind, werden durch einen gesetzt/leer-Marker ersetzt (damit „ist dieses Anmeldeinformationen
-      konfiguriert?“ weiterhin beantwortbar bleibt), und andere Tool-Antworten werden
-      von geheimen Werten bereinigt, die der Server bereits gesehen hat (Werte, die
-      kürzer als 6 Zeichen sind, werden übersprungen, da das Ersetzen kleiner Fragmente
-      zu einer Beschädigung der nicht zusammenhängenden Ausgabe führen würde). Felder,
-      die nicht durch ihr Schema als Passwörter markiert sind, können nicht erkannt
-      werden. Standardmäßig deaktiviert.
+    description: Entfernt Geheimnisse aus Tool-Antworten, bevor sie den KI-Assistenten
+      erreichen. App-Optionen (Add-on) und als Passwörter markierte Integrationsfelder
+      werden durch eine Markierung für gesetzt/leer ersetzt (sodass "ist diese Zugangsbezeichnung
+      konfiguriert?" beantwortet bleiben kann), und andere Tool-Antworten werden von
+      Geheimniswerten bereinigt, die der Server bereits gesehen hat (Werte, die kürzer
+      als 6 Zeichen sind, werden übersprungen, da das Ersetzen winziger Fragmente
+      zusammenhängende Ausgaben beschädigen würde). Felder, die von ihrem Schema nicht
+      als Passwörter markiert wurden, können nicht erkannt werden. Standardmäßig aus.
   enable_mandatory_bps:
     name: Best-Practice-Skills bei Schreibvorgängen anhängen
     description: 'Hauptschalter für die Funktion zur Bereitstellung von Schreib-Tool-Skill-Inhalten
@@ -177,10 +177,11 @@ configuration:
       gelten weiterhin). Standard 7.
   verify_ssl:
     name: TLS-Zertifikat verifizieren
-    description: Verifiziert das TLS-Zertifikat des Home Assistant Servers. Das Add-on
-      verbindet sich via Supervisor-Proxy, daher hat dies normalerweise keinen Effekt
-      und sollte aktiviert bleiben. Deaktiviere nur, wenn du das Add-on umkonfiguriert
-      hast, um mit HA über einen öffentlichen HTTPS-Hostnamen mit selbstsigniertem
-      Zertifikat oder Hostname-Mismatch zu sprechen. Deaktivieren schwächt die Transport-Sicherheit
-      – lass an, außer du weißt, dass du es brauchst. Erfordert Neustart, um wirksam
-      zu werden.
+    description: Überprüfe das TLS-Zertifikat des Home Assistant-Servers. Die App
+      (das Add-on) verbindet sich über den Supervisor-Proxy, daher hat dies normalerweise
+      keine Auswirkungen und sollte aktiviert bleiben. Deaktiviere es nur, wenn du
+      die App (das Add-on) so rekonfiguriert hast, dass sie über einen öffentlichen
+      HTTPS-Hostnamen mit einem selbstsignierten Zertifikat oder einem Hostnamen-Mismatch
+      mit HA kommuniziert. Das Deaktivieren schwächt die Transportsicherheit — lasse
+      es eingeschaltet, es sei denn, du weißt, dass du es brauchst. Erfordert einen
+      Neustart, um wirksam zu werden.

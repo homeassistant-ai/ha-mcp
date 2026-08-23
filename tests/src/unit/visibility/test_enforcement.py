@@ -37,6 +37,15 @@ def make_context(name, arguments=None):
     )
 
 
+def report_context(*, proxied=False):
+    arguments = {"fields": ["recent_logs"]}
+    if proxied:
+        return make_context(
+            "ha_call_read_tool", {"name": "ha_report_issue", "arguments": arguments}
+        )
+    return make_context("ha_report_issue", arguments)
+
+
 def text_result(text="ok", structured=None):
     """A ToolResult stand-in with a text content block + structured content."""
     return SimpleNamespace(
@@ -181,6 +190,134 @@ class TestInactivePassthrough:
         assert client.get_states_calls == 0
 
 
+class TestReportIssueRestriction:
+    """The diagnostics tool stays reachable unless explicitly restricted."""
+
+    @pytest.mark.parametrize("proxied", [False, True])
+    async def test_report_issue_bypasses_active_enforcement_by_default(
+        self, set_config, proxied
+    ):
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
+        client = FakeClient()
+        mw = make_mw(get_client=lambda: client)
+
+        result = await mw.on_call_tool(
+            report_context(proxied=proxied),
+            _returns(text_result("diagnostics mention sensor.hidden")),
+        )
+
+        assert result.content[0].text == "diagnostics mention sensor.hidden"
+        assert client.get_states_calls == 0
+
+    async def test_report_issue_bypasses_unavailable_visibility_data_by_default(
+        self, set_config
+    ):
+        """The diagnostic escape hatch must not touch unavailable HA inputs."""
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
+        client = FakeClient(fail=True)
+        mw = make_mw(get_client=lambda: client)
+
+        result = await mw.on_call_tool(
+            report_context(),
+            _returns(text_result("diagnostics remain reachable")),
+        )
+
+        assert result.content[0].text == "diagnostics remain reachable"
+        assert client.get_states_calls == 0
+
+    async def test_report_issue_opt_in_is_inert_while_enforce_is_off(self, set_config):
+        set_config(
+            enabled=True,
+            enforce=False,
+            deny_entity_ids=["sensor.hidden"],
+            restrict_report_issue=True,
+        )
+        client = FakeClient()
+        mw = make_mw(get_client=lambda: client)
+
+        result = await mw.on_call_tool(
+            report_context(),
+            _returns(text_result("diagnostics mention sensor.hidden")),
+        )
+
+        assert result.content[0].text == "diagnostics mention sensor.hidden"
+        assert client.get_states_calls == 0
+
+    async def test_default_bypass_is_logged(self, set_config, caplog):
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
+        mw = make_mw(get_client=FakeClient)
+
+        with caplog.at_level("INFO", logger="ha_mcp.visibility.enforcement"):
+            await mw.on_call_tool(
+                report_context(),
+                _returns(text_result("diagnostics mention sensor.hidden")),
+            )
+
+        bypass_messages = [
+            record.message
+            for record in caplog.records
+            if "restrict_report_issue=false" in record.message
+        ]
+        assert bypass_messages == [
+            "visibility enforce: bypassing ha_report_issue because "
+            "restrict_report_issue=false"
+        ]
+
+    async def test_default_bypass_is_not_logged_when_enforcement_inactive(
+        self, set_config, caplog
+    ):
+        set_config(enabled=True, enforce=False, deny_entity_ids=["sensor.hidden"])
+        mw = make_mw(get_client=FakeClient)
+
+        with caplog.at_level("INFO", logger="ha_mcp.visibility.enforcement"):
+            result = await mw.on_call_tool(
+                report_context(),
+                _returns(text_result("diagnostics mention sensor.hidden")),
+            )
+
+        assert result.content[0].text == "diagnostics mention sensor.hidden"
+        assert not any(
+            "bypassing ha_report_issue" in record.message for record in caplog.records
+        ), [record.message for record in caplog.records]
+
+    async def test_default_bypass_is_not_logged_without_active_hide_dimension(
+        self, set_config, caplog
+    ):
+        set_config(enabled=True, enforce=True)
+        mw = make_mw(get_client=FakeClient)
+
+        with caplog.at_level("INFO", logger="ha_mcp.visibility.enforcement"):
+            result = await mw.on_call_tool(
+                report_context(),
+                _returns(text_result("diagnostics remain reachable")),
+            )
+
+        assert result.content[0].text == "diagnostics remain reachable"
+        assert not any(
+            "bypassing ha_report_issue" in record.message for record in caplog.records
+        ), [record.message for record in caplog.records]
+
+    @pytest.mark.parametrize("proxied", [False, True])
+    async def test_report_issue_is_scanned_when_operator_opts_in(
+        self, set_config, proxied
+    ):
+        set_config(
+            enabled=True,
+            enforce=True,
+            deny_entity_ids=["sensor.hidden"],
+            restrict_report_issue=True,
+        )
+        mw = make_mw(get_client=FakeClient)
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                report_context(proxied=proxied),
+                _returns(text_result("diagnostics mention sensor.hidden")),
+            )
+
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+
 # ---------------------------------------------------------------------------
 # Inbound: concealment + refusal
 # ---------------------------------------------------------------------------
@@ -307,8 +444,32 @@ class TestConfigLoadFailure:
         assert body["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
         assert "entity_visibility.json" in body["error"]["message"]
 
+    async def test_corrupt_config_with_no_prior_load_keeps_report_issue_available(
+        self, breakable_config, caplog
+    ):
+        breakable_config["broken"] = True
+        client = FakeClient()
+        mw = make_mw(get_client=lambda: client)
+
+        with caplog.at_level("WARNING", logger="ha_mcp.visibility.enforcement"):
+            result = await mw.on_call_tool(
+                make_context("ha_report_issue", {"fields": ["recent_logs"]}),
+                _returns(text_result("diagnostics still available")),
+            )
+
+        assert result.content[0].text == "diagnostics still available"
+        assert client.get_states_calls == 0
+        messages = [record.message for record in caplog.records]
+        assert [
+            message for message in messages if "allowing ha_report_issue" in message
+        ] == [
+            "visibility enforce: config load failed; allowing ha_report_issue because "
+            "its diagnostic exemption defaults to unrestricted"
+        ]
+        assert not any("failing closed" in message for message in messages), messages
+
     async def test_corrupt_config_after_enforce_off_load_passes_through(
-        self, breakable_config
+        self, breakable_config, caplog
     ):
         # Availability: a non-enforce install whose file corrupts mid-session
         # keeps working on the last-known-good (enforce-off) config.
@@ -319,11 +480,58 @@ class TestConfigLoadFailure:
         )
         assert result.content[0].text == "first"
         breakable_config["broken"] = True
-        result = await mw.on_call_tool(
-            make_context("ha_get_state", {"entity_id": "light.any"}),
-            _returns(text_result("second")),
-        )
+        caplog.clear()
+        with caplog.at_level("WARNING", logger="ha_mcp.visibility.enforcement"):
+            result = await mw.on_call_tool(
+                make_context("ha_get_state", {"entity_id": "light.any"}),
+                _returns(text_result("second")),
+            )
         assert result.content[0].text == "second"
+        warnings = [
+            record
+            for record in caplog.records
+            if "config load failed" in record.message
+        ]
+        assert [record.message for record in warnings] == [
+            "visibility enforce: config load failed; using last-known-good config"
+        ]
+        assert warnings[0].exc_info is not None
+
+    async def test_outbound_only_config_load_failure_logs(
+        self, breakable_config, monkeypatch, caplog
+    ):
+        mw = make_mw(get_client=FakeClient)
+        await mw.on_call_tool(
+            make_context("ha_get_state", {"entity_id": "light.any"}),
+            _returns(text_result("prime")),
+        )
+        calls = 0
+
+        def _load(_d):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return breakable_config["config"]
+            raise ValueError("entity_visibility.json changed during the call")
+
+        monkeypatch.setattr(resolver, "load_visibility_config", _load)
+        caplog.clear()
+        with caplog.at_level("WARNING", logger="ha_mcp.visibility.enforcement"):
+            result = await mw.on_call_tool(
+                make_context("ha_get_state", {"entity_id": "light.any"}),
+                _returns(text_result("second")),
+            )
+
+        assert result.content[0].text == "second"
+        warnings = [
+            record
+            for record in caplog.records
+            if "config load failed" in record.message
+        ]
+        assert [record.message for record in warnings] == [
+            "visibility enforce: config load failed; using last-known-good config"
+        ]
+        assert warnings[0].exc_info is not None
 
     async def test_corrupt_config_after_enforce_on_load_stays_enforced(
         self, breakable_config
@@ -350,6 +558,31 @@ class TestConfigLoadFailure:
             )
         body = _error_body(exc)
         assert body["error"]["code"] == "ENTITY_NOT_FOUND"
+
+    async def test_corrupt_config_after_report_opt_in_stays_enforced(
+        self, breakable_config
+    ):
+        breakable_config["config"] = VisibilityConfig(
+            enabled=True,
+            enforce=True,
+            exclude_categories=[],
+            deny_entity_ids=["sensor.hidden"],
+            restrict_report_issue=True,
+        )
+        mw = make_mw(get_client=FakeClient)
+        result = await mw.on_call_tool(
+            make_context("ha_report_issue", {"fields": ["recent_logs"]}),
+            _returns(text_result("clean diagnostics")),
+        )
+        assert result.content[0].text == "clean diagnostics"
+
+        breakable_config["broken"] = True
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_report_issue", {"fields": ["recent_logs"]}),
+                _returns(text_result("diagnostics mention sensor.hidden")),
+            )
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +611,74 @@ class TestProxyUnwrap:
         body = _error_body(exc)
         assert body["error"]["code"] == "ENTITY_NOT_FOUND"
         assert body["entity_id"] == "sensor.hidden"
+
+    async def test_search_tool_extra_name_is_not_treated_as_dispatch(self, set_config):
+        """ha_search_tools searches a catalog; it never executes its name key."""
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
+        mw = make_mw(get_client=FakeClient)
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_search_tools",
+                    {"query": "lights", "name": "ha_report_issue"},
+                ),
+                _returns(text_result("catalog mentions sensor.hidden")),
+            )
+
+        body = _error_body(exc)
+        assert body["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert body["tool_name"] == "ha_search_tools"
+
+    async def test_retired_inner_name_is_reported_as_current_name(self, set_config):
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
+        mw = make_mw(get_client=FakeClient)
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_call_read_tool",
+                    {"name": "ha_get_addon", "arguments": {"slug": "core_ssh"}},
+                ),
+                _returns(text_result("result mentions sensor.hidden")),
+            )
+
+        body = _error_body(exc)
+        assert body["tool_name"] == "ha_get_app"
+        assert "ha_get_app" in body["error"]["message"]
+
+    async def test_proxy_fail_closed_error_names_inner_tool(self, set_config):
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
+        mw = make_mw(get_client=lambda: FakeClient(fail=True))
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_call_read_tool",
+                    {"name": "ha_get_logs", "arguments": {}},
+                ),
+                _unreached_call_next,
+            )
+
+        body = _error_body(exc)
+        assert body["tool_name"] == "ha_get_logs"
+
+    async def test_proxy_outbound_error_names_inner_tool(self, set_config):
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
+        mw = make_mw(get_client=FakeClient)
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_call_read_tool",
+                    {"name": "ha_get_logs", "arguments": {}},
+                ),
+                _returns(text_result("result mentions sensor.hidden")),
+            )
+
+        body = _error_body(exc)
+        assert body["tool_name"] == "ha_get_logs"
+        assert "ha_get_logs" in body["error"]["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -478,6 +779,47 @@ class TestBoundaryRegex:
 
 
 class TestUnscannableSurfaces:
+    @pytest.mark.parametrize(
+        ("proxy_name", "target_name", "arguments"),
+        [
+            (
+                "ha_call_read_tool",
+                "ha_config_get_dashboard",
+                {"include_screenshot": True},
+            ),
+            (
+                "ha_call_write_tool",
+                "ha_config_set_dashboard",
+                {"return_screenshot": True},
+            ),
+            ("ha_call_write_tool", "ha_manage_custom_tool", {"code": "print(1)"}),
+            ("ha_call_write_tool", "ha_manage_custom_tool", {"run_saved": "t"}),
+            (
+                "ha_call_read_tool",
+                "ha_config_get_dashboard",
+                json.dumps({"include_screenshot": True}),
+            ),
+        ],
+    )
+    async def test_proxied_unscannable_call_refused_before_dispatch(
+        self, set_config, proxy_name, target_name, arguments
+    ):
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
+        mw = make_mw(get_client=FakeClient)
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context(
+                    proxy_name,
+                    {"name": target_name, "arguments": arguments},
+                ),
+                _unreached_call_next,
+            )
+
+        body = _error_body(exc)
+        assert body["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+        assert body["tool_name"] == target_name
+
     async def test_custom_tool_code_refused(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
         mw = make_mw(get_client=FakeClient)

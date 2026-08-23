@@ -36,9 +36,21 @@ def _is_ssl_error(exc: BaseException) -> bool:
 logger = logging.getLogger(__name__)
 
 # Transient gateway statuses from a reverse proxy / Supervisor ingress — HA Core
-# restarting or briefly overloaded behind it. The upstream couldn't be reached,
-# so the request did not execute and retrying is safe even for writes.
-_RETRYABLE_STATUS = frozenset({502, 503, 504})
+# restarting or briefly overloaded behind it. Retried for SAFE METHODS ONLY.
+#
+# None of them proves Home Assistant did not execute the request: RFC 9110 has
+# 502 as "received an invalid response from an inbound server", which a proxy
+# only sends after reaching it, and 504 as the upstream answering too slowly.
+# #1623 extended the retry to writes on the premise that "a gateway 5xx means
+# the request never reached the backend"; that premise is false, and replaying
+# a write can double-apply it — fire an event twice, run a script twice, or
+# turn a completed DELETE into a misleading 404 on the replay.
+#
+# The flake class #1623 fixed was a 502 storm failing ~190 tests at once, which
+# is overwhelmingly reads; those keep the retry. A write that fails loudly is
+# recoverable by the caller, which a silent double-apply is not.
+_RETRYABLE_GATEWAY_STATUS = frozenset({502, 503, 504})
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _MAX_REQUEST_ATTEMPTS = 3
 # Journald window requested for the Core error log on Supervisor-backed
 # installs. Both such branches of get_error_log() build their request from this
@@ -304,7 +316,8 @@ class HomeAssistantClient:
         Handles auth, HTTP 4xx/5xx, and transport errors in one place.
         Callers parse the body themselves (JSON via `_request`, text via
         `get_addon_logs`, etc.). Transient gateway errors (502/503/504) are
-        retried with bounded exponential backoff before surfacing.
+        retried with bounded exponential backoff for safe methods only; a write
+        is never replayed.
 
         Raises:
             HomeAssistantAuthError: 401 response.
@@ -323,10 +336,11 @@ class HomeAssistantClient:
                 if response.status_code >= 400:
                     message, error_data = self._error_message_from_response(response)
 
-                    if (
-                        response.status_code in _RETRYABLE_STATUS
-                        and attempt < _MAX_REQUEST_ATTEMPTS
-                    ):
+                    retryable = (
+                        response.status_code in _RETRYABLE_GATEWAY_STATUS
+                        and method.upper() in _SAFE_METHODS
+                    )
+                    if retryable and attempt < _MAX_REQUEST_ATTEMPTS:
                         logger.warning(
                             f"Transient {response.status_code} from Home Assistant "
                             f"(attempt {attempt}/{_MAX_REQUEST_ATTEMPTS}), retrying "
@@ -1211,6 +1225,28 @@ class HomeAssistantClient:
         logger.debug(f"Starting config flow for handler: {handler}")
         return await self._request("POST", "/config/config_entries/flow", json=payload)
 
+    async def start_reconfigure_flow(
+        self, handler: str, entry_id: str
+    ) -> dict[str, Any]:
+        """Start Home Assistant's official reconfigure flow for an entry.
+
+        Home Assistant selects ``SOURCE_RECONFIGURE`` when ``entry_id`` is
+        included in the config-flow start payload. The integration's
+        ``async_step_reconfigure`` then owns validation and updates the
+        existing entry in place; this method deliberately does not edit
+        storage or delete/recreate entries.
+        """
+        logger.debug(
+            "Starting reconfigure flow for handler %s and entry %s",
+            handler,
+            entry_id,
+        )
+        return await self._request(
+            "POST",
+            "/config/config_entries/flow",
+            json={"handler": handler, "entry_id": entry_id},
+        )
+
     async def submit_config_flow_step(
         self, flow_id: str, user_input: dict[str, Any]
     ) -> dict[str, Any]:
@@ -1228,6 +1264,10 @@ class HomeAssistantClient:
             HomeAssistantAPIError: If flow submission fails
         """
         logger.debug(f"Submitting flow step for flow_id: {flow_id}")
+        # POST, so no gateway retry — see _RETRYABLE_GATEWAY_STATUS. This is
+        # the call that motivated the rule: HA consumes the flow_id on success,
+        # so a replay returns 404 "Invalid flow specified", a definitive-looking
+        # 4xx that hides a first attempt which may already have committed.
         return await self._request(
             "POST", f"/config/config_entries/flow/{flow_id}", json=user_input
         )
@@ -1382,6 +1422,43 @@ class HomeAssistantClient:
             }
         )
 
+    async def list_config_entries(self) -> list[dict[str, Any]]:
+        """List all config entries from Home Assistant."""
+        logger.debug("Listing Home Assistant config entries")
+        entries: Any = await self._request("GET", "/config/config_entries/entry")
+        if not isinstance(entries, list):
+            raise HomeAssistantAPIError(
+                "Unexpected response format from config entries API",
+                status_code=500,
+            )
+        return [dict(entry) for entry in entries if isinstance(entry, dict)]
+
+    async def _list_registry(self, ws_type: str, label: str) -> list[dict[str, Any]]:
+        """Read a registry list, raising rather than returning a partial one.
+
+        Callers use "empty" to mean the entry genuinely has nothing registered,
+        so a malformed response must never degrade to [].
+        """
+        response = await self.send_websocket_message({"type": ws_type})
+        result: Any = response.get("result") if isinstance(response, dict) else None
+        if not isinstance(result, list) or not all(
+            isinstance(item, dict) for item in result
+        ):
+            detail = response.get("error") if isinstance(response, dict) else response
+            raise HomeAssistantAPIError(
+                f"Unexpected response from {label} registry API: {detail!r}",
+                status_code=500,
+            )
+        return [dict(item) for item in result]
+
+    async def list_entity_registry(self) -> list[dict[str, Any]]:
+        """List Home Assistant's entity registry through the official WebSocket API."""
+        return await self._list_registry("config/entity_registry/list", "entity")
+
+    async def list_device_registry(self) -> list[dict[str, Any]]:
+        """List Home Assistant's device registry through the official WebSocket API."""
+        return await self._list_registry("config/device_registry/list", "device")
+
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
         """
         Get config entry details.
@@ -1393,25 +1470,17 @@ class HomeAssistantClient:
             entry_id: Config entry ID
 
         Returns:
-            Full config entry data
+            Home Assistant's config-entry fragment (``ConfigEntry.as_json_fragment``):
+            identity, state and capability flags. It carries NO ``data`` key, so the
+            entry's connection settings and credentials are not in it.
 
         Raises:
             HomeAssistantAPIError: If entry not found or API error
         """
         logger.debug(f"Getting config entry: {entry_id}")
-        # List all entries and filter by entry_id.
-        # Typed as Any because _request returns dict[str, Any] generically,
-        # but this endpoint actually returns a list.
-        entries: Any = await self._request("GET", "/config/config_entries/entry")
-
-        if not isinstance(entries, list):
-            raise HomeAssistantAPIError(
-                "Unexpected response format from config entries API",
-                status_code=500,
-            )
-
+        entries = await self.list_config_entries()
         found: dict[str, Any] | None = next(
-            (dict(e) for e in entries if e.get("entry_id") == entry_id), None
+            (entry for entry in entries if entry.get("entry_id") == entry_id), None
         )
         if found is None:
             raise HomeAssistantAPIError(

@@ -39,10 +39,10 @@ configuration:
       Some Codex models and ChatGPT include deferred tools too — check your client/model
       directly to confirm its features so you don''t leave this enabled unnecessarily.
       Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete).
-      Requires an add-on restart to take effect — then reconnect or refresh the MCP
-      server in your AI client so it reloads the tool list. Restarting the add-on
-      alone does NOT refresh a client''s cached tool list; this applies after changing
-      any setting here.'
+      Requires an app (add-on) restart to take effect — then reconnect or refresh
+      the MCP server in your AI client so it reloads the tool list. Restarting the
+      app (add-on) alone does NOT refresh a client''s cached tool list; this applies
+      after changing any setting here.'
   tool_search_max_results:
     name: Tool search max results
     description: 'Maximum number of tools returned by ha_search_tools when tool search
@@ -68,17 +68,17 @@ configuration:
   read_only_mode:
     name: Read Only Mode
     description: Toggles all write tools off, and removes ability for tools to make
-      any write or destructive calls. Mixed read/write tools (backups, add-ons, energy
-      preferences, voice pipelines, and code mode when enabled) stay available with
-      their write operations blocked. Same toggle as the web UI Tools tab. Off by
-      default. Requires restart to take effect.
+      any write or destructive calls. Mixed read/write tools — backups, Apps (add-ons),
+      energy preferences, voice pipelines, and code mode when enabled — stay available
+      with their write operations blocked. Same toggle as the web UI Tools tab. Off
+      by default. Requires restart to take effect.
   redact_secrets:
     name: Redact Secrets
     description: Redacts secrets from tool responses before they reach the AI assistant.
-      Add-on options and integration fields marked as passwords are replaced with
-      a set/empty marker (so "is this credential configured?" stays answerable), and
-      other tool responses are scrubbed of secret values the server has already seen
-      (values shorter than 6 characters are skipped, since replacing tiny fragments
+      App (add-on) options and integration fields marked as passwords are replaced
+      with a set/empty marker (so "is this credential configured?" stays answerable),
+      and other tool responses are scrubbed of secret values the server has already
+      seen (values shorter than 6 characters are skipped, since replacing tiny fragments
       would corrupt unrelated output). Fields not marked as passwords by their schema
       cannot be detected. Off by default.
   enable_mandatory_bps:
@@ -159,9 +159,9 @@ configuration:
       still apply). Default 7.
   verify_ssl:
     name: Verify TLS certificate
-    description: Verify the Home Assistant server's TLS certificate. The add-on connects
-      via the Supervisor proxy, so this normally has no effect and should stay enabled.
-      Disable only if you've reconfigured the add-on to talk to HA over a public HTTPS
-      hostname with a self-signed certificate or hostname mismatch. Disabling weakens
-      transport security — leave on unless you know you need it. Requires restart
-      to take effect.
+    description: Verify the Home Assistant server's TLS certificate. The app (add-on)
+      connects via the Supervisor proxy, so this normally has no effect and should
+      stay enabled. Disable only if you've reconfigured the app (add-on) to talk to
+      HA over a public HTTPS hostname with a self-signed certificate or hostname mismatch.
+      Disabling weakens transport security — leave on unless you know you need it.
+      Requires restart to take effect.

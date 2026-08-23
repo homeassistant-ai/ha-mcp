@@ -39,7 +39,8 @@ from fastmcp.tools import Tool
 
 from .config import get_global_settings
 from .errors import ErrorCode, create_error_response
-from .policy.middleware import PROXY_META_TOOLS
+from .policy.middleware import CALL_PROXY_META_TOOLS
+from .renamed_tools import current_tool_name
 from .tools.helpers import raise_tool_error
 
 if TYPE_CHECKING:
@@ -80,7 +81,7 @@ def _backup_write(args: dict[str, Any]) -> str | None:
 # Add-on parameters that, when present, mean the call mutates add-on
 # configuration (so the read-only middleware must block it). Module-level
 # so the schema-drift guard test (test_read_only.py) can pin an
-# independent manifest against it — see item 10b / ha_manage_addon.
+# independent manifest against it — see item 10b / ha_manage_app.
 _ADDON_CONFIG_WRITE_PARAMS = ("options", "network", "boot", "auto_update", "watchdog")
 
 
@@ -174,7 +175,7 @@ def _radio_write(args: dict[str, Any]) -> str | None:
 
 
 # Mixed read/write tools whose read surface has no pure-read duplicate
-# (verified per tool: ha_get_addon cannot proxy-read addon-internal
+# (verified per tool: ha_get_app cannot proxy-read addon-internal
 # APIs; energy prefs and assist pipelines are reachable only through
 # these tools; edit-backup listing exists nowhere else; the saved-tools
 # cache is only listable here; ha_manage_radio's 'ping' probe, 'cluster_read'
@@ -200,7 +201,7 @@ READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
         "action='list', 'view', or 'diff') and listing snapshots "
         "(scope='snapshot', action='list')",
     ),
-    "ha_manage_addon": ReadOnlyExemption(
+    "ha_manage_app": ReadOnlyExemption(
         _addon_write,
         "HTTP GET proxy reads of add-on APIs (slug + path, method='GET')",
     ),
@@ -427,7 +428,7 @@ class ReadOnlyMiddleware(Middleware):
         arguments = cls._coerce_arguments(args.get("arguments"))
         while (
             isinstance(name, str)
-            and name in PROXY_META_TOOLS
+            and name in CALL_PROXY_META_TOOLS
             and isinstance(arguments, dict)
             and isinstance(arguments.get("name"), str)
         ):
@@ -450,20 +451,33 @@ class ReadOnlyMiddleware(Middleware):
         if not get_global_settings().read_only_mode:
             return await call_next(context)
 
-        name = context.message.name
+        # RenamedToolAliasMiddleware runs ahead of this one and normally
+        # rewrites a retired name before it gets here. Resolving it again costs
+        # a dict lookup and removes the ordering dependency: were this gate ever
+        # registered ahead of the alias, it would read a name no exemption is
+        # keyed on, which does not fail closed.
+        name = current_tool_name(context.message.name)
         args = context.message.arguments or {}
 
         # Call proxies: decide on the INNER call (see _unwrap_proxy_call).
-        # ha_search_tools and envelope-less proxy calls pass through —
-        # searching is a read, and the proxy raises its own validation
-        # error for a missing inner name. When the inner call is allowed,
-        # the proxy dispatch re-enters this middleware with the real tool
-        # name anyway (harmless re-check, same verdict).
-        if name in PROXY_META_TOOLS:
+        # Envelope-less proxy calls pass through because the proxy raises its own
+        # validation error for a missing inner name. When the inner call is
+        # allowed, proxy dispatch re-enters this middleware with the real tool name
+        # anyway (harmless re-check, same verdict). ``ha_search_tools`` is not a
+        # dispatch proxy; it reaches generic classification below as an unknown
+        # synthetic tool, which passes through to the search transform (or the
+        # stale-tool hint path when search is disabled).
+        if name in CALL_PROXY_META_TOOLS:
             unwrapped = self._unwrap_proxy_call(args)
             if unwrapped is None:
                 return await call_next(context)
             inner_name, inner_args = unwrapped
+            # The envelope carries whatever name the client knows the tool by.
+            # An exemption is keyed on the current one, and a miss here does
+            # not block: _classify would call the stale name unknown, which is
+            # not "write", and the call would pass straight through to the
+            # proxy — which resolves the rename and dispatches the write tool.
+            inner_name = current_tool_name(inner_name)
             exemption = READ_ONLY_EXEMPT_TOOLS.get(inner_name)
             if exemption is not None:
                 blocked = exemption.blocked_write(inner_args)

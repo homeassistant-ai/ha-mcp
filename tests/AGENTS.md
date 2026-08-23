@@ -8,6 +8,44 @@
 - HA Docker image uses `annotatedyaml` (PyYAML wrapper), NOT `ruamel.yaml` — custom components needing ruamel must declare it in `manifest.json` requirements
 - Feature flags (`ENABLE_YAML_CONFIG_EDITING`, `HAMCP_ENABLE_FILESYSTEM_TOOLS`) are set in `ha_container_with_fresh_config` fixture
 
+## Backend Lanes and How to Gate a Test
+
+The suite runs on several backends, and a test that only makes sense on some
+of them is gated by a marker rather than a runtime `skip`. The markers and
+their exact skip conditions are defined in
+`src/e2e/conftest.py::pytest_collection_modifyitems` — read that docstring
+before adding a gate:
+
+| Marker | Runs on |
+|---|---|
+| `haos_only` | HAOS backends only (`HAOS_TEST_IMAGE_PATH` set). **Auto-applied** to everything under `src/e2e/haos_only/` — no marker needed there |
+| `container_only` | the testcontainer backend only (includes the container-embedded lane) |
+| `embedded_only` | the embedded testcontainer backend only (`E2E_BACKEND=embedded`) — the one lane whose session container has ha-mcp installed inside the HA image. Skips everywhere else, including `haos_embedded` |
+| `external_only` | anywhere the server-under-test runs IN the pytest process: plain testcontainer and HAOS external. Skips stdio, inaddon, container-embedded and HAOS-embedded, which cannot be reconfigured via test-process env / monkeypatch or reach an in-process mock. The name is historical — it does NOT mean "HAOS external only" |
+| `inaddon_only` | HAOS inaddon mode only (`HAOS_TEST_MODE=inaddon`), where `is_running_in_addon()` paths are live |
+| `haos_stdio_only` | HAOS stdio mode only (`HAOS_TEST_MODE=stdio`), where the installed `ha-mcp` command is exercised through a real subprocess transport |
+| `not_on_embedded` / `not_on_haos_embedded` | everywhere except that lane, for tests the lane's own session backend already covers |
+
+Pick the marker by what the test *needs*, not by where it happens to pass:
+`external_only` is about needing an in-process server you can reconfigure,
+`inaddon_only` about needing the addon's supervisor context. Read the skip
+expressions, not the summary docstring — `external_only`'s name has misled
+before (#1375 found 14 supervisor-mock tests silently skipping on every
+testcontainer run).
+
+**Two different things share the `ha_mcp_tools` name — don't conflate them:**
+
+- **The component itself** (filesystem / registry tools) is installed on
+  EVERY lane by `_install_custom_component`. A test may therefore rely on
+  component-gated behaviour with no marker — e.g. a config entry's
+  `unique_id`, which Home Assistant's own API never exposes on any endpoint.
+- **The in-process "server" config entry** of that same component (#1527) is
+  the embedded backend only, seeded separately. That one IS lane-specific.
+
+In production the component is optional (it ships via HACS), so server code
+reading component-only data must degrade honestly for installs without it
+rather than assume the e2e's always-present case.
+
 ## Test Patterns
 
 - Tests expecting tool **success**: use `mcp.call_tool_success()` inside `MCPAssertions` context

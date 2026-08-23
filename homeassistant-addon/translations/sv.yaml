@@ -23,22 +23,22 @@ configuration:
   enable_tool_search:
     name: Aktivera verktygssökning
     description: 'Ersätt hela verktygskatalogen med sökbaserad upptäckt. Minskar inaktiv
-      kontext med ungefär 90%, till cirka 5K tokens. ⚠️ Aktivera INTE detta i klienter
-      med egen inbyggd verktygssökning / fördröjda verktyg (claude.ai, Claude Desktop,
-      Claude Code) — de två söklagren kommer i konflikt, och klientens inbyggda verktygssökning
-      är det bättre valet där; lämna detta avstängt. Om verktyg är fördröjda beror
-      på din klient- och modellkombination: använd detta när din installation laddar
-      hela katalogen direkt — modeller utan inbyggda fördröjda verktyg (t.ex. Gemini,
-      OpenAI-kompatibla lokala modeller, Claude Haiku), klienter som inkluderar alla
-      verktygsscheman oavsett modell (t.ex. GitHub Copilot CLI), eller mindre kontextfönster.
-      Vissa Codex-modeller och ChatGPT inkluderar också fördröjda verktyg — kontrollera
-      din klient/modell direkt för att bekräfta dess funktioner så att du inte lämnar
-      detta aktiverat i onödan. Verktyg hittas via ha_search_tools och exekveras via
-      kategoriserade proxys (läs/skriv/radera). Kräver en omstart av tillägget för
-      att träda i kraft — återanslut sedan eller uppdatera MCP-servern i din AI-klient
-      så att den laddar om verktygslistan. Att endast starta om tillägget uppdaterar
-      INTE en klients cachade verktygslista; detta gäller efter att ha ändrat någon
-      inställning här.'
+      kontext med ungefär 90 %, till cirka 5K tokens. ⚠️ Aktivera INTE detta i klienter
+      med inbyggd verktygssökning / uppskjutna verktyg (claude.ai, Claude Desktop,
+      Claude Code) – de två söklagren krockar, och klientens inbyggda verktygssökning
+      är det bättre valet där; lämna denna avstängd. Huruvida verktyg skjuts upp beror
+      på din klient- och modellkombination: använd detta när din konfiguration läser
+      in hela katalogen i förväg – modeller utan inbyggda uppskjutna verktyg (t.ex.
+      Gemini, OpenAI-kompatibla lokala modeller, Claude Haiku), klienter som infogar
+      alla verktygsscheman oavsett modell (t.ex. GitHub Copilot CLI), eller mindre
+      kontextfönster. Vissa Codex-modeller och ChatGPT inkluderar också uppskjutna
+      verktyg – kontrollera din klient/modell direkt för att bekräfta dess funktioner
+      så att du inte lämnar detta aktiverat i onödan. Verktyg hittas via ha_search_tools
+      och exekveras via kategoriserade proxyservrar (läs/skriv/ta bort). Kräver omstart
+      av appen (tillägget) för att träda i kraft – återanslut eller uppdatera sedan
+      MCP-servern i din AI-klient så att den läser om verktygslistan. Enbart omstart
+      av appen (tillägget) uppdaterar INTE en klients cachade verktygslista; detta
+      gäller efter att du har ändrat någon inställning här.'
   tool_search_max_results:
     name: Max antal resultat för verktygssökning
     description: 'Maximalt antal verktyg som returneras av ha_search_tools när verktygssökning
@@ -64,21 +64,22 @@ configuration:
       omstart för att träda i kraft.'
   read_only_mode:
     name: Skrivskyddat läge
-    description: Stänger av alla skrivverktyg och tar bort verktygens förmåga att
-      göra skriv- eller destruktiva anrop. Blandade läs-/skrivverktyg (säkerhetskopior,
-      tillägg, energipreferenser, röstpipelines och kodläge när aktiverat) förblir
-      tillgängliga med sina skrivoperationer blockerade. Samma växling som fliken
-      Verktyg i webbgränssnittet. Avstängt som standard. Kräver omstart för att träda
-      i kraft.
+    description: Stänger av alla skrivverktyg och tar bort möjligheten för verktyg
+      att göra några skrivningar eller destruktiva anrop. Blandade läs-/skrivverktyg
+      – säkerhetskopior, appar (tillägg), energipreferenser, röstpipeliner och kodläge
+      när det är aktiverat – förblir tillgängliga men med sina skrivåtgärder blockerade.
+      Samma reglage som på fliken Tools i webbgränssnittet. Av som standard. Kräver
+      omstart för att träda i kraft.
   redact_secrets:
     name: Redigera hemligheter
-    description: Redigerar hemligheter från verktygssvar innan de når AI-assistenten.
-      Tilläggsalternativ och integrationsfält markerade som lösenord ersätts med en
-      satt/tom markör (så att ”är denna behörighet konfigurerad?” förblir besvarbar),
-      och andra verktygssvar rensas från hemliga värden som servern redan har sett
-      (värden kortare än 6 tecken hoppas över, eftersom att ersätta små fragment skulle
-      korrumpera orelaterad utdata). Fält som inte är markerade som lösenord av deras
-      schema kan inte upptäckas. Avstängt som standard.
+    description: Döljer hemligheter från verktygssvar innan de når AI-assistenten.
+      Appalternativ (tilläggsalternativ) och integrationsfält markerade som lösenord
+      ersätts med en markering för satt/tomt (så att "är denna autentiseringsuppgift
+      konfigurerad?" fortfarande kan besvaras), och andra verktygssvar rensas från
+      hemliga värden som servern redan har sett (värden kortare än 6 tecken hoppas
+      över, eftersom utbyte av små fragment skulle korruptera orelaterad utdata).
+      Fält som inte är markerade som lösenord av sitt schema kan inte upptäckas. Av
+      som standard.
   enable_mandatory_bps:
     name: Bifoga bästa praxis-färdigheter vid skrivningar
     description: 'Huvudbrytare för funktionen för leverans av skrivverktygsfärdighetsinnehåll
@@ -163,9 +164,10 @@ configuration:
       schemalagd säkerhetskopiering gäller fortfarande). Standard 7.
   verify_ssl:
     name: Verifiera TLS-certifikat
-    description: Verifiera Home Assistant-serverns TLS-certifikat. Tillägget ansluter
-      via Supervisor-proxyn, så detta har normalt ingen effekt och bör förbli aktiverat.
-      Inaktivera endast om du har omkonfigurerat tillägget för att kommunicera med
-      HA över ett offentligt HTTPS-värdnamn med ett självsignerat certifikat eller
-      värdnamnsfel. Att inaktivera försvagar transportsäkerheten – låt det vara aktiverat
-      om du inte vet att du behöver det. Kräver omstart för att träda i kraft.
+    description: Verifiera Home Assistant-serverns TLS-certifikat. Appen (tillägget)
+      ansluter via Supervisor-proxyn, så detta har normalt ingen effekt och bör förbli
+      aktiverat. Inaktivera endast om du har konfigurerat om appen (tillägget) för
+      att kommunicera med HA över ett offentligt HTTPS-värdnamn med ett självsignerat
+      certifikat eller matchningsfel för värdnamn. Inaktivering försvagar transportsäkerheten
+      – lämna på om du inte vet att du behöver det. Kräver omstart för att träda i
+      kraft.

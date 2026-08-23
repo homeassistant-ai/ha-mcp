@@ -351,6 +351,25 @@ def test_other_ineffectual_statement_in_same_file_still_gates(
     assert gate.main(["prog", str(path)]) == 1
 
 
+def test_oauth_path_suppression_is_pinned_to_public_constant(monkeypatch) -> None:
+    """A different clear-text finding in mcp_webhook must still gate."""
+    file = "custom_components/ha_mcp_tools/mcp_webhook.py"
+    rule = "py/clear-text-logging-sensitive-data"
+    message = "This expression is logged as clear text."
+    monkeypatch.setattr(
+        gate,
+        "_source_line",
+        lambda _file, line: (
+            "            OAUTH_BASE,"
+            if line == 731
+            else "        _LOGGER.warning(client_secret)"
+        ),
+    )
+
+    assert gate._allowlist_reason(file, 731, rule, message) is not None
+    assert gate._allowlist_reason(file, 900, rule, message) is None
+
+
 def test_code_scoped_entry_fails_closed_when_source_is_unreadable(
     tmp_path: Path, monkeypatch
 ) -> None:

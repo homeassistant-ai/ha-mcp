@@ -411,6 +411,33 @@ class TestCategorizedCallDispatch:
         )
 
     @pytest.mark.anyio
+    async def test_proxy_dispatches_a_renamed_tool_under_its_current_name(
+        self, transform
+    ):
+        """A stale catalog can name a tool that has since been renamed.
+
+        The alias middleware would rewrite a direct call, but a proxied one is
+        checked against the live category set first and would be rejected as
+        the wrong category before the re-dispatch ever reaches the middleware.
+        """
+        _prepopulate_cache(
+            transform,
+            [
+                _make_tool("ha_manage_app", destructive=True),
+                _make_tool("ha_get_state", read_only=True),
+            ],
+        )
+        ctx = _make_ctx(call_tool_return={"success": True})
+        fn = self._get_proxy_fn(transform, "write")
+
+        result = await fn("ha_manage_addon", {"slug": "core_ssh"}, ctx)
+
+        assert result == {"success": True}
+        ctx.fastmcp.call_tool.assert_called_once_with(
+            "ha_manage_app", {"slug": "core_ssh"}
+        )
+
+    @pytest.mark.anyio
     async def test_write_proxy_happy_path(self, transform):
         """Correct write tool via write proxy succeeds."""
         ctx = _make_ctx(call_tool_return={"success": True})
@@ -535,6 +562,38 @@ class TestDoubleUnwrap:
         assert result == {"state": "on"}
         ctx.fastmcp.call_tool.assert_called_once_with(
             "ha_get_state", {"entity_id": "x"}
+        )
+
+    @pytest.mark.anyio
+    async def test_double_wrapped_renamed_tool_unwraps_under_its_current_name(
+        self, transform
+    ):
+        """The envelope's inner name comes from the same stale catalog.
+
+        The recovery block tests it against the live category sets, so an
+        unresolved retired name fails the unwrap and the call dies with a
+        wrong-category error naming the proxy — the alias covering one envelope
+        shape and not the other.
+        """
+        _prepopulate_cache(
+            transform,
+            [
+                _make_tool("ha_manage_app", destructive=True),
+                _make_tool("ha_get_state", read_only=True),
+            ],
+        )
+        ctx = _make_ctx(call_tool_return={"success": True})
+        fn = self._get_proxy_fn(transform, "write")
+
+        result = await fn(
+            "ha_call_write_tool",
+            {"name": "ha_manage_addon", "arguments": {"slug": "core_ssh"}},
+            ctx,
+        )
+
+        assert result == {"success": True}
+        ctx.fastmcp.call_tool.assert_called_once_with(
+            "ha_manage_app", {"slug": "core_ssh"}
         )
 
     @pytest.mark.anyio
@@ -854,7 +913,7 @@ class TestApplySearchKeywordEnrichment:
             "ha_config_set_script",
             "ha_config_set_helper",
             "ha_search",
-            "ha_manage_addon",
+            "ha_manage_app",
         ):
             assert tool_name in keywords, f"{tool_name} missing from _SEARCH_KEYWORDS"
 

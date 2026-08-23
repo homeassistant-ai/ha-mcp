@@ -60,23 +60,23 @@ configuration:
       webowego. Wymaga ponownego uruchomienia, aby zmiany weszły w życie.'
   read_only_mode:
     name: Tryb tylko do odczytu
-    description: Wyłącza wszystkie narzędzia do zapisu i usuwa możliwość wykonywania
-      przez narzędzia jakichkolwiek operacji zapisu lub destrukcyjnych wywołań. Narzędzia
-      mieszane do odczytu/zapisu (kopie zapasowe, dodatki, preferencje energetyczne,
-      potoki głosowe i tryb kodu, gdy jest włączony) pozostają dostępne, ale ich operacje
-      zapisu są zablokowane. Ten sam przełącznik co w zakładce „Narzędzia” interfejsu
-      sieciowego. Domyślnie wyłączone. Wymaga ponownego uruchomienia, aby zmiany weszły
-      w życie.
+    description: Wyłącza wszystkie narzędzia zapisujące oraz usuwa możliwość wykonywania
+      przez narzędzia jakichkolwiek wywołań zapisujących lub destrukcyjnych. Mieszane
+      narzędzia do odczytu i zapisu — kopie zapasowe, aplikacje (dodatki), preferencje
+      energii, potoki głosowe oraz tryb kodu, gdy jest włączony — pozostają dostępne
+      z zablokowanymi operacjami zapisu. Ten sam przełącznik co na karcie Narzędzia
+      w interfejsie webowym. Domyślnie wyłączony. Wymaga ponownego uruchomienia, aby
+      zacząć obowiązywać.
   redact_secrets:
     name: Redaguj sekrety
-    description: Redaguje sekrety z odpowiedzi narzędzi, zanim dotrą one do asystenta
-      AI. Opcje dodatków i pola integracji oznaczone jako hasła są zastępowane znacznikiem
-      „ustawione/puste” (aby pytanie „czy te dane uwierzytelniające są skonfigurowane?”
-      pozostało możliwe do odpowiedzi), a inne odpowiedzi narzędzi są oczyszczane
-      z wartości tajnych, które serwer już widział (wartości krótsze niż 6 znaków
-      są pomijane, ponieważ zastąpienie małych fragmentów mogłoby uszkodzić niezwiązane
-      z nimi dane wyjściowe). Pola nieoznaczone jako hasła w ich schemacie nie mogą
-      zostać wykryte. Domyślnie wyłączone.
+    description: Usuwa poufne dane z odpowiedzi narzędzi, zanim dotrą one do asystenta
+      AI. Opcje aplikacji (dodatku) i pola integracji oznaczone jako hasła są zastępowane
+      znacznikiem ustawienia/pustej wartości (dzięki czemu na pytanie "czy to poświadczenie
+      jest skonfigurowane?" nadal można odpowiedzieć), a inne odpowiedzi narzędzi
+      są czyszczone z poufnych wartości, które serwer już widział (wartości krótsze
+      niż 6 znaków są pomijane, ponieważ zastępowanie malutkich fragmentów mogłoby
+      uszkodzić powiązane dane wyjściowe). Pola nieoznaczone jako hasła przez ich
+      schemat nie mogą zostać wykryte. Domyślnie wyłączone.
   enable_beta_features:
     name: Włącz funkcje beta (główne)
     description: ⚠ NIEBEZPIECZEŃSTWO — te narzędzia mogą TRWALE USZKODZIĆ Twoją instalację
@@ -137,19 +137,20 @@ configuration:
       komunikacji na edycję.'
   enable_code_mode:
     name: Włącz piaskownicę niestandardowych narzędzi (beta)
-    description: Funkcja beta. Włącza narzędzie ha_manage_custom_tool, które pozwala
-      asystentom AI tworzyć, uruchamiać, zapisywać i usuwać niestandardowy kod Python
-      w bezpiecznej piaskownicy, gdy żadne wbudowane narzędzie nie może obsłużyć żądania.
-      Kod działa w izolowanym interpreterze bez dostępu do systemu plików ani dowolnego
-      dostępu sieciowego. Kod w piaskownicy może korzystać z HA REST API (api_get/api_post),
-      wysyłać polecenia WebSocket (ws_send), wywoływać istniejące narzędzia MCP (call_tool)
-      lub usuwać zapisane narzędzie (delete_saved_tool). Zapisane narzędzia domyślnie
-      są przechowywane w /data/saved_tools.json, dzięki czemu przetrwają restarty
-      dodatków i są widoczne dla każdego klienta, który może się połączyć. Zobacz
-      docs/beta.md, aby poznać znane ograniczenia. Wymaga restartu, aby zmiany weszły
-      w życie. WYMAGA włączenia głównego przełącznika „Enable beta features” powyżej
-      (i w interfejsie sieciowym) — w przeciwnym razie ta pod-flaga jest ignorowana
-      podczas działania, niezależnie od jej wartości tutaj.
+    description: Funkcja w wersji beta. Włącza narzędzie ha_manage_custom_tool, które
+      pozwala asystentom AI tworzyć, uruchamiać, zapisywać i usuwać niestandardowy
+      kod w języku Python w bezpiecznej piaskownicy (sandbox), gdy żadne wbudowane
+      narzędzie nie jest w stanie obsłużyć żądania. Kod uruchamia się w odizolowanym
+      interpreterze bez dostępu do systemu plików ani nieograniczonego dostępu do
+      sieci. Kod w piaskownicy może wywoływać API REST HA (api_get/api_post), wysyłać
+      polecenia WebSocket (ws_send), wywoływać istniejące narzędzia MCP (call_tool)
+      lub usuwać zapisane narzędzie (delete_saved_tool). Zapisane narzędzia są domyślnie
+      zachowywane w /data/saved_tools.json, dzięki czemu przetrwają ponowne uruchomienie
+      aplikacji (dodatku), i są widoczne dla każdego klienta, który może się połączyć.
+      Znane ograniczenia opisano w pliku docs/beta.md. Wymaga ponownego uruchomienia,
+      aby zacząć obowiązywać. WYMAGA, aby główny przełącznik "Włącz funkcje beta"
+      powyżej (i w interfejsie webowym) był włączony — w przeciwnym razie ta podflaga
+      jest ignorowana w czasie wykonywania niezależnie od jej wartości.
   enable_lite_docstrings:
     name: Włącz uproszczone docstringi narzędzi (beta)
     description: 'Funkcja beta. Zastępuje docstringi w kilku „ciężkich” narzędziach
@@ -203,21 +204,22 @@ configuration:
       jest ignorowana podczas działania, niezależnie od jej wartości tutaj.'
   enable_dashboard_screenshot:
     name: Włącz tryb zrzutów ekranu pulpitu nawigacyjnego (beta)
-    description: Funkcja beta — domyślnie wyłączona. Dodaje narzędzie ha_get_dashboard_screenshot
-      oraz opcje include_screenshot / return_screenshot do narzędzi get/set pulpitu
-      nawigacyjnego, dzięki czemu asystenci AI mogą sprawdzać jeden lub więcej responsywnych
-      obrazów Lovelace (np. w celu weryfikacji właśnie utworzonego pulpitu nawigacyjnego).
-      Obsługuje stabilne nazwane widoki, partie mobilne/tabletowe/desktopowe oraz
-      wyjście PNG/JPEG/WebP/BMP. Renderowanie odbywa się w oddzielnym, opcjonalnym
-      silniku — dodatku „Puppet” ballooba (bezgłowy Chromium) — który instalujesz
-      raz (dodaj repozytorium dodatków ballooba, a następnie zainstaluj „Puppet”)
-      i nadajesz mu długotrwały token dostępu; w wdrożeniach Docker/Container uruchamiasz
-      ten silnik jako sidecar i ustawiasz HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nic
-      ciężkiego nie jest instalowane, chyba że zarówno włączysz tę funkcję, jak i
-      zainstalujesz silnik. Wymaga ponownego uruchomienia, aby zmiany weszły w życie.
-      WYMAGA włączenia głównego przełącznika „Enable beta features” powyżej (i w interfejsie
-      użytkownika sieci web) — w przeciwnym razie ta podflaga jest ignorowana w czasie
-      działania, niezależnie od jej wartości tutaj.
+    description: Funkcja w wersji beta — domyślnie wyłączona. Dodaje narzędzie ha_get_dashboard_screenshot
+      oraz opcje include_screenshot / return_screenshot w narzędziach pobierania/ustawiania
+      pulpitów, dzięki czemu asystenci AI mogą sprawdzać jeden lub więcej responsywnych
+      obrazów Lovelace (np. w celu zweryfikowania właśnie utworzonego pulpitu). Obsługuje
+      stabilne nazwane widoki, partie mobilne/tabletowe/desktopowe oraz wyjście w
+      formacie PNG/JPEG/WebP/BMP. Renderowanie odbywa się w osobnym, opcjonalnym silniku
+      — aplikacji (dodatku) "Puppet" autorstwa balloob, bezgłowym Chromium — który
+      instalujesz raz (dodajesz repozytorium balloob do sklepu z aplikacjami, a następnie
+      instalujesz "Puppet") i przekazujesz długoterminowy token dostępu; w przypadku
+      wdrożeń na Dockerze/Containerze uruchamiasz ten silnik jako kontener pomocniczy
+      (sidecar) i ustawiasz zmienną HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Żadne duże
+      komponenty nie są instalowane, dopóki zarówno nie włączysz tej opcji, jak i
+      nie zainstalujesz silnika. Wymaga ponownego uruchomienia, aby zacząć obowiązywać.
+      WYMAGA, aby główny przełącznik "Włącz funkcje beta" powyżej (i w interfejsie
+      webowym) był włączony — w przeciwnym razie ta podflaga jest ignorowana w czasie
+      wykonywania niezależnie od jej wartości.
   enable_auto_backup:
     name: Włącz automatyczne tworzenie kopii zapasowych zmian
     description: 'Tworzy migawkę dla każdej encji przed każdym wywołaniem narzędzia
@@ -284,10 +286,10 @@ configuration:
       wyszukiwaniem narzędzi. Nazwy narzędzi oddzielone przecinkami.
   verify_ssl:
     name: Weryfikuj certyfikat TLS
-    description: Weryfikuje certyfikat TLS serwera Home Assistant. Dodatek łączy się
-      przez proxy Supervisor, więc normalnie nie ma to wpływu i powinno pozostać włączone.
-      Wyłącz tylko, jeśli ponownie skonfigurowałeś dodatek, aby komunikował się z
-      HA przez publiczną nazwę hosta HTTPS z certyfikatem z podpisem własnym lub niezgodnością
-      nazwy hosta. Wyłączenie osłabia bezpieczeństwo transportu — pozostaw włączone,
-      chyba że wiesz, że tego potrzebujesz. Wymaga ponownego uruchomienia, aby zmiany
-      weszły w życie.
+    description: Zweryfikuj certyfikat TLS serwera Home Assistant. Aplikacja (dodatek)
+      łączy się przez proxy Supervisora, więc zazwyczaj nie ma to wpływu i powinno
+      pozostać włączone. Wyłącz tylko wtedy, gdy skonfigurowano aplikację (dodatek)
+      tak, aby komunikowała się z HA przez publiczną nazwę hosta HTTPS z certyfikatem
+      z podpisem własnym lub niedopasowaniem nazwy hosta. Wyłączenie osłabia bezpieczeństwo
+      transportu — pozostaw włączone, chyba że wiesz, że tego potrzebujesz. Wymaga
+      ponownego uruchomienia, aby zaczęło obowiązywać.

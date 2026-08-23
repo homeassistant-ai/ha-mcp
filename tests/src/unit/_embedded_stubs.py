@@ -415,10 +415,18 @@ class ClientTimeout:
     ceil_threshold: float = 5
 
 
+@dataclass(frozen=True)
+class TCPConnector:
+    """Minimal connector stand-in retaining the configured pool limit."""
+
+    limit: int = 100
+
+
 def _make_fake_aiohttp() -> ModuleType:
     mod = ModuleType("aiohttp")
     mod.ClientError = ClientError  # type: ignore[attr-defined]
     mod.ClientTimeout = ClientTimeout  # type: ignore[attr-defined]
+    mod.TCPConnector = TCPConnector  # type: ignore[attr-defined]
     mod.ClientSession = MagicMock(name="ClientSession")  # type: ignore[attr-defined]
     mod.web = _make_fake_web()  # type: ignore[attr-defined]
     return mod

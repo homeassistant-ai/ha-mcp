@@ -1,4 +1,6 @@
+import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -12,7 +14,9 @@ from ha_mcp.visibility.persistence import (
 
 
 def test_absent_file_returns_default(tmp_path):
-    assert load_visibility_config(tmp_path) == VisibilityConfig()
+    loaded = load_visibility_config(tmp_path)
+    assert loaded == VisibilityConfig()
+    assert loaded.restrict_report_issue is False
 
 
 def test_save_then_load_roundtrip_bumps_version(tmp_path):
@@ -28,6 +32,52 @@ def test_save_then_load_preserves_enforce(tmp_path):
     )
     loaded = load_visibility_config(tmp_path)
     assert loaded.enforce is True
+
+
+def test_legacy_enforce_config_loads_with_report_issue_unrestricted(
+    tmp_path: Path,
+) -> None:
+    """A pre-toggle config gains the intentional default diagnostic exemption."""
+    (tmp_path / VISIBILITY_FILENAME).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "enabled": True,
+                "exclude_categories": [],
+                "exclude_hidden": False,
+                "deny_entity_ids": ["sensor.hidden"],
+                "exclude_areas": [],
+                "exclude_labels": [],
+                "allow_entity_ids": [],
+                "allow_areas": [],
+                "allow_labels": [],
+                "respect_assist_exposure": False,
+                "enforce": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_visibility_config(tmp_path)
+
+    assert loaded.enabled is True
+    assert loaded.enforce is True
+    assert loaded.deny_entity_ids == ["sensor.hidden"]
+    assert loaded.restrict_report_issue is False
+
+
+def test_save_then_load_preserves_report_issue_restriction(tmp_path):
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            version=1,
+            enabled=True,
+            enforce=True,
+            restrict_report_issue=True,
+        ),
+    )
+    loaded = load_visibility_config(tmp_path)
+    assert loaded.restrict_report_issue is True
 
 
 def test_corrupt_json_raises_valueerror(tmp_path):

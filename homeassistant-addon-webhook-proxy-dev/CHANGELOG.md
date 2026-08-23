@@ -9,6 +9,14 @@ history from before the fork.
 -->
 
 
+## v3.0.1.dev1 (2026-08-16)
+
+Version line rebased onto the 3.0.0 stable base by the promote PR
+(`rebase_dev_version`). The OAuth surface overhaul developed on this channel as
+2.1.1.dev4 and .dev5 shipped in stable 3.0.0 — see the stable CHANGELOG for the
+user-facing notes; dev and stable are code-identical as of that promotion.
+
+
 ## v2.1.1.dev3 (2026-07-31)
 
 Internal: lint cleanup (ruff pylint rules) — no behavior change.

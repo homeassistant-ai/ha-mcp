@@ -32,24 +32,24 @@ configuration:
     name: Attiva la ricerca degli strumenti
     description: 'Sostituisci il catalogo completo degli strumenti con la scoperta
       basata sulla ricerca. Riduce il contesto inattivo di circa il 90%, a circa 5K
-      token. ⚠️ NON abilitare questa opzione nei client con la propria ricerca strumenti
-      integrata / strumenti differiti (claude.ai, Claude Desktop, Claude Code) — i
-      due livelli di ricerca entrano in conflitto, e la ricerca strumenti integrata
-      del client è la scelta migliore in quel caso; lasciala disattivata. Se gli strumenti
-      sono differiti dipende dalla combinazione client e modello: usa questa opzione
-      quando la tua configurazione carica il catalogo completo in anticipo — modelli
-      senza strumenti differiti nativi (es. Gemini, modelli locali compatibili con
-      OpenAI, Claude Haiku), client che incorporano tutti gli schemi degli strumenti
-      indipendentemente dal modello (es. GitHub Copilot CLI), o finestre di contesto
-      più piccole. Alcuni modelli Codex e ChatGPT includono anche strumenti differiti
-      — controlla direttamente il tuo client/modello per confermarne le funzionalità
-      in modo da non lasciare questa opzione abilitata inutilmente. Gli strumenti
-      vengono trovati tramite ha_search_tools ed eseguiti tramite proxy categorizzati
-      (read/write/delete). Richiede un riavvio dell''add-on per avere effetto — poi
+      token. ⚠️ NON abilitare questa opzione nei client con ricerca di strumenti integrata
+      / strumenti differiti (claude.ai, Claude Desktop, Claude Code) — i due livelli
+      di ricerca entrano in conflitto e la ricerca di strumenti integrata del client
+      è la scelta migliore in quel caso; lasciala disattivata. Se gli strumenti siano
+      differiti dipende dalla combinazione di client e modello: usalo quando la tua
+      configurazione carica l''intero catalogo in anticipo — modelli senza strumenti
+      differiti nativi (es. Gemini, modelli locali compatibili con OpenAI, Claude
+      Haiku), client che inseriscono tutti gli schemi di strumenti indipendentemente
+      dal modello (es. GitHub Copilot CLI), o finestre di contesto più piccole. Alcuni
+      modelli Codex e ChatGPT includono anch''essi strumenti differiti — verifica
+      direttamente il tuo client/modello per confermare le sue funzionalità in modo
+      da non lasciare questa opzione abilitata inutilmente. Gli strumenti vengono
+      trovati tramite ha_search_tools ed eseguiti tramite proxy categorizzati (lettura/scrittura/eliminazione).
+      Richiede il riavvio dell''app (componente aggiuntivo) per avere effetto — quindi
       riconnettiti o aggiorna il server MCP nel tuo client di IA in modo che ricarichi
-      l''elenco degli strumenti. Il solo riavvio dell''add-on NON aggiorna l''elenco
-      degli strumenti memorizzato nella cache di un client; questo si applica dopo
-      aver modificato qualsiasi impostazione qui.'
+      l''elenco degli strumenti. Il solo riavvio dell''app (componente aggiuntivo)
+      NON aggiorna l''elenco degli strumenti memorizzato nella cache di un client;
+      questo si applica dopo aver modificato qualsiasi impostazione qui.'
   tool_search_max_results:
     name: Numero massimo di risultati della ricerca degli strumenti
     description: 'Numero massimo di strumenti restituiti da ha_search_tools quando
@@ -79,24 +79,24 @@ configuration:
       dell''interfaccia web. Richiede un riavvio per avere effetto.'
   read_only_mode:
     name: Modalità di sola lettura
-    description: Disattiva tutti gli strumenti di scrittura e impedisce a qualunque
-      strumento di eseguire chiamate di scrittura o distruttive. Gli strumenti misti
-      di lettura/scrittura (backup, componenti aggiuntivi, preferenze energetiche,
-      pipeline vocali e la modalità codice quando è attiva) restano disponibili, ma
-      con le operazioni di scrittura bloccate. È la stessa opzione della scheda Strumenti
-      nell'interfaccia web. Disattivata per impostazione predefinita. Richiede il
-      riavvio per avere effetto.
+    description: Disattiva tutti gli strumenti di scrittura e rimuove la capacità
+      degli strumenti di effettuare chiamate di scrittura o distruttive. Gli strumenti
+      misti di lettura/scrittura — backup, applicazioni (add-on), preferenze energetiche,
+      pipeline vocali e la modalità codice quando abilitata — rimangono disponibili
+      con le loro operazioni di scrittura bloccate. Stesso interruttore della scheda
+      Tools dell'interfaccia web. Disattivato per impostazione predefinita. Richiede
+      il riavvio per avere effetto.
   redact_secrets:
     name: Rimuovi Segreti
-    description: Rimuove i segreti dalle risposte degli strumenti prima che raggiungano
-      l'assistente IA. Le opzioni dell'add-on e i campi di integrazione contrassegnati
-      come password vengono sostituiti con un marcatore impostato/vuoto (così "questa
-      credenziale è configurata?" rimane una domanda a cui si può rispondere), e altre
-      risposte degli strumenti vengono ripulite dai valori segreti che il server ha
-      già visto (i valori più corti di 6 caratteri vengono saltati, poiché la sostituzione
-      di frammenti minuscoli corromperebbe l'output non correlato). I campi non contrassegnati
-      come password dal loro schema non possono essere rilevati. Disattivato per impostazione
-      predefinita.
+    description: Rimuove le informazioni riservate dalle risposte degli strumenti
+      prima che raggiungano l'assistente IA. Le opzioni dell'applicazione (add-on)
+      e i campi di integrazione contrassegnati come password vengono sostituiti con
+      un marcatore di impostato/vuoto (in modo che "questa credenziale è configurata?"
+      rimanga interrogabile), e le risposte di altri strumenti vengono ripulite dai
+      valori segreti che il server ha già visto (i valori più corti di 6 caratteri
+      vengono ignorati, poiché la sostituzione di frammenti minuscoli corromperebbe
+      output non correlati). I campi non contrassegnati come password dal loro schema
+      non possono essere rilevati. Disattivato per impostazione predefinita.
   enable_mandatory_bps:
     name: Allega le skill di buone pratiche alle scritture
     description: 'Interruttore principale della funzione che consegna il contenuto
@@ -187,10 +187,10 @@ configuration:
       7.
   verify_ssl:
     name: Verifica il certificato TLS
-    description: 'Verifica il certificato TLS del server Home Assistant. Il componente
-      aggiuntivo si collega tramite il proxy del Supervisor, quindi di norma questo
-      non ha alcun effetto e conviene lasciarlo attivo. Disattivalo solo se hai riconfigurato
-      il componente aggiuntivo per parlare con HA tramite un nome host HTTPS pubblico
-      con certificato autofirmato o con nome host non corrispondente. Disattivarlo
-      indebolisce la sicurezza del trasporto: lascialo attivo a meno che tu non sappia
+    description: 'Verifica il certificato TLS del server Home Assistant. L''app (componente
+      aggiuntivo) si connette tramite il proxy Supervisor, quindi questo normalmente
+      non ha effetto e dovrebbe rimanere abilitato. Disabilita solo se hai riconfigurato
+      l''app (componente aggiuntivo) per comunicare con HA su un nome host HTTPS pubblico
+      con un certificato autofirmato o una discrepanza del nome host. La disabilitazione
+      indebolisce la sicurezza del trasporto: lasciala attiva a meno che tu non sappia
       di averne bisogno. Richiede il riavvio per avere effetto.'

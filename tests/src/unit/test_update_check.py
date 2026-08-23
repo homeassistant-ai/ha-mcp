@@ -455,7 +455,7 @@ class TestUpdateCommandHint:
         """In the add-on, the hint points at the Supervisor UI, not pip/docker."""
         monkeypatch.setattr(update_check, "is_running_in_addon", lambda: True)
         hint = update_command_hint("7.9.0")
-        assert "Add-ons" in hint
+        assert "Settings -> Apps -> Home Assistant MCP Server" in hint
         assert "pip install" not in hint and "docker pull" not in hint
 
 

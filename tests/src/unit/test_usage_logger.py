@@ -323,6 +323,15 @@ class TestParameterRedaction:
         assert result["status_code"] == 500
         assert result["cache_key"] == "abc"
 
+    def test_assist_sentence_redacted(self):
+        """ha_manage_pipeline(action='process') carries user speech, which
+        ha_report_issue would otherwise publish verbatim."""
+        result = _redact_parameters(
+            {"action": "process", "sentence": "unlock the front door for Alex"}
+        )
+        assert result["sentence"] == _REDACTED_VALUE
+        assert result["action"] == "process"
+
     def test_case_insensitive(self):
         result = _redact_parameters({"CODE": "1234", "Token": "t"})
         assert result["CODE"] == _REDACTED_VALUE

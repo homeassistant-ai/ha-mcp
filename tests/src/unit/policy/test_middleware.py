@@ -62,6 +62,26 @@ async def test_no_matching_rule_passes_through(queue):
 
 
 @pytest.mark.anyio
+async def test_a_rule_gates_a_call_on_the_tools_retired_name(queue):
+    """The gate is keyed on the current name; ``evaluate`` fails OPEN.
+
+    The alias middleware normally rewrites the name before this gate sees it,
+    so this pins the defence rather than the ordering: reading the raw name
+    here means no rule matches, and an unmatched call is allowed.
+    """
+    pol = Policy(rules=[Rule(tool_name="ha_manage_app")])
+    mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)
+    call_next = AsyncMock()
+
+    with pytest.raises(ToolError) as ei:
+        await mw.on_call_tool(make_context("ha_manage_addon", {"slug": "x"}), call_next)
+
+    body = json.loads(ei.value.args[0])
+    assert body["error"]["code"] == "USER_APPROVAL_REQUIRED"
+    call_next.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_remembered_approval_passes_through(queue):
     pol = Policy(rules=[Rule(tool_name="ha_call_service")])
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)

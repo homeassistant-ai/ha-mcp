@@ -149,20 +149,20 @@ docker pull ghcr.io/homeassistant-ai/ha-mcp:latest
 # Stop your dev container and start a new one with :latest tag
 ```
 
-### Home Assistant Add-on
+### Home Assistant app (add-on)
 
-The dev channel is available as a **separate add-on** in the Home Assistant add-on store.
+The dev channel is available as a **separate app (add-on)** in the Home Assistant App store.
 
 **To use the dev channel:**
 
 1. Open Home Assistant
-2. Go to **Settings** → **Add-ons** → **Add-on Store**
+2. Go to **Settings** → **Apps** → **Install app** (**Settings** → **Add-ons** → **Add-on store** before Home Assistant 2026.2)
 3. Search for **"Home Assistant MCP Server (Dev)"**
 4. Click **Install**
 5. Configure with your token (if not using auto-discovery)
-6. Start the add-on
+6. Start the app
 
-**Key differences from stable add-on:**
+**Key differences from stable app:**
 
 | Property | Stable | Dev |
 |----------|--------|-----|
@@ -171,9 +171,9 @@ The dev channel is available as a **separate add-on** in the Home Assistant add-
 | **Stage** | Stable | Experimental |
 | **Updates** | Biweekly (Wednesday) | Every master push |
 
-**Can I run both?** Yes! Both add-ons can be installed simultaneously. They use different slugs and configuration.
+**Can I run both?** Yes! Both apps can be installed simultaneously. They use different slugs and configuration.
 
-**Switch back to stable:** Simply stop the dev add-on and start/install the stable "Home Assistant MCP Server" add-on instead.
+**Switch back to stable:** Simply stop the dev app and start/install the stable "Home Assistant MCP Server" app instead.
 
 ### Claude Desktop Configuration
 

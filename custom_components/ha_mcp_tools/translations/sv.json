@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "HA-MCP Anpassad Komponent",
-        "description": "Välj vad du vill lägga till. **HA-MCP Server** kör den fullständiga ha-mcp-servern inuti Home Assistant och exponerar den via en Home Assistant-webhook – detta är installationen de flesta vill ha. Det är en fristående server och en komplett ersättning för alla andra installationsmetoder (tillägg, Docker, uvx/PyPI, stdio); om du kör den, kör inte också en av dem. **HA-MCP Fil- & YAML-verktyg** lägger till de privilegierade fil- och YAML-redigeringstjänsterna, som endast behövs om du aktiverar ha-mcp:s valfria fil-/YAML-verktyg. Om din ha-mcp-server redan körs någon annanstans (tillägg, Docker, uvx), behöver du inte serverposten – lägg endast till denna Fil- & YAML-post, och endast om du använder dessa verktyg. Den fungerar med alla servertyper och kan läggas till senare när som helst.",
+        "description": "Välj vad som ska läggas till. **HA-MCP Server** kör hela ha-mcp-servern inne i Home Assistant och exponerar den via en Home Assistant-webhook – detta är installationen som de flesta vill ha. Den är en fristående server och en komplett ersättning för alla andra installationsmetoder: App (tillägg), Docker, uvx/PyPI, stdio; om du kör den ska du inte samtidigt köra någon av dem. **HA-MCP File & YAML Tools** lägger till de privilegierade fil- och YAML-konfigurationstjänsterna, vilket endast behövs om du aktiverar ha-mcp:s valfria fil-/YAML-verktyg. Om din ha-mcp-server redan körs någon annanstans – App (tillägg), Docker, uvx – behöver du inte serverposten – lägg endast till denna Fil- och YAML-post, och endast om du använder dessa verktyg. Den fungerar med alla servertyper och kan läggas till senare när som helst.",
         "menu_options": {
           "server": "HA-MCP Server (rekommenderas)",
           "tools": "HA-MCP Fil- & YAML-verktyg (valfritt)"
@@ -15,12 +15,12 @@
       },
       "server": {
         "title": "HA-MCP Server",
-        "description": "Denna kör den fullständiga ha-mcp-servern inuti Home Assistant och exponerar den på distans via en Home Assistant-webhook (nåbar via Nabu Casa eller valfri omvänd proxy). Det är en fristående server och en komplett ersättning för installationsmetoderna tillägg, Docker, uvx/PyPI och stdio – kör den inte tillsammans med en annan ha-mcp-server. Välj **Skicka** för att starta den; du kan ändra port, bindning och autentisering efteråt i integrationsalternativen."
+        "description": "Detta kör hela ha-mcp-servern inne i Home Assistant och exponerar den på distans via en Home Assistant-webhook (nås via Nabu Casa eller vilken omvänd proxy som helst). Den är en fristående server och en komplett ersättning för installationsmetoderna app (tillägg), Docker, uvx/PyPI och stdio – kör den inte tillsammans med en annan ha-mcp-server. Välj **Skicka** för att starta den; du kan ändra port, bindning och autentisering i efterhand i integreringsalternativen."
       }
     },
     "abort": {
       "already_configured": "Denna post är redan konfigurerad.",
-      "unsupported_home_assistant": "Den inbyggda HA-MCP-servern kräver Home Assistant {required} eller nyare, men denna instans kör {installed}. Du kan fortfarande använda denna komponents HA-MCP Fil- & YAML-verktyg-post med en extern ha-mcp-server som körs som ett tillägg eller Docker-container."
+      "unsupported_home_assistant": "Den inbyggda HA-MCP-servern kräver Home Assistant {required} eller nyare, men denna instans kör {installed}. Du kan fortfarande använda denna komponents post för HA-MCP File & YAML Tools med en extern ha-mcp-server som körs som en app (tillägg) eller Docker-behållare."
     }
   },
   "options": {
@@ -64,9 +64,9 @@
         "data_description": {
           "channel": "Stabil installerar den senaste stabila utgåvan; Utveckling installerar den nyaste utvecklingsversionen. När automatiska uppdateringar är aktiverade, installeras den nyaste versionen av den valda kanalen vid en omladdning eller omstart, samt via en periodisk kontroll. En åsidosättning av utvecklarpaketet nedan har företräde och inaktiverar automatiska uppdateringar.",
           "auto_update": "När aktiverat installeras den nyaste utgåvan av den valda kanalen automatiskt – vid en omladdning eller omstart, och via en periodisk kontroll. När inaktiverat stannar servern på den version som för närvarande är installerad tills du aktiverar detta igen. Detta styr endast ha-mcp-serverpaketet; uppdateringar till själva HA-MCP Anpassade Komponent kommer fortfarande via HACS.",
-          "server_port": "Porten som denna server lyssnar på. Ha-mcp-tillägget använder 9583, så detta standardvärde är 9584 för att låta båda köras sida vid sida – om du inte kör tillägget fungerar vilken ledig port som helst.",
-          "bind_host": "Vem som kan ansluta direkt till MCP-serverporten. Standardinställningen matchar tillägget: nåbar på ditt lokala nätverk, med den hemliga sökvägen som autentiseringsuppgift. Välj loopback för att endast tillåta anslutningar från själva Home Assistant-maskinen – webhook-URL:en och sidopanelen fungerar oavsett.",
-          "webhook_auth": "Hur MCP-klienter autentiserar sig vid webhook-URL:en. Med den hemliga URL:en är länken i sig autentiseringsuppgiften. Med Home Assistant-inloggning loggar klienter som claude.ai in med ett Home Assistant-administratörskonto (OAuth). Med äldre OAuth utfärdar denna integration sitt eget klient-ID och hemlighet att klistra in i klienter som kräver ett, såsom Google Gemini Spark – det kräver en omstart av Home Assistant för att aktiveras eller inaktiveras.",
+          "server_port": "Porten som denna server lyssnar på. Ha-mcp-appen (tillägget) använder 9583, så standardvärdet är 9584 för att låta båda köra sida vid sida – om du inte kör appen (tillägget) fungerar vilken ledig port som helst.",
+          "bind_host": "Vem som kan ansluta direkt till MCP-serverporten. Standardvärdet matchar appen (tillägget): nås på ditt lokala nätverk, med den hemliga sökvägen som autentiseringsuppgift. Välj loopback för att endast tillåta anslutningar från själva Home Assistant-maskinen – webhook-URL:en och sidofältsspanelen fungerar oavsett vilket.",
+          "webhook_auth": "Hur MCP-klienter autentiserar sig vid webhook-URL:en. Med den hemliga URL:en är länken i sig den enda autentiseringsuppgiften – OAuth körs fortfarande för klienter som använder det, men varje inloggning godkänns automatiskt: ingen inloggning och inget klient-ID eller hemlighet behövs. Med Home Assistant-inloggning loggar klienter som claude.ai in med ett Home Assistant-administratörskonto (OAuth). Med äldre OAuth kör denna integration sin egen inloggningstjänst och utfärdar ett klient-ID och en hemlighet att klistra in i klienter som kräver ett – en omstart av Home Assistant kan behövas för att helt aktivera eller inaktivera det.",
           "oauth_client_id_override": "Ersätter det automatiskt genererade äldre OAuth-klient-ID:t. Lämna tomt för att behålla det nuvarande. Används endast när autentiseringsläget är inställt på äldre OAuth.",
           "oauth_client_secret_override": "Ersätter den automatiskt genererade äldre OAuth-klienthemligheten. Lämna tomt för att behålla den nuvarande. Används endast när autentiseringsläget är inställt på äldre OAuth.",
           "oauth_regenerate": "Engångsåtgärd: skapar ett nytt klient-ID och hemlighet för äldre OAuth-läge. Det träder i kraft först efter den Home Assistant-omstart som reparationsmeddelandet ber om – tills du startar om fortsätter det tidigare klient-ID:t och hemligheten att fungera och de nya gör det inte. Rensar även de två åsidosättningsfälten ovan.",
@@ -104,15 +104,15 @@
     },
     "legacy_hacs_source": {
       "title": "Komponenten installerad från det äldre arkivet",
-      "description": "HACS spårar huvudarkivet för ha-mcp-servern för denna komponent, så HACS visar serverns versionsnummer (7.x) och serverns versionsanteckningar här istället för komponentens egna (1.x). Uppdateringar fortsätter att fungera, men förblir felmärkta på detta sätt. För att åtgärda: ta bort detta arkiv från HACS (dina integrationsinställningar och konfigurationsposter behålls), lägg till homeassistant-ai/ha-mcp-integration som ett anpassat arkiv, installera om komponenten från det och starta om Home Assistant."
+      "description": "HACS spårar huvudförrådet för ha-mcp-servern för denna komponent, så HACS visar serverns versionsnummer och versionsanteckningar här istället för komponentens egna (2.x). Uppdateringar fortsätter att fungera, men förblir felmärkta på detta sätt. För att åtgärda: ta bort detta förråd från HACS (dina integrationsinställningar och konfigurationsposter behålls), lägg till homeassistant-ai/ha-mcp-integration som ett anpassat förråd, installera om komponenten från det, och starta om Home Assistant."
     },
     "legacy_oauth_restart": {
-      "title": "Starta om Home Assistant för att tillämpa ändringen av äldre OAuth",
+      "title": "Starta om Home Assistant för att tillämpa de äldre OAuth-inställningarna",
       "fix_flow": {
         "step": {
           "confirm": {
             "title": "Starta om Home Assistant?",
-            "description": "Att skicka in detta formulär kommer att starta om Home Assistant och tillämpa ändringen för legacy OAuth.\n\nKlicka på **Skicka** för att starta om nu."
+            "description": "Att skicka in detta formulär kommer att starta om Home Assistant och tillämpa de äldre OAuth-inställningarna.\n\nKlicka på **Skicka** för att starta om nu."
           }
         }
       }
@@ -129,7 +129,7 @@
       "options": {
         "none": "Hemlig webhook-URL (standard)",
         "ha_auth": "Logga in med Home Assistant (OAuth)",
-        "legacy": "Äldre OAuth (klient-ID/hemlighet, för Google Gemini Spark)"
+        "legacy": "Äldre OAuth (denna integration utfärdar ett klient-ID/en hemlighet att klistra in)"
       }
     },
     "llm_api_exposure": {

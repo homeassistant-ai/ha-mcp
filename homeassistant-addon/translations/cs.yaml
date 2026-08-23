@@ -26,22 +26,22 @@ configuration:
       '
   enable_tool_search:
     name: Povolit vyhledávání nástrojů
-    description: 'Nahradí úplný katalog nástrojů vyhledáváním. Snižuje nečinný kontext
-      přibližně o 90 %, na asi 5K tokenů. ⚠️ NEPOVOLUJTE toto v klientech s vlastním
+    description: 'Nahradit úplný katalog nástrojů vyhledáváním. Snižuje klidový kontext
+      přibližně o 90 %, na asi 5 tisíc tokenů. ⚠️ NEZAPÍNEJTE toto v klientech s vlastním
       vestavěným vyhledáváním nástrojů / odloženými nástroji (claude.ai, Claude Desktop,
-      Claude Code) — dvě vrstvy vyhledávání se střetávají a vestavěné vyhledávání
-      nástrojů klienta je v takovém případě lepší volbou; ponechte toto vypnuté. Zda
-      jsou nástroje odloženy, závisí na kombinaci vašeho klienta a modelu: použijte
-      toto, když vaše nastavení načítá celý katalog předem — modely bez nativních
-      odložených nástrojů (např. Gemini, lokální modely kompatibilní s OpenAI, Claude
-      Haiku), klienti, kteří vkládají všechna schémata nástrojů bez ohledu na model
-      (např. GitHub Copilot CLI), nebo menší kontextová okna. Některé modely Codex
-      a ChatGPT také zahrnují odložené nástroje — zkontrolujte přímo svého klienta/model,
-      abyste potvrdili jeho funkce a zbytečně toto nenechali povolené. Nástroje jsou
-      nalezeny pomocí ha_search_tools a spouštěny pomocí kategorizovaných proxy (čtení/zápis/mazání).
-      Vyžaduje restart doplňku, aby se změny projevily — poté se znovu připojte nebo
-      obnovte server MCP ve vašem AI klientovi, aby znovu načetl seznam nástrojů.
-      Samotný restart doplňku NEobnoví seznam nástrojů uložený v mezipaměti klienta;
+      Claude Code) – obě vrstvy vyhledávání se střetávají a vestavěné vyhledávání
+      nástrojů v klientovi je zde lepší volbou; nechte to vypnuté. Zda jsou nástroje
+      odloženy, závisí na kombinaci vašeho klienta a modelu: použijte toto, když vaše
+      nastavení načítá celý katalog předem – modely bez nativních odložených nástrojů
+      (např. Gemini, lokální modely kompatibilní s OpenAI, Claude Haiku), klienti,
+      kteří vkládají všechna schémata nástrojů bez ohledu na model (např. GitHub Copilot
+      CLI), nebo menší kontextová okna. Některé modely Codex a ChatGPT také obsahují
+      odložené nástroje – ověřte si funkce přímo u svého klienta/modelu, abyste to
+      nenechávali zbytečně zapnuté. Nástroje se vyhledávají přes ha_search_tools a
+      spouštějí se přes kategorizované proxy (read/write/delete). Vyžaduje restart
+      aplikace (doplněku), aby se projevila změna – poté znovu připojte nebo obnovte
+      MCP server ve svém AI klientovi, aby se znovu načetl seznam nástrojů. Samotný
+      restart aplikace (doplněku) NEAKTUALIZUJE mezipaměť seznamu nástrojů klienta;
       toto platí po změně jakéhokoli nastavení zde.'
   tool_search_max_results:
     name: Max. výsledků vyhledávání nástrojů
@@ -69,21 +69,22 @@ configuration:
       uživatelském rozhraní. Vyžaduje restart, aby se projevilo.'
   read_only_mode:
     name: Režim pouze pro čtení
-    description: Vypne všechny nástroje pro zápis a odebere nástrojům možnost provádět
-      jakékoli zápisové nebo destruktivní volání. Smíšené nástroje pro čtení/zápis
-      (zálohy, doplňky, preference energie, hlasové pipeline a režim kódu, pokud je
-      povolen) zůstanou dostupné s blokovanými operacemi zápisu. Stejný přepínač jako
-      na záložce Nástroje ve webovém rozhraní. Ve výchozím nastavení vypnuto. Vyžaduje
-      restart, aby se projevilo.
+    description: Vypne všechny nástroje pro zápis a odstraní schopnost nástrojů provádět
+      jakékoli zápisy nebo destruktivní volání. Smíšené nástroje pro čtení/zápis –
+      zálohy, aplikace (doplňky), preference energie, hlasové pipelines a režim kódu,
+      pokud je povolen – zůstávají k dispozici se zablokovanými operacemi zápisu.
+      Stejný přepínač jako na kartě Tools ve webovém rozhraní. Ve výchozím nastavení
+      vypnuto. K projevům změn je vyžadován restart.
   redact_secrets:
     name: Redigovat tajemství
-    description: Rediguje tajemství z odpovědí nástrojů, než se dostanou k AI asistentovi.
-      Možnosti doplňků a integrační pole označené jako hesla jsou nahrazeny značkou
-      nastaveno/prázdné (takže otázka „je tento pověřovací údaj nakonfigurován?“ zůstane
-      zodpověditelná) a další odpovědi nástrojů jsou očištěny od tajných hodnot, které
-      server již viděl (hodnoty kratší než 6 znaků jsou přeskočeny, protože nahrazení
-      malých fragmentů by poškodilo nesouvisející výstup). Pole, která nejsou schématem
-      označena jako hesla, nelze detekovat. Ve výchozím nastavení vypnuto.
+    description: Skrývá tajné údaje z odpovědí nástrojů, než se dostanou k AI asistenci.
+      Možnosti aplikace (doplňku) a pole integrací označená jako hesla jsou nahrazena
+      značkou nastaveno/prázdno (takže zůstává možné odpovědět na otázku „je tento
+      pověření nastaveno?“), a z odpovědí ostatních nástrojů jsou odstraněny tajné
+      hodnoty, které server již viděl (hodnoty kratší než 6 znaků se přeskakují, protože
+      nahrazování drobných fragmentů by poškodilo nesouvisející výstup). Pole, která
+      nejsou svým schématem označena jako hesla, nelze detekovat. Ve výchozím nastavení
+      vypnuto.
   enable_mandatory_bps:
     name: Připojit dovednosti osvědčených postupů při zápisu
     description: 'Hlavní přepínač pro funkci doručování obsahu dovedností nástrojů
@@ -166,9 +167,9 @@ configuration:
       stále platí). Výchozí 7.
   verify_ssl:
     name: Ověřit certifikát TLS
-    description: Ověří certifikát TLS serveru Home Assistant. Doplněk se připojuje
-      přes proxy Supervisor, takže to obvykle nemá žádný účinek a mělo by zůstat povoleno.
-      Zakázat pouze v případě, že jste doplněk překonfigurovali tak, aby komunikoval
-      s HA přes veřejný HTTPS hostname s vlastnoručně podepsaným certifikátem nebo
-      neshodou hostname. Zakázání oslabuje zabezpečení přenosu — ponechte zapnuto,
-      pokud víte, že to potřebujete. Vyžaduje restart, aby se projevilo.
+    description: Ověřit TLS certifikát serveru Home Assistant. Aplikace (doplněk)
+      se připojuje přes proxy Supervisor, takže to obvykle nemá žádný vliv a mělo
+      by to zůstat zapnuté. Zakazujte pouze v případě, že jste přenastavili aplikaci
+      (doplněk) tak, aby komunikovala s HA přes veřejný HTTPS hostname s The self-signed
+      certifikátem nebo neshodou hostname. Vypnutí oslabuje zabezpečení přenosu –
+      nechte zapnuté, pokud víte, že to potřebujete. Vyžaduje restart, aby se projevilo.

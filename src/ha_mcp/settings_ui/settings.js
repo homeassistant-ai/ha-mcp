@@ -536,14 +536,36 @@ async function applyInfoChrome() {
         '⚠ Changes saved. Restart the ha-mcp process, then refresh the MCP tool list in your AI client.'
       );
     }
-    // Version footer — show the running ha-mcp build at the bottom
-    // of every page. ``info.version`` is whatever
-    // ``HA_MCP_BUILD_VERSION`` the addon's Dockerfile set (e.g.
-    // ``7.5.0`` on stable, ``7.5.0.dev355`` on dev), with a fallback
-    // to package metadata in standalone deployments.
+    // Footer — show the running build and the same deployment classification
+    // used by ha_report_issue. The backend keeps embedded and sidecar distinct
+    // because they need different restart behavior; preserve those concise
+    // names here and clarify the less obvious packaging-oriented values.
     if (info.version) {
       const fEl = document.getElementById('versionFooterText');
-      if (fEl) fEl.textContent = 'ha-mcp ' + info.version;
+      const deploymentMode = typeof info.deployment_mode === 'string'
+        ? info.deployment_mode
+        : '';
+      const deploymentLabels = {
+        embedded: 'embedded',
+        sidecar: 'sidecar',
+        addon: t('footer.deployment.addon', {}, 'app/add-on'),
+        docker: t('footer.deployment.docker', {}, 'container/docker'),
+        pyinstaller: t('footer.deployment.pyinstaller', {}, 'standalone binary'),
+        git: t('footer.deployment.git', {}, 'source checkout'),
+        pypi: t('footer.deployment.pypi', {}, 'python package'),
+        unknown: t('footer.deployment.unknown', {}, 'unknown'),
+      };
+      const deploymentLabel = Object.prototype.hasOwnProperty.call(
+        deploymentLabels, deploymentMode
+      ) ? deploymentLabels[deploymentMode] : deploymentMode;
+      const installation = deploymentLabel
+        ? ' · ' + t(
+          'footer.installation',
+          {method: deploymentLabel},
+          'installation: {method}'
+        )
+        : '';
+      if (fEl) fEl.textContent = 'ha-mcp ' + info.version + installation;
     }
   } catch (e) {
     // A transient /api/settings/info failure must not leave the restart
@@ -1920,11 +1942,11 @@ const FEATURE_META = {
   },
   read_only_mode: {
     label: "Read Only Mode",
-    help: "Toggles all write tools off, and removes ability for tools to make any write or destructive calls. Mixed read/write tools (backups, add-ons, energy preferences, voice pipelines, and code mode when enabled) stay available with their write operations blocked. Same toggle as the web UI Tools tab. Off by default. Requires restart to take effect.",
+    help: "Toggles all write tools off, and removes ability for tools to make any write or destructive calls. Mixed read/write tools — backups, Apps (add-ons), energy preferences, voice pipelines, and code mode when enabled — stay available with their write operations blocked. Same toggle as the web UI Tools tab. Off by default. Requires restart to take effect.",
   },
   redact_secrets: {
     label: "Redact Secrets",
-    help: "Redacts secrets from tool responses before they reach the AI assistant. Add-on options and integration fields marked as passwords are replaced with a set/empty marker (so \"is this credential configured?\" stays answerable), and other tool responses are scrubbed of secret values the server has already seen (values shorter than 6 characters are skipped, since replacing tiny fragments would corrupt unrelated output). Fields not marked as passwords by their schema cannot be detected. Off by default.",
+    help: "Redacts secrets from tool responses before they reach the AI assistant. App (add-on) options and integration fields marked as passwords are replaced with a set/empty marker (so \"is this credential configured?\" stays answerable), and other tool responses are scrubbed of secret values the server has already seen (values shorter than 6 characters are skipped, since replacing tiny fragments would corrupt unrelated output). Fields not marked as passwords by their schema cannot be detected. Off by default.",
   },
   enable_mandatory_bps: {
     label: "Attach best-practice skills on writes",
@@ -1964,7 +1986,7 @@ const FEATURE_META = {
   },
   enable_code_mode: {
     label: "Enable custom tool sandbox (beta)",
-    help: "Beta feature. Enables the ha_manage_custom_tool tool, which lets AI assistants create, run, save, and delete custom Python code in a secure sandbox when no built-in tool can handle the request. Code runs in an isolated interpreter with no filesystem or arbitrary network access. Sandbox code can hit the HA REST API (api_get/api_post), send WebSocket commands (ws_send), call existing MCP tools (call_tool), or remove a saved tool (delete_saved_tool). Saved tools persist to /data/saved_tools.json by default so they survive add-on restarts, and are visible to any client that can connect. See docs/beta.md for known limitations. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
+    help: "Beta feature. Enables the ha_manage_custom_tool tool, which lets AI assistants create, run, save, and delete custom Python code in a secure sandbox when no built-in tool can handle the request. Code runs in an isolated interpreter with no filesystem or arbitrary network access. Sandbox code can hit the HA REST API (api_get/api_post), send WebSocket commands (ws_send), call existing MCP tools (call_tool), or remove a saved tool (delete_saved_tool). Saved tools persist to /data/saved_tools.json by default so they survive app (add-on) restarts, and are visible to any client that can connect. See docs/beta.md for known limitations. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
   enable_lite_docstrings: {
     label: "Enable lite tool docstrings (beta)",
@@ -1972,7 +1994,7 @@ const FEATURE_META = {
   },
   enable_dashboard_screenshot: {
     label: "Enable dashboard screenshot mode (beta)",
-    help: "Beta feature — disabled by default. Adds the ha_get_dashboard_screenshot tool plus include_screenshot / return_screenshot options on the dashboard get/set tools, so AI assistants can inspect one or more responsive Lovelace images (e.g. to verify a dashboard they just created). Supports stable named views, mobile/tablet/desktop batches, and PNG/JPEG/WebP/BMP output. Rendering runs in a separate, opt-in engine — balloob's \"Puppet\" add-on (headless Chromium) — which you install once (add balloob's add-on repository, then install \"Puppet\") and give a long-lived access token; on Docker/Container deployments you run that engine as a sidecar and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is installed unless you both enable this and install the engine. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
+    help: "Beta feature — disabled by default. Adds the ha_get_dashboard_screenshot tool plus include_screenshot / return_screenshot options on the dashboard get/set tools, so AI assistants can inspect one or more responsive Lovelace images (e.g. to verify a dashboard they just created). Supports stable named views, mobile/tablet/desktop batches, and PNG/JPEG/WebP/BMP output. Rendering runs in a separate, opt-in engine — balloob's \"Puppet\" App (add-on), headless Chromium — which you install once (add balloob's repository to the App store, then install \"Puppet\") and give a long-lived access token; on Docker/Container deployments you run that engine as a sidecar and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is installed unless you both enable this and install the engine. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
 };
 // FEATURE_META:END GENERATED
@@ -4556,6 +4578,7 @@ async function visibilityLoadConfig() {
   const cats = c.exclude_categories || [];
   document.getElementById('visibility-enabled').checked = !!c.enabled;
   document.getElementById('visibility-enforce').checked = !!c.enforce;
+  document.getElementById('visibility-restrict-report-issue').checked = !!c.restrict_report_issue;
   document.getElementById('visibility-cat-diagnostic').checked = cats.includes('diagnostic');
   document.getElementById('visibility-cat-config').checked = cats.includes('config');
   document.getElementById('visibility-exclude-hidden').checked = !!c.exclude_hidden;
@@ -4577,6 +4600,7 @@ async function visibilitySaveConfig() {
     version: visibilityVersion,
     enabled: document.getElementById('visibility-enabled').checked,
     enforce: document.getElementById('visibility-enforce').checked,
+    restrict_report_issue: document.getElementById('visibility-restrict-report-issue').checked,
     exclude_categories: cats,
     exclude_hidden: document.getElementById('visibility-exclude-hidden').checked,
     deny_entity_ids: _visibilityParseList(document.getElementById('visibility-deny').value, '\n'),

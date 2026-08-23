@@ -24,7 +24,9 @@ import asyncio
 import importlib
 import inspect
 import os
+import pathlib
 import pkgutil
+import tempfile
 import typing
 from typing import Any
 from unittest.mock import MagicMock
@@ -40,7 +42,7 @@ from ha_mcp.tools.util_helpers import JSON_STRING_COERCION
 # string into a dict could change behavior. Surfaced for maintainer decision;
 # move them out of this allowlist to opt them in.
 COERCION_EXEMPT: dict[tuple[str, str], str] = {
-    ("ha_manage_addon", "body"): (
+    ("ha_manage_app", "body"): (
         "Proxy request body: 'Pass a JSON object or JSON string' — str is an "
         "accepted raw-body form, not a serialization artifact."
     ),
@@ -122,13 +124,7 @@ def _all_registered_tools() -> dict[str, Any]:
 
     from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
     from ha_mcp.tools.registry import EXPLICIT_MODULES
-
-    saved_env: dict[str, str | None] = {}
-    for flag in FEATURE_FLAG_FIELDS:
-        if flag.ftype is bool and flag.field != "read_only_mode":
-            saved_env[flag.env] = os.environ.get(flag.env)
-            os.environ[flag.env] = "true"
-    _reset_global_settings()
+    from ha_mcp.utils.data_paths import get_data_dir
 
     async def _inner() -> dict[str, Any]:
         mcp = FastMCP("guardrail")
@@ -142,7 +138,32 @@ def _all_registered_tools() -> dict[str, Any]:
         listed = await mcp.list_tools()
         return {t.name: await mcp.get_tool(t.name) for t in listed}
 
+    # Everything this function mutates -- the feature-flag variables, the config
+    # directory, the two caches -- is set inside the try, so a failure between
+    # here and the run cannot leave the next test with a modified environment.
+    saved_env: dict[str, str | None] = {}
+    isolated_config = tempfile.TemporaryDirectory()
     try:
+        for flag in FEATURE_FLAG_FIELDS:
+            if flag.ftype is bool and flag.field != "read_only_mode":
+                saved_env[flag.env] = os.environ.get(flag.env)
+                os.environ[flag.env] = "true"
+
+        # Point the settings at an empty directory: otherwise
+        # get_global_settings() reads the real data dir, and a tool_config.json
+        # left there by a local run decides which tools this guardrail gets to
+        # inspect. Clearing the cache is the half that does the work --
+        # get_data_dir is lru_cached, so setting the variable alone changes
+        # nothing once an earlier test has resolved it.
+        saved_env["HA_MCP_CONFIG_DIR"] = os.environ.get("HA_MCP_CONFIG_DIR")
+        os.environ["HA_MCP_CONFIG_DIR"] = isolated_config.name
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+        assert get_data_dir() == pathlib.Path(isolated_config.name), (
+            "the isolation did not take: the guardrail would read persisted "
+            "local state instead of an empty directory"
+        )
+
         return asyncio.run(_inner())
     finally:
         for env_var, prev in saved_env.items():
@@ -150,7 +171,9 @@ def _all_registered_tools() -> dict[str, Any]:
                 os.environ.pop(env_var, None)
             else:
                 os.environ[env_var] = prev
+        get_data_dir.cache_clear()
         _reset_global_settings()
+        isolated_config.cleanup()
 
 
 def test_every_container_param_has_json_string_coercion() -> None:
@@ -300,8 +323,8 @@ def test_dict_or_list_only_params_advertise_no_string_arm() -> None:
 @pytest.mark.parametrize(
     ("tool_name", "param_name", "json_value", "expected"),
     [
-        ("ha_manage_addon", "options", '{"ssl": true}', {"ssl": True}),
-        ("ha_manage_addon", "network", '{"5800/tcp": 8081}', {"5800/tcp": 8081}),
+        ("ha_manage_app", "options", '{"ssl": true}', {"ssl": True}),
+        ("ha_manage_app", "network", '{"5800/tcp": 8081}', {"5800/tcp": 8081}),
         (
             "ha_manage_energy_prefs",
             "config",
@@ -322,7 +345,7 @@ def test_dict_only_param_coerces_json_object_string(
 @pytest.mark.parametrize(
     ("tool_name", "param_name"),
     [
-        ("ha_manage_addon", "options"),
+        ("ha_manage_app", "options"),
         ("ha_manage_energy_prefs", "config"),
     ],
 )

@@ -485,8 +485,10 @@
 
   <section class="a11y-section">
     <h2 class="a11y-section-title" data-i18n="visibility.enforce.title">Enforce mode</h2>
-    <p class="a11y-section-help" data-i18n="visibility.enforce.help">Extends the filter from decluttering search and overview to every tool read. A direct read of a hidden entity returns &ldquo;not found&rdquo;, and a content read (dashboard, template, automation, trace, log, or file) that would surface a hidden entity is refused. Best-effort concealment against incidental exposure, not a hardened security boundary.</p>
-    <label class="a11y-option"><input type="checkbox" id="visibility-enforce"> <span data-i18n="visibility.enforce.only_enforced">Make hidden entities unreadable across all tools (not just search)</span></label>
+    <p class="a11y-section-help" data-i18n="visibility.enforce.help">Extends the filter from decluttering search and overview to every tool read except ha_report_issue by default. A direct read of a hidden entity returns &ldquo;not found&rdquo;, and a content read that would surface one is refused. The report-tool exception is controlled below. Best-effort concealment against incidental exposure, not a hardened security boundary.</p>
+    <label class="a11y-option"><input type="checkbox" id="visibility-enforce"> <span data-i18n="visibility.enforce.only_enforced">Make hidden entities unreadable across tool reads (except issue reports by default)</span></label>
+    <p class="a11y-section-help" data-i18n="visibility.enforce.report_issue_help">While this is off, ha_report_issue and all of its diagnostic output&mdash;including logs&mdash;stay outside enforce mode on every call, even when visibility data is healthy or unavailable. Turn it on to scan and refuse that tool like other reads.</p>
+    <label class="a11y-option"><input type="checkbox" id="visibility-restrict-report-issue"> <span data-i18n="visibility.enforce.restrict_report_issue">Apply enforce mode to ha_report_issue</span></label>
   </section>
 
   <section class="a11y-section">

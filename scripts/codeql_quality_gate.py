@@ -277,6 +277,18 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     # exact intended pattern. Re-audit when one of these files grows.
     (
         "py/clear-text-logging-sensitive-data",
+        "custom_components/ha_mcp_tools/mcp_webhook.py",
+        "as clear text",
+        "OAUTH_BASE,",
+        "False positive: the legacy route-conflict warning logs the route-owner "
+        "domain string from hass.data plus the OAUTH_BASE public URL-path "
+        "constant. CodeQL's name-based classification treats the oauth-named "
+        "symbols as password-class; no credential flows into the call (the "
+        "secret-bearing exception object was deliberately dropped from the log "
+        "in the same PR).",
+    ),
+    (
+        "py/clear-text-logging-sensitive-data",
         "custom_components/ha_mcp_tools/embedded_setup.py",
         "as clear text",
         "",
@@ -380,6 +392,28 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "Warned fallback (dev flavor, identical code to stable): plain write of "
         "the signing key only when the filesystem cannot honor 0600, with a "
         "warning. Persistence is the feature.",
+    ),
+    (
+        "py/clear-text-storage-sensitive-data",
+        "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/__init__.py",
+        "as clear text",
+        "DCR_SECRET_FILE.write_bytes(new_secret)",
+        "Warned fallback (DCR signing key, same pattern as the OAuth signing "
+        "key in oauth.py): load_or_create_dcr_secret writes via "
+        "_atomic_write_0600 first; the flagged plain write only runs when the "
+        "filesystem cannot honor 0600 and it logs a warning. Persisting the "
+        "key is the feature (registered client_ids must survive restarts).",
+    ),
+    (
+        "py/clear-text-storage-sensitive-data",
+        "homeassistant-addon-webhook-proxy/mcp_proxy/__init__.py",
+        "as clear text",
+        "DCR_SECRET_FILE.write_bytes(new_secret)",
+        "Warned fallback (DCR signing key, stable twin of the dev entry above "
+        "— promoted in 3.0.0): load_or_create_dcr_secret writes via "
+        "_atomic_write_0600 first; the flagged plain write only runs when the "
+        "filesystem cannot honor 0600 and it logs a warning. Persisting the "
+        "key is the feature (registered client_ids must survive restarts).",
     ),
     (
         "py/clear-text-storage-sensitive-data",

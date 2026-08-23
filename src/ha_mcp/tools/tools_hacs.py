@@ -538,7 +538,7 @@ class HacsTools:
         # would fall through to a HACS lookup miss) or — for a numeric
         # candidate — reach ``hacs/repository/download`` with an empty
         # repository field. Same destructive-WS-call class as
-        # ``ha_manage_addon``: guard up-front so the caller learns the
+        # ``ha_manage_app``: guard up-front so the caller learns the
         # identifier was unusable before any backend call.
         repository_id = validate_identifier_not_empty(
             repository_id,

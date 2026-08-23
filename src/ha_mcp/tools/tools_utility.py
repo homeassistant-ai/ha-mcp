@@ -201,7 +201,7 @@ class UtilityTools:
                     "The 'slug' parameter is required for source='supervisor'",
                     suggestions=[
                         "Provide the add-on slug, e.g. slug='core_mosquitto'",
-                        "Use ha_get_addon() to list installed add-on slugs",
+                        "Use ha_get_app() to list installed add-on slugs",
                     ],
                 )
             )
@@ -1021,7 +1021,7 @@ class UtilityTools:
                             f"Supervisor rejected the request for '{slug}' — "
                             "verify slug format or that the add-on is installed "
                             "and running",
-                            "Use ha_get_addon() to list installed add-on slugs",
+                            "Use ha_get_app() to list installed add-on slugs",
                             "Ensure Supervisor is available (HA OS or Supervised install)",
                         ],
                     )
@@ -1035,7 +1035,7 @@ class UtilityTools:
                 context={"source": "supervisor", "slug": slug},
                 suggestions=[
                     first_suggestion,
-                    "Use ha_get_addon() to list installed add-on slugs",
+                    "Use ha_get_app() to list installed add-on slugs",
                     "Ensure Supervisor is available (HA OS or Supervised install)",
                 ],
             )
@@ -1050,7 +1050,7 @@ class UtilityTools:
                 suggestions=[
                     "Check Home Assistant connection",
                     f"Verify add-on slug '{slug}' is correct",
-                    "Use ha_get_addon() to list installed add-on slugs",
+                    "Use ha_get_app() to list installed add-on slugs",
                     "Ensure Supervisor is available (HA OS or Supervised install)",
                 ],
             )
@@ -1417,7 +1417,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             matches the whole line; `limit`/`order` do not apply, and issues are
             ranked by count, then severity, then recency.
         **Supervisor params:** slug = add-on slug, e.g. "core_mosquitto" (use
-            ha_get_addon() to list installed slugs)
+            ha_get_app() to list installed slugs)
         **System-service params:** slug = service name. The slug "supervisor"
             here means the Supervisor service's own logs, NOT an add-on with
             that name — the source param disambiguates.

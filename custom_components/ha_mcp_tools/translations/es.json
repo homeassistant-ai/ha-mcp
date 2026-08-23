@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Componente personalizado HA-MCP",
-        "description": "Elige qué quieres añadir. **Servidor HA-MCP** ejecuta el servidor ha-mcp completo dentro de Home Assistant y lo expone a través de un webhook de Home Assistant: es la instalación que quiere la mayoría de la gente. Es un servidor autónomo y un sustituto completo de cualquier otro método de instalación (complemento, Docker, uvx/PyPI, stdio); si lo usas, no uses además uno de esos. **Herramientas de archivos y YAML de HA-MCP** añade los servicios privilegiados de edición de archivos y YAML, necesarios solo si activas las herramientas opcionales de archivos/YAML de ha-mcp. Si tu servidor ha-mcp ya se ejecuta en otro sitio (complemento, Docker, uvx), no necesitas la entrada del servidor: añade solo esta entrada de archivos y YAML, y solo si usas esas herramientas. Funciona con cualquier tipo de servidor y se puede añadir más adelante en cualquier momento.",
+        "description": "Elige qué quieres añadir. **HA-MCP Server** ejecuta el servidor ha-mcp completo dentro de Home Assistant y lo expone a través de un webhook de Home Assistant; esta es la instalación que prefiere la mayoría. Es un servidor independiente y reemplaza por completo cualquier otro método de instalación: aplicación (complemento), Docker, uvx/PyPI, stdio; si lo ejecutas, no ejecutes también uno de esos. **HA-MCP File & YAML Tools** añade los servicios privilegiados de archivos y de configuración YAML, necesarios solo si activas las herramientas opcionales de archivos/YAML de ha-mcp. Si tu servidor ha-mcp ya se ejecuta en otra parte (aplicación [complemento], Docker, uvx), no necesitas la entrada del servidor; añade solo esta entrada de archivos y YAML, y solo si utilizas esas herramientas. Funciona con cualquier tipo de servidor y se puede añadir más adelante en cualquier momento.",
         "menu_options": {
           "server": "Servidor HA-MCP (recomendado)",
           "tools": "Herramientas de archivos y YAML de HA-MCP (opcional)"
@@ -15,12 +15,12 @@
       },
       "server": {
         "title": "Servidor HA-MCP",
-        "description": "Esto ejecuta el servidor ha-mcp completo dentro de Home Assistant y lo expone de forma remota a través de un webhook de Home Assistant (accesible mediante Nabu Casa o cualquier proxy inverso). Es un servidor autónomo y un sustituto completo de los métodos de instalación por complemento, Docker, uvx/PyPI y stdio: no lo ejecutes junto a otro servidor ha-mcp. Pulsa **Enviar** para iniciarlo; después puedes cambiar el puerto, la vinculación y la autenticación en las opciones de la integración."
+        "description": "Esto ejecuta el servidor ha-mcp completo dentro de Home Assistant y lo expone de forma remota a través de un webhook de Home Assistant (accesible mediante Nabu Casa o cualquier proxy inverso). Es un servidor independiente y reemplaza por completo los métodos de instalación de aplicación (complemento), Docker, uvx/PyPI y stdio; no lo ejecutes junto con otro servidor ha-mcp. Selecciona **Enviar** para iniciarlo; puedes cambiar el puerto, la vinculación y la autenticación más adelante en las opciones de la integración."
       }
     },
     "abort": {
       "already_configured": "Esta entrada ya está configurada.",
-      "unsupported_home_assistant": "El servidor HA-MCP integrado en el proceso requiere Home Assistant {required} o posterior, pero esta instancia ejecuta {installed}. Aun así puedes usar la entrada HA-MCP File & YAML Tools de este componente con un servidor ha-mcp externo que se ejecute como complemento o contenedor Docker."
+      "unsupported_home_assistant": "El servidor HA-MCP integrado en el proceso requiere Home Assistant {required} o posterior, pero esta instancia está ejecutando {installed}. Aún puedes usar la entrada HA-MCP File & YAML Tools de este componente con un servidor ha-mcp externo que se ejecute como aplicación (complemento) o contenedor de Docker."
     }
   },
   "options": {
@@ -64,9 +64,9 @@
         "data_description": {
           "channel": "Estable instala la última versión estable; Desarrollo instala la compilación de desarrollo más reciente. Con las actualizaciones automáticas activadas, una recarga o un reinicio, más una comprobación periódica, instalan la compilación más reciente del canal elegido. El paquete alternativo de desarrollo de abajo tiene prioridad y desactiva las actualizaciones automáticas.",
           "auto_update": "Cuando está activado, la versión más reciente del canal elegido se instala automáticamente: en una recarga o reinicio y mediante una comprobación periódica. Cuando está desactivado, el servidor se queda en la versión instalada hasta que lo vuelvas a activar. Esto controla únicamente el paquete del servidor ha-mcp; las actualizaciones del propio componente personalizado HA-MCP siguen llegando por HACS.",
-          "server_port": "El puerto en el que escucha este servidor. El complemento ha-mcp usa el 9583, así que aquí el valor predeterminado es 9584 para que ambos puedan convivir; si no usas el complemento, sirve cualquier puerto libre.",
-          "bind_host": "Quién puede conectarse directamente al puerto del servidor MCP. El valor predeterminado coincide con el del complemento: accesible en tu red local, con la ruta secreta como credencial. Elige loopback para permitir solo conexiones desde la propia máquina de Home Assistant; la URL del webhook y el panel de la barra lateral funcionan en ambos casos.",
-          "webhook_auth": "Cómo se identifican los clientes MCP en la URL del webhook. Con la URL secreta, el propio enlace es la credencial. Con el inicio de sesión de Home Assistant, clientes como claude.ai entran con una cuenta de administrador de Home Assistant (OAuth). Con OAuth heredado, esta integración emite su propio Client ID y Client Secret para pegarlos en clientes que los exijan, como Google Gemini Spark; activarlo o desactivarlo requiere reiniciar Home Assistant.",
+          "server_port": "El puerto en el que escucha este servidor. La aplicación (complemento) de ha-mcp usa el 9583, por lo que el valor predeterminado es el 9584 para permitir que ambos se ejecuten simultáneamente; si no ejecutas la aplicación (complemento), cualquier puerto libre sirve.",
+          "bind_host": "Quién puede conectarse directamente al puerto del servidor MCP. El valor predeterminado coincide con el de la aplicación (complemento): accesible en tu red local, con la ruta secreta como credencial. Elige bucle local (loopback) para permitir solo conexiones desde la propia máquina de Home Assistant; la URL del webhook y el panel de la barra lateral funcionan en ambos casos.",
+          "webhook_auth": "Cómo los clientes de MCP se autentican en la URL del webhook. Con la URL secreta, el propio enlace es la única credencial — OAuth sigue funcionando para los clientes que lo usan, pero cada inicio de sesión se aprueba automáticamente: no se necesita iniciar sesión ni un ID de cliente o Secreto. Con el inicio de sesión de Home Assistant, clientes como claude.ai inician sesión con una cuenta de administrador de Home Assistant (OAuth). Con OAuth heredado, esta integración ejecuta su propio servicio de inicio de sesión y emite un ID de cliente y un Secreto para pegar en los clientes que lo requieran — puede ser necesario reiniciar Home Assistant para activarlo o desactivarlo por completo.",
           "oauth_client_id_override": "Sustituye el Client ID de OAuth heredado generado automáticamente. Déjalo vacío para conservar el actual. Solo se usa mientras el modo de autenticación esté en OAuth heredado.",
           "oauth_client_secret_override": "Sustituye el Client Secret de OAuth heredado generado automáticamente. Déjalo vacío para conservar el actual. Solo se usa mientras el modo de autenticación esté en OAuth heredado.",
           "oauth_regenerate": "Acción puntual: genera un Client ID y un Client Secret nuevos para el modo OAuth heredado. Solo surte efecto tras el reinicio de Home Assistant que pide el aviso de reparación; hasta que reinicies siguen funcionando el Client ID y el Client Secret anteriores, y no los nuevos. También vacía los dos campos de sustitución de arriba.",
@@ -104,15 +104,15 @@
     },
     "legacy_hacs_source": {
       "title": "Componente instalado desde el repositorio antiguo",
-      "description": "HACS está siguiendo el repositorio principal del servidor ha-mcp para este componente, así que aquí muestra los números de versión del servidor (7.x) y sus notas de la versión en lugar de los del propio componente (1.x). Las actualizaciones siguen funcionando, pero permanecen mal etiquetadas. Para arreglarlo: quita este repositorio de HACS (se conservan tus ajustes de integración y tus entradas de configuración), añade homeassistant-ai/ha-mcp-integration como repositorio personalizado, reinstala el componente desde ahí y reinicia Home Assistant."
+      "description": "HACS está rastreando el repositorio principal del servidor ha-mcp para este componente, por lo que HACS muestra aquí los números de versión y las notas de la versión del servidor en lugar de los propios del componente (2.x). Las actualizaciones siguen funcionando, pero permanecen mal etiquetadas de esta manera. Para solucionarlo: elimina este repositorio de HACS (se conservan tus ajustes de integración y entradas de configuración), añade homeassistant-ai/ha-mcp-integration como un repositorio personalizado, reinstala el componente desde él y reinicia Home Assistant."
     },
     "legacy_oauth_restart": {
-      "title": "Reinicia Home Assistant para aplicar el cambio de OAuth heredado",
+      "title": "Reinicia Home Assistant para aplicar los ajustes de OAuth heredado",
       "fix_flow": {
         "step": {
           "confirm": {
             "title": "¿Reiniciar Home Assistant?",
-            "description": "Al enviar este formulario se reiniciará Home Assistant y se aplicará el cambio de OAuth heredado.\n\nHaz clic en **Enviar** para reiniciar ahora."
+            "description": "Al enviar este formulario se reiniciará Home Assistant y se aplicarán los ajustes de OAuth heredado.\n\nHaz clic en <strong>Enviar</strong> para reiniciar ahora."
           }
         }
       }
@@ -129,7 +129,7 @@
       "options": {
         "none": "URL de webhook secreta (predeterminada)",
         "ha_auth": "Iniciar sesión con Home Assistant (OAuth)",
-        "legacy": "OAuth heredado (Client ID y Client Secret, para Google Gemini Spark)"
+        "legacy": "OAuth heredado (esta integración emite un ID de cliente/Secreto para pegar)"
       }
     },
     "llm_api_exposure": {

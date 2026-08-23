@@ -14,7 +14,7 @@ import logging
 from enum import StrEnum
 from typing import Any, NoReturn
 
-from ..client.rest_client import HomeAssistantAPIError
+from ..client.rest_client import _NO_ANSWER_ERRORS, HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
 from ..redaction import redact_flow_schema, redaction_enabled
 from .config_entry_flow_form import (
@@ -53,6 +53,46 @@ class _FlowType(StrEnum):
     MENU = "menu"
     ABORT = "abort"
     CREATE_ENTRY = "create_entry"
+
+
+class ReconfigureStatus(StrEnum):
+    """Outcome vocabulary for the ``ha_set_integration`` reconfigure mode.
+
+    Ordered by how far the request got. Everything from ``APPLIED_*`` onward
+    means Home Assistant committed the change, so a caller must not blindly
+    retry those.
+    """
+
+    #: Read-only preflight: validated, nothing started.
+    PREVIEW = "preview"
+    #: A confirmation was required and none was supplied.
+    CONFIRMATION_REQUIRED = "confirmation_required"
+    #: The supplied confirm_token no longer matches the entry's state.
+    STALE_PREFLIGHT = "stale_preflight"
+    #: The flow was aborted before any value reached Home Assistant.
+    FLOW_ABORTED_BEFORE_APPLY = "flow_aborted_before_apply"
+    #: Home Assistant rejected the change; nothing was committed.
+    APPLY_FAILED = "apply_failed"
+    #: Committed, but the flow never consumed every supplied value.
+    APPLIED_BUT_INCOMPLETE = "applied_but_incomplete"
+    #: Committed, and the entry no longer carries the identity it had.
+    APPLIED_IDENTITY_MISMATCH = "applied_identity_mismatch"
+    #: Committed, identity intact, and the entry reloaded cleanly.
+    APPLIED_AND_VERIFIED = "applied_and_verified"
+    #: Committed, but the result could not be fully verified.
+    APPLIED_BUT_UNVERIFIED = "applied_but_unverified"
+
+
+#: Statuses that mean Home Assistant already committed the change. Callers use
+#: this to decide whether aborting a flow or retrying is still safe.
+POST_COMMIT_STATUSES = frozenset(
+    {
+        ReconfigureStatus.APPLIED_BUT_INCOMPLETE,
+        ReconfigureStatus.APPLIED_IDENTITY_MISMATCH,
+        ReconfigureStatus.APPLIED_AND_VERIFIED,
+        ReconfigureStatus.APPLIED_BUT_UNVERIFIED,
+    }
+)
 
 
 def _parse_flow_api_error(
@@ -234,13 +274,20 @@ async def _raise_flow_api_error(
     menu_choice: str | None,
     current_step: dict[str, Any] | None,
     submitted: dict[str, Any] | None,
+    is_reconfigure: bool = False,
 ) -> NoReturn:
     """Translate an HA 4xx during a flow submit into a structured ToolError.
 
     For 400/422 responses, parses ``response_data`` for field-level info
     via ``_parse_flow_api_error``. When the body is unstructured (no
-    ``errors`` map), attaches the helper's ``data_schema`` (if it can be
-    fetched) so the caller has actionable information.
+    ``errors`` map), attaches a ``data_schema`` so the caller has actionable
+    information.
+
+    ``is_reconfigure`` changes two things. The schema comes from the live
+    reconfigure step rather than a fresh introspection flow (``helper_type``
+    carries the integration domain there and reaches no schema fetch), and
+    the prose names the integration instead of a helper, because this path
+    also serves ``ha_set_integration(reconfigure=True)``.
 
     Always raises ``ToolError`` — never returns.
     """
@@ -267,9 +314,15 @@ async def _raise_flow_api_error(
         if isinstance(step_schema, list):
             current_schema = step_schema
 
-    # Single introspection round-trip — used by both branches below.
-    info = await fetch_helper_flow_info(client, helper_type, menu_choice)
-    schema = info.get("schema") or current_schema
+    if is_reconfigure:
+        # The live reconfigure step already carries the schema HA is asking
+        # against. Introspecting here would start a second, normal setup flow
+        # whose schema is a different contract.
+        schema = current_schema
+    else:
+        # Single introspection round-trip — used by both branches below.
+        info = await fetch_helper_flow_info(client, helper_type, menu_choice)
+        schema = info.get("schema") or current_schema
     # An options/reconfigure step's schema carries the persisted values in
     # description.suggested_value — under redact_secrets those must not ride
     # into the error context verbatim (#2157). Deep-copies, so the live
@@ -281,7 +334,14 @@ async def _raise_flow_api_error(
         # Structured field errors — tell the caller which fields failed.
         context["field_errors"] = field_errors
         readable = ", ".join(f"{k}: {v}" for k, v in field_errors.items())
-        message = f"Helper validation failed — {readable}"
+        subject = (
+            f"{helper_type} reconfigure validation"
+            if is_reconfigure and helper_type
+            else "Reconfigure validation"
+            if is_reconfigure
+            else "Helper validation"
+        )
+        message = f"{subject} failed — {readable}"
         suggestions.append(
             "Fix the field(s) listed in 'field_errors' and retry the call."
         )
@@ -294,8 +354,15 @@ async def _raise_flow_api_error(
             context["data_schema"] = schema
     else:
         # Unstructured — attach the data_schema so the LLM has something to use.
+        subject = (
+            f"{helper_type} reconfigure"
+            if is_reconfigure and helper_type
+            else "reconfigure"
+            if is_reconfigure
+            else helper_type or "flow"
+        )
         message = (
-            f"Home Assistant rejected the {helper_type or 'flow'} request "
+            f"Home Assistant rejected the {subject} request "
             f"({status_code}): {parsed['message']}"
         )
         if schema is not None:
@@ -304,6 +371,9 @@ async def _raise_flow_api_error(
                 "Inspect 'data_schema' in this error to see the fields HA expects, "
                 "then retry with a corrected config."
             )
+
+    if is_reconfigure:
+        context["status"] = ReconfigureStatus.APPLY_FAILED
 
     raise_tool_error(
         create_error_response(
@@ -324,6 +394,7 @@ async def _submit_step(
     helper_type: str | None,
     last_menu_choice: str | None,
     current_step: dict[str, Any],
+    is_reconfigure: bool = False,
 ) -> dict[str, Any]:
     try:
         return await asyncio.wait_for(submit_fn(flow_id, payload), timeout=20.0)
@@ -337,8 +408,89 @@ async def _submit_step(
                 menu_choice=last_menu_choice,
                 current_step=current_step,
                 submitted=payload,
+                is_reconfigure=is_reconfigure,
+            )
+        if is_reconfigure and (api_err.status_code or 0) >= 500:
+            # A 5xx is the HTTP spelling of "no answer came back". A 504 from
+            # a proxy in front of Home Assistant means the upstream WAS
+            # reached and simply did not answer in time, so the submit — the
+            # call that probes, commits and reloads — may already have
+            # committed. Without a status this re-raised bare and the generic
+            # handler in _run_reconfigure_flow aborted a possibly-committed
+            # flow, which is exactly what POST_COMMIT_STATUSES exists to
+            # suppress. 4xx stays a re-raise: HA parsed the request and
+            # answered about it (rejection, auth, unknown flow).
+            _raise_reconfigure_no_answer(
+                api_err,
+                flow_id=flow_id,
+                payload=payload,
+                current_step=current_step,
+                error_code=ErrorCode.SERVICE_CALL_FAILED,
+                detail=f"HTTP {api_err.status_code}",
             )
         raise
+    except (TimeoutError, *_NO_ANSWER_ERRORS) as no_answer:
+        # Every class here is evidence that NO ANSWER came back — see
+        # _NO_ANSWER_ERRORS in rest_client.py — as opposed to Home Assistant
+        # answering with a rejection (which the 400/422 branch above handles).
+        # The submit is the call that probes, commits and reloads, so losing
+        # the answer to it is precisely the applied_but_unverified ambiguity:
+        # HA may already have committed.
+        #
+        # Widening beyond TimeoutError matters because rest_client funnels
+        # EVERY httpx transport failure (ConnectError, TimeoutException,
+        # HTTPError) into HomeAssistantConnectionError, so an ordinary
+        # connection reset after the POST reached HA took the old re-raise
+        # path: it reached the caller with no status at all, and the generic
+        # handler upstream aborted a flow that may have committed. A caller
+        # reads a bare connection error as "nothing happened" and retries.
+        #
+        # Carrying the post-commit status also suppresses that abort, since
+        # _run_reconfigure_flow gates it on POST_COMMIT_STATUSES.
+        if is_reconfigure:
+            _raise_reconfigure_no_answer(
+                no_answer,
+                flow_id=flow_id,
+                payload=payload,
+                current_step=current_step,
+                error_code=ErrorCode.TIMEOUT_OPERATION
+                if isinstance(no_answer, TimeoutError)
+                else ErrorCode.SERVICE_CALL_FAILED,
+                detail=type(no_answer).__name__,
+            )
+        raise
+
+
+def _raise_reconfigure_no_answer(
+    cause: BaseException,
+    *,
+    flow_id: str,
+    payload: dict[str, Any],
+    current_step: dict[str, Any],
+    error_code: ErrorCode,
+    detail: str,
+) -> NoReturn:
+    """Raise ``applied_but_unverified`` for a submit whose answer was lost.
+
+    Carrying the post-commit status is what suppresses the flow abort, since
+    ``_run_reconfigure_flow`` gates that on ``POST_COMMIT_STATUSES``.
+    """
+    raise_tool_error(
+        create_error_response(
+            error_code,
+            "Reconfigure flow submission got no answer from Home "
+            f"Assistant ({detail}); the change may have been applied",
+            suggestions=[
+                "Do not retry automatically. Inspect the config entry in Home Assistant before attempting rollback."
+            ],
+            context={
+                "flow_id": flow_id,
+                "status": ReconfigureStatus.APPLIED_BUT_UNVERIFIED,
+                "submitted_keys": sorted(payload),
+                "details": current_step,
+            },
+        )
+    )
 
 
 def _finish_flow_entry(
@@ -389,7 +541,18 @@ def _finish_flow_entry(
     return response
 
 
-def _raise_flow_abort(flow_id: str, current_step: dict[str, Any]) -> NoReturn:
+def _flow_failure_context(
+    flow_id: str, current_step: dict[str, Any], *, is_reconfigure: bool
+) -> dict[str, Any]:
+    context: dict[str, Any] = {"flow_id": flow_id, "details": current_step}
+    if is_reconfigure:
+        context["status"] = ReconfigureStatus.APPLY_FAILED
+    return context
+
+
+def _raise_flow_abort(
+    flow_id: str, current_step: dict[str, Any], *, is_reconfigure: bool = False
+) -> NoReturn:
     """Raise the structured error for an ABORT flow step."""
     reason = current_step.get("reason")
     abort_suggestions: list[str] = []
@@ -405,8 +568,183 @@ def _raise_flow_abort(flow_id: str, current_step: dict[str, Any]) -> NoReturn:
             ErrorCode.SERVICE_CALL_FAILED,
             f"Flow aborted: {reason}",
             suggestions=abort_suggestions or None,
-            context={"flow_id": flow_id, "details": current_step},
+            context=_flow_failure_context(
+                flow_id, current_step, is_reconfigure=is_reconfigure
+            ),
         )
+    )
+
+
+def _unconsumed_reconfigure_keys(
+    ignored_config_keys: set[str],
+    remaining_config: dict[str, Any],
+) -> list[str]:
+    """List caller keys that a reconfigure flow never consumed.
+
+    ``remaining_config`` starts as a copy of the caller's config and is only
+    ever popped from, or reassigned at a key it already holds, so every key
+    still in it is a caller key.
+    """
+    return sorted(ignored_config_keys | set(remaining_config))
+
+
+def _reconfigure_success_response(
+    current_step: dict[str, Any],
+    *,
+    ignored_config_keys: set[str],
+    remaining_config: dict[str, Any],
+    reuse_state: _ReuseState,
+) -> dict[str, Any]:
+    """Build the common successful reconfigure response."""
+    response: dict[str, Any] = {
+        # Past tense, matching the "created" this walker's sibling emits. Only
+        # set_config_subentry reads this; the ha_set_integration reconfigure
+        # surface builds its own response and reports operation "reconfigure"
+        # on both the preview and the applied leg.
+        "success": True,
+        "operation": "reconfigured",
+        "flow_result": current_step,
+    }
+    warnings = _success_warnings(ignored_config_keys, remaining_config, reuse_state)
+    if warnings:
+        response["warnings"] = warnings
+    return response
+
+
+def _reconfigure_abort_result(
+    current_step: dict[str, Any],
+    *,
+    is_reconfigure: bool,
+    flow_id: str,
+    ignored_config_keys: set[str],
+    remaining_config: dict[str, Any],
+    reuse_state: _ReuseState,
+) -> dict[str, Any] | None:
+    """Translate a successful reconfigure abort into a walker result."""
+    if (
+        not is_reconfigure
+        or current_step.get("reason") not in _RECONFIGURE_SUCCESS_REASONS
+    ):
+        return None
+    unresolved = _unconsumed_reconfigure_keys(ignored_config_keys, remaining_config)
+    if unresolved:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Reconfigure flow completed without consuming all supplied "
+                "configuration values",
+                suggestions=[
+                    "Inspect the existing entry state before taking any further "
+                    "action; Home Assistant may already have applied part of the "
+                    "requested change.",
+                ],
+                context={
+                    "flow_id": flow_id,
+                    "status": ReconfigureStatus.APPLIED_BUT_INCOMPLETE,
+                    "unconsumed_config_keys": unresolved,
+                    "details": current_step,
+                },
+            )
+        )
+    return _reconfigure_success_response(
+        current_step,
+        ignored_config_keys=ignored_config_keys,
+        remaining_config=remaining_config,
+        reuse_state=reuse_state,
+    )
+
+
+def _handle_abort_step(
+    flow_id: str,
+    current_step: dict[str, Any],
+    *,
+    is_reconfigure: bool,
+    ignored_config_keys: set[str],
+    remaining_config: dict[str, Any],
+    reuse_state: _ReuseState,
+) -> dict[str, Any]:
+    """Handle normal aborts and successful reconfigure aborts."""
+    reconfigure_result = _reconfigure_abort_result(
+        current_step,
+        is_reconfigure=is_reconfigure,
+        flow_id=flow_id,
+        ignored_config_keys=ignored_config_keys,
+        remaining_config=remaining_config,
+        reuse_state=reuse_state,
+    )
+    if reconfigure_result is not None:
+        return reconfigure_result
+    _raise_flow_abort(flow_id, current_step, is_reconfigure=is_reconfigure)
+    raise AssertionError("unreachable after _raise_flow_abort")
+
+
+def _flow_form_payload(
+    current_step: dict[str, Any],
+    *,
+    flow_id: str,
+    remaining_config: dict[str, Any],
+    ignored_config_keys: set[str],
+    reuse_state: _ReuseState,
+) -> tuple[dict[str, Any], bool]:
+    """Build one generic flow form payload.
+
+    Returns the payload and whether the step consumed at least one caller key
+    — not which ones; ``remaining_config`` and ``ignored_config_keys`` carry
+    that.
+    """
+    consumed_form_keys: set[str] = set()
+    form_data = _auto_confirm_form_payload(current_step)
+    if form_data is None:
+        form_data = _handle_form_step(
+            flow_id,
+            current_step,
+            remaining_config,
+            ignored_config_keys,
+            consumed_form_keys,
+            reuse_state,
+        )
+    return form_data, bool(consumed_form_keys)
+
+
+def _handle_flow_create_entry(
+    flow_id: str,
+    current_step: dict[str, Any],
+    *,
+    is_reconfigure: bool,
+    supplied_keys: list[str],
+    saw_form_step: bool,
+    any_form_key_consumed: bool,
+    ignored_config_keys: set[str],
+    remaining_config: dict[str, Any],
+    reuse_state: _ReuseState,
+) -> dict[str, Any]:
+    """Finish a normal flow, but never treat create_entry as reconfigure success."""
+    if is_reconfigure:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Reconfigure flow created a new config entry instead of "
+                "updating the existing entry",
+                suggestions=[
+                    "Inspect Home Assistant for a duplicate entry before "
+                    "retrying; do not create another entry automatically."
+                ],
+                context={
+                    "flow_id": flow_id,
+                    "status": ReconfigureStatus.APPLIED_BUT_UNVERIFIED,
+                    "details": current_step,
+                },
+            )
+        )
+    return _finish_flow_entry(
+        flow_id,
+        current_step,
+        supplied_keys=supplied_keys,
+        saw_form_step=saw_form_step,
+        any_form_key_consumed=any_form_key_consumed,
+        ignored_config_keys=ignored_config_keys,
+        remaining_config=remaining_config,
+        reuse_state=reuse_state,
     )
 
 
@@ -417,6 +755,8 @@ async def _handle_flow_steps(
     config: dict[str, Any],
     submit_fn: Any = None,
     helper_type: str | None = None,
+    *,
+    is_reconfigure: bool = False,
 ) -> dict[str, Any]:
     """Walk a multi-step config flow handling menu and form steps.
 
@@ -448,11 +788,25 @@ async def _handle_flow_steps(
             client.submit_config_flow_step (create). Pass
             client.submit_options_flow_step for options (update) flows.
         helper_type: Optional helper type (e.g. ``"statistics"``). When
-            provided, surfaces the helper's data_schema in error context
-            for unstructured HA 4xx responses so the caller can react.
+            provided outside reconfigure mode, surfaces the helper's
+            data_schema in error context for unstructured HA 4xx responses so
+            the caller can react. Under ``is_reconfigure`` no schema is
+            fetched (the live step already carries the right one) and the
+            value is used only to name the integration in error prose.
+        is_reconfigure: Whether this is the official reconfigure flow — the
+            same mode HA uses for reauth, so both ``reconfigure_successful``
+            and ``reauth_successful`` count as its success aborts. In this
+            mode ``create_entry`` is rejected as
+            ``ReconfigureStatus.APPLIED_BUT_UNVERIFIED``, and a success abort
+            is a success only when the flow consumed EVERY supplied config
+            key — any leftover raises
+            ``ReconfigureStatus.APPLIED_BUT_INCOMPLETE``, because Home
+            Assistant has already committed whatever it did consume.
 
     Returns:
-        ``{"success": True, "entry": result}`` on success, plus ``warnings``
+        ``{"success": True, "entry": result}`` for a normal flow, or
+        ``{"success": True, "operation": "reconfigured", "flow_result":
+        result}`` under ``is_reconfigure``. Both carry ``warnings``
         when SOME caller-supplied config keys were not declared by any flow
         step, or when a key had to be resubmitted to a later step that
         redeclared it. When the flow presented at least one form step and NONE
@@ -479,9 +833,10 @@ async def _handle_flow_steps(
         result_type = current_step.get("type")
 
         if result_type == _FlowType.CREATE_ENTRY:
-            return _finish_flow_entry(
+            return _handle_flow_create_entry(
                 flow_id,
                 current_step,
+                is_reconfigure=is_reconfigure,
                 supplied_keys=supplied_keys,
                 saw_form_step=saw_form_step,
                 any_form_key_consumed=any_form_key_consumed,
@@ -491,7 +846,14 @@ async def _handle_flow_steps(
             )
 
         if result_type == _FlowType.ABORT:
-            _raise_flow_abort(flow_id, current_step)
+            return _handle_abort_step(
+                flow_id,
+                current_step,
+                is_reconfigure=is_reconfigure,
+                ignored_config_keys=ignored_config_keys,
+                remaining_config=remaining_config,
+                reuse_state=reuse_state,
+            )
 
         if result_type == _FlowType.MENU:
             menu_choice = _handle_menu_step(
@@ -514,6 +876,7 @@ async def _handle_flow_steps(
                 helper_type=helper_type,
                 last_menu_choice=last_menu_choice,
                 current_step=current_step,
+                is_reconfigure=is_reconfigure,
             )
 
         elif result_type == _FlowType.FORM:
@@ -524,18 +887,14 @@ async def _handle_flow_steps(
             # what it consumed for any later step that redeclares the same
             # field.
             saw_form_step = True
-            consumed_form_keys: set[str] = set()
-            form_data = _auto_confirm_form_payload(current_step)
-            if form_data is None:
-                form_data = _handle_form_step(
-                    flow_id,
-                    current_step,
-                    remaining_config,
-                    ignored_config_keys,
-                    consumed_form_keys,
-                    reuse_state,
-                )
-            if consumed_form_keys:
+            form_data, consumed_any = _flow_form_payload(
+                current_step,
+                flow_id=flow_id,
+                remaining_config=remaining_config,
+                ignored_config_keys=ignored_config_keys,
+                reuse_state=reuse_state,
+            )
+            if consumed_any:
                 any_form_key_consumed = True
             logger.debug(
                 f"Flow step {step_num}: form submit "
@@ -549,6 +908,7 @@ async def _handle_flow_steps(
                 helper_type=helper_type,
                 last_menu_choice=last_menu_choice,
                 current_step=current_step,
+                is_reconfigure=is_reconfigure,
             )
 
         elif result_type in _UNDRIVABLE_STEP_TYPES:
@@ -562,7 +922,9 @@ async def _handle_flow_steps(
                         "Complete this flow in the Home Assistant UI "
                         "(Settings > Devices & Services)."
                     ],
-                    context={"flow_id": flow_id, "details": current_step},
+                    context=_flow_failure_context(
+                        flow_id, current_step, is_reconfigure=is_reconfigure
+                    ),
                 )
             )
 
@@ -571,7 +933,9 @@ async def _handle_flow_steps(
                 create_error_response(
                     ErrorCode.INTERNAL_UNEXPECTED,
                     f"Unexpected flow result type: {result_type}",
-                    context={"flow_id": flow_id, "details": current_step},
+                    context=_flow_failure_context(
+                        flow_id, current_step, is_reconfigure=is_reconfigure
+                    ),
                 )
             )
 
@@ -583,9 +947,90 @@ async def _handle_flow_steps(
                 "flow_id": flow_id,
                 "max_steps": max_steps,
                 "consumed_menu_selections": consumed_menu_selections,
+                # Reconfigure-only keys: the reconfigure caller reads both to
+                # decide whether to abort the pending flow. Adding them to
+                # every flow's error shape would change the public contract of
+                # the add-integration, options and helper paths for nothing.
+                **(
+                    {
+                        "flow_budget_exhausted": True,
+                        "status": ReconfigureStatus.FLOW_ABORTED_BEFORE_APPLY,
+                    }
+                    if is_reconfigure
+                    else {}
+                ),
             },
         )
     )
+
+
+def _handle_subentry_create_entry(
+    flow_id: str,
+    current_step: dict[str, Any],
+    *,
+    is_reconfigure: bool,
+    ignored_config_keys: set[str],
+    remaining_config: dict[str, Any],
+    reuse_state: _ReuseState,
+) -> dict[str, Any]:
+    """Handle a subentry create result and reject it in reconfigure mode."""
+    if is_reconfigure:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Config subentry reconfigure created a new entry instead "
+                "of updating the existing entry",
+                suggestions=[
+                    "Inspect Home Assistant for a duplicate subentry before "
+                    "retrying; do not create another entry automatically."
+                ],
+                context={
+                    "flow_id": flow_id,
+                    "status": ReconfigureStatus.APPLIED_BUT_UNVERIFIED,
+                    "details": current_step,
+                },
+            )
+        )
+    response: dict[str, Any] = {
+        "success": True,
+        "operation": "created",
+        "flow_result": current_step,
+    }
+    warnings = _success_warnings(ignored_config_keys, remaining_config, reuse_state)
+    if warnings:
+        response["warnings"] = warnings
+    return response
+
+
+def _handle_subentry_abort(
+    flow_id: str,
+    current_step: dict[str, Any],
+    *,
+    is_reconfigure: bool,
+    ignored_config_keys: set[str],
+    remaining_config: dict[str, Any],
+    reuse_state: _ReuseState,
+) -> dict[str, Any]:
+    """Handle a subentry abort, enforcing consumed values after reconfigure."""
+    reason = current_step.get("reason")
+    reconfigure_result = _reconfigure_abort_result(
+        current_step,
+        is_reconfigure=is_reconfigure,
+        flow_id=flow_id,
+        ignored_config_keys=ignored_config_keys,
+        remaining_config=remaining_config,
+        reuse_state=reuse_state,
+    )
+    if reconfigure_result is not None:
+        return reconfigure_result
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"Config subentry flow aborted: {reason}",
+            context={"flow_id": flow_id, "details": current_step},
+        )
+    )
+    raise AssertionError("unreachable after subentry flow abort")
 
 
 async def _handle_config_subentry_flow_steps(
@@ -602,6 +1047,16 @@ async def _handle_config_subentry_flow_steps(
     were not declared by any flow step, or when a key was resubmitted to a
     later step that redeclared it. Fields redeclared by a later step are filled
     on the same terms as :func:`_handle_flow_steps`.
+
+    ``is_reconfigure`` (set by ``set_config_subentry`` whenever a
+    ``subentry_id`` is supplied) tightens that contract to match the
+    integration reconfigure path: a success abort that left ANY supplied key
+    unconsumed raises ``ReconfigureStatus.APPLIED_BUT_INCOMPLETE`` instead of
+    returning success plus a warning. Home Assistant has already committed
+    the keys it did consume, so a partial apply reported as success would
+    read as "done" to an agent. This is a behaviour change for
+    ``ha_config_set_helper(helper_type="config_subentry", subentry_id=...)``
+    callers who previously relied on the warning.
     """
     remaining_config = dict(config)
     current_step = initial_step
@@ -616,38 +1071,23 @@ async def _handle_config_subentry_flow_steps(
         result_type = current_step.get("type")
 
         if result_type == _FlowType.CREATE_ENTRY:
-            response: dict[str, Any] = {
-                "success": True,
-                "operation": "created",
-                "flow_result": current_step,
-            }
-            warnings = _success_warnings(
-                ignored_config_keys, remaining_config, reuse_state
+            return _handle_subentry_create_entry(
+                flow_id,
+                current_step,
+                is_reconfigure=is_reconfigure,
+                ignored_config_keys=ignored_config_keys,
+                remaining_config=remaining_config,
+                reuse_state=reuse_state,
             )
-            if warnings:
-                response["warnings"] = warnings
-            return response
 
         if result_type == _FlowType.ABORT:
-            reason = current_step.get("reason")
-            if is_reconfigure and reason in _RECONFIGURE_SUCCESS_REASONS:
-                response = {
-                    "success": True,
-                    "operation": "reconfigured",
-                    "flow_result": current_step,
-                }
-                warnings = _success_warnings(
-                    ignored_config_keys, remaining_config, reuse_state
-                )
-                if warnings:
-                    response["warnings"] = warnings
-                return response
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Config subentry flow aborted: {reason}",
-                    context={"flow_id": flow_id, "details": current_step},
-                )
+            return _handle_subentry_abort(
+                flow_id,
+                current_step,
+                is_reconfigure=is_reconfigure,
+                ignored_config_keys=ignored_config_keys,
+                remaining_config=remaining_config,
+                reuse_state=reuse_state,
             )
 
         if result_type == _FlowType.MENU:
@@ -673,6 +1113,7 @@ async def _handle_config_subentry_flow_steps(
                 helper_type=None,
                 last_menu_choice=last_menu_choice,
                 current_step=current_step,
+                is_reconfigure=is_reconfigure,
             )
             continue
 
@@ -698,6 +1139,7 @@ async def _handle_config_subentry_flow_steps(
                 helper_type=None,
                 last_menu_choice=last_menu_choice,
                 current_step=current_step,
+                is_reconfigure=is_reconfigure,
             )
             continue
 
@@ -730,6 +1172,18 @@ async def _handle_config_subentry_flow_steps(
                 "flow_id": flow_id,
                 "max_steps": max_steps,
                 "consumed_menu_selections": consumed_menu_selections,
+                # Reconfigure-only keys: the reconfigure caller reads both to
+                # decide whether to abort the pending flow. Adding them to
+                # every flow's error shape would change the public contract of
+                # the add-integration, options and helper paths for nothing.
+                **(
+                    {
+                        "flow_budget_exhausted": True,
+                        "status": ReconfigureStatus.FLOW_ABORTED_BEFORE_APPLY,
+                    }
+                    if is_reconfigure
+                    else {}
+                ),
             },
         )
     )

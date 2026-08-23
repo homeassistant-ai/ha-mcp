@@ -6,11 +6,11 @@ MCP requests to the ha-mcp addon, allowing remote access via any reverse
 proxy (Nabu Casa, Cloudflare, DuckDNS, nginx, etc.). The webhook URL itself
 is the shared secret in this default mode.
 
-Authentication: when the addon's "Enable OAuth" toggle is on, the addon
-writes OAuth client credentials into the config file and this integration
-lazy-imports `oauth.py` to register the OAuth 2.1 endpoints + bearer-token
-gate. When the toggle is off, no OAuth code is loaded and the proxy behaves
-exactly like the original unauthenticated webhook.
+Authentication is selected by the add-on's OAuth mode. All three modes expose
+the proxy-owned scoped discovery and authorization surface: ha_auth validates
+Home Assistant bearer tokens, legacy uses the proxy's embedded provider, and
+none mode keeps the secret webhook URL as the only credential while completing
+client-mandated OAuth invisibly with a cosmetic token.
 
 Configuration is read from /config/.mcp_proxy_dev_config.json, which is written
 by the proxy addon's startup script. No manual configuration is needed — the
@@ -23,8 +23,10 @@ import hashlib
 import json
 import logging
 import re
+import secrets
 import threading
 from collections.abc import Callable, Coroutine
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -52,8 +54,25 @@ _LOGGER = logging.getLogger(__name__)
 # must survive a config-entry reload, during which hass.data[DOMAIN] is gone.
 _LOGGER_LEVEL_RAISED = False
 
+# Home Assistant's OWN webhook component logs "Received message for
+# unregistered webhook <id> from <ip>" at INFO and then answers an empty 200
+# ("Always respond successfully to not give away if a hook exists or not").
+# That line is the difference between "the request reached HA but nothing is
+# registered for this id" and "the request never arrived at all" — precisely
+# the question the inbound log exists to answer, and invisible by default
+# because it belongs to HA's logger rather than ours (#2220). Raise it
+# alongside our own for as long as the toggle is on.
+_WEBHOOK_LOGGER = logging.getLogger("homeassistant.components.webhook")
+_WEBHOOK_LOGGER_LEVEL_RAISED = False
+
 DOMAIN = "mcp_proxy_dev"
 CONFIG_FILE = Path("/config/.mcp_proxy_dev_config.json")
+DCR_SECRET_FILE = Path("/config/.mcp_proxy_dev_dcr_secret")
+
+# Anonymous CIMD lookups get a separate, deliberately small connection pool.
+# Slow public metadata endpoints must never consume the authenticated relay
+# session's capacity.
+_CIMD_CONNECTOR_LIMIT = 4
 
 # OAuth mode markers written into hass.data["oauth_mode"] and read by the
 # webhook gate + the mode-aware discovery views. Mirrored as
@@ -139,6 +158,34 @@ CONFIG_SCHEMA = vol.Schema(
     {vol.Optional(DOMAIN): vol.Any(None, dict)},
     extra=vol.ALLOW_EXTRA,
 )
+
+
+def load_or_create_dcr_secret() -> bytes:
+    """Persist the 32-byte HMAC key used for stateless DCR client ids."""
+    from .oauth import _atomic_write_0600
+
+    if DCR_SECRET_FILE.exists():
+        data = DCR_SECRET_FILE.read_bytes()
+        if len(data) >= 32:
+            return data
+        _LOGGER.warning(
+            "MCP Proxy DCR: existing signing key at %s is shorter than "
+            "32 bytes (got %d). Regenerating — previously registered "
+            "OAuth clients will need to re-authorize.",
+            DCR_SECRET_FILE,
+            len(data),
+        )
+    new_secret = secrets.token_bytes(32)
+    DCR_SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if not _atomic_write_0600(DCR_SECRET_FILE, new_secret):
+        DCR_SECRET_FILE.write_bytes(new_secret)
+        _LOGGER.warning(
+            "MCP Proxy DCR: could not create the signing key file with "
+            "restricted permissions at %s. The key may have wider "
+            "permissions than intended.",
+            DCR_SECRET_FILE,
+        )
+    return new_secret
 
 
 def _oauth_route_fingerprint(
@@ -307,6 +354,25 @@ def _validate_and_mask_target(target_url: str, webhook_id: str) -> str:
     return masked_wh
 
 
+def _apply_logger_level(logger: logging.Logger, raised: bool, enable: bool) -> bool:
+    """Raise ``logger`` to INFO while the toggle is on; return the new flag.
+
+    Only raises when the effective level is less verbose, so an explicit
+    DEBUG/INFO from the user's `logger:` config is never overridden, and only
+    undoes a raise WE made. (If a user had set a level quieter than INFO then
+    toggled debug on and off, this resets to NOTSET rather than their original
+    level; restoring that would need durable per-level state, not worth it for
+    a debug aid.)
+    """
+    if enable and logger.getEffectiveLevel() > logging.INFO:
+        logger.setLevel(logging.INFO)
+        return True
+    if not enable and raised:
+        logger.setLevel(logging.NOTSET)
+        return False
+    return raised
+
+
 def _apply_debug_logging(proxy_config: dict) -> bool:
     """Apply the inbound-request debug-logging toggle to this integration's
     logger and return whether it is enabled."""
@@ -317,18 +383,14 @@ def _apply_debug_logging(proxy_config: dict) -> bool:
     # explicit DEBUG/INFO the user set via Home Assistant's `logger:` config. We
     # track whether WE raised it and, when the toggle is off, undo only our own
     # raise — never a level the user set themselves.
-    global _LOGGER_LEVEL_RAISED
+    global _LOGGER_LEVEL_RAISED, _WEBHOOK_LOGGER_LEVEL_RAISED
     debug_logging = bool(proxy_config.get("debug_logging", False))
-    if debug_logging and _LOGGER.getEffectiveLevel() > logging.INFO:
-        _LOGGER.setLevel(logging.INFO)
-        _LOGGER_LEVEL_RAISED = True
-    elif not debug_logging and _LOGGER_LEVEL_RAISED:
-        # Undo only the INFO we raised. (If a user had set an explicit level
-        # quieter than INFO — ERROR/CRITICAL — then toggled debug on then off,
-        # this resets to NOTSET rather than their original level; restoring that
-        # would need durable per-level state, not worth it for a debug aid.)
-        _LOGGER.setLevel(logging.NOTSET)
-        _LOGGER_LEVEL_RAISED = False
+    _LOGGER_LEVEL_RAISED = _apply_logger_level(
+        _LOGGER, _LOGGER_LEVEL_RAISED, debug_logging
+    )
+    _WEBHOOK_LOGGER_LEVEL_RAISED = _apply_logger_level(
+        _WEBHOOK_LOGGER, _WEBHOOK_LOGGER_LEVEL_RAISED, debug_logging
+    )
     return debug_logging
 
 
@@ -421,9 +483,9 @@ async def _setup_ha_auth_oauth(
         _hass_version = "unknown"
     _LOGGER.info(
         "MCP Proxy: OAuth mode 'ha_auth' — Home Assistant (version %s) is "
-        "the authorization server; this add-on serves only the OAuth "
-        "discovery documents and validates bearer tokens via hass.auth. No "
-        "HA restart is needed to enable or disable this mode.",
+        "the authorization server behind this add-on's scoped OAuth surface; "
+        "bearer tokens are validated via hass.auth. No HA restart is needed "
+        "to enable or disable this mode.",
         _hass_version,
     )
     # ha_auth is ALWAYS host-derived: the SAME install must work via the
@@ -432,22 +494,28 @@ async def _setup_ha_auth_oauth(
     # and ignore any public_base_url a hand-edited config might carry (the
     # ambiguity guard above only rejects stray client_id/client_secret keys,
     # so a stray public_base_url would otherwise wrongly pin the base URL).
+    cimd_session: aiohttp.ClientSession | None = None
     try:
         from .auth_native import ResourceServer
         from .oauth import register_metadata_views
+        from .oauth_autoapprove import register_autoapprove_views
+        from .oauth_dcr import bind_dcr_view
 
+        dcr_signing_key = await hass.async_add_executor_job(load_or_create_dcr_secret)
+        cimd_session = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(limit=_CIMD_CONNECTOR_LIMIT)
+        )
         resource_server = ResourceServer(hass, webhook_id, None)
         # Registers the seven discovery-document views at most once per HA
         # session (register_metadata_views no-ops when either mode already
         # bound them — see oauth._METADATA_VIEWS_REGISTERED_KEY), so a
-        # config-entry reload or a live legacy->ha_auth switch doesn't
-        # stack shadowed duplicates. ha_auth binds NO root views (HA core is
-        # the authorization server, serving its own /auth/authorize +
-        # /auth/token; the bare /authorize + /token are the legacy flavor's
-        # own root views), so there is no owner-key / fingerprint bookkeeping
-        # and no restart concept — hence oauth_restart_needed stays False and
-        # the marker-CLEAR path runs below.
+        # config-entry reload or a live legacy->ha_auth switch doesn't stack
+        # shadowed duplicates. The scoped handlers redirect/relay into core;
+        # the bare /authorize + /token remain legacy-only aliases, so there is
+        # no owner-key / fingerprint bookkeeping and no restart concept.
         register_metadata_views(hass, resource_server)
+        register_autoapprove_views(hass)
+        bind_dcr_view(hass)
     except Exception as err:
         _LOGGER.exception(
             "MCP Proxy: failed to initialise ha_auth OAuth (%s)",
@@ -456,7 +524,11 @@ async def _setup_ha_auth_oauth(
         # OAuth setup failed — unregister the webhook async_setup_entry registered so
         # we don't leave an unauthenticated endpoint live.
         async_unregister(hass, webhook_id)
-        await session.close()
+        if cimd_session is not None:
+            with suppress(Exception):
+                await cimd_session.close()
+        with suppress(Exception):
+            await session.close()
         raise ConfigEntryError(
             f"Failed to enable OAuth on the MCP webhook: {err}. "
             "Auth is not being enforced — refusing to start the "
@@ -465,6 +537,8 @@ async def _setup_ha_auth_oauth(
         ) from err
     hass_data["oauth"] = resource_server
     hass_data["oauth_mode"] = OAUTH_MODE_HA_AUTH
+    hass_data["dcr_signing_key"] = dcr_signing_key
+    hass_data["cimd_session"] = cimd_session
 
 
 async def _setup_legacy_oauth(
@@ -557,6 +631,9 @@ async def _setup_legacy_oauth(
         oauth_restart_needed = _bind_legacy_oauth_views(
             hass, oauth_provider, route_owner, fingerprint
         )
+        from .oauth_autoapprove import register_autoapprove_views
+
+        register_autoapprove_views(hass)
     except ConfigEntryError:
         # The post-await collision re-check above already tore down (webhook
         # unregistered, session closed) — re-raise as-is so the generic
@@ -586,7 +663,7 @@ async def _setup_legacy_oauth(
     return oauth_restart_needed
 
 
-def _setup_none_autoapprove(
+async def _setup_none_autoapprove(
     hass: HomeAssistant, webhook_id: str, hass_data: dict
 ) -> None:
     """Set up none-mode auto-approve discovery (OAuth off — issue #1969).
@@ -610,14 +687,17 @@ def _setup_none_autoapprove(
             AutoApproveProvider,
             register_autoapprove_views,
         )
+        from .oauth_dcr import bind_dcr_view
 
+        dcr_signing_key = await hass.async_add_executor_job(load_or_create_dcr_secret)
         # Host-derived base URLs (public_base_url=None), like ha_auth: the same
         # install must work via any external URL.
         provider = AutoApproveProvider(hass, webhook_id, None)
-        # Both view bundles bind at most once per HA session (guarded); a
+        # All three view bundles bind at most once per HA session (guarded); a
         # none<->ha_auth switch reuses them, so no restart is needed.
         register_metadata_views(hass, provider)
         register_autoapprove_views(hass)
+        bind_dcr_view(hass)
     except Exception:
         _LOGGER.exception(
             "MCP Proxy: failed to set up none-mode auto-approve discovery; "
@@ -626,6 +706,7 @@ def _setup_none_autoapprove(
             "unassisted)."
         )
         return
+    hass_data["dcr_signing_key"] = dcr_signing_key
     hass_data[AUTOAPPROVE_PROVIDER_KEY] = provider
     hass_data["oauth_mode"] = OAUTH_MODE_NONE_AUTOAPPROVE
     _LOGGER.info(
@@ -644,13 +725,10 @@ async def _setup_oauth_section(
 ) -> bool:
     """Set up the optional OAuth section, dispatching by mode. Returns
     oauth_restart_needed; raises ConfigEntryError on malformed config."""
-    # OAuth is opt-in. When the addon writes an `oauth` section into the
-    # config file (only when enable_oauth is on AND both creds are non-empty,
-    # validated by start.py), we lazy-import the provider and register its
-    # views. When the section is absent, this entire branch is skipped —
-    # nothing about hass.data, imports, or registered HTTP views changes
-    # from the no-auth baseline. That is the load-bearing guarantee for
-    # users who don't opt into OAuth.
+    # An `oauth` section selects ha_auth or legacy. When it is absent, the
+    # proxy stays unauthenticated but exposes the none-mode compatibility
+    # surface so OAuth-mandating clients can still connect; its token remains
+    # cosmetic and never enables the webhook's bearer gate.
     #
     # If the OAuth section IS present but malformed — blank creds, or view
     # registration fails — we fail loudly via ConfigEntryError. The user
@@ -685,7 +763,7 @@ async def _setup_oauth_section(
     # forwarder stays unauthenticated and never 401s (see _setup_none_autoapprove
     # / the AUTOAPPROVE_PROVIDER_KEY-not-"oauth" split). No restart is ever
     # needed, so oauth_restart_needed stays False.
-    _setup_none_autoapprove(hass, webhook_id, hass_data)
+    await _setup_none_autoapprove(hass, webhook_id, hass_data)
     return False
 
 
@@ -1014,7 +1092,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     webhook_id = data.get("webhook_id")
     if webhook_id:
         async_unregister(hass, webhook_id)
-    session = data.get("session")
-    if session:
-        await session.close()
+    # Close each session independently: a failure closing one must not leak
+    # the other's connector or fail the unload, matching how the
+    # setup-failure path already suppresses close errors.
+    for candidate in ("session", "cimd_session"):
+        client = data.get(candidate)
+        if client:
+            with suppress(Exception):
+                await client.close()
     return True

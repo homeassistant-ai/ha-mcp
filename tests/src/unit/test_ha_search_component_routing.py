@@ -64,6 +64,10 @@ _CAPS_SEARCH = {
     "capabilities": ["search"],
     "limits": {},
 }
+_CAPS_SEARCH_MEMBERSHIP = {
+    **_CAPS_SEARCH,
+    "capabilities": ["search", "search_entity_membership"],
+}
 
 
 class RoutingClient:
@@ -171,6 +175,78 @@ async def test_component_fast_path_skips_legacy_fetches(tmp_path, monkeypatch) -
         c for c in ws.send_command.call_args_list if c.args[0] == "ha_mcp_tools/search"
     ]
     assert len(search_calls) == 1
+    assert "result_fields" not in search_calls[0].kwargs
+
+
+@pytest.mark.asyncio
+async def test_membership_request_falls_back_from_old_component(
+    tmp_path, monkeypatch
+) -> None:
+    """A component without the additive capability stays on the legacy path."""
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    ws = make_ws(
+        "ha_mcp_tools/search",
+        info_result=_CAPS_SEARCH,
+        cmd_result=_entity_search_result(),
+    )
+    client = RoutingClient()
+    ha_search = _build_ha_search(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await ha_search(query="kitchen", result_fields=["entity_id", "is_group"])
+
+    assert resp["entities"] == [
+        {"entity_id": "light.kitchen", "is_group": False},
+        {"entity_id": "sensor.kitchen_temp", "is_group": False},
+    ]
+    assert client.get_states_calls == 1
+    assert not any(
+        call.args[0] == "ha_mcp_tools/search" for call in ws.send_command.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_membership_capability_forwards_only_requested_fields(
+    tmp_path, monkeypatch
+) -> None:
+    """A capable component receives the canonical opt-in field list."""
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    component_result = _entity_search_result()
+    component_result["entities"][0].update(
+        {
+            "is_group": True,
+            "member_entity_ids": ["light.member_one", "light.member_two"],
+        }
+    )
+    ws = make_ws(
+        "ha_mcp_tools/search",
+        info_result=_CAPS_SEARCH_MEMBERSHIP,
+        cmd_result=component_result,
+    )
+    client = RoutingClient()
+    ha_search = _build_ha_search(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await ha_search(
+            query="kitchen",
+            result_fields=["member_entity_ids", "entity_id", "is_group"],
+        )
+
+    assert resp["entities"][0] == {
+        "entity_id": "light.kitchen",
+        "is_group": True,
+        "member_entity_ids": ["light.member_one", "light.member_two"],
+    }
+    search_call = next(
+        call
+        for call in ws.send_command.call_args_list
+        if call.args[0] == "ha_mcp_tools/search"
+    )
+    assert search_call.kwargs["result_fields"] == [
+        "is_group",
+        "member_entity_ids",
+    ]
+    assert client.get_states_calls == 0
 
 
 @pytest.mark.asyncio
@@ -360,7 +436,12 @@ class ListingModeClient(RoutingClient):
     """RoutingClient + area/floor registries so the area listing path works."""
 
     def __init__(self) -> None:
+        """Initialize area and floor registry fixtures for listing-mode tests."""
         super().__init__()
+        self.floor_rows: list[dict[str, Any]] = []
+        self.area_rows: list[dict[str, Any]] = [
+            {"area_id": "kitchen", "name": "Kitchen"}
+        ]
         self.registry_with_area = {
             "success": True,
             "result": [
@@ -378,16 +459,17 @@ class ListingModeClient(RoutingClient):
         }
 
     async def send_websocket_message(self, msg: dict[str, Any]) -> dict[str, Any]:
+        """Serve area and floor fixtures before delegating other requests."""
         msg_type = msg.get("type", "")
         if msg_type == "config/area_registry/list":
             self.ws_types[msg_type] += 1
             return {
                 "success": True,
-                "result": [{"area_id": "kitchen", "name": "Kitchen"}],
+                "result": self.area_rows,
             }
         if msg_type == "config/floor_registry/list":
             self.ws_types[msg_type] += 1
-            return {"success": True, "result": []}
+            return {"success": True, "result": self.floor_rows}
         if msg_type == "config/entity_registry/list":
             self.ws_types[msg_type] += 1
             return self.registry_with_area
@@ -652,6 +734,32 @@ class TestListingModesBypassComponent:
         assert not ws.send_command.await_count, (
             "component must not be consulted for area-scoped queries"
         )
+
+    @pytest.mark.asyncio
+    async def test_floor_filter_expands_from_public_ha_search(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The public tool expands an exact floor to all of its areas."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        client = ListingModeClient()
+        client.floor_rows = [
+            {"floor_id": "sous_sol", "name": "Sous-sol", "aliases": ["Basement"]}
+        ]
+        client.area_rows = [
+            {"area_id": "kitchen", "name": "Kitchen"},
+            {"area_id": "cave", "name": "Cave", "floor_id": "sous_sol"},
+        ]
+        client.registry_with_area["result"][0]["area_id"] = "cave"
+        ha_search = _build_ha_search(client)
+        ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result={})
+
+        with patch_ws(ws, tools_search):
+            data = await ha_search(area_filter="Sous-sol", domain_filter="light")
+
+        assert data["area_names"] == ["Cave"]
+        assert [entity["entity_id"] for entity in data["entities"]] == ["light.kitchen"]
+        assert any("expanded to 1 area(s)" in warning for warning in data["warnings"])
+        assert not ws.send_command.await_count
 
     @pytest.mark.asyncio
     async def test_state_filter_only_bypasses_component(

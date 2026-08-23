@@ -117,7 +117,14 @@ async def fetch_registries_via_component(
     if category_scopes:
         kwargs["category_scopes"] = list(category_scopes)
     try:
-        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            # verify_ssl keys the client pool, so omitting it hands back a
+            # DIFFERENT pooled client than the capability probe used and a
+            # self-signed setup fails the read after passing detection.
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
         raw = await ws.send_command(WS_REGISTRIES, **kwargs)
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):

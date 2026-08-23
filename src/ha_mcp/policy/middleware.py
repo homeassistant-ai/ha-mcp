@@ -12,6 +12,7 @@ from anyio.to_thread import run_sync as run_in_thread
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 
 from ..errors import ErrorCode, create_error_response
+from ..renamed_tools import current_tool_name
 from ..tools.helpers import raise_tool_error, safe_progress
 from .approval_queue import ApprovalQueue, PendingApproval, compute_args_hash
 from .evaluator import Verdict, evaluate, find_matching_rule
@@ -19,21 +20,23 @@ from .model import Policy, Rule
 
 logger = logging.getLogger(__name__)
 
-# Toolsearch proxy meta-tools — always pass through. Gating the proxy
-# directly would be wrong: rule predicates target the REAL tool's args
-# (e.g. args.domain), but the proxy receives wrapped {"name": "...",
-# "arguments": {...}} envelopes. The proxy re-dispatches via
-# ctx.fastmcp.call_tool(name, arguments), which re-enters the middleware
-# chain with the real tool name and args, so the inner call gets gated
-# correctly there.
-PROXY_META_TOOLS = frozenset(
+# Dispatching call proxies are a strict subset of the ungated tool-search
+# meta-tools. Only these three execute their envelope's ``name``; search merely
+# returns catalog metadata and must not be unwrapped by other middleware.
+# Gating a call proxy directly would be wrong: rule predicates target the real
+# tool's args (for example args.domain), while the proxy receives a wrapped
+# {"name": "...", "arguments": {...}} envelope. Its dispatch re-enters the
+# middleware chain with the real name and args, so the inner call is gated there.
+CALL_PROXY_META_TOOLS = frozenset(
     {
         "ha_call_read_tool",
         "ha_call_write_tool",
         "ha_call_delete_tool",
-        "ha_search_tools",
     }
 )
+# Policy itself also leaves catalog search ungated; unlike the call proxies it
+# never dispatches a tool named in client-supplied arguments.
+PROXY_META_TOOLS = CALL_PROXY_META_TOOLS | {"ha_search_tools"}
 
 # ha_dev_manage_server actions that MANAGE the approval queue itself.
 # Gating these deadlocks by construction: with a wildcard (or
@@ -100,7 +103,13 @@ class PolicyMiddleware(Middleware):
                     ],
                 )
             )
-        name = context.message.name
+        # RenamedToolAliasMiddleware runs ahead of this one and normally
+        # rewrites a retired name before it arrives. Resolving it again costs a
+        # dict lookup and removes the ordering dependency, which here is the
+        # difference between gated and ungated: rules are keyed on the current
+        # name, and ``evaluate`` returns ALLOW when nothing matches, so a gate
+        # reading a stale name lets the call through.
+        name = current_tool_name(context.message.name)
         args = context.message.arguments or {}
 
         if _passes_ungated(name, args):

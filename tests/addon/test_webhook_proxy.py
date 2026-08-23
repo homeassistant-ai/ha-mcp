@@ -4,6 +4,7 @@ Structure tests verify addon files and config.yaml.
 Unit tests mock Supervisor API calls to test discovery logic in start.py.
 """
 
+import contextlib
 import importlib
 import importlib.util
 import json
@@ -126,6 +127,13 @@ class _FakeClientTimeout:
     ceil_threshold: float = 5
 
 
+@dataclass(frozen=True)
+class _FakeTCPConnector:
+    """Connector stand-in retaining the isolated CIMD pool limit."""
+
+    limit: int = 100
+
+
 def _install_runtime_stubs():
     """Inject homeassistant.* and aiohttp stubs into sys.modules.
 
@@ -153,6 +161,7 @@ def _install_runtime_stubs():
     aiohttp_mod = types.ModuleType("aiohttp")
     aiohttp_mod.ClientSession = MagicMock(name="ClientSession")
     aiohttp_mod.ClientTimeout = _FakeClientTimeout
+    aiohttp_mod.TCPConnector = _FakeTCPConnector
     aiohttp_mod.ClientError = type("ClientError", (Exception,), {})
     aiohttp_web = types.ModuleType("aiohttp.web")
     aiohttp_web.Request = MagicMock
@@ -260,8 +269,8 @@ def _import_mcp_proxy(preload_oauth=None):
     component_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
     init_path = os.path.join(component_dir, "__init__.py")
     mod_name = f"mcp_proxy_init_{CURRENT['key']}"
-    sys.modules.pop(mod_name, None)
-    sys.modules.pop(f"{mod_name}.oauth", None)
+    for suffix in ("", ".oauth", ".oauth_autoapprove", ".oauth_dcr", ".oauth_indirect"):
+        sys.modules.pop(f"{mod_name}{suffix}", None)
     spec = importlib.util.spec_from_file_location(
         mod_name,
         init_path,
@@ -272,6 +281,10 @@ def _import_mcp_proxy(preload_oauth=None):
     if preload_oauth is not None:
         sys.modules[f"{mod_name}.oauth"] = preload_oauth
     spec.loader.exec_module(mod)
+    if hasattr(mod, "DCR_SECRET_FILE"):
+        dcr_tmp = tempfile.TemporaryDirectory()
+        mod._test_dcr_secret_dir = dcr_tmp
+        mod.DCR_SECRET_FILE = Path(dcr_tmp.name) / ".mcp_proxy_dev_dcr_secret"
     return mod
 
 
@@ -292,6 +305,12 @@ def _import_oauth(tmp_secret_dir=None):
     mod = importlib.util.module_from_spec(spec)
     sys.modules[mod_name] = mod
     spec.loader.exec_module(mod)
+    if hasattr(mod, "_addon_alive"):
+
+        async def _addon_alive(_hass):
+            return True
+
+        mod._addon_alive = _addon_alive
     if tmp_secret_dir is not None:
         mod.SECRET_FILE = Path(tmp_secret_dir) / ".mcp_proxy_oauth_secret"
     return mod
@@ -329,6 +348,84 @@ def _ha_auth_supported() -> bool:
     )
 
 
+def test_heartbeat_touch_precedes_oauth_enforcement():
+    """#2218 review: main() must touch the heartbeat BEFORE the fail-closed
+    stale-code probe — that probe hits a heartbeat-gated OAuth view, and the
+    clean-shutdown path deletes the file, so probing first would misread
+    every fresh start as stale code and enter restart recovery. Applies to
+    flavors that ship the heartbeat gate (feature-detected)."""
+    for variant in WEBHOOK_PROXY_VARIANTS.values():
+        start_src = Path(variant["addon_dir"], "start.py").read_text()
+        if "HEARTBEAT_FILE" not in start_src:
+            continue  # flavor predates the heartbeat gate
+        # Slice main()'s body: _keep_alive_loop is DEFINED earlier in the file
+        # and touches the heartbeat too, so a whole-file index() would be
+        # satisfied by that unrelated touch even with main()'s deleted.
+        body = start_src[start_src.index("\ndef main(") :]
+        assert "HEARTBEAT_FILE.touch()" in body, variant["key"]
+        touch = body.index("HEARTBEAT_FILE.touch()")
+        enforce = body.index("_enforce_oauth_or_disable(enable_oauth)")
+        assert touch < enforce, variant["key"]
+
+
+def _component_src(name: str) -> str:
+    """Source of a component module in the CURRENT flavor, "" when absent."""
+    path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], name)
+    if not os.path.exists(path):
+        return ""
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _unified_oauth_routes() -> bool:
+    """Feature-detect the unified scoped authorize/token dispatchers.
+
+    The marker is the legacy handler they dispatch INTO: the scoped URL alone
+    is not distinguishing, because the none-mode-only view that predates
+    unification binds the same path. Stable gains this on promotion — same
+    lockstep-with-code approach as `_ha_auth_supported`."""
+    return "handle_legacy_authorize_get" in _component_src("oauth_autoapprove.py")
+
+
+def _dcr_registration_supported() -> bool:
+    """Feature-detect the stateless DCR registration endpoint."""
+    return "DcrRegisterView" in _component_src("oauth_dcr.py")
+
+
+def _dedicated_cimd_session() -> bool:
+    """Feature-detect the isolated CIMD connector pool."""
+    return "cimd_session" in _component_src("__init__.py")
+
+
+def _proxy_owned_oauth_endpoints() -> bool:
+    """Feature-detect that the ha_auth AS document advertises proxy-owned
+    endpoints under OAUTH_BASE rather than core's own /auth/* routes."""
+    return '"authorization_endpoint": f"{base}{OAUTH_BASE}/authorize"' in (
+        _component_src("auth_native.py")
+    )
+
+
+def _autoapprove_any_redirect() -> bool:
+    """Feature-detect none-mode accepting any valid redirect (the claude.ai
+    client allowlist retired)."""
+    return "without a client allowlist" in _component_src("oauth_autoapprove.py")
+
+
+def _require_webhook_logger(mod) -> None:
+    """Skip only a flavor that genuinely predates the webhook-logger raise.
+
+    Feature-detected rather than keyed on the flavor name, so the promote
+    transform starts running these on stable the moment the code lands there
+    — a hard-coded flavor skip would silently stay off forever. Dev always
+    leads stable, so a missing attribute THERE is a real regression, not a
+    not-yet-promoted capability, and must fail rather than skip.
+    """
+    if hasattr(mod, "_WEBHOOK_LOGGER"):
+        return
+    assert CURRENT["key"] != "dev", "dev must ship the webhook-logger raise"
+    pytest.skip("flavor predates the webhook-logger raise")
+
+
 def _none_autoapprove_supported() -> bool:
     """Feature-detect whether the CURRENT flavor ships none-mode auto-approve
     discovery (its `oauth_autoapprove.py` module, issue #1969). The stable
@@ -353,7 +450,7 @@ def _rfc9207_iss_supported() -> bool:
         return "def _issuer(" in fh.read()
 
 
-def _import_none_autoapprove_stack():
+def _import_none_autoapprove_stack(tmp_secret_dir=None):
     """Import the integration wired so none-mode auto-approve resolves.
 
     Loads __init__, oauth, oauth_autoapprove, and auth_native as submodules of
@@ -367,7 +464,15 @@ def _import_none_autoapprove_stack():
     _install_runtime_stubs()
     component_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
     pkg_name = f"mcp_proxy_init_{CURRENT['key']}"
-    for suffix in ("", ".oauth", ".oauth_autoapprove", ".auth_native", ".repairs"):
+    for suffix in (
+        "",
+        ".oauth",
+        ".oauth_autoapprove",
+        ".oauth_dcr",
+        ".oauth_indirect",
+        ".auth_native",
+        ".repairs",
+    ):
         sys.modules.pop(f"{pkg_name}{suffix}", None)
     init_path = os.path.join(component_dir, "__init__.py")
     init_spec = importlib.util.spec_from_file_location(
@@ -380,6 +485,8 @@ def _import_none_autoapprove_stack():
     autoapprove = _load_pkg_submodule(pkg_name, component_dir, "oauth_autoapprove")
     auth_native = _load_pkg_submodule(pkg_name, component_dir, "auth_native")
     init_spec.loader.exec_module(pkg)
+    if tmp_secret_dir is not None and hasattr(pkg, "DCR_SECRET_FILE"):
+        pkg.DCR_SECRET_FILE = Path(tmp_secret_dir) / ".mcp_proxy_dev_dcr_secret"
     return pkg, oauth, autoapprove, auth_native
 
 
@@ -393,6 +500,12 @@ def _load_pkg_submodule(pkg_name, component_dir, sub):
     m = importlib.util.module_from_spec(spec)
     sys.modules[name] = m
     spec.loader.exec_module(m)
+    if sub == "oauth" and hasattr(m, "_addon_alive"):
+
+        async def _addon_alive(_hass):
+            return True
+
+        m._addon_alive = _addon_alive
     return m
 
 
@@ -409,7 +522,15 @@ def _import_ha_auth_stack(tmp_secret_dir=None):
     _install_runtime_stubs()
     component_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
     pkg_name = f"mcp_proxy_init_{CURRENT['key']}"
-    for suffix in ("", ".oauth", ".auth_native", ".repairs"):
+    for suffix in (
+        "",
+        ".oauth",
+        ".oauth_autoapprove",
+        ".oauth_dcr",
+        ".oauth_indirect",
+        ".auth_native",
+        ".repairs",
+    ):
         sys.modules.pop(f"{pkg_name}{suffix}", None)
     # Create the package object first so submodules have a parent with __path__.
     init_path = os.path.join(component_dir, "__init__.py")
@@ -425,6 +546,8 @@ def _import_ha_auth_stack(tmp_secret_dir=None):
     auth_native = _load_pkg_submodule(pkg_name, component_dir, "auth_native")
     # Execute the package __init__ last; its lazy imports resolve to the above.
     init_spec.loader.exec_module(pkg)
+    if tmp_secret_dir is not None and hasattr(pkg, "DCR_SECRET_FILE"):
+        pkg.DCR_SECRET_FILE = Path(tmp_secret_dir) / ".mcp_proxy_dev_dcr_secret"
     return pkg, oauth, auth_native
 
 
@@ -1595,6 +1718,10 @@ class TestOAuthOffPreservesBehavior:
             assert (
                 hass.data[mod.DOMAIN]["oauth_mode"] == mod.OAUTH_MODE_NONE_AUTOAPPROVE
             )
+        if _dcr_registration_supported():
+            # The none-mode surface now serves stateless DCR, keyed by the
+            # signing secret loaded at setup.
+            expected |= {"dcr_signing_key"}
         assert set(hass.data[mod.DOMAIN].keys()) == expected
 
     async def test_setup_does_not_import_oauth_module_when_off(self, mod, hass):
@@ -1707,9 +1834,40 @@ class TestDebugLogging:
         # deterministic.
         mod._LOGGER.setLevel(logging.NOTSET)
         mod._LOGGER_LEVEL_RAISED = False
+        if hasattr(mod, "_WEBHOOK_LOGGER"):
+            mod._WEBHOOK_LOGGER.setLevel(logging.NOTSET)
+            mod._WEBHOOK_LOGGER_LEVEL_RAISED = False
         yield
         mod._LOGGER.setLevel(logging.NOTSET)
         mod._LOGGER_LEVEL_RAISED = False
+        if hasattr(mod, "_WEBHOOK_LOGGER"):
+            mod._WEBHOOK_LOGGER.setLevel(logging.NOTSET)
+            mod._WEBHOOK_LOGGER_LEVEL_RAISED = False
+
+    async def test_debug_on_also_surfaces_has_webhook_logger(self, mod, hass):
+        """#2220: with the toggle on and NO inbound lines, the user still can't
+        tell "request never arrived" from "arrived but nothing is registered
+        for this id" — HA answers an empty 200 for an unregistered webhook and
+        logs the reason on ITS logger, invisible by default. The toggle raises
+        that logger too, and undoes only its own raise."""
+        _require_webhook_logger(mod)
+
+        await self._run_setup(mod, hass, debug=True)
+        assert mod._WEBHOOK_LOGGER.getEffectiveLevel() <= logging.INFO
+
+        await self._run_setup(mod, hass, debug=False)
+        assert mod._WEBHOOK_LOGGER.level == logging.NOTSET
+
+    async def test_debug_toggle_never_lowers_an_explicit_user_level(self, mod, hass):
+        """A user who set DEBUG via HA's `logger:` config keeps it: we only
+        ever raise a less-verbose logger, and only undo our own raise."""
+        _require_webhook_logger(mod)
+        mod._WEBHOOK_LOGGER.setLevel(logging.DEBUG)
+
+        await self._run_setup(mod, hass, debug=True)
+        await self._run_setup(mod, hass, debug=False)
+
+        assert mod._WEBHOOK_LOGGER.level == logging.DEBUG
 
     async def _run_setup(self, mod, hass, debug):
         proxy_config = {
@@ -1745,6 +1903,8 @@ class TestDebugLogging:
             # Dev's OAuth-off path also serves none-mode auto-approve discovery
             # (issue #1969): provider under "autoapprove" + the mode marker.
             expected |= {"autoapprove", "oauth_mode"}
+        if _dcr_registration_supported():
+            expected |= {"dcr_signing_key"}
         assert set(hass.data[mod.DOMAIN].keys()) == expected
 
     async def test_debug_on_stores_flag(self, mod, hass):
@@ -2370,8 +2530,13 @@ class TestOAuthSetupEntry:
         assert provider is not None
         assert provider.client_id == "client-1234567890ABCDEF"
         # 4 core OAuth views, plus the well-known metadata variants on flavors
-        # that ship them (feature-detected — see _wellknown_oauth_urls).
-        expected_views = 4 + len(_wellknown_oauth_urls(oauth, "mcp_test"))
+        # that ship them (feature-detected — see _wellknown_oauth_urls), plus
+        # the two unified scoped dispatchers that legacy mode now also binds.
+        expected_views = (
+            4
+            + len(_wellknown_oauth_urls(oauth, "mcp_test"))
+            + (2 if _unified_oauth_routes() else 0)
+        )
         assert hass.http.register_view.call_count == expected_views
         # Successful OAuth setup records that THIS flavor owns the root routes,
         # so the sibling flavor refuses loudly instead of shadowing them.
@@ -2635,6 +2800,13 @@ class TestOAuthRestartRepairTrigger:
         hass.data[mod.OAUTH_ROUTE_KEY_FINGERPRINT] = mod._oauth_route_fingerprint(
             creds["client_id"], creds["client_secret"], fixed_key
         )
+        if _unified_oauth_routes():
+            # Same premise as the seeded fingerprint: the unified scoped
+            # dispatchers were also bound earlier this session (guard key in
+            # oauth_autoapprove.py), so the reload must reuse them.
+            hass.data[
+                f"webhook_proxy_oauth_autoapprove_views_registered_{mod.DOMAIN}"
+            ] = True
         repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale"}')
         with (
             patch.object(mod, "_read_config", return_value=self._oauth_config()),
@@ -2690,6 +2862,10 @@ class TestOAuthRestartRepairTrigger:
         # DIFFERENT (now-stale) identity than the creds we're reloading with.
         hass.data[mod.OAUTH_ROUTE_OWNER_KEY] = mod.DOMAIN
         hass.data[mod.OAUTH_ROUTE_KEY_FINGERPRINT] = "stale-fingerprint"
+        if _unified_oauth_routes():
+            hass.data[
+                f"webhook_proxy_oauth_autoapprove_views_registered_{mod.DOMAIN}"
+            ] = True
         with (
             patch.object(mod, "_read_config", return_value=self._oauth_config()),
             patch.object(mod, "async_register"),
@@ -3248,7 +3424,13 @@ def _provider_for_view_tests(tmp_path, public_base_url=None):
 
 
 def _make_view_request(
-    *, headers=None, query=None, method="GET", post_data=None, scheme="https"
+    *,
+    headers=None,
+    query=None,
+    method="GET",
+    post_data=None,
+    scheme="https",
+    path="/authorize",
 ):
     """Mock a starlette/aiohttp-style web.Request with the bits the views read."""
     req = MagicMock()
@@ -3256,6 +3438,7 @@ def _make_view_request(
     req.query = query or {}
     req.method = method
     req.scheme = scheme
+    req.path = path
     if post_data is not None:
         req.post = AsyncMock(return_value=post_data)
     return req
@@ -3333,11 +3516,13 @@ class TestAuthorizationServerView:
 
         body = json_resp.call_args.args[0]
         assert body["issuer"].endswith(CURRENT["oauth_base"])
-        # Authorize/token endpoints live at the root path of the host so
-        # that clients constructing them from the resource host (Claude.ai)
-        # find them.
-        assert body["authorization_endpoint"] == "https://legit.example/authorize"
-        assert body["token_endpoint"] == "https://legit.example/token"
+        # The dev mirror advertises its mode-dispatched scoped routes; stable
+        # keeps the legacy root aliases until the promote workflow carries it.
+        route_base = CURRENT["oauth_base"] if _proxy_owned_oauth_endpoints() else ""
+        assert body["authorization_endpoint"] == (
+            f"https://legit.example{route_base}/authorize"
+        )
+        assert body["token_endpoint"] == f"https://legit.example{route_base}/token"
         assert "code" in body["response_types_supported"]
         assert "authorization_code" in body["grant_types_supported"]
         assert "refresh_token" in body["grant_types_supported"]
@@ -3620,14 +3805,38 @@ class TestShutdownAndWebhookErrors:
         log_file.write_text("x\n")
         old = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT))
         logs: list[str] = []
+        # The heartbeat gate is dev-only until promoted — same
+        # lockstep-with-code feature detection as `_ha_auth_supported`.
+        has_heartbeat = hasattr(start, "HEARTBEAT_FILE")
+        heartbeat = tmp_path / "heartbeat"
+        heartbeat.write_text("")
+        seen: dict[str, bool] = {}
+
+        def _record_then_remove():
+            # Captured DURING the slow HA call: the surface must already be
+            # dark by now, so a mid-cleanup kill can't leave it serving.
+            seen["heartbeat_alive"] = heartbeat.exists()
+
         try:
-            with (
-                patch.object(start, "INBOUND_LOG_FILE", log_file),
-                patch.object(start, "_remove_config_entry") as rm,
-                patch.object(start, "log_info", side_effect=logs.append),
-            ):
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(patch.object(start, "INBOUND_LOG_FILE", log_file))
+                rm = stack.enter_context(
+                    patch.object(
+                        start, "_remove_config_entry", side_effect=_record_then_remove
+                    )
+                )
+                stack.enter_context(
+                    patch.object(start, "log_info", side_effect=logs.append)
+                )
+                if has_heartbeat:
+                    stack.enter_context(
+                        patch.object(start, "HEARTBEAT_FILE", heartbeat)
+                    )
                 start._shutdown_cleanup("SIGTERM")
             rm.assert_called_once()
+            if has_heartbeat:
+                assert not heartbeat.exists()  # OAuth surface taken dark
+                assert seen["heartbeat_alive"] is False  # ...before the HA calls
             assert not log_file.exists()  # mirror file dropped
             assert any("reason: SIGTERM" in m for m in logs)
             # Handlers restored to default so a second signal can't abort cleanup.
@@ -3823,6 +4032,39 @@ class TestTokenView:
             kwargs.get("headers", {}).get("WWW-Authenticate")
             == 'Basic realm="MCP Proxy OAuth"'
         )
+
+    async def test_basic_auth_accepts_raw_unencoded_configured_creds(
+        self, setup, tmp_path
+    ):
+        """#2218 review: configured credentials may contain '+' or '%XX'; a
+        naive client sends them un-encoded in Basic auth, and the decoded
+        candidate alone would mangle them (unquote_plus turns '+' into a
+        space). The raw split must authenticate too."""
+        oauth, _provider, _view = setup
+        provider = oauth.OAuthProvider(
+            hass=MagicMock(),
+            client_id="configured-client+id",
+            client_secret="se%41cret+x",
+            webhook_id="mcp_webhook_id_aaaa",
+            signing_key=b"\x00" * 32,
+            public_base_url=None,
+        )
+        view = oauth.TokenView(provider)
+        request = _make_view_request(
+            method="POST",
+            headers={
+                "Authorization": self._basic_header(
+                    "configured-client+id", "se%41cret+x"
+                )
+            },
+            post_data={"grant_type": "unsupported_probe"},
+        )
+
+        with patch.object(oauth.web, "json_response") as resp_ctor:
+            await view.post(request)
+
+        # Authentication succeeded; the probe grant fails AFTER the gate.
+        assert resp_ctor.call_args.args[0]["error"] == "unsupported_grant_type"
 
     async def test_invalid_client_via_form_returns_401(self, setup):
         oauth, provider, view = setup
@@ -4604,6 +4846,13 @@ class TestOAuthSetupEntryRegistersExpectedViews:
             "/authorize",
             "/token",
         } | _wellknown_oauth_urls(oauth, "mcp_test")
+        if _unified_oauth_routes():
+            # The unified scoped dispatchers bind in every mode; the root
+            # views above stay as the legacy compatibility aliases.
+            expected |= {
+                f"{CURRENT['oauth_base']}/authorize",
+                f"{CURRENT['oauth_base']}/token",
+            }
         assert registered_urls == expected
 
 
@@ -4696,11 +4945,9 @@ class TestHaAuthMode:
         assert entry.get("description"), "oauth_mode needs a translation description"
         assert "Beta" in entry["name"]
 
-    # ---- setup registers exactly the 7 metadata views, no root views ----
+    # ---- setup registers discovery and dev unified views, no root views ----
 
-    async def test_setup_registers_seven_metadata_views_and_marks_mode(
-        self, hass, tmp_path
-    ):
+    async def test_setup_registers_oauth_surface_and_marks_mode(self, hass, tmp_path):
         mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
         repairs = _bind_repairs(mod, tmp_path)
         repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale"}')
@@ -4722,8 +4969,15 @@ class TestHaAuthMode:
             f"{CURRENT['oauth_base']}/protected-resource",
             f"{CURRENT['oauth_base']}/authorization-server",
         } | _wellknown_oauth_urls(oauth, "mcp_test")
+        if _unified_oauth_routes():
+            expected |= {
+                f"{CURRENT['oauth_base']}/authorize",
+                f"{CURRENT['oauth_base']}/token",
+            }
+        if _dcr_registration_supported():
+            expected.add(f"{CURRENT['oauth_base']}/register")
         assert registered == expected
-        assert len(registered) == 7
+        assert len(registered) == len(expected)
         # No root /authorize or /token views in ha_auth mode.
         assert "/authorize" not in registered
         assert "/token" not in registered
@@ -4739,6 +4993,36 @@ class TestHaAuthMode:
         mock_create_issue.assert_not_called()
         mock_write.assert_not_called()
 
+    async def test_ha_auth_wires_dcr_key_and_isolated_cimd_session(
+        self, hass, tmp_path
+    ):
+        """The dev parity surface persists DCR and isolates public lookups."""
+        if not _dedicated_cimd_session():
+            pytest.skip("dedicated CIMD session has not been promoted")
+        mod, _oauth, _auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        _bind_repairs(mod, tmp_path)
+        relay_session = MagicMock()
+        cimd_session = MagicMock()
+        with (
+            patch.object(mod, "_read_config", return_value=self._ha_auth_config()),
+            patch.object(mod, "async_register"),
+            patch.object(
+                mod.aiohttp,
+                "ClientSession",
+                side_effect=[relay_session, cimd_session],
+            ) as session_factory,
+        ):
+            result = await mod.async_setup_entry(hass, MagicMock())
+
+        assert result is True
+        data = hass.data[mod.DOMAIN]
+        assert data["session"] is relay_session
+        assert data["cimd_session"] is cimd_session
+        assert data["dcr_signing_key"] == mod.DCR_SECRET_FILE.read_bytes()
+        assert len(data["dcr_signing_key"]) >= 32
+        connector = session_factory.call_args_list[1].kwargs["connector"]
+        assert connector.limit == 4
+
     async def test_ha_auth_init_failure_unregisters_and_raises(self, hass, tmp_path):
         """ha_auth mirror of the legacy provider-init-failure teardown: if
         register_metadata_views raises while enabling OAuth, the user opted into
@@ -4747,13 +5031,18 @@ class TestHaAuthMode:
         session (no leak), and leave DOMAIN out of hass.data."""
         mod, oauth, _an = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
         _bind_repairs(mod, tmp_path)
-        session = MagicMock()
-        session.close = AsyncMock()
+        relay_session = MagicMock()
+        relay_session.close = AsyncMock()
+        cimd_session = MagicMock()
+        cimd_session.close = AsyncMock()
+        sessions = [relay_session]
+        if _dedicated_cimd_session():
+            sessions.append(cimd_session)
         with (
             patch.object(mod, "_read_config", return_value=self._ha_auth_config()),
             patch.object(mod, "async_register"),
             patch.object(mod, "async_unregister") as mock_unreg,
-            patch.object(mod.aiohttp, "ClientSession", return_value=session),
+            patch.object(mod.aiohttp, "ClientSession", side_effect=sessions),
             # The integration lazy-imports register_metadata_views at call time
             # (`from .oauth import register_metadata_views` inside
             # async_setup_entry), so patching the oauth module attribute lands.
@@ -4766,7 +5055,11 @@ class TestHaAuthMode:
 
         assert "Failed to enable OAuth" in str(exc_info.value)
         mock_unreg.assert_called_once_with(hass, "mcp_test")
-        session.close.assert_awaited_once()
+        relay_session.close.assert_awaited_once()
+        if _dedicated_cimd_session():
+            cimd_session.close.assert_awaited_once()
+        else:
+            cimd_session.close.assert_not_awaited()
         assert mod.DOMAIN not in hass.data
 
     async def test_setup_ignores_stray_public_base_url_host_derived(
@@ -4826,17 +5119,22 @@ class TestHaAuthMode:
             hass.http.register_view.reset_mock()
             # A second setup (config-entry reload) must NOT re-register the views.
             await mod.async_setup_entry(hass, MagicMock())
-        assert first == 7
+        assert first == (
+            7
+            + (2 if _unified_oauth_routes() else 0)
+            + (1 if _dcr_registration_supported() else 0)
+        )
         assert hass.http.register_view.call_count == 0
         # The register-once flag lives in oauth.py (a top-level hass.data key),
         # not on the integration package.
         assert hass.data[oauth._METADATA_VIEWS_REGISTERED_KEY] is True
 
     async def test_register_once_flag_survives_unload(self, hass, tmp_path):
-        """The register-once flag lives at a TOP-LEVEL hass.data key so it
-        outlives async_unload_entry's pop(DOMAIN): HA can't drop the seven bound
-        views until it restarts, so a setup -> unload -> setup cycle must NOT
-        re-register them (which would trip aiohttp's duplicate-view ValueError)."""
+        """The register-once flags outlive the config-entry data they gate.
+
+        HA cannot drop bound HTTP views until restart, so setup after unload
+        must reuse the complete discovery/scoped/DCR surface.
+        """
         mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
         _bind_repairs(mod, tmp_path)
         session = MagicMock()
@@ -4848,7 +5146,11 @@ class TestHaAuthMode:
             patch.object(mod.aiohttp, "ClientSession", return_value=session),
         ):
             await mod.async_setup_entry(hass, MagicMock())
-            assert hass.http.register_view.call_count == 7
+            assert hass.http.register_view.call_count == (
+                7
+                + (2 if _unified_oauth_routes() else 0)
+                + (1 if _dcr_registration_supported() else 0)
+            )
             flag_key = oauth._METADATA_VIEWS_REGISTERED_KEY
             assert hass.data[flag_key] is True
             await mod.async_unload_entry(hass, MagicMock())
@@ -4893,8 +5195,12 @@ class TestHaAuthMode:
             patch.object(mod, "async_register"),
             patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
         ):
-            await mod.async_setup_entry(hass, MagicMock())  # ha_auth: 7 metadata
-            assert hass.http.register_view.call_count == 7
+            await mod.async_setup_entry(hass, MagicMock())  # ha_auth discovery
+            assert hass.http.register_view.call_count == (
+                7
+                + (2 if _unified_oauth_routes() else 0)
+                + (1 if _dcr_registration_supported() else 0)
+            )
             hass.http.register_view.reset_mock()
             await mod.async_setup_entry(hass, MagicMock())  # legacy: only 2 root
         registered = {
@@ -4905,12 +5211,10 @@ class TestHaAuthMode:
         assert not (registered & _wellknown_oauth_urls(oauth, "mcp_test"))
         assert hass.data[mod.DOMAIN]["oauth_mode"] == mod.OAUTH_MODE_LEGACY
 
-    async def test_legacy_then_ha_auth_does_not_reregister_metadata(
+    async def test_legacy_then_ha_auth_only_adds_unbound_dcr_route(
         self, hass, tmp_path
     ):
-        """A live legacy -> ha_auth switch: legacy already bound the seven via
-        the shared registrar, so the ha_auth setup's register_metadata_views
-        no-ops and registers nothing new."""
+        """A switch reuses shared routes and adds only DCR when supported."""
         mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
         _bind_repairs(mod, tmp_path)
         hass.is_running = False
@@ -4923,11 +5227,18 @@ class TestHaAuthMode:
             patch.object(mod, "async_register"),
             patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
         ):
-            await mod.async_setup_entry(hass, MagicMock())  # legacy: 7 + 2 root
-            assert hass.http.register_view.call_count == 9
+            await mod.async_setup_entry(hass, MagicMock())  # legacy views + root
+            assert hass.http.register_view.call_count == (
+                11 if _unified_oauth_routes() else 9
+            )
             hass.http.register_view.reset_mock()
             await mod.async_setup_entry(hass, MagicMock())  # ha_auth: reuse all
-        assert hass.http.register_view.call_count == 0
+        if _dcr_registration_supported():
+            assert [
+                call.args[0].url for call in hass.http.register_view.call_args_list
+            ] == [f"{CURRENT['oauth_base']}/register"]
+        else:
+            assert hass.http.register_view.call_count == 0
         assert hass.data[mod.DOMAIN]["oauth_mode"] == mod.OAUTH_MODE_HA_AUTH
 
     async def test_unknown_mode_raises(self, hass, tmp_path):
@@ -5057,14 +5368,22 @@ class TestHaAuthMode:
             await oauth.AuthorizationServerMetadataView(rs).get(request)
         doc = jr.call_args.args[0]
         assert doc["issuer"] == f"https://legit.example{oauth.OAUTH_BASE}"
-        assert doc["authorization_endpoint"] == "https://legit.example/auth/authorize"
-        assert doc["token_endpoint"] == "https://legit.example/auth/token"
+        route_base = oauth.OAUTH_BASE if _proxy_owned_oauth_endpoints() else "/auth"
+        assert doc["authorization_endpoint"] == (
+            f"https://legit.example{route_base}/authorize"
+        )
+        assert doc["token_endpoint"] == f"https://legit.example{route_base}/token"
         assert doc["response_types_supported"] == ["code"]
         assert doc["grant_types_supported"] == ["authorization_code", "refresh_token"]
         assert doc["code_challenge_methods_supported"] == ["S256"]
         assert doc["token_endpoint_auth_methods_supported"] == ["none"]
         assert doc["client_id_metadata_document_supported"] is True
-        assert "registration_endpoint" not in doc
+        if _dcr_registration_supported():
+            assert doc["registration_endpoint"] == (
+                f"https://legit.example{oauth.OAUTH_BASE}/register"
+            )
+        else:
+            assert "registration_endpoint" not in doc
         # A well-known variant serves the SAME document.
         wk = oauth.WellKnownAuthorizationServerMetadataView(
             rs,
@@ -5497,8 +5816,9 @@ class TestHaAuthMode:
         # It is genuinely the ha_auth document (public client + CIMD), not legacy.
         assert canonical["token_endpoint_auth_methods_supported"] == ["none"]
         assert canonical["client_id_metadata_document_supported"] is True
+        route_base = oauth.OAUTH_BASE if _proxy_owned_oauth_endpoints() else "/auth"
         assert canonical["authorization_endpoint"] == (
-            "https://legit.example/auth/authorize"
+            f"https://legit.example{route_base}/authorize"
         )
         base = oauth.OAUTH_BASE
         variants = (
@@ -5554,8 +5874,9 @@ class TestHaAuthMode:
         assert doc["client_id_metadata_document_supported"] is True
         # Host-derived base from the request, NOT the bound provider's pin.
         assert doc["issuer"] == f"https://switch-host.example{oauth.OAUTH_BASE}"
+        route_base = oauth.OAUTH_BASE if _proxy_owned_oauth_endpoints() else "/auth"
         assert doc["authorization_endpoint"] == (
-            "https://switch-host.example/auth/authorize"
+            f"https://switch-host.example{route_base}/authorize"
         )
         assert "pinned-legacy.example" not in doc["issuer"]
 
@@ -5591,8 +5912,9 @@ class TestHaAuthMode:
         assert "client_id_metadata_document_supported" not in doc
         # Pinned base from public_base_url, NOT the request Host.
         assert doc["issuer"] == f"https://pinned-legacy.example{oauth.OAUTH_BASE}"
+        route_base = oauth.OAUTH_BASE if _proxy_owned_oauth_endpoints() else ""
         assert doc["authorization_endpoint"] == (
-            "https://pinned-legacy.example/authorize"
+            f"https://pinned-legacy.example{route_base}/authorize"
         )
         assert "other-host.example" not in doc["issuer"]
 
@@ -6118,8 +6440,10 @@ class TestNoneAutoApproveMode:
         # The two fields HA core's root doc lacks — the whole reason for #1969.
         assert doc["token_endpoint_auth_methods_supported"] == ["none"]
         assert doc["client_id_metadata_document_supported"] is True
-        # No DCR: fixed/auto flow, so no registration endpoint advertised.
-        assert "registration_endpoint" not in doc
+        if _dcr_registration_supported():
+            assert doc["registration_endpoint"] == (f"https://x.example{base}/register")
+        else:
+            assert "registration_endpoint" not in doc
 
     async def test_as_view_serves_none_document_when_live(self):
         _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
@@ -6191,27 +6515,33 @@ class TestNoneAutoApproveMode:
         assert isinstance(t1, str) and len(t1) >= 20
         assert t1 != t2
 
-    # ---- redirect open-redirect gate (allowlist-only) ----
+    # ---- none-mode redirect policy ----
 
-    def test_redirect_gate_allows_claude_callback_only(self):
+    def test_redirect_gate_matches_flavor_policy(self):
         _mod, _oauth, autoapprove, _an = _import_none_autoapprove_stack()
-        assert autoapprove._is_valid_autoapprove_redirect(self.CLAUDE_REDIRECT) is True
-        # A same-host-different-path or any other https URL is NOT allowlisted.
-        assert (
-            autoapprove._is_valid_autoapprove_redirect("https://claude.ai/evil")
-            is False
-        )
-        assert (
-            autoapprove._is_valid_autoapprove_redirect("https://evil.example/cb")
-            is False
-        )
-        # http (non-https) fails the floor before the allowlist even matters.
-        assert (
-            autoapprove._is_valid_autoapprove_redirect(
-                "http://claude.ai/api/mcp/auth_callback"
+        if _autoapprove_any_redirect():
+            base = {
+                "response_type": "code",
+                "code_challenge": "A" * 43,
+                "code_challenge_method": "S256",
+            }
+            assert (
+                autoapprove._validate_autoapprove_authorize(
+                    {**base, "redirect_uri": self.CLAUDE_REDIRECT}
+                )
+                is None
             )
-            is False
-        )
+            assert (
+                autoapprove._validate_autoapprove_authorize(
+                    {**base, "redirect_uri": "https://other.example/cb"}
+                )
+                is None
+            )
+        else:
+            assert autoapprove._is_valid_autoapprove_redirect(self.CLAUDE_REDIRECT)
+            assert not autoapprove._is_valid_autoapprove_redirect(
+                "https://other.example/cb"
+            )
 
     # ---- AutoApproveAuthorizeView (GET: issue code, 302, no UI) ----
 
@@ -6292,7 +6622,7 @@ class TestNoneAutoApproveMode:
         assert expected in q
         assert q["iss"] == [advertised]
 
-    async def test_authorize_rejects_non_allowlisted_redirect_with_400(self):
+    async def test_authorize_applies_flavor_redirect_policy(self):
         _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
         hass, _provider = self._none_live_hass(oauth, autoapprove)
         view = autoapprove.AutoApproveAuthorizeView(hass)
@@ -6312,9 +6642,13 @@ class TestNoneAutoApproveMode:
             patch.object(autoapprove.web, "Response") as resp,
         ):
             await view.get(request)
-        # 400 in place — NEVER a 302 to an unvalidated target.
-        assert jr.call_args.kwargs["status"] == 400
-        resp.assert_not_called()
+        if _autoapprove_any_redirect():
+            resp.assert_called_once()
+            assert resp.call_args.kwargs["status"] == 302
+            jr.assert_not_called()
+        else:
+            assert jr.call_args.kwargs["status"] == 400
+            resp.assert_not_called()
 
     async def test_authorize_rejects_non_s256(self):
         _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
@@ -6428,7 +6762,7 @@ class TestNoneAutoApproveMode:
     # ---- full setup registers the views + marks the mode ----
 
     async def test_setup_registers_metadata_and_autoapprove_views(self, hass, tmp_path):
-        mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        mod, oauth, autoapprove, _an = _import_none_autoapprove_stack(tmp_path)
         repairs = _bind_repairs(mod, tmp_path)
         repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale"}')
         # No "oauth" section = OAuth off = none-mode auto-approve.
@@ -6458,13 +6792,21 @@ class TestNoneAutoApproveMode:
             f"{CURRENT['oauth_base']}/authorize",
             f"{CURRENT['oauth_base']}/token",
         }
+        if _dcr_registration_supported():
+            autoapprove_urls.add(f"{CURRENT['oauth_base']}/register")
         assert registered == metadata | autoapprove_urls
-        assert len(registered) == 9  # 7 discovery + 2 auto-approve
+        assert len(registered) == len(metadata | autoapprove_urls)
         # Mode marker + provider under the non-"oauth" key.
         assert hass.data[mod.DOMAIN]["oauth_mode"] == mod.OAUTH_MODE_NONE_AUTOAPPROVE
         assert isinstance(
             hass.data[mod.DOMAIN]["autoapprove"], autoapprove.AutoApproveProvider
         )
+        if _dcr_registration_supported():
+            assert hass.data[mod.DOMAIN]["dcr_signing_key"] == (
+                mod.DCR_SECRET_FILE.read_bytes()
+            )
+        else:
+            assert "dcr_signing_key" not in hass.data[mod.DOMAIN]
         # The bearer-gate key stays off — the webhook is unauthenticated.
         assert "oauth" not in hass.data[mod.DOMAIN]
         # No root /authorize or /token (those are legacy-only).
@@ -6480,7 +6822,7 @@ class TestNoneAutoApproveMode:
         """Unlike ha_auth/legacy, a none-mode auto-approve setup failure must NOT
         tear down the (intentionally unauthenticated) webhook — it just skips the
         discovery enhancement and keeps forwarding."""
-        mod, oauth, _aa, _an = _import_none_autoapprove_stack()
+        mod, oauth, _aa, _an = _import_none_autoapprove_stack(tmp_path)
         _bind_repairs(mod, tmp_path)
         config = {
             "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
@@ -6534,8 +6876,9 @@ class TestNoneAutoApproveMode:
         hass.data[oauth.DOMAIN] = {"oauth_mode": oauth.MODE_HA_AUTH, "oauth": rs}
         with patch.object(oauth.web, "json_response") as jr:
             await view.get(request)
+        ha_route_base = base if _proxy_owned_oauth_endpoints() else "/auth"
         assert jr.call_args.args[0]["authorization_endpoint"] == (
-            "https://legit.example/auth/authorize"
+            f"https://legit.example{ha_route_base}/authorize"
         )
 
         # Flip back to none — the same bound view serves the auto-approve doc.

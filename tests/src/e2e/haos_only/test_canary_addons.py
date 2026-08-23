@@ -7,9 +7,9 @@ it would have to mock the entire Supervisor API surface (the partial
 mock added in #1192 only covers a few direct REST endpoints).
 
 Three concrete assertions:
-1. ``ha_get_addon`` (default listing) returns every addon the build
+1. ``ha_get_app`` (default listing) returns every addon the build
    script installs, by display name.
-2. ``ha_get_addon(slug=core_mosquitto)`` returns Supervisor-backed
+2. ``ha_get_app(slug=core_mosquitto)`` returns Supervisor-backed
    detail for a known core slug.
 3. HACS bootstrap actually completed — the "Get HACS" addon installs
    HACS into ``/config/custom_components/hacs/``, and HACS registers
@@ -47,10 +47,10 @@ INSTALLED_ADDON_NAMES = (
 
 
 async def test_addons_installed_via_mcp(mcp_client: Any) -> None:
-    """`ha_get_addon` (no args) lists every addon the build script installed."""
-    raw = await mcp_client.call_tool("ha_get_addon", {})
+    """`ha_get_app` (no args) lists every addon the build script installed."""
+    raw = await mcp_client.call_tool("ha_get_app", {})
     payload = parse_mcp_result(raw)
-    assert payload.get("success"), f"ha_get_addon returned failure: {payload}"
+    assert payload.get("success"), f"ha_get_app returned failure: {payload}"
 
     installed_names = {a.get("name") for a in payload.get("addons", [])}
     LOG.info("Installed addons on booted HAOS: %s", sorted(installed_names))
@@ -64,15 +64,15 @@ async def test_addons_installed_via_mcp(mcp_client: Any) -> None:
 
 
 async def test_supervisor_info_via_mcp(mcp_client: Any) -> None:
-    """`ha_get_addon` with a known core slug returns Supervisor-backed detail.
+    """`ha_get_app` with a known core slug returns Supervisor-backed detail.
 
     This exercises the WS supervisor/api path through ha-mcp itself — the
     one the testcontainer can't validate because no Supervisor exists
     behind that mocked endpoint.
     """
-    raw = await mcp_client.call_tool("ha_get_addon", {"slug": "core_mosquitto"})
+    raw = await mcp_client.call_tool("ha_get_app", {"slug": "core_mosquitto"})
     payload = parse_mcp_result(raw)
-    assert payload.get("success"), f"ha_get_addon(core_mosquitto) failed: {payload}"
+    assert payload.get("success"), f"ha_get_app(core_mosquitto) failed: {payload}"
     detail = payload.get("addon") or payload.get("data") or payload
     # Mosquitto is install=true, start=False in the build — so it should
     # be installed but not started. Either field name HA returns is fine.

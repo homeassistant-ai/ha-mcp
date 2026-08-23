@@ -50,10 +50,10 @@ from pathlib import Path
 import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
-from test_constants import TEST_TOKEN
 
 from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX
 
+from ...conftest import TEST_TOKEN, _retire_stdio_sidecar, _stdio_env
 from ...utilities.wait_helpers import wait_for_condition
 
 logger = logging.getLogger(__name__)
@@ -68,39 +68,28 @@ async def test_stdio_launcher_runs_the_startup_nudge(
 
     container_info = ha_container_with_fresh_config
 
-    # Mirrors the ``stdio_mcp_client`` fixture's env — that fixture is
-    # session-scoped and shares one subprocess, so this test spawns its own —
-    # plus HA_MCP_CONFIG_DIR, which puts the subprocess's data dir (and so the
-    # marker the nudge writes) inside this test's tmp dir. The subprocess
-    # inherits nothing, so HA_MCP_DISABLE_UPDATE_CHECK — which would return the
-    # nudge early — is deliberately absent.
-    env = {
-        "HOMEASSISTANT_URL": container_info["base_url"],
-        "HOMEASSISTANT_TOKEN": TEST_TOKEN,
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", ""),
-        "HA_MAX_RETRIES": "1",
-        "ENABLE_STRICT_MANDATORY_BPS": "false",
-        "HA_MCP_CONFIG_DIR": str(tmp_path),
-    }
-
-    # keep_alive=False: the pinned FastMCP defaults to keeping the stdio
-    # subprocess alive past the client context, which would leak a server
-    # per test run and skip the lifespan's cancellation path on exit.
+    # Use the same explicit environment as the stdio fixtures, plus this test's
+    # config dir. HA_MCP_DISABLE_UPDATE_CHECK is intentionally absent because it
+    # would return the nudge early.
+    env = _stdio_env(container_info, tmp_path)
     transport = StdioTransport(command="ha-mcp", args=[], env=env, keep_alive=False)
+    client = Client(transport)
 
     def marker_files():
         return list(tmp_path.glob(f"{MARKER_FILENAME_PREFIX}_*.json"))
 
-    async with Client(transport):
-        # Poll INSIDE the client context: leaving it terminates the subprocess,
-        # and the lifespan cancels the nudge task on the way out.
-        found = await wait_for_condition(
-            marker_files,
-            timeout=30,
-            condition_name="HACS refresh marker written by the stdio launcher",
-        )
-        markers = marker_files()
+    try:
+        async with client:
+            # Poll INSIDE the client context: leaving it terminates the subprocess,
+            # and the lifespan cancels the nudge task on the way out.
+            found = await wait_for_condition(
+                marker_files,
+                timeout=30,
+                condition_name="HACS refresh marker written by the stdio launcher",
+            )
+            markers = marker_files()
+    finally:
+        await _retire_stdio_sidecar(tmp_path)
 
     assert found, (
         "No HACS refresh marker appeared in the subprocess data dir within 30s "

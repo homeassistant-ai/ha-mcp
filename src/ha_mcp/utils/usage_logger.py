@@ -142,6 +142,10 @@ _SENSITIVE_PARAM_KEYS = frozenset(
         "apikey",
         "client_secret",
         "authorization",
+        # Not a credential but user speech: ha_manage_pipeline(action='process')
+        # takes whatever the user said, which is as likely to name a person or
+        # an address as it is to turn on a light.
+        "sentence",
     }
 )
 # Suffix match only for families with a low false-positive rate. Deliberately

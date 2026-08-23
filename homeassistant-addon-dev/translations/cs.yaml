@@ -61,21 +61,22 @@ configuration:
       uživatelském rozhraní. Vyžaduje restart, aby se projevilo.'
   read_only_mode:
     name: Režim pouze pro čtení
-    description: Vypne všechny nástroje pro zápis a odebere nástrojům možnost provádět
-      jakékoli zápisové nebo destruktivní volání. Smíšené nástroje pro čtení/zápis
-      (zálohy, doplňky, preference energie, hlasové pipeline a režim kódu, pokud je
-      povolen) zůstanou dostupné s blokovanými operacemi zápisu. Stejný přepínač jako
-      na záložce Nástroje ve webovém rozhraní. Ve výchozím nastavení vypnuto. Vyžaduje
-      restart, aby se projevilo.
+    description: Vypne všechny nástroje pro zápis a odstraní schopnost nástrojů provádět
+      jakékoli zápisy nebo destruktivní volání. Smíšené nástroje pro čtení/zápis –
+      zálohy, aplikace (doplňky), preference energie, hlasové pipelines a režim kódu,
+      pokud je povolen – zůstávají k dispozici se zablokovanými operacemi zápisu.
+      Stejný přepínač jako na kartě Tools ve webovém rozhraní. Ve výchozím nastavení
+      vypnuto. K projevům změn je vyžadován restart.
   redact_secrets:
     name: Redigovat tajemství
-    description: Rediguje tajemství z odpovědí nástrojů, než se dostanou k AI asistentovi.
-      Možnosti doplňků a integrační pole označené jako hesla jsou nahrazeny značkou
-      nastaveno/prázdné (takže otázka „je tento pověřovací údaj nakonfigurován?“ zůstane
-      zodpověditelná) a další odpovědi nástrojů jsou očištěny od tajných hodnot, které
-      server již viděl (hodnoty kratší než 6 znaků jsou přeskočeny, protože nahrazení
-      malých fragmentů by poškodilo nesouvisející výstup). Pole, která nejsou schématem
-      označena jako hesla, nelze detekovat. Ve výchozím nastavení vypnuto.
+    description: Skrývá tajné údaje z odpovědí nástrojů, než se dostanou k AI asistenci.
+      Možnosti aplikace (doplňku) a pole integrací označená jako hesla jsou nahrazena
+      značkou nastaveno/prázdno (takže zůstává možné odpovědět na otázku „je tento
+      pověření nastaveno?“), a z odpovědí ostatních nástrojů jsou odstraněny tajné
+      hodnoty, které server již viděl (hodnoty kratší než 6 znaků se přeskakují, protože
+      nahrazování drobných fragmentů by poškodilo nesouvisející výstup). Pole, která
+      nejsou svým schématem označena jako hesla, nelze detekovat. Ve výchozím nastavení
+      vypnuto.
   enable_beta_features:
     name: Povolit beta funkce (hlavní)
     description: ⚠ NEBEZPEČÍ — tyto nástroje mohou TRVALE POŠKODIT vaši instalaci
@@ -132,19 +133,19 @@ configuration:
       na disk (problém #1720). Vypněte pouze pro úsporu jedné zpáteční cesty na úpravu.'
   enable_code_mode:
     name: Povolit sandbox vlastních nástrojů (beta)
-    description: Beta funkce. Povoluje nástroj ha_manage_custom_tool, který umožňuje
-      AI asistentům vytvářet, spouštět, ukládat a mazat vlastní kód Pythonu v zabezpečeném
-      sandboxu, když žádný vestavěný nástroj nedokáže požadavek zpracovat. Kód běží
-      v izolovaném interpretu bez přístupu k souborovému systému nebo libovolnému
-      síťovému přístupu. Kód v sandboxu může přistupovat k HA REST API (api_get/api_post),
-      posílat WebSocket příkazy (ws_send), volat existující nástroje MCP (call_tool)
-      nebo odstranit uložený nástroj (delete_saved_tool). Uložené nástroje se ve výchozím
-      nastavení ukládají do /data/saved_tools.json, takže přežijí restarty doplňku
-      a jsou viditelné pro každého klienta, který se může připojit. Známá omezení
-      naleznete v docs/beta.md. Vyžaduje restart, aby se projevilo. VYŽADUJE, aby
-      byl zapnut hlavní přepínač „Enable beta features“ výše (a ve webovém rozhraní)
-      – jinak je tento podřízený příznak za běhu ignorován bez ohledu na jeho hodnotu
-      zde.
+    description: Funkce v beta verzi. Povoluje nástroj ha_manage_custom_tool, který
+      umožňuje AI asistentům vytvářet, spouštět, ukládat a mazat vlastní kód v Pythonu
+      v zabezpečeném sandboxu, když žádný vestavěný nástroj nedokáže požadavek zpracovat.
+      Kód běží v izolovaném interpretu bez přístupu k souborovému systému nebo libovolné
+      síti. Kód v sandboxu může přistupovat k REST API HA (api_get/api_post), odesílat
+      příkazy WebSocket (ws_send), volat existující nástroje MCP (call_tool) nebo
+      odstranit uložený nástroj (delete_saved_tool). Uložené nástroje se ve výchozím
+      nastavení ukládají do /data/saved_tools.json, takže přežijí restarty aplikace
+      (doplňku) a jsou viditelné pro každého klienta, který se může připojit. Známá
+      omezení naleznete v docs/beta.md. K projevům změn je vyžadován restart. VYŽADUJE,
+      aby byl výše uvedený hlavní přepínač „Enable beta features“ zapnutý (a to i
+      ve webovém rozhraní) – v opačném případě bude tento dílčí příznak za běhu ignorován
+      bez ohledu na jeho hodnotu zde.
   enable_lite_docstrings:
     name: Povolit zjednodušené docstringy nástrojů (beta)
     description: 'Beta funkce. Nahrazuje docstringy u několika náročných nástrojů
@@ -195,20 +196,21 @@ configuration:
       za běhu ignorován bez ohledu na jeho hodnotu zde.'
   enable_dashboard_screenshot:
     name: Povolit režim snímání obrazovky dashboardu (beta)
-    description: Beta funkce — ve výchozím nastavení zakázáno. Přidává nástroj ha_get_dashboard_screenshot
-      a možnosti include_screenshot / return_screenshot k nástrojům pro získání/nastavení
-      panelu, takže asistenti AI mohou kontrolovat jeden nebo více responzivních obrázků
-      Lovelace (např. k ověření panelu, který právě vytvořili). Podporuje stabilní
-      pojmenované pohledy, dávky pro mobilní zařízení/tablety/desktopy a výstup PNG/JPEG/WebP/BMP.
-      Vykreslování probíhá v samostatném, volitelném enginu — doplňku „Puppet“ od
-      ballooba (headless Chromium) — který nainstalujete jednou (přidáte repozitář
-      doplňků ballooba, poté nainstalujete „Puppet“) a udělíte mu dlouhodobý přístupový
-      token; v nasazeních Docker/Container spustíte tento engine jako sidecar a nastavíte
-      HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nic náročného se nenainstaluje, pokud
-      tuto funkci nepovolíte a nenainstalujete engine. Vyžaduje restart, aby se projevilo.
-      VYŽADUJE, aby byl zapnut hlavní přepínač „Enable beta features“ výše (a ve webovém
-      rozhraní) — jinak je tento podřízený příznak za běhu ignorován bez ohledu na
-      jeho hodnotu zde.
+    description: Funkce v beta verzi – ve výchozím nastavení zakázána. Přidává nástroj
+      ha_get_dashboard_screenshot a volby include_screenshot / return_screenshot k
+      nástrojům pro získání/nastavení nástěnek, takže AI asistenti mohou kontrolovat
+      jeden nebo více responzivních obrázků Lovelace (např. pro ověření právě vytvořené
+      nástěnky). Podporuje stabilní pojmenované pohledy, dávky pro mobily/tablety/desktopy
+      a výstup v PNG/JPEG/WebP/BMP. Vykreslování běží v samostatném volitelném enginu
+      – „Puppet“ aplikaci (doplňku) od ballooba, což je headless Chromium –, který
+      nainstalujete jednou (přidáte balloobův repozitář do obchodu s aplikacemi a
+      nainstalujete „Puppet“) a poskytnete mu přístupový token s dlouhou platností;
+      v nasazeních Docker/Container tento engine spustíte jako vedlejší kontejner
+      (sidecar) a nastavíte proměnnou HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nic náročného
+      se neinstaluje, dokud obojí nepovolíte a nenainstalujete daný engine. K projevům
+      změn je vyžadován restart. VYŽADUJE, aby byl výše uvedený hlavní přepínač „Enable
+      beta features“ zapnutý (a to i ve webovém rozhraní) – v opačném případě bude
+      tento dílčí příznak za běhu ignorován bez ohledu na jeho hodnotu zde.
   enable_auto_backup:
     name: Povolit automatické zálohování úprav
     description: 'Pořídí snímek pro každou entitu před každým zabaleným zápisem/destruktivním
@@ -271,9 +273,9 @@ configuration:
       vyhledáváním nástrojů. Názvy nástrojů oddělené čárkami.
   verify_ssl:
     name: Ověřit certifikát TLS
-    description: Ověří certifikát TLS serveru Home Assistant. Doplněk se připojuje
-      přes proxy Supervisor, takže to obvykle nemá žádný účinek a mělo by zůstat povoleno.
-      Zakázat pouze v případě, že jste doplněk překonfigurovali tak, aby komunikoval
-      s HA přes veřejný HTTPS hostname s vlastnoručně podepsaným certifikátem nebo
-      neshodou hostname. Zakázání oslabuje zabezpečení přenosu — ponechte zapnuto,
-      pokud víte, že to potřebujete. Vyžaduje restart, aby se projevilo.
+    description: Ověřit TLS certifikát serveru Home Assistant. Aplikace (doplněk)
+      se připojuje přes proxy Supervisor, takže to obvykle nemá žádný vliv a mělo
+      by to zůstat zapnuté. Zakazujte pouze v případě, že jste přenastavili aplikaci
+      (doplněk) tak, aby komunikovala s HA přes veřejný HTTPS hostname s The self-signed
+      certifikátem nebo neshodou hostname. Vypnutí oslabuje zabezpečení přenosu –
+      nechte zapnuté, pokud víte, že to potřebujete. Vyžaduje restart, aby se projevilo.

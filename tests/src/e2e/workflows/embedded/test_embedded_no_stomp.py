@@ -49,6 +49,12 @@ from ...conftest import (
     EMBEDDED_HA_CONSTRAINTS_COPY,
 )
 
+# The freeze snapshots exist only where the entrypoint installs ha-mcp into
+# the HA image: the embedded testcontainer lane. Collection-time marker
+# rather than a runtime skip, so the mass-skip ceiling accounts for these
+# (the ``embedded_only`` gate lives in conftest's collection hook; #2245).
+pytestmark = pytest.mark.embedded_only
+
 _REQUIREMENTS_ALL_URL = (
     "https://raw.githubusercontent.com/home-assistant/core/"
     "{version}/requirements_all.txt"
@@ -136,29 +142,6 @@ def _fetch_requirements_all(ha_version: str) -> set[str]:
     )
 
 
-_KNOWN_BACKENDS = {"container", "embedded", "haos", "haos_inaddon", "haos_embedded"}
-
-
-def _skip_unless_embedded(info) -> None:
-    """Runtime skip with a drift tripwire.
-
-    Runtime skips are invisible to the mass-skip detector (it counts only
-    collection-time markers), so a silently changed backend label would
-    disable this guard forever with nothing noticing. An UNKNOWN label
-    therefore fails loudly instead of skipping.
-    """
-    backend = info.get("backend")
-    assert backend in _KNOWN_BACKENDS, (
-        f"unknown backend label {backend!r} — the conftest's backend names "
-        "changed; update this guard so it keeps running on the embedded lane"
-    )
-    if backend != "embedded":
-        pytest.skip(
-            "freeze snapshots are written only by the embedded testcontainer "
-            "backend's preinstall entrypoint (E2E_BACKEND=embedded)"
-        )
-
-
 def _governed_names(config_path: Path) -> set[str]:
     constraints_file = config_path / EMBEDDED_HA_CONSTRAINTS_COPY
     assert constraints_file.is_file(), (
@@ -240,7 +223,6 @@ def test_embedded_preinstall_replaces_nothing_ha_governs(
     ha_container_with_fresh_config,
 ):
     info = ha_container_with_fresh_config
-    _skip_unless_embedded(info)
 
     config_path = Path(info["config_path"])
     before_file = config_path / EMBEDDED_FREEZE_BEFORE
@@ -281,7 +263,6 @@ def test_embedded_runtime_install_replaces_nothing_ha_governs(
     snapshot covers everything every install path did.
     """
     info = ha_container_with_fresh_config
-    _skip_unless_embedded(info)
 
     config_path = Path(info["config_path"])
     before_file = config_path / EMBEDDED_FREEZE_BEFORE

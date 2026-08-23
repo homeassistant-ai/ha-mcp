@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import re
+import ssl
 import time
 from typing import Annotated, Any, ClassVar, Literal, NoReturn
 from urllib.parse import unquote, urlsplit
@@ -23,7 +24,11 @@ from ha_mcp._vendor import websockets
 from ha_mcp._vendor.websockets.asyncio.client import ClientConnection
 
 from .._version import is_running_in_addon
-from ..client.rest_client import HomeAssistantClient, HomeAssistantCommandError
+from ..client.rest_client import (
+    HomeAssistantClient,
+    HomeAssistantCommandError,
+    _is_ssl_error,
+)
 from ..errors import (
     ErrorCode,
     create_error_response,
@@ -892,6 +897,111 @@ async def _collect_ws_messages_loop(
         total_size += len(clean)
 
 
+def _tls_setup_error(e: Exception, slug: str) -> NoReturn:
+    """Report a CA-store/TLS-context build failure distinctly from network errors."""
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.CONNECTION_FAILED,
+            f"Could not build a TLS context for the app (add-on) request: {e!s}",
+            context={"slug": slug},
+            suggestions=[
+                "The MCP host's CA store failed to load. Check SSL_CERT_FILE "
+                "and SSL_CERT_DIR, or the system certificate bundle.",
+            ],
+        )
+    )
+
+
+def _build_ws_ssl_context(
+    ws_url: str, verify_ssl: bool, slug: str
+) -> ssl.SSLContext | None:
+    """Build the proxy's client TLS context, honoring the HA verify setting."""
+    if not ws_url.startswith("wss://"):
+        return None
+    try:
+        ssl_context = ssl.create_default_context()
+    except OSError as e:
+        _tls_setup_error(e, slug)
+    if not verify_ssl:
+        logger.warning(
+            "TLS verification disabled for add-on WebSocket proxy "
+            "(HA_VERIFY_SSL=false). Connecting to %s with hostname/cert "
+            "checks off.",
+            ws_url,
+        )
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+    return ssl_context
+
+
+def _tls_verification_failure_suggestions() -> list[str]:
+    """Name the TLS remedy instead of pointing the caller at the network."""
+    return [
+        "Home Assistant's certificate did not validate. If it is self-signed "
+        "or issued for a different hostname than the configured HA URL, set "
+        "HA_VERIFY_SSL=false to skip verification, or reach HA at the "
+        "hostname the certificate was issued for.",
+    ]
+
+
+def _build_addon_http_client(
+    client: HomeAssistantClient, timeout: int, slug: str
+) -> httpx.AsyncClient:
+    """Build the proxy's HTTP client, honoring the HA verify setting.
+
+    httpx builds its TLS context at construction; doing it before the request
+    try reports a CA-store failure as such rather than letting it escape
+    unstructured.
+    """
+    try:
+        return httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout),
+            verify=client.verify_ssl,
+        )
+    except OSError as e:
+        _tls_setup_error(e, slug)
+        return None  # py/mixed-returns: unreachable, _tls_setup_error raises
+
+
+def _raise_connect_failure(
+    client: HomeAssistantClient,
+    e: Exception,
+    *,
+    label: str,
+    url: str,
+    slug: str,
+    port: int | None,
+) -> NoReturn:
+    """Raise the structured connect-phase error, classifying TLS failures.
+
+    A certificate-verification failure with verification enabled gets the TLS
+    remedy; everything else keeps the route-appropriate network guidance.
+    """
+    if _is_ssl_error(e) and client.verify_ssl:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONNECTION_FAILED,
+                f"TLS verification failed connecting to {label}: {e!s}",
+                details=f"url={url}",
+                context={
+                    "slug": slug,
+                    "direct_port": bool(port),
+                    "verify_ssl": True,
+                },
+                suggestions=_tls_verification_failure_suggestions(),
+            )
+        )
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.CONNECTION_FAILED,
+            f"Failed to connect to {label}: {e!s}",
+            details=f"url={url}",
+            context={"slug": slug, "direct_port": bool(port)},
+            suggestions=_addon_connection_failure_suggestions(client, port),
+        )
+    )
+
+
 async def _run_ws_session(
     ws_url: str,
     headers: dict[str, str],
@@ -900,6 +1010,7 @@ async def _run_ws_session(
     timeout: int,
     wait_for_close: bool,
     caller_capped: bool,
+    ssl_context: ssl.SSLContext | None,
 ) -> tuple[list[str], int, str, float]:
     """Connect to a WebSocket URL, optionally send body, collect messages.
 
@@ -916,6 +1027,7 @@ async def _run_ws_session(
         max_size=5 * 1024 * 1024,  # 5MB max per message
         open_timeout=10,
         close_timeout=5,
+        ssl=ssl_context,
     ) as ws:
         if body is not None:
             await ws.send(json.dumps(body) if isinstance(body, dict) else str(body))
@@ -1024,6 +1136,58 @@ def _build_ws_result(
     return result
 
 
+def _front_door_state(addon: dict[str, Any]) -> bool | None:
+    """Return the app's ``leave_front_door_open`` state, or None when unexposed.
+
+    Supervisor's ``options`` dict omits an option the user never saved even
+    when the app's schema exposes it, and the app treats that absence as
+    disabled — so the schema, not key presence, decides whether the option
+    applies (stock installs ship the key in the schema only).
+    """
+    options = addon.get("options")
+    if isinstance(options, dict) and "leave_front_door_open" in options:
+        return bool(options["leave_front_door_open"])
+    schema = addon.get("schema")
+    if isinstance(schema, list) and any(
+        isinstance(item, dict) and item.get("name") == "leave_front_door_open"
+        for item in schema
+    ):
+        return False
+    return None
+
+
+def _ws_auth_error_suggestions(
+    addon: dict[str, Any], slug: str, port: int | None, status: int
+) -> list[str]:
+    """Return route-appropriate guidance for a rejected WS handshake."""
+    if port:
+        # Prefer the caller-resolved slug; fall back to the addon dict, then a
+        # placeholder, so the suggestion never renders slug=''.
+        slug_val = slug or addon.get("slug") or "<slug>"
+        if _front_door_state(addon) is False:
+            primary = _direct_port_auth_suggestion(slug_val)
+        else:
+            primary = _direct_port_rejection_suggestion()
+    elif is_running_in_addon():
+        # The addon-variant route authenticates with Supervisor ingress
+        # headers, not an ingress session or HA token — do not send the
+        # caller to inspect credentials this request never carried.
+        primary = (
+            "The app (add-on) rejected the ingress-port handshake. This route "
+            "authenticates with Supervisor ingress headers; check that the "
+            "target app is running and its ingress is healthy."
+        )
+    else:
+        primary = (
+            "The ingress session may have expired or your HA token may lack the "
+            "required scope. Verify the token has admin rights and try again."
+        )
+    return [
+        primary,
+        f"Status {status} from the WebSocket handshake.",
+    ]
+
+
 async def _call_addon_ws(
     client: HomeAssistantClient,
     slug: str,
@@ -1068,7 +1232,7 @@ async def _call_addon_ws(
             processes the response. The variable ``response`` is bound to
             the list of parsed messages (``list[dict | str]``); the value
             of ``response`` after execution replaces ``messages`` in the
-            output. See ``ha_manage_addon`` docstring for details.
+            output. See ``ha_manage_app`` docstring for details.
 
     Returns:
         Dictionary with collected messages, metadata, and status.
@@ -1098,7 +1262,7 @@ async def _call_addon_ws(
         port,
         ingress_suggestions=[
             "Use the 'port' parameter for WebSocket connections to this add-on",
-            f"Use ha_get_addon(slug='{slug}') to see available ports",
+            f"Use ha_get_app(slug='{slug}') to see available ports",
         ],
     )
 
@@ -1115,6 +1279,9 @@ async def _call_addon_ws(
         requested = max(0, message_offset) + max(0, message_limit)
         collection_cap = min(_MAX_WS_MESSAGES, requested)
 
+    # Built before the try so a CA-store failure is reported as such rather
+    # than as the add-on being unreachable.
+    ssl_context = _build_ws_ssl_context(ws_url, client.verify_ssl, slug)
     try:
         collected, total_size, close_reason, elapsed = await _run_ws_session(
             ws_url,
@@ -1124,22 +1291,18 @@ async def _call_addon_ws(
             timeout,
             wait_for_close,
             caller_capped=message_limit is not None,
+            ssl_context=ssl_context,
         )
     except websockets.exceptions.InvalidHandshake as e:
         suggestions = [
             "Check that the add-on supports WebSocket on this path",
-            f"Use ha_get_addon(slug='{slug}') to inspect available endpoints",
+            f"Use ha_get_app(slug='{slug}') to inspect available endpoints",
         ]
         # 401/403 means auth was rejected, not a path-shape problem.
         if isinstance(e, websockets.exceptions.InvalidStatus):
             status = e.response.status_code
             if status in (401, 403):
-                suggestions = [
-                    "The ingress session may have expired or your HA token "
-                    "may lack the required scope. Verify the token has admin "
-                    "rights and try again.",
-                    f"Status {status} from the WebSocket handshake.",
-                ]
+                suggestions = _ws_auth_error_suggestions(addon, slug, port, status)
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
@@ -1177,14 +1340,13 @@ async def _call_addon_ws(
             )
         )
     except OSError as e:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.CONNECTION_FAILED,
-                f"Failed to connect to add-on '{addon_name}' WebSocket: {e!s}",
-                details=f"url={ws_url}",
-                context={"slug": slug, "direct_port": bool(port)},
-                suggestions=_addon_connection_failure_suggestions(client, port),
-            )
+        _raise_connect_failure(
+            client,
+            e,
+            label=f"app (add-on) '{addon_name}' WebSocket",
+            url=ws_url,
+            slug=slug,
+            port=port,
         )
 
     return _build_ws_result(
@@ -1553,57 +1715,106 @@ def _build_http_result(
     return result
 
 
+def _addon_config_for_http_hint(addon: dict[str, Any]) -> dict[str, Any]:
+    """Return the app settings that can explain direct-access failures."""
+    return {
+        "options": addon.get("options"),
+        "ports": addon.get("network") or addon.get("ports") or None,
+        "host_network": addon.get("host_network"),
+        "ingress_port": addon.get("ingress_port"),
+    }
+
+
+def _direct_port_auth_suggestion(slug: str) -> str:
+    """Explain the configurable direct-access auth trade-off, Ingress first."""
+    return (
+        "The app (add-on) rejected this direct-port request. Prefer Ingress: retry "
+        f"without the 'port' parameter (ha_manage_app(slug='{slug}', "
+        "path='...')). The app's 'leave_front_door_open' option controls "
+        "direct-access authentication; only if the user explicitly accepts "
+        "the security trade-off, use "
+        f"ha_manage_app(slug='{slug}', "
+        "options={'leave_front_door_open': True}), then "
+        f"ha_manage_app(slug='{slug}', action='restart'), and retry. Enabling "
+        "it removes authentication from the app's direct-access surface for "
+        "hosts that can reach the mapped port."
+    )
+
+
+def _direct_port_rejection_suggestion() -> str:
+    """Explain a direct-port rejection the front-door option cannot fix.
+
+    Fires when the app exposes no ``leave_front_door_open`` option, or when it
+    is already enabled — either way the remedy lives in the app's own auth
+    configuration, not in that option.
+    """
+    return (
+        "The app (add-on) rejected this direct-port request. Check the app's own "
+        "authentication and access-control settings, IP allowlist, and logs."
+    )
+
+
 def _add_http_error_hints(
     result: dict[str, Any],
     response: httpx.Response,
     addon: dict[str, Any],
     slug: str,
+    direct_port: bool,
 ) -> None:
     """Mutate result to add an error key for 4xx/5xx responses, with tailored suggestions for 401 and 403."""
     if response.status_code >= 400:
         result["error"] = f"Add-on API returned HTTP {response.status_code}"
+        # Prefer the caller-resolved slug (authoritative); fall back to the
+        # addon dict, then a placeholder only if neither is populated.
+        slug_val = slug or addon.get("slug") or "<slug>"
         if response.status_code == 401:
-            # 401 is a credential/session problem — addon_config is not attached
-            # because the network layout is irrelevant; the caller needs to fix
-            # their token or re-establish the ingress session, not reconfigure ports.
-            result["suggestion"] = (
-                "Authentication failed. The ingress session may have expired, "
-                "or your HA token may lack the required scope. Verify the "
-                "token has admin rights and try again."
-            )
-        elif response.status_code == 403:
-            # 403 is typically an Nginx IP ACL blocking direct access — a
-            # network configuration problem. Attach addon_config so the LLM
-            # can see the port mapping and suggest the correct port override.
-            ports_dict = addon.get("network") or addon.get("ports") or {}
-            unmapped = sorted(k for k, v in ports_dict.items() if v is None)
-            result["addon_config"] = {
-                "options": addon.get("options"),
-                "ports": ports_dict or None,
-                "host_network": addon.get("host_network"),
-                "ingress_port": addon.get("ingress_port"),
-            }
-            # Prefer the caller-resolved slug (authoritative); fall back to the
-            # addon dict, then a placeholder only if neither is populated.
-            slug_val = slug or addon.get("slug") or "<slug>"
-            example_proto = unmapped[0] if unmapped else ""
-            example_port = example_proto.split("/", 1)[0] if example_proto else ""
-            if unmapped and example_port.isdigit():
-                addon_label = addon.get("name") or slug_val
-                result["suggestion"] = (
-                    f"Map {example_proto} to a host port in the HA UI "
-                    f"('{addon_label}' → Configuration → Network), restart the "
-                    f"add-on, then retry with ha_manage_addon(slug='{slug_val}', "
-                    f"path='...', port={example_port})."
-                )
+            if direct_port:
+                result["addon_config"] = _addon_config_for_http_hint(addon)
+                if _front_door_state(addon) is False:
+                    result["suggestion"] = _direct_port_auth_suggestion(slug_val)
+                else:
+                    result["suggestion"] = _direct_port_rejection_suggestion()
             else:
+                # An ingress 401 is a credential/session problem. Keep network
+                # configuration out of that result so the caller fixes the HA
+                # token or ingress session instead of weakening app authentication.
                 result["suggestion"] = (
-                    "This add-on is blocking direct connections (likely Nginx IP restriction). "
-                    "Try using the 'port' parameter to connect to the add-on's direct access port "
-                    "(see addon_config.ports above) with 'leave_front_door_open' enabled. "
-                    "Example: ha_manage_addon(slug='...', path='...', port=<direct_port>). "
-                    "The user may need to change add-on settings in the HA UI and restart the add-on."
+                    "Authentication failed. The ingress session may have expired, "
+                    "or your HA token may lack the required scope. Verify the "
+                    "token has admin rights and try again."
                 )
+        elif response.status_code == 403:
+            # A direct-port 403 is app-level access control; an ingress 403 is
+            # typically an Nginx IP ACL blocking direct access — a network
+            # configuration problem. Attach addon_config either way so the LLM
+            # can see the port mapping.
+            result["addon_config"] = _addon_config_for_http_hint(addon)
+            if direct_port:
+                if _front_door_state(addon) is False:
+                    result["suggestion"] = _direct_port_auth_suggestion(slug_val)
+                else:
+                    result["suggestion"] = _direct_port_rejection_suggestion()
+            else:
+                ports_dict = addon.get("network") or addon.get("ports") or {}
+                unmapped = sorted(k for k, v in ports_dict.items() if v is None)
+                example_proto = unmapped[0] if unmapped else ""
+                example_port = example_proto.split("/", 1)[0] if example_proto else ""
+                if unmapped and example_port.isdigit():
+                    addon_label = addon.get("name") or slug_val
+                    result["suggestion"] = (
+                        f"Map {example_proto} to a host port in the HA UI "
+                        f"('{addon_label}' → Configuration → Network), restart the "
+                        f"add-on, then retry with ha_manage_app(slug='{slug_val}', "
+                        f"path='...', port={example_port})."
+                    )
+                else:
+                    result["suggestion"] = (
+                        "This add-on is blocking direct connections (likely Nginx IP restriction). "
+                        "Try using the 'port' parameter to connect to the add-on's direct access port "
+                        "(see addon_config.ports above) with 'leave_front_door_open' enabled. "
+                        "Example: ha_manage_app(slug='...', path='...', port=<direct_port>). "
+                        "The user may need to change add-on settings in the HA UI and restart the add-on."
+                    )
 
 
 async def _call_addon_api(
@@ -1653,7 +1864,7 @@ async def _call_addon_api(
             after offset/limit slicing.
         raw: Internal flag — when True, skip the size-based truncation that
             otherwise replaces large array/object responses with an error
-            placeholder. Used by array_patch mode in ha_manage_addon, which
+            placeholder. Used by array_patch mode in ha_manage_app, which
             needs the full parsed response in memory to apply operations
             even when the JSON is larger than _MAX_RESPONSE_SIZE.
         extra_headers: Optional caller-supplied request headers. Layered
@@ -1687,7 +1898,7 @@ async def _call_addon_api(
         port,
         ingress_suggestions=[
             "Check if this add-on exposes a direct port instead",
-            f"Use ha_get_addon(slug='{slug}') to see port mappings",
+            f"Use ha_get_app(slug='{slug}') to see port mappings",
             "Use the 'port' parameter to connect to a direct access port",
         ],
     )
@@ -1713,8 +1924,9 @@ async def _call_addon_api(
     else:
         request_content = None
 
+    addon_http_client = _build_addon_http_client(client, timeout, slug)
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as http_client:
+        async with addon_http_client as http_client:
             response = await http_client.request(
                 method=method.upper(),
                 url=url,
@@ -1738,14 +1950,13 @@ async def _call_addon_api(
             )
         )
     except httpx.ConnectError as e:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.CONNECTION_FAILED,
-                f"Failed to connect to add-on '{addon_name}': {e!s}",
-                details=f"url={url}",
-                context={"slug": slug, "direct_port": bool(port)},
-                suggestions=_addon_connection_failure_suggestions(client, port),
-            )
+        _raise_connect_failure(
+            client,
+            e,
+            label=f"app (add-on) '{addon_name}'",
+            url=url,
+            slug=slug,
+            port=port,
         )
 
     # 6. Parse response body
@@ -1786,14 +1997,16 @@ async def _call_addon_api(
         transformed,
         truncated,
     )
-    _add_http_error_hints(result, response, addon, slug)
+    _add_http_error_hints(result, response, addon, slug, direct_port=bool(port))
     return result
 
 
 class AddOnTools:
-    """Encapsulates add-on management logic for ha_get_addon and ha_manage_addon.
+    """Encapsulates add-on management logic for ha_get_app and ha_manage_app.
 
-    ha_manage_addon supports three mutually exclusive modes: config
+    ha_manage_app supports five mutually exclusive modes: lifecycle
+    (install/start/stop/restart/rebuild/update/uninstall), store-repository
+    (add_repository/remove_repository), config
     (options/network/boot/auto_update/watchdog), proxy (path-based HTTP or
     WebSocket), and array-patch (fetch-modify-post on a JSON array endpoint).
     """
@@ -1942,7 +2155,7 @@ class AddOnTools:
         (``POST /store/repositories`` with body ``{"repository": "<url>"}``);
         ``remove_repository`` unregisters one by its repository slug
         (``DELETE /store/repositories/{slug}``). Registering a repository is
-        what makes its add-ons show up in ``ha_get_addon(source="available")``
+        what makes its add-ons show up in ``ha_get_app(source="available")``
         so they can then be installed via lifecycle ``action="install"``.
         """
         key = action.lower().strip()
@@ -2065,7 +2278,7 @@ class AddOnTools:
         else:
             suggestions = [
                 "Verify the repository slug — list current repositories with "
-                + "ha_get_addon(source='available')",
+                + "ha_get_app(source='available')",
                 "A repository that still has installed add-ons can't be removed "
                 + "until those add-ons are uninstalled",
             ]
@@ -2082,7 +2295,7 @@ class AddOnTools:
     def _reject_sentinel_options(options: dict[str, Any]) -> None:
         """Reject redaction sentinels before any merge/write (#2157).
 
-        A caller round-tripping a redacted ha_get_addon read must not
+        A caller round-tripping a redacted ha_get_app read must not
         overwrite a live credential with the placeholder string. Omitting
         the key keeps the current value (writes merge server-side). Active
         regardless of the redact_secrets toggle: a sentinel captured while
@@ -2170,7 +2383,7 @@ class AddOnTools:
                     f"Supervisor rejected configuration for add-on '{slug}'",
                     details=error_detail,
                     suggestions=[
-                        "Fetch current options via ha_get_addon(slug) to see required fields",
+                        "Fetch current options via ha_get_app(slug) to see required fields",
                         "Re-submit all required option fields together",
                     ],
                 )
@@ -2194,7 +2407,7 @@ class AddOnTools:
         if ignored_fields:
             response.setdefault("warnings", []).append(
                 f"{len(ignored_fields)} field(s) not in add-on schema were ignored "
-                f"before write: {ignored_fields}. Use ha_get_addon(slug) to see the "
+                f"before write: {ignored_fields}. Use ha_get_app(slug) to see the "
                 "declared schema."
             )
             response["ignored_fields"] = ignored_fields
@@ -2617,7 +2830,7 @@ class AddOnTools:
         validate_identifier_not_empty(
             slug,
             "slug",
-            suggestions=["Use ha_get_addon() to discover installed add-on slugs"],
+            suggestions=["Use ha_get_app() to discover installed add-on slugs"],
         )
         config_data = self._build_config_payload(
             options, network, boot, auto_update, watchdog
@@ -2712,6 +2925,17 @@ class AddOnTools:
         )
 
 
+# Terminology boundary, deliberate: the tool names, titles, tags and the first
+# docstring line of each tool follow Home Assistant's 2026.2 rename to "Apps",
+# because those are what an agent reads and what the locale catalogs translate.
+# The docstring bodies keep "add-on" for the Supervisor surface they describe:
+# the slugs and the option names kept the old spelling, and so did the REST
+# paths this server calls. /addons is the documented default route, served by
+# the v1 app; /v2/apps is a separate surface, mounted only when the
+# supervisor_v2_api feature flag is on (it defaults to off, arrived in
+# 2026-04, and is absent from older Supervisors), and its list contract is not
+# even the same shape. So neither finishing the rename into the bodies nor
+# reverting the first line for consistency is the fix.
 def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -> None:
     """
     Register add-on management tools with the MCP server.
@@ -2725,16 +2949,16 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
     tools = AddOnTools(client)
 
     @mcp.tool(
-        tags={"Add-ons"},
+        tags={"Apps (add-ons)"},
         annotations={
             "openWorldHint": True,
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get Add-ons",
+            "title": "Get Apps (add-ons)",
         },
     )
     @log_tool_usage
-    async def ha_get_addon(
+    async def ha_get_app(
         source: Annotated[
             Literal["installed", "available"] | None,
             Field(
@@ -2774,7 +2998,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Get Home Assistant add-ons - list installed, available, or get details for one.
+        """Get Home Assistant Apps (formerly known as add-ons, and this tool as ha_get_addon) - list installed, available, or get details for one.
 
         This tool retrieves add-on information based on the parameters:
         - slug provided: Returns detailed info for a single add-on (ingress, ports, options, state)
@@ -2786,8 +3010,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         **SINGLE ADD-ON (slug provided):**
         Returns comprehensive details including ingress entry, ports, options, state,
         and (when the add-on exposes one) a top-level ``log_level`` reflecting the
-        current Supervisor option — useful for confirming ha_manage_addon log_level changes.
-        Useful for discovering what APIs an add-on exposes before calling ha_manage_addon.
+        current Supervisor option — useful for confirming ha_manage_app log_level changes.
+        Useful for discovering what APIs an add-on exposes before calling ha_manage_app.
 
         **INSTALLED ADD-ONS (source='installed'):**
         Returns add-ons with version, state (started/stopped), and update availability.
@@ -2799,11 +3023,11 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         - query: Search by name or description (case-insensitive)
 
         **Example Usage:**
-        - List installed add-ons: ha_get_addon()
-        - Get Node-RED details: ha_get_addon(slug="<prefix>_nodered")
-        - List with resource usage: ha_get_addon(include_stats=True)
-        - List available add-ons: ha_get_addon(source="available")
-        - Search for MQTT: ha_get_addon(source="available", query="mqtt")
+        - List installed add-ons: ha_get_app()
+        - Get Node-RED details: ha_get_app(slug="<prefix>_nodered")
+        - List with resource usage: ha_get_app(include_stats=True)
+        - List available add-ons: ha_get_app(source="available")
+        - Search for MQTT: ha_get_app(source="available", query="mqtt")
         """
         return await tools.get_addon(
             source=source,
@@ -2814,22 +3038,22 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         )
 
     @mcp.tool(
-        tags={"Add-ons"},
+        tags={"Apps (add-ons)"},
         annotations={
             "openWorldHint": True,
             "destructiveHint": True,
             "idempotentHint": False,
             "readOnlyHint": False,
-            "title": "Manage Add-on",
+            "title": "Manage App (add-on)",
         },
     )
     @log_tool_usage
-    async def ha_manage_addon(
+    async def ha_manage_app(
         slug: Annotated[
             str,
             Field(
                 description="Add-on slug (e.g., '<prefix>_nodered', '<prefix>_frigate'). "
-                "Slug prefixes vary by add-on repository — call ha_get_addon() "
+                "Slug prefixes vary by add-on repository — call ha_get_app() "
                 "to discover the actual installed slug. Required for every mode "
                 "except the store-repository actions "
                 "(action='add_repository'/'remove_repository'), which use "
@@ -2871,7 +3095,10 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             int | None,
             Field(
                 description="Proxy mode only. Connect to this port instead of the Ingress port. "
-                "Use ha_get_addon(slug='...') to find available ports.",
+                "Use ha_get_app(slug='...') to find available ports. Some apps, including "
+                "Node-RED, reject direct access unless their leave_front_door_open option is "
+                "enabled and the app is restarted; related errors include an actionable, "
+                "security-qualified ha_manage_app options command.",
                 default=None,
             ),
         ] = None,
@@ -3019,7 +3246,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 description="Lifecycle mode: run a Supervisor add-on action. One of "
                 "'install', 'uninstall', 'start', 'stop', 'restart', 'rebuild', "
                 "'update'. 'install'/'update' require the add-on's repository to be "
-                "registered (it appears in ha_get_addon(source='available')). "
+                "registered (it appears in ha_get_app(source='available')). "
                 "Store-repository mode: 'add_repository' / 'remove_repository' "
                 "register or unregister a custom add-on store repository — these "
                 "use the 'repository' param instead of 'slug'. "
@@ -3035,13 +3262,13 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 "'remove_repository'). For add_repository: the repository URL "
                 "(e.g., 'https://github.com/balloob/home-assistant-addons'). For "
                 "remove_repository: the repository slug (e.g., '0f1cc410', as shown "
-                "in ha_get_addon(source='available')). Required for those actions; "
+                "in ha_get_app(source='available')). Required for those actions; "
                 "ignored otherwise.",
                 default=None,
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Manage a Home Assistant add-on — update its configuration or call its internal API.
+        """Manage a Home Assistant App (formerly known as an add-on, and this tool as ha_manage_addon) — update its configuration or call its internal API.
 
         Five mutually exclusive operating modes:
 
@@ -3049,7 +3276,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         stop/restart/rebuild/update):
         Runs a Supervisor add-on action on ``slug``. ``install`` / ``update`` go
         through the store (the add-on's repository must be registered — it shows
-        up in ``ha_get_addon(source="available")``); the rest act on an installed
+        up in ``ha_get_app(source="available")``); the rest act on an installed
         add-on. This is how an assistant brings an add-on online for the user
         (e.g. installing + starting the dashboard screenshot engine).
 
@@ -3073,8 +3300,12 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         proxy by default (works on HAOS, Supervised, and off-host PyPI/uvx
         installs). Pass `port=...` to bypass Ingress and connect directly to
         an add-on's container port — that mode requires the MCP host to
-        share Home Assistant's container network (i.e. only the HAOS addon).
-        Use ha_get_addon(slug="...") to discover available ports and endpoints.
+        share Home Assistant's container network (in practice: the HAOS app
+        (add-on) deployment). Apps such as Node-RED may reject direct requests
+        unless `leave_front_door_open` is enabled in their options and the app
+        is restarted. Authentication errors name the exact
+        `ha_manage_app(options=...)` remedy and its security tradeoff; prefer
+        Ingress when it works.
 
         **ESPHome Device Builder dashboard (current rewrite):** config and log
         access is a WebSocket JSON-command API, NOT REST. The legacy endpoints
@@ -3108,20 +3339,16 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
         **Response shaping (proxy mode):**
         - WebSocket streams can be noisy (e.g. the ESPHome dashboard's devices/logs
-          dumps the device's full config banner on connect). By default, `summarize=True` collapses long runs of
-          non-signal messages into short elision markers; INFO/WARNING/ERROR/exit
-          lines always pass through. Pagination via `message_offset` / `message_limit`
-          works on the raw collected list before summarize runs.
-        - `python_transform` applies a sandboxed Python expression as a final
-          post-processing step in both HTTP and WebSocket modes. The variable
-          `response` is bound to:
-            * WebSocket: `list[dict | str]` — parsed JSON messages are dicts,
-              undecodable frames stay as ANSI-stripped strings. Elision markers
-              appear as `{"elided": N, "note": "..."}` dicts when summarize ran.
-            * HTTP: `dict | list | str` — whichever the content-type produced.
-          Transforms may mutate in place (response.append(...), del response[k])
-          or reassign (response = [...]). This is post-processing only — it does
-          NOT provide optimistic-locking or write-back semantics.
+          dumps the device's full config banner on connect), which is what
+          `summarize` is for. INFO/WARNING/ERROR/exit lines always pass through
+          it, and pagination via `message_offset` / `message_limit` works on the
+          raw collected list before summarize runs.
+        - `python_transform` runs after slicing and summarize, and before the
+          response size cap, so it can narrow an oversized response back under
+          the limit. What `response` binds to and what may be done to it is on
+          the parameter itself. Only the interaction is here: undecodable
+          WebSocket frames arrive as ANSI-stripped strings, and elision markers
+          as `{"elided": N, "note": "..."}` dicts when summarize ran.
 
         **WARNING:** Setting boot="auto"/"manual" will fail for add-ons whose Supervisor
         metadata locks the boot mode. The Supervisor returns an error in this case.
@@ -3129,32 +3356,32 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         **NOTE:** This tool only works with Home Assistant OS or Supervised installations.
 
         **Examples:**
-        - Install an add-on: ha_manage_addon(slug="...", action="install")
-        - Start an add-on: ha_manage_addon(slug="...", action="start")
-        - Add a store repository: ha_manage_addon(action="add_repository", repository="https://github.com/balloob/home-assistant-addons")
-        - Remove a store repository: ha_manage_addon(action="remove_repository", repository="0f1cc410")
-        - Set add-on option: ha_manage_addon(slug="...", options={"log_level": "debug"})
+        - Install an add-on: ha_manage_app(slug="...", action="install")
+        - Start an add-on: ha_manage_app(slug="...", action="start")
+        - Add a store repository: ha_manage_app(action="add_repository", repository="https://github.com/balloob/home-assistant-addons")
+        - Remove a store repository: ha_manage_app(action="remove_repository", repository="0f1cc410")
+        - Set add-on option: ha_manage_app(slug="...", options={"log_level": "debug"})
           Note: only the fields you provide are updated — current values are fetched first
           and merged automatically. Fields not in the add-on's schema are ignored with a warning.
-        - Disable auto-update: ha_manage_addon(slug="...", auto_update=False)
-        - Change host port: ha_manage_addon(slug="...", network={"5800/tcp": 8082})
-        - Set boot mode: ha_manage_addon(slug="...", boot="manual")
-        - Call HTTP API: ha_manage_addon(slug="...", path="/api/events")
-        - Direct port: ha_manage_addon(slug="...", path="/flows", port=1880)
-        - ESPHome list devices (HTTP): ha_manage_addon(slug="<prefix>_esphome", path="/devices")
-        - ESPHome read a device's YAML (WS one-shot): ha_manage_addon(slug="<prefix>_esphome", path="/ws", websocket=True, wait_for_close=False, message_limit=2, body={"command": "devices/get_config", "message_id": "1", "args": {"configuration": "device.yaml"}})
-        - ESPHome live logs (WS, bounded): ha_manage_addon(slug="<prefix>_esphome", path="/ws", websocket=True, wait_for_close=False, message_limit=60, body={"command": "devices/logs", "message_id": "1", "args": {"configuration": "device.yaml", "port": "OTA"}})
-        - Filter WS errors only: ha_manage_addon(slug="...", path="/ws", websocket=True, python_transform="response = [m for m in response if 'ERROR' in str(m) or 'WARN' in str(m)]")
-        - HTTP subset: ha_manage_addon(slug="...", path="/flows", python_transform="response = [f['id'] for f in response]")
+        - Disable auto-update: ha_manage_app(slug="...", auto_update=False)
+        - Change host port: ha_manage_app(slug="...", network={"5800/tcp": 8082})
+        - Set boot mode: ha_manage_app(slug="...", boot="manual")
+        - Call HTTP API: ha_manage_app(slug="...", path="/api/events")
+        - Direct port: ha_manage_app(slug="...", path="/flows", port=1880) — if the app rejects it, the error names the 'leave_front_door_open' remedy and its security trade-off; prefer Ingress.
+        - ESPHome list devices (HTTP): ha_manage_app(slug="<prefix>_esphome", path="/devices")
+        - ESPHome read a device's YAML (WS one-shot): ha_manage_app(slug="<prefix>_esphome", path="/ws", websocket=True, wait_for_close=False, message_limit=2, body={"command": "devices/get_config", "message_id": "1", "args": {"configuration": "device.yaml"}})
+        - ESPHome live logs (WS, bounded): ha_manage_app(slug="<prefix>_esphome", path="/ws", websocket=True, wait_for_close=False, message_limit=60, body={"command": "devices/logs", "message_id": "1", "args": {"configuration": "device.yaml", "port": "OTA"}})
+        - Filter WS errors only: ha_manage_app(slug="...", path="/ws", websocket=True, python_transform="response = [m for m in response if 'ERROR' in str(m) or 'WARN' in str(m)]")
+        - HTTP subset: ha_manage_app(slug="...", path="/flows", python_transform="response = [f['id'] for f in response]")
         - Array-patch (Node-RED, rename a node):
-            ha_manage_addon(
+            ha_manage_app(
                 slug="a0d7b954_nodered", path="/flows",
                 array_patch={"operations": [
                     {"op": "patch", "id": "abc123", "patches": {"name": "New Name"}},
                 ]},
             )
         - Array-patch (Node-RED, replace one tab's nodes atomically):
-            ha_manage_addon(
+            ha_manage_app(
                 slug="a0d7b954_nodered", path="/flows",
                 array_patch={"operations": [
                     {"op": "delete_where", "field": "z", "value": "tab-id"},
@@ -3164,7 +3391,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 request_headers={"Node-RED-Deployment-Type": "full"},
             )
         - Custom request headers (proxy mode):
-            ha_manage_addon(slug="...", path="/api/state",
+            ha_manage_app(slug="...", path="/api/state",
                             request_headers={"Accept": "text/plain"})
         """
         return await tools.manage_addon(
