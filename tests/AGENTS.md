@@ -50,10 +50,12 @@ rather than assume the e2e's always-present case.
 
 - Tests expecting tool **success**: use `mcp.call_tool_success()` inside `MCPAssertions` context
 - Tests expecting tool **failure**: use `mcp.call_tool_failure()` inside `MCPAssertions`
-  context, and **pass `expected_error`**. It catches the `ToolError` and matches
-  `expected_error` against the extracted message. Without `expected_error` it is a weak
-  assertion: the success check is `if data.get("success")`, so a result dict that omits
-  the key entirely is accepted as a failure.
+  context. Prefer passing `expected_error` — it is what turns the call into a real
+  assertion, matching that substring against the extracted error message. The bare
+  success check is `if data.get("success")`, so a result dict that omits the key is
+  accepted as a failure on its own. About half the current call sites omit
+  `expected_error` and assert on the returned dict themselves instead; that is equally
+  fine. Omitting both is what leaves the failure unverified.
 - `safe_call_tool()` is for calls whose outcome the test does **not** assert: `finally`
   cleanup (so a cleanup failure cannot mask the real assertion) and service-availability
   probes. It swallows `ToolError` and returns a parsed dict, so using it for an expected
