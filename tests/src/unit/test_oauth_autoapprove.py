@@ -1881,6 +1881,196 @@ async def test_scoped_revoke_transport_error_returns_temporarily_unavailable(
     assert resp.headers["Retry-After"] == aa._REVOKE_RETRY_AFTER
 
 
+# ---------------------------------------------------------------------------
+# Revoking an envelope the signing key can no longer verify (#2249 review)
+# ---------------------------------------------------------------------------
+
+
+TOKEN_URL = f"{OAUTH_BASE}/token"
+ROTATED_DCR_KEY = b"r" * 32
+# Both spellings core accepts a revocation in, and the core path each reaches.
+REVOKE_SURFACES = {"token-action": "/auth/token", "scoped-revoke": "/auth/revoke"}
+
+
+def _revoke_post(client, surface: str, token: str):
+    """POST ``token`` as a revocation at one of the two surfaces."""
+    if surface == "token-action":
+        return client.post(
+            TOKEN_URL,
+            data={"action": "revoke", "token": token},
+            allow_redirects=False,
+        )
+    return client.post(REVOKE_URL, data={"token": token}, allow_redirects=False)
+
+
+def _prefixed(payload: bytes) -> str:
+    """A ``hamcp-rt-`` value over ``payload``, signed with nothing we minted."""
+    encoded = oauth_ha_auth._b64url_encode(payload)
+    return f"hamcp-rt-{encoded}.not-a-real-signature"
+
+
+@pytest.mark.parametrize("surface", sorted(REVOKE_SURFACES))
+@pytest.mark.parametrize("unverifiable", ["tampered", "rotated-key"])
+async def test_revocation_forwards_an_unverifiable_envelope(
+    unified_view_client_factory, monkeypatch, surface, unverifiable
+):
+    """Core must see ITS token even when the envelope no longer verifies.
+
+    Rotating the DCR signing key — which is what removing and re-adding the
+    integration does — invalidates every envelope already in a client's hands.
+    Treating those as "not ours" would 307 the ``hamcp-rt-`` string to core,
+    whose revoke endpoint answers 200 for any token it cannot resolve: the
+    client is told the session died while core's grant stays live for its full
+    90 days (#2249 review). Tampering takes the same branch and is pinned with
+    it, because forwarding an unverified body is exactly what has to be safe
+    here — RFC 7009 authorizes the bearer, and core's endpoint is anonymous
+    and idempotent.
+    """
+    signing_key = ROTATED_DCR_KEY if unverifiable == "rotated-key" else DCR_KEY
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        signing_key,
+        "core-refresh",
+        "http://127.0.0.1:54321",
+        oauth_dcr.mint_client_id(DCR_KEY, [LOOPBACK_CALLBACK]),
+    )
+    if unverifiable == "tampered":
+        body, _, signature = envelope.rpartition(".")
+        envelope = f"{body}.{'B' if signature[0] != 'B' else 'C'}{signature[1:]}"
+    session = _CoreTokenSession(body=b"")
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await _revoke_post(client, surface, envelope)
+
+    assert resp.status == 200
+    assert len(session.calls) == 1
+    assert session.calls[0]["url"] == f"https://core.example{REVOKE_SURFACES[surface]}"
+    assert session.calls[0]["data"]["token"] == "core-refresh"
+
+
+@pytest.mark.parametrize("surface", sorted(REVOKE_SURFACES))
+@pytest.mark.parametrize(
+    "token",
+    [
+        pytest.param("hamcp-rt-nodot", id="no-separator"),
+        pytest.param("hamcp-rt-###.not-a-real-signature", id="undecodable-base64"),
+        pytest.param(_prefixed(b"not json"), id="not-json"),
+        pytest.param(_prefixed(b'["not","an","object"]'), id="json-array"),
+        pytest.param(_prefixed(b'{"v":1,"t":42}'), id="int-t"),
+    ],
+)
+async def test_revocation_307s_a_prefixed_value_carrying_no_token(
+    unified_view_client_factory, surface, token
+):
+    """Our prefix over an unreadable body is not a token we can substitute.
+
+    The best-effort unwrap gives up rather than inventing a value, so these
+    reach core exactly as presented and core answers them — no outbound call
+    is made from here.
+    """
+    session = _CoreTokenSession(body=b"")
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await _revoke_post(client, surface, token)
+
+    assert resp.status == 307
+    assert resp.headers["Location"] == REVOKE_SURFACES[surface]
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("surface", sorted(REVOKE_SURFACES))
+async def test_revocation_307s_an_over_long_prefixed_value(
+    unified_view_client_factory, surface
+):
+    """Past the cap the body is never decoded, so there is nothing to swap in.
+
+    The value is a well-formed envelope under another key — only its SIZE
+    stops it being parsed, which is the point of the cap on an anonymous view.
+    """
+    oversized = oauth_ha_auth.wrap_refresh_token(
+        ROTATED_DCR_KEY,
+        "T" * oauth_ha_auth.MAX_REVOKE_ENVELOPE_LEN,
+        "http://127.0.0.1:54321",
+        "cid",
+    )
+    session = _CoreTokenSession(body=b"")
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await _revoke_post(client, surface, oversized)
+
+    assert len(oversized) > oauth_ha_auth.MAX_REVOKE_ENVELOPE_LEN
+    assert resp.status == 307
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("surface", sorted(REVOKE_SURFACES))
+async def test_revocation_503_names_the_retry_delay_on_both_surfaces(
+    unified_view_client_factory, monkeypatch, surface
+):
+    """RFC 7009 §2.2.1 attaches the retry contract to the REQUEST, not the URL.
+
+    ``action=revoke`` on /token is the same revocation as one posted to the
+    scoped view, so it cannot answer a barer 503 than the scoped view does
+    (#2249 review).
+    """
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        DCR_KEY,
+        "core-refresh",
+        "http://127.0.0.1:54321",
+        oauth_dcr.mint_client_id(DCR_KEY, [LOOPBACK_CALLBACK]),
+    )
+    session = _CoreTokenSession(error=TimeoutError(), body=b"")
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await _revoke_post(client, surface, envelope)
+
+    assert resp.status == 503
+    assert (await resp.json())["error"] == "temporarily_unavailable"
+    assert resp.headers["Retry-After"] == aa._REVOKE_RETRY_AFTER
+
+
+async def test_non_revocation_token_503_carries_no_retry_after(
+    unified_view_client_factory, monkeypatch
+):
+    """A refresh that core never answered gets a bare 503.
+
+    RFC 6749 gives an ordinary token failure no retry contract, so the header
+    belongs to revocation alone — the envelope here forces the same proxy leg,
+    which is what makes this the exact counterpart of the test above.
+    """
+    client_id = oauth_dcr.mint_client_id(DCR_KEY, [LOOPBACK_CALLBACK])
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        DCR_KEY, "core-refresh", "http://127.0.0.1:54321", client_id
+    )
+    session = _CoreTokenSession(error=TimeoutError())
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        TOKEN_URL,
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": envelope,
+            "client_id": client_id,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 503
+    assert "Retry-After" not in resp.headers
+
+
 def test_ha_auth_document_advertises_the_scoped_revocation_endpoint():
     """#2248: the client holds an envelope, so revocation must come to us.
 

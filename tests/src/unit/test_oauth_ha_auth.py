@@ -22,8 +22,10 @@ from custom_components.ha_mcp_tools.oauth_dcr import (  # noqa: E402
     mint_client_id,
 )
 from custom_components.ha_mcp_tools.oauth_ha_auth import (  # noqa: E402
+    MAX_REVOKE_ENVELOPE_LEN,
     EnvelopeState,
     _b64url_encode,
+    core_token_for_revocation,
     origin_client_id,
     redirect_matches,
     resolve_forward_client_id,
@@ -1044,6 +1046,108 @@ def test_refresh_envelope_skips_the_presenter_binding_when_none():
         "core-rt",
         "https://a.example",
     )
+
+
+# ---------------------------------------------------------------------------
+# Best-effort revocation unwrap (#2249 review)
+# ---------------------------------------------------------------------------
+
+
+ROTATED_KEY = b"r" * 32
+
+
+def _prefixed(payload: bytes) -> str:
+    """A ``hamcp-rt-`` value over ``payload`` with a signature we never minted."""
+    return f"hamcp-rt-{_b64url_encode(payload)}.not-a-real-signature"
+
+
+def test_core_token_for_revocation_reads_a_verified_envelope():
+    """The verified path answers first, exactly as the refresh leg's does."""
+    envelope = wrap_refresh_token(KEY, "core-rt", "https://a.example", "cid")
+
+    assert core_token_for_revocation(KEY, envelope) == "core-rt"
+
+
+def test_core_token_for_revocation_recovers_a_tampered_or_rotated_envelope():
+    """A failed MAC still yields core's token on the REVOCATION path.
+
+    The rotated key is the case that matters: removing and re-adding the
+    integration mints a new DCR key, which invalidates every envelope already
+    in a client's hands. Forwarding a body we did not verify is sound here and
+    only here — RFC 7009 authorizes the bearer, and core's revoke endpoint is
+    anonymous and idempotent, so a forger gains nothing they could not get by
+    POSTing to core themselves (#2249 review).
+    """
+    envelope = wrap_refresh_token(KEY, "core-rt", "https://a.example", "cid")
+    body, _, signature = envelope.rpartition(".")
+    tampered = f"{body}.{'B' if signature[0] != 'B' else 'C'}{signature[1:]}"
+    rotated = wrap_refresh_token(ROTATED_KEY, "core-rt", "https://a.example", "cid")
+
+    assert unwrap_refresh_token(KEY, tampered, None) is EnvelopeState.INVALID
+    assert unwrap_refresh_token(KEY, rotated, None) is EnvelopeState.INVALID
+    assert core_token_for_revocation(KEY, tampered) == "core-rt"
+    assert core_token_for_revocation(KEY, rotated) == "core-rt"
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        pytest.param("core-opaque-refresh-token", id="pre-envelope-token"),
+        pytest.param("", id="empty"),
+        pytest.param(mint_client_id(KEY, ["https://a.example/cb"]), id="dcr-blob"),
+    ],
+)
+def test_core_token_for_revocation_ignores_values_without_the_prefix(token):
+    """Not ours at all: the caller forwards the presented value unchanged."""
+    assert core_token_for_revocation(KEY, token) is None
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        pytest.param("hamcp-rt-", id="no-body"),
+        pytest.param("hamcp-rt-nodot", id="no-separator"),
+        pytest.param("hamcp-rt-###.not-a-real-signature", id="undecodable-base64"),
+        pytest.param(_prefixed(b"not json"), id="not-json"),
+        pytest.param(_prefixed(b'["not","an","object"]'), id="json-array"),
+        pytest.param(_prefixed(b'{"v":1,"t":42}'), id="int-t"),
+        pytest.param(_prefixed(b'{"v":1,"c":"https://a.example"}'), id="missing-t"),
+        pytest.param(_prefixed(b"[" * 1500 + b"]" * 1500), id="deeply-nested"),
+    ],
+)
+def test_core_token_for_revocation_refuses_unusable_bodies(token):
+    """Prefixed but carrying no token: forward it as presented, never guess.
+
+    The nesting case is the #2218 guard: this parse runs BEFORE any MAC check,
+    so ``json.loads`` sees caller-chosen nesting and can raise RecursionError
+    where :func:`unwrap_refresh_token` never can.
+    """
+    assert len(token) <= MAX_REVOKE_ENVELOPE_LEN  # not the cap doing the work
+    assert core_token_for_revocation(KEY, token) is None
+
+
+def test_core_token_for_revocation_caps_the_unverified_parse():
+    """An oversized prefixed value is refused BEFORE it is decoded.
+
+    Core's refresh tokens are short, so nothing legitimate approaches the cap;
+    it exists because this parse is the one place an anonymous view hands
+    attacker-chosen bytes to base64 and json.loads. It guards only that path —
+    an envelope this server can still VERIFY is honoured at any size.
+    """
+    huge = "T" * MAX_REVOKE_ENVELOPE_LEN
+    rotated = wrap_refresh_token(ROTATED_KEY, huge, "https://a.example", "cid")
+    ours = wrap_refresh_token(KEY, huge, "https://a.example", "cid")
+
+    assert len(rotated) > MAX_REVOKE_ENVELOPE_LEN
+    assert core_token_for_revocation(KEY, rotated) is None
+    assert core_token_for_revocation(KEY, ours) == huge
+
+
+def test_core_token_for_revocation_without_a_signing_key_is_none():
+    """No key configured means no envelope of ours to recognise at all."""
+    envelope = wrap_refresh_token(KEY, "core-rt", "https://a.example", "cid")
+
+    assert core_token_for_revocation(None, envelope) is None
 
 
 def test_rewrite_token_response_body_wraps_a_string_refresh_token():

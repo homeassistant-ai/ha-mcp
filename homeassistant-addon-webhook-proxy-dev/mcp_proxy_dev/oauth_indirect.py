@@ -419,8 +419,9 @@ class EnvelopeState(Enum):
     caller falls through to the legacy derivation.
     ``INVALID`` — our prefix, with nothing redeemable behind it: a bad MAC, a
     presenter mismatch, a malformed body, or an unknown version. Core cannot
-    redeem such a value either, so the caller answers it locally instead of
-    relaying it (the DCR signing key may simply have rotated).
+    redeem such a value either, so the REFRESH leg answers it locally instead
+    of relaying it (the DCR signing key may simply have rotated). Revocation
+    is the exception: see :func:`core_token_for_revocation`.
     """
 
     ABSENT = "absent"
@@ -472,6 +473,73 @@ def unwrap_refresh_token(
     ):
         return EnvelopeState.INVALID
     return core_refresh_token, forward_client_id
+
+
+# Cap on a prefixed value the REVOCATION path will parse WITHOUT a verified
+# MAC. Core's own refresh tokens are short, so a real envelope lands far under
+# this; the cap keeps an anonymous view from handing an unbounded
+# attacker-chosen blob to the base64 decoder and json.loads (the sibling input
+# caps in oauth_dcr — MAX_REDIRECT_URI_LEN, MAX_DCR_BODY_BYTES — are the
+# precedent).
+MAX_REVOKE_ENVELOPE_LEN = 4096
+
+
+def core_token_for_revocation(signing_key: bytes | None, token: str) -> str | None:
+    """Core's own refresh token behind a revocation's ``token``, or None.
+
+    None means "nothing of ours here" — no ``hamcp-rt-`` prefix, no signing
+    key, or a prefixed value whose body yields no token — and the caller
+    forwards the presented value on to core unchanged.
+
+    A verified envelope resolves through :func:`unwrap_refresh_token`. A
+    prefixed value whose MAC does NOT verify still gives up its core token
+    here, parsed from the body alone, because revocation is the one leg where
+    that is sound: RFC 7009 authorizes the BEARER of a token rather than a
+    client, and core's ``/auth/revoke`` is anonymous and idempotent and
+    answers 200 whatever it is handed — so forwarding an unverified body
+    grants a forger nothing they could not get by POSTing to core directly.
+    What it buys is the real case: an envelope minted before the DCR signing
+    key rotated (removing and re-adding the integration mints a new one) stays
+    revocable, instead of reaching core as a string it cannot resolve and
+    answers 200 to while the grant lives out its 90 days (#2248).
+
+    Deliberately revocation-only. The refresh leg still answers an INVALID
+    envelope locally and never forwards it: there an unverified body would be
+    a credential claim, where here it is only a request to destroy one.
+
+    Never raises: this runs on an anonymous view.
+    """
+    if signing_key is None or not token.startswith(_REFRESH_ENVELOPE_PREFIX):
+        return None
+    verified = unwrap_refresh_token(signing_key, token, None)
+    if isinstance(verified, tuple):
+        core_refresh_token, _forward_id = verified
+        return core_refresh_token
+    # Only EnvelopeState.INVALID reaches here — the prefix check above ruled
+    # ABSENT out. Everything below runs on UNVERIFIED, caller-chosen input.
+    if len(token) > MAX_REVOKE_ENVELOPE_LEN:
+        return None
+    body, sep, _sig = token[len(_REFRESH_ENVELOPE_PREFIX) :].rpartition(".")
+    if not sep or not body:
+        return None
+    try:
+        payload = json.loads(_b64url_decode(body))
+    except (ValueError, binascii.Error, UnicodeEncodeError, RecursionError):
+        # RecursionError: json.loads on a deeply nested body (#2218 review),
+        # which only this parse can meet — unwrap_refresh_token reaches
+        # json.loads only AFTER the MAC verifies.
+        return None
+    if not isinstance(payload, dict):
+        return None
+    unverified_token = payload.get("t")
+    if not isinstance(unverified_token, str):
+        return None
+    _LOGGER.warning(
+        "ha_auth revoke: the presented envelope failed verification — the "
+        "DCR signing key may have rotated. Forwarding the revocation to core "
+        "on the token's own authority (RFC 7009 authorizes the bearer)"
+    )
+    return unverified_token
 
 
 def rewrite_token_response_body(

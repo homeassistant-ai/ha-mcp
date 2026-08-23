@@ -385,15 +385,27 @@ def _revoke_rewrite(dcr_key: bytes | None, form: MultiDict) -> bool:
     rather than a client identity, so the presenter binding is deliberately
     skipped here. Returns whether the request must now be proxied (core has to
     see its own token).
+
+    BOTH a verified envelope and a prefixed-but-unverifiable one are proxied
+    (#2249 review by Patch76). The unverifiable case is the ordinary one: every
+    envelope minted before the DCR signing key rotated — which is what
+    removing and re-adding the integration does — fails its MAC, and treating
+    it as "not ours" would 307 it to core, whose revoke endpoint answers 200
+    for any token it cannot resolve. The client would be told the session was
+    revoked while core's grant stayed live for its full 90 days. Forwarding a
+    body we did not verify is sound HERE and nowhere else: possession is the
+    only authorization a revocation needs, and core's endpoint is anonymous
+    and idempotent, so it grants a forger nothing they could not do by POSTing
+    to core directly. The refresh path keeps answering an INVALID envelope
+    locally and never forwards it.
     """
-    from .oauth_indirect import unwrap_refresh_token
+    from .oauth_indirect import core_token_for_revocation
 
     if dcr_key is None:
         return False
-    unwrapped = unwrap_refresh_token(dcr_key, str(form.get("token", "")), None)
-    if not isinstance(unwrapped, tuple):
+    core_refresh_token = core_token_for_revocation(dcr_key, str(form.get("token", "")))
+    if core_refresh_token is None:
         return False
-    core_refresh_token, _forward_id = unwrapped
     form.popall("token", None)
     form["token"] = core_refresh_token
     return True
@@ -509,6 +521,23 @@ async def _code_leg_forces_proxy(
     return disposition is RefreshDisposition.UNREPRODUCIBLE
 
 
+def _unavailable(description: str, *, revocation: bool) -> web.Response:
+    """A 503 for a failed forward, carrying ``Retry-After`` on a revocation.
+
+    RFC 7009 §2.2.1 gives that status a specific meaning on a revocation
+    endpoint — the client must assume the token still exists and may retry
+    after a delay the server MAY name — and a client should not get a
+    different answer for spelling the same revocation as ``action=revoke`` on
+    ``/token`` rather than posting it to the scoped ``/revoke`` view
+    (#2249 review by Patch76). Plain token failures stay bare: RFC 6749 gives
+    them no such retry contract.
+    """
+    response = _json_error("temporarily_unavailable", 503, description)
+    if revocation:
+        response.headers["Retry-After"] = _REVOKE_RETRY_AFTER
+    return response
+
+
 async def _forward_to_core(
     hass: HomeAssistant, data: dict[str, Any], path: str, form: MultiDict
 ) -> tuple[int, bytes, str] | web.Response:
@@ -517,9 +546,15 @@ async def _forward_to_core(
     Shared by the token and revocation legs (#2248): both forward a rewritten
     credential-bearing form to core over the relay session and map the same
     transport failures, and only the token leg rewrites what comes back.
+
+    Whether this is a revocation is read from the request itself rather than
+    passed in, so both surfaces — the scoped ``/revoke`` view and ``/token``
+    with ``action=revoke`` — get the same 503, and neither call site has to
+    remember to say so.
     """
     from .oauth_indirect import core_token_base_url
 
+    revocation = path == "/auth/revoke" or form.get("action") == "revoke"
     session = data.get("session")
     if session is None:
         _LOGGER.warning(
@@ -527,9 +562,7 @@ async def _forward_to_core(
             "(half-initialised setup); answering 503",
             path,
         )
-        return _json_error(
-            "temporarily_unavailable", 503, "token forwarding is not available"
-        )
+        return _unavailable("token forwarding is not available", revocation=revocation)
     base = core_token_base_url(hass)
     try:
         async with session.post(
@@ -549,8 +582,8 @@ async def _forward_to_core(
             base,
             type(err).__name__,
         )
-        return _json_error(
-            "temporarily_unavailable", 503, "core did not answer the token request"
+        return _unavailable(
+            "core did not answer the token request", revocation=revocation
         )
 
 
@@ -757,10 +790,13 @@ class AutoApproveRevokeView(HomeAssistantView):
     ANONYMOUS BY DESIGN, like core's own revocation view (``requires_auth =
     False``, ``cors_allowed = True``, mirrored here): RFC 7009 authorizes the
     BEARER of the token, not a client identity. That grants no new reach. A
-    caller who cannot present a valid HMAC-signed envelope never causes an
-    outbound request at all — an unrecognised or forged token 307s and this
-    proxy makes no call — so the forwarding path is reachable only by someone
-    already holding the credential they are asking us to destroy.
+    token carrying no ``hamcp-rt-`` prefix never causes an outbound request at
+    all — it 307s and this proxy makes no call. A prefixed one IS forwarded
+    even when its MAC does not verify, which is what keeps revocation working
+    across a signing-key rotation (#2249 review) and hands a forger nothing:
+    core's revoke endpoint is anonymous and idempotent and answers 200 to
+    whatever they could already POST to it directly. See
+    :func:`_revoke_rewrite`.
     """
 
     requires_auth = False
@@ -793,21 +829,20 @@ class AutoApproveRevokeView(HomeAssistantView):
             (key, str(value)) for key, value in raw_form.items()
         )
         if not _revoke_rewrite(data.get(CFG_DCR_SIGNING_KEY), form):
-            # Nothing of ours in the body, so no rewrite is needed: 307 the
-            # client into core's own /auth/revoke, which then observes the
-            # CLIENT's address. Relative Location for the token view's reason
-            # — an absolute one would derive the credential target from
-            # unvalidated forwarded headers.
+            # No core token to recover from the body, so there is nothing
+            # to rewrite: 307 the client into core's own /auth/revoke, which
+            # then observes the CLIENT's address. Relative Location for the
+            # token view's reason — an absolute one would derive the
+            # credential target from unvalidated forwarded headers.
             return web.Response(
                 status=307,
                 headers={"Location": "/auth/revoke", "Cache-Control": "no-store"},
             )
         forwarded = await _forward_to_core(self._hass, data, "/auth/revoke", form)
         if isinstance(forwarded, web.Response):
-            # The helper's only Response is the 503, which RFC 7009 §2.2.1
-            # gives a specific meaning here: the token is still live. Name the
-            # retry delay rather than leaving the client to invent one.
-            forwarded.headers["Retry-After"] = _REVOKE_RETRY_AFTER
+            # The helper's only Response is the 503, and it already carries
+            # the RFC 7009 §2.2.1 Retry-After for every revocation, whichever
+            # surface it arrived on.
             return forwarded
         status, body, content_type = forwarded
         # Relayed as-is: core answers a revocation with an empty 200, so there
