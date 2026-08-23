@@ -10,8 +10,10 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.bulk_selector import (
+    MAX_SELECTOR_ENTITIES,
     BulkSelectorInfrastructureError,
     BulkSelectorResolution,
+    InfrastructureErrorCause,
 )
 from ha_mcp.tools.tools_service import ServiceTools
 
@@ -199,7 +201,13 @@ async def test_dispatch_tool_error_propagates_unchanged(
             action="off",
         )
 
-    assert str(exc_info.value) == str(original)
+    # `is`, not a text comparison: the code path under test is a bare
+    # `except ToolError: raise`, which re-raises the SAME object -- `is`
+    # pins that exact contract, where a text-equal-but-reconstructed
+    # ToolError would also satisfy a str() comparison without proving the
+    # guard actually took the re-raise branch instead of rebuilding an
+    # equivalent one some other way.
+    assert exc_info.value is original
 
 
 @pytest.mark.asyncio
@@ -390,6 +398,42 @@ async def test_operations_mode_allows_members_targeted_alone() -> None:
 
 
 @pytest.mark.asyncio
+async def test_operations_mode_allows_scene_alongside_its_configured_entities() -> None:
+    """A scene targeted together with an entity IT CONFIGURES must NOT be
+    flagged -- HA core's scene platform sets a scene's ``entity_id``
+    attribute to the entities it configures (not entities it is
+    structurally composed of), which is the identical shape a real
+    aggregate's member list has. Without excluding scenes here the same
+    way ``bulk_selector._NON_AGGREGATE_ROOT_DOMAINS`` does, this would be
+    flagged as a group conflict whose only offered remedy (selector mode's
+    ``exclude_entity_ids``) selector mode itself refuses for scenes --
+    sending the caller to a fix that doesn't exist for the case that
+    triggered the error.
+    """
+    device_tools = MagicMock()
+    device_tools.bulk_device_control = AsyncMock(return_value={"success": True})
+    client = MagicMock()
+    client.get_states = AsyncMock(
+        return_value=[
+            _light_state("scene.movie_night", ["light.living_room"]),
+            _light_state("light.living_room"),
+        ]
+    )
+    tools = ServiceTools(client, device_tools)
+    operations = [
+        {"entity_id": "scene.movie_night", "action": "on"},
+        {"entity_id": "light.living_room", "action": "off"},
+    ]
+
+    result = await tools.ha_bulk_control(operations, False)
+
+    assert result == {"success": True}
+    device_tools.bulk_device_control.assert_awaited_once_with(
+        operations=operations, parallel=False, ctx=None
+    )
+
+
+@pytest.mark.asyncio
 async def test_operations_mode_rejects_opposing_action_group_member_conflict() -> None:
     """A conflict is flagged regardless of whether the group and member rows
     request the SAME action or opposing ones. The group's own fan-out races
@@ -549,30 +593,12 @@ async def test_operations_mode_group_safety_check_fails_closed_on_states_error()
 
     device_tools.bulk_device_control.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_operations_mode_group_safety_check_fails_closed_on_malformed_states() -> (
-    None
-):
-    """A non-list states response is just as unverifiable as a transport
-    failure and must fail closed the same way, not be treated as "no
-    states, so no conflicts possible"."""
-    device_tools = MagicMock()
-    device_tools.bulk_device_control = AsyncMock(return_value={"success": True})
-    client = MagicMock()
-    client.get_states = AsyncMock(return_value={"success": False})
-    tools = ServiceTools(client, device_tools)
-
-    with pytest.raises(ToolError, match="Home Assistant"):
-        await tools.ha_bulk_control(
-            [
-                {"entity_id": "light.one", "action": "off"},
-                {"entity_id": "light.two", "action": "off"},
-            ],
-            False,
-        )
-
-    device_tools.bulk_device_control.assert_not_awaited()
+    # The malformed-response-shape counterpart to this test used to live
+    # here, mocking client.get_states() to return a non-list. Removed: the
+    # real client now enforces list-or-raise at the source
+    # (HomeAssistantClient.get_states, see tests/src/unit/test_rest_client_states.py)
+    # instead of this call site defending against a shape production
+    # cannot actually produce.
 
 
 @pytest.mark.asyncio
@@ -606,7 +632,9 @@ async def test_operations_mode_group_safety_check_propagates_tool_error_unchange
             False,
         )
 
-    assert str(exc_info.value) == str(original)
+    # `is`, not a text comparison -- see the identical note on the
+    # selector-mode sibling of this test (test_dispatch_tool_error_propagates_unchanged).
+    assert exc_info.value is original
     device_tools.bulk_device_control.assert_not_awaited()
 
 
@@ -647,10 +675,20 @@ async def test_operations_mode_rejects_every_selector_only_parameter(
     five used to share one message that always blamed "selector" -- the one
     parameter the caller demonstrably did not pass, since this branch is
     only reached when ``selector is None``.
+
+    action/parameters/timeout_seconds/validate_first are all declared
+    ``BulkControlOperation`` row fields, so the message must send the
+    caller to move the value onto each row -- telling them to delete it
+    (the old, still-correct-for-``dry_run`` remedy) discards intent that
+    was almost certainly real: ``operations=[...], parameters={...}``
+    means "apply these to my operations", not "forget I said this".
     """
     tools = ServiceTools(MagicMock(), MagicMock())
 
-    with pytest.raises(ToolError, match=f"'{offender}' is a selector-only parameter"):
+    with pytest.raises(
+        ToolError,
+        match=f"'{offender}' is a per-operation field in operations mode",
+    ):
         await tools.ha_bulk_control(
             operations=[{"entity_id": "light.one", "action": "off"}],
             **kwargs,
@@ -671,6 +709,22 @@ async def test_selector_mode_requires_action() -> None:
         await tools.ha_bulk_control(
             selector={"domain": "light", "area_ids": ["salon"]},
         )
+
+
+def test_docstring_entity_limit_matches_the_constant() -> None:
+    """The tool docstring hardcodes the entity-limit number in prose (a
+    docstring can't be an f-string -- Python only recognizes a plain
+    string literal immediately after ``def`` as ``__doc__``, so
+    interpolating ``MAX_SELECTOR_ENTITIES`` there would silently make the
+    tool's real description ``None``), so nothing at import time keeps the
+    two in sync if ``MAX_SELECTOR_ENTITIES`` ever changes. This test is
+    that sync check instead.
+    """
+    assert ServiceTools.ha_bulk_control.__doc__ is not None
+    assert (
+        f"more than {MAX_SELECTOR_ENTITIES} entities"
+        in ServiceTools.ha_bulk_control.__doc__
+    )
 
 
 @pytest.mark.asyncio
@@ -747,7 +801,7 @@ async def test_infrastructure_error_suggestions_match_the_actual_cause(
         AsyncMock(
             side_effect=BulkSelectorInfrastructureError(
                 "Home Assistant device registry returned a malformed entry",
-                cause="malformed_device_registry",
+                cause=InfrastructureErrorCause.MALFORMED_DEVICE_REGISTRY,
             )
         ),
     )
@@ -763,3 +817,53 @@ async def test_infrastructure_error_suggestions_match_the_actual_cause(
     assert "device registry" in body.lower()
     assert "HOMEASSISTANT_URL" not in body
     assert "network connectivity" not in body.lower()
+
+
+@pytest.mark.asyncio
+async def test_visibility_config_cause_routes_to_its_own_suggestions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The THIRD cause, not just malformed_device_registry: a corrupt or
+    unloadable entity_visibility.json is also not a network problem, and
+    must route to the settings-UI-focused suggestion, not the connectivity
+    boilerplate.
+    """
+    monkeypatch.setattr(
+        "ha_mcp.tools.tools_service.resolve_bulk_selector",
+        AsyncMock(
+            side_effect=BulkSelectorInfrastructureError(
+                "Entity visibility could not be resolved safely: config "
+                "could not be loaded",
+                cause=InfrastructureErrorCause.VISIBILITY_CONFIG,
+            )
+        ),
+    )
+    tools = ServiceTools(MagicMock(), MagicMock())
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_bulk_control(
+            selector={"domain": "light", "area_ids": ["salon"]},
+            action="off",
+        )
+
+    body = str(exc_info.value)
+    assert "entity visibility" in body.lower()
+    assert "HOMEASSISTANT_URL" not in body
+    assert "network connectivity" not in body.lower()
+
+
+def test_infrastructure_error_suggestions_cover_every_cause() -> None:
+    """A parity test over the closed cause set, not another parametrized
+    string case: the previous test above constructs
+    ``cause=InfrastructureErrorCause.MALFORMED_DEVICE_REGISTRY`` itself,
+    so it only ever proves the table against a value the test supplies --
+    never catches the table itself silently falling out of sync with the
+    enum (a member added to ``InfrastructureErrorCause`` with no matching
+    ``_INFRASTRUCTURE_ERROR_SUGGESTIONS`` entry would fall back to the
+    connectivity boilerplate at runtime with no test noticing). This
+    fails the moment the two drift, regardless of which cause a future
+    raise site happens to use.
+    """
+    from ha_mcp.tools.tools_service import _INFRASTRUCTURE_ERROR_SUGGESTIONS
+
+    assert set(_INFRASTRUCTURE_ERROR_SUGGESTIONS) == set(InfrastructureErrorCause)

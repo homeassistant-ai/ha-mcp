@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -271,6 +272,51 @@ async def test_directly_hidden_matching_root_is_counted(
 
 
 @pytest.mark.asyncio
+async def test_load_hidden_set_warnings_are_threaded_into_the_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``load_hidden_set``'s own operator-facing warnings (e.g. an unknown
+    ``exclude_categories`` entry -- benign, so returned as a warning even
+    under ``strict=True``, per its own docstring) must reach
+    ``resolution.warnings`` even when nothing is hidden.
+
+    Distinct from ``test_directly_hidden_matching_root_is_counted`` above:
+    that test's own ``result.warnings != ()`` assertion is satisfied by
+    the SEPARATE hidden-count warning this resolver builds itself, since
+    its mock returns an empty warnings list -- so replacing
+    ``list(visibility_warnings)`` with ``[]`` at the call site would leave
+    that test (and the whole suite) green. Zero hidden entities here means
+    the hidden-count warning never fires, isolating this one specifically.
+    """
+    monkeypatch.setattr(
+        bulk_selector,
+        "load_hidden_set",
+        AsyncMock(
+            return_value=(
+                set(),
+                ["Unknown exclude_categories dropped: typo_category"],
+            )
+        ),
+    )
+    client = SelectorClient(
+        states=[_state("light.one")],
+        entities=[{"entity_id": "light.one", "area_id": "salon"}],
+    )
+
+    result = await resolve_bulk_selector(
+        client,
+        {"domain": "light", "area_ids": ["salon"]},
+        action="off",
+        parameters=None,
+        timeout_seconds=None,
+        validate_first=True,
+    )
+
+    assert result.hidden_entity_count == 0
+    assert result.warnings == ("Unknown exclude_categories dropped: typo_category",)
+
+
+@pytest.mark.asyncio
 async def test_registry_hidden_by_excludes_even_with_visibility_filter_disabled() -> (
     None
 ):
@@ -531,6 +577,43 @@ async def test_cross_domain_aggregate_with_no_matching_leaves_names_the_domain()
 
 
 @pytest.mark.asyncio
+async def test_all_roots_hidden_reports_hidden_not_domain_missing() -> None:
+    """Regression: when EVERY matching root in the area is hidden,
+    ``candidate_roots`` (which subtracts ``hidden`` before expansion) is
+    itself empty, so ``expanded_leaves`` is empty too -- a narrower
+    "expanded_leaves and not selected_leaves" guard would misfire on this
+    exact input the same way an unconditional "not selected_leaves" guard
+    did, reporting "No entities of domain 'light' exist in the selected
+    area(s)" for an entity that DOES exist and IS in the area; it is
+    simply hidden. Must report the hidden cause instead, matching the
+    pre-existing behavior for a partially-hidden match set.
+    """
+    client = SelectorClient(
+        states=[_state("light.hidden_by_user")],
+        entities=[
+            {
+                "entity_id": "light.hidden_by_user",
+                "area_id": "salon",
+                "hidden_by": "user",
+            }
+        ],
+    )
+
+    with pytest.raises(
+        BulkSelectorValidationError,
+        match=r"excluded or hidden \(1 hidden\)",
+    ):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "light", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_all_matches_excluded_names_exclusion_not_area() -> None:
     """Candidates existed in-area but all were excluded: a distinct message
     from "domain not in area" above -- this is the caller's exclusion (or
@@ -552,6 +635,48 @@ async def test_all_matches_excluded_names_exclusion_not_area() -> None:
                 "domain": "light",
                 "area_ids": ["salon"],
                 "exclude_entity_ids": ["light.only"],
+            },
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_all_matches_excluded_and_hidden_reports_both_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both counts together, not just excluded-only (above) or hidden-only
+    (test_all_roots_hidden_reports_hidden_not_domain_missing).
+    ``_all_excluded_or_hidden_message``'s "both non-zero" branch has no
+    test pinning its exact formatting -- a swapped or dropped count there
+    would pass every existing test, since the excluded-only and
+    hidden-only tests each exercise only ONE of its two conditionals.
+    """
+    monkeypatch.setattr(
+        bulk_selector,
+        "load_hidden_set",
+        AsyncMock(return_value=({"light.hidden_one"}, [])),
+    )
+    client = SelectorClient(
+        states=[_state("light.excluded_one"), _state("light.hidden_one")],
+        entities=[
+            {"entity_id": "light.excluded_one", "area_id": "salon"},
+            {"entity_id": "light.hidden_one", "area_id": "salon"},
+        ],
+    )
+
+    with pytest.raises(
+        BulkSelectorValidationError,
+        match=r"excluded or hidden \(1 excluded, 1 hidden\)",
+    ):
+        await resolve_bulk_selector(
+            client,
+            {
+                "domain": "light",
+                "area_ids": ["salon"],
+                "exclude_entity_ids": ["light.excluded_one"],
             },
             action="off",
             parameters=None,
@@ -617,6 +742,53 @@ async def test_topology_fetch_failure_propagates_without_orphaning_tasks() -> No
             timeout_seconds=None,
             validate_first=True,
         )
+
+
+@pytest.mark.asyncio
+async def test_topology_multi_failure_logs_every_fetch_not_just_the_first(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Two simultaneous fetch failures must BOTH be logged, by name.
+
+    The single-failure test above never exercises the "more than one
+    failure" branch. Also pins ``%r``/``exc_info=`` over ``%s``:
+    ``str(asyncio.TimeoutError())``/``str(ConnectionResetError())`` are
+    both empty, so a ``%s``-formatted WARNING for exactly this kind of
+    outage would read as content-free noise, defeating the point of
+    logging every failure instead of just the one that gets raised.
+    """
+
+    class DoubleFailingClient(SelectorClient):
+        async def send_websocket_message(
+            self, message: dict[str, Any]
+        ) -> dict[str, Any]:
+            if message["type"] == "config/device_registry/list":
+                raise ConnectionResetError()
+            if message["type"] == "config/area_registry/list":
+                raise TimeoutError()
+            return await super().send_websocket_message(message)
+
+    client = DoubleFailingClient(
+        states=[_state("light.one")],
+        entities=[{"entity_id": "light.one", "area_id": "salon"}],
+    )
+
+    with (
+        caplog.at_level(logging.WARNING),
+        pytest.raises((ConnectionResetError, TimeoutError)),
+    ):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "light", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("device registry" in message for message in warnings)
+    assert any("area registry" in message for message in warnings)
 
 
 @pytest.mark.asyncio
@@ -864,6 +1036,86 @@ async def test_operations_parameters_are_independent_per_row() -> None:
     assert operations[0]["parameters"] is not operations[1]["parameters"]
     operations[0]["parameters"]["brightness_pct"] = 10
     assert operations[1]["parameters"]["brightness_pct"] == 50
+
+
+@pytest.mark.asyncio
+async def test_resolution_parameters_survive_caller_mutating_its_own_dict() -> None:
+    """The resolution's OWN stored ``parameters`` must not alias the
+    caller's dict. The per-row copy in ``.operations`` protects each
+    dispatch row from cross-row mutation, but does nothing about the
+    resolution's own copy -- without a copy at the point ``parameters`` is
+    stored, a caller that still holds the dict it passed in and mutates it
+    after this call returns would silently rewrite the "frozen" resolution's
+    payload too, breaking dry_run's preview/dispatch consistency guarantee.
+    """
+    client = SelectorClient(
+        states=[_state("light.one")],
+        entities=[{"entity_id": "light.one", "area_id": "salon"}],
+    )
+    caller_parameters = {"brightness_pct": 50}
+
+    result = await resolve_bulk_selector(
+        client,
+        {"domain": "light", "area_ids": ["salon"]},
+        action="on",
+        parameters=caller_parameters,
+        timeout_seconds=None,
+        validate_first=True,
+    )
+    caller_parameters["brightness_pct"] = 999
+
+    assert result.operations[0]["parameters"]["brightness_pct"] == 50
+
+
+@pytest.mark.asyncio
+async def test_resolution_equality_is_action_sensitive() -> None:
+    """Two resolutions over the identical entity set but OPPOSITE actions
+    must not compare equal.
+
+    ``_operation_common`` (which holds ``action``) is excluded from
+    ``__repr__`` for a real reason (it can carry a lock/alarm code via
+    ``parameters``) but must stay IN the dataclass's equality comparison:
+    it is not dispatch-irrelevant plumbing despite its name, and
+    "on" vs "off" over the same entities is about as different as two
+    resolutions can be while still comparing equal on every other field.
+    """
+    client = SelectorClient(
+        states=[_state("light.one")],
+        entities=[{"entity_id": "light.one", "area_id": "salon"}],
+    )
+    selector = {"domain": "light", "area_ids": ["salon"]}
+    kwargs = {"parameters": None, "timeout_seconds": None, "validate_first": True}
+
+    on_result = await resolve_bulk_selector(client, selector, action="on", **kwargs)
+    off_result = await resolve_bulk_selector(client, selector, action="off", **kwargs)
+
+    assert on_result.resolved_entity_ids == off_result.resolved_entity_ids
+    assert on_result != off_result
+    assert on_result.operations != off_result.operations
+
+
+@pytest.mark.asyncio
+async def test_resolution_repr_never_contains_a_lock_or_alarm_code() -> None:
+    """``repr(resolution)`` must never leak a code carried in ``parameters``
+    -- a future dataclass regeneration (e.g. a field reordering that drops
+    the explicit ``field(..., repr=False)``) would silently restore it to
+    every log line and traceback that prints a resolution unredacted.
+    """
+    client = SelectorClient(
+        states=[_state("lock.one")],
+        entities=[{"entity_id": "lock.one", "area_id": "salon"}],
+    )
+
+    result = await resolve_bulk_selector(
+        client,
+        {"domain": "lock", "area_ids": ["salon"]},
+        action="open",
+        parameters={"code": "SENTINEL-SECRET-1234"},
+        timeout_seconds=None,
+        validate_first=True,
+    )
+
+    assert "SENTINEL-SECRET-1234" not in repr(result)
 
 
 @pytest.mark.asyncio

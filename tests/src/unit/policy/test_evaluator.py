@@ -148,12 +148,17 @@ class TestNormalizeStringifiedContainers:
             {"validate_first": True, "timeout_seconds": 5, "extra": None}
         ) == {"validate_first": True, "timeout_seconds": 5, "extra": None}
 
-    def test_deeply_nested_input_does_not_crash_with_recursion_error(self):
+    def test_deeply_nested_input_propagates_recursion_error(self):
         """A RecursionError from this function's OWN dict/list recursion
         (not json.loads's, which loads_if_json_container_str already
-        guards) must be caught rather than propagate and crash policy
-        evaluation -- mirrors loads_if_json_container_str's own
-        RecursionError handling by leaving the whole value unrepaired.
+        guards -- so a still-stringified value can never reach this
+        function's own recursion at deep nesting) must PROPAGATE, not be
+        swallowed. Swallowing it would let a security gate evaluate (and
+        hash) unnormalized args and silently ALLOW a call a rule scoped to
+        a nested field should have required approval for -- the caller
+        (PolicyMiddleware.on_call_tool) is responsible for catching this
+        and failing the call closed, matching the corrupt-policy-file
+        precedent it already applies.
         """
         import sys
 
@@ -161,9 +166,8 @@ class TestNormalizeStringifiedContainers:
         for _ in range(sys.getrecursionlimit() + 100):
             nested = {"nested": nested}
 
-        result = normalize_stringified_containers({"selector": nested})
-
-        assert result == {"selector": nested}
+        with pytest.raises(RecursionError):
+            normalize_stringified_containers({"selector": nested})
 
 
 # --- match_rule ---

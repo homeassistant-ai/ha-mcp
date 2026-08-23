@@ -43,18 +43,23 @@ def normalize_stringified_containers(value: Any) -> Any:
     JSON syntax error — the tool's own validation does that, with a
     properly attributed parameter name.
 
-    Deeply-nested input (real nested dicts/lists, or a stringified
-    container that decodes into deeply nested containers) is likewise left
-    unrepaired rather than crashing the call: unlike ``json.loads``, this
-    function's own dict/list recursion has no built-in depth floor, so a
-    ``RecursionError`` here is caught at the top level and the whole
-    (unrepaired) value is returned, mirroring ``loads_if_json_container_str``'s
-    own ``RecursionError`` handling.
+    Deeply-nested INPUT (real nested dicts/lists in the caller's own
+    ``args`` -- NOT a stringified container decoding into deep nesting;
+    ``loads_if_json_container_str`` already absorbs ``json.loads``'s own
+    ``RecursionError``, so a still-stringified value can never reach this
+    function's own recursion at all) can exceed the interpreter's
+    recursion limit and raise ``RecursionError`` here. Unlike the
+    malformed-JSON case, this is deliberately NOT swallowed: silently
+    returning the unrepaired value would let this security gate evaluate
+    (and hash) unnormalized args and, for a rule scoped to a nested
+    selector-inspectable field, silently ALLOW a call that should have
+    required approval -- the identical "fail open on a degraded gate"
+    mistake ``PolicyMiddleware.on_call_tool`` already refuses to make for
+    a corrupt policy file. The caller (``on_call_tool``) is responsible
+    for catching this and failing the call closed with a structured,
+    logged error, matching that same precedent.
     """
-    try:
-        return _normalize_stringified_containers(value)
-    except RecursionError:
-        return value
+    return _normalize_stringified_containers(value)
 
 
 def _normalize_stringified_containers(value: Any) -> Any:

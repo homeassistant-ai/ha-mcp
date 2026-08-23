@@ -133,6 +133,41 @@ class TestCreateConnectionError:
 
         assert response["error"]["code"] == "CONNECTION_TIMEOUT"
 
+    def test_custom_suggestions_override_the_defaults(self):
+        """A caller-supplied ``suggestions`` list must be used verbatim, not
+        merged with or overridden by CONNECTION_FAILED's own network-centric
+        defaults (check HA is running / verify HOMEASSISTANT_URL / check
+        network) -- those are actively unhelpful for a non-network cause
+        (e.g. a malformed local registry row) that still routes through
+        this same connection-error shape."""
+        response = create_connection_error(
+            "Could not verify against Home Assistant's device registry",
+            suggestions=["Check Home Assistant's device-registry logs"],
+        )
+
+        assert response["error"]["suggestion"] == (
+            "Check Home Assistant's device-registry logs"
+        )
+        assert "Check if Home Assistant is running and accessible" not in (
+            response["error"].get("suggestions", [])
+        )
+
+    def test_omitted_suggestions_still_yield_the_defaults(self):
+        """No ``suggestions`` argument (the overwhelming majority of
+        ``create_connection_error`` call sites) must still produce
+        CONNECTION_FAILED's own default suggestions -- this is the
+        behavior every OTHER caller of this helper relies on, and
+        ``create_error_response`` treats a falsy ``suggestions`` (``None``
+        or ``[]``) identically, as "use the defaults": a caller that
+        passes ``suggestions=[]`` thinking that means "no suggestions"
+        would silently get the network boilerplate back instead.
+        """
+        response = create_connection_error("Failed to connect")
+
+        assert response["error"]["suggestion"] == (
+            "Check if Home Assistant is running and accessible"
+        )
+
 
 class TestCreateAuthError:
     """Tests for create_auth_error function."""

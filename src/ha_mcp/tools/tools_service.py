@@ -5,7 +5,7 @@ This module provides service execution and WebSocket-enabled operation monitorin
 """
 
 import logging
-from typing import Annotated, Any, NoReturn, NotRequired, TypedDict, cast
+from typing import Annotated, Any, NamedTuple, NoReturn, NotRequired, TypedDict, cast
 
 import httpx
 from fastmcp import Context
@@ -27,10 +27,12 @@ from ..errors import (
 )
 from ..utils.entity_membership import normalize_member_entity_ids
 from .bulk_selector import (
+    _NON_AGGREGATE_ROOT_DOMAINS,
     BulkControlSelector,
     BulkSelectorInfrastructureError,
     BulkSelectorResolution,
     BulkSelectorValidationError,
+    InfrastructureErrorCause,
     resolve_bulk_selector,
 )
 from .component_api import (
@@ -184,7 +186,7 @@ def _parse_bulk_operations(operations: Any) -> list[Any]:
 
 
 def _expand_membership_transitively(
-    entity_id: str, states_by_id: dict[str, Any], visited: set[str]
+    entity_id: str, states_by_id: dict[str, Any], *, visited: set[str] | None = None
 ) -> set[str]:
     """Return every entity reachable from ``entity_id`` via nested
     group/aggregate membership -- direct members and, recursively, THEIR
@@ -192,8 +194,14 @@ def _expand_membership_transitively(
 
     ``visited`` guards against a membership cycle; an entity already seen
     on this walk is treated as having no further members instead of
-    recursing forever. Best-effort, not authoritative: an unknown or
-    stateless entity simply contributes no members, mirroring
+    recursing forever. Keyword-only and defaulted to ``None`` (allocated
+    internally on first call) rather than a plain mutable positional
+    parameter: today every top-level caller happens to pass a fresh
+    ``set()``, but a positional mutable default is the kind of thing a
+    later "optimization" hoists out of a loop -- which would silently
+    start returning empty member sets (everything already "visited") and
+    lose conflicts instead of erroring. Best-effort, not authoritative: an
+    unknown or stateless entity simply contributes no members, mirroring
     ``_find_group_member_conflicts``'s own tolerance for a batch that
     references something ``states`` doesn't have -- this is a safety-net
     scan over the small set of entities in one batch, not the selector
@@ -201,6 +209,8 @@ def _expand_membership_transitively(
     which is right to raise on exactly those cases when it is actually
     resolving a dispatch set.
     """
+    if visited is None:
+        visited = set()
     if entity_id in visited:
         return set()
     visited.add(entity_id)
@@ -213,42 +223,70 @@ def _expand_membership_transitively(
     expanded = set(members)
     for member_id in members:
         expanded.update(
-            _expand_membership_transitively(member_id, states_by_id, visited)
+            _expand_membership_transitively(member_id, states_by_id, visited=visited)
         )
     return expanded
 
 
+class _GroupConflict(NamedTuple):
+    """One group/aggregate entity's conflict with an operations batch.
+
+    ``unlisted_members``: this group's members that were NOT separately
+    listed in the batch -- the entities the group's own cascade will
+    change WITHOUT the caller having asked for them. This is the
+    actionable half of the report: the caller needs to know which
+    entities their attempt to exclude something actually failed to
+    protect. Preferred over ``redundant_members`` whenever non-empty.
+    ``redundant_members``: this group's members that WERE also listed
+    separately -- harmless (each ends up in the requested state either
+    way via the group's own fan-out), but still flagged as a conflict
+    since a differing per-row action or parameters races that fan-out
+    rather than safely overriding it. Reported only when
+    ``unlisted_members`` is empty (every member is already accounted
+    for), since naming the harmless rows instead of the harmed ones is
+    the wrong report even when both are non-empty.
+    """
+
+    unlisted_members: list[str]
+    redundant_members: list[str]
+
+
 def _find_group_member_conflicts(
     entity_ids: set[str], states: list[Any]
-) -> dict[str, list[str]]:
-    """Return ``{group_entity_id: [conflicting_member_ids]}`` for every
-    group/aggregate entity this batch targets alongside one or more of its
-    own members -- direct or nested (a batch targeting an outer group and a
+) -> dict[str, _GroupConflict]:
+    """Return ``{group_entity_id: _GroupConflict}`` for every group/
+    aggregate entity this batch targets alongside one or more of its own
+    members -- direct or nested (a batch targeting an outer group and a
     leaf reachable only through an inner group it contains is exactly as
     unsafe as targeting the inner group and that leaf directly).
 
-    Deliberately does not distinguish same-action duplicates from opposing
-    ones (e.g. group "on" plus an explicit member "off"): Home Assistant
-    fans a service call on the group entity out to every member regardless
-    of what else is in the same batch, so an opposing member row is a race
-    against that fan-out, not a safe override, and gets flagged exactly
-    like a same-action one.
+    Scene entities are never treated as an aggregate here (see
+    ``bulk_selector._NON_AGGREGATE_ROOT_DOMAINS``, imported rather than
+    duplicated so the two modes cannot drift on what counts as one): HA
+    core's scene platform sets a scene's ``entity_id`` attribute to the
+    entities it CONFIGURES, not entities it is structurally composed of,
+    and selector mode's own ``exclude_entity_ids`` deliberately refuses to
+    treat a scene as an aggregate root for the identical reason -- flagging
+    one here would send the caller to a remedy selector mode itself
+    refuses for the exact case that triggered it.
     """
     states_by_id = {
         state["entity_id"]: state
         for state in states
         if isinstance(state, dict) and isinstance(state.get("entity_id"), str)
     }
-    conflicts: dict[str, list[str]] = {}
+    conflicts: dict[str, _GroupConflict] = {}
     for entity_id in sorted(entity_ids):
-        transitive_members = _expand_membership_transitively(
-            entity_id, states_by_id, set()
-        )
+        if any(entity_id.startswith(f"{d}.") for d in _NON_AGGREGATE_ROOT_DOMAINS):
+            continue
+        transitive_members = _expand_membership_transitively(entity_id, states_by_id)
         if not transitive_members:
             continue
-        overlap = sorted((entity_ids & transitive_members) - {entity_id})
-        if overlap:
-            conflicts[entity_id] = overlap
+        redundant_members = sorted((entity_ids & transitive_members) - {entity_id})
+        if not redundant_members:
+            continue
+        unlisted_members = sorted(transitive_members - entity_ids)
+        conflicts[entity_id] = _GroupConflict(unlisted_members, redundant_members)
     return conflicts
 
 
@@ -271,10 +309,21 @@ async def _reject_operations_group_member_conflicts(
     Fails closed on its own states-fetch failure too: an unverifiable batch
     is not a verified-safe one, and this is the same infrastructure-failure
     stance ``bulk_selector.py`` takes for the analogous selector-mode read.
+    ``client.get_states()`` itself now raises ``HomeAssistantConnectionError``
+    rather than swallowing a malformed response to ``[]`` (see its
+    docstring in ``rest_client.py``) -- that used to be the actual fail-OPEN
+    hole here: an HA hiccup silently produced an empty states list, which
+    read as "verified, no conflicts" instead of "could not verify".
+
     A single-entity (or empty/all-malformed) batch cannot contain a
     group/member conflict by construction, so the states fetch is skipped
-    entirely for it -- the overwhelming majority of operations-mode calls
-    never touch a group at all and should not pay for this check.
+    entirely for it. Every batch with 2+ distinct entities still pays one
+    uncached, full ``GET /states`` here regardless of whether any of them
+    turn out to be a group -- this trades that fixed per-call cost for
+    simplicity over fetching only the batch's own (and transitively
+    reachable) entities, which would need N concurrent per-entity reads
+    instead of one bulk one and is bounded by batch size rather than
+    instance size. Revisit if that cost becomes a real bottleneck.
     """
     entity_ids = {
         op["entity_id"]
@@ -292,35 +341,36 @@ async def _reject_operations_group_member_conflicts(
             exc, context={"operation": "bulk operations group-safety check"}
         )
         raise  # unreachable: exception_to_structured_error always raises
-    if not isinstance(states, list):
-        raise_tool_error(
-            create_connection_error(
-                "Could not verify the operations batch against group "
-                "membership because Home Assistant's states response was "
-                "unexpected",
-                suggestions=[
-                    "Check if Home Assistant is running and accessible",
-                    "Retry the request; this may be a transient read failure",
-                ],
-            )
-        )
     conflicts = _find_group_member_conflicts(entity_ids, states)
     if not conflicts:
         return
+    # Prefer naming the members that will be silently AFFECTED (not in the
+    # batch, so nothing else in the call protects them) over the ones
+    # merely redundant with the group's own row -- the redundant rows are
+    # harmless and not what the caller needs to fix. Falls back to naming
+    # the redundant ones only when every member is already accounted for
+    # (no unlisted ones exist to report).
     detail = "; ".join(
-        f"'{group}' together with its own member(s) {', '.join(members)}"
-        for group, members in sorted(conflicts.items())
+        (
+            f"'{group}' will also affect {', '.join(conflict.unlisted_members)}, "
+            "which this batch did not list"
+            if conflict.unlisted_members
+            else f"'{group}' is redundant with its own already-listed "
+            f"member(s) {', '.join(conflict.redundant_members)}"
+        )
+        for group, conflict in sorted(conflicts.items())
     )
     raise_tool_error(
         create_validation_error(
             "This operations batch targets a group/aggregate entity "
-            "together with one or more of its own individual members: "
-            f"{detail}. Home Assistant applies the action to every member "
-            "when the group entity is targeted, regardless of what else is "
-            "listed separately -- a member row does not protect or exempt "
-            "it from the group's own action. Target ONLY the group, or "
-            "ONLY the specific member(s) you want affected, never both in "
-            "the same call. To act on most of a group while excluding "
+            f"together with one or more of its own individual members: {detail}. "
+            "Home Assistant applies the action to every member when the "
+            "group entity is targeted, regardless of what else is listed "
+            "separately -- a member row does not protect or exempt it from "
+            "the group's own action, and one absent from the batch entirely "
+            "is not excluded by that absence either. Target ONLY the group, "
+            "or ONLY the specific member(s) you want affected, never both "
+            "in the same call. To act on most of a group while excluding "
             "specific members, use selector mode instead: exclude_entity_ids "
             "goes INSIDE selector, not as a top-level argument, e.g. "
             '{"selector": {"domain": "light", "area_ids": ["<area_id>"], '
@@ -362,6 +412,42 @@ def _selector_only_parameter_offender(
     return None
 
 
+# action, parameters, timeout_seconds and validate_first are all declared
+# fields on BulkControlOperation (see its class docstring) -- in operations
+# mode they belong on each row, not as a top-level tool argument, so the
+# caller's actual fix is to move the value, not delete it. Only dry_run has
+# no per-row equivalent (there is no such thing as "dry-run this one row"),
+# so it alone gets the remove-or-switch-modes remedy.
+_PER_ROW_SELECTOR_ONLY_PARAMETERS = frozenset(
+    {"action", "parameters", "timeout_seconds", "validate_first"}
+)
+
+
+def _selector_only_parameter_message(offending_parameter: str) -> str:
+    """Build the remedy for one selector-only parameter used in operations mode.
+
+    Telling the caller to remove the parameter (or abandon operations mode
+    entirely) discards their intent for the four fields that DO have a
+    per-row home: ``operations=[...], parameters={...}`` almost certainly
+    meant "apply these parameters to my operations", and the fix is to
+    move the value into each row, not delete it.
+    """
+    if offending_parameter in _PER_ROW_SELECTOR_ONLY_PARAMETERS:
+        return (
+            f"'{offending_parameter}' is a per-operation field in operations "
+            f"mode (see BulkControlOperation), not a top-level tool argument "
+            f"-- move it onto each row instead, e.g. {{'entity_id': "
+            f"'light.kitchen', 'action': 'on', '{offending_parameter}': ...}}, "
+            f"and remove the top-level '{offending_parameter}' argument."
+        )
+    return (
+        f"'{offending_parameter}' is a selector-only parameter and cannot be "
+        "used with operations. Either remove "
+        f"'{offending_parameter}' from this call, or switch to selector mode "
+        "by replacing 'operations' with 'selector' (+ 'action')."
+    )
+
+
 # Per-cause (message, suggestions) for BulkSelectorInfrastructureError (see
 # its docstring in bulk_selector.py). Not every infrastructure failure is a
 # network problem -- CONNECTION_FAILED's own DEFAULT_SUGGESTIONS
@@ -369,15 +455,17 @@ def _selector_only_parameter_offender(
 # actively unhelpful for a malformed local registry row or a corrupt local
 # visibility config file, so those causes get their own actionable text
 # instead of inheriting the connectivity defaults.
-_INFRASTRUCTURE_ERROR_SUGGESTIONS: dict[str, tuple[str, list[str]]] = {
-    "connectivity": (
+_INFRASTRUCTURE_ERROR_SUGGESTIONS: dict[
+    InfrastructureErrorCause, tuple[str, list[str]]
+] = {
+    InfrastructureErrorCause.CONNECTIVITY: (
         "Could not resolve the selector because Home Assistant data was unavailable",
         [
             "Check if Home Assistant is running and accessible",
             "Retry the request; this may be a transient registry read failure",
         ],
     ),
-    "malformed_device_registry": (
+    InfrastructureErrorCause.MALFORMED_DEVICE_REGISTRY: (
         "Could not resolve the selector because Home Assistant's device "
         "registry returned a malformed entry",
         [
@@ -387,7 +475,7 @@ _INFRASTRUCTURE_ERROR_SUGGESTIONS: dict[str, tuple[str, list[str]]] = {
             + "restart Home Assistant if the issue persists",
         ],
     ),
-    "visibility_config": (
+    InfrastructureErrorCause.VISIBILITY_CONFIG: (
         "Could not resolve the selector because the entity visibility "
         "filter could not be evaluated safely",
         [
@@ -1909,11 +1997,7 @@ class ServiceTools:
         if offending_parameter is not None:
             raise_tool_error(
                 create_validation_error(
-                    f"'{offending_parameter}' is a selector-only parameter and "
-                    "cannot be used with operations. Either remove "
-                    f"'{offending_parameter}' from this call, or switch to "
-                    "selector mode by replacing 'operations' with 'selector' "
-                    "(+ 'action').",
+                    _selector_only_parameter_message(offending_parameter),
                     parameter=offending_parameter,
                 )
             )
@@ -1986,7 +2070,10 @@ class ServiceTools:
                 exc,
             )
             message, suggestions = _INFRASTRUCTURE_ERROR_SUGGESTIONS.get(
-                exc.cause, _INFRASTRUCTURE_ERROR_SUGGESTIONS["connectivity"]
+                exc.cause,
+                _INFRASTRUCTURE_ERROR_SUGGESTIONS[
+                    InfrastructureErrorCause.CONNECTIVITY
+                ],
             )
             raise_tool_error(
                 create_connection_error(

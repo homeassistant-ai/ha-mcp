@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Annotated, Any, NamedTuple, NotRequired, TypedDict
 
 from pydantic import ConfigDict, Field
@@ -120,15 +121,18 @@ class BulkSelectorResolution:
     expanded_group_ids: tuple[str, ...]
     hidden_entity_count: int
     warnings: tuple[str, ...] = field(default_factory=tuple)
-    # repr=False: `_operation_common["parameters"]` can carry a lock or alarm
-    # code (selector mode's `parameters` argument, e.g. `lock.open` with a
-    # keypad code). The default dataclass __repr__ would otherwise write it
-    # to logs/tracebacks anywhere a resolution is printed or logged unredacted.
-    # compare=False: it is dispatch-only plumbing, not part of what makes two
-    # resolutions the "same" resolved plan.
-    _operation_common: dict[str, Any] = field(
-        default_factory=dict, repr=False, compare=False
-    )
+    # repr=False only (compare stays at its True default): `_operation_common`
+    # can carry a lock or alarm code (selector mode's `parameters` argument,
+    # e.g. `lock.open` with a keypad code), so the default dataclass __repr__
+    # would otherwise write it to logs/tracebacks anywhere a resolution is
+    # printed or logged unredacted. It is NOT compare-excludable, though: it
+    # holds `action`, so two resolutions over the identical entity set but
+    # OPPOSITE actions must not compare equal, and `compare=False` would make
+    # them -- there is no dispatch-irrelevant reading of this field despite
+    # its name. The trade-off this accepts (unchanged from before repr=False
+    # was added) is that the frozen dataclass stays unhashable, since a plain
+    # `dict` has no __hash__; nothing hashes a resolution today.
+    _operation_common: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @property
     def operations(self) -> list[dict[str, Any]]:
@@ -179,6 +183,32 @@ class BulkSelectorValidationError(ValueError):
         self.parameter = parameter
 
 
+class InfrastructureErrorCause(StrEnum):
+    """Why a ``BulkSelectorInfrastructureError`` was raised, for routing the
+    response's ``suggestions`` to an actionable next step -- not every
+    infrastructure failure is a network problem. A closed set (StrEnum,
+    matching ``ErrorCode``/``Verdict``/the rest of this codebase's error
+    taxonomy) rather than an open ``str``: a typo in a raise site's
+    ``cause=`` used to type-check as any other string and silently fall
+    back to ``CONNECTIVITY``'s boilerplate at the lookup in
+    ``tools_service.py``, keeping the suite green while quietly serving
+    the wrong suggestions. mypy now catches that at the raise site instead.
+    """
+
+    CONNECTIVITY = "connectivity"
+    """A genuinely unavailable/malformed HA registry or state response --
+    "check HA is running" is the right advice. The default."""
+
+    MALFORMED_DEVICE_REGISTRY = "malformed_device_registry"
+    """A local, user-fixable data problem: a device-registry row missing
+    ``id``. Network suggestions are actively unhelpful here."""
+
+    VISIBILITY_CONFIG = "visibility_config"
+    """A local, user-fixable data problem: a corrupt/unloadable
+    ``entity_visibility.json``. Network suggestions are actively unhelpful
+    here."""
+
+
 class BulkSelectorInfrastructureError(RuntimeError):
     """Report a Home Assistant infrastructure failure hit while resolving a
     selector -- NOT the caller's fault, and never the caller's to fix by
@@ -189,18 +219,17 @@ class BulkSelectorInfrastructureError(RuntimeError):
     rewrite a selector that was fine and retry against an HA outage no
     selector can fix.
 
-    ``cause`` distinguishes actionable next steps for the response's
-    ``suggestions``: not every infrastructure failure is a network problem.
-    ``"connectivity"`` (default) covers a genuinely unavailable/malformed HA
-    registry or state response -- "check HA is running" is the right advice.
-    ``"malformed_device_registry"`` and ``"visibility_config"`` are local,
-    user-fixable data problems (a device-registry row missing ``id``; a
-    corrupt/unloadable ``entity_visibility.json``) where network suggestions
-    are actively unhelpful -- see ``tools_service.py``'s
-    ``_INFRASTRUCTURE_ERROR_SUGGESTIONS``.
+    ``cause`` (see ``InfrastructureErrorCause``) distinguishes actionable
+    next steps for the response's ``suggestions`` -- see
+    ``tools_service.py``'s ``_INFRASTRUCTURE_ERROR_SUGGESTIONS``.
     """
 
-    def __init__(self, message: str, *, cause: str = "connectivity") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        cause: InfrastructureErrorCause = InfrastructureErrorCause.CONNECTIVITY,
+    ) -> None:
         super().__init__(message)
         self.cause = cause
 
@@ -233,7 +262,7 @@ def _validate_device_registry_rows(device_rows: list[dict[str, Any]]) -> None:
     if any(not row.get("id") for row in device_rows):
         raise BulkSelectorInfrastructureError(
             "Home Assistant device registry returned a malformed entry",
-            cause="malformed_device_registry",
+            cause=InfrastructureErrorCause.MALFORMED_DEVICE_REGISTRY,
         )
 
 
@@ -368,6 +397,20 @@ def _validate_selector(selector: Mapping[str, Any], action: str) -> _ValidatedSe
     )
 
 
+# Matches the positional order of the five awaitables in _load_topology's
+# gather() call -- zipped in below so a failure's own log line names the
+# ACTUAL registry that failed ("the device registry fetch failed") instead
+# of a generic "a topology fetch failed" that gives an operator nothing to
+# search HA's own logs for.
+_TOPOLOGY_FETCH_LABELS = (
+    "states",
+    "entity registry",
+    "device registry",
+    "area registry",
+    "floor registry",
+)
+
+
 async def _load_topology(client: Any) -> _Topology:
     """Load the HA state and registry views used by one resolution.
 
@@ -377,6 +420,16 @@ async def _load_topology(client: Any) -> _Topology:
     cancelled nor retrieved, so their eventual exceptions surface only as an
     unattributed "Task exception was never retrieved" with no tool or call
     context once the event loop garbage-collects them.
+
+    Logs every failed fetch here (not just the one that gets raised, and
+    not left to the caller's own log line, which only ever sees the single
+    exception that propagates): with two+ concurrent fetches failing (e.g.
+    both the entity and device registry reads), every failure after the
+    first would otherwise vanish without a trace. ``%r`` plus
+    ``exc_info=`` (not ``%s``): ``str()`` on the exception types these
+    fetches actually raise -- ``asyncio.TimeoutError``, ``ConnectionResetError``
+    -- is frequently empty, which would otherwise produce a content-free
+    WARNING line for exactly the outage this logging exists to diagnose.
     """
     results: tuple[Any, Any, Any, Any, Any] = await asyncio.gather(
         client.get_states(),
@@ -387,19 +440,17 @@ async def _load_topology(client: Any) -> _Topology:
         return_exceptions=True,
     )
     states, entities, devices, areas, floors = results
-    failures = [result for result in results if isinstance(result, BaseException)]
+    failures = [
+        (label, result)
+        for label, result in zip(_TOPOLOGY_FETCH_LABELS, results, strict=True)
+        if isinstance(result, BaseException)
+    ]
     if failures:
-        # Log every failed fetch, not just the one that gets raised: the
-        # caller's own `except Exception` handler only ever logs the single
-        # exception this raises, so with two+ concurrent fetches failing
-        # (e.g. both the entity and device registry reads), every failure
-        # after the first would otherwise vanish without a trace.
-        for failure in failures[1:]:
+        for label, failure in failures:
             logger.warning(
-                "bulk selector: topology fetch failed (additional failure): %s",
-                failure,
+                "bulk selector: %s fetch failed: %r", label, failure, exc_info=failure
             )
-        raise failures[0]
+        raise failures[0][1]
     # Keyword construction, not `_Topology(*results)`: the NamedTuple exists
     # specifically so a reordered gather() call can't mislabel a registry
     # silently -- unpacking the gather() result and re-splatting it
@@ -472,24 +523,35 @@ def _select_area_ids(
 def _expand_roots(
     roots: list[str],
     states: Mapping[str, Mapping[str, Any]],
-    expanded_groups: set[str],
     cache: dict[str, _ExpansionEntry],
     parameter: str,
-) -> set[str]:
-    """Expand a list of aggregate or leaf roots into a deduplicated leaf set."""
+) -> _ExpansionEntry:
+    """Expand a list of aggregate or leaf roots into a deduplicated leaf set
+    and the aggregates discovered while expanding them.
+
+    Returns an ``_ExpansionEntry`` rather than mutating a caller-supplied
+    out-parameter: ``resolve_bulk_selector`` calls this once for the
+    selection side and once for the exclusion side, and the exclusion
+    side's groups were previously collected into an accumulator that was
+    allocated, passed in, and never read again -- write-only. Returning
+    both halves makes "does this call site actually use the discovered
+    groups" an explicit choice at each call site instead of a set that
+    might or might not get inspected later.
+    """
     leaves: set[str] = set()
+    groups: set[str] = set()
     for entity_id in roots:
         leaves.update(
             _expand_entity(
                 entity_id,
                 states,
                 path=(),
-                expanded_groups=expanded_groups,
+                expanded_groups=groups,
                 cache=cache,
                 parameter=parameter,
             )
         )
-    return leaves
+    return _ExpansionEntry(frozenset(leaves), frozenset(groups))
 
 
 async def _load_hidden_entities(
@@ -535,7 +597,7 @@ async def _load_hidden_entities(
             # registry/Assist-data unavailable) here, so the routed
             # suggestions below hedge across both rather than confidently
             # pointing at the wrong one.
-            cause="visibility_config",
+            cause=InfrastructureErrorCause.VISIBILITY_CONFIG,
         ) from exc
     registry_hidden = {
         entity_id
@@ -575,11 +637,11 @@ async def resolve_bulk_selector(
     area_ids = validated.area_ids
     floor_ids = validated.floor_ids
     excluded_roots = validated.excluded_roots
-    try:
-        topology = await _load_topology(client)
-    except Exception as exc:
-        logger.warning("bulk selector: topology fetch failed: %s", exc)
-        raise
+    # No try/except here: _load_topology already logs every failed fetch
+    # (with its own registry label, %r, and exc_info=) before raising, so
+    # a second, generic log line here would only duplicate it with less
+    # information.
+    topology = await _load_topology(client)
     if not isinstance(topology.states, list) or not all(
         isinstance(state, dict) for state in topology.states
     ):
@@ -642,38 +704,49 @@ async def resolve_bulk_selector(
         )
     directly_hidden = matching_roots & hidden
     candidate_roots = sorted(matching_roots - hidden)
-    # Separate accumulators: expanded_group_ids in the final resolution must
-    # report only aggregates discovered while expanding the SELECTION side.
-    # An excluded aggregate (and any of its own nested sub-groups) is not
-    # something that fed the dispatch -- reporting it in the same set would
-    # misleadingly suggest it did. The memoization cache stays shared: an
-    # entity referenced by both sides should still only be expanded once.
-    expanded_groups: set[str] = set()
-    excluded_expanded_groups: set[str] = set()
+    # Two independent calls, not one shared out-param: expanded_group_ids in
+    # the final resolution must report only aggregates discovered while
+    # expanding the SELECTION side. An excluded aggregate (and any of its
+    # own nested sub-groups) is not something that fed the dispatch --
+    # reporting it in the same set would misleadingly suggest it did, so the
+    # exclusion side's own `.groups` is deliberately never read below. The
+    # memoization cache stays shared: an entity referenced by both sides
+    # should still only be expanded once.
     expansion_cache: dict[str, _ExpansionEntry] = {}
-    expanded_leaves = _expand_roots(
-        candidate_roots, states, expanded_groups, expansion_cache, "selector"
+    selection_expansion = _expand_roots(
+        candidate_roots, states, expansion_cache, "selector"
     )
-    excluded_leaves = _expand_roots(
+    exclusion_expansion = _expand_roots(
         excluded_roots,
         states,
-        excluded_expanded_groups,
         expansion_cache,
         "selector.exclude_entity_ids",
     )
+    expanded_leaves = selection_expansion.leaves
+    excluded_leaves = exclusion_expansion.leaves
+    expanded_groups = selection_expansion.groups
     selected_leaves = {
         entity_id for entity_id in expanded_leaves if entity_id.startswith(f"{domain}.")
     }
-    if not selected_leaves:
+    if expanded_leaves and not selected_leaves:
         # A fourth, distinct empty-result cause: matching_roots was
         # non-empty (a non-scene aggregate of a DIFFERENT domain qualified
         # as a root, e.g. a `group.living_room` whose members are all
-        # `switch.*`), so expansion ran, but none of its resulting leaves
-        # were the target domain -- neither exclusion nor visibility ever
-        # entered into it. Caught here, before either subtraction below,
-        # so it can never be misreported as "excluded or hidden".
+        # `switch.*`), so expansion ran and produced leaves, but none of
+        # them were the target domain -- neither exclusion nor visibility
+        # ever entered into it. Caught here, before either subtraction
+        # below, so it can never be misreported as "excluded or hidden".
+        #
+        # Gated on `expanded_leaves` (not just `not selected_leaves`):
+        # `candidate_roots` already subtracts `hidden` above, so when EVERY
+        # matching root in the area is hidden, `candidate_roots` -- and
+        # therefore `expanded_leaves` -- is itself empty, and this branch
+        # must NOT fire for that case: those entities are real, are in the
+        # area, and are simply hidden, which is exactly what the
+        # `_all_excluded_or_hidden_message` branch below exists to report.
         raise BulkSelectorValidationError(
-            f"No entities of domain '{domain}' exist in the selected area(s)"
+            f"No entities of domain '{domain}' exist in the selected area(s) -- "
+            "a matched aggregate's members are all a different domain"
         )
     effective_excluded = selected_leaves & excluded_leaves
     selected_leaves.difference_update(excluded_leaves)
@@ -697,7 +770,13 @@ async def resolve_bulk_selector(
         "validate_first": validate_first,
     }
     if parameters is not None:
-        operation_common["parameters"] = parameters
+        # Copy, not the caller's own object by reference: the per-row copy
+        # in BulkSelectorResolution.operations protects each DISPATCH row
+        # from cross-row mutation, but does nothing about the resolution's
+        # own stored copy -- without this, a caller that still holds
+        # `parameters` and mutates it after this call returns would silently
+        # rewrite the "frozen" resolution's own payload too.
+        operation_common["parameters"] = dict(parameters)
     if timeout_seconds is not None:
         operation_common["timeout_seconds"] = timeout_seconds
     excluded_and_hidden = effective_excluded & hidden

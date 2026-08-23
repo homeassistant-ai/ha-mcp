@@ -135,7 +135,34 @@ class PolicyMiddleware(Middleware):
         # fail-safe to see the real structure. This only affects the local
         # copy used for gating; `context` itself is untouched, so the actual
         # tool call still receives the client's original wire shape.
-        args = normalize_stringified_containers(context.message.arguments or {})
+        try:
+            args = normalize_stringified_containers(context.message.arguments or {})
+        except RecursionError:
+            # Fail-closed for the same reason the corrupt-policy branch
+            # above is: silently evaluating (and hashing) unnormalized args
+            # would let a rule scoped to a nested selector-inspectable field
+            # (e.g. args.selector.domain) never match, and the call would
+            # ALLOW. Reachable only via genuinely deep real nesting in the
+            # caller's own args (a stringified container decoding into deep
+            # nesting cannot reach this -- see the docstring), so this is
+            # about the gate degrading loudly rather than a realistic
+            # traffic pattern.
+            logger.warning(
+                "policy middleware: args normalization hit RecursionError "
+                "for tool=%s; failing closed",
+                name,
+            )
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.POLICY_LOAD_FAILED,
+                    "This call's arguments are nested too deeply to "
+                    "evaluate safely against the security policy.",
+                    suggestions=[
+                        "Reduce the nesting depth of the tool call arguments "
+                        "and retry.",
+                    ],
+                )
+            )
 
         if _passes_ungated(name, args):
             return await call_next(context)
@@ -224,18 +251,44 @@ class PolicyMiddleware(Middleware):
             self._queue.remove(pending.token)
             self._raise_denied_error()
 
-        # The wait may have lasted long enough for the queue's sweeper to
-        # evict this entry (TTL elapsed during the block). In that case
-        # the pending row no longer exists in the UI so the LLM is being
-        # told to re-call with a dead token. Issue a fresh entry so the
-        # next re-call wakes a real pending row.
-        #
-        # NOT for dynamic calls: a dynamic entry is only ever consumable by
-        # the invocation that created it (see the creator-only binding
-        # above), so no future re-call can ever "wake" a reissued row
-        # either -- reissuing here would just mint a second, equally
-        # unreachable row and burn a queue slot for nothing.
-        if not dynamic_targets and self._queue.get(pending.token) is None:
+        pending = self._finalize_timed_out_pending(
+            pending, dynamic_targets=dynamic_targets, policy=policy, name=name
+        )
+        self._raise_pending_error(pending, rule, dynamic_targets=dynamic_targets)
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
+
+    def _finalize_timed_out_pending(
+        self,
+        pending: PendingApproval,
+        *,
+        dynamic_targets: bool,
+        policy: Policy,
+        name: str,
+    ) -> PendingApproval:
+        """Resolve a pending entry that timed out without a decision.
+
+        Two mutually exclusive outcomes, split by ``dynamic_targets`` for
+        the same reason the entry was never shared or looked up in the
+        first place (see ``on_call_tool``'s creator-only binding
+        comments):
+
+        - Static: the entry may have been evicted by the queue's sweeper
+          (TTL elapsed during the wait). A future re-call's own ``find()``
+          lookup is how it gets consumed, so a dead token would strand
+          that re-call forever -- reissue a fresh entry so the next
+          re-call wakes a real pending row.
+        - Dynamic: no re-call can ever look this entry up (creator-only
+          binding), so reissuing would only mint a second, equally
+          unreachable row. Instead the entry is removed here, before
+          ``_raise_pending_error`` builds its message -- leaving it in
+          the queue past this point would offer the settings UI a row
+          that looks approvable but isn't (nothing is left holding this
+          ``pending`` reference to act on the decision).
+        """
+        if dynamic_targets:
+            self._queue.remove(pending.token)
+            return pending
+        if self._queue.get(pending.token) is None:
             old_token = pending.token
             pending = self._queue.create(
                 pending.tool_name,
@@ -250,8 +303,7 @@ class PolicyMiddleware(Middleware):
                 pending.token,
                 name,
             )
-        self._raise_pending_error(pending, rule, dynamic_targets=dynamic_targets)
-        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
+        return pending
 
     async def _wait_for_decision(
         self,
@@ -301,20 +353,17 @@ class PolicyMiddleware(Middleware):
 
         ``dynamic_targets`` switches both the message and suggestions: a
         dynamic selector entry is bound to the single invocation that
-        created it (see the creator-only binding in ``on_call_tool``) and
-        can never be picked up by a later re-call, so its wording must not
-        promise the normal "re-call after the user approves" recovery path
-        the non-dynamic case uses.
+        created it (see the creator-only binding in ``on_call_tool``), was
+        already removed from the queue by the caller just before this
+        raises (nothing else could ever consume it), and can never be
+        picked up by a later re-call -- so its wording must not promise the
+        normal "re-call after the user approves" recovery path the
+        non-dynamic case uses, and must not describe a still-open approval
+        window: this is the ONLY call site, reached after
+        ``_wait_for_decision`` returns with no decision, so the wait window
+        has already closed by the time this message is built.
         """
-        # Time-remaining, not total TTL: an LLM that re-calls a minute
-        # before expiry should see "~60s left", not the original 300s.
-        remaining = max(
-            0, int((pending.expires_at - datetime.now(UTC)).total_seconds())
-        )
-        context: dict[str, Any] = {
-            "token": pending.token,
-            "expires_in_seconds": remaining,
-        }
+        context: dict[str, Any] = {"token": pending.token}
         # Surface the matched rule so users (and the LLM) can tell at a
         # glance WHY the call was gated. Critical for "I added a
         # specific condition but every call is still gated" diagnostics.
@@ -324,34 +373,26 @@ class PolicyMiddleware(Middleware):
                 "when": [p.model_dump() for p in rule.when],
             }
         if dynamic_targets:
-            # "Re-call after the user approves" is false for a dynamic
-            # entry: it is bound to THIS invocation only (see the
-            # creator-only binding above the call site), so a re-call can
-            # never consume this pending row -- it always mints its own,
-            # independent one. Telling the agent to re-call anyway produces
-            # an approve-and-be-asked-again loop: the user approves the row
-            # they can see, the re-call ignores it and creates another. The
-            # only window in which THIS approval can succeed is while this
-            # call is still actively blocked (up to expires_in_seconds from
-            # now); once it elapses, this specific request is dead and a
-            # fresh call is a genuinely new request, not a retry of this one.
+            # No expires_in_seconds here: the caller already removed this
+            # entry from the queue before raising, so there is no live
+            # countdown left to report -- a number here would read as
+            # "there's still time", exactly the false impression this
+            # message must not give.
             message = (
-                "User approval required. This approval request is single-use "
-                "and bound to this specific call only (see token above) -- it "
-                "cannot be approved after the fact by re-calling. Tell the "
-                "user to approve or deny it in the ha-mcp settings UI, Tool "
-                "Security Policies tab, right now, before this call's wait "
-                "window closes. If it closes unapproved, re-calling starts a "
-                "brand-new independent request rather than resuming this one."
+                "User approval required, and this specific request has "
+                "already expired: it was single-use, bound to this one "
+                "call only, and this call's wait window has now closed. "
+                "The token above has already been removed and no longer "
+                "exists -- there is nothing left to approve for this call. "
+                "Re-call this tool to create a brand-new, independent "
+                "request."
             )
             suggestions = [
-                "Tell the user to approve or deny THIS pending request (the "
-                + "token above) in the Tool Security Policies tab immediately "
-                + "-- it will not still work after this call has already timed "
-                + "out.",
-                "Do not re-call expecting this approval to be picked up; a "
-                + "re-call creates its own separate request with its own "
-                + "approval window instead.",
+                "Do not tell the user to approve the token above -- it no "
+                "longer exists and there is nothing left to approve.",
+                "Re-call this tool with the same arguments to create a new "
+                "pending request, then have the user approve THAT one "
+                "while the new call is still waiting on it.",
             ]
         else:
             message = (
@@ -365,6 +406,15 @@ class PolicyMiddleware(Middleware):
                 + "the ha-mcp settings UI and approve the pending request.",
                 "Re-call this tool with the same arguments after the user approves.",
             ]
+            # Time-remaining, not total TTL: an LLM that re-calls a minute
+            # before expiry should see "~60s left", not the original 300s.
+            # Meaningful only here: this entry survives past this call (a
+            # later re-call's find() can still consume it), so its TTL is
+            # a live, actionable number -- unlike the dynamic case above.
+            remaining = max(
+                0, int((pending.expires_at - datetime.now(UTC)).total_seconds())
+            )
+            context["expires_in_seconds"] = remaining
         raise_tool_error(
             create_error_response(
                 ErrorCode.USER_APPROVAL_REQUIRED,
