@@ -242,7 +242,7 @@
     "tools.summary.disabled": "사용 안 함 {count}개",
     "tools.read_only.save_failed": "읽기 전용 모드 변경이 저장되지 않았습니다. 서버에는 이전 값이 그대로 남아 있습니다.",
     "backup.fields.enable_auto_backup.label": "편집 시 자동 백업",
-    "backup.fields.enable_auto_backup.help": "래핑된 쓰기 또는 파괴적 도구 호출이 있을 때마다 그 전에 스냅숏을 남깁니다.",
+    "backup.fields.enable_auto_backup.help": "래핑된 쓰기 또는 파괴적 도구 호출 전에 스냅숏을 남깁니다. 엔티티별 제한 간격(auto_backup_throttle_minutes)이 지나지 않았으면 캡처를 건너뛰며, 필수 모드에서도 쓰기는 계속 진행됩니다.",
     "backup.fields.auto_backup_throttle_minutes.label": "제한 간격(분)",
     "backup.fields.auto_backup_throttle_minutes.help": "엔티티별 제한 간격입니다. 0 = 쓰기마다, N > 0 = N분당 최대 한 번 백업. 범위 0~1440.",
     "backup.fields.auto_backup_retain_per_entity.label": "엔티티당 보관 개수",
