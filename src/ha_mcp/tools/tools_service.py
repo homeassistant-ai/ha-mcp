@@ -232,9 +232,9 @@ _INFRASTRUCTURE_ERROR_SUGGESTIONS: dict[str, tuple[str, list[str]]] = {
         "registry returned a malformed entry",
         [
             "This indicates malformed data in Home Assistant's own device "
-            "registry, not a problem with the selector",
+            + "registry, not a problem with the selector",
             "Check Home Assistant's logs for device-registry errors, or "
-            "restart Home Assistant if the issue persists",
+            + "restart Home Assistant if the issue persists",
         ],
     ),
     "visibility_config": (
@@ -242,10 +242,10 @@ _INFRASTRUCTURE_ERROR_SUGGESTIONS: dict[str, tuple[str, list[str]]] = {
         "filter could not be evaluated safely",
         [
             "Check the Entity Visibility tab in the ha-mcp settings UI -- "
-            "entity_visibility.json may be corrupt or invalid",
+            + "entity_visibility.json may be corrupt or invalid",
             "If the config looks fine, this may be a temporary Home "
-            "Assistant registry issue -- check Home Assistant is running "
-            "and retry",
+            + "Assistant registry issue -- check Home Assistant is running "
+            + "and retry",
         ],
     ),
 }

@@ -346,12 +346,12 @@ class PolicyMiddleware(Middleware):
             )
             suggestions = [
                 "Tell the user to approve or deny THIS pending request (the "
-                "token above) in the Tool Security Policies tab immediately "
-                "-- it will not still work after this call has already timed "
-                "out.",
+                + "token above) in the Tool Security Policies tab immediately "
+                + "-- it will not still work after this call has already timed "
+                + "out.",
                 "Do not re-call expecting this approval to be picked up; a "
-                "re-call creates its own separate request with its own "
-                "approval window instead.",
+                + "re-call creates its own separate request with its own "
+                + "approval window instead.",
             ]
         else:
             message = (
@@ -362,7 +362,7 @@ class PolicyMiddleware(Middleware):
             )
             suggestions = [
                 "Tell the user to open the Tool Security Policies tab in "
-                "the ha-mcp settings UI and approve the pending request.",
+                + "the ha-mcp settings UI and approve the pending request.",
                 "Re-call this tool with the same arguments after the user approves.",
             ]
         raise_tool_error(
