@@ -189,10 +189,24 @@ mode** option in the entry options:
   system-generated users are rejected. This is distinct from the beta OAuth mode
   below — no bespoke authorization server or self-issued token is involved, and
   revoking the user's Home Assistant token/session revokes access.
-  The component-scoped authorize/token endpoints front Core's own `/auth/*`
-  (a browser redirect and a server-side token forward) so the URLs clients
-  cache are the component's — Core remains the authorization authority and
-  performs its own validation on every request. For URL-shaped client
+  The component-scoped authorize/token/revoke endpoints front Core's own
+  `/auth/*` (a browser redirect, a server-side token forward, and an RFC 7009
+  revocation forward) so the URLs clients cache are the component's — Core
+  remains the authorization authority and performs its own validation on every
+  request. Revocation is fronted because the refresh token the client holds is
+  a signed envelope naming the identity Core bound the grant to, and Core
+  answers 200 for a token it does not recognise: posting the envelope to Core
+  directly would report a revocation that never happened. The scoped endpoint
+  is anonymous exactly as Core's own is (RFC 7009 authorizes the bearer of the
+  token, not a client identity). It makes no outbound request for a token that
+  is not one of its own envelopes; a prefixed one is forwarded even when its
+  signature does not verify, which is what keeps revocation working after the
+  signing key rotates (removing and re-adding the integration mints a new one).
+  That grants a forger nothing: possession is the only authorization a
+  revocation needs, and Core's revocation endpoint is anonymous and idempotent,
+  so an unverified body could just as well have been posted to Core directly.
+  The refresh path is the strict one — an envelope whose signature it cannot
+  verify is answered locally and never forwarded. For URL-shaped client
   identities Core would reject (cross-origin Client ID Metadata Document
   clients), the component validates the CIMD document itself per the MCP
   2026-07-28 requirements (https-only fetch with no redirects, 10 KiB cap,

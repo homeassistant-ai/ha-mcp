@@ -1,0 +1,191 @@
+---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/ko.json (keys addon.*, features.*,
+# addon_dev.*); regenerate with: python scripts/generate_locales.py
+configuration:
+  backup_hint:
+    name: HA 전체 스냅숏 권유 강도(LLM 대상)
+    description: '위험한 작업(예: 기기 대량 삭제) 전에 Home Assistant 전체
+
+      tarball 백업을 권할지에 대해 LLM이 보는
+
+      `ha_manage_backup(scope=''snapshot'')` 도구 설명의 문구 강도를
+
+      조정합니다. LLM에게 전달되는 이 한 문장에만 영향을 줍니다.
+
+
+      자동화·스크립트·헬퍼 등을 편집할 때마다 자동으로 스냅숏을
+
+      남기려면 아래의 **편집 자동 백업 사용** 토글을 쓰세요.'
+  secret_path:
+    name: 비밀 경로 재정의
+    description: 'MCP 서버에 사용할 사용자 지정 HTTP 경로입니다(선택). 자동 생성된 안전한 경로를 쓰려면 비워 두세요.
+
+      '
+  enable_tool_search:
+    name: 도구 검색 사용
+    description: '전체 도구 카탈로그 대신 검색 기반 탐색을 사용합니다. 대기 상태 컨텍스트를 약 90% 줄여 약 5K 토큰 수준으로
+      낮춥니다. ⚠️ 자체 도구 검색이나 지연 로딩 도구 기능을 갖춘 클라이언트(claude.ai, Claude Desktop, Claude
+      Code)에서는 켜지 마세요. 두 검색 계층이 충돌하며, 그런 환경에서는 클라이언트 내장 도구 검색이 더 낫습니다. 도구가 지연 로딩되는지는
+      클라이언트와 모델 조합에 따라 다릅니다. 전체 카탈로그를 처음부터 모두 불러오는 환경(네이티브 지연 로딩 도구가 없는 모델(예: Gemini,
+      OpenAI 호환 로컬 모델, Claude Haiku), 모델과 무관하게 모든 도구 스키마를 인라인으로 넣는 클라이언트(예: GitHub
+      Copilot CLI), 컨텍스트 창이 작은 경우)에서 사용하세요. 일부 Codex 모델과 ChatGPT도 지연 로딩 도구를 지원하므로,
+      불필요하게 켜 두지 않도록 사용 중인 클라이언트/모델의 기능을 직접 확인하세요. 도구는 ha_search_tools로 찾고 범주별 프록시(읽기/쓰기/삭제)를
+      통해 실행됩니다. 적용하려면 다시 시작해야 합니다.'
+  enable_tool_security_policies:
+    name: 도구 보안 정책 사용(고급)
+    description: 위험도가 높은 도구 호출(잠금·경보 제어, 자동화 쓰기 등)에 사용자 승인을 요구합니다. 보호된 도구가 호출되면 에이전트는
+      사용자에게 웹 UI의 도구 보안 정책 탭을 열고 승인을 누르라고 안내하며, 그 후에야 호출이 진행됩니다. 인수 조건을 선택적으로 붙일 수
+      있는 도구별 규칙은 도구 보안 정책 탭에서 설정합니다. 기본값은 꺼짐입니다. 적용하려면 다시 시작해야 합니다.
+  enable_security_policy_tool:
+    name: AI 에이전트가 도구 보안 정책을 편집하도록 허용
+    description: ha_manage_security_policy 도구를 등록합니다. 이 도구를 통해 연결된 AI 에이전트가 도구 보안
+      정책을 읽고 다시 쓸 수 있으며, 여기에는 승인 게이트를 제거하는 것도 포함됩니다. 기본값은 꺼짐입니다. 위의 도구 보안 정책 옵션과는
+      별개로, 규칙이 적용되는지가 아니라 누가 규칙을 편집할 수 있는지를 결정합니다. 이 도구는 대기 중인 승인을 보거나 결정할 수 없습니다.
+      사람이 개입하는 절차를 유지하려면 켜기 전에 먼저 이 도구를 게이팅하세요. 웹 UI의 도구 탭에서 보안 정책 관리 도구의 "보안 게이트"를
+      켜면 됩니다. 적용하려면 다시 시작해야 합니다.
+  read_only_mode:
+    name: 읽기 전용 모드
+    description: 모든 쓰기 도구를 끄고, 도구가 쓰기 또는 파괴적 호출을 하지 못하게 합니다. 읽기와 쓰기가 섞인 도구(백업, 앱(애드온),
+      에너지 환경설정, 음성 파이프라인, 활성화된 경우 코드 모드)는 쓰기 작업만 차단된 채 계속 사용할 수 있습니다. 웹 UI 도구 탭의 토글과
+      같은 설정입니다. 기본값은 꺼짐입니다. 적용하려면 다시 시작해야 합니다.
+  redact_secrets:
+    name: 비밀 정보 가리기
+    description: 도구 응답이 AI 어시스턴트에 전달되기 전에 비밀 정보를 가립니다. 앱(애드온) 옵션과 통합 구성요소 필드 중 비밀번호로
+      표시된 항목은 설정됨/비어 있음 표시로 대체되어 "이 자격 증명이 설정되어 있는가?"라는 질문에는 여전히 답할 수 있으며, 다른 도구 응답에서도
+      서버가 이미 확인한 비밀 값이 제거됩니다(6자 미만인 값은 건너뜁니다. 짧은 조각을 치환하면 관련 없는 출력까지 망가지기 때문입니다).
+      스키마에서 비밀번호로 표시하지 않은 필드는 감지할 수 없습니다. 기본값은 꺼짐입니다.
+  enable_beta_features:
+    name: 베타 기능 사용(마스터)
+    description: ⚠ 위험 — 이 도구들은 Home Assistant 설치본을 영구적으로 손상시킬 수 있습니다. YAML 설정과 파일
+      시스템에 쓰고, 사용자 지정 구성요소를 설치하며, 샌드박스에서 임의의 파이썬을 실행하고, AI가 보는 도구 설명문을 편집합니다. 어떠한
+      보증이나 지원도 제공되지 않으며, 사용에 따른 책임은 전적으로 사용자에게 있습니다. 켜기 전에 Home Assistant 백업을 만드시고,
+      백업 없이 운영 환경에서 켜지 마세요. 아래의 실험적 하위 플래그를 여는 마스터 게이트로, 이 마스터가 꺼져 있으면 하위 플래그를 true로
+      설정해도 런타임에서 무시됩니다. 같은 토글이 웹 설정 UI의 "베타 기능(위험)"에도 있으며, 다시 시작하면 두 화면이 서로 반영됩니다.
+  enable_yaml_config_editing:
+    name: YAML 설정 편집 사용(베타)
+    description: '베타 기능입니다. AI 어시스턴트가 configuration.yaml과 packages/*.yaml의 최상위 키를
+      추가·교체·삭제할 수 있게 합니다. 허용 목록에 있는 키(예: template, sensor, command_line, mqtt, knx)만
+      가능하며 homeassistant, http, recorder 같은 핵심 키는 차단됩니다. 편집할 때마다 YAML 문법을 검증하고 설정
+      검사를 실행하며 자동 백업을 만듭니다. 대부분의 키는 변경 사항을 적용하려면 HA를 완전히 다시 시작해야 합니다. 알려진 제한 사항은 docs/beta.md를
+      참고하세요. 전용 도구(자동화, 스크립트, 장면, 헬퍼, 템플릿 센서)를 쓸 수 있다면 그쪽을 우선하세요. 위(그리고 웹 UI)의 "베타
+      기능 사용" 마스터 토글이 켜져 있어야 하며, 그렇지 않으면 여기 값과 관계없이 이 하위 플래그는 런타임에서 무시됩니다.'
+  enable_yaml_packages_automation:
+    name: packages/*.yaml에서 automation 허용
+    description: YAML 설정 편집의 하위 토글입니다. 켜면 ha_config_set_yaml이 packages/*.yaml 안에서
+      yaml_path='automation'을 허용합니다. 끄면 클라이언트와 서버 양쪽에서 호출이 거부됩니다. 스토리지 모드 도구(ha_config_set_automation)에는
+      영향이 없습니다. 기본값은 꺼짐이며, 위의 "YAML 설정 편집 사용"도 켜져 있어야 효과가 있습니다.
+  enable_yaml_packages_script:
+    name: packages/*.yaml에서 script 허용
+    description: YAML 설정 편집의 하위 토글입니다. 켜면 ha_config_set_yaml이 packages/*.yaml 안에서
+      yaml_path='script'를 허용합니다. 끄면 클라이언트와 서버 양쪽에서 호출이 거부됩니다. 스토리지 모드 도구(ha_config_set_script)에는
+      영향이 없습니다. 기본값은 꺼짐이며, 위의 "YAML 설정 편집 사용"도 켜져 있어야 효과가 있습니다.
+  enable_yaml_packages_scene:
+    name: packages/*.yaml에서 scene 허용
+    description: YAML 설정 편집의 하위 토글입니다. 켜면 ha_config_set_yaml이 packages/*.yaml 안에서
+      yaml_path='scene'을 허용합니다. 끄면 클라이언트와 서버 양쪽에서 호출이 거부됩니다. 스토리지 모드 도구(ha_config_set_scene)에는
+      영향이 없습니다. 기본값은 꺼짐이며, 위의 "YAML 설정 편집 사용"도 켜져 있어야 효과가 있습니다.
+  enable_yaml_edit_confirm:
+    name: YAML 편집 시 확인 요구(변경 미리보기)
+    description: 'YAML 설정 편집의 하위 토글이며 기본값은 켜짐입니다(권장). 첫 번째 ha_config_set_yaml 호출은
+      디스크에 반영될 내용을 정확히 보여 주는 통합 diff와 확인 토큰만 반환하고 아무것도 쓰지 않으며, 그 토큰과 함께 다시 호출해야 편집이
+      반영됩니다. 요청한 편집 범위를 벗어난 의도치 않은 변경을 디스크에 닿기 전에 잡기 위한 기능입니다(이슈 #1720). 편집마다 왕복 한
+      번을 아끼려는 경우에만 끄세요.'
+  enable_code_mode:
+    name: 사용자 지정 도구 샌드박스 사용(베타)
+    description: 베타 기능입니다. ha_manage_custom_tool 도구를 켜서, 내장 도구로 처리할 수 없는 요청이 있을 때
+      AI 어시스턴트가 안전한 샌드박스에서 사용자 지정 파이썬 코드를 만들고 실행하고 저장하고 삭제할 수 있게 합니다. 코드는 파일 시스템 접근이나
+      임의 네트워크 접근이 없는 격리된 인터프리터에서 실행됩니다. 샌드박스 코드는 HA REST API 호출(api_get/api_post),
+      WebSocket 명령 전송(ws_send), 기존 MCP 도구 호출(call_tool), 저장된 도구 삭제(delete_saved_tool)를
+      할 수 있습니다. 저장된 도구는 기본적으로 /data/saved_tools.json에 보관되어 앱(애드온)을 다시 시작해도 유지되며, 접속할
+      수 있는 모든 클라이언트에 보입니다. 알려진 제한 사항은 docs/beta.md를 참고하세요. 적용하려면 다시 시작해야 합니다. 위(그리고
+      웹 UI)의 "베타 기능 사용" 마스터 토글이 켜져 있어야 하며, 그렇지 않으면 여기 값과 관계없이 이 하위 플래그는 런타임에서 무시됩니다.
+  enable_lite_docstrings:
+    name: 간소화된 도구 설명문 사용(베타)
+    description: '베타 기능입니다. 무거운 ha-mcp 도구 몇 가지(자동화, 스크립트, 장면, 헬퍼, 대시보드, ha_call_service,
+      ha_config_set_yaml)의 설명문을, 스키마와 예시 세부 사항을 ha_get_skill_guide 도구(또는 그 skill://
+      리소스)로 넘기는 짧은 버전으로 바꿉니다. 경고: 대기 상태 토큰 사용량은 줄지만 LLM 성능이 떨어질 수 있습니다. 축약된 설명은 LLM이
+      실제로 스킬 도구를 호출하거나 스킬 리소스를 읽어 세부 사항을 확인한다는 전제에 의존하는데, 이는 보장되지 않습니다(일부 모델은 추가 도구
+      호출을 건너뛰어 이전보다 적은 안내만 받게 됩니다). MCP 리소스를 지원하는 클라이언트나 enable_tool_search와 함께 쓰는
+      것이 가장 좋습니다. 적용하려면 다시 시작해야 합니다. 위(그리고 웹 UI)의 "베타 기능 사용" 마스터 토글이 켜져 있어야 하며, 그렇지
+      않으면 여기 값과 관계없이 이 하위 플래그는 런타임에서 무시됩니다.'
+  enable_mandatory_bps:
+    name: 쓰기 시 모범 사례 스킬 첨부
+    description: '쓰기 도구 스킬 콘텐츠 전달 기능(이슈 #1182)의 마스터 스위치입니다. 켜져 있으면(기본값) 여섯 개의 설정 쓰기
+      도구(자동화, 스크립트, 장면, 헬퍼, 대시보드, 원시 YAML)가 쓰기에 성공할 때마다 Home Assistant 표준 모범 사례 참조
+      파일을 `skill_content`에 첨부하고, 모범 사례 경고가 인용한 참조 섹션도 자동으로 함께 넣습니다. 각 도구는 호출 단위 `MandatoryBPS`
+      매개변수도 제공하므로, 에이전트가 콘텐츠를 확보한 뒤에는 이후 호출에서 false로 설정할 수 있습니다. 이 마스터 스위치가 꺼져 있으면
+      호출 단위 매개변수나 모범 사례 경고와 관계없이 skill_content가 전혀 전달되지 않습니다. 켜 두는 것을 우선 권장하며, 컨텍스트
+      창이 매우 작은 모델에서만 끄세요. 끄면 쓰기 정확도가 떨어질 수 있습니다. 적용하려면 다시 시작해야 합니다.'
+  enable_strict_mandatory_bps:
+    name: 엄격 모범 사례 모드
+    description: 엄격 모드입니다. 클라이언트가 모범 사례를 읽었다는 것을 증명하기 전까지 도구를 사용하지 못하게 막습니다. 켜져 있는
+      동안에는 모범 사례가 적용되는 여섯 개의 쓰기 도구(자동화, 스크립트, 장면, 헬퍼, 대시보드, 원시 YAML)가 차단되고, ha_get_skill_guide로
+      모범 사례 스킬을 읽은 뒤 거기서 받은 확인 키를 다시 전달하라는 오류를 반환합니다. 또한 켜져 있는 동안 ha_get_skill_guide
+      도구는 활성 상태로 잠깁니다. 확인 키를 발급하는 유일한 도구이기 때문입니다. 위의 "쓰기 시 모범 사례 스킬 첨부" 옵션의 하위 항목이며,
+      상위 옵션이 꺼져 있으면 아무 효과가 없습니다. 적용하려면 다시 시작해야 합니다.
+  enable_filesystem_tools:
+    name: 파일 시스템 도구 사용(베타)
+    description: 'HAMCP_ENABLE_FILESYSTEM_TOOLS=true로 설정합니다. Home Assistant 파일 시스템에
+      대한 직접 읽기/쓰기 접근을 허용합니다. 경고: MCP 서버에 시스템 파일에 대한 민감한 직접 접근 권한을 주는 것입니다. AI 어시스턴트에게
+      파일 작업을 맡겨도 된다고 판단할 때만 켜세요. 적용하려면 다시 시작해야 합니다. 위(그리고 웹 UI)의 "베타 기능 사용" 마스터 토글이
+      켜져 있어야 하며, 그렇지 않으면 여기 값과 관계없이 이 하위 플래그는 런타임에서 무시됩니다.'
+  enable_dashboard_screenshot:
+    name: 대시보드 스크린샷 모드 사용(베타)
+    description: '베타 기능이며 기본값은 꺼짐입니다. ha_get_dashboard_screenshot 도구와 함께 대시보드 조회/설정
+      도구에 include_screenshot / return_screenshot 옵션을 추가해, AI 어시스턴트가 반응형 Lovelace 이미지를
+      한 장 이상 확인할 수 있게 합니다(예: 방금 만든 대시보드 검증). 고정된 이름의 뷰, 모바일/태블릿/데스크톱 일괄 촬영, PNG/JPEG/WebP/BMP
+      출력을 지원합니다. 렌더링은 별도로 선택해 설치하는 엔진, 즉 balloob의 "Puppet" 앱(애드온)(헤드리스 Chromium)에서
+      실행되며, 한 번 설치하고(앱 스토어에 balloob 저장소를 추가한 뒤 "Puppet" 설치) 장기 액세스 토큰을 부여하면 됩니다. 도커/컨테이너
+      배포에서는 그 엔진을 사이드카로 실행하고 HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL을 설정하세요. 이 옵션을 켜고
+      엔진을 설치하기 전에는 무거운 구성요소가 전혀 설치되지 않습니다. 적용하려면 다시 시작해야 합니다. 위(그리고 웹 UI)의 "베타 기능
+      사용" 마스터 토글이 켜져 있어야 하며, 그렇지 않으면 여기 값과 관계없이 이 하위 플래그는 런타임에서 무시됩니다.'
+  enable_auto_backup:
+    name: 편집 자동 백업 사용
+    description: 래핑된 쓰기·파괴적 MCP 도구 호출(자동화, 스크립트, 장면, 헬퍼, 대시보드, 대시보드 리소스, 라벨, 카테고리,
+      그룹, 구역, 영역, 캘린더, 할 일, 엔티티, 기기, 통합 구성요소 및 이에 대응하는 제거·삭제 도구) 전에 엔티티별 스냅숏을 남깁니다.
+      자동 백업 제한 간격이 그 빈도를 제한합니다. 0(기본값)은 그러한 호출마다 남기고, N>0은 엔티티당 N분에 최대 한 번만 남깁니다.
+      스냅숏은 /data/ha_mcp_backups/ 아래에 YAML 파일로 저장되며(HAMCP_BACKUP_DIR로 변경 가능), 웹 설정
+      UI의 백업 탭이나 ha_manage_backup(scope='edits', ...)으로 조회·복원·삭제할 수 있습니다. 위 도메인에서는
+      스냅숏 생성이 최선 노력 방식이라, 실패하면 WARNING을 기록하고 쓰기는 그대로 진행됩니다. 파일 도구와 원시 YAML 도구는 예외입니다.
+      ha_write_file, ha_delete_file, ha_config_set_yaml은 스냅숏을 전제 조건으로 취급하므로, 이 옵션이
+      꺼져 있으면 해당 도구를 통한 쓰기가 거부되고 스냅숏 생성이 실패해도 쓰기가 차단됩니다. 기본값은 켜짐이며, 체크를 해제하면 최선 노력
+      스냅숏을 포기하는 동시에 파일 도구와 원시 YAML 도구도 사용할 수 없게 됩니다. 적용하려면 다시 시작해야 합니다.
+  auto_backup_throttle_minutes:
+    name: 자동 백업 제한 간격(분)
+    description: 엔티티별 제한 간격입니다. 0(기본값)은 래핑된 쓰기마다 스냅숏을 남깁니다. N>0은 엔티티당 N분에 최대 한 번만
+      남깁니다. 범위 0~1440.
+  auto_backup_retain_per_entity:
+    name: 자동 백업 보관 개수(엔티티당)
+    description: 엔티티당 보관하는 최대 스냅숏 수입니다. 이 상한을 넘는 오래된 스냅숏은 새로 저장할 때마다 밀려납니다. 기본값 100,
+      범위 1~10000.
+  enable_snapshot_delete:
+    name: 스냅숏 삭제 허용
+    description: ha_manage_backup이 HA 전체 스냅숏 tarball을 삭제할 수 있게 합니다(scope='snapshot',
+      action='delete'). 기본값은 꺼짐입니다. 잘못된 변경 후 스냅숏이 마지막 복구 지점일 수 있으므로 사람이 직접 허용해야 합니다.
+      켜더라도 예약된 백업, 남아 있는 가장 최신 스냅숏, 아래 최소 보관 기간보다 최근에 만들어진 스냅숏은 계속 보호됩니다.
+  snapshot_delete_min_age_days:
+    name: 삭제 가능한 최소 스냅숏 보관 기간(일)
+    description: 스냅숏은 최소 이 기간이 지나야 삭제할 수 있습니다. 범위 0~365이며, 0이면 이 하한이 해제됩니다(최신 스냅숏과
+      예약 백업 보호는 그대로 적용됩니다). 기본값 7.
+  tool_search_max_results:
+    name: 도구 검색 최대 결과 수
+    description: '도구 검색이 켜져 있을 때 ha_search_tools가 반환하는 도구의 최대 개수입니다. 값을 낮추면(2~3) 컨텍스트
+      토큰을 아낄 수 있지만 관련 도구를 놓칠 수 있습니다. 범위: 2~10. 다시 시작해야 적용됩니다.'
+  disabled_tools:
+    name: 비활성화할 도구(쉼표로 구분)
+    description: '여기에 나열한 도구는 강제로 꺼지고 웹 설정 UI(도구 탭)에서 잠깁니다. 이 옵션을 먼저 해제하지 않으면 거기서
+      다시 켤 수 없습니다. 소수의 필수 도구(ha_search, ha_get_overview, ha_get_state, ha_report_issue,
+      ha_manage_backup)는 비활성화할 수 없으며 여기에 적어도 계속 동작합니다. ha_get_skill_guide는 엄격 모범 사례
+      모드(enable_strict_mandatory_bps)가 꺼져 있을 때만 비활성화할 수 있습니다. 도구 이름을 쉼표로 구분해 입력하세요(예:
+      ha_call_event,ha_eval_template).'
+  pinned_tools:
+    name: 고정할 도구(쉼표로 구분)
+    description: 여기에 나열한 도구는 고정 상태로 잠깁니다. 도구 탭 맨 위에 표시되며, 이 옵션을 먼저 해제하지 않으면 웹 설정 UI에서
+      고정을 해제할 수 없습니다. 도구 검색과 함께 쓰면 유용합니다. 도구 이름을 쉼표로 구분해 입력하세요.
+  verify_ssl:
+    name: TLS 인증서 검증
+    description: Home Assistant 서버의 TLS 인증서를 검증합니다. 앱(애드온)은 Supervisor 프록시를 통해 연결하므로
+      보통 아무 영향이 없으며 켜 두는 것이 좋습니다. 자체 서명 인증서나 호스트 이름이 일치하지 않는 공개 HTTPS 호스트 이름으로 HA에
+      접속하도록 앱(애드온)을 다시 구성한 경우에만 끄세요. 끄면 전송 구간 보안이 약해지므로, 반드시 필요한 경우가 아니면 켜 두세요. 적용하려면
+      다시 시작해야 합니다.
