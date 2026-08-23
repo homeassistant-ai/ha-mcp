@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import importlib
 import json
 import sys
@@ -14,13 +16,23 @@ from ._embedded_stubs import install
 
 install()
 
-from custom_components.ha_mcp_tools import oauth_ha_auth  # noqa: E402
-from custom_components.ha_mcp_tools.oauth_dcr import mint_client_id  # noqa: E402
+from custom_components.ha_mcp_tools import oauth_dcr, oauth_ha_auth  # noqa: E402
+from custom_components.ha_mcp_tools.oauth_dcr import (  # noqa: E402
+    client_redirect_uris,
+    mint_client_id,
+)
 from custom_components.ha_mcp_tools.oauth_ha_auth import (  # noqa: E402
+    MAX_REVOKE_ENVELOPE_LEN,
+    EnvelopeState,
+    _b64url_encode,
+    core_token_for_revocation,
     origin_client_id,
     redirect_matches,
     resolve_forward_client_id,
+    rewrite_token_response_body,
     stable_translation_origin,
+    unwrap_refresh_token,
+    wrap_refresh_token,
 )
 
 KEY = b"k" * 32
@@ -193,7 +205,11 @@ async def test_refresh_translates_single_origin_dcr_client():
 )
 @pytest.mark.asyncio
 async def test_refresh_marks_dcr_clients_without_stable_origin(redirect_uris):
-    """Multi-origin and loopback-only DCR identities are UNREPRODUCIBLE."""
+    """Multi-origin and loopback-only DCR identities are UNREPRODUCIBLE.
+
+    Only reachable for refresh tokens minted before the #2248 envelope; the
+    token view consults the envelope first.
+    """
     client_id = mint_client_id(KEY, redirect_uris)
 
     translated = await oauth_ha_auth.translated_client_id_for_refresh(
@@ -419,9 +435,10 @@ async def test_explicit_default_port_translates_on_both_legs(monkeypatch):
 @pytest.mark.asyncio
 async def test_mixed_registration_refresh_derivation_is_unreproducible():
     """#2217 review: hybrid (web + loopback) registrations never derive a
-    refresh identity — the server cannot know which redirect the token used,
-    and the registration is advertised authorization_code-only. Authorize via
-    the web redirect still translates normally."""
+    refresh identity from a pre-envelope token — the server cannot know which
+    redirect the token used. Authorize via the web redirect still translates
+    normally, and #2248 records that translation in the refresh token itself so
+    the derivation below is only reached by tokens minted before it."""
     client_id = mint_client_id(
         KEY,
         ["http://localhost/callback", "https://a.example/cb"],
@@ -893,3 +910,301 @@ def test_cimd_cache_evicts_oldest_not_wholesale():
     assert "https://h1.example/c.json" in oauth_ha_auth._cimd_cache  # rest retained
     assert "https://new.example/c.json" in oauth_ha_auth._cimd_cache
     oauth_ha_auth._cimd_cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# Refresh-token envelope (issue #2248)
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_envelope_round_trips():
+    """Recover core's token and the identity core bound it to."""
+    client_id = mint_client_id(KEY, ["http://127.0.0.1/callback"])
+    envelope = wrap_refresh_token(
+        KEY, "core-refresh-token", "http://127.0.0.1:54321", client_id
+    )
+
+    assert envelope.startswith("hamcp-rt-")
+    assert unwrap_refresh_token(KEY, envelope, client_id) == (
+        "core-refresh-token",
+        "http://127.0.0.1:54321",
+    )
+
+
+def test_refresh_envelope_rejects_a_tampered_signature():
+    """A flipped signature byte, or a rotated key, invalidates the envelope."""
+    envelope = wrap_refresh_token(KEY, "core-rt", "https://a.example", "cid")
+    body, _, signature = envelope.rpartition(".")
+    tampered = f"{body}.{'B' if signature[0] != 'B' else 'C'}{signature[1:]}"
+
+    assert unwrap_refresh_token(KEY, tampered, "cid") is EnvelopeState.INVALID
+    assert unwrap_refresh_token(b"x" * 32, envelope, "cid") is EnvelopeState.INVALID
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        # ABSENT: no hamcp-rt- prefix, so the legacy derivation still owns it.
+        ("core-opaque-refresh-token", EnvelopeState.ABSENT),  # pre-#2248 token
+        ("", EnvelopeState.ABSENT),
+        # INVALID: our prefix, nothing redeemable behind it.
+        ("hamcp-rt-", EnvelopeState.INVALID),  # prefix with no body
+        ("hamcp-rt-nodot", EnvelopeState.INVALID),
+        ("hamcp-rt-.sig", EnvelopeState.INVALID),
+        ("hamcp-rt-###.###", EnvelopeState.INVALID),  # undecodable base64url
+    ],
+)
+def test_refresh_envelope_rejects_non_envelope_tokens(token, expected):
+    """Never raise, and separate "not ours" from "ours but unredeemable"."""
+    assert unwrap_refresh_token(KEY, token, "cid") is expected
+
+
+def _hand_signed_envelope(payload: object) -> str:
+    """Sign an arbitrary envelope payload under KEY, exactly as the code does.
+
+    Lets a test drive payload shapes ``wrap_refresh_token`` cannot produce, so
+    the version and type guards are exercised behind a VALID MAC instead of
+    being masked by the signature check.
+    """
+    body = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
+    signature = hmac.new(
+        KEY, f"hamcp-rt-{body}".encode("ascii"), hashlib.sha256
+    ).digest()
+    return f"hamcp-rt-{body}.{_b64url_encode(signature)}"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(
+            {"v": 2, "t": "core-rt", "c": "https://a.example", "p": "x"},
+            id="future-version",
+        ),
+        pytest.param({"v": 1, "t": 42, "c": "https://a.example", "p": "x"}, id="int-t"),
+        pytest.param({"v": 1, "t": "core-rt", "c": None, "p": "x"}, id="null-c"),
+        pytest.param(
+            {"v": 1, "t": "core-rt", "c": "https://a.example", "p": ["x"]}, id="list-p"
+        ),
+        pytest.param({"v": 1, "t": "core-rt"}, id="missing-c-and-p"),
+        pytest.param(["not", "an", "object"], id="json-array"),
+    ],
+)
+def test_refresh_envelope_rejects_wrong_payload_shapes(payload):
+    """A valid MAC over the wrong payload is still INVALID, never a crash.
+
+    The signature only proves WE minted the blob; a future version or a
+    non-string field would otherwise be unpacked into the forwarded form.
+    """
+    assert (
+        unwrap_refresh_token(KEY, _hand_signed_envelope(payload), "cid")
+        is EnvelopeState.INVALID
+    )
+
+
+def test_refresh_envelope_and_dcr_blob_are_disjoint():
+    """Relabelling one blob family as the other does not make it verify.
+
+    Both are HMAC-signed under the same key, and the only thing separating
+    them is that the envelope's MAC covers its prefix while the DCR blob's
+    covers the bare body. Swapping the prefixes is exactly the attack that
+    difference exists to stop, so both directions are driven here rather than
+    merely handing each verifier the other's intact string.
+    """
+    blob = mint_client_id(KEY, ["https://a.example/cb"])
+    envelope = wrap_refresh_token(KEY, "core-rt", "https://a.example", "cid")
+
+    assert unwrap_refresh_token(KEY, blob, "cid") is EnvelopeState.ABSENT
+    assert client_redirect_uris(KEY, envelope) is None
+    # Relabelled: same signed bodies, the other family's prefix.
+    relabelled_blob = f"hamcp-rt-{blob.removeprefix('hamcp-dcr-')}"
+    relabelled_envelope = f"hamcp-dcr-{envelope.removeprefix('hamcp-rt-')}"
+    assert unwrap_refresh_token(KEY, relabelled_blob, "cid") is EnvelopeState.INVALID
+    assert client_redirect_uris(KEY, relabelled_envelope) is None
+
+
+def test_refresh_envelope_rejects_a_different_presenter():
+    """Bind the envelope to the client_id it was minted alongside."""
+    envelope = wrap_refresh_token(KEY, "core-rt", "https://a.example", "cid-a")
+
+    assert unwrap_refresh_token(KEY, envelope, "cid-b") is EnvelopeState.INVALID
+    assert unwrap_refresh_token(KEY, envelope, "cid-a") == (
+        "core-rt",
+        "https://a.example",
+    )
+
+
+def test_refresh_envelope_skips_the_presenter_binding_when_none():
+    """A None presenter unwraps any intact envelope (RFC 7009 revocation).
+
+    Revocation authorizes the BEARER of the token, not a client identity, so
+    the revoke path must be able to recover core's token without knowing which
+    client_id the envelope was minted alongside.
+    """
+    envelope = wrap_refresh_token(KEY, "core-rt", "https://a.example", "cid-a")
+
+    assert unwrap_refresh_token(KEY, envelope, None) == (
+        "core-rt",
+        "https://a.example",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Best-effort revocation unwrap (#2249 review)
+# ---------------------------------------------------------------------------
+
+
+ROTATED_KEY = b"r" * 32
+
+
+def _prefixed(payload: bytes) -> str:
+    """A ``hamcp-rt-`` value over ``payload`` with a signature we never minted."""
+    return f"hamcp-rt-{_b64url_encode(payload)}.not-a-real-signature"
+
+
+def test_core_token_for_revocation_reads_a_verified_envelope():
+    """The verified path answers first, exactly as the refresh leg's does."""
+    envelope = wrap_refresh_token(KEY, "core-rt", "https://a.example", "cid")
+
+    assert core_token_for_revocation(KEY, envelope) == "core-rt"
+
+
+def test_core_token_for_revocation_recovers_a_tampered_or_rotated_envelope():
+    """A failed MAC still yields core's token on the REVOCATION path.
+
+    The rotated key is the case that matters: removing and re-adding the
+    integration mints a new DCR key, which invalidates every envelope already
+    in a client's hands. Forwarding a body we did not verify is sound here and
+    only here — RFC 7009 authorizes the bearer, and core's revoke endpoint is
+    anonymous and idempotent, so a forger gains nothing they could not get by
+    POSTing to core themselves (#2249 review).
+    """
+    envelope = wrap_refresh_token(KEY, "core-rt", "https://a.example", "cid")
+    body, _, signature = envelope.rpartition(".")
+    tampered = f"{body}.{'B' if signature[0] != 'B' else 'C'}{signature[1:]}"
+    rotated = wrap_refresh_token(ROTATED_KEY, "core-rt", "https://a.example", "cid")
+
+    assert unwrap_refresh_token(KEY, tampered, None) is EnvelopeState.INVALID
+    assert unwrap_refresh_token(KEY, rotated, None) is EnvelopeState.INVALID
+    assert core_token_for_revocation(KEY, tampered) == "core-rt"
+    assert core_token_for_revocation(KEY, rotated) == "core-rt"
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        pytest.param("core-opaque-refresh-token", id="pre-envelope-token"),
+        pytest.param("", id="empty"),
+        pytest.param(mint_client_id(KEY, ["https://a.example/cb"]), id="dcr-blob"),
+    ],
+)
+def test_core_token_for_revocation_ignores_values_without_the_prefix(token):
+    """Not ours at all: the caller forwards the presented value unchanged."""
+    assert core_token_for_revocation(KEY, token) is None
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        pytest.param("hamcp-rt-", id="no-body"),
+        pytest.param("hamcp-rt-nodot", id="no-separator"),
+        pytest.param("hamcp-rt-###.not-a-real-signature", id="undecodable-base64"),
+        pytest.param(_prefixed(b"not json"), id="not-json"),
+        pytest.param(_prefixed(b'["not","an","object"]'), id="json-array"),
+        pytest.param(_prefixed(b'{"v":1,"t":42}'), id="int-t"),
+        pytest.param(_prefixed(b'{"v":1,"c":"https://a.example"}'), id="missing-t"),
+        pytest.param(_prefixed(b"[" * 1500 + b"]" * 1500), id="deeply-nested"),
+    ],
+)
+def test_core_token_for_revocation_refuses_unusable_bodies(token):
+    """Prefixed but carrying no token: forward it as presented, never guess.
+
+    The nesting case is the #2218 guard: this parse runs BEFORE any MAC check,
+    so ``json.loads`` sees caller-chosen nesting and can raise RecursionError
+    where :func:`unwrap_refresh_token` never can.
+    """
+    assert len(token) <= MAX_REVOKE_ENVELOPE_LEN  # not the cap doing the work
+    assert core_token_for_revocation(KEY, token) is None
+
+
+def test_core_token_for_revocation_caps_the_unverified_parse():
+    """An oversized prefixed value is refused BEFORE it is decoded.
+
+    Core's refresh tokens are short, so nothing legitimate approaches the cap;
+    it exists because this parse is the one place an anonymous view hands
+    attacker-chosen bytes to base64 and json.loads. It guards only that path —
+    an envelope this server can still VERIFY is honoured at any size.
+    """
+    huge = "T" * MAX_REVOKE_ENVELOPE_LEN
+    rotated = wrap_refresh_token(ROTATED_KEY, huge, "https://a.example", "cid")
+    ours = wrap_refresh_token(KEY, huge, "https://a.example", "cid")
+
+    assert len(rotated) > MAX_REVOKE_ENVELOPE_LEN
+    assert core_token_for_revocation(KEY, rotated) is None
+    assert core_token_for_revocation(KEY, ours) == huge
+
+
+def test_core_token_for_revocation_without_a_signing_key_is_none():
+    """No key configured means no envelope of ours to recognise at all."""
+    envelope = wrap_refresh_token(KEY, "core-rt", "https://a.example", "cid")
+
+    assert core_token_for_revocation(None, envelope) is None
+
+
+def test_rewrite_token_response_body_wraps_a_string_refresh_token():
+    """Swap core's refresh token for an envelope, leaving the rest intact."""
+    raw = json.dumps(
+        {
+            "access_token": "core-access",
+            "token_type": "Bearer",
+            "expires_in": 1800,
+            "refresh_token": "core-refresh",
+        }
+    ).encode()
+
+    rewritten = json.loads(
+        rewrite_token_response_body(KEY, raw, "http://127.0.0.1:54321", "cid")
+    )
+
+    assert rewritten["access_token"] == "core-access"
+    assert rewritten["expires_in"] == 1800
+    assert unwrap_refresh_token(KEY, rewritten["refresh_token"], "cid") == (
+        "core-refresh",
+        "http://127.0.0.1:54321",
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"access_token":"x","token_type":"Bearer"}',  # core's refresh response
+        b'{"error":"invalid_grant"}',
+        b'{"refresh_token":null}',
+        b'{"refresh_token":42}',
+        b'["not","an","object"]',
+        b"not json at all",
+        b"",
+        b'{"refresh_token":"\xff\xfe"}',  # not UTF-8
+    ],
+)
+def test_rewrite_token_response_body_leaves_other_bodies_byte_identical(body):
+    """Relay anything with no string refresh_token to wrap, byte for byte."""
+    assert rewrite_token_response_body(KEY, body, "https://a.example", "cid") is body
+
+
+def test_normalized_origin_keeps_an_explicit_zero_port_distinct():
+    """Port 0 is falsy, so a normalizer using ``or`` would collapse these two.
+
+    The authorize-leg translation keys off this identity, so ``:0`` and the
+    scheme default must never compare equal (registration round-trips both
+    URIs — see test_register_preserves_explicit_zero_port_in_web_origin).
+    """
+    assert oauth_dcr.normalized_origin("https://a.example:0/cb") == (
+        "https",
+        "a.example",
+        0,
+    )
+    assert oauth_dcr.normalized_origin("https://a.example/cb") == (
+        "https",
+        "a.example",
+        443,
+    )
