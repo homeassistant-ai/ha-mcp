@@ -25,6 +25,7 @@ from ..errors import (
     create_error_response,
     create_validation_error,
 )
+from ..utils.entity_membership import normalize_member_entity_ids
 from .bulk_selector import (
     BulkControlSelector,
     BulkSelectorInfrastructureError,
@@ -180,6 +181,111 @@ def _parse_bulk_operations(operations: Any) -> list[Any]:
             # silently vanishing from the batch.
             operations_list.append(operation)
     return operations_list
+
+
+def _find_group_member_conflicts(
+    operations: list[Any], states: list[Any]
+) -> dict[str, list[str]]:
+    """Return ``{group_entity_id: [conflicting_member_ids]}`` for every
+    group/aggregate entity this batch targets alongside one or more of its
+    own members.
+
+    Deliberately does not distinguish same-action duplicates from opposing
+    ones (e.g. group "on" plus an explicit member "off"): Home Assistant
+    fans a service call on the group entity out to every member regardless
+    of what else is in the same batch, so an opposing member row is a race
+    against that fan-out, not a safe override, and gets flagged exactly
+    like a same-action one.
+    """
+    entity_ids = {
+        op["entity_id"]
+        for op in operations
+        if isinstance(op, dict) and isinstance(op.get("entity_id"), str)
+    }
+    if len(entity_ids) < 2:
+        return {}
+    states_by_id = {
+        state["entity_id"]: state
+        for state in states
+        if isinstance(state, dict) and isinstance(state.get("entity_id"), str)
+    }
+    conflicts: dict[str, list[str]] = {}
+    for entity_id in sorted(entity_ids):
+        state = states_by_id.get(entity_id)
+        if state is None:
+            continue
+        members = normalize_member_entity_ids(state.get("attributes"))
+        if not members:
+            continue
+        overlap = sorted((entity_ids & set(members)) - {entity_id})
+        if overlap:
+            conflicts[entity_id] = overlap
+    return conflicts
+
+
+async def _reject_operations_group_member_conflicts(
+    client: Any, operations: list[Any]
+) -> None:
+    """Fail closed when an operations-mode batch targets a group/aggregate
+    entity together with one or more of its own members.
+
+    Confirmed live (2026-08-23): Home Assistant (Hue Room/Zone groups in
+    particular) fans a service call on the GROUP entity out to every member
+    regardless of what else is in the same batch -- an operations batch
+    that turned off a Hue Room group plus 4 of its 5 members (deliberately
+    omitting the 5th, to exclude it) still turned the 5th member off too,
+    purely from the group row's own cascade. Listing a member row
+    separately does not shield it, so this fails the WHOLE batch closed
+    (nothing dispatched) rather than silently letting the group row's
+    cascade override an exclusion operations mode has no way to express.
+
+    Fails closed on its own states-fetch failure too: an unverifiable batch
+    is not a verified-safe one, and this is the same infrastructure-failure
+    stance ``bulk_selector.py`` takes for the analogous selector-mode read.
+    """
+    try:
+        states = await client.get_states()
+    except ToolError:
+        raise
+    except Exception as exc:
+        exception_to_structured_error(
+            exc, context={"operation": "bulk operations group-safety check"}
+        )
+        raise  # unreachable: exception_to_structured_error always raises
+    if not isinstance(states, list):
+        raise_tool_error(
+            create_connection_error(
+                "Could not verify the operations batch against group "
+                "membership because Home Assistant's states response was "
+                "unexpected",
+                suggestions=[
+                    "Check if Home Assistant is running and accessible",
+                    "Retry the request; this may be a transient read failure",
+                ],
+            )
+        )
+    conflicts = _find_group_member_conflicts(operations, states)
+    if not conflicts:
+        return
+    detail = "; ".join(
+        f"'{group}' together with its own member(s) {', '.join(members)}"
+        for group, members in sorted(conflicts.items())
+    )
+    raise_tool_error(
+        create_validation_error(
+            "This operations batch targets a group/aggregate entity "
+            "together with one or more of its own individual members: "
+            f"{detail}. Home Assistant applies the action to every member "
+            "when the group entity is targeted, regardless of what else is "
+            "listed separately -- a member row does not protect or exempt "
+            "it from the group's own action. Target ONLY the group, or "
+            "ONLY the specific member(s) you want affected, never both in "
+            "the same call. To act on most of a group while excluding "
+            "specific members, use ha_bulk_control's selector mode with "
+            "exclude_entity_ids instead.",
+            parameter="operations",
+        )
+    )
 
 
 def _selector_only_parameter_offender(
@@ -1705,6 +1811,12 @@ class ServiceTools:
         this one call. Parallel execution is the default, and invalid items are
         reported without aborting valid operations in the same batch — but a batch
         in which every item fails validation dispatches nothing and fails the call.
+        A batch that targets a group/aggregate entity together with one or more of
+        its own individual members also fails closed (nothing dispatched): Home
+        Assistant applies the action to every member when the group is targeted
+        regardless of what else is listed, so a member row cannot exclude that
+        member from the group's own action. Use selector mode with
+        ``exclude_entity_ids`` when a group action must exclude specific members.
 
         **Selector mode** (``selector`` + ``action``): use exact area or floor IDs
         when exclusions must be applied after recursively expanding generic
@@ -1763,6 +1875,7 @@ class ServiceTools:
             )
 
         operations_list = _parse_bulk_operations(operations)
+        await _reject_operations_group_member_conflicts(self._client, operations_list)
 
         result = await self._device_tools.bulk_device_control(
             operations=operations_list, parallel=parallel, ctx=ctx

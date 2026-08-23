@@ -771,6 +771,68 @@ async def test_excluding_an_aggregate_excludes_every_expanded_member() -> None:
 
 
 @pytest.mark.asyncio
+async def test_hue_room_group_excludes_one_member_leaf_not_the_group() -> None:
+    """Selector-mode regression test for the confirmed live basement-
+    exclusion bug (handoff, 2026-08-23): a real Hue Room group
+    (``light.couloir_sous_sol_hue``, 5 member lights) with one leaf member
+    excluded via ``exclude_entity_ids``.
+
+    Unlike ``test_excluding_an_aggregate_excludes_every_expanded_member``
+    (which excludes the GROUP entity itself), this excludes one of the
+    group's own LEAF members while still targeting the group's area --
+    exactly the "turn off the basement except the staircase light" shape
+    that ``operations`` mode could not express safely. Asserts the group
+    entity itself never appears in ``resolved_entity_ids`` or as a dispatch
+    operation (selector mode only ever dispatches to expanded leaves), and
+    that the excluded leaf is the only member missing from the result.
+    """
+    members = [
+        "light.couloir_sous_sol_spot_01",
+        "light.couloir_sous_sol_spot_02",
+        "light.couloir_sous_sol_spot_03",
+        "light.couloir_sous_sol_spot_04",
+        "light.couloir_sous_sol_escalier",
+    ]
+    client = SelectorClient(
+        states=[
+            _state("light.couloir_sous_sol_hue", members),
+            *(_state(member) for member in members),
+        ],
+        entities=[
+            {"entity_id": "light.couloir_sous_sol_hue", "area_id": "sous_sol"},
+            *({"entity_id": member, "area_id": None} for member in members),
+        ],
+        areas=[{"area_id": "sous_sol", "name": "Sous-sol", "floor_id": None}],
+    )
+
+    result = await resolve_bulk_selector(
+        client,
+        {
+            "domain": "light",
+            "area_ids": ["sous_sol"],
+            "exclude_entity_ids": ["light.couloir_sous_sol_escalier"],
+        },
+        action="off",
+        parameters=None,
+        timeout_seconds=None,
+        validate_first=True,
+    )
+
+    assert result.resolved_entity_ids == (
+        "light.couloir_sous_sol_spot_01",
+        "light.couloir_sous_sol_spot_02",
+        "light.couloir_sous_sol_spot_03",
+        "light.couloir_sous_sol_spot_04",
+    )
+    assert "light.couloir_sous_sol_escalier" not in result.resolved_entity_ids
+    assert "light.couloir_sous_sol_hue" not in result.resolved_entity_ids
+    assert all(
+        row["entity_id"] != "light.couloir_sous_sol_hue" for row in result.operations
+    )
+    assert result.excluded_entity_ids == ("light.couloir_sous_sol_escalier",)
+
+
+@pytest.mark.asyncio
 async def test_operations_parameters_are_independent_per_row() -> None:
     """Each operation row's `parameters` dict must be its own object.
 
