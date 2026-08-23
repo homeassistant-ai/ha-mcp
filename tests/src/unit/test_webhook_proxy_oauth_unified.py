@@ -1297,3 +1297,156 @@ async def test_dcr_register_rejects_oversized_body(oauth_stack):
     assert response.status == 400
     assert response.json_body["error"] == "invalid_client_metadata"
     assert response.json_body["error_description"] == "body is too large"
+
+
+# ---------------------------------------------------------------------------
+# ha_auth scoped RFC 7009 revocation endpoint (issue #2248)
+# ---------------------------------------------------------------------------
+
+
+async def test_scoped_revoke_forwards_the_unwrapped_envelope(oauth_stack, monkeypatch):
+    """The envelope is swapped for core's own token before core sees it.
+
+    Core's ``/auth/revoke`` answers 200 for a token it has never seen, so a
+    client posting the envelope there directly would be told its session was
+    revoked while it stayed live.
+    """
+    oauth, dcr, indirect, autoapprove = (
+        oauth_stack.oauth,
+        oauth_stack.dcr,
+        oauth_stack.indirect,
+        oauth_stack.autoapprove,
+    )
+    client_id = dcr.mint_client_id(KEY, ["http://127.0.0.1/callback"])
+    envelope = indirect.wrap_refresh_token(
+        KEY, "core-refresh", "http://127.0.0.1:54321", client_id
+    )
+    relay_session = _core_relay_session(b"")
+    hass = _ha_auth_hass(oauth, relay_session)
+    monkeypatch.setattr(
+        indirect, "core_token_base_url", lambda _hass: "https://core.example"
+    )
+
+    response = await autoapprove.AutoApproveRevokeView(hass).post(
+        _oauth_request(form={"token": envelope})
+    )
+
+    assert response.status == 200
+    assert relay_session.post.call_args.args[0] == "https://core.example/auth/revoke"
+    assert relay_session.post.call_args.kwargs["data"]["token"] == "core-refresh"
+
+
+async def test_scoped_revoke_of_a_plain_token_307s_to_core(oauth_stack):
+    """A token that is not ours reaches core unchanged, from the client."""
+    oauth, autoapprove = oauth_stack.oauth, oauth_stack.autoapprove
+    relay_session = _core_relay_session(b"")
+    hass = _ha_auth_hass(oauth, relay_session)
+
+    response = await autoapprove.AutoApproveRevokeView(hass).post(
+        _oauth_request(form={"token": "core-opaque-refresh-token"})
+    )
+
+    assert response.status == 307
+    assert response.headers["Location"] == "/auth/revoke"
+    assert response.headers["Cache-Control"] == "no-store"
+    relay_session.post.assert_not_called()
+
+
+async def test_scoped_revoke_without_a_dcr_key_307s_to_core(oauth_stack):
+    """No signing key means no envelope could have been minted, so there is
+    nothing to unwrap and the revocation 307s like any other token."""
+    oauth, autoapprove = oauth_stack.oauth, oauth_stack.autoapprove
+    relay_session = _core_relay_session(b"")
+    hass = _hass(oauth, oauth.MODE_HA_AUTH, dcr_key=None)
+    hass.data[oauth.DOMAIN]["session"] = relay_session
+
+    response = await autoapprove.AutoApproveRevokeView(hass).post(
+        _oauth_request(form={"token": "hamcp-rt-whatever.sig"})
+    )
+
+    assert response.status == 307
+    relay_session.post.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", ["MODE_NONE_AUTOAPPROVE", "MODE_LEGACY"])
+async def test_scoped_revoke_404s_outside_ha_auth(oauth_stack, mode):
+    """Only ha_auth hands out an envelope, so only ha_auth fronts revocation."""
+    oauth, autoapprove = oauth_stack.oauth, oauth_stack.autoapprove
+    hass = _hass(oauth, getattr(oauth, mode))
+
+    response = await autoapprove.AutoApproveRevokeView(hass).post(
+        _oauth_request(form={"token": "anything"})
+    )
+
+    assert response.status == 404
+    assert response.json_body["error"] == "not_found"
+
+
+async def test_scoped_revoke_transport_error_returns_temporarily_unavailable(
+    oauth_stack, monkeypatch
+):
+    """A failed forward is a 503, not a fabricated revocation success.
+
+    RFC 7009 2.2.1 gives that status a specific meaning on this endpoint --
+    the token must be assumed to still exist -- and lets the server name the
+    retry delay, so the client does not have to guess or give up.
+    """
+    oauth, dcr, indirect, autoapprove = (
+        oauth_stack.oauth,
+        oauth_stack.dcr,
+        oauth_stack.indirect,
+        oauth_stack.autoapprove,
+    )
+    client_id = dcr.mint_client_id(KEY, ["http://127.0.0.1/callback"])
+    envelope = indirect.wrap_refresh_token(
+        KEY, "core-refresh", "http://127.0.0.1:54321", client_id
+    )
+    relay_session = SimpleNamespace(post=MagicMock(side_effect=TimeoutError()))
+    hass = _ha_auth_hass(oauth, relay_session)
+    monkeypatch.setattr(
+        indirect, "core_token_base_url", lambda _hass: "https://core.example"
+    )
+
+    response = await autoapprove.AutoApproveRevokeView(hass).post(
+        _oauth_request(form={"token": envelope})
+    )
+
+    assert response.status == 503
+    assert response.json_body["error"] == "temporarily_unavailable"
+    assert response.headers["Retry-After"] == autoapprove._REVOKE_RETRY_AFTER
+
+
+async def test_ha_auth_document_advertises_the_scoped_revocation_endpoint(
+    oauth_stack,
+):
+    """#2248: the client holds an envelope, so revocation must come to us.
+
+    None mode issues no refresh token at all, so its document keeps quiet —
+    advertising a route that 404s there would be worse than silence.
+    """
+    oauth = oauth_stack.oauth
+    base = "https://ha.example"
+    ha_auth_doc = oauth_stack.auth_native.authorization_server_document(base)
+    assert ha_auth_doc["revocation_endpoint"] == f"{base}{oauth.OAUTH_BASE}/revoke"
+    assert ha_auth_doc["revocation_endpoint_auth_methods_supported"] == ["none"]
+
+    none_doc = oauth_stack.autoapprove.authorization_server_document(base)
+    assert "revocation_endpoint" not in none_doc
+
+
+def test_register_autoapprove_views_binds_three_views(oauth_stack):
+    """/revoke is advertised by the ha_auth document, so the bundle carries it."""
+    oauth, autoapprove = oauth_stack.oauth, oauth_stack.autoapprove
+    hass = _hass(oauth, oauth.MODE_HA_AUTH)
+    hass.http.register_view = MagicMock()
+
+    autoapprove.register_autoapprove_views(hass)
+    autoapprove.register_autoapprove_views(hass)  # bind-once guard
+
+    assert hass.http.register_view.call_count == 3
+    bound = {type(call.args[0]) for call in hass.http.register_view.call_args_list}
+    assert bound == {
+        autoapprove.AutoApproveAuthorizeView,
+        autoapprove.AutoApproveTokenView,
+        autoapprove.AutoApproveRevokeView,
+    }

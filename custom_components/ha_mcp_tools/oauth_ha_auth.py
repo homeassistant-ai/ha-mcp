@@ -27,7 +27,9 @@ server-side-forwarded 200 has its ``refresh_token`` replaced by a signed
 envelope (:func:`wrap_refresh_token`) carrying core's real token plus the
 client_id core bound it to, and the refresh leg unwraps it back into the exact
 pair. :func:`translated_client_id_for_refresh` remains for tokens minted before
-the envelope existed.
+the envelope existed. The client therefore holds a value core cannot recognise,
+and core answers a revocation 200 either way, so ``{OAUTH_BASE}/revoke`` fronts
+revocation as well and unwraps before forwarding.
 
 SECURITY: translation grants nothing new. Core already accepts any
 self-asserted ``client_id == redirect-origin`` pair (that is how claude.ai
@@ -752,8 +754,8 @@ def _stable_origin_or_unreproducible(
 
 
 def core_token_base_url(hass: HomeAssistant) -> str:
-    """Base URL for the server-side ``/auth/token`` forward — never
-    request-derived.
+    """Base URL for the server-side ``/auth/token`` and ``/auth/revoke``
+    forwards — never request-derived.
 
     Loopback when core serves plain http (no TLS mismatch possible); otherwise
     the operator-configured URL via ``homeassistant.helpers.network.get_url``.

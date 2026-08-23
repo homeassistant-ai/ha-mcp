@@ -11,11 +11,11 @@ through to Home Assistant *core*'s own origin-root
 ``registration_endpoint``. claude.ai then can neither use CIMD nor do dynamic
 client registration and shows "Automatic client registration isn't supported…".
 
-This module owns the pair of path-scoped ``OAUTH_BASE`` endpoints. In none mode
-they complete OAuth *invisibly* — no login, no consent — so a connector that
-does run discovery resolves against our own corrected documents (served by
-:mod:`mcp_webhook`) instead of HA core's broken root doc, and connects with zero
-HA login:
+This module owns three path-scoped ``OAUTH_BASE`` endpoints. In none mode the
+authorize/token pair completes OAuth *invisibly* — no login, no consent — so a
+connector that does run discovery resolves against our own corrected documents
+(served by :mod:`mcp_webhook`) instead of HA core's broken root doc, and
+connects with zero HA login:
 
 * ``GET  {OAUTH_BASE}/authorize`` issues a PKCE-bound one-time code and
   immediately 302-redirects back to the client with ``?code=…&state=…`` — no
@@ -24,8 +24,11 @@ HA login:
   ``client_secret``) for an opaque access token. The token is *cosmetic* — none
   mode ignores bearers entirely — but is a real random string so a spec-strict
   client is satisfied.
+* ``POST {OAUTH_BASE}/revoke`` fronts RFC 7009 revocation for ha_auth mode, the
+  only mode that hands the client a signed refresh envelope core cannot redeem
+  (#2248); it 404s in the other two.
 
-Both views dispatch per request from ``hass.data`` to the live legacy, ha_auth,
+The views dispatch per request from ``hass.data`` to the live legacy, ha_auth,
 or none-mode provider (and 404 when no remote OAuth mode is live), mirroring the
 discovery views so mode switches need no restart. The none-mode PKCE code store
 and redirect-URI floor are reused from :mod:`oauth_legacy` rather than copied.
@@ -81,12 +84,19 @@ CFG_AUTOAPPROVE_PROVIDER = "autoapprove_provider"
 # endpoints from consuming the pool used by authenticated MCP forwarding.
 CFG_CIMD_SESSION = "cimd_session"
 
-# TOP-LEVEL hass.data flag recording that the two unified scoped views are bound
-# for this HA session. Not under DOMAIN so it survives async_unload_entry's
+# TOP-LEVEL hass.data flag recording that the three unified scoped views are
+# bound for this HA session. Not under DOMAIN so it survives async_unload_entry's
 # teardown — aiohttp cannot unregister a bound view until HA restarts, so the
 # views (and this ownership flag) must outlive the config entry (mirrors
 # mcp_webhook._OAUTH_VIEWS_REGISTERED_KEY).
 _AUTOAPPROVE_VIEWS_REGISTERED_KEY = "ha_mcp_tools_oauth_autoapprove_views_registered"
+
+
+# RFC 7009 §2.2.1: on a 503 from a revocation endpoint "the client must assume
+# the token still exists and may retry after a reasonable delay", and the server
+# MAY name that delay. Seconds, as a short transient — a client left to guess may
+# simply give up, and an abandoned revocation leaves the session live (#2248).
+_REVOKE_RETRY_AFTER = "5"
 
 
 def _json_not_found() -> web.Response:
@@ -317,12 +327,17 @@ class AutoApproveAuthorizeView(HomeAssistantView):
 def _revoke_rewrite(dcr_key: bytes | None, form: MultiDict) -> bool:
     """Swap an envelope back for core's own token on a revocation (#2248).
 
-    Core's ``/auth/token`` also takes ``action=revoke&token=<refresh_token>``
-    and answers 200 even for a token it has never seen, so a client revoking
-    the envelope we handed it would get a success it did not receive. RFC 7009
-    authorizes the BEARER of the token rather than a client identity, so the
-    presenter binding is deliberately skipped here. Returns whether the
-    exchange must now be proxied (core has to see its own token).
+    Core takes a revocation two ways — ``action=revoke&token=…`` on
+    ``/auth/token`` (the IndieAuth 6.3.5 shape, which core marks deprecated in
+    favour of the view below but keeps for backwards compat) and the RFC 7009
+    ``/auth/revoke`` view — and BOTH answer 200 even for a token they have
+    never seen, so a client revoking the envelope we handed it would get a
+    success it did not receive. The single place that knows how a revocation
+    token is unwrapped, shared by the token view's ``action=revoke`` branch and
+    :class:`AutoApproveRevokeView`. RFC 7009 authorizes the BEARER of the token
+    rather than a client identity, so the presenter binding is deliberately
+    skipped here. Returns whether the request must now be proxied (core has to
+    see its own token).
     """
     from .oauth_ha_auth import unwrap_refresh_token
 
@@ -450,6 +465,51 @@ async def _code_leg_forces_proxy(
         client_id,
     )
     return disposition is RefreshDisposition.UNREPRODUCIBLE
+
+
+async def _forward_to_core(
+    hass: HomeAssistant, cfg: dict[str, Any], path: str, form: MultiDict
+) -> tuple[int, bytes, str] | web.Response:
+    """POST ``form`` to core's ``path`` server-side; its raw answer or a 503.
+
+    Shared by the token and revocation legs (#2248): both forward a rewritten
+    credential-bearing form to core over the relay session and map the same
+    transport failures, and only the token leg rewrites what comes back.
+    """
+    from .oauth_ha_auth import core_token_base_url
+
+    session = cfg.get("session")
+    if session is None:
+        _LOGGER.warning(
+            "ha_auth %s forward: the entry has no relay session "
+            "(half-initialised setup); answering 503",
+            path,
+        )
+        return _json_error(
+            "temporarily_unavailable", 503, "token forwarding is not available"
+        )
+    base = core_token_base_url(hass)
+    try:
+        async with session.post(
+            f"{base}{path}",
+            data=form,
+            timeout=aiohttp.ClientTimeout(total=25),
+        ) as resp:
+            return (
+                resp.status,
+                await resp.read(),
+                resp.content_type or "application/json",
+            )
+    except (TimeoutError, aiohttp.ClientError) as err:
+        _LOGGER.warning(
+            "ha_auth %s forward to %s failed: %s",
+            path,
+            base,
+            type(err).__name__,
+        )
+        return _json_error(
+            "temporarily_unavailable", 503, "core did not answer the token request"
+        )
 
 
 class AutoApproveTokenView(HomeAssistantView):
@@ -647,54 +707,104 @@ class AutoApproveTokenView(HomeAssistantView):
         Every other status — and a body with nothing to wrap — is relayed
         byte-for-byte.
         """
-        from .oauth_ha_auth import core_token_base_url, rewrite_token_response_body
+        from .oauth_ha_auth import rewrite_token_response_body
 
-        session = cfg.get("session")
-        if session is None:
-            _LOGGER.warning(
-                "ha_auth token forward: the entry has no relay session "
-                "(half-initialised setup); answering 503"
+        forwarded = await _forward_to_core(self._hass, cfg, "/auth/token", form)
+        if isinstance(forwarded, web.Response):
+            return forwarded
+        status, body, content_type = forwarded
+        # Revocation answers 200 with an EMPTY body, so there is nothing to
+        # rewrite and a warning would be pure noise.
+        if status == 200 and dcr_key is not None and form.get("action") != "revoke":
+            body = rewrite_token_response_body(dcr_key, body, forward_id, client_id)
+        return web.Response(
+            status=status,
+            body=body,
+            content_type=content_type,
+            headers=_TOKEN_RESPONSE_HEADERS,
+        )
+
+
+class AutoApproveRevokeView(HomeAssistantView):
+    """Scoped RFC 7009 ``/revoke`` endpoint, served in ha_auth mode only (#2248).
+
+    Core's own ``POST /auth/revoke`` answers 200 for a token it has never seen
+    (RFC 7009 §2.2, which core's ``RevokeTokenView`` cites verbatim), so a
+    client that posts the signed envelope we handed it straight to core gets a
+    silent no-op and keeps a live session. Fronting revocation here is what
+    lets the envelope be swapped for core's own token first. Legacy and none
+    mode never mint an envelope, so this route 404s there — the envelope is the
+    whole reason it exists.
+
+    ANONYMOUS BY DESIGN, like core's own revocation view (``requires_auth =
+    False``, ``cors_allowed = True``, mirrored here): RFC 7009 authorizes the
+    BEARER of the token, not a client identity. That grants no new reach. A
+    caller who cannot present a valid HMAC-signed envelope never causes an
+    outbound request at all — an unrecognised or forged token 307s and this
+    server makes no call — so the forwarding path is reachable only by someone
+    already holding the credential they are asking us to destroy.
+    """
+
+    requires_auth = False
+    cors_allowed = True
+    url = f"{OAUTH_BASE}/revoke"
+    name = "ha_mcp_tools:oauth:autoapprove-revoke"
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Bind the view to the HA instance; liveness is resolved per request."""
+        self._hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        """Unwrap an envelope and forward, or 307 the revocation into core."""
+        cfg = _webhook_cfg(self._hass)
+        if cfg is None or cfg.get("resource_server") is None:
+            return _json_not_found()
+        from multidict import MultiDict
+
+        from .oauth_dcr import CFG_DCR_SIGNING_KEY
+
+        raw_form = await read_form(request)
+        if raw_form is None:
+            return _json_error("invalid_request", 400)
+        # str()-coerced MultiDict for the same reason the token view builds
+        # one: bytes/FileField values from a multipart body would raise a
+        # TypeError inside the outgoing serializer (#2219).
+        form: MultiDict = MultiDict(
+            (key, str(value)) for key, value in raw_form.items()
+        )
+        if not _revoke_rewrite(cfg.get(CFG_DCR_SIGNING_KEY), form):
+            # Nothing of ours in the body, so no rewrite is needed: 307 the
+            # client into core's own /auth/revoke, which then observes the
+            # CLIENT's address. Relative Location for the token view's reason
+            # — an absolute one would derive the credential target from
+            # unvalidated forwarded headers (#2213 review round 2).
+            return web.Response(
+                status=307,
+                headers={
+                    "Location": "/auth/revoke",
+                    "Cache-Control": "no-store",
+                },
             )
-            return _json_error(
-                "temporarily_unavailable", 503, "token forwarding is not available"
-            )
-        base = core_token_base_url(self._hass)
-        try:
-            async with session.post(
-                f"{base}/auth/token",
-                data=form,
-                timeout=aiohttp.ClientTimeout(total=25),
-            ) as resp:
-                body = await resp.read()
-                # Revocation answers 200 with an EMPTY body, so there is
-                # nothing to rewrite and a warning would be pure noise.
-                if (
-                    resp.status == 200
-                    and dcr_key is not None
-                    and form.get("action") != "revoke"
-                ):
-                    body = rewrite_token_response_body(
-                        dcr_key, body, forward_id, client_id
-                    )
-                return web.Response(
-                    status=resp.status,
-                    body=body,
-                    content_type=resp.content_type or "application/json",
-                    headers=_TOKEN_RESPONSE_HEADERS,
-                )
-        except (TimeoutError, aiohttp.ClientError) as err:
-            _LOGGER.warning(
-                "ha_auth token forward to %s failed: %s",
-                base,
-                type(err).__name__,
-            )
-            return _json_error(
-                "temporarily_unavailable", 503, "core did not answer the token request"
-            )
+        forwarded = await _forward_to_core(self._hass, cfg, "/auth/revoke", form)
+        if isinstance(forwarded, web.Response):
+            # The helper's only Response is the 503, which RFC 7009 §2.2.1
+            # gives a specific meaning here: the token is still live. Name the
+            # retry delay rather than leaving the client to invent one.
+            forwarded.headers["Retry-After"] = _REVOKE_RETRY_AFTER
+            return forwarded
+        status, body, content_type = forwarded
+        # Relayed as-is: core answers a revocation with an empty 200, so there
+        # is never a refresh_token to wrap on the way back.
+        return web.Response(
+            status=status,
+            body=body,
+            content_type=content_type,
+            headers=_TOKEN_RESPONSE_HEADERS,
+        )
 
 
 def bind_autoapprove_views(hass: HomeAssistant) -> None:
-    """Bind the two unified OAuth views at most once per HA session.
+    """Bind the three unified OAuth views at most once per HA session.
 
     aiohttp cannot unregister a bound view, so a reload / re-enable / mode
     switch must reuse the already-bound views — they resolve the active
@@ -706,11 +816,14 @@ def bind_autoapprove_views(hass: HomeAssistant) -> None:
     """
     if hass.data.get(_AUTOAPPROVE_VIEWS_REGISTERED_KEY):
         return
-    # Set the flag only AFTER both views register (issue #1978): see
+    # Set the flag only AFTER ALL THREE views register (issue #1978): see
     # mcp_webhook._register_metadata_views. Marking the bundle bound before
-    # /token registers would let a later setup assign its mode provider and
-    # advertise OAuth with an unbound /token — a 404 on the token exchange. The
-    # flag must mean the full bundle succeeded; a partial bind leaves it unset.
+    # /token or /revoke registers would let a later setup assign its mode
+    # provider and advertise OAuth with an unbound endpoint the discovery
+    # document names — a 404 on the token exchange or on revocation (#2248).
+    # The flag must mean the full bundle succeeded; a partial bind leaves it
+    # unset.
     hass.http.register_view(AutoApproveAuthorizeView(hass))
     hass.http.register_view(AutoApproveTokenView(hass))
+    hass.http.register_view(AutoApproveRevokeView(hass))
     hass.data[_AUTOAPPROVE_VIEWS_REGISTERED_KEY] = True

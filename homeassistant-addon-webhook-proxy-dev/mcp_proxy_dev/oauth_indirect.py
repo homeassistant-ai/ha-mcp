@@ -25,7 +25,9 @@ Core binds a refresh token to the client_id the code leg presented, and a
 redirect_uri-less refresh grant carries nothing that re-derives it. So the
 identity is recorded at mint time: every server-side-forwarded 200 has its
 ``refresh_token`` replaced by a signed envelope naming that client_id, and the
-refresh leg unwraps it back into the exact pair (#2248).
+refresh leg unwraps it back into the exact pair (#2248). The client therefore
+holds a value core cannot recognise, and core answers a revocation 200 either
+way, so the proxy fronts revocation too and unwraps before forwarding.
 """
 
 from __future__ import annotations
@@ -604,7 +606,8 @@ def _stable_origin_or_unreproducible(
 
 
 def core_token_base_url(hass: HomeAssistant) -> str:
-    """Return a trusted base URL for forwarding to core's token endpoint."""
+    """Return a trusted base URL for forwarding to core's token and revocation
+    endpoints."""
     api = getattr(hass.config, "api", None)
     if api is not None and not getattr(api, "use_ssl", False):
         return f"http://127.0.0.1:{api.port}"

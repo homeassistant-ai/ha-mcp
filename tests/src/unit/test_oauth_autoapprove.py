@@ -550,20 +550,28 @@ class TestTokenView:
 
 
 class TestBindAutoApproveViews:
-    def test_first_bind_registers_two_views(self):
+    def test_first_bind_registers_three_views(self):
         hass = _make_hass()
         hass.http = MagicMock()
         aa.bind_autoapprove_views(hass)
-        assert hass.http.register_view.call_count == 2
+        assert hass.http.register_view.call_count == 3
+        bound = {type(call.args[0]) for call in hass.http.register_view.call_args_list}
+        # /revoke is advertised by the ha_auth document (#2248), so a bundle
+        # missing it would advertise a 404 route.
+        assert bound == {
+            aa.AutoApproveAuthorizeView,
+            aa.AutoApproveTokenView,
+            aa.AutoApproveRevokeView,
+        }
         assert hass.data.get(aa._AUTOAPPROVE_VIEWS_REGISTERED_KEY) is True
 
     def test_second_bind_is_a_noop(self):
-        # aiohttp cannot rebind a view — a re-enable must reuse the bound pair.
+        # aiohttp cannot rebind a view — a re-enable must reuse the bound set.
         hass = _make_hass()
         hass.http = MagicMock()
         aa.bind_autoapprove_views(hass)
         aa.bind_autoapprove_views(hass)
-        assert hass.http.register_view.call_count == 2
+        assert hass.http.register_view.call_count == 3
 
 
 # ---------------------------------------------------------------------------
@@ -1744,3 +1752,149 @@ async def test_ha_auth_revoke_of_a_plain_token_is_unchanged(
     assert resp.status == 307
     assert resp.headers["Location"] == "/auth/token"
     assert session.calls == []
+
+
+# ---------------------------------------------------------------------------
+# ha_auth scoped RFC 7009 revocation endpoint (issue #2248)
+# ---------------------------------------------------------------------------
+
+
+REVOKE_URL = f"{OAUTH_BASE}/revoke"
+
+
+async def test_scoped_revoke_forwards_the_unwrapped_envelope(
+    unified_view_client_factory, monkeypatch
+):
+    """The envelope is swapped for core's own token before core sees it.
+
+    Core's ``/auth/revoke`` answers 200 for a token it has never seen, so a
+    client posting the envelope there directly would be told its session was
+    revoked while it stayed live. Fronting the endpoint is what makes the
+    answer true.
+    """
+    session = _CoreTokenSession(body=b"")
+    client_id = oauth_dcr.mint_client_id(DCR_KEY, [LOOPBACK_CALLBACK])
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        DCR_KEY, "core-refresh", "http://127.0.0.1:54321", client_id
+    )
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        REVOKE_URL, data={"token": envelope}, allow_redirects=False
+    )
+
+    assert resp.status == 200
+    assert len(session.calls) == 1
+    assert session.calls[0]["url"] == "https://core.example/auth/revoke"
+    assert session.calls[0]["data"]["token"] == "core-refresh"
+
+
+async def test_scoped_revoke_of_a_plain_token_307s_to_core(
+    unified_view_client_factory,
+):
+    """A token that is not ours reaches core unchanged, from the client.
+
+    Nothing needs rewriting, so core observes the CLIENT's address exactly as
+    the token view's 307 leg preserves it, via a relative Location.
+    """
+    session = _CoreTokenSession(body=b"")
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        REVOKE_URL,
+        data={"token": "core-opaque-refresh-token"},
+        allow_redirects=False,
+    )
+
+    assert resp.status == 307
+    assert resp.headers["Location"] == "/auth/revoke"
+    assert resp.headers["Cache-Control"] == "no-store"
+    assert session.calls == []
+
+
+async def test_scoped_revoke_without_a_dcr_key_307s_to_core(
+    unified_view_client_factory,
+):
+    """No signing key means no envelope could have been minted, so nothing to
+    unwrap — the revocation 307s like any other unrecognised token."""
+    session = _CoreTokenSession(body=b"")
+    client = await unified_view_client_factory(mode="ha_auth", session=session)
+
+    resp = await client.post(
+        REVOKE_URL, data={"token": "hamcp-rt-whatever.sig"}, allow_redirects=False
+    )
+
+    assert resp.status == 307
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("mode", ["none", "legacy"])
+async def test_scoped_revoke_404s_outside_ha_auth(unified_view_client_factory, mode):
+    """Only ha_auth hands out an envelope, so only ha_auth fronts revocation."""
+    client = await unified_view_client_factory(mode=mode)
+
+    resp = await client.post(
+        REVOKE_URL, data={"token": "anything"}, allow_redirects=False
+    )
+
+    assert resp.status == 404
+    assert (await resp.json())["error"] == "not_found"
+
+
+async def test_scoped_revoke_404s_when_the_entry_is_unloaded():
+    """A bound view outlives its config entry; with no cfg it must 404."""
+    view = aa.AutoApproveRevokeView(_make_hass())
+    resp = await view.post(_token_request({"token": "anything"}))
+    assert resp.status == 404
+
+
+async def test_scoped_revoke_transport_error_returns_temporarily_unavailable(
+    unified_view_client_factory, monkeypatch
+):
+    """A failed forward is a 503, not a fabricated revocation success.
+
+    RFC 7009 2.2.1 gives that status a specific meaning on this endpoint --
+    the token must be assumed to still exist -- and lets the server name the
+    retry delay, so the client does not have to guess or give up.
+    """
+    session = _CoreTokenSession(error=TimeoutError(), body=b"")
+    client_id = oauth_dcr.mint_client_id(DCR_KEY, [LOOPBACK_CALLBACK])
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        DCR_KEY, "core-refresh", "http://127.0.0.1:54321", client_id
+    )
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        REVOKE_URL, data={"token": envelope}, allow_redirects=False
+    )
+
+    assert resp.status == 503
+    assert (await resp.json())["error"] == "temporarily_unavailable"
+    assert resp.headers["Retry-After"] == aa._REVOKE_RETRY_AFTER
+
+
+def test_ha_auth_document_advertises_the_scoped_revocation_endpoint():
+    """#2248: the client holds an envelope, so revocation must come to us.
+
+    None mode issues no refresh token at all, so its document keeps quiet —
+    advertising a route that 404s there would be worse than silence.
+    """
+    from custom_components.ha_mcp_tools import mcp_webhook
+
+    base = "https://ha.example"
+    ha_auth_doc = mcp_webhook._authorization_server_document(base)
+    assert ha_auth_doc["revocation_endpoint"] == f"{base}{OAUTH_BASE}/revoke"
+    assert ha_auth_doc["revocation_endpoint_auth_methods_supported"] == ["none"]
+
+    none_doc = mcp_webhook._none_mode_authorization_server_document(base)
+    assert "revocation_endpoint" not in none_doc
+    legacy_doc = mcp_webhook._legacy_authorization_server_document(base)
+    assert "revocation_endpoint" not in legacy_doc
