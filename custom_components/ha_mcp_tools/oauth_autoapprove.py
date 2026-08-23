@@ -43,8 +43,10 @@ provider.
 
 from __future__ import annotations
 
+import logging
 import secrets
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import aiohttp
 from aiohttp import web
@@ -64,6 +66,8 @@ from .oauth_legacy import (
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
     from multidict import MultiDict
+
+_LOGGER = logging.getLogger(__name__)
 
 
 # cfg (hass.data[DOMAIN][DATA_WEBHOOK]) key holding the live AutoApproveProvider.
@@ -310,19 +314,150 @@ class AutoApproveAuthorizeView(HomeAssistantView):
         return await handle_legacy_authorize_post(legacy_provider, request)
 
 
+def _revoke_rewrite(dcr_key: bytes | None, form: MultiDict) -> bool:
+    """Swap an envelope back for core's own token on a revocation (#2248).
+
+    Core's ``/auth/token`` also takes ``action=revoke&token=<refresh_token>``
+    and answers 200 even for a token it has never seen, so a client revoking
+    the envelope we handed it would get a success it did not receive. RFC 7009
+    authorizes the BEARER of the token rather than a client identity, so the
+    presenter binding is deliberately skipped here. Returns whether the
+    exchange must now be proxied (core has to see its own token).
+    """
+    from .oauth_ha_auth import unwrap_refresh_token
+
+    if dcr_key is None:
+        return False
+    unwrapped = unwrap_refresh_token(dcr_key, str(form.get("token", "")), None)
+    if not isinstance(unwrapped, tuple):
+        return False
+    core_refresh_token, _forward_id = unwrapped
+    form.popall("token", None)
+    form["token"] = core_refresh_token
+    return True
+
+
+def _envelope_identity(
+    dcr_key: bytes | None, form: MultiDict, client_id: str
+) -> tuple[str, bool] | web.Response | None:
+    """Read a refresh grant's identity out of its signed envelope (#2248).
+
+    None when the presented token carries no envelope (``ABSENT``) or no DCR
+    key is configured — the caller then falls through to the pre-envelope
+    derivation. A verified envelope rewrites ``form``'s ``refresh_token`` to
+    core's own token and forces the proxy leg, because a 307 would hand core a
+    value it cannot redeem. An ``INVALID`` one is answered locally for the same
+    reason: core cannot redeem it either, and relaying it would only feed its
+    failed-login accounting.
+    """
+    from .oauth_ha_auth import EnvelopeState, unwrap_refresh_token
+
+    if dcr_key is None:
+        return None
+    envelope = unwrap_refresh_token(
+        dcr_key, str(form.get("refresh_token", "")), client_id
+    )
+    if isinstance(envelope, tuple):
+        core_refresh_token, forward_id = envelope
+        form.popall("refresh_token", None)
+        form["refresh_token"] = core_refresh_token
+        return forward_id, True
+    if envelope is EnvelopeState.INVALID:
+        _LOGGER.warning(
+            "ha_auth refresh: signed envelope failed verification for "
+            "client_id %s — the DCR signing key may have changed, or the "
+            "token was replayed under another client_id or tampered with",
+            client_id,
+        )
+        return _json_error(
+            "invalid_grant",
+            400,
+            "re-authorize: this refresh token could not be verified against "
+            "this server's current signing key",
+        )
+    return None
+
+
+async def _pre_envelope_refresh_identity(
+    cfg: dict[str, Any], dcr_key: bytes | None, client_id: str
+) -> tuple[str, bool] | web.Response:
+    """Re-derive the identity of a redirect-less PRE-envelope refresh (#2248).
+
+    Only ``EnvelopeState.ABSENT`` tokens reach here — minted before the
+    envelope shipped, or presented while no DCR key is configured.
+    """
+    from .oauth_ha_auth import RefreshDisposition, translated_client_id_for_refresh
+
+    translated = await translated_client_id_for_refresh(
+        cfg.get(CFG_CIMD_SESSION),
+        dcr_key,
+        client_id,
+    )
+    if translated is RefreshDisposition.UNREPRODUCIBLE:
+        # The token was bound to an origin nothing here can name, so core
+        # would reject it; answering locally keeps a guaranteed failure out
+        # of core's failed-login accounting. Registration still advertises
+        # refresh_token for these clients — one re-authorize mints an
+        # envelope-carrying token that refreshes from then on.
+        return _json_error(
+            "invalid_grant",
+            400,
+            "re-authorize once: this refresh token predates the signed "
+            "identity envelope, and its client's registration names no single "
+            "reproducible web origin to re-derive it from",
+        )
+    if translated is RefreshDisposition.PASSTHROUGH:
+        return client_id, False
+    return translated, False
+
+
+async def _code_leg_forces_proxy(
+    cfg: dict[str, Any], dcr_key: bytes | None, client_id: str
+) -> bool:
+    """Whether an UNTRANSLATED code exchange must still be proxied (#2248).
+
+    The authorize leg's same-origin fast path returns the client_id without
+    fetching its CIMD document, which is right for that leg — but it means a
+    hybrid identity (redirects across two web origins, one of them same-origin
+    with the client_id) reaches core untranslated and gets core's RAW refresh
+    token back. Its redirect-less refresh then lands in
+    ``translated_client_id_for_refresh``, which DOES fetch, sees the split
+    origins and answers UNREPRODUCIBLE — a local invalid_grant forever, under
+    a message promising that re-authorizing fixes it.
+
+    So the code leg pays the one CIMD fetch the fast path skipped: an
+    unreproducible identity is proxied instead of 307'd, its ``refresh_token``
+    comes back wrapped with forward id == client_id, and the refresh leg
+    proxies that same pair to core, which accepts it. A failed fetch or a
+    reproducible identity degrades to PASSTHROUGH and the 307, exactly as
+    before. Without a DCR key there is nothing to sign the envelope with, so
+    proxying would buy nothing.
+    """
+    from .oauth_ha_auth import RefreshDisposition, translated_client_id_for_refresh
+
+    if dcr_key is None:
+        return False
+    try:
+        if urlparse(client_id).scheme != "https":
+            return False
+    except ValueError:
+        # Malformed client_id: core stays the authority (the authorize leg
+        # makes the same call on an anonymous view).
+        return False
+    disposition = await translated_client_id_for_refresh(
+        cfg.get(CFG_CIMD_SESSION),
+        dcr_key,
+        client_id,
+    )
+    return disposition is RefreshDisposition.UNREPRODUCIBLE
+
+
 class AutoApproveTokenView(HomeAssistantView):
     """Unified scoped ``/token`` dispatcher for every remote auth mode.
 
     Legacy mode uses the shared credentialed token handlers, ha_auth forwards
     into core, and none mode exchanges a PKCE code as a public client for a
     cosmetic opaque token (none mode ignores bearers and has no refresh cycle).
-
-    ha_auth's forwarded 200s carry a REWRITTEN ``refresh_token`` (issue #2248):
-    the value handed to the client is a signed envelope naming the client_id
-    core bound the grant to, which the refresh leg unwraps back into core's own
-    token. That is what makes loopback-callback and multi-origin clients
-    refreshable — nothing here has to re-derive an origin the registration
-    cannot name.
     """
 
     requires_auth = False
@@ -384,9 +519,9 @@ class AutoApproveTokenView(HomeAssistantView):
         counters, trusted_networks refresh validation, and last_used_ip all key
         on request.remote — #2213 review). Only translated identities (the body
         must be rewritten) are forwarded server-side; the translation matches
-        the authorize leg, and every forwarded 200 comes back with its
-        ``refresh_token`` wrapped in the signed envelope that makes the next
-        refresh resolvable (#2248).
+        the authorize leg, and every forwarded 200 that is a grant response
+        comes back with its ``refresh_token`` wrapped in the signed envelope
+        that makes the next refresh resolvable (#2248).
         """
         from multidict import MultiDict
 
@@ -404,7 +539,7 @@ class AutoApproveTokenView(HomeAssistantView):
         )
         dcr_key = cfg.get(CFG_DCR_SIGNING_KEY)
         client_id = str(form.get("client_id", ""))
-        resolved = await self._ha_auth_forward_identity(cfg, form, dcr_key)
+        resolved = await self._ha_auth_forward_identity(cfg, form, client_id, dcr_key)
         if isinstance(resolved, web.Response):
             return resolved
         forward_id, proxy_required = resolved
@@ -432,10 +567,12 @@ class AutoApproveTokenView(HomeAssistantView):
                     "Cache-Control": "no-store",
                 },
             )
-        # Translated identity (cross-origin CIMD / DCR blob, or an unwrapped
-        # envelope): the body must be rewritten, so the exchange is forwarded
-        # server-side. Core records this server's address for these rare
-        # clients — accepted residual, noted in the PR.
+        # The body must be rewritten, so the exchange is forwarded server-side:
+        # a translated identity (cross-origin CIMD / DCR blob), an unwrapped
+        # envelope, a revocation whose token was one, or a code leg whose
+        # untranslated identity could not otherwise refresh (#2248). Core
+        # records this server's address for these rare clients — accepted
+        # residual, noted in the PR.
         form.popall("client_id", None)
         form["client_id"] = forward_id
         return await self._proxy_token_to_core(
@@ -443,14 +580,18 @@ class AutoApproveTokenView(HomeAssistantView):
         )
 
     async def _ha_auth_forward_identity(
-        self, cfg: dict[str, Any], form: MultiDict, dcr_key: bytes | None
+        self,
+        cfg: dict[str, Any],
+        form: MultiDict,
+        client_id: str,
+        dcr_key: bytes | None,
     ) -> tuple[str, bool] | web.Response:
-        """The client_id to present to core, plus whether proxying is forced.
+        """Resolve the client_id to present to core, plus whether proxying is forced.
 
         Returns a ready ``web.Response`` instead when the grant must be
-        answered locally. Mutates ``form`` in the envelope case: the wire value
-        of ``refresh_token`` is our envelope, and core must receive the token
-        it minted.
+        answered locally. Mutates ``form`` wherever the wire value is one of
+        ours and core must receive its own: the envelope in a refresh grant,
+        and the envelope in a revocation's ``token``.
 
         Envelope first (#2248). A refresh token we wrapped names the client_id
         core bound it to, so the identity is READ rather than re-derived, and
@@ -461,53 +602,22 @@ class AutoApproveTokenView(HomeAssistantView):
         list, and a verified registration with no reproducible origin is
         answered locally rather than 307'd into a guaranteed core failure.
         """
-        from .oauth_ha_auth import (
-            RefreshDisposition,
-            resolve_forward_client_id,
-            translated_client_id_for_refresh,
-            unwrap_refresh_token,
-        )
+        from .oauth_ha_auth import resolve_forward_client_id
 
         grant_type = str(form.get("grant_type", ""))
-        client_id = str(form.get("client_id", ""))
         redirect_uri = str(form.get("redirect_uri", ""))
-        if grant_type == "refresh_token" and dcr_key is not None:
-            envelope = unwrap_refresh_token(
-                dcr_key, str(form.get("refresh_token", "")), client_id
-            )
+        if form.get("action") == "revoke":
+            # RFC 7009 revocation carries no grant_type; the only rewrite it
+            # needs is the envelope swap, and everything else 307s as before.
+            return client_id, _revoke_rewrite(dcr_key, form)
+        if grant_type == "refresh_token":
+            envelope = _envelope_identity(dcr_key, form, client_id)
             if envelope is not None:
-                core_refresh_token, forward_id = envelope
-                form.popall("refresh_token", None)
-                form["refresh_token"] = core_refresh_token
-                return forward_id, True
+                return envelope
         if not client_id:
             return client_id, False
         if grant_type == "refresh_token" and not redirect_uri:
-            # A pre-#2248 refresh token (or a tampered envelope): the identity
-            # was never recorded, so re-derive it from the registered list.
-            translated = await translated_client_id_for_refresh(
-                cfg.get(CFG_CIMD_SESSION),
-                dcr_key,
-                client_id,
-            )
-            if translated is RefreshDisposition.UNREPRODUCIBLE:
-                # The token was bound to an origin nothing here can name, so
-                # core would reject it; answering locally keeps a guaranteed
-                # failure out of core's failed-login accounting. Registration
-                # still advertises refresh_token for these clients — one
-                # re-authorize mints an envelope-carrying token that refreshes
-                # from then on.
-                return _json_error(
-                    "invalid_grant",
-                    400,
-                    "re-authorize once: this refresh token predates the "
-                    "signed identity envelope and its client's registration "
-                    "names no single reproducible web origin, so "
-                    "re-authorizing is what makes the session refreshable",
-                )
-            if translated is RefreshDisposition.PASSTHROUGH:
-                return client_id, False
-            return translated, False
+            return await _pre_envelope_refresh_identity(cfg, dcr_key, client_id)
         # Authorization-code exchanges — and refreshes that DO carry a
         # redirect_uri — use the presented redirect, exactly like the authorize
         # leg. With no redirect_uri, validation leaves the client_id untouched
@@ -518,6 +628,8 @@ class AutoApproveTokenView(HomeAssistantView):
             client_id,
             redirect_uri,
         )
+        if grant_type == "authorization_code" and forward_id == client_id:
+            return client_id, await _code_leg_forces_proxy(cfg, dcr_key, client_id)
         return forward_id, False
 
     async def _proxy_token_to_core(
@@ -539,7 +651,13 @@ class AutoApproveTokenView(HomeAssistantView):
 
         session = cfg.get("session")
         if session is None:
-            return _json_error("temporarily_unavailable", 503)
+            _LOGGER.warning(
+                "ha_auth token forward: the entry has no relay session "
+                "(half-initialised setup); answering 503"
+            )
+            return _json_error(
+                "temporarily_unavailable", 503, "token forwarding is not available"
+            )
         base = core_token_base_url(self._hass)
         try:
             async with session.post(
@@ -548,7 +666,13 @@ class AutoApproveTokenView(HomeAssistantView):
                 timeout=aiohttp.ClientTimeout(total=25),
             ) as resp:
                 body = await resp.read()
-                if resp.status == 200 and dcr_key is not None:
+                # Revocation answers 200 with an EMPTY body, so there is
+                # nothing to rewrite and a warning would be pure noise.
+                if (
+                    resp.status == 200
+                    and dcr_key is not None
+                    and form.get("action") != "revoke"
+                ):
                     body = rewrite_token_response_body(
                         dcr_key, body, forward_id, client_id
                     )
@@ -558,8 +682,15 @@ class AutoApproveTokenView(HomeAssistantView):
                     content_type=resp.content_type or "application/json",
                     headers=_TOKEN_RESPONSE_HEADERS,
                 )
-        except (TimeoutError, aiohttp.ClientError):
-            return _json_error("temporarily_unavailable", 503)
+        except (TimeoutError, aiohttp.ClientError) as err:
+            _LOGGER.warning(
+                "ha_auth token forward to %s failed: %s",
+                base,
+                type(err).__name__,
+            )
+            return _json_error(
+                "temporarily_unavailable", 503, "core did not answer the token request"
+            )
 
 
 def bind_autoapprove_views(hass: HomeAssistant) -> None:

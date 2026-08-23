@@ -42,8 +42,8 @@ security considerations page).
 MIRROR: ``homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/oauth_indirect.py``
 is the near-verbatim twin of this module. Keep behavioural changes on the two
 sides in step; that file's header names the pair's one intended delta (the
-loopback and redirect-shape helpers come from ``oauth_legacy.py`` here and
-``oauth.py`` there).
+loopback, redirect-shape, and base64url helpers come from ``oauth_legacy.py``
+here and ``oauth.py`` there).
 """
 
 from __future__ import annotations
@@ -262,8 +262,7 @@ def stable_translation_origin(registered: list[str]) -> str | None:
     an ephemeral port (RFC 8252) — they are translated from the presented
     redirect on the authorize/code legs, and the redirect_uri-less refresh leg
     reads that origin back out of the signed envelope instead of deriving it
-    here (#2248). This derivation now serves only refresh tokens minted before
-    the envelope shipped.
+    here (#2248).
     """
     origins: set[str] = set()
     for uri in registered:
@@ -518,23 +517,40 @@ def wrap_refresh_token(
     return f"{_REFRESH_ENVELOPE_PREFIX}{body}.{_b64url_encode(sig)}"
 
 
-def unwrap_refresh_token(
-    signing_key: bytes, token: str, presented_client_id: str
-) -> tuple[str, str] | None:
-    """Recover ``(core refresh token, forward client_id)``, or None.
+class EnvelopeState(Enum):
+    """Why :func:`unwrap_refresh_token` returned no ``(token, client_id)`` pair.
 
-    None for anything that is not an intact envelope minted for THIS presenter:
-    a bare core token from before the envelope shipped, a tampered signature, a
-    DCR blob, or garbage. Never raises — this runs on an anonymous view, so a
-    malformed value must fall through to the legacy derivation rather than
-    traceback (the contract ``client_redirect_uris`` states for its own blob).
+    ``ABSENT`` — the value carries no ``hamcp-rt-`` prefix: a bare core token
+    minted before the envelope shipped (#2248), a DCR blob, or garbage. The
+    caller falls through to the legacy derivation.
+    ``INVALID`` — our prefix, with nothing redeemable behind it: a bad MAC, a
+    presenter mismatch, a malformed body, or an unknown version. Core cannot
+    redeem such a value either, so the caller answers it locally instead of
+    relaying it (the DCR signing key may simply have rotated).
+    """
+
+    ABSENT = "absent"
+    INVALID = "invalid"
+
+
+def unwrap_refresh_token(
+    signing_key: bytes, token: str, presented_client_id: str | None
+) -> tuple[str, str] | EnvelopeState:
+    """Recover ``(core refresh token, forward client_id)``, or why it failed.
+
+    ``presented_client_id`` is the identity the envelope must have been minted
+    alongside; pass None to skip that binding, which is what RFC 7009
+    revocation wants — it authorizes the bearer of the token, not a client.
+    Never raises: this runs on an anonymous view, and the two
+    :class:`EnvelopeState` members are the whole failure surface. ``json.loads``
+    runs only AFTER the MAC verifies, so no caller-chosen nesting reaches it.
     """
     if not token.startswith(_REFRESH_ENVELOPE_PREFIX):
-        return None
+        return EnvelopeState.ABSENT
     blob = token[len(_REFRESH_ENVELOPE_PREFIX) :]
     body, sep, sig_part = blob.rpartition(".")
     if not sep or not body:
-        return None
+        return EnvelopeState.INVALID
     try:
         expected = hmac.new(
             signing_key,
@@ -542,12 +558,12 @@ def unwrap_refresh_token(
             hashlib.sha256,
         ).digest()
         if not hmac.compare_digest(_b64url_decode(sig_part), expected):
-            return None
+            return EnvelopeState.INVALID
         payload = json.loads(_b64url_decode(body))
     except (ValueError, binascii.Error, UnicodeEncodeError):
-        return None
+        return EnvelopeState.INVALID
     if not isinstance(payload, dict) or payload.get("v") != 1:
-        return None
+        return EnvelopeState.INVALID
     core_refresh_token = payload.get("t")
     forward_client_id = payload.get("c")
     presenter = payload.get("p")
@@ -556,9 +572,11 @@ def unwrap_refresh_token(
         and isinstance(forward_client_id, str)
         and isinstance(presenter, str)
     ):
-        return None
-    if not hmac.compare_digest(presenter, _presented_client_hash(presented_client_id)):
-        return None
+        return EnvelopeState.INVALID
+    if presented_client_id is not None and not hmac.compare_digest(
+        presenter, _presented_client_hash(presented_client_id)
+    ):
+        return EnvelopeState.INVALID
     return core_refresh_token, forward_client_id
 
 
@@ -576,11 +594,28 @@ def rewrite_token_response_body(
     try:
         parsed = json.loads(body)
     except (ValueError, RecursionError):
+        # RecursionError: json.loads on a deeply nested body (#2218 review).
+        if body:
+            # A 200 from core's token endpoint is always a JSON object; a
+            # non-empty body that is not one means core changed shape (or
+            # something else answered), and the relay is flying blind.
+            _LOGGER.warning(
+                "ha_auth token response: core returned a non-JSON 200 body "
+                "(%d bytes); relaying it unwrapped",
+                len(body),
+            )
         return body
     if not isinstance(parsed, dict):
+        _LOGGER.warning(
+            "ha_auth token response: core returned JSON %s rather than an "
+            "object; relaying it unwrapped",
+            type(parsed).__name__,
+        )
         return body
     core_refresh_token = parsed.get("refresh_token")
     if not isinstance(core_refresh_token, str):
+        # Expected on the refresh leg: core answers access_token/token_type/
+        # expires_in with nothing to wrap. Silent by design.
         return body
     parsed["refresh_token"] = wrap_refresh_token(
         signing_key, core_refresh_token, forward_client_id, presented_client_id
@@ -599,11 +634,8 @@ class RefreshDisposition(Enum):
     relaying a guaranteed core failure into its failed-login accounting
     (#2217 review — previously only DCR blobs got that answer, so CIMD
     identities of the same shape were 307'd into core on every token expiry).
-    Reachable only for refresh tokens minted before the signed envelope
-    shipped (#2248): an envelope names the identity outright, so the derivation
-    below never runs for one. A single re-authorize migrates such a session to
-    an envelope-carrying token, which refreshes whatever its registration
-    shape.
+    Reachable only for pre-envelope refresh tokens (#2248), which one
+    re-authorize migrates to an envelope that names its identity outright.
     """
 
     PASSTHROUGH = "passthrough"
@@ -617,10 +649,12 @@ async def translated_client_id_for_refresh(
 ) -> str | RefreshDisposition:
     """Refresh-leg identity for a PRE-ENVELOPE token: an origin, or a disposition.
 
-    The caller reaches here only when the presented refresh token is not a
-    signed envelope (:func:`unwrap_refresh_token`) — i.e. it was minted before
-    #2248 shipped, or it was tampered with. Envelope-carrying tokens name their
-    identity outright and never take this path.
+    Reached only for :attr:`EnvelopeState.ABSENT` — a bare token minted before
+    #2248 shipped — or when no DCR key is configured, so the envelope check is
+    skipped entirely. A verified envelope names its identity outright, and one
+    that carries our prefix without verifying (:attr:`EnvelopeState.INVALID`:
+    tampered, replayed under another client_id, or signed under a rotated key)
+    is answered locally by the caller; neither reaches here.
 
     Must agree with what the authorize/code legs presented to core, or core
     rejects the refresh (the token is bound to the client_id it was minted
@@ -644,8 +678,7 @@ async def translated_client_id_for_refresh(
     * Everything else that is VERIFIED — multiple web origins (Gemini
       Spark-class), loopback-only (Claude Code-class), or hybrid — cannot be
       re-derived from a pre-envelope token without the redirect:
-      ``UNREPRODUCIBLE``, which one re-authorize converts into an
-      envelope-carrying session that refreshes indefinitely.
+      ``UNREPRODUCIBLE``.
     """
     registered: list[str] | None = None
     if dcr_key is not None:
@@ -663,10 +696,6 @@ async def translated_client_id_for_refresh(
         return RefreshDisposition.PASSTHROUGH
     if not _refresh_identity_is_reproducible(registered):
         return RefreshDisposition.UNREPRODUCIBLE
-    # Reproducible ⇒ exactly one web origin ⇒ stable_translation_origin cannot
-    # return None (canonical_origin_url is one-to-one over normalized origins).
-    stable = stable_translation_origin(registered)
-    assert stable is not None
     # Reproduce what the authorize leg forwarded, or admit we cannot. That
     # leg's fast path keys off the PRESENTED redirect, which the redirect-less
     # refresh grant does not carry, so the registered list is all we have:
@@ -696,6 +725,28 @@ async def translated_client_id_for_refresh(
     if all(matched):
         return RefreshDisposition.PASSTHROUGH
     if any(matched):
+        return RefreshDisposition.UNREPRODUCIBLE
+    return _stable_origin_or_unreproducible(registered, client_id)
+
+
+def _stable_origin_or_unreproducible(
+    registered: list[str], client_id: str
+) -> str | RefreshDisposition:
+    """The one web origin ``registered`` translates to, or ``UNREPRODUCIBLE``.
+
+    ``_refresh_identity_is_reproducible`` already established that exactly one
+    exists (canonical_origin_url is one-to-one over normalized origins), so
+    None here means those two disagree. This view is ANONYMOUS: a bare
+    ``assert`` would turn that into a 500, and ``-O`` strips it outright — so
+    the impossible case degrades to the answer an ambiguous registration gets.
+    """
+    stable = stable_translation_origin(registered)
+    if stable is None:
+        _LOGGER.warning(
+            "ha_auth refresh: %s passed the reproducible-identity check but "
+            "names no single web origin; answering unreproducible",
+            client_id,
+        )
         return RefreshDisposition.UNREPRODUCIBLE
     return stable
 

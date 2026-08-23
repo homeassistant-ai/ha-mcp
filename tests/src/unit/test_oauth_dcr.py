@@ -297,12 +297,11 @@ async def test_register_accepts_google_multi_origin_client(dcr_view_client_facto
 async def test_register_preserves_explicit_zero_port_in_web_origin(
     dcr_view_client_factory,
 ):
-    """Treat an explicit port zero as distinct from the HTTPS default port.
+    """Round-trip an explicit port zero through the registration view.
 
-    Port 0 is falsy, so a normalizer applying the scheme default with ``or``
-    would collapse these two into one origin. The registration round-trips both
-    URIs verbatim and ``normalized_origin`` keeps them apart, which is what the
-    authorize-leg translation keys off.
+    The origin identity itself is pinned next to the other translation unit
+    tests, by
+    test_oauth_ha_auth.test_normalized_origin_keeps_an_explicit_zero_port_distinct.
     """
     client = await dcr_view_client_factory(dcr_key=KEY, resource_server=object())
     redirect_uris = ["https://a.example/cb", "https://a.example:0/cb"]
@@ -314,16 +313,6 @@ async def test_register_preserves_explicit_zero_port_in_web_origin(
 
     assert resp.status == 201
     assert client_redirect_uris(KEY, (await resp.json())["client_id"]) == redirect_uris
-    assert oauth_dcr.normalized_origin("https://a.example:0/cb") == (
-        "https",
-        "a.example",
-        0,
-    )
-    assert oauth_dcr.normalized_origin("https://a.example/cb") == (
-        "https",
-        "a.example",
-        443,
-    )
 
 
 async def test_register_none_mode_advertises_authorization_code_only(
