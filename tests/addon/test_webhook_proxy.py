@@ -392,6 +392,14 @@ def _dcr_registration_supported() -> bool:
     return "DcrRegisterView" in _component_src("oauth_dcr.py")
 
 
+def _scoped_revoke_supported() -> bool:
+    """Feature-detect the scoped RFC 7009 revocation dispatcher (#2248).
+
+    Bound alongside the unified authorize/token pair in every mode (it 404s
+    outside ha_auth); stable gains it on promotion."""
+    return "AutoApproveRevokeView" in _component_src("oauth_autoapprove.py")
+
+
 def _dedicated_cimd_session() -> bool:
     """Feature-detect the isolated CIMD connector pool."""
     return "cimd_session" in _component_src("__init__.py")
@@ -2531,11 +2539,13 @@ class TestOAuthSetupEntry:
         assert provider.client_id == "client-1234567890ABCDEF"
         # 4 core OAuth views, plus the well-known metadata variants on flavors
         # that ship them (feature-detected — see _wellknown_oauth_urls), plus
-        # the two unified scoped dispatchers that legacy mode now also binds.
+        # the two unified scoped dispatchers that legacy mode now also binds,
+        # plus the scoped revocation dispatcher bound with them (#2248).
         expected_views = (
             4
             + len(_wellknown_oauth_urls(oauth, "mcp_test"))
             + (2 if _unified_oauth_routes() else 0)
+            + (1 if _scoped_revoke_supported() else 0)
         )
         assert hass.http.register_view.call_count == expected_views
         # Successful OAuth setup records that THIS flavor owns the root routes,
@@ -4853,6 +4863,8 @@ class TestOAuthSetupEntryRegistersExpectedViews:
                 f"{CURRENT['oauth_base']}/authorize",
                 f"{CURRENT['oauth_base']}/token",
             }
+        if _scoped_revoke_supported():
+            expected.add(f"{CURRENT['oauth_base']}/revoke")
         assert registered_urls == expected
 
 
@@ -4974,6 +4986,8 @@ class TestHaAuthMode:
                 f"{CURRENT['oauth_base']}/authorize",
                 f"{CURRENT['oauth_base']}/token",
             }
+        if _scoped_revoke_supported():
+            expected.add(f"{CURRENT['oauth_base']}/revoke")
         if _dcr_registration_supported():
             expected.add(f"{CURRENT['oauth_base']}/register")
         assert registered == expected
