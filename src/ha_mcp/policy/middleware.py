@@ -159,7 +159,7 @@ class PolicyMiddleware(Middleware):
                     "evaluate safely against the security policy.",
                     suggestions=[
                         "Reduce the nesting depth of the tool call arguments "
-                        "and retry.",
+                        + "and retry.",
                     ],
                 )
             )
@@ -389,10 +389,10 @@ class PolicyMiddleware(Middleware):
             )
             suggestions = [
                 "Do not tell the user to approve the token above -- it no "
-                "longer exists and there is nothing left to approve.",
+                + "longer exists and there is nothing left to approve.",
                 "Re-call this tool with the same arguments to create a new "
-                "pending request, then have the user approve THAT one "
-                "while the new call is still waiting on it.",
+                + "pending request, then have the user approve THAT one "
+                + "while the new call is still waiting on it.",
             ]
         else:
             message = (

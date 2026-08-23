@@ -139,18 +139,28 @@ class TestCreateConnectionError:
         defaults (check HA is running / verify HOMEASSISTANT_URL / check
         network) -- those are actively unhelpful for a non-network cause
         (e.g. a malformed local registry row) that still routes through
-        this same connection-error shape."""
+        this same connection-error shape.
+
+        Two custom suggestions, not one: ``create_error_response`` only
+        sets the plural ``suggestions`` key when there is more than one
+        (a single suggestion is carried solely in the singular
+        ``suggestion`` key), so a one-item list here could never actually
+        populate ``suggestions`` -- checking a default string is absent
+        from a key that is always absent by construction would prove
+        nothing about whether the defaults were really overridden.
+        """
+        custom_suggestions = [
+            "Check Home Assistant's device-registry logs",
+            "Restart Home Assistant if the issue persists",
+        ]
+
         response = create_connection_error(
             "Could not verify against Home Assistant's device registry",
-            suggestions=["Check Home Assistant's device-registry logs"],
+            suggestions=custom_suggestions,
         )
 
-        assert response["error"]["suggestion"] == (
-            "Check Home Assistant's device-registry logs"
-        )
-        assert "Check if Home Assistant is running and accessible" not in (
-            response["error"].get("suggestions", [])
-        )
+        assert response["error"]["suggestion"] == custom_suggestions[0]
+        assert response["error"]["suggestions"] == custom_suggestions
 
     def test_omitted_suggestions_still_yield_the_defaults(self):
         """No ``suggestions`` argument (the overwhelming majority of
