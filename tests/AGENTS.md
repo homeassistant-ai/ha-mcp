@@ -49,10 +49,11 @@ rather than assume the e2e's always-present case.
 ## Test Patterns
 
 - Tests expecting tool **success**: use `mcp.call_tool_success()` inside `MCPAssertions` context
-- Tests expecting tool **failure**: use `mcp.call_tool_failure()` inside `MCPAssertions` context.
-  It catches the `ToolError`, asserts the call actually failed rather than silently
-  succeeding, and — when `expected_error` is given — matches it against the extracted
-  error message.
+- Tests expecting tool **failure**: use `mcp.call_tool_failure()` inside `MCPAssertions`
+  context, and **pass `expected_error`**. It catches the `ToolError` and matches
+  `expected_error` against the extracted message. Without `expected_error` it is a weak
+  assertion: the success check is `if data.get("success")`, so a result dict that omits
+  the key entirely is accepted as a failure.
 - `safe_call_tool()` is for calls whose outcome the test does **not** assert: `finally`
   cleanup (so a cleanup failure cannot mask the real assertion) and service-availability
   probes. It swallows `ToolError` and returns a parsed dict, so using it for an expected

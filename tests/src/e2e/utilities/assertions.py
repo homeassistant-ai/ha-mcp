@@ -113,8 +113,11 @@ async def safe_call_tool(
 ) -> dict[str, Any]:
     """Call an MCP tool and return parsed result, handling ToolError exceptions.
 
-    This is useful for tests that expect tools to fail and want to inspect
-    the error response without catching exceptions manually.
+    For a call whose outcome the test does NOT assert: ``finally``-block cleanup
+    (so a cleanup failure cannot mask the real assertion) and service-availability
+    probes. It swallows ``ToolError`` and returns a parsed dict either way, so a
+    test that asserts a failure should use ``MCPAssertions.call_tool_failure()``
+    with ``expected_error`` instead -- see tests/AGENTS.md "Test Patterns".
 
     Args:
         mcp_client: The MCP client instance
