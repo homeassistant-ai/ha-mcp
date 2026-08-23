@@ -100,6 +100,16 @@ class ErrorCode(StrEnum):
     USER_DENIED = "USER_DENIED"
     POLICY_LOAD_FAILED = "POLICY_LOAD_FAILED"
 
+    # Distinct from POLICY_LOAD_FAILED above: the policy file itself loaded
+    # fine, but this call's own arguments were too deeply nested to
+    # evaluate against it safely (see normalize_stringified_containers'
+    # RecursionError handling in middleware.py). A different failure with a
+    # different, caller-shaped remedy ("reduce the nesting depth and
+    # retry") -- sharing POLICY_LOAD_FAILED would make the two
+    # indistinguishable to anything grouping on the code (a dashboard, an
+    # operator grepping logs after "my policy broke").
+    POLICY_ARGS_TOO_DEEPLY_NESTED = "POLICY_ARGS_TOO_DEEPLY_NESTED"
+
     # Read Only Mode (discussion #1569). A write operation was blocked
     # because the server-wide Read Only Mode toggle is on.
     READ_ONLY_MODE = "READ_ONLY_MODE"
@@ -210,6 +220,10 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
         "Check documentation for required fields",
         "Ensure all required parameters are provided",
     ],
+    ErrorCode.VALIDATION_FAILED: [
+        "Check the parameter values and format against the tool documentation",
+        "Review the message and details fields for the specific constraint that failed",
+    ],
     ErrorCode.VALIDATION_INVALID_JSON: [
         "Ensure the parameter is valid JSON",
         "Check for syntax errors in JSON",
@@ -310,10 +324,21 @@ def create_connection_error(
     details: str | None = None,
     timeout: bool = False,
     context: dict[str, Any] | None = None,
+    suggestions: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Create a connection error response."""
+    """Create a connection error response.
+
+    ``suggestions`` overrides ``DEFAULT_SUGGESTIONS[CONNECTION_FAILED/TIMEOUT]``
+    (network/URL/connectivity checks) for a caller whose failure is
+    CONNECTION_FAILED-shaped (unavailable, not the caller's fault to fix by
+    editing input) but not actually a network problem — e.g. malformed local
+    registry data or an unloadable local config file, where "check your
+    HOMEASSISTANT_URL" is not an actionable next step.
+    """
     code = ErrorCode.CONNECTION_TIMEOUT if timeout else ErrorCode.CONNECTION_FAILED
-    return create_error_response(code, message, details, context=context)
+    return create_error_response(
+        code, message, details, suggestions=suggestions, context=context
+    )
 
 
 # Authentication-error suggestions for Home Assistant add-on installs. On the

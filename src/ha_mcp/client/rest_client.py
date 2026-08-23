@@ -409,13 +409,26 @@ class HomeAssistantClient:
         return await self._request("GET", "/config")
 
     async def get_states(self) -> list[dict[str, Any]]:
-        """Get all entity states."""
+        """Get all entity states.
+
+        Raises ``HomeAssistantConnectionError`` when the response isn't the
+        JSON array ``/states`` always returns on success -- including
+        ``_request``'s own empty-dict fallback for an unparseable body.
+        Silently returning ``[]`` here would let a genuine fetch failure
+        masquerade as "this instance has zero entities", which no real,
+        running Home Assistant instance produces; callers that need to
+        verify something against the live entity set (e.g. a bulk-control
+        safety check) would otherwise treat that failure as "verified,
+        nothing to worry about" instead of "could not verify".
+        """
         logger.debug("Fetching all entity states")
         result = await self._request("GET", "/states")
         if isinstance(result, list):
             return result
-        else:
-            return []
+        raise HomeAssistantConnectionError(
+            f"Home Assistant /states returned an unexpected response shape: "
+            f"{type(result).__name__}"
+        )
 
     async def get_entity_state(self, entity_id: str) -> dict[str, Any]:
         """

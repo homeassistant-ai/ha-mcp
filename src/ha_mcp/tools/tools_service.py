@@ -5,7 +5,7 @@ This module provides service execution and WebSocket-enabled operation monitorin
 """
 
 import logging
-from typing import Annotated, Any, NoReturn, NotRequired, TypedDict, cast
+from typing import Annotated, Any, NamedTuple, NoReturn, NotRequired, TypedDict, cast
 
 import httpx
 from fastmcp import Context
@@ -14,6 +14,7 @@ from fastmcp.tools import tool
 from pydantic import ConfigDict, Field, SkipValidation, TypeAdapter, ValidationError
 
 from ..client.rest_client import (
+    HomeAssistantClient,
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
@@ -21,8 +22,19 @@ from ..client.rest_client import (
 from ..client.websocket_client import get_websocket_client
 from ..errors import (
     ErrorCode,
+    create_connection_error,
     create_error_response,
     create_validation_error,
+)
+from ..utils.entity_membership import normalize_member_entity_ids
+from .bulk_selector import (
+    _NON_AGGREGATE_ROOT_DOMAINS,
+    BulkControlSelector,
+    BulkSelectorInfrastructureError,
+    BulkSelectorResolution,
+    BulkSelectorValidationError,
+    InfrastructureErrorCause,
+    resolve_bulk_selector,
 )
 from .component_api import (
     component_supports,
@@ -129,6 +141,437 @@ class BulkControlOperation(TypedDict):
 # outside the class body because mypy permits only field declarations there.
 BulkControlOperation.__pydantic_config__ = ConfigDict(extra="forbid")  # type: ignore[attr-defined]
 _BULK_CONTROL_OPERATION_ADAPTER = TypeAdapter(BulkControlOperation)
+
+
+def _parse_bulk_operations(operations: Any) -> list[Any]:
+    """Parse explicit bulk rows while preserving per-row runtime failures."""
+    try:
+        parsed_operations = parse_json_param(operations, "operations")
+    except ValueError as exc:
+        raise_tool_error(
+            create_validation_error(
+                f"Invalid operations parameter: {exc}",
+                parameter="operations",
+                invalid_json=True,
+            )
+        )
+    if not isinstance(parsed_operations, list):
+        raise_tool_error(
+            create_validation_error(
+                "Operations parameter must be a list",
+                parameter="operations",
+                details=f"Received type: {type(parsed_operations).__name__}",
+            )
+        )
+    operations_list: list[Any] = []
+    for index, operation in enumerate(parsed_operations):
+        try:
+            operations_list.append(
+                _BULK_CONTROL_OPERATION_ADAPTER.validate_python(operation)
+            )
+        except ValidationError as exc:
+            # include_input=False: a malformed row can carry a lock or alarm
+            # code in its `parameters`, and str(exc) would otherwise write
+            # that value to persistent logs.
+            logger.warning(
+                "ha_bulk_control operation %d failed schema validation: %s",
+                index,
+                exc.errors(include_url=False, include_input=False),
+            )
+            # The malformed row is deliberately preserved (not dropped) so
+            # the runtime batch validator downstream still reports it as a
+            # per-operation failure with its own diagnostics, instead of it
+            # silently vanishing from the batch.
+            operations_list.append(operation)
+    return operations_list
+
+
+def _expand_membership_transitively(
+    entity_id: str, states_by_id: dict[str, Any], *, visited: set[str] | None = None
+) -> set[str]:
+    """Return every entity reachable from ``entity_id`` via nested
+    group/aggregate membership -- direct members and, recursively, THEIR
+    members too (an outer Zone containing an inner Room group, say).
+
+    ``visited`` guards against a membership cycle; an entity already seen
+    on this walk is treated as having no further members instead of
+    recursing forever. Keyword-only and defaulted to ``None`` (allocated
+    internally on first call) rather than a plain mutable positional
+    parameter: today every top-level caller happens to pass a fresh
+    ``set()``, but a positional mutable default is the kind of thing a
+    later "optimization" hoists out of a loop -- which would silently
+    start returning empty member sets (everything already "visited") and
+    lose conflicts instead of erroring. Best-effort, not authoritative: an
+    unknown or stateless entity simply contributes no members, mirroring
+    ``_find_group_member_conflicts``'s own tolerance for a batch that
+    references something ``states`` doesn't have -- this is a safety-net
+    scan over the small set of entities in one batch, not the selector
+    resolver's own graph-integrity validation (``bulk_selector._expand_entity``),
+    which is right to raise on exactly those cases when it is actually
+    resolving a dispatch set.
+    """
+    if visited is None:
+        visited = set()
+    if entity_id in visited:
+        return set()
+    visited.add(entity_id)
+    state = states_by_id.get(entity_id)
+    if state is None:
+        return set()
+    members = normalize_member_entity_ids(state.get("attributes"))
+    if not members:
+        return set()
+    expanded = set(members)
+    for member_id in members:
+        expanded.update(
+            _expand_membership_transitively(member_id, states_by_id, visited=visited)
+        )
+    return expanded
+
+
+class _GroupConflict(NamedTuple):
+    """One group/aggregate entity's conflict with an operations batch.
+
+    ``unlisted_members``: this group's members that were NOT separately
+    listed in the batch -- the entities the group's own cascade will
+    change WITHOUT the caller having asked for them. This is the
+    actionable half of the report: the caller needs to know which
+    entities their attempt to exclude something actually failed to
+    protect. Preferred over ``redundant_members`` whenever non-empty.
+    ``redundant_members``: this group's members that WERE also listed
+    separately -- harmless (each ends up in the requested state either
+    way via the group's own fan-out), but still flagged as a conflict
+    since a differing per-row action or parameters races that fan-out
+    rather than safely overriding it. Reported only when
+    ``unlisted_members`` is empty (every member is already accounted
+    for), since naming the harmless rows instead of the harmed ones is
+    the wrong report even when both are non-empty.
+    """
+
+    unlisted_members: list[str]
+    redundant_members: list[str]
+
+
+# Every listed member beyond this many is summarized as "+N more" rather
+# than enumerated: `unlisted_members` is bounded by instance topology size
+# (a group's total member count), not batch size, so a large group produces
+# an unbounded error message otherwise. This is a fail-closed path -- the
+# remedy sentence at the end is the entire value of the error -- and
+# visibility/enforcement.py scans tool-error text for hidden entity IDs,
+# refusing the whole call if one appears; enumerating every member makes
+# that materially more likely for no benefit once the caller already has
+# the point.
+_MAX_LISTED_GROUP_MEMBERS = 10
+
+
+def _format_member_list(members: list[str]) -> str:
+    """Render a member list for an error message, capped at
+    ``_MAX_LISTED_GROUP_MEMBERS`` (see its docstring)."""
+    shown = ", ".join(members[:_MAX_LISTED_GROUP_MEMBERS])
+    overflow = len(members) - _MAX_LISTED_GROUP_MEMBERS
+    return f"{shown} (+{overflow} more)" if overflow > 0 else shown
+
+
+def _find_group_member_conflicts(
+    entity_ids: set[str], states: list[Any]
+) -> dict[str, _GroupConflict]:
+    """Return ``{group_entity_id: _GroupConflict}`` for every group/
+    aggregate entity this batch targets alongside one or more of its own
+    members -- direct or nested (a batch targeting an outer group and a
+    leaf reachable only through an inner group it contains is exactly as
+    unsafe as targeting the inner group and that leaf directly).
+
+    Scenes ARE checked here, unlike ``bulk_selector``'s aggregate-root
+    admission (``_NON_AGGREGATE_ROOT_DOMAINS``): the two ask different
+    questions. Selector mode asks "may I expand this entity's ``entity_id``
+    attribute to decide what to INCLUDE" -- no for a scene, since its
+    configured targets can live anywhere in the house and would wrongly
+    drag them into an area-scoped dispatch. This function asks "will
+    dispatching this row also change something else named in this same
+    batch" -- yes for a scene: ``scene.turn_on`` applies the scene's stored
+    states to every entity it configures, exactly the same batch-internal
+    race a real group's cascade creates. Skipping scenes here would leave
+    that race open for the one entity type whose whole purpose is fanning
+    a single action out to many others.
+    """
+    states_by_id = {
+        state["entity_id"]: state
+        for state in states
+        if isinstance(state, dict) and isinstance(state.get("entity_id"), str)
+    }
+    conflicts: dict[str, _GroupConflict] = {}
+    for entity_id in sorted(entity_ids):
+        transitive_members = _expand_membership_transitively(entity_id, states_by_id)
+        if not transitive_members:
+            continue
+        redundant_members = sorted((entity_ids & transitive_members) - {entity_id})
+        if not redundant_members:
+            continue
+        unlisted_members = sorted(transitive_members - entity_ids)
+        conflicts[entity_id] = _GroupConflict(unlisted_members, redundant_members)
+    return conflicts
+
+
+async def _reject_operations_group_member_conflicts(
+    client: HomeAssistantClient, operations: list[Any]
+) -> None:
+    """Fail closed when an operations-mode batch targets a group/aggregate
+    entity together with one or more of its own members.
+
+    Confirmed live (2026-08-23): Home Assistant (Hue Room/Zone groups in
+    particular) fans a service call on the GROUP entity out to every member
+    regardless of what else is in the same batch -- an operations batch
+    that turned off a Hue Room group plus 4 of its 5 members (deliberately
+    omitting the 5th, to exclude it) still turned the 5th member off too,
+    purely from the group row's own cascade. Listing a member row
+    separately does not shield it, so this fails the WHOLE batch closed
+    (nothing dispatched) rather than silently letting the group row's
+    cascade override an exclusion operations mode has no way to express.
+
+    Fails closed on its own states-fetch failure too: an unverifiable batch
+    is not a verified-safe one, and this is the same infrastructure-failure
+    stance ``bulk_selector.py`` takes for the analogous selector-mode read.
+    ``client.get_states()`` itself now raises ``HomeAssistantConnectionError``
+    rather than swallowing a malformed response to ``[]`` (see its
+    docstring in ``rest_client.py``) -- that used to be the actual fail-OPEN
+    hole here: an HA hiccup silently produced an empty states list, which
+    read as "verified, no conflicts" instead of "could not verify".
+
+    A single-entity (or empty/all-malformed) batch cannot contain a
+    group/member conflict by construction, so the states fetch is skipped
+    entirely for it. Every batch with 2+ distinct entities still pays one
+    uncached, full ``GET /states`` here regardless of whether any of them
+    turn out to be a group -- this trades that fixed per-call cost for
+    simplicity over fetching only the batch's own (and transitively
+    reachable) entities, which would need N concurrent per-entity reads
+    instead of one bulk one and is bounded by batch size rather than
+    instance size. Revisit if that cost becomes a real bottleneck.
+    """
+    entity_ids = {
+        op["entity_id"]
+        for op in operations
+        if isinstance(op, dict) and isinstance(op.get("entity_id"), str)
+    }
+    if len(entity_ids) < 2:
+        return
+    try:
+        states = await client.get_states()
+    except ToolError:
+        raise
+    except Exception as exc:
+        exception_to_structured_error(
+            exc,
+            context={"operation": "bulk operations group-safety check"},
+            suggestions=[
+                "Could not verify this operations batch against group/"
+                + "aggregate membership, so nothing was dispatched.",
+                "Retry the request; this may be a transient Home Assistant "
+                + "connectivity issue.",
+            ],
+        )
+        raise  # unreachable: exception_to_structured_error always raises
+    conflicts = _find_group_member_conflicts(entity_ids, states)
+    if not conflicts:
+        return
+    # Prefer naming the members that will be silently AFFECTED (not in the
+    # batch, so nothing else in the call protects them) over the ones
+    # merely redundant with the group's own row -- the redundant rows are
+    # harmless and not what the caller needs to fix. Falls back to naming
+    # the redundant ones only when every member is already accounted for
+    # (no unlisted ones exist to report).
+    detail = "; ".join(
+        (
+            f"'{group}' will also affect {_format_member_list(conflict.unlisted_members)}, "
+            "which this batch did not list"
+            if conflict.unlisted_members
+            else f"'{group}' is redundant with its own already-listed "
+            f"member(s) {_format_member_list(conflict.redundant_members)}"
+        )
+        for group, conflict in sorted(conflicts.items())
+    )
+    # A scene conflict is still real (see _find_group_member_conflicts'
+    # docstring), but selector mode cannot express "act on most of a scene
+    # while excluding some" -- scene is never an aggregate root there. That
+    # remedy sentence is only worth offering when at least one conflict is
+    # a real, selector-expressible aggregate.
+    non_scene_conflict = any(
+        not any(group.startswith(f"{d}.") for d in _NON_AGGREGATE_ROOT_DOMAINS)
+        for group in conflicts
+    )
+    selector_remedy = (
+        " To act on most of a group while excluding specific members, use "
+        "selector mode instead: exclude_entity_ids goes INSIDE selector, not "
+        "as a top-level argument, e.g. "
+        '{"selector": {"domain": "light", "area_ids": ["<area_id>"], '
+        '"exclude_entity_ids": ["<entity_to_skip>"]}, "action": "off"}. '
+        "area_ids/floor_ids must be exact registry IDs (call "
+        "ha_list_floors_areas to look them up), not display names."
+        if non_scene_conflict
+        else ""
+    )
+    raise_tool_error(
+        create_validation_error(
+            "This operations batch targets a group/aggregate entity "
+            f"together with one or more of its own individual members: {detail}. "
+            "Home Assistant applies the action to every member when the "
+            "group entity is targeted, regardless of what else is listed "
+            "separately -- a member row does not protect or exempt it from "
+            "the group's own action, and one absent from the batch entirely "
+            "is not excluded by that absence either. Target ONLY the group, "
+            "or ONLY the specific member(s) you want affected, never both "
+            f"in the same call.{selector_remedy}",
+            parameter="operations",
+        )
+    )
+
+
+def _selector_only_parameter_offender(
+    *,
+    action: str | None,
+    parameters: dict[str, Any] | None,
+    timeout_seconds: float | None,
+    validate_first: bool,
+    dry_run: bool,
+) -> str | None:
+    """Name the one selector-only parameter set on an operations-mode call.
+
+    Five distinct mistakes (action, parameters, timeout_seconds,
+    validate_first, dry_run) used to share one message that always blamed
+    "selector" — the one parameter that was demonstrably absent, since this
+    is only reached when ``selector is None``. Naming the actual offender
+    lets the caller fix the real mistake on the first try.
+    """
+    for name, value in (
+        ("action", action),
+        ("parameters", parameters),
+        ("timeout_seconds", timeout_seconds),
+    ):
+        if value is not None:
+            return name
+    if validate_first is not True:
+        return "validate_first"
+    if dry_run:
+        return "dry_run"
+    return None
+
+
+# action, parameters, timeout_seconds and validate_first are all declared
+# fields on BulkControlOperation (see its class docstring) -- in operations
+# mode they belong on each row, not as a top-level tool argument, so the
+# caller's actual fix is to move the value, not delete it. Only dry_run has
+# no per-row equivalent (there is no such thing as "dry-run this one row"),
+# so it alone gets the remove-or-switch-modes remedy.
+_PER_ROW_SELECTOR_ONLY_PARAMETERS = frozenset(
+    {"action", "parameters", "timeout_seconds", "validate_first"}
+)
+
+# One representative, correctly-typed sample value per per-row parameter,
+# for the worked example below. A bare "..." placeholder rendered inside a
+# Python dict literal is always a quoted STRING regardless of the field's
+# real type -- for timeout_seconds (a float) that example teaches the
+# model the wrong shape for the exact value it is being told to copy.
+_PER_ROW_PARAMETER_EXAMPLE_VALUES: dict[str, Any] = {
+    "action": "on",
+    "parameters": {"brightness_pct": 30},
+    "timeout_seconds": 5,
+    "validate_first": True,
+}
+
+
+def _selector_only_parameter_message(offending_parameter: str) -> str:
+    """Build the remedy for one selector-only parameter used in operations mode.
+
+    Telling the caller to remove the parameter (or abandon operations mode
+    entirely) discards their intent for the four fields that DO have a
+    per-row home: ``operations=[...], parameters={...}`` almost certainly
+    meant "apply these parameters to my operations", and the fix is to
+    move the value into each row, not delete it.
+    """
+    if offending_parameter in _PER_ROW_SELECTOR_ONLY_PARAMETERS:
+        # Built from a dict, not a hardcoded literal: 'action' is itself one
+        # of the four per-row parameters this branch handles, and a fixed
+        # "..., 'action': 'on', 'action': ...}" literal would render a
+        # duplicate-key example -- shown to a model that is being told to
+        # copy it -- whenever action is the actual offender.
+        example_row: dict[str, Any] = {"entity_id": "light.kitchen"}
+        if offending_parameter != "action":
+            example_row["action"] = "on"
+        example_row[offending_parameter] = _PER_ROW_PARAMETER_EXAMPLE_VALUES[
+            offending_parameter
+        ]
+        return (
+            f"'{offending_parameter}' is a per-operation field in operations "
+            f"mode (see BulkControlOperation), not a top-level tool argument "
+            f"-- move it onto each row instead, e.g. {example_row}, "
+            f"and remove the top-level '{offending_parameter}' argument."
+        )
+    return (
+        f"'{offending_parameter}' is a selector-only parameter and cannot be "
+        "used with operations. Either remove "
+        f"'{offending_parameter}' from this call, or switch to selector mode "
+        "by replacing 'operations' with 'selector' (+ 'action')."
+    )
+
+
+# Per-cause (message, suggestions) for BulkSelectorInfrastructureError (see
+# its docstring in bulk_selector.py). Not every infrastructure failure is a
+# network problem -- CONNECTION_FAILED's own DEFAULT_SUGGESTIONS
+# (check HA is running / verify HOMEASSISTANT_URL / check network) are
+# actively unhelpful for a malformed local registry row or a corrupt local
+# visibility config file, so those causes get their own actionable text
+# instead of inheriting the connectivity defaults.
+_INFRASTRUCTURE_ERROR_SUGGESTIONS: dict[
+    InfrastructureErrorCause, tuple[str, list[str]]
+] = {
+    InfrastructureErrorCause.CONNECTIVITY: (
+        "Could not resolve the selector because Home Assistant data was unavailable",
+        [
+            "Check if Home Assistant is running and accessible",
+            "Retry the request; this may be a transient registry read failure",
+        ],
+    ),
+    InfrastructureErrorCause.MALFORMED_DEVICE_REGISTRY: (
+        "Could not resolve the selector because Home Assistant's device "
+        "registry returned a malformed entry",
+        [
+            "This indicates malformed data in Home Assistant's own device "
+            + "registry, not a problem with the selector",
+            "Check Home Assistant's logs for device-registry errors, or "
+            + "restart Home Assistant if the issue persists",
+        ],
+    ),
+    InfrastructureErrorCause.VISIBILITY_CONFIG: (
+        "Could not resolve the selector because the entity visibility "
+        "filter could not be evaluated safely",
+        [
+            "Check the Entity Visibility tab in the ha-mcp settings UI -- "
+            + "entity_visibility.json may be corrupt or invalid",
+            "If the config looks fine, this may be a temporary Home "
+            + "Assistant registry issue -- check Home Assistant is running "
+            + "and retry",
+        ],
+    ),
+}
+
+
+def _attach_resolution_to_response(
+    response: dict[str, Any], resolution: BulkSelectorResolution
+) -> None:
+    """Attach ``resolution.summary()`` to a response, surfacing its warnings
+    at the top level.
+
+    Per AGENTS.md "Return Values", ``warnings`` is always a top-level
+    ``list[str]``, never nested inside another field.
+    ``resolution.summary()`` nests its own warnings (e.g. "N entities were
+    hidden") under ``resolution`` for internal cohesion, so this pops them
+    back out. ``response`` may already carry dispatch-time warnings (e.g.
+    from ``bulk_device_control``) -- those are extended, not overwritten.
+    """
+    summary = resolution.summary()
+    resolution_warnings = summary.pop("warnings", [])
+    response["resolution"] = summary
+    if resolution_warnings:
+        response.setdefault("warnings", []).extend(resolution_warnings)
 
 
 class _AmbiguousDispatch:
@@ -318,7 +761,7 @@ def _build_service_suggestions(
 class ServiceTools:
     """Service call and device operation tools for Home Assistant."""
 
-    def __init__(self, client: Any, device_tools: Any) -> None:
+    def __init__(self, client: HomeAssistantClient, device_tools: Any) -> None:
         self._client = client
         self._device_tools = device_tools
 
@@ -482,7 +925,20 @@ class ServiceTools:
         return response
 
     async def _capture_initial_state(self, entity_id: str | None) -> str | None:
-        """Capture the current state of an entity before a service call."""
+        """Capture the current state of an entity before a service call.
+
+        ``entity_id`` stays optional in the signature to match the caller's
+        own ``str | None`` (a service call may target zero entities); the
+        one current call site only reaches this when ``should_wait`` (which
+        embeds an ``entity_id is not None`` check among several AND-ed
+        conditions) is true, so ``entity_id`` is always real there in
+        practice -- but that invariant lives in a boolean a few lines away,
+        not in a form the type checker can see through. Narrowing here
+        instead of trusting the caller keeps ``get_entity_state`` (which
+        genuinely requires a ``str``) honestly typed.
+        """
+        if entity_id is None:
+            return None
         try:
             state_data = await self._client.get_entity_state(entity_id)
             return state_data.get("state") if state_data else None
@@ -1518,81 +1974,241 @@ class ServiceTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "All entity operations to execute in this single tool call. "
-                    "Each item requires entity_id and action. Use action='off', not "
-                    "service='turn_off'; do not include domain or service. Example: "
-                    "[{'entity_id': 'light.hall', 'action': 'off'}, "
-                    "{'entity_id': 'light.cave', 'action': 'off'}]"
+                    "Explicit entity operations. Use this or selector, never both. "
+                    "Each item requires exact entity_id and action. Use "
+                    "action='off', not service='turn_off'."
                 )
             ),
-        ],
+            # Declared type stays `list[...]` (not `| None`) so the generated
+            # tool schema shows `operations` as always a list; `cast(Any, None)`
+            # supplies the runtime default without a `| None` mypy would then
+            # require type-narrowing for at every use below `selector is None`.
+        ] = cast(Any, None),
         parallel: bool = True,
         ctx: Context | None = None,
+        selector: Annotated[
+            SkipValidation[BulkControlSelector] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Optional exact structural scope using domain plus area_ids "
+                    "and/or floor_ids, with optional exclude_entity_ids."
+                )
+            ),
+        ] = None,
+        action: Annotated[
+            str | None,
+            Field(description="One device action applied to every resolved leaf."),
+        ] = None,
+        parameters: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(description="Optional action parameters for selector mode."),
+        ] = None,
+        timeout_seconds: Annotated[
+            float | None,
+            Field(ge=0, le=60, allow_inf_nan=False, strict=True),
+        ] = None,
+        validate_first: Annotated[bool, Field(strict=True)] = True,
+        dry_run: Annotated[bool, Field(strict=True)] = False,
     ) -> dict[str, Any]:
-        """Manage multiple entity actions in one request.
+        """Manage explicit operations or one deterministic structural bulk action.
 
-        When NOT to use: use ``ha_call_service`` for one service call targeting a
-        group or for service-specific payloads that do not fit device actions.
+        When NOT to use: use ``ha_call_service`` for service-specific payloads or
+        backend-native group targeting, and ``ha_search`` for fuzzy name discovery.
 
-        Use this when one request should apply actions to multiple independent
-        entities. Optional item parameters carry brightness, temperature, position,
-        or other action data.
+        **Operations mode** (``operations``, no ``selector``): put every target in
+        this one call. Parallel execution is the default, and invalid items are
+        reported without aborting valid operations in the same batch — but a batch
+        in which every item fails validation dispatches nothing and fails the call.
+        A batch that targets a group/aggregate entity together with one or more of
+        its own individual members also fails closed (nothing dispatched): Home
+        Assistant applies the action to every member when the group is targeted
+        regardless of what else is listed, so a member row cannot exclude that
+        member from the group's own action. Use selector mode with
+        ``exclude_entity_ids`` when a group action must exclude specific members.
 
-        Caveats: put every target in ``operations`` and call the tool once. Parallel
-        execution is the default, and invalid items are reported without aborting
-        valid operations in the same batch. A batch in which every item fails
-        validation dispatches nothing and fails the call.
+        **Selector mode** (``selector`` + ``action``): use exact area or floor IDs
+        when exclusions must be applied after recursively expanding generic
+        aggregate membership. Resolves a frozen visible leaf set before dispatch;
+        it is not transactional, so Home Assistant may still report per-leaf
+        failures. A selector resolving to more than 100 entities
+        (``MAX_SELECTOR_ENTITIES``) fails closed instead of dispatching a
+        partial/oversized batch — narrow it (a more specific area/floor, or add
+        ``exclude_entity_ids``) and retry. Set ``dry_run`` to preview the resolved
+        set without changing state.
         """
-        parallel_bool = parallel
-
-        # FastMCP validates the outer list but deliberately defers item failures so
-        # one malformed row cannot abort valid operations in the same batch.
-        # parse_json_param remains a defensive passthrough for the list case.
-        try:
-            parsed_operations = parse_json_param(operations, "operations")
-        except ValueError as e:
+        if operations is None and selector is None:
             raise_tool_error(
                 create_validation_error(
-                    f"Invalid operations parameter: {e}",
+                    "Provide exactly one of operations or selector; neither was given",
                     parameter="operations",
-                    invalid_json=True,
+                )
+            )
+        if operations is not None and selector is not None:
+            raise_tool_error(
+                create_validation_error(
+                    "Provide exactly one of operations or selector; both were given",
+                    parameter="selector",
                 )
             )
 
-        if not isinstance(parsed_operations, list):
+        if selector is not None:
+            return await self._run_bulk_selector(
+                cast(dict[str, Any], selector),
+                action=action,
+                parameters=parameters,
+                timeout_seconds=timeout_seconds,
+                validate_first=validate_first,
+                dry_run=dry_run,
+                parallel=parallel,
+                ctx=ctx,
+            )
+
+        offending_parameter = _selector_only_parameter_offender(
+            action=action,
+            parameters=parameters,
+            timeout_seconds=timeout_seconds,
+            validate_first=validate_first,
+            dry_run=dry_run,
+        )
+        if offending_parameter is not None:
             raise_tool_error(
                 create_validation_error(
-                    "Operations parameter must be a list",
-                    parameter="operations",
-                    details=f"Received type: {type(parsed_operations).__name__}",
+                    _selector_only_parameter_message(offending_parameter),
+                    parameter=offending_parameter,
                 )
             )
 
-        operations_list: list[Any] = []
-        for index, operation in enumerate(parsed_operations):
-            try:
-                operations_list.append(
-                    _BULK_CONTROL_OPERATION_ADAPTER.validate_python(operation)
-                )
-            except ValidationError as exc:
-                # Preserve malformed rows for the runtime batch validator, which
-                # reports them in skipped_details instead of rejecting the call.
-                # The schema's reason is richer than the runtime validator's and
-                # is the only place it survives, so log it here.
-                # include_input=False: a malformed row can carry sensitive
-                # values (lock or alarm codes in a mistyped field), and
-                # str(exc) would write them to persistent server logs.
-                logger.warning(
-                    "ha_bulk_control operation %d failed schema validation: %s",
-                    index,
-                    exc.errors(include_url=False, include_input=False),
-                )
-                operations_list.append(operation)
+        operations_list = _parse_bulk_operations(operations)
+        await _reject_operations_group_member_conflicts(self._client, operations_list)
 
         result = await self._device_tools.bulk_device_control(
-            operations=operations_list, parallel=parallel_bool, ctx=ctx
+            operations=operations_list, parallel=parallel, ctx=ctx
         )
         return cast(dict[str, Any], result)
+
+    async def _run_bulk_selector(
+        self,
+        selector: dict[str, Any],
+        *,
+        action: str | None,
+        parameters: dict[str, Any] | None,
+        timeout_seconds: float | None,
+        validate_first: bool,
+        dry_run: bool,
+        parallel: bool,
+        ctx: Context | None,
+    ) -> dict[str, Any]:
+        """Resolve one structural selector and, unless ``dry_run``, dispatch it.
+
+        Split out of ``ha_bulk_control`` to keep that tool's own McCabe
+        complexity under the repo's C901 threshold (AGENTS.md — no per-file
+        exemptions).
+        """
+        if action is None:
+            raise_tool_error(
+                create_validation_error(
+                    "Selector mode requires action", parameter="action"
+                )
+            )
+        try:
+            parsed_selector = parse_json_param(selector, "selector")
+            if not isinstance(parsed_selector, dict):
+                raise BulkSelectorValidationError("selector must be a JSON object")
+        except ValueError as exc:
+            # BulkSelectorValidationError subclasses ValueError; catching it
+            # separately alongside ValueError was redundant.
+            parameter = getattr(exc, "parameter", "selector")
+            raise_tool_error(create_validation_error(str(exc), parameter=parameter))
+        try:
+            resolution = await resolve_bulk_selector(
+                self._client,
+                parsed_selector,
+                action=action,
+                parameters=parameters,
+                timeout_seconds=timeout_seconds,
+                validate_first=validate_first,
+            )
+        except BulkSelectorValidationError as exc:
+            # Caller-fixable: the selector itself is wrong. Unlike the
+            # `except ValueError` above (which also catches plain ValueErrors
+            # with no `.parameter`), every BulkSelectorValidationError sets
+            # one (default "selector") -- no getattr fallback needed.
+            raise_tool_error(create_validation_error(str(exc), parameter=exc.parameter))
+        except BulkSelectorInfrastructureError as exc:
+            # NOT caller-fixable by editing the selector. Routed through
+            # create_connection_error (not create_validation_error) so an
+            # agent doesn't try to rewrite a selector that was never the
+            # problem -- but the specific next step depends on exc.cause,
+            # since not every cause is actually a connectivity problem.
+            logger.warning(
+                "ha_bulk_control: selector resolution infrastructure failure (%s): %s",
+                exc.cause,
+                exc,
+            )
+            message, suggestions = _INFRASTRUCTURE_ERROR_SUGGESTIONS.get(
+                exc.cause,
+                _INFRASTRUCTURE_ERROR_SUGGESTIONS[
+                    InfrastructureErrorCause.CONNECTIVITY
+                ],
+            )
+            raise_tool_error(
+                create_connection_error(
+                    message, details=str(exc), suggestions=suggestions
+                )
+            )
+        except Exception as exc:
+            exception_to_structured_error(
+                exc,
+                context={"operation": "resolve bulk selector"},
+            )
+            raise  # unreachable: exception_to_structured_error always raises
+
+        if dry_run:
+            response: dict[str, Any] = {
+                "success": True,
+                "dry_run": True,
+                "dispatched": False,
+            }
+            _attach_resolution_to_response(response, resolution)
+            return response
+        try:
+            result = await self._device_tools.bulk_device_control(
+                operations=resolution.operations,
+                parallel=parallel,
+                ctx=ctx,
+            )
+        except ToolError:
+            # bulk_device_control already raises a fully structured ToolError
+            # (e.g. "every operation failed validation" -- see its own
+            # raise_tool_error call sites) -- re-raise it untouched. Without
+            # this guard, the except Exception below would catch it too and
+            # re-classify it via exception_to_structured_error, discarding
+            # its real code/message/suggestions for a generic one.
+            raise
+        except Exception as exc:
+            # Attach the frozen resolution to the error context: a
+            # non-transactional, partially-executed bulk write must leave a
+            # record of which entities were resolved and attempted, in the
+            # response the agent sees, not just in whatever
+            # bulk_device_control itself logged.
+            logger.warning(
+                "ha_bulk_control: dispatch failed after resolving %d entities: %s",
+                len(resolution.resolved_entity_ids),
+                exc,
+            )
+            exception_to_structured_error(
+                exc,
+                context={
+                    "operation": "bulk device control",
+                    "resolution": resolution.summary(),
+                },
+            )
+            raise  # unreachable: exception_to_structured_error always raises
+        response = cast(dict[str, Any], result)
+        _attach_resolution_to_response(response, resolution)
+        return response
 
     @tool(
         name="ha_call_event",
@@ -1683,7 +2299,9 @@ class ServiceTools:
         }
 
 
-def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+def register_service_tools(
+    mcp: Any, client: HomeAssistantClient, **kwargs: Any
+) -> None:
     """Register service call and operation monitoring tools with the MCP server."""
     device_tools = kwargs.get("device_tools")
     if not device_tools:
