@@ -988,8 +988,9 @@ class TestRegisterWebhook:
         assert isinstance(cfg[mw.CFG_AUTOAPPROVE_PROVIDER], mw.AutoApproveProvider)
         assert cfg["resource_server"] is None
         assert cfg["oauth_provider"] is None
-        # 7 discovery views + 2 unified OAuth views + 1 DCR view.
-        assert hass.http.register_view.call_count == 10
+        # 7 discovery views + 3 unified OAuth views (authorize/token/revoke)
+        # + 1 DCR view.
+        assert hass.http.register_view.call_count == 11
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
 
     async def test_none_ha_auth_none_switch_reuses_bound_views(self, monkeypatch):
@@ -1006,7 +1007,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_NONE,
         )
-        assert hass.http.register_view.call_count == 10
+        assert hass.http.register_view.call_count == 11
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
         await mw.async_unregister_webhook(hass)
 
@@ -1019,7 +1020,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_HA,
         )
-        assert hass.http.register_view.call_count == 10
+        assert hass.http.register_view.call_count == 11
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_HA
         await mw.async_unregister_webhook(hass)
 
@@ -1031,7 +1032,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_NONE,
         )
-        assert hass.http.register_view.call_count == 10
+        assert hass.http.register_view.call_count == 11
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
 
     async def test_ha_auth_registers_resource_server_and_views(self, monkeypatch):
@@ -1051,8 +1052,9 @@ class TestRegisterWebhook:
 
         cfg = hass.data[DOMAIN][DATA_WEBHOOK]
         assert isinstance(cfg["resource_server"], mw.ResourceServer)
-        # Seven discovery + two unified OAuth + one DCR view were bound.
-        assert hass.http.register_view.call_count == 10
+        # Seven discovery + three unified OAuth (authorize/token/revoke) + one
+        # DCR view were bound.
+        assert hass.http.register_view.call_count == 11
         assert hass.data.get(mw._OAUTH_VIEWS_REGISTERED_KEY) is True
 
     async def test_ha_auth_isolates_cimd_fetches_from_forwarding(self, monkeypatch):
@@ -1108,7 +1110,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_HA,
         )
-        assert hass.http.register_view.call_count == 10
+        assert hass.http.register_view.call_count == 11
         await mw.async_unregister_webhook(hass)
 
         # Second enable in the same HA session: no new bindings, no raise.
@@ -1119,7 +1121,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_HA,
         )
-        assert hass.http.register_view.call_count == 10
+        assert hass.http.register_view.call_count == 11
         assert isinstance(
             hass.data[DOMAIN][DATA_WEBHOOK]["resource_server"], mw.ResourceServer
         )
@@ -1179,8 +1181,9 @@ class TestRegisterWebhook:
         cfg = hass.data[DOMAIN][DATA_WEBHOOK]
         assert isinstance(cfg["oauth_provider"], LegacyOAuthProvider)
         assert cfg["resource_server"] is None
-        # 7 discovery + 2 unified scoped + 2 root legacy views.
-        assert hass.http.register_view.call_count == 11
+        # 7 discovery + 3 unified scoped (authorize/token/revoke) + 2 root
+        # legacy views.
+        assert hass.http.register_view.call_count == 12
         assert hass.data.get(OAUTH_ROUTE_OWNER_KEY) == DOMAIN
         assert restart_needed is False
 
@@ -1218,8 +1221,9 @@ class TestRegisterWebhook:
         assert fake_session.closed is False
         assert restart_needed is False
         assert hass.data[OAUTH_ROUTE_OWNER_KEY] == "webhook_proxy"
-        # Only metadata + unified scoped views bind; root remains add-on-owned.
-        assert hass.http.register_view.call_count == 9
+        # Only metadata + the three unified scoped views bind; root remains
+        # add-on-owned.
+        assert hass.http.register_view.call_count == 10
         assert any(
             record.levelname == "WARNING"
             and record.name == mw.__name__
