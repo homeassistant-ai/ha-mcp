@@ -331,7 +331,9 @@ class TestLiteDocstringsMappingInvariants:
           defers nothing cannot be allowed to quietly re-acquire a
           ``ha_get_skill_guide`` pointer or name a reference file, because
           that is how a description starts advertising content the pinned
-          submodule does not contain.
+          submodule does not contain. No entry declares this today — the
+          arm is kept so a tool the skill pack does not cover has an
+          honest option other than a dead pointer.
         """
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
@@ -504,12 +506,10 @@ class TestLiteDocstringsKeysAndDestinations:
         the map the tests read. If they disagree, one of them is lying to
         somebody.
 
-        NOTE: no entry names a reference file at the moment, so this
-        currently passes vacuously. It is deliberately kept rather than
-        deleted: it arms itself the moment an entry starts citing a file
-        inline, which is exactly what the ``ha_manage_backup`` pin-bump
-        commit will do when it restores that pointer alongside
-        ``references/backups.md``.
+        Live as of the ``references/backups.md`` pin bump:
+        ``ha_manage_backup``'s lite text cites that file inline and its
+        destination names the same one, so a future edit that changes one
+        without the other fails here.
         """
         from ha_mcp.server import HomeAssistantSmartMCPServer
 

@@ -135,7 +135,7 @@ Both lists above are checked against `_LITE_DOCSTRINGS` by `test_documented_tool
 |---|---|---|
 | `references/<file>.md`, `SKILL.md` | A file in the bundled skill pack. The lite text carries a `ha_get_skill_guide` pointer to reach it. | `test_every_lite_destination_resolves` reads the file out of the **vendored** pack — a description cannot defer to guide content that is not shipped. |
 | `tool-response:<field>` | The guidance ships in the tool's own response. Used by `ha_report_issue`, because issue reporting is ha-mcp product meta and the skill pack's CONTRIBUTING forbids coupling skill content to specific MCP tool names. | The field must actually be returned, and the lite text must name it. |
-| `self-contained` | The entry defers nothing — the trimmed text carries everything it needs. Used by `ha_manage_backup` until the skill pack ships a backup reference. | The lite text must carry **no** `ha_get_skill_guide` pointer and name no reference file, so an entry cannot quietly start advertising content the pinned submodule does not contain. |
+| `self-contained` | The entry defers nothing — the trimmed text carries everything it needs. **No entry uses this today**; it exists so a tool the skill pack does not cover has an honest option other than pointing at content that isn't there. | The lite text must carry **no** `ha_get_skill_guide` pointer and name no reference file, so an entry cannot quietly start advertising content the pinned submodule does not contain. |
 
 There is no exemption list: every entry is checked against the form it declares.
 

@@ -844,14 +844,15 @@ class HomeAssistantSmartMCPServer:
         # action) combinations are listed in the tool description", so
         # trimming it away would leave that pointer aimed at nothing.
         #
-        # This entry DEFERS NOTHING — it carries no ha_get_skill_guide
-        # pointer, and its destination is "self-contained". The skill pack
-        # has no backup reference yet (homeassistant-ai/skills#76 adds one),
-        # and advertising a file the pinned submodule does not contain is the
-        # exact dead-end this map exists to prevent. What the eleven worked
-        # examples covered is call syntax, which the input schema already
-        # carries; the judgment they illustrated moves in with the pointer,
-        # in the same commit that bumps the pin.
+        # The deferral target now exists: homeassistant-ai/skills#76 landed
+        # references/backups.md, and the submodule pin in this commit
+        # includes it, so test_every_lite_destination_resolves enforces it
+        # rather than the entry sitting on "self-contained". What defers is
+        # the recovery-layer judgment — which of HA's two paths fits which
+        # failure, what an archive actually contains, encryption keys, and
+        # what HA does and does not protect on delete. The eleven worked
+        # examples stay dropped: they were call syntax, which the input
+        # schema already carries.
         #
         # destructiveHint is set on this tool, so the lite text keeps every
         # irreversibility marker inline rather than deferring it: the
@@ -880,7 +881,10 @@ class HomeAssistantSmartMCPServer:
             "Use `edits` to undo a recent agent edit to an "
             "automation/script/scene/dashboard/helper; use `snapshot` for "
             "system-wide recovery and before irreversible operations. "
-            "{backup_hint_text}"
+            "{backup_hint_text}\n\n"
+            "For which recovery path fits which failure, what an archive "
+            "actually contains, and the encryption key a restore needs, see "
+            "ha_get_skill_guide (`references/backups.md`)."
         ),
         # ha_report_issue: 2045 -> 712 chars, a 65% reduction. Same dedented
         # basis as above; the raw indented docstring is 2351 chars, which is
@@ -955,7 +959,7 @@ class HomeAssistantSmartMCPServer:
         # "parameters, schema, and examples", which it never had — the
         # parameters ship in the input schema regardless.
         "ha_search": "SKILL.md",
-        "ha_manage_backup": "self-contained",
+        "ha_manage_backup": "references/backups.md",
         "ha_report_issue": "tool-response:instructions",
     }
 
