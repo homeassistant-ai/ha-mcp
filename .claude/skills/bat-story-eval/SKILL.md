@@ -33,7 +33,7 @@ If `$ARGUMENTS` is `--help` or missing `--baseline`, show usage and stop:
 ### 0a. Compute Diff
 
 ```bash
-cd "$(git rev-parse --show-toplevel)/worktree/uat-stories"
+cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/worktree/uat-stories"
 git diff <baseline>..HEAD -- src/ha_mcp/ --stat
 git diff <baseline>..HEAD -- src/ha_mcp/ --name-only
 ```
@@ -112,7 +112,7 @@ For EACH agent, run all stories against the **baseline** version. One container 
 ### 1a. Start container with first story
 
 ```bash
-cd "$(git rev-parse --show-toplevel)/worktree/uat-stories"
+cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/worktree/uat-stories"
 uv run python tests/uat/stories/run_story.py \
   catalog/<first_story>.yaml \
   --agents <agent> --keep-container \
