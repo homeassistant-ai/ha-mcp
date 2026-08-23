@@ -242,6 +242,29 @@ async def test_existing_operations_call_shape_remains_supported() -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_operations_mode_single_entity_skips_states_fetch() -> None:
+    """A single distinct entity_id can never contain a group/member
+    conflict -- there's no second row to overlap with -- so the
+    group-safety check must not fetch states for it at all. The
+    overwhelming majority of operations-mode calls target one entity (or
+    several rows for the SAME entity) and never touch a group, and
+    shouldn't pay for a states round-trip this check can never use.
+    """
+    device_tools = MagicMock()
+    device_tools.bulk_device_control = AsyncMock(return_value={"success": True})
+    client = MagicMock()
+    client.get_states = AsyncMock(return_value=[])
+    tools = ServiceTools(client, device_tools)
+
+    result = await tools.ha_bulk_control(
+        [{"entity_id": "light.one", "action": "off"}], False
+    )
+
+    assert result == {"success": True}
+    client.get_states.assert_not_awaited()
+
+
 def _light_state(entity_id: str, members: list[str] | None = None) -> dict:
     """A minimal HA state dict; ``members`` sets the group-membership
     attribute Home Assistant (and ha_mcp.utils.entity_membership) reads as
@@ -397,13 +420,118 @@ async def test_operations_mode_rejects_opposing_action_group_member_conflict() -
 
 
 @pytest.mark.asyncio
+async def test_operations_mode_rejects_nested_group_conflict() -> None:
+    """A conflict must be caught through a NESTED aggregate, not just a
+    direct member -- an outer Zone group containing an inner Room group,
+    with the batch targeting the outer group and a leaf that only belongs
+    to the inner one. Checking only ``light.outer``'s own direct
+    ``entity_id`` attribute (``["light.inner"]``) would miss this: the
+    outer group's own service call still cascades through the inner group
+    down to the leaf, exactly as unsafe as targeting the inner group and
+    that leaf directly.
+    """
+    device_tools = MagicMock()
+    device_tools.bulk_device_control = AsyncMock(return_value={"success": True})
+    client = MagicMock()
+    client.get_states = AsyncMock(
+        return_value=[
+            _light_state("light.outer", ["light.inner"]),
+            _light_state("light.inner", ["light.leaf_a", "light.leaf_b"]),
+            _light_state("light.leaf_a"),
+            _light_state("light.leaf_b"),
+        ]
+    )
+    tools = ServiceTools(client, device_tools)
+    operations = [
+        {"entity_id": "light.outer", "action": "off"},
+        {"entity_id": "light.leaf_a", "action": "off"},
+    ]
+
+    with pytest.raises(ToolError, match="group/aggregate entity"):
+        await tools.ha_bulk_control(operations, False)
+
+    device_tools.bulk_device_control.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_operations_mode_allows_unrelated_nested_groups() -> None:
+    """Two independent group hierarchies with no shared membership must
+    not cross-contaminate -- the transitive walk for one group must not
+    leak into flagging an entity that only belongs to a completely
+    different group's tree.
+    """
+    device_tools = MagicMock()
+    device_tools.bulk_device_control = AsyncMock(return_value={"success": True})
+    client = MagicMock()
+    client.get_states = AsyncMock(
+        return_value=[
+            _light_state("light.outer_a", ["light.inner_a"]),
+            _light_state("light.inner_a", ["light.leaf_a"]),
+            _light_state("light.leaf_a"),
+            _light_state("light.outer_b", ["light.inner_b"]),
+            _light_state("light.inner_b", ["light.leaf_b"]),
+            _light_state("light.leaf_b"),
+        ]
+    )
+    tools = ServiceTools(client, device_tools)
+    operations = [
+        {"entity_id": "light.outer_a", "action": "off"},
+        {"entity_id": "light.leaf_b", "action": "off"},
+    ]
+
+    result = await tools.ha_bulk_control(operations, False)
+
+    assert result == {"success": True}
+    device_tools.bulk_device_control.assert_awaited_once_with(
+        operations=operations, parallel=False, ctx=None
+    )
+
+
+@pytest.mark.asyncio
+async def test_operations_mode_cyclic_membership_does_not_hang() -> None:
+    """A membership cycle (A lists B as a member, B lists A back) must not
+    hang or crash the group-safety check -- unlike ``bulk_selector``'s own
+    selector-mode expansion (which is resolving an authoritative dispatch
+    set and is right to raise on a cycle), this is a best-effort safety
+    scan over one batch and should degrade gracefully instead.
+    """
+    device_tools = MagicMock()
+    device_tools.bulk_device_control = AsyncMock(return_value={"success": True})
+    client = MagicMock()
+    client.get_states = AsyncMock(
+        return_value=[
+            _light_state("light.a", ["light.b"]),
+            _light_state("light.b", ["light.a"]),
+            _light_state("light.c"),
+        ]
+    )
+    tools = ServiceTools(client, device_tools)
+    operations = [
+        {"entity_id": "light.a", "action": "off"},
+        {"entity_id": "light.c", "action": "off"},
+    ]
+
+    result = await tools.ha_bulk_control(operations, False)
+
+    assert result == {"success": True}
+    device_tools.bulk_device_control.assert_awaited_once_with(
+        operations=operations, parallel=False, ctx=None
+    )
+
+
+@pytest.mark.asyncio
 async def test_operations_mode_group_safety_check_fails_closed_on_states_error() -> (
     None
 ):
     """A states-fetch failure during the group-safety check must not
     silently skip the check and dispatch anyway: an unverifiable batch is
     not a verified-safe one, matching the fail-closed stance
-    bulk_selector.py takes for the analogous selector-mode read."""
+    bulk_selector.py takes for the analogous selector-mode read.
+
+    Two distinct entities: a single-entity batch short-circuits before the
+    states fetch (see test_operations_mode_single_entity_skips_states_fetch),
+    so it would never reach this code path.
+    """
     device_tools = MagicMock()
     device_tools.bulk_device_control = AsyncMock(return_value={"success": True})
     client = MagicMock()
@@ -412,7 +540,11 @@ async def test_operations_mode_group_safety_check_fails_closed_on_states_error()
 
     with pytest.raises(ToolError):
         await tools.ha_bulk_control(
-            [{"entity_id": "light.one", "action": "off"}], False
+            [
+                {"entity_id": "light.one", "action": "off"},
+                {"entity_id": "light.two", "action": "off"},
+            ],
+            False,
         )
 
     device_tools.bulk_device_control.assert_not_awaited()
@@ -433,7 +565,11 @@ async def test_operations_mode_group_safety_check_fails_closed_on_malformed_stat
 
     with pytest.raises(ToolError, match="Home Assistant"):
         await tools.ha_bulk_control(
-            [{"entity_id": "light.one", "action": "off"}], False
+            [
+                {"entity_id": "light.one", "action": "off"},
+                {"entity_id": "light.two", "action": "off"},
+            ],
+            False,
         )
 
     device_tools.bulk_device_control.assert_not_awaited()
@@ -463,7 +599,11 @@ async def test_operations_mode_group_safety_check_propagates_tool_error_unchange
 
     with pytest.raises(ToolError) as exc_info:
         await tools.ha_bulk_control(
-            [{"entity_id": "light.one", "action": "off"}], False
+            [
+                {"entity_id": "light.one", "action": "off"},
+                {"entity_id": "light.two", "action": "off"},
+            ],
+            False,
         )
 
     assert str(exc_info.value) == str(original)

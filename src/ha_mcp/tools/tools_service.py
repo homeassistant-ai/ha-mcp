@@ -183,12 +183,49 @@ def _parse_bulk_operations(operations: Any) -> list[Any]:
     return operations_list
 
 
+def _expand_membership_transitively(
+    entity_id: str, states_by_id: dict[str, Any], visited: set[str]
+) -> set[str]:
+    """Return every entity reachable from ``entity_id`` via nested
+    group/aggregate membership -- direct members and, recursively, THEIR
+    members too (an outer Zone containing an inner Room group, say).
+
+    ``visited`` guards against a membership cycle; an entity already seen
+    on this walk is treated as having no further members instead of
+    recursing forever. Best-effort, not authoritative: an unknown or
+    stateless entity simply contributes no members, mirroring
+    ``_find_group_member_conflicts``'s own tolerance for a batch that
+    references something ``states`` doesn't have -- this is a safety-net
+    scan over the small set of entities in one batch, not the selector
+    resolver's own graph-integrity validation (``bulk_selector._expand_entity``),
+    which is right to raise on exactly those cases when it is actually
+    resolving a dispatch set.
+    """
+    if entity_id in visited:
+        return set()
+    visited.add(entity_id)
+    state = states_by_id.get(entity_id)
+    if state is None:
+        return set()
+    members = normalize_member_entity_ids(state.get("attributes"))
+    if not members:
+        return set()
+    expanded = set(members)
+    for member_id in members:
+        expanded.update(
+            _expand_membership_transitively(member_id, states_by_id, visited)
+        )
+    return expanded
+
+
 def _find_group_member_conflicts(
-    operations: list[Any], states: list[Any]
+    entity_ids: set[str], states: list[Any]
 ) -> dict[str, list[str]]:
     """Return ``{group_entity_id: [conflicting_member_ids]}`` for every
     group/aggregate entity this batch targets alongside one or more of its
-    own members.
+    own members -- direct or nested (a batch targeting an outer group and a
+    leaf reachable only through an inner group it contains is exactly as
+    unsafe as targeting the inner group and that leaf directly).
 
     Deliberately does not distinguish same-action duplicates from opposing
     ones (e.g. group "on" plus an explicit member "off"): Home Assistant
@@ -197,13 +234,6 @@ def _find_group_member_conflicts(
     against that fan-out, not a safe override, and gets flagged exactly
     like a same-action one.
     """
-    entity_ids = {
-        op["entity_id"]
-        for op in operations
-        if isinstance(op, dict) and isinstance(op.get("entity_id"), str)
-    }
-    if len(entity_ids) < 2:
-        return {}
     states_by_id = {
         state["entity_id"]: state
         for state in states
@@ -211,13 +241,12 @@ def _find_group_member_conflicts(
     }
     conflicts: dict[str, list[str]] = {}
     for entity_id in sorted(entity_ids):
-        state = states_by_id.get(entity_id)
-        if state is None:
+        transitive_members = _expand_membership_transitively(
+            entity_id, states_by_id, set()
+        )
+        if not transitive_members:
             continue
-        members = normalize_member_entity_ids(state.get("attributes"))
-        if not members:
-            continue
-        overlap = sorted((entity_ids & set(members)) - {entity_id})
+        overlap = sorted((entity_ids & transitive_members) - {entity_id})
         if overlap:
             conflicts[entity_id] = overlap
     return conflicts
@@ -242,7 +271,18 @@ async def _reject_operations_group_member_conflicts(
     Fails closed on its own states-fetch failure too: an unverifiable batch
     is not a verified-safe one, and this is the same infrastructure-failure
     stance ``bulk_selector.py`` takes for the analogous selector-mode read.
+    A single-entity (or empty/all-malformed) batch cannot contain a
+    group/member conflict by construction, so the states fetch is skipped
+    entirely for it -- the overwhelming majority of operations-mode calls
+    never touch a group at all and should not pay for this check.
     """
+    entity_ids = {
+        op["entity_id"]
+        for op in operations
+        if isinstance(op, dict) and isinstance(op.get("entity_id"), str)
+    }
+    if len(entity_ids) < 2:
+        return
     try:
         states = await client.get_states()
     except ToolError:
@@ -264,7 +304,7 @@ async def _reject_operations_group_member_conflicts(
                 ],
             )
         )
-    conflicts = _find_group_member_conflicts(operations, states)
+    conflicts = _find_group_member_conflicts(entity_ids, states)
     if not conflicts:
         return
     detail = "; ".join(
