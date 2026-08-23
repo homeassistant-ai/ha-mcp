@@ -343,6 +343,54 @@ async def test_operations_mode_rejects_group_and_member_in_same_batch() -> None:
     assert '"selector": {"domain": "light"' in message
     assert '"exclude_entity_ids"' in message
     assert "ha_list_floors_areas" in message
+    # This batch omitted the 5th member (light.couloir_sous_sol_escalier),
+    # so the report must name it as UNLISTED -- the "will also affect"
+    # branch -- not the harmless "is redundant with" branch. Swapping
+    # `_GroupConflict.unlisted_members` for `.redundant_members` at the
+    # f-string call site is a one-token change that this test's earlier
+    # assertions alone would not have caught.
+    assert "will also affect" in message
+    assert "is redundant with" not in message
+    assert "light.couloir_sous_sol_escalier" in message
+    device_tools.bulk_device_control.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_group_conflict_message_caps_a_large_unlisted_member_list() -> None:
+    """``unlisted_members`` is bounded by the GROUP's total membership, not
+    batch size -- a large group must not render an unbounded error message.
+    Capped at ``_MAX_LISTED_GROUP_MEMBERS``, with the overflow summarized as
+    "(+N more)" rather than silently dropped: this is a fail-closed path
+    (the remedy sentence at the end is the entire value of the error), and
+    ``visibility/enforcement.py`` scans tool-error text for hidden entity
+    IDs, refusing the whole call if one appears -- enumerating every member
+    of a large group makes that collision materially more likely for no
+    benefit once the caller already has the point.
+    """
+    device_tools = MagicMock()
+    device_tools.bulk_device_control = AsyncMock(return_value={"success": True})
+    members = [f"light.member_{i:02d}" for i in range(20)]
+    client = MagicMock()
+    client.get_states = AsyncMock(
+        return_value=[
+            _light_state("light.group", members),
+            *(_light_state(m) for m in members),
+        ]
+    )
+    tools = ServiceTools(client, device_tools)
+    operations = [
+        {"entity_id": "light.group", "action": "off"},
+        {"entity_id": "light.member_00", "action": "off"},
+    ]
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_bulk_control(operations, False)
+
+    # 20 members, one (member_00) listed and so excluded from
+    # unlisted_members -- 19 unlisted, 10 shown, 9 summarized.
+    message = json.loads(str(exc_info.value))["error"]["message"]
+    assert "(+9 more)" in message
+    assert message.count("light.member_") == 10
     device_tools.bulk_device_control.assert_not_awaited()
 
 
@@ -398,17 +446,27 @@ async def test_operations_mode_allows_members_targeted_alone() -> None:
 
 
 @pytest.mark.asyncio
-async def test_operations_mode_allows_scene_alongside_its_configured_entities() -> None:
-    """A scene targeted together with an entity IT CONFIGURES must NOT be
-    flagged -- HA core's scene platform sets a scene's ``entity_id``
-    attribute to the entities it configures (not entities it is
-    structurally composed of), which is the identical shape a real
-    aggregate's member list has. Without excluding scenes here the same
-    way ``bulk_selector._NON_AGGREGATE_ROOT_DOMAINS`` does, this would be
-    flagged as a group conflict whose only offered remedy (selector mode's
-    ``exclude_entity_ids``) selector mode itself refuses for scenes --
-    sending the caller to a fix that doesn't exist for the case that
-    triggered the error.
+async def test_operations_mode_rejects_scene_alongside_its_configured_entities() -> (
+    None
+):
+    """A scene targeted together with an entity IT CONFIGURES must be
+    flagged: HA's ``scene.turn_on`` applies the scene's stored states to
+    every entity it configures, exactly the batch-internal race a real
+    group's own cascade creates -- ``scene`` has ``valid_actions: ["on",
+    "turn_on"]`` (see ``domain_handlers.py``), so this row really does
+    dispatch and really does affect ``light.living_room``.
+
+    Deliberately NOT skipped the way ``bulk_selector``'s aggregate-root
+    admission skips scenes (``_NON_AGGREGATE_ROOT_DOMAINS``): that skip
+    answers "may I expand this to decide what to INCLUDE" (no, for a
+    scene -- its configured targets can live anywhere in the house), a
+    different question from this check's "will dispatching this also
+    change something else in this batch" (yes, for a scene). Also every
+    member here (``light.living_room``) is separately listed, so this
+    exercises the ``redundant_members`` message branch -- the
+    ``unlisted_members`` branch is covered by
+    ``test_operations_mode_rejects_group_and_member_in_same_batch``
+    above, and nothing previously exercised both.
     """
     device_tools = MagicMock()
     device_tools.bulk_device_control = AsyncMock(return_value={"success": True})
@@ -425,12 +483,19 @@ async def test_operations_mode_allows_scene_alongside_its_configured_entities() 
         {"entity_id": "light.living_room", "action": "off"},
     ]
 
-    result = await tools.ha_bulk_control(operations, False)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_bulk_control(operations, False)
 
-    assert result == {"success": True}
-    device_tools.bulk_device_control.assert_awaited_once_with(
-        operations=operations, parallel=False, ctx=None
-    )
+    message = json.loads(str(exc_info.value))["error"]["message"]
+    assert "group/aggregate entity" in message
+    assert "scene.movie_night" in message
+    assert "is redundant with" in message
+    assert "will also affect" not in message
+    # Selector mode cannot express "act on most of a scene while excluding
+    # some" -- scene is never an aggregate root there -- so that dead-end
+    # remedy must not be offered when every conflict is scene-only.
+    assert "selector mode" not in message
+    device_tools.bulk_device_control.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -494,6 +559,43 @@ async def test_operations_mode_rejects_nested_group_conflict() -> None:
     with pytest.raises(ToolError, match="group/aggregate entity"):
         await tools.ha_bulk_control(operations, False)
 
+    device_tools.bulk_device_control.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_operations_mode_treats_a_nested_scene_as_a_transitive_member() -> None:
+    """A scene LISTED as a member of a group counts as one of that group's
+    transitive members, the same as any other nested aggregate --
+    dispatching the outer group activates the scene member, which cascades
+    into the entities the scene itself configures.
+    ``_expand_membership_transitively`` applies no domain filter at any
+    depth, so a scene reached via nesting is treated identically whether
+    it is the batch's own directly-targeted entity (see
+    ``test_operations_mode_rejects_scene_alongside_its_configured_entities``)
+    or several levels down -- one rule, not a special case for depth 0.
+    """
+    device_tools = MagicMock()
+    device_tools.bulk_device_control = AsyncMock(return_value={"success": True})
+    client = MagicMock()
+    client.get_states = AsyncMock(
+        return_value=[
+            _light_state("light.group", ["scene.movie_night"]),
+            _light_state("scene.movie_night", ["light.living_room"]),
+            _light_state("light.living_room"),
+        ]
+    )
+    tools = ServiceTools(client, device_tools)
+    operations = [
+        {"entity_id": "light.group", "action": "off"},
+        {"entity_id": "light.living_room", "action": "off"},
+    ]
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_bulk_control(operations, False)
+
+    message = json.loads(str(exc_info.value))["error"]["message"]
+    assert "group/aggregate entity" in message
+    assert "scene.movie_night" in message
     device_tools.bulk_device_control.assert_not_awaited()
 
 
@@ -693,6 +795,33 @@ async def test_operations_mode_rejects_every_selector_only_parameter(
             operations=[{"entity_id": "light.one", "action": "off"}],
             **kwargs,
         )
+
+
+@pytest.mark.asyncio
+async def test_selector_only_action_example_never_duplicates_the_key() -> None:
+    """The worked example for the 'action' offender must not duplicate the
+    'action' key.
+
+    The other three per-row offenders (parameters, timeout_seconds,
+    validate_first) get an example row that hardcodes 'action': 'on'
+    alongside the offending field -- but 'action' is itself one of the four
+    per-row offenders, so naively reusing that same hardcoded example when
+    action IS the offender would render a duplicate-key example to a model
+    that is being told to copy it.
+    """
+    tools = ServiceTools(MagicMock(), MagicMock())
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_bulk_control(
+            operations=[{"entity_id": "light.one", "action": "off"}],
+            action="off",
+        )
+
+    message = json.loads(str(exc_info.value))["error"]["message"]
+    # The pre-fix bug hardcoded "'action': 'on'" into the example row
+    # unconditionally, so the message for the 'action' offender rendered
+    # this exact adjacent duplicate-key sequence.
+    assert "'action': 'on', 'action'" not in message, message
 
 
 @pytest.mark.asyncio

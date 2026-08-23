@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -121,18 +122,25 @@ class BulkSelectorResolution:
     expanded_group_ids: tuple[str, ...]
     hidden_entity_count: int
     warnings: tuple[str, ...] = field(default_factory=tuple)
-    # repr=False only (compare stays at its True default): `_operation_common`
-    # can carry a lock or alarm code (selector mode's `parameters` argument,
-    # e.g. `lock.open` with a keypad code), so the default dataclass __repr__
-    # would otherwise write it to logs/tracebacks anywhere a resolution is
-    # printed or logged unredacted. It is NOT compare-excludable, though: it
-    # holds `action`, so two resolutions over the identical entity set but
-    # OPPOSITE actions must not compare equal, and `compare=False` would make
-    # them -- there is no dispatch-irrelevant reading of this field despite
-    # its name. The trade-off this accepts (unchanged from before repr=False
-    # was added) is that the frozen dataclass stays unhashable, since a plain
-    # `dict` has no __hash__; nothing hashes a resolution today.
-    _operation_common: dict[str, Any] = field(default_factory=dict, repr=False)
+    # repr=False: `_operation_common` can carry a lock or alarm code
+    # (selector mode's `parameters` argument, e.g. `lock.open` with a
+    # keypad code), so the default dataclass __repr__ would otherwise write
+    # it to logs/tracebacks anywhere a resolution is printed or logged
+    # unredacted. It stays compare=True (the default): it holds `action`,
+    # so two resolutions over the identical entity set but OPPOSITE actions
+    # must not compare equal, and `compare=False` would make them -- there
+    # is no dispatch-irrelevant reading of this field despite its name.
+    # hash=False, though: `@dataclass(frozen=True)` generates a real
+    # __hash__ from every compare=True field, and a plain `dict` has none
+    # -- left at its default, `hash(resolution)` would type-check (mypy
+    # sees a real __hash__, isinstance(r, Hashable) is True) and then raise
+    # `TypeError: unhashable type: 'dict'` at runtime the first time
+    # anything actually hashes one. hash=False excludes just this field
+    # from __hash__ while keeping it in __eq__, so the class is genuinely
+    # hashable (hash/eq stay consistent) instead of merely claiming to be.
+    _operation_common: dict[str, Any] = field(
+        default_factory=dict, repr=False, hash=False
+    )
 
     @property
     def operations(self) -> list[dict[str, Any]]:
@@ -149,10 +157,14 @@ class BulkSelectorResolution:
             row = {"entity_id": entity_id, **self._operation_common}
             if "parameters" in row:
                 # `**self._operation_common` only shallow-copies: every row
-                # would otherwise share the SAME "parameters" dict object,
-                # so an in-place mutation of one row's parameters (e.g. by
-                # the dispatcher) would silently leak into every other row.
-                row["parameters"] = dict(row["parameters"])
+                # would otherwise share the SAME "parameters" dict object
+                # (and the same nested values inside it, e.g. an
+                # `rgb_color` list), so an in-place mutation of one row's
+                # parameters -- even a nested one, like
+                # `params["rgb_color"][0] = 0` -- would otherwise leak into
+                # every other row. Deep, not shallow: a `dict(...)` copy
+                # would only stop top-level key rebinding.
+                row["parameters"] = copy.deepcopy(row["parameters"])
             operations.append(row)
         return operations
 
@@ -402,15 +414,6 @@ def _validate_selector(selector: Mapping[str, Any], action: str) -> _ValidatedSe
 # ACTUAL registry that failed ("the device registry fetch failed") instead
 # of a generic "a topology fetch failed" that gives an operator nothing to
 # search HA's own logs for.
-_TOPOLOGY_FETCH_LABELS = (
-    "states",
-    "entity registry",
-    "device registry",
-    "area registry",
-    "floor registry",
-)
-
-
 async def _load_topology(client: Any) -> _Topology:
     """Load the HA state and registry views used by one resolution.
 
@@ -440,9 +443,26 @@ async def _load_topology(client: Any) -> _Topology:
         return_exceptions=True,
     )
     states, entities, devices, areas, floors = results
+    # Labels paired with their named local, not zipped against `results` by
+    # position: a `zip(strict=True)` against a separate label tuple only
+    # catches a LENGTH change on reorder, not the reorder itself -- if a
+    # future edit swaps two `gather()` lines and correctly updates the
+    # unpack above to match, a position-based label tuple would silently
+    # keep naming the OLD order, confidently blaming the wrong registry in
+    # the WARNING below during exactly the outage this logging exists to
+    # diagnose. Binding each label directly to its already-correct local
+    # makes a mislabel impossible without an edit that is visibly wrong on
+    # this line itself.
+    labeled_results = (
+        ("states", states),
+        ("entity registry", entities),
+        ("device registry", devices),
+        ("area registry", areas),
+        ("floor registry", floors),
+    )
     failures = [
         (label, result)
-        for label, result in zip(_TOPOLOGY_FETCH_LABELS, results, strict=True)
+        for label, result in labeled_results
         if isinstance(result, BaseException)
     ]
     if failures:
@@ -474,7 +494,22 @@ def _require_domain_known(domain: str, states: Mapping[str, Any]) -> None:
 
 def _all_excluded_or_hidden_message(*, excluded_count: int, hidden_count: int) -> str:
     """Build the final empty-result message with a visibility-safe count
-    breakdown (never entity IDs) when available."""
+    breakdown (never entity IDs) when available.
+
+    Only ever called once ``resolve_bulk_selector``'s own empty-aggregate
+    and wrong-domain gates have both already ruled themselves out (see the
+    ``not directly_hidden`` guards above this function's one call site), so
+    by construction at least one count here is non-zero -- refuse the
+    zero/zero case outright rather than let a future regression upstream
+    silently render a confident "excluded or hidden" claim with no
+    evidence behind it.
+    """
+    if not excluded_count and not hidden_count:
+        raise AssertionError(
+            "_all_excluded_or_hidden_message called with both counts zero -- "
+            "resolve_bulk_selector's empty-result gates should have already "
+            "raised a more specific error for this case"
+        )
     counts = []
     if excluded_count:
         counts.append(f"{excluded_count} excluded")
@@ -728,7 +763,30 @@ async def resolve_bulk_selector(
     selected_leaves = {
         entity_id for entity_id in expanded_leaves if entity_id.startswith(f"{domain}.")
     }
-    if expanded_leaves and not selected_leaves:
+    # Both branches below are gated on `not directly_hidden`: `candidate_roots`
+    # already subtracts `hidden`, so if ANY matching root is hidden, some of
+    # the "wrong domain" or "empty aggregate" evidence below could really be
+    # explained by that hidden entity having been the one that mattered --
+    # e.g. one visible root expands to a different domain while a SEPARATE,
+    # hidden root would have matched directly. `directly_hidden` is the more
+    # actionable fact in that case, so neither branch fires and both counts
+    # fall through together into `_all_excluded_or_hidden_message` below.
+    # `directly_hidden` empty additionally guarantees `candidate_roots` is
+    # non-empty here (matching_roots was already confirmed non-empty above,
+    # and nothing in it is hidden), so neither branch needs its own
+    # `candidate_roots` check.
+    if not directly_hidden and not expanded_leaves:
+        # A matched aggregate (or every one of several) has literally no
+        # members -- `normalize_member_entity_ids` returned `[]`, not
+        # `None`, so it WAS admitted as a root, but its own expansion
+        # contributed nothing. Distinct from "wrong domain" below: no leaf
+        # of ANY domain resulted, so there is nothing to blame on a
+        # different domain either.
+        raise BulkSelectorValidationError(
+            f"No entities of domain '{domain}' exist in the selected area(s) -- "
+            "the matched aggregate(s) have no members"
+        )
+    if not directly_hidden and expanded_leaves and not selected_leaves:
         # A fourth, distinct empty-result cause: matching_roots was
         # non-empty (a non-scene aggregate of a DIFFERENT domain qualified
         # as a root, e.g. a `group.living_room` whose members are all
@@ -736,14 +794,6 @@ async def resolve_bulk_selector(
         # them were the target domain -- neither exclusion nor visibility
         # ever entered into it. Caught here, before either subtraction
         # below, so it can never be misreported as "excluded or hidden".
-        #
-        # Gated on `expanded_leaves` (not just `not selected_leaves`):
-        # `candidate_roots` already subtracts `hidden` above, so when EVERY
-        # matching root in the area is hidden, `candidate_roots` -- and
-        # therefore `expanded_leaves` -- is itself empty, and this branch
-        # must NOT fire for that case: those entities are real, are in the
-        # area, and are simply hidden, which is exactly what the
-        # `_all_excluded_or_hidden_message` branch below exists to report.
         raise BulkSelectorValidationError(
             f"No entities of domain '{domain}' exist in the selected area(s) -- "
             "a matched aggregate's members are all a different domain"
@@ -770,13 +820,16 @@ async def resolve_bulk_selector(
         "validate_first": validate_first,
     }
     if parameters is not None:
-        # Copy, not the caller's own object by reference: the per-row copy
-        # in BulkSelectorResolution.operations protects each DISPATCH row
-        # from cross-row mutation, but does nothing about the resolution's
-        # own stored copy -- without this, a caller that still holds
-        # `parameters` and mutates it after this call returns would silently
-        # rewrite the "frozen" resolution's own payload too.
-        operation_common["parameters"] = dict(parameters)
+        # Deep copy, not the caller's own object by reference (and not a
+        # shallow `dict(...)`, which stops only top-level rebinding and
+        # still shares nested values like an `rgb_color` list): the
+        # per-row copy in BulkSelectorResolution.operations protects each
+        # DISPATCH row from cross-row mutation, but does nothing about the
+        # resolution's own stored copy -- without this, a caller that
+        # still holds `parameters` and mutates it (at any depth) after
+        # this call returns would silently rewrite the "frozen"
+        # resolution's own payload too.
+        operation_common["parameters"] = copy.deepcopy(parameters)
     if timeout_seconds is not None:
         operation_common["timeout_seconds"] = timeout_seconds
     excluded_and_hidden = effective_excluded & hidden

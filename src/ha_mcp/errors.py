@@ -100,6 +100,16 @@ class ErrorCode(StrEnum):
     USER_DENIED = "USER_DENIED"
     POLICY_LOAD_FAILED = "POLICY_LOAD_FAILED"
 
+    # Distinct from POLICY_LOAD_FAILED above: the policy file itself loaded
+    # fine, but this call's own arguments were too deeply nested to
+    # evaluate against it safely (see normalize_stringified_containers'
+    # RecursionError handling in middleware.py). A different failure with a
+    # different, caller-shaped remedy ("reduce the nesting depth and
+    # retry") -- sharing POLICY_LOAD_FAILED would make the two
+    # indistinguishable to anything grouping on the code (a dashboard, an
+    # operator grepping logs after "my policy broke").
+    POLICY_ARGS_TOO_DEEPLY_NESTED = "POLICY_ARGS_TOO_DEEPLY_NESTED"
+
     # Read Only Mode (discussion #1569). A write operation was blocked
     # because the server-wide Read Only Mode toggle is on.
     READ_ONLY_MODE = "READ_ONLY_MODE"

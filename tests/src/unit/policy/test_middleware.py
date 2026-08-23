@@ -562,7 +562,7 @@ async def test_deeply_nested_args_fail_closed_not_silently_allowed(queue):
             call_next,
         )
     body = json.loads(ei.value.args[0])
-    assert body["error"]["code"] == "POLICY_LOAD_FAILED"
+    assert body["error"]["code"] == "POLICY_ARGS_TOO_DEEPLY_NESTED"
     call_next.assert_not_called()
 
 
@@ -757,6 +757,14 @@ async def test_dynamic_selector_pending_error_does_not_promise_a_working_recall(
     assert queue.get(body["token"]) is None
     assert queue.list_pending() == []
     assert "single-use" in full_text or "bound to this specific call" in full_text
+    # The static path's own remaining-TTL context key must not leak in
+    # here: nothing is left with a live countdown for a removed, single-use
+    # entry, and create_error_response splays context fields (including
+    # this one) to the top level, outside the message/suggestions text the
+    # assertions above already check -- a refactor hoisting `remaining`
+    # back into the shared context would restore a misleading countdown
+    # here while every text-based assertion above kept passing.
+    assert "expires_in_seconds" not in body
 
 
 @pytest.mark.anyio

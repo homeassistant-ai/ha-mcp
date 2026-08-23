@@ -223,9 +223,20 @@ class TestBulkControl:
         against Home Assistant's real entity_id/member_entity_ids shape, not
         just a fixture.
         """
+        # Discovered dynamically, not hardcoded to specific demo-platform
+        # entities: mirrors test_bulk_control_multiple_lights' own pattern
+        # for finding real lights to build a batch from.
+        search_result = await mcp_client.call_tool(
+            "ha_search", {"domain_filter": "light", "limit": 5}
+        )
+        search_data = parse_mcp_result(search_result)
+        results = search_data.get("entities", [])
+        if len(results) < 2:
+            pytest.skip("Need at least 2 lights to build a real group for this test")
+        member_entity_ids = [r.get("entity_id") for r in results[:2]]
+
         object_id = f"test_e2e_bulk_conflict_{uuid4().hex[:8]}"
         group_entity_id = f"group.{object_id}"
-        member_entity_ids = ["light.bed_light", "light.ceiling_lights"]
 
         async with MCPAssertions(mcp_client) as mcp:
             create_data = await mcp.call_tool_success(
@@ -264,8 +275,11 @@ class TestBulkControl:
                 )
                 logger.info("Group targeted alone dispatched normally")
             finally:
-                await mcp.call_tool_success(
-                    "ha_config_remove_group", {"object_id": object_id}
+                # safe_call_tool, not mcp.call_tool_success: a cleanup
+                # failure here must not raise inside `finally` and mask a
+                # real assertion failure from the try block above.
+                await safe_call_tool(
+                    mcp_client, "ha_config_remove_group", {"object_id": object_id}
                 )
 
     async def test_bulk_turn_on_single_light(self, mcp_client, test_light_entity):

@@ -251,6 +251,26 @@ class _GroupConflict(NamedTuple):
     redundant_members: list[str]
 
 
+# Every listed member beyond this many is summarized as "+N more" rather
+# than enumerated: `unlisted_members` is bounded by instance topology size
+# (a group's total member count), not batch size, so a large group produces
+# an unbounded error message otherwise. This is a fail-closed path -- the
+# remedy sentence at the end is the entire value of the error -- and
+# visibility/enforcement.py scans tool-error text for hidden entity IDs,
+# refusing the whole call if one appears; enumerating every member makes
+# that materially more likely for no benefit once the caller already has
+# the point.
+_MAX_LISTED_GROUP_MEMBERS = 10
+
+
+def _format_member_list(members: list[str]) -> str:
+    """Render a member list for an error message, capped at
+    ``_MAX_LISTED_GROUP_MEMBERS`` (see its docstring)."""
+    shown = ", ".join(members[:_MAX_LISTED_GROUP_MEMBERS])
+    overflow = len(members) - _MAX_LISTED_GROUP_MEMBERS
+    return f"{shown} (+{overflow} more)" if overflow > 0 else shown
+
+
 def _find_group_member_conflicts(
     entity_ids: set[str], states: list[Any]
 ) -> dict[str, _GroupConflict]:
@@ -260,15 +280,18 @@ def _find_group_member_conflicts(
     leaf reachable only through an inner group it contains is exactly as
     unsafe as targeting the inner group and that leaf directly).
 
-    Scene entities are never treated as an aggregate here (see
-    ``bulk_selector._NON_AGGREGATE_ROOT_DOMAINS``, imported rather than
-    duplicated so the two modes cannot drift on what counts as one): HA
-    core's scene platform sets a scene's ``entity_id`` attribute to the
-    entities it CONFIGURES, not entities it is structurally composed of,
-    and selector mode's own ``exclude_entity_ids`` deliberately refuses to
-    treat a scene as an aggregate root for the identical reason -- flagging
-    one here would send the caller to a remedy selector mode itself
-    refuses for the exact case that triggered it.
+    Scenes ARE checked here, unlike ``bulk_selector``'s aggregate-root
+    admission (``_NON_AGGREGATE_ROOT_DOMAINS``): the two ask different
+    questions. Selector mode asks "may I expand this entity's ``entity_id``
+    attribute to decide what to INCLUDE" -- no for a scene, since its
+    configured targets can live anywhere in the house and would wrongly
+    drag them into an area-scoped dispatch. This function asks "will
+    dispatching this row also change something else named in this same
+    batch" -- yes for a scene: ``scene.turn_on`` applies the scene's stored
+    states to every entity it configures, exactly the same batch-internal
+    race a real group's cascade creates. Skipping scenes here would leave
+    that race open for the one entity type whose whole purpose is fanning
+    a single action out to many others.
     """
     states_by_id = {
         state["entity_id"]: state
@@ -277,8 +300,6 @@ def _find_group_member_conflicts(
     }
     conflicts: dict[str, _GroupConflict] = {}
     for entity_id in sorted(entity_ids):
-        if any(entity_id.startswith(f"{d}.") for d in _NON_AGGREGATE_ROOT_DOMAINS):
-            continue
         transitive_members = _expand_membership_transitively(entity_id, states_by_id)
         if not transitive_members:
             continue
@@ -338,7 +359,14 @@ async def _reject_operations_group_member_conflicts(
         raise
     except Exception as exc:
         exception_to_structured_error(
-            exc, context={"operation": "bulk operations group-safety check"}
+            exc,
+            context={"operation": "bulk operations group-safety check"},
+            suggestions=[
+                "Could not verify this operations batch against group/"
+                + "aggregate membership, so nothing was dispatched.",
+                "Retry the request; this may be a transient Home Assistant "
+                + "connectivity issue.",
+            ],
         )
         raise  # unreachable: exception_to_structured_error always raises
     conflicts = _find_group_member_conflicts(entity_ids, states)
@@ -352,13 +380,33 @@ async def _reject_operations_group_member_conflicts(
     # (no unlisted ones exist to report).
     detail = "; ".join(
         (
-            f"'{group}' will also affect {', '.join(conflict.unlisted_members)}, "
+            f"'{group}' will also affect {_format_member_list(conflict.unlisted_members)}, "
             "which this batch did not list"
             if conflict.unlisted_members
             else f"'{group}' is redundant with its own already-listed "
-            f"member(s) {', '.join(conflict.redundant_members)}"
+            f"member(s) {_format_member_list(conflict.redundant_members)}"
         )
         for group, conflict in sorted(conflicts.items())
+    )
+    # A scene conflict is still real (see _find_group_member_conflicts'
+    # docstring), but selector mode cannot express "act on most of a scene
+    # while excluding some" -- scene is never an aggregate root there. That
+    # remedy sentence is only worth offering when at least one conflict is
+    # a real, selector-expressible aggregate.
+    non_scene_conflict = any(
+        not any(group.startswith(f"{d}.") for d in _NON_AGGREGATE_ROOT_DOMAINS)
+        for group in conflicts
+    )
+    selector_remedy = (
+        " To act on most of a group while excluding specific members, use "
+        "selector mode instead: exclude_entity_ids goes INSIDE selector, not "
+        "as a top-level argument, e.g. "
+        '{"selector": {"domain": "light", "area_ids": ["<area_id>"], '
+        '"exclude_entity_ids": ["<entity_to_skip>"]}, "action": "off"}. '
+        "area_ids/floor_ids must be exact registry IDs (call "
+        "ha_list_floors_areas to look them up), not display names."
+        if non_scene_conflict
+        else ""
     )
     raise_tool_error(
         create_validation_error(
@@ -370,13 +418,7 @@ async def _reject_operations_group_member_conflicts(
             "the group's own action, and one absent from the batch entirely "
             "is not excluded by that absence either. Target ONLY the group, "
             "or ONLY the specific member(s) you want affected, never both "
-            "in the same call. To act on most of a group while excluding "
-            "specific members, use selector mode instead: exclude_entity_ids "
-            "goes INSIDE selector, not as a top-level argument, e.g. "
-            '{"selector": {"domain": "light", "area_ids": ["<area_id>"], '
-            '"exclude_entity_ids": ["<entity_to_skip>"]}, "action": "off"}. '
-            "area_ids/floor_ids must be exact registry IDs (call "
-            "ha_list_floors_areas to look them up), not display names.",
+            f"in the same call.{selector_remedy}",
             parameter="operations",
         )
     )
@@ -433,11 +475,19 @@ def _selector_only_parameter_message(offending_parameter: str) -> str:
     move the value into each row, not delete it.
     """
     if offending_parameter in _PER_ROW_SELECTOR_ONLY_PARAMETERS:
+        # Built from a dict, not a hardcoded literal: 'action' is itself one
+        # of the four per-row parameters this branch handles, and a fixed
+        # "..., 'action': 'on', 'action': ...}" literal would render a
+        # duplicate-key example -- shown to a model that is being told to
+        # copy it -- whenever action is the actual offender.
+        example_row: dict[str, Any] = {"entity_id": "light.kitchen"}
+        if offending_parameter != "action":
+            example_row["action"] = "on"
+        example_row[offending_parameter] = "..."
         return (
             f"'{offending_parameter}' is a per-operation field in operations "
             f"mode (see BulkControlOperation), not a top-level tool argument "
-            f"-- move it onto each row instead, e.g. {{'entity_id': "
-            f"'light.kitchen', 'action': 'on', '{offending_parameter}': ...}}, "
+            f"-- move it onto each row instead, e.g. {example_row}, "
             f"and remove the top-level '{offending_parameter}' argument."
         )
     return (

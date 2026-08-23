@@ -580,12 +580,13 @@ async def test_cross_domain_aggregate_with_no_matching_leaves_names_the_domain()
 async def test_all_roots_hidden_reports_hidden_not_domain_missing() -> None:
     """Regression: when EVERY matching root in the area is hidden,
     ``candidate_roots`` (which subtracts ``hidden`` before expansion) is
-    itself empty, so ``expanded_leaves`` is empty too -- a narrower
-    "expanded_leaves and not selected_leaves" guard would misfire on this
-    exact input the same way an unconditional "not selected_leaves" guard
-    did, reporting "No entities of domain 'light' exist in the selected
-    area(s)" for an entity that DOES exist and IS in the area; it is
-    simply hidden. Must report the hidden cause instead, matching the
+    itself empty, so ``expanded_leaves`` is empty too -- gating the "wrong
+    domain" guard on `expanded_leaves` being truthy (not just
+    `not selected_leaves`) means it correctly stays silent on this exact
+    input, unlike an unconditional "not selected_leaves" guard, which DID
+    misfire here, reporting "No entities of domain 'light' exist in the
+    selected area(s)" for an entity that DOES exist and IS in the area; it
+    is simply hidden. Must report the hidden cause instead, matching the
     pre-existing behavior for a partially-hidden match set.
     """
     client = SelectorClient(
@@ -602,6 +603,76 @@ async def test_all_roots_hidden_reports_hidden_not_domain_missing() -> None:
     with pytest.raises(
         BulkSelectorValidationError,
         match=r"excluded or hidden \(1 hidden\)",
+    ):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "light", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_empty_aggregate_reports_no_members_not_excluded_or_hidden() -> None:
+    """A matched aggregate whose own membership attribute is present but
+    empty (``normalize_member_entity_ids`` returns ``[]``, not ``None``,
+    so it WAS admitted as a root) must report that it has no members --
+    not the zero-evidence "All matching entities were excluded or hidden",
+    which would name neither an exclusion nor a hidden entity because
+    there isn't one: the aggregate simply has no members to expand.
+    ``light.elsewhere`` exists (in a different, unselected area) purely so
+    ``_require_domain_known`` passes and this reaches the gate under test.
+    """
+    client = SelectorClient(
+        states=[_state("group.empty_lights", []), _state("light.elsewhere")],
+        entities=[
+            {"entity_id": "group.empty_lights", "area_id": "salon"},
+            {"entity_id": "light.elsewhere", "area_id": "cuisine"},
+        ],
+    )
+
+    with pytest.raises(BulkSelectorValidationError, match="have no members"):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "light", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_wrong_domain_aggregate_does_not_mask_a_separately_hidden_match() -> None:
+    """A visible aggregate that expands to a different domain must not
+    mask a SEPARATE, directly-hidden entity of the target domain in the
+    same area.
+
+    ``expanded_leaves`` is the union across every candidate root, so it is
+    truthy as soon as ANY visible root expands to ANY leaf -- even one
+    from a root that has nothing to do with the hidden entity. The
+    correct report here is the hidden branch's (1 hidden), not "a matched
+    aggregate's members are all a different domain", which would name the
+    unrelated switch group and say nothing about the light that is
+    actually there, in the area, and simply hidden.
+    """
+    client = SelectorClient(
+        states=[
+            _state("light.hidden_one"),
+            _state("group.switches", ["switch.one"]),
+            _state("switch.one"),
+        ],
+        entities=[
+            {"entity_id": "light.hidden_one", "area_id": "salon", "hidden_by": "user"},
+            {"entity_id": "group.switches", "area_id": "salon"},
+            {"entity_id": "switch.one", "area_id": None},
+        ],
+    )
+
+    with pytest.raises(
+        BulkSelectorValidationError, match=r"excluded or hidden \(1 hidden\)"
     ):
         await resolve_bulk_selector(
             client,
@@ -789,6 +860,58 @@ async def test_topology_multi_failure_logs_every_fetch_not_just_the_first(
     warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
     assert any("device registry" in message for message in warnings)
     assert any("area registry" in message for message in warnings)
+
+
+@pytest.mark.asyncio
+async def test_topology_all_five_failures_are_each_logged_by_their_own_label(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """All five concurrent fetches failing must each be logged under their
+    OWN label, not just the two (device/area registry) the test above
+    happens to fail.
+
+    Each label is now bound directly to its named local rather than
+    zipped against ``results`` by position (see ``_load_topology``), which
+    makes a REORDER-caused mislabel structurally impossible -- but a plain
+    typo in one of the five literal label strings would still slip past
+    that guard and past a test that only ever fails two of the five.
+    """
+
+    class AllFailingClient(SelectorClient):
+        async def get_states(self) -> list[dict[str, Any]]:
+            raise ConnectionError("states unavailable")
+
+        async def send_websocket_message(
+            self, message: dict[str, Any]
+        ) -> dict[str, Any]:
+            raise ConnectionError(f"{message['type']} unavailable")
+
+    client = AllFailingClient(
+        states=[_state("light.one")],
+        entities=[{"entity_id": "light.one", "area_id": "salon"}],
+    )
+
+    with caplog.at_level(logging.WARNING), pytest.raises(ConnectionError):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "light", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    for label in (
+        "states",
+        "entity registry",
+        "device registry",
+        "area registry",
+        "floor registry",
+    ):
+        assert any(label in message for message in warnings), (
+            f"missing WARNING for {label!r}: {warnings}"
+        )
 
 
 @pytest.mark.asyncio

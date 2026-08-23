@@ -154,7 +154,7 @@ class PolicyMiddleware(Middleware):
             )
             raise_tool_error(
                 create_error_response(
-                    ErrorCode.POLICY_LOAD_FAILED,
+                    ErrorCode.POLICY_ARGS_TOO_DEEPLY_NESTED,
                     "This call's arguments are nested too deeply to "
                     "evaluate safely against the security policy.",
                     suggestions=[
@@ -287,6 +287,23 @@ class PolicyMiddleware(Middleware):
         """
         if dynamic_targets:
             self._queue.remove(pending.token)
+            # INFO, matching the reissue log below: silently removing this
+            # is otherwise the only state transition in this file that
+            # leaves no trace, on a queue whose whole purpose is auditable
+            # human approval. Without it, a user who clicks Approve a
+            # moment after this call's wait window closed -- an ordinary
+            # sequence, not an attack -- lands on
+            # ApprovalQueue.approve's "unknown token" WARNING, which is
+            # explicitly documented there as meaning a UI bug, a stale
+            # tab, OR an attacker probing tokens. This line is what lets
+            # an operator tell those apart.
+            logger.info(
+                "policy middleware: dynamic pending token %s removed after "
+                "its single-use wait window closed for tool=%s; a late "
+                "Approve click on it will log as an unknown token",
+                pending.token,
+                name,
+            )
             return pending
         if self._queue.get(pending.token) is None:
             old_token = pending.token
