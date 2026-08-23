@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -259,6 +260,13 @@ async def test_operations_mode_rejects_group_and_member_in_same_batch() -> None:
     Operations mode has no ``exclude_entity_ids`` to express that intent,
     so the omission alone never protected it; the only safe response is to
     reject the whole batch rather than silently dispatch it.
+
+    Also confirmed live: the rejection message alone was not enough. The
+    calling model retried four times with a broken selector call --
+    ``exclude_entity_ids`` at the top level (it belongs inside ``selector``)
+    and area *display names* where exact ``area_id`` registry values were
+    required -- and never recovered. The message must show a concrete,
+    correctly-shaped example, not just name selector mode.
     """
     device_tools = MagicMock()
     device_tools.bulk_device_control = AsyncMock(return_value={"success": True})
@@ -293,9 +301,17 @@ async def test_operations_mode_rejects_group_and_member_in_same_batch() -> None:
         # caller's (unenforceable, in this mode) attempt to exclude it.
     ]
 
-    with pytest.raises(ToolError, match="group/aggregate entity"):
+    with pytest.raises(ToolError) as exc_info:
         await tools.ha_bulk_control(operations, False)
 
+    message = json.loads(str(exc_info.value))["error"]["message"]
+    assert "group/aggregate entity" in message
+    # The worked example must show exclude_entity_ids nested INSIDE
+    # selector -- not as a sibling argument, which is the exact mistake
+    # observed live.
+    assert '"selector": {"domain": "light"' in message
+    assert '"exclude_entity_ids"' in message
+    assert "ha_list_floors_areas" in message
     device_tools.bulk_device_control.assert_not_awaited()
 
 

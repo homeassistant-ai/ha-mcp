@@ -1046,3 +1046,28 @@ async def test_invalid_structural_ids_fail_closed(
             timeout_seconds=None,
             validate_first=True,
         )
+
+
+@pytest.mark.asyncio
+async def test_unknown_area_id_message_points_to_the_lookup_tool() -> None:
+    """A caller with only a display name (e.g. ha_search's friendly
+    ``area_names``, or a floor's display name) retries with the same wrong
+    value forever unless told area_ids/floor_ids are a different, exact
+    registry ID and where to find it -- confirmed live: a caller that
+    passed display names ("Cave", "Couloir Sous-Sol") as ``area_ids`` hit
+    this exact error four times in a row with no path to recovery.
+    """
+    client = SelectorClient(states=[_state("light.one")], entities=[])
+
+    with pytest.raises(
+        BulkSelectorValidationError,
+        match=r"exact Home Assistant registry IDs.*ha_list_floors_areas",
+    ):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "light", "area_ids": ["Couloir Sous-Sol"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )

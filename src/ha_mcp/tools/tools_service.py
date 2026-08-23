@@ -281,8 +281,12 @@ async def _reject_operations_group_member_conflicts(
             "it from the group's own action. Target ONLY the group, or "
             "ONLY the specific member(s) you want affected, never both in "
             "the same call. To act on most of a group while excluding "
-            "specific members, use ha_bulk_control's selector mode with "
-            "exclude_entity_ids instead.",
+            "specific members, use selector mode instead: exclude_entity_ids "
+            "goes INSIDE selector, not as a top-level argument, e.g. "
+            '{"selector": {"domain": "light", "area_ids": ["<area_id>"], '
+            '"exclude_entity_ids": ["<entity_to_skip>"]}, "action": "off"}. '
+            "area_ids/floor_ids must be exact registry IDs (call "
+            "ha_list_floors_areas to look them up), not display names.",
             parameter="operations",
         )
     )

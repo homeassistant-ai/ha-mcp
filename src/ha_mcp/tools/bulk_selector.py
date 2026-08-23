@@ -445,12 +445,23 @@ def _select_area_ids(
     unknown_areas = sorted(set(area_ids) - set(areas))
     unknown_floors = sorted(set(floor_ids) - floors)
     if unknown_areas or unknown_floors:
+        # A caller that only has display names (e.g. from ha_search's
+        # friendly area_names, or a floor's display name) will otherwise
+        # retry with the same wrong value indefinitely -- area_ids/floor_ids
+        # are exact HA registry IDs (usually a lowercase, underscored slug
+        # like "living_room"), not the names shown in the UI, and nothing
+        # else in this error says where to find the real ones.
         details = []
         if unknown_areas:
             details.append(f"unknown area_ids: {', '.join(unknown_areas)}")
         if unknown_floors:
             details.append(f"unknown floor_ids: {', '.join(unknown_floors)}")
-        raise BulkSelectorValidationError("; ".join(details))
+        raise BulkSelectorValidationError(
+            "; ".join(details) + ". area_ids/floor_ids must be exact Home "
+            "Assistant registry IDs, not display names shown in the UI or "
+            "returned as ha_search's 'area_names' -- call ha_list_floors_areas "
+            "to look up the exact area_id/floor_id for each area or floor."
+        )
     selected = set(area_ids)
     selected.update(
         area_id for area_id, row in areas.items() if row.get("floor_id") in floor_ids
