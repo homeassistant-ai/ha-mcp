@@ -134,17 +134,16 @@ async def safe_call_tool(
         return tool_error_to_result(exc)
 
 
-def assert_mcp_success(result, operation_name: str = "operation"):
-    """
-    Assert that MCP tool result indicates success.
+def looks_like_success(data: dict[str, Any]) -> bool:
+    """Whether a parsed tool result is a success response.
 
-    Args:
-        result: FastMCP client result
-        operation_name: Name of operation for error message
+    Shared by ``assert_mcp_success`` and ``assert_mcp_failure`` so the two
+    cannot disagree about what "success" means. Several tools succeed
+    WITHOUT a ``success`` key (``pending_restart``, bulk-operation
+    payloads), so a bare ``data.get("success")`` check treats those as
+    failures -- which is fine for the success assertion (it lists them
+    explicitly) but silently accepted them as failures on the other side.
     """
-    data = parse_mcp_result(result)
-
-    # Handle different success indicators
     success_indicators = [
         data.get("success") is True,
         # ha_manage_app's options/network write returns
@@ -175,7 +174,20 @@ def assert_mcp_success(result, operation_name: str = "operation"):
         ),
     ]
 
-    if not any(success_indicators):
+    return any(success_indicators)
+
+
+def assert_mcp_success(result, operation_name: str = "operation"):
+    """
+    Assert that MCP tool result indicates success.
+
+    Args:
+        result: FastMCP client result
+        operation_name: Name of operation for error message
+    """
+    data = parse_mcp_result(result)
+
+    if not looks_like_success(data):
         error_msg = data.get("error", "Unknown error")
         suggestions = data.get("suggestions", [])
 
@@ -202,8 +214,12 @@ def assert_mcp_failure(
     """
     data = parse_mcp_result(result)
 
-    # Check that operation actually failed
-    if data.get("success"):
+    # Check that operation actually failed. Uses the shared success
+    # predicate, not a bare data.get("success"): a tool that succeeds
+    # without a success key (pending_restart, bulk-operation payloads)
+    # would otherwise be accepted here as a failure, so a regression that
+    # made an expected-failure call SUCCEED could pass unnoticed.
+    if looks_like_success(data):
         raise AssertionError(f"{operation_name} should have failed but succeeded")
 
     # If expected error specified, check for it
@@ -383,8 +399,9 @@ class MCPAssertions:
         except ToolError as exc:
             # Convert ToolError to result dict and validate
             data = tool_error_to_result(exc)
-            # Verify this is actually a failure
-            if data.get("success"):
+            # Verify this is actually a failure (shared predicate, see
+            # assert_mcp_failure)
+            if looks_like_success(data):
                 raise AssertionError(
                     f"{operation_name} should have failed but succeeded"
                 ) from exc
