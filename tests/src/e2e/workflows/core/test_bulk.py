@@ -210,6 +210,64 @@ class TestBulkControl:
                     {"kind": "area", "id": area_id},
                 )
 
+    async def test_operations_mode_rejects_real_group_and_member_conflict(
+        self, mcp_client
+    ):
+        """A real HA group entity plus one of its own members must be rejected.
+
+        This is the live bug the group-safety gate exists to close: a batch
+        built from an entity list (operations mode) that names an aggregate
+        alongside one of the individual members it already cascades to. Unit
+        tests cover the detection logic against mocked state; this drives the
+        same gate through a group.set-created group so the check is proven
+        against Home Assistant's real entity_id/member_entity_ids shape, not
+        just a fixture.
+        """
+        object_id = f"test_e2e_bulk_conflict_{uuid4().hex[:8]}"
+        group_entity_id = f"group.{object_id}"
+        member_entity_ids = ["light.bed_light", "light.ceiling_lights"]
+
+        async with MCPAssertions(mcp_client) as mcp:
+            create_data = await mcp.call_tool_success(
+                "ha_config_set_group",
+                {
+                    "object_id": object_id,
+                    "name": "E2E Bulk Conflict Test",
+                    "entities": member_entity_ids,
+                },
+            )
+            assert create_data.get("entity_id") == group_entity_id, (
+                f"Entity ID mismatch: {create_data}"
+            )
+
+            try:
+                # The group and one of its own real members in the same
+                # batch -- the exact shape that let a group's cascade
+                # silently override an entity meant to be spared.
+                await mcp.call_tool_failure(
+                    "ha_bulk_control",
+                    {
+                        "operations": create_operations(
+                            [group_entity_id, member_entity_ids[0]], "off"
+                        )
+                    },
+                    expected_error="group/aggregate entity",
+                )
+                logger.info("Group+member conflict correctly rejected")
+
+                # The group alone is unambiguous and must still dispatch --
+                # proves the rejection above is about the conflict, not
+                # about the group entity being untouchable.
+                await mcp.call_tool_success(
+                    "ha_bulk_control",
+                    {"operations": create_operations([group_entity_id], "off")},
+                )
+                logger.info("Group targeted alone dispatched normally")
+            finally:
+                await mcp.call_tool_success(
+                    "ha_config_remove_group", {"object_id": object_id}
+                )
+
     async def test_bulk_turn_on_single_light(self, mcp_client, test_light_entity):
         """Test bulk_control with a single light entity."""
         logger.info(f"Testing ha_bulk_control turn_on with {test_light_entity}")
