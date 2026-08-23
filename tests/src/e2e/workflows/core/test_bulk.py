@@ -223,22 +223,26 @@ class TestBulkControl:
         against Home Assistant's real entity_id/member_entity_ids shape, not
         just a fixture.
         """
-        # Discovered dynamically, not hardcoded to specific demo-platform
-        # entities: mirrors test_bulk_control_multiple_lights' own pattern
-        # for finding real lights to build a batch from.
-        search_result = await mcp_client.call_tool(
-            "ha_search", {"domain_filter": "light", "limit": 5}
-        )
-        search_data = parse_mcp_result(search_result)
-        results = search_data.get("entities", [])
-        if len(results) < 2:
-            pytest.skip("Need at least 2 lights to build a real group for this test")
-        member_entity_ids = [r.get("entity_id") for r in results[:2]]
-
         object_id = f"test_e2e_bulk_conflict_{uuid4().hex[:8]}"
         group_entity_id = f"group.{object_id}"
 
         async with MCPAssertions(mcp_client) as mcp:
+            # Discovered dynamically, not hardcoded to specific demo-platform
+            # entities: mirrors test_bulk_control_multiple_lights' own
+            # pattern for finding real lights to build a batch from. Routed
+            # through call_tool_success (not a bare mcp_client.call_tool) so
+            # a real ha_search failure fails the test loudly instead of
+            # being silently read as "no entities" and skipped.
+            search_data = await mcp.call_tool_success(
+                "ha_search", {"domain_filter": "light", "limit": 5}
+            )
+            results = search_data.get("entities", [])
+            if len(results) < 2:
+                pytest.skip(
+                    "Need at least 2 lights to build a real group for this test"
+                )
+            member_entity_ids = [r.get("entity_id") for r in results[:2]]
+
             create_data = await mcp.call_tool_success(
                 "ha_config_set_group",
                 {
