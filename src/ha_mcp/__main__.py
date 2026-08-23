@@ -33,6 +33,7 @@ import threading  # noqa: E402
 from collections.abc import Coroutine  # noqa: E402
 from typing import TYPE_CHECKING, Any, NoReturn  # noqa: E402
 
+import anyio  # noqa: E402
 from fastmcp.exceptions import ToolError  # noqa: E402
 from pydantic import ValidationError as PydanticValidationError  # noqa: E402
 
@@ -446,6 +447,43 @@ class ToolValidationLogFilter(logging.Filter):
         return True
 
 
+class SessionDisconnectLogFilter(logging.Filter):
+    """Demote 'session crashed' tracebacks caused by an already-gone client.
+
+    Every HTTP entry point runs Streamable HTTP in stateless mode (see
+    ``_http_run_kwargs``). A tool call slow enough to outlast the client's
+    patience -- a busy Home Assistant instance, a resource-contended local
+    LLM host on the client side, or an ordinary HTTP timeout -- lets the SDK
+    finish serving the response and tear the transport down while
+    ``app.run()`` is still working; the eventual attempt to deliver the
+    response then writes into an already-closed memory stream and raises
+    ``anyio.ClosedResourceError``. The SDK already catches this (``except
+    Exception: logger.exception(...)`` in both the stateless and stateful
+    session runners of mcp/server/streamable_http_manager.py) -- it just logs
+    it as an alarming ERROR-level traceback. That's an expected race in a
+    stateless HTTP protocol (the client already gave up), not a server bug,
+    so demote it the same way ToolValidationLogFilter demotes other
+    known-benign failures. Any other exception on this logger -- an actual
+    crash -- is left untouched.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name != "mcp.server.streamable_http_manager" or not record.exc_info:
+            return True
+
+        err = record.exc_info[1]
+        if not isinstance(err, anyio.ClosedResourceError):
+            return True
+
+        record.msg = f"{record.getMessage()}: client disconnected before response delivery"
+        record.args = ()
+        record.levelno = logging.WARNING
+        record.levelname = "WARNING"
+        record.exc_info = None
+        record.exc_text = None
+        return True
+
+
 class ProbeAccessLogFilter(logging.Filter):
     """Drop benign, non-MCP HTTP probe noise from the uvicorn access log.
 
@@ -530,6 +568,9 @@ def _setup_logging(log_level_str: str, force: bool = True) -> None:
 
     logging.getLogger("mcp.server.streamable_http").addFilter(
         StatelessSessionLogFilter()
+    )
+    logging.getLogger("mcp.server.streamable_http_manager").addFilter(
+        SessionDisconnectLogFilter()
     )
     logging.getLogger("fastmcp.server.server").addFilter(ToolValidationLogFilter())
 
