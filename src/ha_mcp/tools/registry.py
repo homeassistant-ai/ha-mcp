@@ -61,13 +61,20 @@ class _ServerLike(Protocol):
     """
 
     @property
-    def client(self) -> HomeAssistantClient: ...
+    def client(self) -> HomeAssistantClient:
+        """The real Home Assistant client every register_*_tools plugin reads from."""
+
     @property
-    def mcp(self) -> Any: ...
+    def mcp(self) -> Any:
+        """The FastMCP server instance tools are registered against."""
+
     @property
-    def smart_tools(self) -> Any: ...
+    def smart_tools(self) -> Any:
+        """The lazily-created SmartSearchTools instance."""
+
     @property
-    def device_tools(self) -> Any: ...
+    def device_tools(self) -> Any:
+        """The lazily-created DeviceControlTools instance."""
 
 
 # Preset module groups for common use cases
