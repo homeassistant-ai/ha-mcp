@@ -5136,6 +5136,7 @@ class TestHaAuthMode:
         assert first == (
             7
             + (2 if _unified_oauth_routes() else 0)
+            + (1 if _scoped_revoke_supported() else 0)
             + (1 if _dcr_registration_supported() else 0)
         )
         assert hass.http.register_view.call_count == 0
@@ -5163,6 +5164,7 @@ class TestHaAuthMode:
             assert hass.http.register_view.call_count == (
                 7
                 + (2 if _unified_oauth_routes() else 0)
+                + (1 if _scoped_revoke_supported() else 0)
                 + (1 if _dcr_registration_supported() else 0)
             )
             flag_key = oauth._METADATA_VIEWS_REGISTERED_KEY
@@ -5213,6 +5215,7 @@ class TestHaAuthMode:
             assert hass.http.register_view.call_count == (
                 7
                 + (2 if _unified_oauth_routes() else 0)
+                + (1 if _scoped_revoke_supported() else 0)
                 + (1 if _dcr_registration_supported() else 0)
             )
             hass.http.register_view.reset_mock()
@@ -5243,7 +5246,8 @@ class TestHaAuthMode:
         ):
             await mod.async_setup_entry(hass, MagicMock())  # legacy views + root
             assert hass.http.register_view.call_count == (
-                11 if _unified_oauth_routes() else 9
+                (11 if _unified_oauth_routes() else 9)
+                + (1 if _scoped_revoke_supported() else 0)
             )
             hass.http.register_view.reset_mock()
             await mod.async_setup_entry(hass, MagicMock())  # ha_auth: reuse all
@@ -6806,6 +6810,9 @@ class TestNoneAutoApproveMode:
             f"{CURRENT['oauth_base']}/authorize",
             f"{CURRENT['oauth_base']}/token",
         }
+        if _scoped_revoke_supported():
+            # Bound with the pair in every mode; 404s outside ha_auth (#2248).
+            autoapprove_urls.add(f"{CURRENT['oauth_base']}/revoke")
         if _dcr_registration_supported():
             autoapprove_urls.add(f"{CURRENT['oauth_base']}/register")
         assert registered == metadata | autoapprove_urls
