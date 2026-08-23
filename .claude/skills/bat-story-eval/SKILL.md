@@ -33,7 +33,7 @@ If `$ARGUMENTS` is `--help` or missing `--baseline`, show usage and stop:
 ### 0a. Compute Diff
 
 ```bash
-cd /home/julien/github/ha-mcp/worktree/uat-stories
+cd "$(git rev-parse --show-toplevel)/worktree/uat-stories"
 git diff <baseline>..HEAD -- src/ha_mcp/ --stat
 git diff <baseline>..HEAD -- src/ha_mcp/ --name-only
 ```
@@ -112,7 +112,7 @@ For EACH agent, run all stories against the **baseline** version. One container 
 ### 1a. Start container with first story
 
 ```bash
-cd /home/julien/github/ha-mcp/worktree/uat-stories
+cd "$(git rev-parse --show-toplevel)/worktree/uat-stories"
 uv run python tests/uat/stories/run_story.py \
   catalog/<first_story>.yaml \
   --agents <agent> --keep-container \
@@ -370,4 +370,4 @@ Flag >5% total size increase (directly impacts token cost per turn).
 - Reuse containers: first story starts it (`--keep-container`), rest use `--ha-url`
 - Custom story YAMLs go to `/tmp/` (ephemeral); full details reported in Step 6
 - See "Metrics" section in Step 4 for primary vs secondary metric classification
-- The working directory MUST be `/home/julien/github/ha-mcp/worktree/uat-stories` for `uv run`
+- The working directory MUST be the `worktree/uat-stories` worktree root (where `pyproject.toml` lives) for `uv run`
