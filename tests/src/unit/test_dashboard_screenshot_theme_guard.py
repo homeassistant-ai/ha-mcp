@@ -12,6 +12,7 @@ screenshot tools honestly ``readOnlyHint: True``.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, ClassVar

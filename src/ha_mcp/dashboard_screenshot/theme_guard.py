@@ -196,7 +196,10 @@ class ThemeGuard:
             # Best-effort: a real failure to close must not mask the original
             # exception (including the cancellation that triggered cleanup).
             try:
-                await ws.disconnect()
+                # shield: we are frequently here *because* of a cancellation
+                # (SESSION_TIMEOUT_SECONDS). A bare await would be cancelled
+                # at once and the socket would never actually close.
+                await asyncio.shield(ws.disconnect())
             except Exception as close_error:
                 logger.debug(
                     "Ignoring error while closing the theme-guard session: %s",
