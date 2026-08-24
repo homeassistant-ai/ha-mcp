@@ -177,18 +177,28 @@ token grants. If the token is missing or invalid, Puppet lands on the login
 page and (by its design) restarts; ha-mcp surfaces this as a clear "set the
 engine's access token" error rather than a silent failure.
 
-Puppet's theme and dark-mode renderer controls used to dispatch Home
-Assistant's `settheme` event on every cold render, which Home Assistant
-persisted on the frontend profile of the user whose token the engine runs with
-— and synced to that user's real web and mobile sessions, flipping a dark-mode
-user's whole UI to light on every screenshot (#1909). Recent Puppet versions
-fixed that cold-render dispatch, so ha-mcp's snapshot/restore bracket around
-each capture is now disabled (#1991); the guard code is retained so it can be
-switched back on if a future engine regression reintroduces the write. If you
-run an older Puppet build, update the app (or your self-hosted sidecar
-image) — older engines still persist the theme selection and will keep
-flipping it. A dedicated Puppet account remains a sound belt-and-suspenders
-setup. Language selection is local to Puppet's browser session.
+Puppet dispatches Home Assistant's `settheme` event on cold renders, which
+Home Assistant persists on the frontend profile of the user whose token the
+engine runs with — and syncs to that user's real web and mobile sessions,
+flipping that user's whole UI on every screenshot (#1909). Upstream stopped
+the dispatch for renders that request no theme
+(balloob/home-assistant-addons#89), but by its own title only for that case,
+and it is unreleased as of Puppet 2.6.0 — so on current releases every render
+writes.
+
+The screenshot and dashboard-get tools **detect** this and report it, but
+never write: they read the engine account's saved theme before and after the
+render and, when it changed, emit a warning naming the previous value. Undoing
+it is a separate, explicitly write-annotated call —
+`ha_manage_theme(action="set_engine_theme", value=...)` — so these tools stay
+honestly `readOnlyHint: True` (#1991). `ha_manage_theme(action=
+"get_engine_theme")` inspects the same value. Note this is the engine
+account's *per-user* profile, a different layer from the backend default that
+`action="set"` changes.
+
+**Give the engine its own Home Assistant user and long-lived token** and the
+problem disappears: the write lands on an account nobody looks at, and no
+warning is emitted. Language selection is local to Puppet's browser session.
 
 To change the Puppet engine app's own options (such as `keep_browser_open`)
 or to restart it, use `ha_manage_app`; the screenshot tools only render and

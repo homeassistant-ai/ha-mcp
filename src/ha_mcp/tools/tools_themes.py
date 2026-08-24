@@ -26,7 +26,7 @@ from .util_helpers import summarize_theme_listing, websocket_error_message
 
 logger = logging.getLogger(__name__)
 
-ThemeAction = Literal["list", "set"]
+ThemeAction = Literal["list", "set", "get_engine_theme", "set_engine_theme"]
 
 
 class ThemesTools:
@@ -34,6 +34,33 @@ class ThemesTools:
 
     def __init__(self, client: Any) -> None:
         self._client = client
+
+    async def _engine_credential(self) -> Any:
+        """Resolve the screenshot engine user's credential, or fail clearly.
+
+        The engine writes its own token user's profile, which in a dedicated
+        engine-account setup is NOT the account ha-mcp itself authenticates
+        as -- so these actions cannot simply reuse ha-mcp's own client.
+        """
+        from ..dashboard_screenshot.provision import resolve_engine
+        from ..dashboard_screenshot.theme_guard import ThemeGuard
+
+        engine_target = await resolve_engine()
+        guard = ThemeGuard.for_capture(engine_target.addon_credential, self._client)
+        if guard.credential is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "No screenshot-engine credential is discoverable in this "
+                    "deployment, so the engine account's theme cannot be read "
+                    "or written.",
+                    suggestions=[
+                        "This action only applies where a screenshot engine "
+                        "is configured.",
+                    ],
+                )
+            )
+        return guard.credential
 
     async def _list_themes(self) -> dict[str, Any]:
         """Fetch installed theme names and defaults via websocket."""
@@ -84,6 +111,19 @@ class ThemesTools:
                 default=None,
             ),
         ] = None,
+        value: Annotated[
+            dict[str, Any] | None,
+            Field(
+                description=(
+                    "Frontend user-data theme object when "
+                    "action='set_engine_theme', e.g. {'theme': '', "
+                    "'dark': False}. An empty dict restores default/auto "
+                    "behavior. Take this verbatim from the warning a "
+                    "screenshot tool emitted."
+                ),
+                default=None,
+            ),
+        ] = None,
         mode: Annotated[
             Literal["light", "dark"] | None,
             Field(
@@ -107,6 +147,18 @@ class ThemesTools:
         current defaults; action='set' selects the backend default theme
         (optionally per light/dark mode).
 
+        SCREENSHOT-ENGINE ACTIONS (per-user, not the backend default):
+        Taking a dashboard screenshot makes the Puppet engine write the saved
+        theme of the Home Assistant user its token belongs to, which also
+        flips that user's live web and mobile sessions. The screenshot tools
+        are read-only and only *report* this; use action='set_engine_theme'
+        with the value quoted in their warning to put it back, and
+        action='get_engine_theme' to inspect it. These act on that engine
+        account's per-user profile via frontend/set_user_data, which is a
+        different layer from the backend default that action='set' changes.
+        Giving the engine its own dedicated user and token avoids the issue
+        entirely.
+
         Caveats: action='set' changes the backend-selected default only -
         users who explicitly picked a theme in their profile keep their
         choice. Theme names are validated by Home Assistant at call time.
@@ -118,10 +170,43 @@ class ThemesTools:
               action="set", theme_name="nord", mode="dark")
         - Restore built-in default: ha_manage_theme(
               action="set", theme_name="default")
+        - Inspect the engine account's theme: ha_manage_theme(
+              action="get_engine_theme")
+        - Undo a screenshot's theme change: ha_manage_theme(
+              action="set_engine_theme", value={"theme": "", "dark": False})
         """
         try:
             if action == "list":
                 return {"success": True, "data": await self._list_themes()}
+
+            if action == "get_engine_theme":
+                from ..dashboard_screenshot.theme_guard import read_engine_theme
+
+                credential = await self._engine_credential()
+                return {
+                    "success": True,
+                    "data": {"theme": await read_engine_theme(credential)},
+                }
+
+            if action == "set_engine_theme":
+                from ..dashboard_screenshot.theme_guard import write_engine_theme
+
+                if value is None:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_MISSING_PARAMETER,
+                            "value is required when action='set_engine_theme'",
+                            context={"action": action},
+                            suggestions=[
+                                "Use the value quoted in the screenshot "
+                                "tool's warning, e.g. {'theme': '', "
+                                "'dark': False}",
+                            ],
+                        )
+                    )
+                credential = await self._engine_credential()
+                await write_engine_theme(credential, value)
+                return {"success": True, "data": {"theme": value}}
 
             if not theme_name:
                 raise_tool_error(
