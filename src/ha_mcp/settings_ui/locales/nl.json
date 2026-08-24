@@ -470,7 +470,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Bulkbediening",
-      "description": "Beheer meerdere entiteitsacties in één verzoek."
+      "description": "Beheer expliciete bewerkingen of één deterministische structurele bulkactie."
     },
     "ha_call_event": {
       "title": "Roep Gebeurtenis aan",

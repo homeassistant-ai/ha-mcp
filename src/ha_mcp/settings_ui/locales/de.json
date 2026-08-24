@@ -501,7 +501,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Massensteuerung",
-      "description": "Verwalte mehrere Entitätsaktionen in einer Anfrage."
+      "description": "Verwalte explizite Operationen oder eine deterministische strukturelle Massenaktion."
     },
     "ha_call_event": {
       "title": "Ereignis aufrufen",

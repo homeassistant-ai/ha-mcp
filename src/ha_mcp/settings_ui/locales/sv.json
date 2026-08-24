@@ -470,7 +470,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Masskontroll",
-      "description": "Hantera flera entitetsåtgärder i en enda begäran."
+      "description": "Hantera explicita åtgärder eller en deterministisk strukturell massåtgärd."
     },
     "ha_call_event": {
       "title": "Anropa Händelse",

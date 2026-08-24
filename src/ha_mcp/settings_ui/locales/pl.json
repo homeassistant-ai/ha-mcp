@@ -470,7 +470,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Sterowanie zbiorcze",
-      "description": "Zarządzaj wieloma akcjami encji w jednym żądaniu."
+      "description": "Zarządzaj jawnymi operacjami lub jedną deterministyczną strukturalną akcją masową."
     },
     "ha_call_event": {
       "title": "Wywołaj zdarzenie",
