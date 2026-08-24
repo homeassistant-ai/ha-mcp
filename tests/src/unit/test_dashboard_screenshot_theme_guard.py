@@ -541,6 +541,40 @@ class TestSessionCleanup:
         assert len(_FakeWsClient.instances) == 1
         assert _FakeWsClient.instances[0].disconnected is True
 
+    async def test_blocked_disconnect_is_cancelled_not_orphaned(
+        self, monkeypatch: Any
+    ) -> None:
+        """A disconnect that never completes must not outlive the cleanup."""
+        import ha_mcp.dashboard_screenshot.theme_guard as guard_module
+
+        entered = asyncio.Event()
+        tasks: list[Any] = []
+
+        async def hang_disconnect(self: Any) -> None:
+            entered.set()
+            await asyncio.sleep(3600)
+
+        real_ensure = asyncio.ensure_future
+
+        def tracking_ensure(coro: Any, **kw: Any) -> Any:
+            task = real_ensure(coro, **kw)
+            tasks.append(task)
+            return task
+
+        with monkeypatch.context() as patched:
+            patched.setattr(_FakeWsClient, "disconnect", hang_disconnect)
+            patched.setattr(guard_module, "CLOSE_TIMEOUT_SECONDS", 0.01)
+            patched.setattr(guard_module.asyncio, "ensure_future", tracking_ensure)
+            _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+            guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+            await guard.take_snapshot()
+            await asyncio.wait_for(entered.wait(), timeout=1)
+
+        # The cleanup owned the blocked close and finished with it settled,
+        # rather than leaving it pending against a live socket.
+        assert tasks, "cleanup should have created a disconnect task"
+        assert all(t.done() for t in tasks), "disconnect task left pending"
+
 
 class TestNullExpectedCurrentGuard:
     """An explicit null expected_current must guard, not mean 'unguarded'."""

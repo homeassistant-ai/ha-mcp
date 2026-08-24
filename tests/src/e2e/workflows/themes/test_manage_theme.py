@@ -236,6 +236,9 @@ class TestManageTheme:
             )
             return
 
+        assert data.get("success") is False, (
+            f"Expected an explicit failure, got: {data}"
+        )
         # Assert the structured-error contract rather than matching wording:
         # the message varies with WHY the engine is unavailable (not
         # configured, not installed, not started, unidentifiable account).

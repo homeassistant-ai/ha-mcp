@@ -238,19 +238,28 @@ class ThemeGuard:
         finally:
             # Best-effort: a real failure to close must not mask the original
             # exception (including the cancellation that triggered cleanup).
+            # Owned explicitly: a bare shield leaves the inner task pending
+            # after a timeout or cancellation, still holding the socket and
+            # able to raise late with nobody to receive it.
+            close = asyncio.ensure_future(ws.disconnect())
             try:
                 # shield: we are frequently here *because* of a cancellation
                 # (SESSION_TIMEOUT_SECONDS). A bare await would be cancelled
                 # at once and the socket would never actually close.
                 await asyncio.wait_for(
-                    asyncio.shield(ws.disconnect()),
-                    timeout=CLOSE_TIMEOUT_SECONDS,
+                    asyncio.shield(close), timeout=CLOSE_TIMEOUT_SECONDS
                 )
             except (Exception, TimeoutError) as close_error:
                 logger.debug(
                     "Ignoring error while closing the theme-guard session: %s",
                     close_error,
                 )
+            finally:
+                if not close.done():
+                    close.cancel()
+                # Retrieve the outcome so a late failure never surfaces as an
+                # orphaned "exception was never retrieved" warning.
+                await asyncio.gather(close, return_exceptions=True)
 
     @staticmethod
     async def _fetch_theme(ws: HomeAssistantWebSocketClient) -> Any:

@@ -276,3 +276,63 @@ class TestDevManageServer:
         )
         assert result.get("success") is not True
         assert "standalone" in extract_error_message(result).lower()
+
+
+class TestEngineThemeIdentityGuard:
+    """Deterministic engine-account coverage, only reachable with dev mode.
+
+    ha_dev_manage_settings can set dashboard_screenshot_engine_url at runtime
+    (it is resolved live per capture, so no restart is needed). Pointing it at
+    an explicit URL forces resolve_engine() to return no addon_credential,
+    which is exactly the case where ha-mcp's own credential must NOT be
+    treated as the engine account -- so the refusal is deterministic here in a
+    way it cannot be in the themes suite, where dev mode is off.
+    """
+
+    async def test_explicit_engine_url_refuses_engine_theme_actions(
+        self, mcp_client_with_dev_mode
+    ):
+        set_result = await safe_call_tool(
+            mcp_client_with_dev_mode,
+            "ha_dev_manage_settings",
+            {
+                "action": "set",
+                "setting": "dashboard_screenshot_engine_url",
+                "value": "http://sidecar.example:10000",
+            },
+        )
+        assert set_result.get("success") is True, f"Could not set URL: {set_result}"
+
+        try:
+            read = await safe_call_tool(
+                mcp_client_with_dev_mode,
+                "ha_manage_theme",
+                {"action": "get_engine_theme"},
+            )
+            assert read.get("success") is False, (
+                f"Reading an unidentifiable engine account must fail: {read}"
+            )
+            assert "identified" in extract_error_message(read).lower(), (
+                f"Error should name the identity problem: {read}"
+            )
+
+            # The write refuses for the same reason, so a restore can never
+            # land on ha-mcp's own profile.
+            write = await safe_call_tool(
+                mcp_client_with_dev_mode,
+                "ha_manage_theme",
+                {
+                    "action": "set_engine_theme",
+                    "value": {"theme": "", "dark": False},
+                    "expected_current": None,
+                },
+            )
+            assert write.get("success") is False, (
+                f"Writing an unidentifiable engine account must fail: {write}"
+            )
+        finally:
+            await safe_call_tool(
+                mcp_client_with_dev_mode,
+                "ha_dev_manage_settings",
+                {"action": "reset", "setting": "dashboard_screenshot_engine_url"},
+            )
