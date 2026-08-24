@@ -180,16 +180,28 @@ class ThemeGuard:
             self.credential.token,
             verify_ssl=self.credential.verify_ssl,
         )
-        if not await ws.connect():
-            reason = ws.last_connect_error
-            detail = f": {reason}" if isinstance(reason, str) else ""
-            raise ConnectionError(
-                f"could not authenticate to {self.credential.url}{detail}"
-            )
+        # connect() is INSIDE the try: SESSION_TIMEOUT_SECONDS can cancel
+        # mid-connect or mid-auth, and CancelledError is a BaseException, so
+        # leaving it outside skipped disconnect() entirely and stranded the
+        # socket plus its background reader task.
         try:
+            if not await ws.connect():
+                reason = ws.last_connect_error
+                detail = f": {reason}" if isinstance(reason, str) else ""
+                raise ConnectionError(
+                    f"could not authenticate to {self.credential.url}{detail}"
+                )
             yield ws
         finally:
-            await ws.disconnect()
+            # Best-effort: a real failure to close must not mask the original
+            # exception (including the cancellation that triggered cleanup).
+            try:
+                await ws.disconnect()
+            except Exception as close_error:
+                logger.debug(
+                    "Ignoring error while closing the theme-guard session: %s",
+                    close_error,
+                )
 
     @staticmethod
     async def _fetch_theme(ws: HomeAssistantWebSocketClient) -> Any:
@@ -306,11 +318,14 @@ async def write_engine_theme(
     """Write the engine user's saved ``theme`` frontend user-data value.
 
     Only reached through ``ha_manage_theme``, which is annotated as a write.
-    When ``expected_current`` is supplied this is a compare-and-set: the write
-    is refused unless the stored value still matches. That is what stops a
-    delayed restore from stomping a theme the user changed in the meantime --
-    and, because a mismatched account's theme will not match either, stops a
-    misresolved credential writing the wrong user's profile.
+    When ``expected_current`` is supplied the stored value is re-read
+    immediately before the write and the write is skipped on a mismatch. This
+    is best-effort, not atomic: ``frontend/set_user_data`` is an unconditional
+    ``async_set_item`` with no version or etag, so Home Assistant offers
+    nothing to compare against server-side and a change landing between the
+    re-read and the write is not caught. What it does catch is what actually
+    happens -- a delayed restore against a theme the user has since changed,
+    and a misresolved credential, whose account's theme will not match either.
     """
     guard = ThemeGuard(credential=credential)
 

@@ -185,11 +185,14 @@ class ThemesTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Compare-and-set guard for action='set_engine_theme': the "
-                    "write is refused unless the stored theme still equals "
-                    "this. Pass the expected_current value quoted in the "
-                    "screenshot tool's warning. Omitting it forces an "
-                    "unconditional overwrite."
+                    "Guard for action='set_engine_theme': the stored theme is "
+                    "read immediately before the write and the write is "
+                    "skipped if it no longer equals this. Best-effort, not "
+                    "atomic -- Home Assistant exposes no conditional write, "
+                    "so a change landing between that read and the write is "
+                    "not caught. Pass the expected_current value quoted in "
+                    "the screenshot tool's warning. Omitting it overwrites "
+                    "unconditionally."
                 ),
                 default=None,
             ),

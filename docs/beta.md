@@ -273,11 +273,15 @@ render failure to a warning so it never breaks a write that already committed.
 `include_screenshot` (get) does not commit a dashboard/config write, and the
 screenshot *is* the requested payload, so a total render failure surfaces as
 an error (matching the standalone `ha_get_dashboard_screenshot` tool) rather
-than a warning a caller might miss. Because rendering makes Puppet persist
-theme/dark preferences on the engine account — a side effect of the render
-itself, which ha-mcp detects but does not write or undo — screenshot
-operations are blocked in server Read Only Mode; ordinary dashboard
-get/list/search calls remain available.
+than a warning a caller might miss. Screenshot operations stay **available** in server Read
+Only Mode: both entry points are `readOnlyHint: True`, so the transform does
+not hide them and the middleware does not block them (#1991 removed the
+exemption that used to block them, pinned by
+`test_dashboard_config_screenshot_now_passes`). Rendering still makes Puppet
+persist theme/dark preferences on the engine account, and ha-mcp still reports
+that in warnings — so in Read Only Mode you get the warning but cannot act on
+it, since `ha_manage_theme` is exempted only for its read actions
+(`get_engine_theme` inspects the value; `set_engine_theme` stays blocked).
 
 **Raw rendered paths remain constrained.** `ha_get_dashboard_screenshot`
 validates legacy `dashboard_path` values (rejects URLs, query strings,

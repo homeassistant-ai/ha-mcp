@@ -507,3 +507,33 @@ class TestCompareAndSetWrite:
         warning = guard.warnings[0]
         assert "value=" in warning
         assert "expected_current=" in warning
+
+
+class TestSessionCleanup:
+    """A cancelled guard session must not strand its WebSocket."""
+
+    async def test_cancelled_connect_still_disconnects(self, monkeypatch: Any) -> None:
+        """SESSION_TIMEOUT_SECONDS cancels via CancelledError, a BaseException.
+
+        connect() sits inside the session's try/finally precisely so that
+        cancellation there still runs disconnect(); leaving it outside
+        stranded the socket and its background reader task.
+        """
+        started = asyncio.Event()
+
+        async def hang_connect(self: Any) -> bool:
+            started.set()
+            await asyncio.sleep(3600)
+            return True
+
+        with monkeypatch.context() as patched:
+            patched.setattr(_FakeWsClient, "connect", hang_connect)
+            guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+            task = asyncio.ensure_future(guard.take_snapshot())
+            await asyncio.wait_for(started.wait(), timeout=1)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                _ = await task
+
+        assert len(_FakeWsClient.instances) == 1
+        assert _FakeWsClient.instances[0].disconnected is True

@@ -682,6 +682,7 @@ _EXEMPT_TOOL_MODULES = {
     "ha_manage_radio": "tools_radio.py",
     "ha_manage_updates": "tools_updates.py",
     "ha_manage_security_policy": "tools_security_policy.py",
+    "ha_manage_theme": "tools_themes.py",
 }
 
 # INDEPENDENT, hardcoded manifests of the argument names each exempt
@@ -693,6 +694,7 @@ _EXEMPT_TOOL_MODULES = {
 # tool likewise fails this test, telling the maintainer to re-review the
 # read-only predicate.
 _EXEMPT_INSPECTED_ARGS = {
+    "ha_manage_theme": {"action"},
     "ha_manage_backup": {"scope", "action"},
     "ha_manage_app": {
         "action",
@@ -735,6 +737,17 @@ _ADDON_CONFIG_WRITE_PARAMS_MANIFEST = (
 # dispatch fields the predicate inspects) would silently classify as a
 # read in Read Only Mode.
 _EXEMPT_GATED_OR_READ_ARGS = {
+    "ha_manage_theme": {
+        # Consumed only under the action dispatch the predicate inspects:
+        # the backend-default write payload ('set')...
+        "theme_name",
+        "mode",
+        # ...and the engine-account restore payload plus its compare guard
+        # ('set_engine_theme'). Both actions are blocked outright, so these
+        # carry no mutation capability of their own in read-only mode.
+        "value",
+        "expected_current",
+    },
     "ha_manage_backup": {
         # Consumed only under the (scope, action) dispatch the predicate
         # inspects: snapshot create/restore payloads...
