@@ -1845,7 +1845,8 @@ class IntegrationTools:
                     "for the entry's options flow (updates its options). "
                     "Updating an existing entry — options or reconfigure — is "
                     "a patch: a field you omit keeps its current value, and a "
-                    "field set to null is cleared. "
+                    "field set to null is cleared where the integration's "
+                    "schema allows that field to be empty. "
                     "Multi-step flows consume keys per step; menu steps take "
                     "'next_step_id' — a string, or a list of successive "
                     "selections for flows that present more than one menu "
@@ -1934,7 +1935,8 @@ class IntegrationTools:
         - Update options: entry_id + config — drives the entry's options
           flow (what the "Configure" button does in the HA UI). Like that
           dialog it is a patch: omitted fields keep their current values, and
-          a field set to null is cleared.
+          a field set to null is cleared where the integration's schema
+          allows that field to be empty.
         - Reconfigure: entry_id + reconfigure=True + config — drives the
           existing entry's official reconfigure flow (host, port, credentials).
           Call it without confirm_token for a read-only preflight; repeat with

@@ -300,7 +300,9 @@ async def update_config_entry_options(
     nobody touched. Before issue #2254 those keys were dropped and voluptuous
     substituted each field's static default, so a one-key patch silently reset
     the rest of the entry's options. A key the caller sets to ``None`` is the
-    opposite request and is honoured as a clear.
+    opposite request and is honoured as a clear, which for a field carrying a
+    schema default means submitting the ``None`` for Home Assistant to
+    validate rather than omitting it into that default.
     """
     _reject_redaction_sentinels(config_dict)
     config_entry = await client.get_config_entry(entry_id)

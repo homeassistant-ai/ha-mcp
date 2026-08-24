@@ -4710,7 +4710,8 @@ class HelperConfigTools:
                     "history_stats, mold_indicator). "
                     "Ignored for simple helper types. "
                     "On update it is a patch: a field you omit keeps its "
-                    "current value, and a field set to null is cleared. "
+                    "current value, and a field set to null is cleared where "
+                    "the schema allows that field to be empty. "
                     "Field set is delivered as data_schema on the first validation error."
                 ),
                 default=None,
@@ -4779,7 +4780,8 @@ class HelperConfigTools:
         - UPDATE preserves type-specific fields not re-passed (rename never wipes
           initial/icon/etc. for any simple helper). Flow-helper and config
           subentry updates behave the same way: a field omitted from `config`
-          keeps its current value, and a field set to null is cleared.
+          keeps its current value, and a field set to null is cleared where
+          the schema allows that field to be empty.
         - Pass `action="create"` or `action="update"` to disambiguate intent.
           For SIMPLE/FLOW helpers, omitted action falls back to the implicit
           `helper_id`-presence discriminator. For config subentries, omitted

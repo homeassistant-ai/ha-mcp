@@ -490,15 +490,28 @@ def _consume_leaf_field(
     :func:`_redeclared_field_submission` chooses between omitting the field,
     submitting the step's own value, and resubmitting the recorded one.
 
-    Under ``keep_current_values`` an explicit ``None`` on a non-required field
-    is a clear rather than a value: the key is consumed and recorded, but left
-    out of the payload, because omission is how the UI's form clears a box
-    (issue #2254). A required field keeps submitting ``None`` verbatim — Home
-    Assistant, not this walker, decides what a required null means.
+    Under ``keep_current_values`` an explicit ``None`` on an optional field
+    with no ``"default"`` is a clear rather than a value: the key is consumed
+    and recorded, but left out of the payload, because for such a field
+    omission is the only way to express a clear — the value simply stays
+    absent (issue #2254).
+
+    A field that carries a ``"default"`` is submitted with ``None`` verbatim
+    instead. Omitting it would let voluptuous substitute the static schema
+    default, which is a different value than the caller asked for and would
+    report success while quietly not clearing anything; submitting lets Home
+    Assistant decide whether ``None`` is meaningful for that field and say so
+    if it is not. A required field submits ``None`` verbatim for the same
+    reason.
     """
     if name in remaining_config:
         value = remaining_config.pop(name)
-        clearing = keep_current_values and value is None and not field.get("required")
+        clearing = (
+            keep_current_values
+            and value is None
+            and not field.get("required")
+            and "default" not in field
+        )
         if not clearing:
             form_data[name] = value
         _mark_consumed(consumed_config_keys, path_prefix, name)
@@ -728,8 +741,9 @@ def _handle_form_step(
     steps arrive pre-filled with the stored values and the UI's save posts all
     of them back, so a declared field the caller left out is submitted with the
     step's own value wherever the step supplies one (issue #2254); a field the
-    caller set to ``None`` is instead consumed and omitted, which is the UI's
-    clear gesture. It takes a ``reuse_state`` to work: the record is what keeps
+    caller set to ``None`` is a clear, submitted as an omission only where the
+    field has no schema default to be substituted in its place (see
+    :func:`_consume_leaf_field`). It takes a ``reuse_state`` to work: the record is what keeps
     a backfill off a path the caller already filled in this same step.
 
     When ``data_schema`` is absent (HA didn't tell us field names), falls

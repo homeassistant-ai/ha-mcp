@@ -170,7 +170,7 @@ class TestOptionsStepBackfill:
 class TestExplicitClear:
     """``null`` is the caller asking for the field to be emptied."""
 
-    def test_null_on_an_optional_field_omits_the_key_and_skips_backfill(self) -> None:
+    def test_null_on_an_optional_field_with_no_default_omits_the_key(self) -> None:
         remaining: dict[str, Any] = {"province": None}
         consumed: set[str] = set()
 
@@ -191,6 +191,34 @@ class TestExplicitClear:
         # nothing but clears does not read as "no keys applied".
         assert consumed == {"province"}
         assert remaining == {}
+
+    def test_null_on_a_defaulted_optional_field_is_submitted_verbatim(self) -> None:
+        """Omitting it would substitute the static default, not clear it.
+
+        A defaulted field cannot express "empty" by omission — voluptuous
+        fills the default in. Submitting the None hands the decision to Home
+        Assistant, which either clears the field or rejects the value; both
+        beat reporting success after quietly writing the schema default
+        (Codex review, #2256).
+        """
+        remaining: dict[str, Any] = {"workdays": None}
+        consumed: set[str] = set()
+
+        form_data = _handle_form_step(
+            "flow-2254",
+            _workday_options_step(),
+            remaining,
+            None,
+            consumed,
+            _ReuseState(),
+            keep_current_values=True,
+        )
+
+        assert form_data["workdays"] is None
+        assert consumed == {"workdays"}
+        # The clear is the caller's business; the untouched fields still get
+        # their usual backfill.
+        assert form_data["province"] == "BW"
 
     def test_null_on_a_required_field_is_submitted_verbatim(self) -> None:
         """HA, not this walker, decides what a required null means."""

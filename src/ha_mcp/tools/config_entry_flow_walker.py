@@ -804,8 +804,12 @@ async def _handle_flow_steps(
             named no key for is submitted with the step's own value instead of
             being dropped — which is what stopped a one-field options patch
             from resetting everything it did not mention (issue #2254). A
-            field the caller explicitly set to ``None`` is consumed and
-            omitted instead: omission is the UI's clear gesture. Backfilled
+            field the caller explicitly set to ``None`` is a clear: for an
+            optional field with no schema default that means consuming the key
+            and omitting it, the only way such a field can be emptied;
+            everything else submits the ``None`` so Home Assistant validates
+            it, since omitting a defaulted field would substitute its static
+            default rather than clear it. Backfilled
             values are the step's data, so they neither count towards the
             "consumed at least one caller key" test below nor satisfy the
             reconfigure "consumed EVERY key" one.
