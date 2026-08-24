@@ -150,17 +150,30 @@ class SessionDisconnectLogFilter(logging.Filter):
 
 
 def _add_filter_once(logger_name: str, filter_cls: type[logging.Filter]) -> None:
-    """Attach one ``filter_cls`` instance to ``logger_name``, unless already present.
+    """Attach one ``filter_cls`` instance to ``logger_name``, replacing any stale one.
 
     ``install_sdk_log_filters()`` can run more than once per process: the
     in-process embedded server calls it on every ``_serve()`` reload without
     a process restart, and process-wide ``logging`` state (including each
-    named logger's filter list) persists across those reloads. Without this
-    guard, filters would accumulate one more redundant instance per reload.
+    named logger's filter list) persists across those reloads. Each reload
+    also re-imports this module from scratch (the embedded server purges
+    ``ha_mcp.*`` from ``sys.modules`` before reinstalling -- see
+    ``_purge_ha_mcp_modules``), so ``filter_cls`` is a BRAND NEW class object
+    each time, even though its name is unchanged. A same-``isinstance``-check
+    against a filter instance from a PREVIOUS generation would therefore
+    never match, letting filters accumulate one more stale instance per
+    reload forever. Match by ``(module, qualname)`` instead -- stable across
+    reloads of the same module path -- and drop every stale-generation match
+    before attaching the current one, so a logger never carries more than
+    one filter of a given conceptual type, and it's always this generation's.
     """
     logger = logging.getLogger(logger_name)
-    if any(isinstance(f, filter_cls) for f in logger.filters):
-        return
+    identity = (filter_cls.__module__, filter_cls.__qualname__)
+    logger.filters[:] = [
+        f
+        for f in logger.filters
+        if (type(f).__module__, type(f).__qualname__) != identity
+    ]
     logger.addFilter(filter_cls())
 
 
