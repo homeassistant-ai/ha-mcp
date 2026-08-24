@@ -1,0 +1,133 @@
+---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/zh-Hant.json (keys addon.*, features.*,
+# addon_dev.*); regenerate with: python scripts/generate_locales.py
+configuration:
+  backup_hint:
+    name: 完整 HA 快照建議級別（面向 LLM）
+    description: '調整 LLM 在 `ha_manage_backup(scope=''snapshot'')` 工具描述中看到的提示措辭，即在執行高風險操作（例如批次刪除裝置）之前何時建議建立完整的
+      Home Assistant tarball 備份。僅影響這一句面向 LLM 的提示文字。
+
+
+      如需在每次編輯自動化 / 指令碼 / 輔助元素等之前自動建立快照，請使用下方單獨的 **啟用編輯自動備份** 開關。'
+  secret_path:
+    name: 金鑰路徑覆蓋
+    description: 'MCP 伺服器的可選自訂 HTTP 路徑。留空則使用自動生成的安全路徑。
+
+      '
+  enable_tool_search:
+    name: 啟用工具搜尋
+    description: 用基於搜尋的發現取代完整工具目錄。將空閒上下文減少約 90%，降至約 5K token。⚠️ 如果用戶端自帶內建工具搜尋/延遲工具（claude.ai、Claude
+      Desktop、Claude Code），請勿啟用此功能——兩層搜尋會相互衝突，且在這些用戶端中其內建工具搜尋是更好的選擇；請保持關閉。工具是否延遲取決於用戶端與模型的組合：當您的設定會一次性載入完整目錄時才使用此功能——例如沒有原生延遲工具的模型（如
+      Gemini、本地 OpenAI 相容模型、Claude Haiku）、無論模型如何都會內聯全部工具架構的用戶端（如 GitHub Copilot CLI），或上下文視窗較小時。部分
+      Codex 模型和 ChatGPT 也帶有延遲工具——請直接向您的用戶端/模型確認其具備哪些功能，以免不必要地保持啟用此功能。工具透過 ha_search_tools
+      發現，並透過分類代理（讀/寫/刪）執行。需要重新啟動才能生效。
+  enable_tool_security_policies:
+    name: 啟用工具安全策略（高階）
+    description: 將高風險工具呼叫（鎖具／警報控制、自動化寫入等）置於使用者核准之後。呼叫受保護工具時，AI 代理程式會提示使用者開啟網頁介面的「工具安全策略」分頁並核准，呼叫才會繼續。各工具規則及選用的參數條件都在該分頁設定。預設關閉。需要重新啟動才會生效。
+  enable_security_policy_tool:
+    name: 允許 AI 代理編輯工具安全策略
+    description: 註冊 ha_manage_security_policy 工具，允許連線的 AI 代理程式讀取及重寫工具安全策略，包括移除核准閘門。預設關閉。此設定與上方的「工具安全策略」選項互相獨立：它控制誰能編輯規則，而不是規則是否強制執行。此工具無法查看或決定待核准項目。若要保留人工確認，請在啟用工具前先套用閘門：在網頁介面的「工具」分頁中，為「管理安全策略」開啟「已套用安全閘門」。需要重新啟動才會生效。
+  read_only_mode:
+    name: 只讀模式
+    description: 關閉所有寫入工具，並移除工具執行任何寫入或破壞性呼叫的能力。混合讀寫工具（備份、App（附加元件）、能源偏好設定、語音管道，以及啟用時的程式碼模式）在保持可用的同時，其寫入操作會被阻止。與網頁端
+      UI 的“工具”分頁使用相同的開關。預設關閉。需要重新啟動才能生效。
+  redact_secrets:
+    name: 遮蔽機密資訊
+    description: 在工具回應送達 AI 助手前遮蔽其中的機密資訊。App（附加元件）選項及標記為密碼的整合欄位會改成「已設定」或「空白」標記，因此仍可回答「此憑證是否已設定？」；其他工具回應則會移除伺服器曾看過的機密值。少於
+      6 個字元的值會略過，避免短片段取代破壞無關輸出。結構描述中未標記為密碼的欄位無法偵測。預設關閉。
+  enable_beta_features:
+    name: 啟用測試版功能（主開關）
+    description: ⚠ 危險 — 這些工具可能會永久損壞您的 Home Assistant 安裝。它們會寫入您的 YAML 設定、檔案系統，安裝自訂元件，執行任意沙盒
+      Python 程式碼，並編輯 AI 可見的工具檔案字串。不提供任何擔保和支援保證 — 您需自行承擔啟用它們的風險。在開啟此功能前請務必備份 Home Assistant，切勿在沒有備份的情況下在生產環境中啟用。這是下方實驗性子標誌的主開關；當此主開關關閉時，即使子標誌被明確設定為
+      true，它們在執行時也會被忽略。相同的開關也會在網頁設定 UI 的“Beta features (dangerous)”下顯示 — 任何一處的更改都會在重新啟動後反映到另一處。
+  enable_yaml_config_editing:
+    name: 啟用 YAML 設定編輯（測試版）
+    description: 測試版功能。允許 AI 助手在 configuration.yaml 和 packages/*.yaml 中新增、替換或刪除頂級鍵。僅允許白名單鍵（例如
+      template、sensor、command_line、mqtt、knx）；核心鍵如 homeassistant、http、recorder 被阻止。每次編輯都會校驗
+      YAML 語法、執行設定檢查，並建立自動備份。大多數鍵的更改需要完整重新啟動 HA 才能生效。已知限制見 docs/beta.md。可用時使用專用工具（自動化、指令碼、場景、輔助元素、模板感測器）更佳。需要上方（及
+      Web UI 中）的主開關“啟用測試版功能”開啟——否則無論此處值如何，此子開關在執行時都會被忽略。
+  enable_yaml_packages_automation:
+    name: 允許 automation 出現在 packages/*.yaml
+    description: YAML 設定編輯的子開關。開啟時，ha_config_set_yaml 接受 packages/*.yaml 中的 yaml_path='automation'。關閉時，用戶端和伺服器端都會拒絕該呼叫。儲存模式工具（ha_config_set_automation）不受影響。預設關閉；僅當上方“啟用
+      YAML 設定編輯”也開啟時生效。
+  enable_yaml_packages_script:
+    name: 允許 script 出現在 packages/*.yaml
+    description: YAML 設定編輯的子開關。開啟時，ha_config_set_yaml 接受 packages/*.yaml 中的 yaml_path='script'。關閉時，用戶端和伺服器端都會拒絕該呼叫。儲存模式工具（ha_config_set_script）不受影響。預設關閉；僅當上方“啟用
+      YAML 設定編輯”也開啟時生效。
+  enable_yaml_packages_scene:
+    name: 允許 scene 出現在 packages/*.yaml
+    description: YAML 設定編輯的子開關。開啟時，ha_config_set_yaml 接受 packages/*.yaml 中的 yaml_path='scene'。關閉時，用戶端和伺服器端都會拒絕該呼叫。儲存模式工具（ha_config_set_scene）不受影響。預設關閉；僅當上方“啟用
+      YAML 設定編輯”也開啟時生效。
+  enable_yaml_edit_confirm:
+    name: YAML 編輯需確認（差異預覽）
+    description: 'YAML 設定編輯的子開關，預設開啟（推薦）。首次 ha_config_set_yaml 呼叫會返回磁碟上將精確更改的統一差異，外加一個確認權杖，且不寫入任何內容；僅當使用權杖重複該呼叫時，編輯才會落地。其存在是為了在變更到達磁碟前捕獲請求編輯之外的意外更改（issue
+      #1720）。僅在每次編輯要省一次往返時關閉。'
+  enable_code_mode:
+    name: 啟用自訂工具沙箱（測試版）
+    description: 測試版功能。啟用 ha_manage_custom_tool 工具；沒有內建工具能處理請求時，AI 助手可在安全沙箱中建立、執行、儲存及刪除自訂
+      Python 程式碼。程式碼在隔離的直譯器中執行，無法存取檔案系統或任意網路。沙箱程式碼可呼叫 HA REST API（api_get/api_post）、傳送
+      WebSocket 指令（ws_send）、呼叫現有 MCP 工具（call_tool），或刪除已儲存的工具（delete_saved_tool）。已儲存的工具預設保存在
+      /data/saved_tools.json，因此 App（附加元件）重新啟動後仍會保留，且任何能連線的用戶端都能看見。已知限制請參閱 docs/beta.md。需要重新啟動才會生效。上方及網頁介面的「啟用測試版功能」主開關必須開啟，否則無論此處設定為何，執行時都會忽略此子旗標。
+  enable_lite_docstrings:
+    name: 啟用精簡工具檔案字串（測試版）
+    description: 測試版功能。將少數重型 ha-mcp 工具（自動化、指令碼、場景、輔助元素、儀表盤、ha_call_service、ha_config_set_yaml）上的檔案字串替換為更短的變體，將
+      schema 和示例細節推遲到 ha_get_skill_guide 工具（或其 skill:// 資源）。警告：這會降低空閒 token 用量，但可能降低
+      LLM 表現——精簡後的描述依賴 LLM 實際呼叫技能工具或讀取技能資源來取得細節，這並不保證（某些模型會跳過額外的工具呼叫，最終得到的指引反而比之前更少）。最好與支援
+      MCP 資源的用戶端或 enable_tool_search 搭配使用。需要重新啟動才能生效。需要上方（及 Web UI 中）的主開關“啟用測試版功能”開啟——否則無論此處值如何，此子開關在執行時都會被忽略。
+  enable_mandatory_bps:
+    name: 寫入時附加最佳實踐技能
+    description: '寫入工具技能內容投遞功能（issue #1182）的主開關。啟用時（預設），六個設定寫入工具（自動化、指令碼、場景、輔助元素、儀表盤、原始
+      YAML）會在每次成功寫入時於 `skill_content` 下附加規範的 Home Assistant 最佳實踐參考檔案，並自動嵌入最佳實踐警告引用的任何參考章節。每個工具還暴露一個逐呼叫
+      `MandatoryBPS` 參數，代理程式在獲得內容後的後續呼叫中可將其設為 false。當此主開關關閉時，無論逐呼叫參數或 BP 警告如何，都不會輸出
+      skill_content。建議預設開啟；僅在上下文視窗極小的模型上才停用。關閉可能降低寫入準確性。需要重新啟動才能生效。'
+  enable_strict_mandatory_bps:
+    name: 嚴格最佳實踐模式
+    description: 嚴格模式：在用戶端能證明已閱讀最佳實踐之前，阻止其使用該工具。開啟時，六個最佳實踐寫入工具（自動化、指令碼、場景、輔助元素、儀表盤、原始
+      YAML）會被阻止並返回錯誤，指引用戶端透過 ha_get_skill_guide 閱讀最佳實踐技能並回傳在那裡獲得的確認金鑰。開啟時，ha_get_skill_guide
+      工具被鎖定啟用——它是確認金鑰的唯一發布方。為上方“寫入時附加最佳實踐技能”選項的子項，當其父項關閉時無效。需要重新啟動才能生效。
+  enable_filesystem_tools:
+    name: 啟用檔案系統工具（測試版）
+    description: 設定 HAMCP_ENABLE_FILESYSTEM_TOOLS=true。啟用對您的 Home Assistant 檔案系統的直接檔案讀/寫存取。警告：這會讓
+      MCP 伺服器直接讀寫您的 Home Assistant 檔案系統，獲得對系統的敏感檔案存取權限。僅在信任 AI 助手進行檔案操作時才啟用。需要重新啟動才能生效。需要上方（及
+      Web UI 中）的主開關“啟用測試版功能”開啟——否則無論此處值如何，此子開關在執行時都會被忽略。
+  enable_dashboard_screenshot:
+    name: 啟用儀表盤截圖模式（測試版）
+    description: 測試版功能，預設停用。新增 ha_get_dashboard_screenshot 工具，以及儀表板取得／設定工具的 include_screenshot／return_screenshot
+      選項，讓 AI 助手能檢查一個或多個回應式 Lovelace 影像，例如驗證剛建立的儀表板。支援穩定的具名檢視、手機／平板／電腦批次處理，以及 PNG／JPEG／WebP／BMP
+      輸出。渲染會在獨立的選用引擎中執行（balloob 的「Puppet」App（附加元件）或無頭 Chromium）；只需安裝一次，並提供長期存取權杖。在
+      Docker／Container 部署中，可將引擎作為 sidecar 執行並設定 HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL。除非同時啟用此功能並安裝引擎，否則不會安裝額外的大型元件。需要重新啟動才會生效。上方及網頁介面的「啟用測試版功能」主開關必須開啟，否則無論此處設定為何，執行時都會忽略此子旗標。
+  enable_auto_backup:
+    name: 啟用編輯自動備份
+    description: 在每次封裝的寫入/破壞性 MCP 工具呼叫（自動化、指令碼、場景、輔助、儀表盤、儀表盤資源、標籤、類別、組、區域、日曆、待辦事項、實體、裝置、整合以及相關的移除/刪除工具）之前，捕獲每個實體的快照。自動備份節流限制了發生頻率：0（預設）表示每次此類呼叫都捕獲，N>0
+      表示每個實體每 N 分鐘最多捕獲一個快照。快照以 YAML 檔案形式儲存在 /data/ha_mcp_backups/ 下（可透過 HAMCP_BACKUP_DIR
+      覆蓋），並透過網頁設定 UI 中的“Backups”分頁或 ha_manage_backup(scope='edits', ...) 進行列出、恢復或刪除。對於這些領域，捕獲是盡力而為的
+      — 失敗會記錄 WARNING 並繼續寫入。檔案和原始 YAML 工具是例外：ha_write_file、ha_delete_file 和 ha_config_set_yaml
+      將快照視為先決條件，因此當此功能關閉時，透過它們進行的寫入將被拒絕，並且捕獲失敗也會阻止寫入。預設開啟；取消勾選將退出盡力而為的捕獲，並使檔案和原始 YAML
+      工具隨之失效。需要重新啟動才能生效。
+  auto_backup_throttle_minutes:
+    name: 自動備份節流（分鐘）
+    description: 按實體的節流視窗。0（預設）表示每次被封裝的寫入都捕獲快照。N>0 表示每個實體每 N 分鐘最多捕獲一次快照。範圍 0–1440。
+  auto_backup_retain_per_entity:
+    name: 自動備份保留數量（每個實體）
+    description: 每個實體保留的最大快照數量。超出該上限的較舊快照會在每次成功捕獲時被輪換清除。預設 100，範圍 1–10000。
+  enable_snapshot_delete:
+    name: 允許刪除快照
+    description: 允許 ha_manage_backup 刪除完整的 HA 快照 tarball（scope='snapshot', action='delete'）。預設關閉——快照可能是錯誤更改之後最後的恢復點，因此必須由人工在此主動開啟。即使開啟，計劃備份、最新剩餘的快照，以及比下方年齡下限更新的快照仍受保護。
+  snapshot_delete_min_age_days:
+    name: 可刪除快照的最小年齡（天）
+    description: 快照至少要達到此天數才能被刪除。範圍 0–365；0 表示停用該下限（最新快照和計劃備份的保護仍然有效）。預設 7。
+  tool_search_max_results:
+    name: 工具搜尋最大結果數
+    description: 啟用工具搜尋時 ha_search_tools 回傳的最大工具數。較小的值（2–3）可節省上下文 token，但可能遺漏相關工具。範圍：2–10。需要重新啟動。
+  disabled_tools:
+    name: 已停用的工具（以逗號分隔）
+    description: 此處列出的工具會被強制關閉，並在網頁設定介面（“工具”分頁）中鎖定——在取消此選項之前無法在那裡重新啟用。少數必備工具（ha_search、ha_get_overview、ha_get_state、ha_report_issue、ha_manage_backup）無法停用，即使列在此處也會繼續執行。ha_get_skill_guide
+      僅在嚴格最佳實踐模式（enable_strict_mandatory_bps）關閉時才能停用。以逗號分隔的工具名稱（例如 ha_call_event,ha_eval_template）。
+  pinned_tools:
+    name: 已固定的工具（以逗號分隔）
+    description: 此處列出的工具會被鎖定為固定——它們顯示在“工具”分頁頂部，且在取消此選項之前無法從網頁設定介面取消固定。與工具搜尋搭配使用時很有用。以逗號分隔的工具名稱。
+  verify_ssl:
+    name: 驗證 TLS 證書
+    description: 驗證 Home Assistant 伺服器的 TLS 證書。App（附加元件）透過 Supervisor 代理連線，因此此設定通常無效，應保持啟用狀態。僅當您重新設定了App（附加元件），使其透過具有自簽名證書或主機名不匹配的公共
+      HTTPS 主機名與 HA 通訊時，才可以停用。停用會削弱傳輸安全性 — 除非您確有需要，否則請保持開啟。需要重新啟動才能生效。

@@ -311,11 +311,19 @@ def normalize_locale(
     base = candidate.split("-", 1)[0]
     if base in catalogs:
         return base
-    if base == "zh" and "zh-hans" in catalogs:
-        # Map bare "zh" and simplified Chinese region tags (zh-CN, zh-SG) to
-        # zh-hans. Do NOT map zh-TW, zh-HK, etc. — those would need a zh-Hant
-        # catalog to be registered.
-        if candidate == "zh" or candidate.split("-", 1)[-1] in ("cn", "sg"):
+    if base == "zh":
+        subtags = candidate.split("-")[1:]
+        script = next((tag for tag in subtags if tag in {"hans", "hant"}), None)
+        if script and f"zh-{script}" in catalogs:
+            return f"zh-{script}"
+        regions = set(subtags)
+        if "zh-hant" in catalogs and regions.intersection({"tw", "hk", "mo"}):
+            return "zh-hant"
+        # Bare "zh" follows the long-standing Simplified Chinese fallback;
+        # explicit script and region tags select their matching catalog.
+        if "zh-hans" in catalogs and (
+            candidate == "zh" or regions.intersection({"cn", "sg"})
+        ):
             return "zh-hans"
     return None
 
