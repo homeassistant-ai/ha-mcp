@@ -197,8 +197,9 @@ account's *per-user* profile, a different layer from the backend default that
 `action="set"` changes.
 
 **Give the engine its own Home Assistant user and long-lived token** and the
-problem disappears: the write lands on an account nobody looks at, and no
-warning is emitted. Language selection is local to Puppet's browser session.
+problem stops mattering: the write lands on an account nobody looks at, so no
+real session is disturbed. The warning is still emitted — ha-mcp has no signal
+telling it an account is dedicated — but it becomes safe to ignore. Language selection is local to Puppet's browser session.
 
 To change the Puppet engine app's own options (such as `keep_browser_open`)
 or to restart it, use `ha_manage_app`; the screenshot tools only render and

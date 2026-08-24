@@ -461,3 +461,49 @@ class TestCaptureBracket:
         assert any(
             "ha_manage_theme" in warning for warning in payload.get("warnings", [])
         )
+
+
+class TestCompareAndSetWrite:
+    """The restore is a compare-and-set, not a blind overwrite."""
+
+    async def test_write_refuses_when_current_does_not_match(self) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import (
+            ThemeChangedError,
+            write_engine_theme,
+        )
+
+        # Someone changed the theme after the warning was emitted.
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = {"theme": "nord"}
+        with pytest.raises(ThemeChangedError) as exc_info:
+            await write_engine_theme(
+                _PUPPET_CREDENTIAL,
+                dict(_DARK_THEME),
+                expected_current=dict(_CLOBBERED_THEME),
+            )
+
+        assert exc_info.value.actual == {"theme": "nord"}
+        assert _set_calls() == []
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == {"theme": "nord"}
+
+    async def test_write_proceeds_when_current_matches(self) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import write_engine_theme
+
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
+        await write_engine_theme(
+            _PUPPET_CREDENTIAL,
+            dict(_DARK_THEME),
+            expected_current=dict(_CLOBBERED_THEME),
+        )
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
+
+    async def test_warning_carries_both_values_for_the_guard(self) -> None:
+        """The agent needs expected_current, not just the value to restore."""
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+        await guard.take_snapshot()
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
+        await guard.detect_change()
+
+        warning = guard.warnings[0]
+        assert "value=" in warning
+        assert "expected_current=" in warning

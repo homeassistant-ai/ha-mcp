@@ -272,6 +272,25 @@ class TestExemptionRules:
         rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_radio"].blocked_write
         assert (rule(args) is None) is allowed
 
+    @pytest.mark.parametrize(
+        "args,allowed",
+        [
+            ({"action": "list"}, True),
+            # No pure-read duplicate exists, and Read Only Mode still surfaces
+            # the capture warning naming this value -- so it stays inspectable.
+            ({"action": "get_engine_theme"}, True),
+            # Both writes stay blocked: the backend default and the
+            # engine-account restore.
+            ({"action": "set", "theme_name": "nord"}, False),
+            ({"action": "set_engine_theme", "value": {"theme": ""}}, False),
+            # A missing action fails closed -- never a silent read.
+            ({}, False),
+        ],
+    )
+    def test_manage_theme(self, args, allowed):
+        rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_theme"].blocked_write
+        assert (rule(args) is None) is allowed
+
 
 @pytest.mark.anyio
 class TestMiddleware:
@@ -639,6 +658,7 @@ class TestExemptTableContract:
             "ha_manage_radio",
             "ha_manage_updates",
             "ha_manage_security_policy",
+            "ha_manage_theme",
         }
 
     def test_every_exemption_describes_whats_allowed(self):

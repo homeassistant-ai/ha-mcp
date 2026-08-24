@@ -62,6 +62,71 @@ class ThemesTools:
             )
         return guard.credential
 
+    async def _get_engine_theme(self) -> dict[str, Any]:
+        """Read the screenshot engine account's saved per-user theme."""
+        from ..dashboard_screenshot.theme_guard import read_engine_theme
+
+        credential = await self._engine_credential()
+        return {"success": True, "data": {"theme": await read_engine_theme(credential)}}
+
+    async def _set_engine_theme(
+        self,
+        action: str,
+        value: dict[str, Any] | None,
+        expected_current: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Restore the screenshot engine account's saved per-user theme."""
+        from ..dashboard_screenshot.theme_guard import (
+            ThemeChangedError,
+            write_engine_theme,
+        )
+
+        if value is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "value is required when action='set_engine_theme'",
+                    context={"action": action},
+                    suggestions=[
+                        "Use the value quoted in the screenshot tool's "
+                        + "warning, e.g. {'theme': '', 'dark': False}",
+                    ],
+                )
+            )
+        credential = await self._engine_credential()
+        try:
+            if expected_current is None:
+                await write_engine_theme(credential, value)
+            else:
+                await write_engine_theme(
+                    credential, value, expected_current=expected_current
+                )
+        except ThemeChangedError as guard_error:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "The engine account's saved theme is no longer the value "
+                    "this restore expected, so it was not overwritten.",
+                    context={
+                        "action": action,
+                        "expected_current": expected_current,
+                        "actual_current": guard_error.actual,
+                    },
+                    suggestions=[
+                        (
+                            "Something else changed the theme since the "
+                            + "warning was emitted -- confirm the intended "
+                            + "value before retrying."
+                        ),
+                        (
+                            "Re-read it with ha_manage_theme("
+                            + "action='get_engine_theme')."
+                        ),
+                    ],
+                )
+            )
+        return {"success": True, "data": {"theme": value}}
+
     async def _list_themes(self) -> dict[str, Any]:
         """Fetch installed theme names and defaults via websocket."""
         result = await self._client.send_websocket_message(
@@ -107,6 +172,19 @@ class ThemesTools:
                     "Theme name when action='set'. Must be an installed theme; "
                     "'default' restores the built-in theme, 'none' resets the "
                     "chosen mode to the built-in default."
+                ),
+                default=None,
+            ),
+        ] = None,
+        expected_current: Annotated[
+            dict[str, Any] | None,
+            Field(
+                description=(
+                    "Compare-and-set guard for action='set_engine_theme': the "
+                    "write is refused unless the stored theme still equals "
+                    "this. Pass the expected_current value quoted in the "
+                    "screenshot tool's warning. Omitting it forces an "
+                    "unconditional overwrite."
                 ),
                 default=None,
             ),
@@ -180,33 +258,10 @@ class ThemesTools:
                 return {"success": True, "data": await self._list_themes()}
 
             if action == "get_engine_theme":
-                from ..dashboard_screenshot.theme_guard import read_engine_theme
-
-                credential = await self._engine_credential()
-                return {
-                    "success": True,
-                    "data": {"theme": await read_engine_theme(credential)},
-                }
+                return await self._get_engine_theme()
 
             if action == "set_engine_theme":
-                from ..dashboard_screenshot.theme_guard import write_engine_theme
-
-                if value is None:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_MISSING_PARAMETER,
-                            "value is required when action='set_engine_theme'",
-                            context={"action": action},
-                            suggestions=[
-                                "Use the value quoted in the screenshot "
-                                "tool's warning, e.g. {'theme': '', "
-                                "'dark': False}",
-                            ],
-                        )
-                    )
-                credential = await self._engine_credential()
-                await write_engine_theme(credential, value)
-                return {"success": True, "data": {"theme": value}}
+                return await self._set_engine_theme(action, value, expected_current)
 
             if not theme_name:
                 raise_tool_error(

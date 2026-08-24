@@ -53,6 +53,9 @@ logger = logging.getLogger(__name__)
 
 THEME_USER_DATA_KEY = "theme"
 
+# Sentinel: None is a legitimate stored theme value, so it cannot mean "unset".
+_UNSET: Any = object()
+
 # Where Puppet reaches Home Assistant when its ``home_assistant_url`` option
 # is unset — the Supervisor-internal alias, mirrored from the add-on default.
 DEFAULT_ENGINE_HA_URL = "http://homeassistant:8123"
@@ -73,6 +76,12 @@ RESTORE_SETTLE_SECONDS = 1.0
 # The guard runs before the engine is contacted and must never eat the
 # caller's MCP timeout window; send_command otherwise waits 30s by default.
 COMMAND_TIMEOUT_SECONDS = 5.0
+
+# COMMAND_TIMEOUT_SECONDS only bounds a command once the socket is open and
+# authenticated. An unreachable endpoint or a bad token stalls in connect/auth
+# instead, before the engine is ever contacted, so the whole session is bounded
+# too.
+SESSION_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,13 +202,19 @@ class ThemeGuard:
         payload = response.get("result") if isinstance(response, dict) else None
         return payload.get("value") if isinstance(payload, dict) else None
 
+    async def _read_theme(self) -> Any:
+        """One bounded read of the engine user's saved theme."""
+        async with self._session() as ws:
+            return await self._fetch_theme(ws)
+
     async def take_snapshot(self) -> None:
         """Record the saved theme before the engine renders. Never raises."""
         if self.credential is None:
             return
         try:
-            async with self._session() as ws:
-                self._snapshot = await self._fetch_theme(ws)
+            self._snapshot = await asyncio.wait_for(
+                self._read_theme(), timeout=SESSION_TIMEOUT_SECONDS
+            )
             self._snapshot_taken = True
         except Exception as exc:
             logger.warning(
@@ -227,8 +242,9 @@ class ThemeGuard:
             # the frontend's resulting user-data write is asynchronous -- let
             # it land before reading (see RESTORE_SETTLE_SECONDS).
             await asyncio.sleep(RESTORE_SETTLE_SECONDS)
-            async with self._session() as ws:
-                current = await self._fetch_theme(ws)
+            current = await asyncio.wait_for(
+                self._read_theme(), timeout=SESSION_TIMEOUT_SECONDS
+            )
         except Exception as exc:
             logger.warning(
                 "Could not re-read the screenshot engine user's saved theme "
@@ -261,30 +277,54 @@ class ThemeGuard:
             "account its token belongs to, which also changes that account's "
             "live web and mobile sessions. This tool is read-only and will "
             "not change it back. To restore it, call ha_manage_theme("
-            f"action='set_engine_theme', value={restore_value!r}). "
-            "To stop this happening at all, give the screenshot engine its "
-            "own Home Assistant user and long-lived token, so its writes "
-            "land on an account nobody looks at."
+            f"action='set_engine_theme', value={restore_value!r}, "
+            f"expected_current={current!r}) -- the expected_current guard "
+            "refuses the write if anything changed the theme in the "
+            "meantime. To stop this happening at all, give the screenshot "
+            "engine its own Home Assistant user and long-lived token, so "
+            "its writes land on an account nobody looks at."
         )
 
 
 async def read_engine_theme(credential: EngineCredential) -> Any:
     """Read the engine user's saved ``theme`` frontend user-data value."""
     guard = ThemeGuard(credential=credential)
-    async with guard._session() as ws:
-        return await ThemeGuard._fetch_theme(ws)
+    return await asyncio.wait_for(guard._read_theme(), timeout=SESSION_TIMEOUT_SECONDS)
 
 
-async def write_engine_theme(credential: EngineCredential, value: Any) -> None:
+class ThemeChangedError(RuntimeError):
+    """The saved theme is not what the caller expected to overwrite."""
+
+    def __init__(self, actual: Any) -> None:
+        super().__init__("saved theme no longer matches expected_current")
+        self.actual = actual
+
+
+async def write_engine_theme(
+    credential: EngineCredential, value: Any, expected_current: Any = _UNSET
+) -> None:
     """Write the engine user's saved ``theme`` frontend user-data value.
 
     Only reached through ``ha_manage_theme``, which is annotated as a write.
+    When ``expected_current`` is supplied this is a compare-and-set: the write
+    is refused unless the stored value still matches. That is what stops a
+    delayed restore from stomping a theme the user changed in the meantime --
+    and, because a mismatched account's theme will not match either, stops a
+    misresolved credential writing the wrong user's profile.
     """
     guard = ThemeGuard(credential=credential)
-    async with guard._session() as ws:
-        await ws.send_command(
-            "frontend/set_user_data",
-            key=THEME_USER_DATA_KEY,
-            value=value,
-            _wait_timeout=COMMAND_TIMEOUT_SECONDS,
-        )
+
+    async def _write() -> None:
+        async with guard._session() as ws:
+            if expected_current is not _UNSET:
+                current = await ThemeGuard._fetch_theme(ws)
+                if current != expected_current:
+                    raise ThemeChangedError(current)
+            await ws.send_command(
+                "frontend/set_user_data",
+                key=THEME_USER_DATA_KEY,
+                value=value,
+                _wait_timeout=COMMAND_TIMEOUT_SECONDS,
+            )
+
+    await asyncio.wait_for(_write(), timeout=SESSION_TIMEOUT_SECONDS)
