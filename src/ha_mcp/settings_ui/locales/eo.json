@@ -470,7 +470,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Amasa Kontrolo",
-      "description": "Mastrumi plurajn entajn agojn en unu peto."
+      "description": "Administri eksplicitajn operaciojn aŭ unu determinisman strukturan amasagadon."
     },
     "ha_call_event": {
       "title": "Voki Eventon",

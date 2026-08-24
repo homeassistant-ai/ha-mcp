@@ -501,7 +501,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "일괄 제어",
-      "description": "여러 엔티티 작업을 한 번의 요청으로 처리합니다."
+      "description": "명시적 작업 또는 하나의 결정론적 구조적 일괄 작업을 관리합니다."
     },
     "ha_call_event": {
       "title": "이벤트 호출",

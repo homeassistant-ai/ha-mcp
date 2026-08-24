@@ -501,7 +501,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Control en bloque",
-      "description": "Gestiona múltiples acciones de entidades en una sola solicitud."
+      "description": "Gestiona operaciones explícitas o una acción masiva estructural determinista."
     },
     "ha_call_event": {
       "title": "Lanzar evento",

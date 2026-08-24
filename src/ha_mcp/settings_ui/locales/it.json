@@ -501,7 +501,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Controllo in blocco",
-      "description": "Gestisci più azioni di entità in una singola richiesta."
+      "description": "Gestisci operazioni esplicite o un'azione di gruppo strutturale deterministica."
     },
     "ha_call_event": {
       "title": "Invia un evento",
