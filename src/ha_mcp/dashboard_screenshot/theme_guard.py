@@ -278,8 +278,14 @@ class ThemeGuard:
                 "Could not read the screenshot engine user's saved frontend "
                 f"theme before rendering; if the render changed it, {_RESTORE_HINT}."
             )
-            # Nothing to restore, so do not hold the lock across the render.
-            self._release_lock()
+        finally:
+            if not self._snapshot_taken:
+                # Nothing to restore, so never hold the lock across the
+                # render. This lives in ``finally`` rather than the ``except``
+                # because asyncio.CancelledError is a BaseException: a
+                # cancellation mid-session would otherwise strand the lock and
+                # time out every later themed capture.
+                self._release_lock()
 
     def _release_lock(self) -> None:
         """Drop the per-engine lock if this guard holds it."""

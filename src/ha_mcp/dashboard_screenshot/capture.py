@@ -858,8 +858,9 @@ async def capture_dashboard_images(
     A batch that requests a theme (``theme`` or ``dark_mode``) is bracketed by
     a :class:`ThemeGuard` that restores the engine user's saved frontend theme
     afterwards, because such renders make Puppet write it (issue #1909).
-    Unthemed batches issue no writes at all. Guard failures are non-fatal and
-    surface through ``capture_warnings``.
+    Unthemed batches issue no writes at all. Snapshot and restore failures
+    surface through ``capture_warnings``. A theme-lock timeout rejects the
+    themed capture to prevent an unserialized render.
     """
     path = _validate_dashboard_path(dashboard_path)
     options = validate_capture_parameters(
