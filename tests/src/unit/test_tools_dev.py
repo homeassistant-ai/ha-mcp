@@ -484,6 +484,36 @@ class TestManageServer:
         assert "cleared_override" not in submitted
         assert submitted["channel"] == "stable"
 
+    async def test_update_source_never_echoes_preserved_secrets(self):
+        # The component's options form exposes oauth_client_secret as a
+        # suggested_value, so the schema-driven resend picks it up -- correctly,
+        # since omitting it would clear the credential. It must NOT come back to
+        # the MCP client: this path submits the flow directly, so the flow-schema
+        # redaction never sees it (Codex review, #2256).
+        flow = dict(_SERVER_FLOW_WITH_OVERRIDES)
+        flow["data_schema"] = list(flow["data_schema"]) + [
+            {
+                "name": "oauth_client_secret",
+                "description": {"suggested_value": "super-secret-value"},
+            },
+        ]
+        client = _mock_client(entries=[{"entry_id": "server-e"}], flows=[flow])
+        result = await DevTools(client).ha_dev_manage_server(
+            action="update_source", channel="stable"
+        )
+
+        submitted = client.submit_options_flow_step.await_args.args[1]
+        assert submitted["oauth_client_secret"] == "super-secret-value", (
+            "The secret must still be resent, or the update would clear it"
+        )
+
+        # ...but the response reports only what the caller asked to change.
+        applied = result["data"].get("applied") or result["data"].get("applying")
+        assert applied == {"channel": "stable"}
+        assert "super-secret-value" not in json.dumps(result), (
+            f"Credential leaked into the tool response: {result}"
+        )
+
     async def test_update_source_new_pip_spec_wins_over_preserved(self):
         # A caller-supplied pip_spec must override the preserved (suggested_value)
         # pin, not be clobbered by it: the preserve dict is seeded first, then the

@@ -299,7 +299,10 @@ def _consume_section_schema(
             keep_current_values=keep_current_values,
         )
     )
-    return nested_data
+    # Strip before returning, so the caller's "did this section get anything?"
+    # check counts real values and a section holding only clears is dropped
+    # rather than submitted as sentinels.
+    return _strip_cleared(nested_data)
 
 
 def _mark_consumed(
@@ -368,6 +371,25 @@ def _step_owned_submission_value(field: dict[str, Any]) -> Any:
     if field.get("type") == "constant" and field.get("value") is not None:
         return copy.deepcopy(field["value"])
     return _MISSING_DEFAULT
+
+
+# Marks a field the caller cleared. A clear cannot be expressed by simply
+# leaving the key out: a REQUIRED section is pre-seeded with the step's own
+# values by _required_section_defaults BEFORE anything is consumed, so an
+# omitted key just lets that seed survive the merge and resubmits the value
+# the caller asked to drop. The sentinel rides through the merge in the key's
+# place and is stripped once the section is assembled (issue #2254).
+_CLEARED = object()
+
+
+def _strip_cleared(form_data: dict[str, Any]) -> dict[str, Any]:
+    """Drop every key a clear marked, at any depth. Mutates and returns."""
+    for name in [k for k, v in form_data.items() if v is _CLEARED]:
+        del form_data[name]
+    for value in form_data.values():
+        if isinstance(value, dict):
+            _strip_cleared(value)
+    return form_data
 
 
 def _is_redacted_value(value: Any) -> bool:
@@ -512,8 +534,7 @@ def _consume_leaf_field(
             and not field.get("required")
             and "default" not in field
         )
-        if not clearing:
-            form_data[name] = value
+        form_data[name] = _CLEARED if clearing else value
         _mark_consumed(consumed_config_keys, path_prefix, name)
         if reuse_state is not None:
             reuse_state.record(path_prefix, name, value, scoped_only=explicit_source)
@@ -776,12 +797,14 @@ def _handle_form_step(
             remaining_config, consumed_config_keys, reuse_state
         )
 
-    return _consume_form_schema(
-        data_schema,
-        remaining_config,
-        ignored_config_keys,
-        consumed_config_keys,
-        "",
-        reuse_state,
-        keep_current_values=keep_current_values,
+    return _strip_cleared(
+        _consume_form_schema(
+            data_schema,
+            remaining_config,
+            ignored_config_keys,
+            consumed_config_keys,
+            "",
+            reuse_state,
+            keep_current_values=keep_current_values,
+        )
     )

@@ -386,6 +386,45 @@ class TestSectionBackfill:
             "advanced": {"timeout": 45, "scheme": "https"},
         }
 
+    def test_clearing_a_leaf_in_a_required_section_drops_the_prefill(self) -> None:
+        """A required section is pre-seeded; a clear has to beat the seed.
+
+        ``_required_section_defaults`` seeds a REQUIRED section with the
+        step's own values before anything is consumed, and
+        ``_field_default_value`` reads ``description.suggested_value`` first —
+        so an optional no-default leaf inside one arrives already holding its
+        stored value. Merely leaving the cleared key out of the consumed
+        payload lets that seed survive the merge, submitting the old value
+        while the tool reports a successful clear (Codex review, #2256).
+        """
+        step = _section_step(
+            True,
+            [
+                {"name": "timeout", "description": {"suggested_value": 45}},
+                {
+                    "name": "scheme",
+                    "required": True,
+                    "description": {"suggested_value": "https"},
+                },
+            ],
+        )
+
+        form_data = _handle_form_step(
+            "flow-2254",
+            step,
+            {"host": "10.0.0.5", "advanced": {"timeout": None}},
+            reuse_state=_ReuseState(),
+            keep_current_values=True,
+        )
+
+        assert "timeout" not in form_data["advanced"], (
+            "The cleared leaf came back from the required-section prefill: "
+            f"{form_data['advanced']}"
+        )
+        # The rest of the section still goes back untouched.
+        assert form_data["advanced"]["scheme"] == "https"
+        assert form_data["host"] == "10.0.0.5"
+
     def test_create_flow_leaves_an_untouched_optional_section_alone(self) -> None:
         """Flag off keeps the #2013 rule: nothing the caller never named."""
         step = _section_step(

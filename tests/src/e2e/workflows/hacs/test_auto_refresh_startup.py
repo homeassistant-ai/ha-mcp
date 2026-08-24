@@ -53,6 +53,7 @@ from fastmcp.client.transports import StdioTransport
 
 from ha_mcp.client.websocket_client import DEFAULT_COMMAND_WAIT_TIMEOUT
 from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX, RETRY_DELAYS
+from ha_mcp.tools.hacs_registration import HACS_REFRESH_TIMEOUT
 
 from ...conftest import TEST_TOKEN, _retire_stdio_sidecar, _stdio_env
 from ...utilities.wait_helpers import wait_for_condition
@@ -63,15 +64,24 @@ logger = logging.getLogger(__name__)
 # against HA finishing HACS's setup — HACS registers its WS handlers late, and
 # until it does the command comes back ``unknown_command``, which
 # ``_refresh_with_retries`` cannot tell apart from "no HACS installed" and so
-# keeps retrying. Budget for one such attempt failing the slowest way it can:
-# ``hacs/repositories/list`` hanging until ``DEFAULT_COMMAND_WAIT_TIMEOUT``,
-# then ``RETRY_DELAYS[0]`` of sleep, then a second attempt that may spend that
-# same command timeout before it writes anything. Waiting any less makes these
-# lanes a coin flip on a slow runner — attempt two lands AT the deadline and
-# the marker appears just after the assert. Everything here is derived, never
-# a literal, so a change to either schedule cannot silently outgrow the wait.
+# keeps retrying. Budget for one such attempt failing the slowest way it can,
+# all the way to the marker actually being written:
+#   1. ``hacs/repositories/list`` hangs until ``DEFAULT_COMMAND_WAIT_TIMEOUT``
+#   2. ``RETRY_DELAYS[0]`` of sleep before the pass tries again
+#   3. the second list call may spend that same command timeout
+#   4. ``send_hacs_repository_refresh`` then runs on its OWN, longer budget
+#      (``HACS_REFRESH_TIMEOUT``) — the marker is written after it returns
+# Waiting any less makes these lanes a coin flip on a slow runner: the marker
+# lands just after the assert. Every term is derived from the schedule it
+# waits on, never a literal, so raising any of them cannot silently outgrow
+# the wait. It costs nothing on the happy path — wait_for_condition polls and
+# returns the moment the marker appears.
 NUDGE_MARKER_TIMEOUT = (
-    DEFAULT_COMMAND_WAIT_TIMEOUT + RETRY_DELAYS[0] + DEFAULT_COMMAND_WAIT_TIMEOUT + 15.0
+    DEFAULT_COMMAND_WAIT_TIMEOUT
+    + RETRY_DELAYS[0]
+    + DEFAULT_COMMAND_WAIT_TIMEOUT
+    + HACS_REFRESH_TIMEOUT
+    + 15.0
 )
 
 

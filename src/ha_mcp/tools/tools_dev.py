@@ -2061,10 +2061,21 @@ class DevTools:
         entry_id, flow, current = found
 
         user_input: dict[str, Any] = _preserved_flow_overrides(flow)
+        # What goes BACK to the caller is only what the caller asked to change.
+        # user_input also carries every override resent to avoid wiping it, and
+        # the component's options form exposes OPT_OAUTH_CLIENT_SECRET as a
+        # suggested_value — echoing the whole payload would hand that
+        # credential to the MCP client. This probe submits the flow directly
+        # rather than through the walker, so the flow-schema redaction path
+        # never sees it either. Preserve it in the submission, keep it out of
+        # the response.
+        requested: dict[str, Any] = {}
         if channel is not None:
             user_input[_OPT_CHANNEL] = channel
+            requested[_OPT_CHANNEL] = channel
         if pip_spec is not None:
             user_input[_OPT_PIP_SPEC] = pip_spec
+            requested[_OPT_PIP_SPEC] = pip_spec
         flow_id = flow.get("flow_id")
         if not flow_id:
             raise_tool_error(
@@ -2086,7 +2097,7 @@ class DevTools:
                     "target": (
                         "this server (the embedded ha_mcp_tools in-process entry)"
                     ),
-                    "applying": user_input,
+                    "applying": requested,
                     "previous": {
                         _OPT_CHANNEL: current.get(_OPT_CHANNEL),
                         _OPT_PIP_SPEC: current.get(_OPT_PIP_SPEC),
@@ -2114,7 +2125,7 @@ class DevTools:
             "data": {
                 "entry_id": entry_id,
                 "target": "ha_mcp_tools in-process server entry",
-                "applied": user_input,
+                "applied": requested,
                 "previous": {
                     _OPT_CHANNEL: current.get(_OPT_CHANNEL),
                     _OPT_PIP_SPEC: current.get(_OPT_PIP_SPEC),
