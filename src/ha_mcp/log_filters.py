@@ -135,7 +135,9 @@ class SessionDisconnectLogFilter(logging.Filter):
         if err is None or not _is_only_closed_resource_errors(err):
             return True
 
-        record.msg = f"{record.getMessage()}: client disconnected before response delivery"
+        record.msg = (
+            f"{record.getMessage()}: client disconnected before response delivery"
+        )
         record.args = ()
         record.levelno = logging.WARNING
         record.levelname = "WARNING"

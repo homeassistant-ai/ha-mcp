@@ -2656,9 +2656,7 @@ class TestServeLogFilters:
         install_calls: list = []
         log_filters_mod = ModuleType("ha_mcp.log_filters")
         log_filters_mod.install_sdk_log_filters = lambda: install_calls.append(True)
-        _stub_ha_mcp_surface(
-            monkeypatch, mcp=fake_mcp, log_filters_mod=log_filters_mod
-        )
+        _stub_ha_mcp_surface(monkeypatch, mcp=fake_mcp, log_filters_mod=log_filters_mod)
 
         mgr._thread_main("tok")
 

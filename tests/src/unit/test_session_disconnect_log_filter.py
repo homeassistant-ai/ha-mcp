@@ -225,7 +225,9 @@ class TestSessionDisconnectLogFilterWiring:
             ha_main._setup_logging("INFO", force=True)
             assert any(
                 isinstance(f, SessionDisconnectLogFilter) for f in sdk_logger.filters
-            ), "_setup_logging must attach SessionDisconnectLogFilter to the SDK's session-manager logger"
+            ), (
+                "_setup_logging must attach SessionDisconnectLogFilter to the SDK's session-manager logger"
+            )
 
             disconnect_buf = io.StringIO()
             handler = logging.StreamHandler(disconnect_buf)
