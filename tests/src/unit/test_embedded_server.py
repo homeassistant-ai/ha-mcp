@@ -3717,7 +3717,7 @@ class TestImporterAwareBringUp:
         with pytest.raises(es.EmbeddedServerError) as exc:
             await mgr._async_ensure_package(defer_mutations=True)
 
-        assert exc.value.kind == "restart"
+        assert exc.value.kind == "package"
         assert "refusing the first install" in str(exc.value)
         fast.assert_not_awaited()
         force.assert_not_awaited()

@@ -945,7 +945,7 @@ class EmbeddedServerManager:
                 "not installed; refusing the first install because it could "
                 "replace loaded FastMCP files. Restart Home Assistant so HA-MCP "
                 "can establish runtime ownership before other MCP integrations.",
-                kind="restart",
+                kind="package",
             )
 
     def _replaced_dist_name(self) -> str | None:
