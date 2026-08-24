@@ -584,11 +584,11 @@ class TestNullExpectedCurrentGuard:
 
 
 class TestToolLayerForcePassthrough:
-    """force must survive the tool dispatch, not just the helper signature.
+    """force must survive the public dispatch, not just the helper signature.
 
     The helper tests call write_engine_theme() directly, so they cannot see a
     dispatch that drops the argument -- which is how an inert force flag
-    shipped once already.
+    shipped once already. These go through ha_manage_theme itself.
     """
 
     async def _tools(self) -> Any:
@@ -607,9 +607,12 @@ class TestToolLayerForcePassthrough:
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
 
         # expected_current deliberately mismatches: only a real force
-        # passthrough lets this write land.
-        result = await tools._set_engine_theme(
-            "set_engine_theme", dict(_CLOBBERED_THEME), None, True
+        # passthrough down the public path lets this write land.
+        result = await tools.ha_manage_theme(
+            action="set_engine_theme",
+            value=dict(_CLOBBERED_THEME),
+            expected_current=None,
+            force=True,
         )
 
         assert result["success"] is True
@@ -620,7 +623,10 @@ class TestToolLayerForcePassthrough:
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
 
         with pytest.raises(ToolError):
-            await tools._set_engine_theme(
-                "set_engine_theme", dict(_CLOBBERED_THEME), None, False
+            await tools.ha_manage_theme(
+                action="set_engine_theme",
+                value=dict(_CLOBBERED_THEME),
+                expected_current=None,
+                force=False,
             )
         assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
