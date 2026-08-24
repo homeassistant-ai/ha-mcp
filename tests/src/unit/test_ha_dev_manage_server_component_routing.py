@@ -542,10 +542,15 @@ async def test_non_embedded_never_routes_to_component_write(
         )
 
     # Synchronous legacy submit (non-embedded returns "applied", not "scheduled").
-    assert result["data"]["applied"] == {
-        "server_url": "http://ha:8123",
-        "channel": "dev",
-    }
+    # "applied" reports only what the CALLER asked to change. The preserved
+    # overrides are resent to avoid wiping them, not requested, and the
+    # component's options form carries oauth_client_secret among them — so
+    # echoing the whole payload handed a credential back to the client
+    # (Codex review, #2256).
+    assert result["data"]["applied"] == {"channel": "dev"}
     assert len(client.submit_calls) == 1
+    # ...while the SUBMISSION still carries the preserved override, or the
+    # update would clear it.
+    assert client.submit_calls[0][1]["server_url"] == "http://ha:8123"
     sent = [c.args[0] for c in ws.send_command.call_args_list]
     assert "ha_mcp_tools/server_entry_update" not in sent
