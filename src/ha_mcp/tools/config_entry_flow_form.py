@@ -441,7 +441,8 @@ def _edit_mode_submission(
     the caller asked to write (Patch76 review, issue #2254).
 
     Only a field the caller never named anywhere falls through to the step's
-    own value.
+    own value — as does one whose reused write is already spent, rather than
+    letting an omission apply a static default over what is stored.
     """
     recorded = reuse_state.recorded_value(path_prefix, name)
     if recorded is _MISSING_DEFAULT:
@@ -449,7 +450,14 @@ def _edit_mode_submission(
     if recorded is None:
         return _NO_SUBMISSION
     if not reuse_state.claim_write(dotted):
-        return _NO_SUBMISSION
+        # The one reused write per (step, path) is spent — a menu loop is
+        # revisiting this step. Falling back to omission would let voluptuous
+        # substitute the field's STATIC default over the entry's stored value,
+        # which is the very wipe this mode exists to stop, so send what the
+        # step presented instead (CodeRabbit review, issue #2254). The
+        # required-field branch still omits: there, omission raises HA's own
+        # loud "required key not provided" rather than losing data silently.
+        return _current_value_backfill(field)
     return recorded, True
 
 

@@ -607,6 +607,54 @@ class TestRequiredFieldPathsUnchanged:
             f"The later step overwrote the caller's value: {second}"
         )
 
+    def test_a_revisited_step_keeps_the_stored_value_after_the_write_is_spent(
+        self,
+    ) -> None:
+        """A menu loop must not let the static default win on encounter three.
+
+        ``claim_write`` allows one reused write per (step, path). Once spent,
+        omitting the key handed voluptuous the field's STATIC default, which
+        overwrote the entry's stored value — the exact wipe this mode exists
+        to stop (CodeRabbit review, #2256). The step's own value goes back
+        instead.
+        """
+        step: dict[str, Any] = {
+            "type": "form",
+            "step_id": "init",
+            "data_schema": [
+                {
+                    "name": "workdays",
+                    "required": False,
+                    "optional": True,
+                    "default": ["mon", "tue", "wed", "thu", "fri"],
+                    "description": {"suggested_value": ["mon", "wed", "fri"]},
+                },
+            ],
+        }
+        reuse_state = _ReuseState()
+        remaining: dict[str, Any] = {"workdays": ["sat"]}
+        payloads = [
+            _handle_form_step(
+                "flow-2254",
+                dict(step),
+                remaining,
+                None,
+                set(),
+                reuse_state,
+                keep_current_values=True,
+            )
+            for _ in range(3)
+        ]
+
+        # The caller's value applies while the budget lasts...
+        assert payloads[0]["workdays"] == ["sat"]
+        assert payloads[1]["workdays"] == ["sat"]
+        # ...and once spent the STORED value goes back, never the static
+        # default that an omission would have substituted.
+        assert payloads[2]["workdays"] == ["mon", "wed", "fri"], (
+            f"Spent write fell back to the schema default: {payloads[2]}"
+        )
+
     def test_create_flow_still_drops_a_redeclared_optional_field(self) -> None:
         """Flag off keeps the pre-#2254 shape: nothing goes back at all."""
         reuse_state = _ReuseState()
