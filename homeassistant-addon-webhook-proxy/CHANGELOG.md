@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v3.0.2 (2026-08-24)
+
+### Bug Fixes
+
+- In `ha_auth` mode, loopback-callback and multi-origin registered clients no
+  longer have to sign in again whenever Home Assistant's 30-minute access token
+  expires. Refresh tokens now retain the exact client identity used during
+  authorization; sessions created before this update may need one final
+  reauthorization.
+
+- Revoking one of these refresh tokens now revokes the underlying Home
+  Assistant grant instead of returning success while leaving it active. OAuth
+  discovery advertises a scoped revocation endpoint for `ha_auth`, and
+  temporary forwarding failures return `503` with retry guidance.
+
+
 
 ## v3.0.1 (2026-08-18)
 
