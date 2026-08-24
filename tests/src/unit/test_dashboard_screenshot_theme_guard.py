@@ -310,7 +310,9 @@ class TestEngineThemeHelpers:
         from ha_mcp.dashboard_screenshot.theme_guard import write_engine_theme
 
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
-        await write_engine_theme(_PUPPET_CREDENTIAL, dict(_DARK_THEME))
+        # The guard is on by default now, so an unconditional write is
+        # explicit: omitting expected_current means "expect no stored theme".
+        await write_engine_theme(_PUPPET_CREDENTIAL, dict(_DARK_THEME), force=True)
         assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
         assert len(_set_calls()) == 1
 
@@ -538,3 +540,44 @@ class TestSessionCleanup:
 
         assert len(_FakeWsClient.instances) == 1
         assert _FakeWsClient.instances[0].disconnected is True
+
+
+class TestNullExpectedCurrentGuard:
+    """An explicit null expected_current must guard, not mean 'unguarded'."""
+
+    async def test_null_expected_current_refuses_when_a_theme_appeared(
+        self,
+    ) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import (
+            ThemeChangedError,
+            write_engine_theme,
+        )
+
+        # Warning observed a never-configured theme (None); by the time the
+        # agent restores, the user has picked one.
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        with pytest.raises(ThemeChangedError):
+            await write_engine_theme(
+                _PUPPET_CREDENTIAL, dict(_CLOBBERED_THEME), expected_current=None
+            )
+        assert _set_calls() == []
+
+    async def test_null_expected_current_writes_when_still_null(self) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import write_engine_theme
+
+        await write_engine_theme(
+            _PUPPET_CREDENTIAL, dict(_DARK_THEME), expected_current=None
+        )
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
+
+    async def test_force_skips_the_guard(self) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import write_engine_theme
+
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        await write_engine_theme(
+            _PUPPET_CREDENTIAL,
+            dict(_CLOBBERED_THEME),
+            expected_current=None,
+            force=True,
+        )
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _CLOBBERED_THEME

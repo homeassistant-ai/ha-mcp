@@ -78,6 +78,7 @@ class ThemesTools:
         action: str,
         value: dict[str, Any] | None,
         expected_current: dict[str, Any] | None,
+        force: bool = False,
     ) -> dict[str, Any]:
         """Restore the screenshot engine account's saved per-user theme."""
         from ..dashboard_screenshot.theme_guard import (
@@ -99,12 +100,11 @@ class ThemesTools:
             )
         credential = await self._engine_credential()
         try:
-            if expected_current is None:
-                await write_engine_theme(credential, value)
-            else:
-                await write_engine_theme(
-                    credential, value, expected_current=expected_current
-                )
+            # expected_current=None is an explicit "expect no stored theme",
+            # not an omission -- only force skips the guard.
+            await write_engine_theme(
+                credential, value, expected_current=expected_current, force=force
+            )
         except ThemeChangedError as guard_error:
             raise_tool_error(
                 create_error_response(
@@ -187,16 +187,28 @@ class ThemesTools:
                 description=(
                     "Guard for action='set_engine_theme': the stored theme is "
                     "read immediately before the write and the write is "
-                    "skipped if it no longer equals this. Best-effort, not "
-                    "atomic -- Home Assistant exposes no conditional write, "
-                    "so a change landing between that read and the write is "
-                    "not caught. Pass the expected_current value quoted in "
-                    "the screenshot tool's warning. Omitting it overwrites "
-                    "unconditionally."
+                    "skipped if it no longer equals this. An explicit null "
+                    "means 'expect no stored theme' and is enforced like any "
+                    "other value; the guard is always applied unless force is "
+                    "set. Best-effort, not atomic -- Home Assistant exposes no "
+                    "conditional write, so a change landing between that read "
+                    "and the write is not caught. Pass the expected_current "
+                    "value quoted in the screenshot tool's warning."
                 ),
                 default=None,
             ),
         ] = None,
+        force: Annotated[
+            bool,
+            Field(
+                description=(
+                    "action='set_engine_theme' only: skip the expected_current "
+                    "guard and overwrite unconditionally. Leave false unless "
+                    "you intend to discard whatever is stored."
+                ),
+                default=False,
+            ),
+        ] = False,
         value: Annotated[
             dict[str, Any] | None,
             JSON_STRING_COERCION,

@@ -747,6 +747,9 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         # carry no mutation capability of their own in read-only mode.
         "value",
         "expected_current",
+        # Unconditional-overwrite escape hatch on set_engine_theme, itself a
+        # blocked action in read-only mode.
+        "force",
     },
     "ha_manage_backup": {
         # Consumed only under the (scope, action) dispatch the predicate

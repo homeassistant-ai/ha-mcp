@@ -83,6 +83,12 @@ COMMAND_TIMEOUT_SECONDS = 5.0
 # too.
 SESSION_TIMEOUT_SECONDS = 10.0
 
+# Cleanup runs shielded so a cancellation cannot abort the close mid-flight,
+# but shielded work still has to be bounded or a blocked disconnect() would
+# extend the session past SESSION_TIMEOUT_SECONDS. The shielded task keeps
+# running in the background when this bound expires; we just stop waiting.
+CLOSE_TIMEOUT_SECONDS = 2.0
+
 
 @dataclass(frozen=True, slots=True)
 class EngineCredential:
@@ -199,8 +205,11 @@ class ThemeGuard:
                 # shield: we are frequently here *because* of a cancellation
                 # (SESSION_TIMEOUT_SECONDS). A bare await would be cancelled
                 # at once and the socket would never actually close.
-                await asyncio.shield(ws.disconnect())
-            except Exception as close_error:
+                await asyncio.wait_for(
+                    asyncio.shield(ws.disconnect()),
+                    timeout=CLOSE_TIMEOUT_SECONDS,
+                )
+            except (Exception, TimeoutError) as close_error:
                 logger.debug(
                     "Ignoring error while closing the theme-guard session: %s",
                     close_error,
@@ -316,12 +325,16 @@ class ThemeChangedError(RuntimeError):
 
 
 async def write_engine_theme(
-    credential: EngineCredential, value: Any, expected_current: Any = _UNSET
+    credential: EngineCredential,
+    value: Any,
+    expected_current: Any = _UNSET,
+    *,
+    force: bool = False,
 ) -> None:
     """Write the engine user's saved ``theme`` frontend user-data value.
 
     Only reached through ``ha_manage_theme``, which is annotated as a write.
-    When ``expected_current`` is supplied the stored value is re-read
+    Unless ``force`` is set the stored value is re-read
     immediately before the write and the write is skipped on a mismatch. This
     is best-effort, not atomic: ``frontend/set_user_data`` is an unconditional
     ``async_set_item`` with no version or etag, so Home Assistant offers
@@ -334,9 +347,10 @@ async def write_engine_theme(
 
     async def _write() -> None:
         async with guard._session() as ws:
-            if expected_current is not _UNSET:
+            if not force:
                 current = await ThemeGuard._fetch_theme(ws)
-                if current != expected_current:
+                expected = None if expected_current is _UNSET else expected_current
+                if current != expected:
                     raise ThemeChangedError(current)
             await ws.send_command(
                 "frontend/set_user_data",
