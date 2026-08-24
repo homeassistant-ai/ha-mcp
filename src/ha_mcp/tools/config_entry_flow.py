@@ -168,8 +168,10 @@ async def set_config_subentry(
 
     The reconfigure branch fails when the flow leaves any supplied config key
     unconsumed, where it previously returned success plus a warning — see
-    :func:`_handle_config_subentry_flow_steps` for why. The create branch is
-    unchanged.
+    :func:`_handle_config_subentry_flow_steps` for why. It also walks with
+    ``keep_current_values`` (issue #2254), so a partial patch keeps the
+    subentry fields it does not name instead of resetting them. The create
+    branch is unchanged on both counts.
     """
     _reject_redaction_sentinels(config_dict)
     flow_result = await client.start_config_subentry_flow(
@@ -205,6 +207,7 @@ async def set_config_subentry(
             flow_result,
             config_dict,
             is_reconfigure=subentry_id is not None,
+            keep_current_values=subentry_id is not None,
         )
     except asyncio.CancelledError:
         await _abort_subentry_flow_best_effort(client, flow_id)
@@ -289,6 +292,15 @@ async def update_config_entry_options(
     ``ha_set_integration`` path passes ``None`` to accept any domain). Starts
     an options flow, walks the flow steps, and returns the result. Aborts the
     flow on error. ``noun`` only affects response wording.
+
+    This edits an existing entry, so the walk runs with
+    ``keep_current_values``: every field an options step declares that
+    ``config_dict`` does not name is submitted with the value the step itself
+    carries, exactly as the HA UI's "Configure" dialog posts back the boxes
+    nobody touched. Before issue #2254 those keys were dropped and voluptuous
+    substituted each field's static default, so a one-key patch silently reset
+    the rest of the entry's options. A key the caller sets to ``None`` is the
+    opposite request and is honoured as a clear.
     """
     _reject_redaction_sentinels(config_dict)
     config_entry = await client.get_config_entry(entry_id)
@@ -332,6 +344,7 @@ async def update_config_entry_options(
             config_dict,
             submit_fn=client.submit_options_flow_step,
             helper_type=expected_domain,
+            keep_current_values=True,
         )
     except Exception:
         try:

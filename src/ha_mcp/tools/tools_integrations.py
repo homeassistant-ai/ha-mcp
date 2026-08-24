@@ -1843,6 +1843,9 @@ class IntegrationTools:
                     "Flow form data. With 'domain': input for the new "
                     "integration's config flow. With 'entry_id' alone: input "
                     "for the entry's options flow (updates its options). "
+                    "Updating an existing entry — options or reconfigure — is "
+                    "a patch: a field you omit keeps its current value, and a "
+                    "field set to null is cleared. "
                     "Multi-step flows consume keys per step; menu steps take "
                     "'next_step_id' — a string, or a list of successive "
                     "selections for flows that present more than one menu "
@@ -1929,7 +1932,9 @@ class IntegrationTools:
         - Add integration: domain (+ config) — drives the domain's config
           flow, including menus and multi-step forms.
         - Update options: entry_id + config — drives the entry's options
-          flow (what the "Configure" button does in the HA UI).
+          flow (what the "Configure" button does in the HA UI). Like that
+          dialog it is a patch: omitted fields keep their current values, and
+          a field set to null is cleared.
         - Reconfigure: entry_id + reconfigure=True + config — drives the
           existing entry's official reconfigure flow (host, port, credentials).
           Call it without confirm_token for a read-only preflight; repeat with

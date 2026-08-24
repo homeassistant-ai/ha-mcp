@@ -4,8 +4,11 @@ Extracted from ``config_entry_flow.py`` (which holds the public create/update
 entry points) when that module crossed the ~1000-line split threshold. Turns a
 step's serialized ``data_schema`` plus the caller's config dict into the payload
 to submit, and tracks what was consumed so a later step redeclaring a field can
-be filled. Imports the menu selection keys from ``config_entry_flow_menu``
-(never submitted as form data); ``config_entry_flow_walker`` imports from here.
+be filled. Flows that edit an existing object pass ``keep_current_values``,
+so a field the caller left out goes back as the step presented it instead of
+being dropped (issue #2254). Imports the menu selection keys from
+``config_entry_flow_menu`` (never submitted as form data);
+``config_entry_flow_walker`` imports from here.
 """
 
 import copy
@@ -15,6 +18,7 @@ from dataclasses import field as dc_field
 from typing import Any
 
 from ..errors import ErrorCode, create_error_response
+from ..redaction import carries_sentinel
 from .config_entry_flow_menu import _MENU_SELECTION_KEY_ORDER
 from .helpers import raise_tool_error
 
@@ -245,6 +249,7 @@ def _consume_section_schema(
     *,
     allow_reuse: bool = True,
     explicit_source: bool = False,
+    keep_current_values: bool = False,
 ) -> dict[str, Any]:
     """Consume config values for a nested flow section.
 
@@ -272,6 +277,7 @@ def _consume_section_schema(
                 reuse_state,
                 allow_reuse=allow_reuse,
                 explicit_source=True,
+                keep_current_values=keep_current_values,
             )
         )
         _record_ignored_section_keys(
@@ -290,6 +296,7 @@ def _consume_section_schema(
             reuse_state,
             allow_reuse=allow_reuse,
             explicit_source=explicit_source,
+            keep_current_values=keep_current_values,
         )
     )
     return nested_data
@@ -363,12 +370,45 @@ def _step_owned_submission_value(field: dict[str, Any]) -> Any:
     return _MISSING_DEFAULT
 
 
+def _is_redacted_value(value: Any) -> bool:
+    """True when a step-owned value is, or contains, a redaction sentinel.
+
+    ``redact_secrets`` rewrites a deep copy of a schema for error contexts, so
+    the live step a walk submits against should never carry a sentinel.
+    Backfill is the one place that turns schema data back into submitted data,
+    though, so the check is made anyway: writing ``<redacted: set>`` into a
+    password field would replace a working secret with a placeholder.
+    """
+    if isinstance(value, list):
+        return any(carries_sentinel(item) for item in value)
+    return carries_sentinel(value)
+
+
+def _current_value_backfill(field: dict[str, Any]) -> tuple[Any, bool]:
+    """Resubmit what an edit-mode step carries for a field the caller left out.
+
+    Options, reconfigure and subentry-reconfigure steps arrive pre-filled by
+    Home Assistant's ``add_suggested_values_to_schema``, and the UI's save
+    posts every box back, so a field nobody named has to be submitted as the
+    step presented it or the save rewrites it (issue #2254). Returns
+    ``_NO_SUBMISSION`` when the step supplies no value of its own: a bare
+    ``"default"`` is the static schema value, which voluptuous fills in for an
+    omitted key exactly as it does for the UI's own form.
+    """
+    step_owned = _step_owned_submission_value(field)
+    if step_owned is _MISSING_DEFAULT or _is_redacted_value(step_owned):
+        return _NO_SUBMISSION
+    return step_owned, False
+
+
 def _redeclared_field_submission(
     field: dict[str, Any],
     name: str,
     path_prefix: str,
     reuse_state: _ReuseState | None,
     allow_reuse: bool,
+    *,
+    keep_current_values: bool = False,
 ) -> tuple[Any, bool]:
     """Decide what to submit for a declared field the caller named no key for here.
 
@@ -378,9 +418,13 @@ def _redeclared_field_submission(
     and the caller's value for this step outranks anything injected. Otherwise,
     in order:
 
-    1. The field is not required: omit it. Nothing is ever injected into an
-       optional field, or into a section that is neither required nor named by
-       the caller (``allow_reuse``) — materializing either would invent data.
+    1. The field is not required, or reuse is barred for this site because the
+       caller named neither it nor the section holding it (``allow_reuse``).
+       Under ``keep_current_values`` the step's own value still goes back, per
+       :func:`_current_value_backfill` — it is the step's data, not the
+       caller's, so barring reuse does not bar it, and a section the backfill
+       itself materializes has to carry what it requires. Otherwise omit:
+       injecting into either on a create flow would invent data.
     2. The step's own schema supplies a value — a suggestion or a constant's
        only legal value, per :func:`_step_owned_submission_value`: submit that.
        It is schema data rather than a caller key, so it is neither marked
@@ -397,17 +441,20 @@ def _redeclared_field_submission(
        spend the one write allowed per (step, path).
 
     Mutates ``reuse_state`` on the fourth branch. Menu selection keys never
-    reach here. Motivating regression (issue #2057): an options flow —
-    LocalTuya's — that declares the same field on an early step and again on a
-    later one.
+    reach here. Motivating regressions: issue #2057, an options flow
+    (LocalTuya's) that declares the same field on an early step and again on a
+    later one; issue #2254, a one-field options patch that reset every field
+    the caller did not name back to its static schema default.
     """
-    if reuse_state is None or not allow_reuse:
+    if reuse_state is None:
         return _NO_SUBMISSION
     dotted = _section_path(path_prefix, name)
     if dotted in reuse_state.filled:
         return _NO_SUBMISSION
-    if not field.get("required"):
-        return _NO_SUBMISSION
+    if not allow_reuse or not field.get("required"):
+        if not keep_current_values:
+            return _NO_SUBMISSION
+        return _current_value_backfill(field)
     step_owned = _step_owned_submission_value(field)
     if step_owned is not _MISSING_DEFAULT:
         return step_owned, False
@@ -432,6 +479,7 @@ def _consume_leaf_field(
     *,
     allow_reuse: bool = True,
     explicit_source: bool = False,
+    keep_current_values: bool = False,
 ) -> None:
     """Fill ``name`` in ``form_data`` from the caller's config or from the step itself.
 
@@ -441,17 +489,30 @@ def _consume_leaf_field(
     the flat caller dict. With no key to pop,
     :func:`_redeclared_field_submission` chooses between omitting the field,
     submitting the step's own value, and resubmitting the recorded one.
+
+    Under ``keep_current_values`` an explicit ``None`` on a non-required field
+    is a clear rather than a value: the key is consumed and recorded, but left
+    out of the payload, because omission is how the UI's form clears a box
+    (issue #2254). A required field keeps submitting ``None`` verbatim — Home
+    Assistant, not this walker, decides what a required null means.
     """
     if name in remaining_config:
         value = remaining_config.pop(name)
-        form_data[name] = value
+        clearing = keep_current_values and value is None and not field.get("required")
+        if not clearing:
+            form_data[name] = value
         _mark_consumed(consumed_config_keys, path_prefix, name)
         if reuse_state is not None:
             reuse_state.record(path_prefix, name, value, scoped_only=explicit_source)
         return
 
     value, from_caller = _redeclared_field_submission(
-        field, name, path_prefix, reuse_state, allow_reuse
+        field,
+        name,
+        path_prefix,
+        reuse_state,
+        allow_reuse,
+        keep_current_values=keep_current_values,
     )
     if value is _MISSING_DEFAULT:
         return
@@ -471,6 +532,7 @@ def _consume_declared_section(
     *,
     allow_reuse: bool,
     explicit_source: bool,
+    keep_current_values: bool,
 ) -> None:
     """Merge one section field's data into ``form_data``.
 
@@ -501,6 +563,7 @@ def _consume_declared_section(
         allow_reuse=allow_reuse
         and (bool(field.get("required")) or explicit_section is not None),
         explicit_source=explicit_source,
+        keep_current_values=keep_current_values,
     )
     if not nested_data:
         return
@@ -520,6 +583,7 @@ def _consume_form_schema(
     *,
     allow_reuse: bool = True,
     explicit_source: bool = False,
+    keep_current_values: bool = False,
 ) -> dict[str, Any]:
     """Consume matching config values and shape nested flow sections.
 
@@ -528,7 +592,8 @@ def _consume_form_schema(
     Unknown keys inside explicit section dicts are added to
     ``ignored_config_keys`` with their dotted section path. A declared field the
     caller named no key for is filled per
-    :func:`_redeclared_field_submission`.
+    :func:`_redeclared_field_submission`, which ``keep_current_values`` puts
+    into the edit-mode contract described there.
     """
     form_data: dict[str, Any] = {}
 
@@ -548,6 +613,7 @@ def _consume_form_schema(
                 reuse_state,
                 allow_reuse=allow_reuse,
                 explicit_source=explicit_source,
+                keep_current_values=keep_current_values,
             )
             continue
 
@@ -562,6 +628,7 @@ def _consume_form_schema(
                 path_prefix,
                 allow_reuse=allow_reuse,
                 explicit_source=explicit_source,
+                keep_current_values=keep_current_values,
             )
 
     return form_data
@@ -636,6 +703,8 @@ def _handle_form_step(
     ignored_config_keys: set[str] | None = None,
     consumed_config_keys: set[str] | None = None,
     reuse_state: _ReuseState | None = None,
+    *,
+    keep_current_values: bool = False,
 ) -> dict[str, Any]:
     """Validate a form step and return form data to submit.
 
@@ -653,6 +722,15 @@ def _handle_form_step(
     its own — resubmitted once from an earlier step's caller value with a
     warning. Nothing is injected into an optional field, or into a section
     neither marked required nor named by the caller.
+
+    ``keep_current_values`` switches that last sentence off for the flows that
+    edit an existing object — options, reconfigure, subentry reconfigure. Their
+    steps arrive pre-filled with the stored values and the UI's save posts all
+    of them back, so a declared field the caller left out is submitted with the
+    step's own value wherever the step supplies one (issue #2254); a field the
+    caller set to ``None`` is instead consumed and omitted, which is the UI's
+    clear gesture. It takes a ``reuse_state`` to work: the record is what keeps
+    a backfill off a path the caller already filled in this same step.
 
     When ``data_schema`` is absent (HA didn't tell us field names), falls
     back to legacy behaviour: submit all non-menu keys and clear them. This
@@ -691,4 +769,5 @@ def _handle_form_step(
         consumed_config_keys,
         "",
         reuse_state,
+        keep_current_values=keep_current_values,
     )

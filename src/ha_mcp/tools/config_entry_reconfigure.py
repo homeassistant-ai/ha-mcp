@@ -606,7 +606,13 @@ async def _run_reconfigure_flow(
     flow_config: dict[str, Any],
     rollback_metadata: dict[str, Any],
 ) -> tuple[str, dict[str, Any]]:
-    """Start and walk the official reconfigure flow."""
+    """Start and walk the official reconfigure flow.
+
+    Walks with ``keep_current_values``: a reconfigure step is pre-filled with
+    the entry's live connection settings, so a field ``flow_config`` does not
+    name is resubmitted as the step presented it rather than dropped back to a
+    schema default (issue #2254).
+    """
     flow_result = await client.start_reconfigure_flow(domain, entry_id)
     flow_id = flow_result.get("flow_id")
     if not flow_id:
@@ -633,6 +639,7 @@ async def _run_reconfigure_flow(
             flow_config,
             helper_type=domain,
             is_reconfigure=True,
+            keep_current_values=True,
         )
     except asyncio.CancelledError:
         await _abort_flow_best_effort(client, flow_id)
