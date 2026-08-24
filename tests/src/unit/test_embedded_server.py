@@ -2629,6 +2629,7 @@ class TestServeLogFilters:
 
     @pytest.fixture(autouse=True)
     def _isolate_env(self):
+        """Snapshot/restore the env vars _thread_main stages, per-test."""
         keys = ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
         saved = {k: os.environ.get(k) for k in keys}
         for key in keys:
@@ -2641,6 +2642,7 @@ class TestServeLogFilters:
                 os.environ[key] = value
 
     def test_serve_installs_log_filters(self, tmp_path, monkeypatch):
+        """_serve calls install_sdk_log_filters() when it is available."""
         mgr, _hass, _entry = _manager(
             tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
         )
@@ -2664,9 +2666,10 @@ class TestServeLogFilters:
         assert isinstance(mgr._thread_exc, _StopServe)
 
     def test_serve_tolerates_missing_log_filters_module(self, tmp_path, monkeypatch):
-        # Backward-compat: an OLDER bundled ha-mcp (the component reaches users
-        # ahead of the server) has no log_filters module. _serve must swallow
-        # the ImportError and keep serving, same as the browser-landing guard.
+        """Backward-compat: an OLDER bundled ha-mcp (the component reaches
+        users ahead of the server) has no log_filters module. _serve must
+        swallow the ImportError and keep serving, same as the
+        browser-landing guard."""
         mgr, _hass, _entry = _manager(
             tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
         )

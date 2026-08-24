@@ -251,13 +251,40 @@ def _install_log_filters_if_available() -> None:
     site: the installed server version is user-controlled (channel choice,
     pip-spec override), so an older ha-mcp without ``ha_mcp.log_filters`` must
     keep serving -- the filters are simply absent there, as they are today.
+
+    Only a ``ModuleNotFoundError`` for exactly ``ha_mcp.log_filters`` is that
+    "older ha-mcp" case and is swallowed silently. Anything else -- a version
+    mismatch in a third-party dependency this import touches (fastmcp,
+    pydantic), which ``_purge_ha_mcp_modules`` deliberately does NOT
+    reinstall per config entry, so a stale one left over from a previous
+    install can break this import -- is logged instead of silently doing
+    nothing: log cosmetics must never block startup, but they also must
+    never fail invisibly.
     """
     try:
         from ha_mcp.log_filters import install_sdk_log_filters
-    except ImportError:
-        # Older installed ha-mcp: no filter helper to install.
+    except ModuleNotFoundError as err:
+        if err.name != "ha_mcp.log_filters":
+            _LOGGER.warning(
+                "Could not install MCP SDK log-noise filters (missing "
+                "dependency %s); continuing without them: %s",
+                err.name,
+                err,
+            )
         return
-    install_sdk_log_filters()
+    except ImportError as err:
+        _LOGGER.warning(
+            "Could not install MCP SDK log-noise filters; continuing without them: %s",
+            err,
+        )
+        return
+    try:
+        install_sdk_log_filters()
+    except Exception as err:
+        _LOGGER.warning(
+            "Could not install MCP SDK log-noise filters; continuing without them: %s",
+            err,
+        )
 
 
 class EmbeddedServerManager:

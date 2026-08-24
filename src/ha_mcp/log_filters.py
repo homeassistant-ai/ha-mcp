@@ -40,6 +40,7 @@ class StatelessSessionLogFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """Drop the routine stateless-teardown record; pass everything else."""
         if record.name != "mcp.server.streamable_http":
             return True
         try:
@@ -63,6 +64,7 @@ class ToolValidationLogFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """Demote a known-benign validation/tool-error record to WARNING."""
         if record.name != "fastmcp.server.server" or not record.exc_info:
             return True
 
@@ -128,6 +130,7 @@ class SessionDisconnectLogFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """Demote a disconnect-caused 'session crashed' record to WARNING."""
         if record.name != "mcp.server.streamable_http_manager" or not record.exc_info:
             return True
 
@@ -146,6 +149,21 @@ class SessionDisconnectLogFilter(logging.Filter):
         return True
 
 
+def _add_filter_once(logger_name: str, filter_cls: type[logging.Filter]) -> None:
+    """Attach one ``filter_cls`` instance to ``logger_name``, unless already present.
+
+    ``install_sdk_log_filters()`` can run more than once per process: the
+    in-process embedded server calls it on every ``_serve()`` reload without
+    a process restart, and process-wide ``logging`` state (including each
+    named logger's filter list) persists across those reloads. Without this
+    guard, filters would accumulate one more redundant instance per reload.
+    """
+    logger = logging.getLogger(logger_name)
+    if any(isinstance(f, filter_cls) for f in logger.filters):
+        return
+    logger.addFilter(filter_cls())
+
+
 def install_sdk_log_filters() -> None:
     """Attach the demotion filters above to their target SDK/fastmcp loggers.
 
@@ -153,12 +171,8 @@ def install_sdk_log_filters() -> None:
     Home Assistant app's ``start.py``, and the in-process embedded server
     (``ha_mcp_tools/embedded_server.py``) each build and run their own
     Streamable HTTP app, so none of them share another launcher's logging
-    setup.
+    setup. Safe to call repeatedly -- see ``_add_filter_once``.
     """
-    logging.getLogger("mcp.server.streamable_http").addFilter(
-        StatelessSessionLogFilter()
-    )
-    logging.getLogger("mcp.server.streamable_http_manager").addFilter(
-        SessionDisconnectLogFilter()
-    )
-    logging.getLogger("fastmcp.server.server").addFilter(ToolValidationLogFilter())
+    _add_filter_once("mcp.server.streamable_http", StatelessSessionLogFilter)
+    _add_filter_once("mcp.server.streamable_http_manager", SessionDisconnectLogFilter)
+    _add_filter_once("fastmcp.server.server", ToolValidationLogFilter)

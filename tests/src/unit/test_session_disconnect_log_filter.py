@@ -12,14 +12,16 @@ from ha_mcp.log_filters import (
 
 
 async def _raise_closed_resource_error() -> None:
+    """Raise the exact exception the disconnect race produces."""
     raise anyio.ClosedResourceError()
 
 
 async def _raise_runtime_error() -> None:
+    """Raise an unrelated failure, standing in for a real server bug."""
     raise RuntimeError("real bug")
 
 
-async def _run_in_task_group(*coro_funcs) -> BaseException:
+async def _run_in_task_group(*coro_funcs) -> Exception:
     """Run each of ``coro_funcs`` as a task-group child and return the raised
     exception -- reproducing the actual shape mcp.server.lowlevel.server.Server.run()
     produces: it dispatches each incoming message via
@@ -28,12 +30,17 @@ async def _run_in_task_group(*coro_funcs) -> BaseException:
     child. anyio always wraps that in an ExceptionGroup, even for a single
     failure -- a hand-built ``exc_info`` with a bare exception does not
     reproduce that boundary.
+
+    Narrowed to ``Exception`` (not ``BaseException``): the child coroutines
+    here only ever raise ``Exception`` subclasses, so anyio's task group
+    wraps them in ``ExceptionGroup`` (an ``Exception``), never
+    ``BaseExceptionGroup``-only content like a cancellation.
     """
     try:
         async with anyio.create_task_group() as tg:
             for coro_func in coro_funcs:
                 tg.start_soon(coro_func)
-    except BaseException as exc:
+    except Exception as exc:
         return exc
     raise AssertionError("task group did not raise")
 
@@ -42,6 +49,7 @@ class TestSessionDisconnectLogFilter:
     """Verify the filter demotes disconnect-caused 'session crashed' tracebacks."""
 
     def setup_method(self):
+        """Create a fresh filter instance for each test."""
         self.log_filter = SessionDisconnectLogFilter()
 
     def _make_record(
@@ -50,6 +58,7 @@ class TestSessionDisconnectLogFilter:
         msg: str,
         exc: BaseException | None,
     ) -> logging.LogRecord:
+        """Build a bare LogRecord carrying ``exc`` as its exc_info, if given."""
         exc_info = (type(exc), exc, None) if exc is not None else None
         return logging.LogRecord(
             name=name,
@@ -62,8 +71,8 @@ class TestSessionDisconnectLogFilter:
         )
 
     def test_demotes_stateless_session_crash_from_closed_resource_error(self):
-        # Exactly what mcp/server/streamable_http_manager.py's
-        # _handle_stateless_request logs when the client already disconnected.
+        """Exactly what mcp/server/streamable_http_manager.py's
+        _handle_stateless_request logs when the client already disconnected."""
         err = anyio.ClosedResourceError()
         record = self._make_record(
             "mcp.server.streamable_http_manager",
@@ -79,8 +88,8 @@ class TestSessionDisconnectLogFilter:
         assert "Stateless session crashed" in record.getMessage()
 
     def test_demotes_stateful_session_crash_from_closed_resource_error(self):
-        # The stateful runner's equivalent log line -- same race, same fix,
-        # even though every HTTP entry point currently forces stateless_http.
+        """The stateful runner's equivalent log line -- same race, same fix,
+        even though every HTTP entry point currently forces stateless_http."""
         err = anyio.ClosedResourceError()
         record = self._make_record(
             "mcp.server.streamable_http_manager",
@@ -92,10 +101,10 @@ class TestSessionDisconnectLogFilter:
         assert record.exc_info is None
 
     async def test_demotes_real_task_group_exception_group(self):
-        # The shape actually logged in production: mcp.server.lowlevel.server
-        # dispatches message handling via anyio.create_task_group().start_soon,
-        # so a ClosedResourceError from _send_response arrives here wrapped in
-        # an ExceptionGroup, not as a bare exception.
+        """The shape actually logged in production: mcp.server.lowlevel.server
+        dispatches message handling via anyio.create_task_group().start_soon,
+        so a ClosedResourceError from _send_response arrives here wrapped in
+        an ExceptionGroup, not as a bare exception."""
         caught = await _run_in_task_group(_raise_closed_resource_error)
         assert isinstance(caught, BaseExceptionGroup)
 
@@ -110,9 +119,9 @@ class TestSessionDisconnectLogFilter:
         assert "client disconnected before response delivery" in record.getMessage()
 
     async def test_leaves_mixed_exception_group_at_error(self):
-        # A task group with one ClosedResourceError AND one unrelated failure
-        # signals a real problem alongside the expected disconnect race -- the
-        # whole record must stay at ERROR with its traceback intact.
+        """A task group with one ClosedResourceError AND one unrelated failure
+        signals a real problem alongside the expected disconnect race -- the
+        whole record must stay at ERROR with its traceback intact."""
         caught = await _run_in_task_group(
             _raise_closed_resource_error, _raise_runtime_error
         )
@@ -129,8 +138,8 @@ class TestSessionDisconnectLogFilter:
         assert record.exc_info is original_exc_info
 
     def test_passes_bare_exception_through_untouched(self):
-        # An actual server bug on this logger must keep its traceback and
-        # ERROR level -- only the known-benign disconnect race is demoted.
+        """An actual server bug on this logger must keep its traceback and
+        ERROR level -- only the known-benign disconnect race is demoted."""
         err = RuntimeError("server bug")
         record = self._make_record(
             "mcp.server.streamable_http_manager",
@@ -143,6 +152,7 @@ class TestSessionDisconnectLogFilter:
         assert record.exc_info is original_exc_info
 
     def test_leaves_other_loggers_unchanged(self):
+        """Only the SDK's session-manager logger is ever touched."""
         err = anyio.ClosedResourceError()
         record = self._make_record(
             "some.other.logger",
@@ -154,6 +164,7 @@ class TestSessionDisconnectLogFilter:
         assert record.exc_info is not None
 
     def test_passes_record_without_exc_info(self):
+        """A record with no attached exception is never touched."""
         record = self._make_record(
             "mcp.server.streamable_http_manager",
             "Stateless session crashed",
@@ -167,33 +178,42 @@ class TestIsOnlyClosedResourceErrors:
     """Direct coverage of the recursive classifier the filter relies on."""
 
     def test_bare_closed_resource_error(self):
+        """A bare ClosedResourceError matches on its own."""
         assert _is_only_closed_resource_errors(anyio.ClosedResourceError()) is True
 
     def test_bare_other_exception(self):
+        """An unrelated bare exception never matches."""
         assert _is_only_closed_resource_errors(RuntimeError("x")) is False
 
     def test_group_of_one_closed_resource_error(self):
+        """A single-item group wrapping just the known-benign exception matches."""
         group = ExceptionGroup("eg", [anyio.ClosedResourceError()])
         assert _is_only_closed_resource_errors(group) is True
 
     def test_nested_group_of_closed_resource_errors(self):
+        """Nested groups are unwrapped recursively, matching all-benign leaves."""
         inner = ExceptionGroup("inner", [anyio.ClosedResourceError()])
         outer = ExceptionGroup("outer", [inner, anyio.ClosedResourceError()])
         assert _is_only_closed_resource_errors(outer) is True
 
     def test_mixed_group_is_rejected(self):
+        """A group with even one non-benign leaf must not match."""
         group = ExceptionGroup("eg", [anyio.ClosedResourceError(), RuntimeError("x")])
         assert _is_only_closed_resource_errors(group) is False
 
     def test_empty_group_is_rejected(self):
-        # Defensive: an ExceptionGroup always carries at least one exception
-        # in practice, but `all([])` is vacuously True -- guard against ever
-        # demoting on a group with nothing in it.
+        """Defensive: an ExceptionGroup always carries at least one exception
+        in practice, but `all([])` is vacuously True -- guard against ever
+        demoting on a group with nothing in it. ExceptionGroup itself refuses
+        to construct empty, so this pins that guarantee rather than exercising
+        the classifier's own guard directly."""
         with pytest.raises(ValueError):
             ExceptionGroup("empty", [])
 
 
 class TestSessionDisconnectLogFilterWiring:
+    """End-to-end: _setup_logging wires the filter onto real logger output."""
+
     def test_setup_logging_wires_filter_and_demotes_output(self, monkeypatch):
         """Integration: ``_setup_logging`` attaches the filter to the SDK's
         session-manager logger, so a real ``ClosedResourceError``-caused
