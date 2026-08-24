@@ -236,9 +236,12 @@ class TestManageTheme:
             )
             return
 
-        error_msg = extract_error_message(data)
-        assert error_msg, f"Failure must carry a message: {data}"
-        assert any(
-            hint in error_msg.lower()
-            for hint in ("engine", "screenshot", "credential", "identified")
-        ), f"Error should explain the engine problem: {data}"
+        # Assert the structured-error contract rather than matching wording:
+        # the message varies with WHY the engine is unavailable (not
+        # configured, not installed, not started, unidentifiable account).
+        error = data.get("error") or {}
+        assert error.get("code"), f"Failure must carry an error code: {data}"
+        assert extract_error_message(data), f"Failure must carry a message: {data}"
+        assert error.get("suggestions"), (
+            f"Engine failures must be actionable, not bare: {data}"
+        )

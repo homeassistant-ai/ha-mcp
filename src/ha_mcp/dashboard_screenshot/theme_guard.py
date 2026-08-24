@@ -38,6 +38,7 @@ Credential resolution mirrors engine discovery:
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
@@ -80,12 +81,15 @@ def _refuses_cleartext(url: str) -> bool:
     host = (parsed.hostname or "").lower()
     if host in _LOCAL_HOSTS or host.endswith(".local"):
         return False
-    # Private ranges stay on the local network, the documented trusted zone.
-    return not (
-        host.startswith("10.")
-        or host.startswith("192.168.")
-        or any(host.startswith(f"172.{n}.") for n in range(16, 32))
-    )
+    # Private ranges stay on the local network, the documented trusted zone --
+    # but ONLY as real IP literals. A DNS name that merely looks like one
+    # ("10.attacker.example") resolves wherever its owner points it, so string
+    # prefix matching would hand the token to an external host.
+    try:
+        address = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return True
+    return not (address.is_private or address.is_loopback or address.is_link_local)
 
 
 _RESTORE_HINT = (

@@ -693,7 +693,17 @@ class TestCleartextRefusal:
             ("http://172.16.0.4:8123", False),
             # Anything else over cleartext puts the token on the wire.
             ("http://ha.example.com:8123", True),
-            ("http://203.0.113.10:8123", True),
+            # A genuinely public address. (203.0.113.x is RFC 5737 TEST-NET,
+            # which Python's ipaddress reports as private, so it is not a
+            # valid stand-in for "remote".)
+            ("http://8.8.8.8:8123", True),
+            # DNS names that merely LOOK like private ranges resolve wherever
+            # their owner points them -- string prefix matching would have
+            # handed the token to an external host.
+            ("http://10.attacker.example:8123", True),
+            ("http://192.168.attacker.example:8123", True),
+            ("http://172.16.attacker.example:8123", True),
+            ("http://127.0.0.1.attacker.example:8123", True),
             # TLS is always fine.
             ("https://ha.example.com:8123", False),
         ],
