@@ -779,7 +779,9 @@ def _reuse_warning(dotted: str, step_id: str) -> str:
         f"Resubmitted '{dotted}' at step '{step_id}': supplied once "
         "but requested by more than one step encounter in this flow "
         "(a later step redeclaring the field, or the same step revisited "
-        "via a menu loop — per-visit values cannot be expressed)"
+        "via a menu loop). Pass step_values={'<step_id>': {'<field>': "
+        "<value>}} to give a step its own value, or to leave it out of "
+        "that step entirely."
     )
 
 

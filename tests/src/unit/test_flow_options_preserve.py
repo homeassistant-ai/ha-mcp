@@ -477,12 +477,67 @@ def _reuse_warning(dotted: str, step_id: str) -> str:
         f"Resubmitted '{dotted}' at step '{step_id}': supplied once "
         "but requested by more than one step encounter in this flow "
         "(a later step redeclaring the field, or the same step revisited "
-        "via a menu loop — per-visit values cannot be expressed)"
+        "via a menu loop). Pass step_values={'<step_id>': {'<field>': "
+        "<value>}} to give a step its own value, or to leave it out of "
+        "that step entirely."
     )
 
 
 class TestRequiredFieldPathsUnchanged:
     """The #2057 last-resort reuse is untouched by the new mode."""
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {"description": {"suggested_value": "10.0.0.1"}},
+            {"default": "fallback"},
+            {},
+        ],
+        ids=["required-with-suggestion", "required-with-default", "required-bare"],
+    )
+    def test_a_clear_on_a_required_field_survives_its_second_encounter(
+        self, extra: dict[str, Any]
+    ) -> None:
+        """A required field's clear must not be reinstated by a later step.
+
+        The popping site submits the ``None`` verbatim for a required field
+        and lets Home Assistant rule on it. A later encounter used to let the
+        step's own suggestion win (reinstating the stored value) or omit the
+        key (letting voluptuous substitute the static default), silently
+        undoing the clear in two of the three shapes.
+        """
+
+        def step(step_id: str) -> dict[str, Any]:
+            field: dict[str, Any] = {"name": "host", "required": True}
+            field.update(extra)
+            return {"type": "form", "step_id": step_id, "data_schema": [field]}
+
+        reuse_state = _ReuseState()
+        remaining: dict[str, Any] = {"host": None}
+
+        first = _handle_form_step(
+            "flow-2254",
+            step("one"),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+            keep_current_values=True,
+        )
+        second = _handle_form_step(
+            "flow-2254",
+            step("two"),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+            keep_current_values=True,
+        )
+
+        assert first == {"host": None}
+        assert second == {"host": None}, (
+            f"The clear was undone on encounter two: {second}"
+        )
 
     async def test_required_redeclared_field_still_reuses_the_caller_value(
         self,
@@ -790,6 +845,107 @@ class TestRequiredFieldPathsUnchanged:
         )
 
         assert form_data == {"host": "10.0.0.5"}
+
+
+class TestPerStepValues:
+    """``step_values`` addresses a field per step encounter (#2254 review)."""
+
+    @staticmethod
+    def _step(step_id: str) -> dict[str, Any]:
+        return {
+            "type": "form",
+            "step_id": step_id,
+            "data_schema": [
+                {
+                    "name": "province",
+                    "required": False,
+                    "optional": True,
+                    "description": {"suggested_value": "BW"},
+                },
+            ],
+        }
+
+    def _walk(self, config: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
+        reuse_state = _ReuseState()
+        remaining = dict(config)
+        first = _handle_form_step(
+            "flow-2254",
+            self._step("one"),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+            keep_current_values=True,
+        )
+        second = _handle_form_step(
+            "flow-2254",
+            self._step("two"),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+            keep_current_values=True,
+        )
+        return first, second, remaining
+
+    def test_a_step_can_carry_its_own_value(self) -> None:
+        first, second, _ = self._walk(
+            {"province": "BY", "step_values": {"two": {"province": "TX"}}}
+        )
+        assert first == {"province": "BY"}
+        assert second == {"province": "TX"}
+
+    def test_addressing_one_step_leaves_the_others_to_the_stored_value(self) -> None:
+        """No flat value at all: the unaddressed step keeps what is stored."""
+        first, second, _ = self._walk({"step_values": {"two": {"province": "TX"}}})
+        assert first == {"province": "BW"}
+        assert second == {"province": "TX"}
+
+    def test_a_step_can_clear_a_field_the_other_sets(self) -> None:
+        first, second, _ = self._walk(
+            {"province": "BY", "step_values": {"two": {"province": None}}}
+        )
+        assert first == {"province": "BY"}
+        assert "province" not in second
+
+    def test_an_unaddressed_flow_is_unchanged(self) -> None:
+        first, second, remaining = self._walk({"province": "BY"})
+        assert first == {"province": "BY"}
+        assert second == {"province": "BY"}
+        assert remaining == {}
+
+    def test_the_reserved_key_is_never_submitted_or_reported_ignored(self) -> None:
+        ignored: set[str] = set()
+        remaining: dict[str, Any] = {"step_values": {"one": {"province": "TX"}}}
+        payload = _handle_form_step(
+            "flow-2254",
+            self._step("one"),
+            remaining,
+            ignored,
+            set(),
+            _ReuseState(),
+            keep_current_values=True,
+        )
+        assert payload == {"province": "TX"}
+        assert "step_values" not in payload
+        assert ignored == set()
+
+    def test_a_schemaless_step_does_not_submit_the_reserved_key(self) -> None:
+        """The legacy no-data_schema path dumps every key; not this one."""
+        remaining: dict[str, Any] = {
+            "host": "10.0.0.5",
+            "step_values": {"one": {"province": "TX"}},
+        }
+        payload = _handle_form_step(
+            "flow-2254",
+            {"type": "form", "step_id": "one"},
+            remaining,
+            None,
+            set(),
+            _ReuseState(),
+            keep_current_values=True,
+        )
+        assert payload == {"host": "10.0.0.5"}
 
 
 class TestBackfillIsNotCallerConsumption:

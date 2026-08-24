@@ -22,6 +22,17 @@ from .helpers import raise_tool_error
 # tools_config_helpers.py.
 _MENU_SELECTION_KEY_ORDER = ("group_type", "next_step_id", "menu_option")
 
+# Reserved key carrying per-step field values: ``{step_id: {field: value}}``.
+# The flat config dict is keyed by field NAME alone, so a flow whose steps
+# declare the same field twice — a later step redeclaring it, or one revisited
+# through a menu loop — had no way to say "this value here, that one there, and
+# nothing at all on the third". The walker slices this per form step; a step
+# nobody addresses behaves exactly as before. Same shape of reservation as the
+# selection keys above, including their collision risk: ``group_type`` is also
+# a real field on the group integration, and that has been the accepted trade
+# since it was introduced.
+_PER_STEP_VALUES_KEY = "step_values"
+
 
 def _handle_menu_step(
     flow_id: str,

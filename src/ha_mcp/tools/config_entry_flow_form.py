@@ -13,19 +13,28 @@ being dropped (issue #2254). Imports the menu selection keys from
 
 import copy
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any
 
 from ..errors import ErrorCode, create_error_response
 from ..redaction import carries_sentinel
-from .config_entry_flow_menu import _MENU_SELECTION_KEY_ORDER
+from .config_entry_flow_menu import (
+    _MENU_SELECTION_KEY_ORDER,
+    _PER_STEP_VALUES_KEY,
+)
 from .helpers import raise_tool_error
 
 # Membership form of the canonical selection-key order — defined here, in the
 # module that checks membership on every form field, and imported onward by
 # the walker.
 _MENU_SELECTION_KEYS = frozenset(_MENU_SELECTION_KEY_ORDER)
+
+# Every key the walker consumes as a DIRECTIVE rather than as form data, so
+# none of them is ever submitted to Home Assistant or counted as an ignored
+# field the flow failed to declare.
+_RESERVED_CONFIG_KEYS = _MENU_SELECTION_KEYS | {_PER_STEP_VALUES_KEY}
 
 _MISSING_DEFAULT = object()
 # "Submit nothing for this field" — see _redeclared_field_submission.
@@ -133,7 +142,9 @@ class _ReuseState:
             f"Resubmitted '{dotted}' at step '{self.step_id}': supplied once "
             "but requested by more than one step encounter in this flow "
             "(a later step redeclaring the field, or the same step revisited "
-            "via a menu loop — per-visit values cannot be expressed)"
+            "via a menu loop). Pass step_values={'<step_id>': {'<field>': "
+            "<value>}} to give a step its own value, or to leave it out of "
+            "that step entirely."
         )
         return True
 
@@ -149,7 +160,7 @@ def _record_ignored_section_keys(
     ignored_config_keys.update(
         f"{section_path}.{key}" if section_path else key
         for key in remaining_config
-        if key not in _MENU_SELECTION_KEYS
+        if key not in _RESERVED_CONFIG_KEYS
     )
 
 
@@ -200,7 +211,7 @@ def _ignored_keys_warnings(
     """Build warnings for caller-supplied config keys no flow step consumed."""
     warnings: list[str] = []
     ignored = ignored_config_keys | {
-        key for key in remaining_config if key not in _MENU_SELECTION_KEYS
+        key for key in remaining_config if key not in _RESERVED_CONFIG_KEYS
     }
     if ignored:
         warnings.append(
@@ -538,12 +549,20 @@ def _redeclared_field_submission(
         if not keep_current_values:
             return _NO_SUBMISSION
         return _edit_mode_submission(field, name, path_prefix, dotted, reuse_state)
+    recorded = reuse_state.recorded_value(path_prefix, name)
+    if recorded is None:
+        # An explicit clear. The popping site submitted this ``None``
+        # verbatim, and so must every later encounter: letting the step's own
+        # value or a static default win here silently reinstates the very
+        # thing the caller asked to drop. Narrow on purpose — a recorded
+        # VALUE still loses to the step's own, which predates this PR and is
+        # what issue #2057 settled.
+        return None, True
     step_owned = _step_owned_submission_value(field)
     if step_owned is not _MISSING_DEFAULT:
         return step_owned, False
     if "default" in field:
         return _NO_SUBMISSION
-    recorded = reuse_state.recorded_value(path_prefix, name)
     if recorded is _MISSING_DEFAULT:
         return _NO_SUBMISSION
     if not reuse_state.claim_write(dotted):
@@ -707,7 +726,7 @@ def _consume_form_schema(
             )
             continue
 
-        if isinstance(name, str) and name not in _MENU_SELECTION_KEYS:
+        if isinstance(name, str) and name not in _RESERVED_CONFIG_KEYS:
             _consume_leaf_field(
                 field,
                 name,
@@ -764,7 +783,7 @@ def _consume_all_remaining_keys(
     """
     form_data: dict[str, Any] = {}
     for key in list(remaining_config.keys()):
-        if key in _MENU_SELECTION_KEYS:
+        if key in _RESERVED_CONFIG_KEYS:
             continue
         value = remaining_config.pop(key)
         form_data[key] = value
@@ -784,6 +803,40 @@ def _consume_all_remaining_keys(
             "branches may have been submitted to this step instead"
         )
     return form_data
+
+
+@contextmanager
+def _step_values_applied(
+    remaining_config: dict[str, Any], current_step: dict[str, Any]
+) -> Iterator[None]:
+    """Overlay this step's entry from ``step_values`` for the duration.
+
+    The flat config dict is keyed by field name alone, so a field two steps
+    declare could only ever carry one value for both. Inside this block the
+    step's own entry SHADOWS the flat value, and on the way out the flat value
+    is restored so a later step still sees it — addressing one step therefore
+    never spends the caller's flat value, and a step nobody addresses behaves
+    exactly as it did before.
+
+    An overlaid key the step turns out not to declare is dropped rather than
+    left behind: it belongs to this step, so it must not leak into a later
+    one or be reported as a field no step declared.
+    """
+    overlay = remaining_config.get(_PER_STEP_VALUES_KEY)
+    step_id = current_step.get("step_id")
+    values = overlay.get(step_id) if isinstance(overlay, dict) else None
+    if not isinstance(values, dict) or not values:
+        yield
+        return
+
+    shadowed = {k: remaining_config[k] for k in values if k in remaining_config}
+    remaining_config.update(copy.deepcopy(values))
+    try:
+        yield
+    finally:
+        for key in values:
+            remaining_config.pop(key, None)
+        remaining_config.update(shadowed)
 
 
 def _handle_form_step(
@@ -853,14 +906,15 @@ def _handle_form_step(
             remaining_config, consumed_config_keys, reuse_state
         )
 
-    return _strip_cleared(
-        _consume_form_schema(
-            data_schema,
-            remaining_config,
-            ignored_config_keys,
-            consumed_config_keys,
-            "",
-            reuse_state,
-            keep_current_values=keep_current_values,
+    with _step_values_applied(remaining_config, current_step):
+        return _strip_cleared(
+            _consume_form_schema(
+                data_schema,
+                remaining_config,
+                ignored_config_keys,
+                consumed_config_keys,
+                "",
+                reuse_state,
+                keep_current_values=keep_current_values,
+            )
         )
-    )

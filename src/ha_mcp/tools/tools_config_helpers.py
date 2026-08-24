@@ -4711,7 +4711,10 @@ class HelperConfigTools:
                     "Ignored for simple helper types. "
                     "On update it is a patch: a field you omit keeps its "
                     "current value, and a field set to null is cleared where "
-                    "the schema allows that field to be empty. "
+                    "the schema allows that field to be empty. A field two "
+                    "steps declare gets your one value both times; pass "
+                    "step_values={'<step_id>': {'<field>': <value>}} to give "
+                    "a step its own value, or to leave it out of that step. "
                     "Field set is delivered as data_schema on the first validation error."
                 ),
                 default=None,
