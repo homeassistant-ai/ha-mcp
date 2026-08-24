@@ -755,3 +755,37 @@ class TestCleartextRefusal:
 
         assert _FakeWsClient.instances == []
         assert guard.warnings
+
+
+class TestCredentialProvenance:
+    """A client-fallback credential is not provably the engine's account."""
+
+    def test_addon_credential_is_provably_the_engine(self) -> None:
+        guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, _client())
+        assert guard.credential_is_engine is True
+
+    def test_client_fallback_is_not_provably_the_engine(self) -> None:
+        guard = ThemeGuard.for_capture(None, _client())
+        assert guard.credential is not None
+        assert guard.credential_is_engine is False
+
+    async def test_uncertain_provenance_is_stated_in_the_report(self) -> None:
+        """The agent must not restore a profile we cannot vouch for."""
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        guard = ThemeGuard.for_capture(None, _client())
+        await guard.take_snapshot()
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
+        await guard.detect_change()
+
+        assert guard.warnings
+        assert "only if both run as the same user" in guard.warnings[0]
+
+    async def test_engine_credential_report_carries_no_caveat(self) -> None:
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+        await guard.take_snapshot()
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
+        await guard.detect_change()
+
+        assert guard.warnings
+        assert "same user" not in guard.warnings[0]

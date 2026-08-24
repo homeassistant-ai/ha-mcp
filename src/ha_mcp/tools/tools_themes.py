@@ -46,11 +46,22 @@ class ThemesTools:
         engine-account setup is NOT the account ha-mcp itself authenticates
         as -- so these actions cannot simply reuse ha-mcp's own client.
         """
+        from ..config import get_global_settings
         from ..dashboard_screenshot.provision import resolve_engine
         from ..dashboard_screenshot.theme_guard import ThemeGuard
 
+        explicit_url = (
+            get_global_settings().dashboard_screenshot_engine_url or ""
+        ).strip()
         engine_target = await resolve_engine()
-        if engine_target.addon_credential is None:
+        # An explicit URL is never provably paired with a credential. Even on
+        # HA OS, _addon_credential_best_effort() hands back the DISCOVERED
+        # Puppet app's credential without checking it identifies the engine
+        # that URL points at -- so a sidecar URL plus a running app yields a
+        # credential for the wrong account. That was a safe no-op while the
+        # guard only wrote back its own snapshot; it is not safe now that
+        # these actions read and write a profile on request.
+        if explicit_url or engine_target.addon_credential is None:
             # An explicitly configured engine URL yields no addon_credential,
             # so the only fallback is ha-mcp's OWN credential -- which under
             # the dedicated-engine-account setup this feature recommends is a
@@ -65,9 +76,10 @@ class ThemesTools:
                     "identified, so its theme cannot be read or written.",
                     suggestions=[
                         (
-                            "This applies to an explicitly configured engine "
-                            + "URL (a Docker/standalone sidecar), where the "
-                            + "engine's own token is not discoverable."
+                            "This applies whenever an engine URL is set "
+                            + "explicitly: the engine's own token is not "
+                            + "discoverable, and a credential discovered via "
+                            + "the Supervisor is not provably that engine's."
                         ),
                         (
                             "Restore the theme from that account's own "

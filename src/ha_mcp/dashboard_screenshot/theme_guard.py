@@ -191,6 +191,10 @@ class ThemeGuard:
     _snapshot: Any = None
     _snapshot_taken: bool = False
     changed_from: Any = None
+    # False when the credential is ha-mcp's own rather than the engine's own
+    # token: it MAY be the same Home Assistant user (the common single-user
+    # setup) but that cannot be established, so the report says so.
+    credential_is_engine: bool = True
 
     @classmethod
     def for_capture(
@@ -200,12 +204,17 @@ class ThemeGuard:
     ) -> ThemeGuard:
         """Resolve the engine user's credential for one capture batch."""
         credential = addon_credential or _client_credential(client)
+        # Only the add-on's own token provably belongs to the engine. The
+        # client fallback MAY be the same user (the common single-user setup)
+        # but that cannot be established, so the report says so rather than
+        # implying the engine account was the one observed.
+        provably_engine = addon_credential is not None
         if credential is None:
             logger.debug(
                 "Dashboard theme guard inactive: no engine credential is "
                 "discoverable in this deployment"
             )
-        return cls(credential=credential)
+        return cls(credential=credential, credential_is_engine=provably_engine)
 
     @asynccontextmanager
     async def _session(self) -> AsyncIterator[HomeAssistantWebSocketClient]:
@@ -353,6 +362,14 @@ class ThemeGuard:
             "meantime. To stop this happening at all, give the screenshot "
             "engine its own Home Assistant user and long-lived token, so "
             "its writes land on an account nobody looks at."
+            + (
+                ""
+                if self.credential_is_engine
+                else " NOTE: this was observed with ha-mcp's own Home "
+                "Assistant credential rather than the engine's own token, so "
+                "it is the engine's account only if both run as the same "
+                "user. Verify before restoring."
+            )
         )
 
 
