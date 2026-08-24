@@ -220,6 +220,92 @@ class TestIntegrationManagement:
                 {"target": entry_id, "confirm": True},
             )
 
+    async def test_partial_options_submit_keeps_unnamed_fields(self, mcp_client):
+        """A one-field options patch must not reset the fields it omits (#2254).
+
+        The bug: the walker submitted ONLY caller-named keys, so every field
+        the caller left out went back to whatever voluptuous substitutes for an
+        absent key — its static schema default — while the tool still reported
+        success. The sibling test above never caught it because ``group``'s
+        light options are all ``vol.Required``, and required fields were
+        already backfilled from the step's own suggestion.
+
+        ``group`` with ``group_type="sensor"`` is the reachable repro: its
+        options schema extends the basic one with
+        ``vol.Optional(CONF_IGNORE_NON_NUMERIC, default=False)``, an OPTIONAL
+        field carrying a static default. Set it true, patch a different field,
+        and pre-fix it silently fell back to false. Deliberately an e2e rather
+        than a unit test: the unit suite pins the payload against a
+        hand-written copy of HA's schema serialization, so it would keep
+        passing if HA changed how it serializes ``suggested_value``. Only a
+        real options flow proves the values actually survive the round trip.
+        """
+        create_result = await mcp_client.call_tool(
+            "ha_set_integration",
+            {
+                "domain": "group",
+                "config": {
+                    "group_type": "sensor",
+                    "name": "test_partial_options_2254_e2e",
+                    "entities": [],
+                    "hide_members": False,
+                    "type": "max",
+                    "ignore_non_numeric": True,
+                },
+            },
+        )
+        data = assert_mcp_success(create_result, "Add sensor group for #2254")
+        entry_id = data["entry_id"]
+
+        try:
+            await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_get_integration",
+                arguments={"entry_id": entry_id},
+                predicate=lambda d: (
+                    d.get("entry", {}).get("options", {}).get("ignore_non_numeric")
+                    is True
+                ),
+                description="baseline option is set before the partial patch",
+            )
+
+            # The patch under test: name ONLY 'type'. Every other field in the
+            # step is left out, which is what used to reset them.
+            update_data = assert_mcp_success(
+                await mcp_client.call_tool(
+                    "ha_set_integration",
+                    {"entry_id": entry_id, "config": {"type": "min"}},
+                ),
+                "Partial options patch",
+            )
+            assert update_data.get("updated") is True
+
+            verify_data = await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_get_integration",
+                arguments={"entry_id": entry_id},
+                predicate=lambda d: (
+                    d.get("entry", {}).get("options", {}).get("type") == "min"
+                ),
+                description="the patched field took effect",
+            )
+            options = verify_data["entry"]["options"]
+
+            # The regression assert: pre-#2254 this was False, silently reset
+            # from the static schema default because the key was omitted.
+            assert options.get("ignore_non_numeric") is True, (
+                "Partial options submit reset 'ignore_non_numeric' to its "
+                "schema default — the #2254 wipe is back. Fields the caller "
+                f"never named must survive the patch. Got options: {options}"
+            )
+            assert options.get("type") == "min"
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_remove_helpers_integrations",
+                {"target": entry_id, "confirm": True},
+            )
+
     async def test_add_integration_unknown_domain_fails(self, mcp_client):
         """Add mode surfaces a structured error for an unknown domain."""
         data = await safe_call_tool(
