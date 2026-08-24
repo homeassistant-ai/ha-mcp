@@ -28,6 +28,7 @@ from ha_mcp.redaction import REDACTED_EMPTY, REDACTED_SET
 from ha_mcp.tools.config_entry_flow import update_config_entry_options
 from ha_mcp.tools.config_entry_flow_form import (
     _handle_form_step,
+    _ignored_keys_warnings,
     _ReuseState,
 )
 from ha_mcp.tools.config_entry_flow_walker import (
@@ -929,6 +930,39 @@ class TestPerStepValues:
         assert payload == {"province": "TX"}
         assert "step_values" not in payload
         assert ignored == set()
+
+    def test_an_unvisited_step_id_is_reported_not_silently_dropped(self) -> None:
+        """A typo'd step_id must not quietly do nothing."""
+        remaining: dict[str, Any] = {
+            "province": "BY",
+            "step_values": {"typo_step": {"province": "TX"}},
+        }
+        _handle_form_step(
+            "flow-2254",
+            self._step("one"),
+            remaining,
+            None,
+            set(),
+            _ReuseState(),
+            keep_current_values=True,
+        )
+        warnings = _ignored_keys_warnings(set(), remaining)
+        assert any("never presented" in w and "typo_step" in w for w in warnings), (
+            f"An unapplied step_values entry went unreported: {warnings}"
+        )
+
+    def test_a_consumed_step_entry_is_not_reported(self) -> None:
+        remaining: dict[str, Any] = {"step_values": {"one": {"province": "TX"}}}
+        _handle_form_step(
+            "flow-2254",
+            self._step("one"),
+            remaining,
+            None,
+            set(),
+            _ReuseState(),
+            keep_current_values=True,
+        )
+        assert _ignored_keys_warnings(set(), remaining) == []
 
     def test_a_schemaless_step_does_not_submit_the_reserved_key(self) -> None:
         """The legacy no-data_schema path dumps every key; not this one."""

@@ -218,6 +218,14 @@ def _ignored_keys_warnings(
             "Ignored config keys not declared by the Home Assistant flow "
             f"schema: {', '.join(sorted(ignored))}"
         )
+    leftover_steps = remaining_config.get(_PER_STEP_VALUES_KEY)
+    if isinstance(leftover_steps, dict) and leftover_steps:
+        warnings.append(
+            "step_values named steps this flow never presented: "
+            f"{', '.join(sorted(str(k) for k in leftover_steps))}. Those "
+            "values were not applied — check the step_id against the "
+            "step the flow actually shows."
+        )
     leftover_menu_keys = _MENU_SELECTION_KEYS & remaining_config.keys()
     if leftover_menu_keys:
         # Name the values, not just the keys: an un-consumed selection means
@@ -824,7 +832,10 @@ def _step_values_applied(
     """
     overlay = remaining_config.get(_PER_STEP_VALUES_KEY)
     step_id = current_step.get("step_id")
-    values = overlay.get(step_id) if isinstance(overlay, dict) else None
+    if not isinstance(overlay, dict):
+        yield
+        return
+    values = overlay.get(step_id)
     if not isinstance(values, dict) or not values:
         yield
         return
@@ -837,6 +848,14 @@ def _step_values_applied(
         for key in values:
             remaining_config.pop(key, None)
         remaining_config.update(shadowed)
+        # Spend this step's entry. What is left at the end of the walk names
+        # steps the flow never presented — a typo'd step_id, or a branch the
+        # menu selections never reached — and gets warned about rather than
+        # silently doing nothing, the same way an un-consumed menu selection
+        # is reported.
+        del overlay[step_id]
+        if not overlay:
+            remaining_config.pop(_PER_STEP_VALUES_KEY, None)
 
 
 def _handle_form_step(
