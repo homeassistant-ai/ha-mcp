@@ -178,17 +178,21 @@ page and (by its design) restarts; ha-mcp surfaces this as a clear "set the
 engine's access token" error rather than a silent failure.
 
 Puppet's theme and dark-mode renderer controls dispatch Home Assistant's
-`settheme` event on render, which Home Assistant persists on the frontend
-profile of the user whose token the engine runs with — and syncs to that
-user's real web and mobile sessions, flipping that user's whole UI on every
-screenshot (#1909). ha-mcp brackets each capture batch with a snapshot/restore
-of that user's saved theme, so the flip is undone automatically. The upstream
-Puppet fix for the dispatch (balloob/home-assistant-addons#89) is merged but
-unreleased as of Puppet 2.6.0, and is scoped to renders that request no
-`theme`/`dark` — an explicit theme or dark-mode capture still writes even once
-it ships, so the bracket stays on regardless of engine version. A dedicated
-Puppet account remains a sound belt-and-suspenders setup. Language selection
-is local to Puppet's browser session.
+`settheme` event, which Home Assistant persists on the frontend profile of the
+user whose token the engine runs with — and syncs to that user's real web and
+mobile sessions, flipping that user's whole UI (#1909). Upstream stopped the
+dispatch for renders that request nothing
+(balloob/home-assistant-addons#89), but only for that case: passing `theme` or
+`dark_mode` still writes, on every engine version.
+
+ha-mcp therefore brackets **only themed captures** with a snapshot/restore of
+that user's saved theme, so the flip is undone automatically. Captures that
+request no theme are not bracketed and issue no writes at all, which is what
+keeps `readOnlyHint: True` accurate on the screenshot tools (#1991). Concurrent
+themed captures against the same engine user are serialized so their brackets
+cannot interleave. A dedicated Puppet account remains a sound
+belt-and-suspenders setup. Language selection is local to Puppet's browser
+session.
 
 To change the Puppet engine app's own options (such as `keep_browser_open`)
 or to restart it, use `ha_manage_app`; the screenshot tools only render and

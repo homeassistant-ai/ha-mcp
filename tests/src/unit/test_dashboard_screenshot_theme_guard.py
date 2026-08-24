@@ -13,6 +13,7 @@ being silently disabled again.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, ClassVar
@@ -50,6 +51,7 @@ class _FakeWsClient:
     def __init__(self, url: str, token: str, verify_ssl: Any = None) -> None:
         self.url = url
         self.token = token
+        self.verify_ssl = verify_ssl
         self.commands: list[dict[str, Any]] = []
         self.disconnected = False
         self.last_connect_error: str | None = None
@@ -195,6 +197,7 @@ class TestSnapshotRestore:
         assert [(ws.url, ws.token) for ws in _FakeWsClient.instances] == [
             ("http://homeassistant:8123", "puppet-token")
         ]
+        await guard.restore()
 
     async def test_restore_skips_write_when_unchanged(self) -> None:
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
@@ -364,19 +367,20 @@ def _patch_engine(monkeypatch: Any, addon_credential: EngineCredential | None) -
 
 
 class TestCaptureBracket:
-    """The ThemeGuard bracket around ``capture_dashboard_images`` is ENABLED.
+    """The ThemeGuard bracket is armed only for renders that request a theme.
 
-    Puppet dispatches a ``settheme`` event on render, which Home Assistant
-    persists onto the engine token user's profile (#1909), so every capture
-    batch snapshots the saved theme before and restores it after. The bracket
-    was once disabled on the premise that upstream Puppet had fixed the
-    dispatch; that fix (balloob/home-assistant-addons#89) is unreleased and is
-    scoped to the no-parameter case, so the bracket stays on.
+    Puppet writes the engine token user's saved theme when a render asks for
+    one (#1909); upstream stopped only the no-parameter dispatch
+    (balloob/home-assistant-addons#89), so themed renders still write on every
+    engine version. Unthemed captures are therefore left unbracketed and issue
+    no writes at all, which is what keeps ``readOnlyHint: True`` honest on the
+    screenshot tools (#1991, PR #2014).
     """
 
-    async def test_capture_restores_theme_clobbered_by_the_render(
+    async def test_unthemed_capture_opens_no_guard_sessions(
         self, monkeypatch: Any
     ) -> None:
+        """The read-only guarantee: no theme requested means no writes."""
         from ha_mcp.dashboard_screenshot import capture
 
         _patch_engine(monkeypatch, _PUPPET_CREDENTIAL)
@@ -388,14 +392,44 @@ class TestCaptureBracket:
         )
 
         assert captures[0].data == _PNG
+        assert _FakeWsClient.instances == []
+        assert _set_calls() == []
+        assert capture_warnings == []
+
+    async def test_dark_mode_capture_restores_the_clobbered_theme(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        _patch_engine(monkeypatch, _PUPPET_CREDENTIAL)
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        capture_warnings: list[str] = []
+
+        captures = await capture.capture_dashboard_images(
+            "lovelace/0", dark_mode=True, capture_warnings=capture_warnings
+        )
+
+        assert captures[0].data == _PNG
         # Snapshot and restore each opened a session as the engine user.
         assert [(ws.url, ws.token) for ws in _FakeWsClient.instances] == [
             ("http://homeassistant:8123", "puppet-token"),
             ("http://homeassistant:8123", "puppet-token"),
         ]
-        # The fake engine clobbered the stored theme; the bracket undid it.
         assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
         assert capture_warnings == []
+
+    async def test_explicit_theme_capture_restores_the_clobbered_theme(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import capture
+
+        _patch_engine(monkeypatch, _PUPPET_CREDENTIAL)
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+
+        captures = await capture.capture_dashboard_images("lovelace/0", theme="shadow")
+
+        assert captures[0].data == _PNG
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
 
     async def test_client_credential_fallback_restores_theme(
         self, monkeypatch: Any
@@ -407,7 +441,7 @@ class TestCaptureBracket:
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
 
         captures = await capture.capture_dashboard_images(
-            "lovelace/0", client=_client()
+            "lovelace/0", dark_mode=True, client=_client()
         )
 
         assert captures[0].data == _PNG
@@ -428,7 +462,7 @@ class TestCaptureBracket:
         _ClobberingEngineClient.status_code = 500
 
         with pytest.raises(ToolError) as exc_info:
-            await capture.capture_dashboard_images("lovelace/0")
+            await capture.capture_dashboard_images("lovelace/0", dark_mode=True)
 
         # The restore in the ``finally`` ran before the error surfaced.
         assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
@@ -436,3 +470,86 @@ class TestCaptureBracket:
         assert not any(
             "restoring it failed" in warning for warning in payload.get("warnings", [])
         )
+
+
+class TestGuardHardening:
+    """Bounded waits, TLS passthrough, and per-engine serialization."""
+
+    def test_client_credential_carries_the_tls_override(self) -> None:
+        """A self-signed direct client must not fall back to the global default."""
+        client = SimpleNamespace(
+            base_url="http://ha.local:8123", token="own-token", verify_ssl=False
+        )
+        credential = _client_credential(client)
+        assert credential is not None
+        assert credential.verify_ssl is False
+
+    def test_client_credential_leaves_tls_unset_when_absent(self) -> None:
+        credential = _client_credential(_client())
+        assert credential is not None
+        assert credential.verify_ssl is None
+
+    async def test_sessions_pass_the_tls_override_through(self) -> None:
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        guard = ThemeGuard.for_capture(
+            EngineCredential(
+                url="https://ha.local:8123", token="tok", verify_ssl=False
+            ),
+            None,
+        )
+        await guard.take_snapshot()
+        assert [ws.verify_ssl for ws in _FakeWsClient.instances] == [False]
+        await guard.restore()
+
+    async def test_guard_commands_are_time_bounded(self) -> None:
+        """The guard must never inherit send_command's 30s default wait."""
+        from ha_mcp.dashboard_screenshot import theme_guard as guard_module
+
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+        await guard.take_snapshot()
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
+        await guard.restore()
+
+        waits = [cmd.get("_wait_timeout") for cmd in _all_commands()]
+        assert waits and all(
+            wait == guard_module.COMMAND_TIMEOUT_SECONDS for wait in waits
+        )
+
+    async def test_unarmed_guard_is_inert(self) -> None:
+        guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None, armed=False)
+        assert guard.credential is None
+        await guard.take_snapshot()
+        await guard.restore()
+        assert _FakeWsClient.instances == []
+
+    async def test_overlapping_batches_are_serialized_per_engine_user(self) -> None:
+        """Regression: interleaved brackets must not persist a clobbered value."""
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        first = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+        second = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+
+        await first.take_snapshot()
+        # The second batch must block until the first releases, so it cannot
+        # snapshot the value the first batch's render is about to clobber.
+        pending = asyncio.ensure_future(second.take_snapshot())
+        await asyncio.sleep(0)
+        assert not pending.done()
+
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
+        await first.restore()
+        await pending
+        await second.restore()
+
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
+
+    async def test_failed_snapshot_does_not_hold_the_lock(self) -> None:
+        _FakeWsClient.fail_get = True
+        guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+        await guard.take_snapshot()
+        assert guard.warnings
+
+        _FakeWsClient.fail_get = False
+        other = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+        await asyncio.wait_for(other.take_snapshot(), timeout=1)
+        await other.restore()

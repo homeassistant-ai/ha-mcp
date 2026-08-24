@@ -855,9 +855,11 @@ async def capture_dashboard_images(
     preset's native orientation. ``full_page`` is a compatibility alias for
     requesting the engine's native ``WIDTHxauto`` viewport.
 
-    The batch is bracketed by a :class:`ThemeGuard` that restores the engine
-    user's saved frontend theme when a render changes it (issue #1909). Guard
-    failures are non-fatal and surface through ``capture_warnings``.
+    A batch that requests a theme (``theme`` or ``dark_mode``) is bracketed by
+    a :class:`ThemeGuard` that restores the engine user's saved frontend theme
+    afterwards, because such renders make Puppet write it (issue #1909).
+    Unthemed batches issue no writes at all. Guard failures are non-fatal and
+    surface through ``capture_warnings``.
     """
     path = _validate_dashboard_path(dashboard_path)
     options = validate_capture_parameters(
@@ -882,19 +884,23 @@ async def capture_dashboard_images(
     mime_type = _MIME_TYPES[options.image_format]
     captures: list[DashboardImageCapture] = []
 
-    # ThemeGuard bracket. Puppet dispatches a ``settheme`` event into the
-    # authenticated frontend, which Home Assistant persists to the engine
-    # user's real profile and syncs to that user's live sessions (#1909).
-    # ha-mcp snapshots the saved theme before the batch and restores it after.
+    # ThemeGuard bracket, armed only for renders that request a theme.
     #
-    # The bracket was previously disabled on the premise that upstream Puppet
-    # had fixed the dispatch. It had not shipped: the fix
-    # (balloob/home-assistant-addons#89) is merged to that repo's master but
-    # unreleased — the newest Puppet release, 2.6.0, predates it. It is also
-    # scoped to the no-parameter case ("don't dispatch settheme when no
-    # theme/dark was requested"), so an explicit ``theme=``/``dark`` capture
-    # still writes even once it does ship.
-    guard = ThemeGuard.for_capture(engine_target.addon_credential, client)
+    # Puppet dispatches a ``settheme`` event into the authenticated frontend,
+    # which Home Assistant persists to the engine user's real profile and
+    # syncs to that user's live sessions (#1909). Upstream stopped the
+    # no-parameter dispatch (balloob/home-assistant-addons#89), but that fix
+    # is scoped by its own title — "don't dispatch settheme when no
+    # theme/dark was requested" — so an explicit ``theme=``/``dark`` render
+    # still writes, on every engine version.
+    #
+    # Arming only that path keeps unthemed captures free of any write, which
+    # is what makes ``readOnlyHint: True`` honest for the overwhelmingly
+    # common case (#1991, PR #2014).
+    theme_requested = options.theme is not None or options.dark_mode
+    guard = ThemeGuard.for_capture(
+        engine_target.addon_credential, client, armed=theme_requested
+    )
     await guard.take_snapshot()
     batch_error: ToolError | None = None
     try:
@@ -974,6 +980,12 @@ async def capture_dashboard_images(
         # Held (not re-raised here) so the restore in ``finally`` runs first
         # and its outcome can be attached to the error payload below.
         batch_error = exc
+    except Exception as exc:
+        # A non-ToolError failure (e.g. raised while entering the HTTP client
+        # context) would otherwise bypass _reraise_with_guard_warnings and
+        # reach the caller's generic handler with the guard's warnings
+        # dropped. Wrap it so a failed restore stays visible either way.
+        batch_error = ToolError(str(exc) or exc.__class__.__name__)
     finally:
         await guard.restore()
         if capture_warnings is not None:
