@@ -282,7 +282,9 @@ class ThemesTools:
                 return await self._get_engine_theme()
 
             if action == "set_engine_theme":
-                return await self._set_engine_theme(action, value, expected_current)
+                return await self._set_engine_theme(
+                    action, value, expected_current, force
+                )
 
             if not theme_name:
                 raise_tool_error(

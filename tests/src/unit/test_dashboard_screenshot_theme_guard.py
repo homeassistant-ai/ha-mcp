@@ -581,3 +581,46 @@ class TestNullExpectedCurrentGuard:
             force=True,
         )
         assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _CLOBBERED_THEME
+
+
+class TestToolLayerForcePassthrough:
+    """force must survive the tool dispatch, not just the helper signature.
+
+    The helper tests call write_engine_theme() directly, so they cannot see a
+    dispatch that drops the argument -- which is how an inert force flag
+    shipped once already.
+    """
+
+    async def _tools(self) -> Any:
+        from ha_mcp.tools.tools_themes import ThemesTools
+
+        tools = ThemesTools(_client())
+
+        async def fake_credential() -> Any:
+            return _PUPPET_CREDENTIAL
+
+        tools._engine_credential = fake_credential  # type: ignore[method-assign]
+        return tools
+
+    async def test_force_reaches_the_write(self) -> None:
+        tools = await self._tools()
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+
+        # expected_current deliberately mismatches: only a real force
+        # passthrough lets this write land.
+        result = await tools._set_engine_theme(
+            "set_engine_theme", dict(_CLOBBERED_THEME), None, True
+        )
+
+        assert result["success"] is True
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _CLOBBERED_THEME
+
+    async def test_without_force_the_mismatch_is_refused(self) -> None:
+        tools = await self._tools()
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+
+        with pytest.raises(ToolError):
+            await tools._set_engine_theme(
+                "set_engine_theme", dict(_CLOBBERED_THEME), None, False
+            )
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
