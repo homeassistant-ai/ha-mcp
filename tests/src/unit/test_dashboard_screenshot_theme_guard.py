@@ -591,19 +591,27 @@ class TestGuardHardening:
             started.set()
             await asyncio.sleep(3600)
 
-        monkeypatch.setattr(ThemeGuard, "_fetch_theme", staticmethod(hang))
-        guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
-        task = asyncio.ensure_future(guard.take_snapshot())
-        await asyncio.wait_for(started.wait(), timeout=1)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        # Scoped so undoing the hang leaves the autouse fixture's
+        # HomeAssistantWebSocketClient patch in place; a blanket
+        # monkeypatch.undo() would drop it and let the second snapshot reach
+        # a real client, turning this into a connection-warning test.
+        with monkeypatch.context() as patched:
+            patched.setattr(ThemeGuard, "_fetch_theme", staticmethod(hang))
+            guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+            task = asyncio.ensure_future(guard.take_snapshot())
+            await asyncio.wait_for(started.wait(), timeout=1)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
-        monkeypatch.undo()
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
         other = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
         await asyncio.wait_for(other.take_snapshot(lock_timeout=1), timeout=2)
         assert other.lock_timed_out is False
+        # Proves it really snapshotted through the fake client rather than
+        # degrading to a connection warning.
+        assert other.warnings == []
+        assert other._snapshot == _DARK_THEME
         await other.restore()
 
     async def test_failed_snapshot_does_not_hold_the_lock(self) -> None:
