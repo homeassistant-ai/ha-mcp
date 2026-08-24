@@ -5,13 +5,10 @@ Assistant persisted it server-side on the engine token user's profile —
 flipping that user's real sessions to light mode. The guard snapshots the
 saved theme before a capture batch and restores it afterwards.
 
-The capture-time bracket is currently DISABLED (#1991): upstream Puppet fixed
-the cold-render dispatch, so ``capture.py`` no longer calls the guard's
-snapshot/restore. The guard code itself is retained (and unchanged), so the
-unit tests below still cover its credential resolution and snapshot/restore
-semantics against a fake WebSocket client. ``TestCaptureBracketDisabled``
-asserts the bracket stays off — capture opens no guard sessions and adds no
-warnings — guarding against a silent re-enable.
+These cover the guard's credential resolution and snapshot/restore semantics
+against a fake WebSocket client, plus ``TestCaptureBracket``, which asserts
+``capture.py`` actually brackets each batch — guarding against the bracket
+being silently disabled again.
 """
 
 from __future__ import annotations
@@ -366,13 +363,18 @@ def _patch_engine(monkeypatch: Any, addon_credential: EngineCredential | None) -
     _ClobberingEngineClient.status_code = 200
 
 
-class TestCaptureBracketDisabled:
-    """The ThemeGuard bracket around capture_dashboard_images is DISABLED
-    (#1991). Upstream Puppet no longer clobbers the theme on cold renders, so
-    ha-mcp opens no snapshot/restore sessions and adds no guard warnings. These
-    guard against the bracket being silently re-enabled."""
+class TestCaptureBracket:
+    """The ThemeGuard bracket around ``capture_dashboard_images`` is ENABLED.
 
-    async def test_capture_opens_no_guard_sessions_and_leaves_theme(
+    Puppet dispatches a ``settheme`` event on render, which Home Assistant
+    persists onto the engine token user's profile (#1909), so every capture
+    batch snapshots the saved theme before and restores it after. The bracket
+    was once disabled on the premise that upstream Puppet had fixed the
+    dispatch; that fix (balloob/home-assistant-addons#89) is unreleased and is
+    scoped to the no-parameter case, so the bracket stays on.
+    """
+
+    async def test_capture_restores_theme_clobbered_by_the_render(
         self, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
@@ -386,19 +388,19 @@ class TestCaptureBracketDisabled:
         )
 
         assert captures[0].data == _PNG
-        # No snapshot/restore WebSocket sessions were opened.
-        assert _FakeWsClient.instances == []
-        # The bracket did not run: the fake engine still simulates the old
-        # clobber, and ha-mcp no longer undoes it (real Puppet no longer
-        # causes it).
-        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _CLOBBERED_THEME
+        # Snapshot and restore each opened a session as the engine user.
+        assert [(ws.url, ws.token) for ws in _FakeWsClient.instances] == [
+            ("http://homeassistant:8123", "puppet-token"),
+            ("http://homeassistant:8123", "puppet-token"),
+        ]
+        # The fake engine clobbered the stored theme; the bracket undid it.
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
         assert capture_warnings == []
 
-    async def test_client_credential_fallback_opens_no_guard_sessions(
+    async def test_client_credential_fallback_restores_theme(
         self, monkeypatch: Any
     ) -> None:
-        """Sidecar/standalone mode: even with a usable client credential the
-        disabled bracket opens no guard sessions."""
+        """Sidecar/standalone mode: the client credential drives the bracket."""
         from ha_mcp.dashboard_screenshot import capture
 
         _patch_engine(monkeypatch, None)
@@ -409,11 +411,14 @@ class TestCaptureBracketDisabled:
         )
 
         assert captures[0].data == _PNG
-        assert _FakeWsClient.instances == []
+        assert [(ws.url, ws.token) for ws in _FakeWsClient.instances] == [
+            ("http://ha.local:8123", "own-token"),
+            ("http://ha.local:8123", "own-token"),
+        ]
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
 
-    async def test_capture_failure_raises_without_guard_warnings(
-        self, monkeypatch: Any
-    ) -> None:
+    async def test_capture_failure_still_restores_theme(self, monkeypatch: Any) -> None:
+        """A failed render must not leave the engine user's theme clobbered."""
         import json
 
         from ha_mcp.dashboard_screenshot import capture
@@ -425,8 +430,8 @@ class TestCaptureBracketDisabled:
         with pytest.raises(ToolError) as exc_info:
             await capture.capture_dashboard_images("lovelace/0")
 
-        # No guard sessions opened, and no guard warning on the error payload.
-        assert _FakeWsClient.instances == []
+        # The restore in the ``finally`` ran before the error surfaced.
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
         payload = json.loads(str(exc_info.value))
         assert not any(
             "restoring it failed" in warning for warning in payload.get("warnings", [])
