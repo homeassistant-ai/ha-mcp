@@ -244,18 +244,25 @@ class ThemeGuard:
             self.credential.token,
             verify_ssl=self.credential.verify_ssl,
         )
-        # connect() is INSIDE the try: SESSION_TIMEOUT_SECONDS can cancel
-        # mid-connect or mid-auth, and CancelledError is a BaseException, so
-        # leaving it outside skipped disconnect() entirely and stranded the
-        # socket plus its background reader task.
+        # The bound lives HERE, at the single construction site, rather than at
+        # each caller: _session is the only place a session carrying the engine
+        # credential is built, so a future entry point inherits the deadline
+        # along with the cleartext refusal instead of having to remember it.
+        # It spans connect, auth and the caller's body -- an unreachable
+        # endpoint stalls in connect, before the engine is ever contacted.
+        #
+        # connect() is INSIDE the try: the deadline cancels via CancelledError,
+        # a BaseException, so leaving it outside skipped disconnect() entirely
+        # and stranded the socket plus its background reader task.
         try:
-            if not await ws.connect():
-                reason = ws.last_connect_error
-                detail = f": {reason}" if isinstance(reason, str) else ""
-                raise ConnectionError(
-                    f"could not authenticate to {self.credential.url}{detail}"
-                )
-            yield ws
+            async with asyncio.timeout(SESSION_TIMEOUT_SECONDS):
+                if not await ws.connect():
+                    reason = ws.last_connect_error
+                    detail = f": {reason}" if isinstance(reason, str) else ""
+                    raise ConnectionError(
+                        f"could not authenticate to {self.credential.url}{detail}"
+                    )
+                yield ws
         finally:
             # Best-effort: a real failure to close must not mask the original
             # exception (including the cancellation that triggered cleanup).
@@ -303,9 +310,7 @@ class ThemeGuard:
         if self.credential is None:
             return
         try:
-            self._snapshot = await asyncio.wait_for(
-                self._read_theme(), timeout=SESSION_TIMEOUT_SECONDS
-            )
+            self._snapshot = await self._read_theme()
             self._snapshot_taken = True
         except Exception as exc:
             logger.warning(
@@ -333,9 +338,7 @@ class ThemeGuard:
             # the frontend's resulting user-data write is asynchronous -- let
             # it land before reading (see RESTORE_SETTLE_SECONDS).
             await asyncio.sleep(RESTORE_SETTLE_SECONDS)
-            current = await asyncio.wait_for(
-                self._read_theme(), timeout=SESSION_TIMEOUT_SECONDS
-            )
+            current = await self._read_theme()
         except Exception as exc:
             logger.warning(
                 "Could not re-read the screenshot engine user's saved theme "
@@ -398,7 +401,7 @@ class ThemeGuard:
 async def read_engine_theme(credential: EngineCredential) -> Any:
     """Read the engine user's saved ``theme`` frontend user-data value."""
     guard = ThemeGuard(credential=credential)
-    return await asyncio.wait_for(guard._read_theme(), timeout=SESSION_TIMEOUT_SECONDS)
+    return await guard._read_theme()
 
 
 class ThemeChangedError(RuntimeError):
@@ -444,4 +447,4 @@ async def write_engine_theme(
                 _wait_timeout=COMMAND_TIMEOUT_SECONDS,
             )
 
-    await asyncio.wait_for(_write(), timeout=SESSION_TIMEOUT_SECONDS)
+    await _write()

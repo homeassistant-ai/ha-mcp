@@ -815,3 +815,34 @@ class TestCredentialProvenance:
             quoted = _re.search(rf"{field}=(\{{.*?\}})", warning)
             assert quoted, f"{field} not quoted in warning: {warning}"
             _json.loads(quoted.group(1))
+
+
+class TestSessionDeadlineIsCentral:
+    """The bound belongs to _session, so new entry points inherit it.
+
+    It previously lived at each of the four call sites, which meant a future
+    entry point would inherit the cleartext refusal (_session is the single
+    construction site) but silently not the deadline.
+    """
+
+    async def test_any_session_user_inherits_the_deadline(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import theme_guard as guard_module
+
+        async def hang_connect(self: Any) -> bool:
+            await asyncio.sleep(3600)
+            return True
+
+        with monkeypatch.context() as patched:
+            patched.setattr(_FakeWsClient, "connect", hang_connect)
+            patched.setattr(guard_module, "SESSION_TIMEOUT_SECONDS", 0.02)
+            guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+
+            # A caller that does NOT wrap the session in its own timeout --
+            # i.e. any new entry point -- must still be bounded.
+            with pytest.raises(TimeoutError):
+                async with guard._session():
+                    pass
+
+        assert _FakeWsClient.instances[0].disconnected is True
