@@ -423,6 +423,24 @@ def _current_value_backfill(field: dict[str, Any]) -> tuple[Any, bool]:
     return step_owned, False
 
 
+def _clears_by_omission(field: dict[str, Any]) -> bool:
+    """Whether leaving this field OUT is how the caller clears it.
+
+    Only for a field that is neither required nor carrying a ``"default"``:
+    there, an absent key simply stays absent. Anything else has a value
+    voluptuous substitutes for the omission — the static default, which is a
+    different value than the caller asked for and would report success while
+    clearing nothing — so the ``None`` is submitted instead and Home Assistant
+    decides whether null is meaningful for that field.
+
+    The single source of truth for both sites that answer this question:
+    :func:`_consume_leaf_field`, where the caller's key is popped, and
+    :func:`_edit_mode_submission`, where a later encounter of the same field
+    has to reach the same verdict (Patch76 review, issue #2254).
+    """
+    return not field.get("required") and "default" not in field
+
+
 def _edit_mode_submission(
     field: dict[str, Any],
     name: str,
@@ -448,7 +466,9 @@ def _edit_mode_submission(
     if recorded is _MISSING_DEFAULT:
         return _current_value_backfill(field)
     if recorded is None:
-        return _NO_SUBMISSION
+        # The caller cleared it. Express that the same way the popping site
+        # did, or the clear stops holding at its second encounter.
+        return _NO_SUBMISSION if _clears_by_omission(field) else (None, True)
     if not reuse_state.claim_write(dotted):
         # The one reused write per (step, path) is spent — a menu loop is
         # revisiting this step. Falling back to omission would let voluptuous
@@ -569,12 +589,7 @@ def _consume_leaf_field(
     """
     if name in remaining_config:
         value = remaining_config.pop(name)
-        clearing = (
-            keep_current_values
-            and value is None
-            and not field.get("required")
-            and "default" not in field
-        )
+        clearing = keep_current_values and value is None and _clears_by_omission(field)
         form_data[name] = _CLEARED if clearing else value
         _mark_consumed(consumed_config_keys, path_prefix, name)
         if reuse_state is not None:

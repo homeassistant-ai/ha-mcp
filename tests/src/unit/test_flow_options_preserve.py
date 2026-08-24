@@ -607,6 +607,97 @@ class TestRequiredFieldPathsUnchanged:
             f"The later step overwrote the caller's value: {second}"
         )
 
+    @staticmethod
+    def _defaulted_step(step_id: str) -> dict[str, Any]:
+        """One OPTIONAL field carrying a static default and no suggestion."""
+        return {
+            "type": "form",
+            "step_id": step_id,
+            "data_schema": [
+                {
+                    "name": "workdays",
+                    "required": False,
+                    "optional": True,
+                    "default": ["mon", "tue", "wed", "thu", "fri"],
+                },
+            ],
+        }
+
+    @pytest.mark.parametrize(
+        ("first_step", "second_step"),
+        [("one", "two"), ("init", "init")],
+        ids=["later-step-redeclares", "same-step-revisited"],
+    )
+    def test_a_clear_on_a_defaulted_field_survives_its_second_encounter(
+        self, first_step: str, second_step: str
+    ) -> None:
+        """What expresses a clear depends on the field's shape, at BOTH sites.
+
+        ``_consume_leaf_field`` submits the ``None`` verbatim for a field
+        carrying a ``"default"``, because omitting it there would let
+        voluptuous substitute that default. The later encounter has to reach
+        the same verdict — omitting it on encounter two hands the default back
+        and reports success having cleared nothing (Patch76 review, #2256).
+        """
+        reuse_state = _ReuseState()
+        remaining: dict[str, Any] = {"workdays": None}
+
+        first = _handle_form_step(
+            "flow-2254",
+            self._defaulted_step(first_step),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+            keep_current_values=True,
+        )
+        second = _handle_form_step(
+            "flow-2254",
+            self._defaulted_step(second_step),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+            keep_current_values=True,
+        )
+
+        assert first == {"workdays": None}
+        assert second == {"workdays": None}, (
+            "The clear stopped holding at its second encounter; omitting the "
+            f"key lets the static default back in. Got: {second}"
+        )
+
+    def test_a_redeclared_optional_field_warns_when_it_resubmits(self) -> None:
+        """Routing the optional path through claim_write emits its note.
+
+        Pinned rather than asserted-away: the mode treats resubmitting the
+        caller's value as the CORRECT outcome here, so the warning rides along
+        with it and callers see it (Patch76 review, #2256).
+        """
+        reuse_state = _ReuseState()
+        remaining: dict[str, Any] = {"province": "BY"}
+
+        _handle_form_step(
+            "flow-2254",
+            self._redeclaring_step("one"),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+            keep_current_values=True,
+        )
+        _handle_form_step(
+            "flow-2254",
+            self._redeclaring_step("two"),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+            keep_current_values=True,
+        )
+
+        assert reuse_state.notes == [_reuse_warning("province", "two")]
+
     def test_a_revisited_step_keeps_the_stored_value_after_the_write_is_spent(
         self,
     ) -> None:
