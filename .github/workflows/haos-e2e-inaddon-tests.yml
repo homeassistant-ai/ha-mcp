@@ -10,14 +10,14 @@ name: HAOS E2E Tests (inaddon)
 # refresh_dev_addon_source_in_qcow2 overwrites the addon source (apps/local
 # on Supervisor 2026.06.0+, else legacy addons/local) with PR source + bumps
 # config.yaml ``version:`` → Supervisor detects an update on next boot →
-# trigger_dev_addon_update calls supervisor/api addons/{slug}/update via WS →
+# the harness switches Supervisor to beta, then trigger_dev_addon_update calls
+# supervisor/api addons/{slug}/update via WS from the external test harness →
 # Docker rebuilds with layer cache → addon restarts with PR source →
 # mcp_client connects via HTTP transport.
 #
-# v1 scope: run ONLY tests/src/e2e/haos_only/ (the canary suite) so the
-# initial green CI gives us a fast feedback loop. Once the full inaddon
-# plumbing is verified, expand to the full src/e2e/ tree (gated by
-# external_only / inaddon_only markers).
+# The default selection is the full src/e2e tree. This is also the one real
+# add-on lane that tracks Supervisor beta so upcoming Supervisor security
+# changes are exercised before stable promotion.
 
 on:
   # No workflow-level `paths:` filter on purpose. This check is a REQUIRED
@@ -252,10 +252,7 @@ jobs:
         # the inaddon branch: addon source is overwritten with PR source
         # before boot, Supervisor update is triggered, mcp_client uses
         # HTTP transport to the addon's MCP endpoint.
-        #
-        # v1: targets src/e2e/haos_only/ only (canary tier). Widen via
-        # workflow_dispatch pytest_paths input once the inaddon plumbing
-        # is stable. external_only-marked tests skip automatically.
+        # external_only-marked tests skip automatically.
         #
         # -n2 --dist loadscope: pytest-xdist parallelizes across 2 workers,
         # each booting its own QEMU (per-worker port offset + qcow2 overlay
@@ -279,6 +276,8 @@ jobs:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
           HAOS_TEST_MODE: inaddon
+          HAOS_SUPERVISOR_CHANNEL: beta
+          HAOS_SUPERVISOR_MIN_VERSION: "2026.08.0"
           # Feeds conftest's HACS token injection (qcow2 pre-boot edit)
           # so HACS repo adds don't hit the unauthenticated shared-IP
           # GitHub rate limit — the recurring HACS-install flake.

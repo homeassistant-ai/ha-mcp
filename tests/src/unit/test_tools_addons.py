@@ -4030,6 +4030,223 @@ class TestSupervisorApiCall:
     """
 
     @pytest.mark.asyncio
+    async def test_addon_mode_uses_direct_supervisor_rest(self, monkeypatch):
+        """Addon installs must not tunnel Supervisor calls through HA Core WS.
+
+        Supervisor 2026.08 blocks add-on-originated ``supervisor/api`` commands
+        because Core would execute them with Core's broader token. The add-on's
+        own manager-role token remains authorized for ``/addons`` and ``/store``
+        over the direct Supervisor REST API.
+        """
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.verify_ssl = False
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {"wrong": "transport"}}
+        )
+
+        response = httpx.Response(
+            200,
+            json={"result": "ok", "data": {"addons": [{"slug": "core_mqtt"}]}},
+        )
+        direct_client = AsyncMock()
+        direct_client.request.return_value = response
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+            return_value=context,
+            create=True,
+        ) as factory:
+            result = await _supervisor_api_call(client, "/addons")
+
+        assert result == {
+            "success": True,
+            "result": {"addons": [{"slug": "core_mqtt"}]},
+        }
+        factory.assert_called_once_with(timeout=30.0, verify=False)
+        direct_client.request.assert_awaited_once_with("GET", "/addons")
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_posts_json_and_classifies_supervisor_error(
+        self, monkeypatch
+    ):
+        """Direct REST preserves request bodies and Supervisor error messages."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {}}
+        )
+        response = httpx.Response(
+            400,
+            json={
+                "result": "error",
+                "message": "Missing option 'authorized_keys' in ssh",
+            },
+        )
+        direct_client = AsyncMock()
+        direct_client.request.return_value = response
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+        submitted = {"options": {"ssh": {"sftp": True}}}
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(
+                client,
+                "/addons/core_ssh/options",
+                method="POST",
+                data=submitted,
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        direct_client.request.assert_awaited_once_with(
+            "POST", "/addons/core_ssh/options", json=submitted
+        )
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("status_code", "message", "expected_code"),
+        [
+            (401, "Unauthorized", "AUTH_INVALID_TOKEN"),
+            (404, "Add-on not found", "RESOURCE_NOT_FOUND"),
+            (500, "Supervisor unavailable", "SERVICE_CALL_FAILED"),
+        ],
+    )
+    async def test_addon_mode_preserves_direct_http_status_classification(
+        self,
+        monkeypatch,
+        status_code,
+        message,
+        expected_code,
+    ):
+        """Direct Supervisor HTTP status codes keep structured error semantics."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        response = httpx.Response(
+            status_code,
+            json={"result": "error", "message": message},
+        )
+        direct_client = AsyncMock()
+        direct_client.request.return_value = response
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(client, "/addons/missing/info")
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == expected_code
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("transport_error", "expected_code"),
+        [
+            (httpx.ConnectError("connection refused"), "CONNECTION_FAILED"),
+            (httpx.ReadTimeout("read timed out"), "CONNECTION_TIMEOUT"),
+        ],
+    )
+    async def test_addon_mode_classifies_direct_transport_failure(
+        self, monkeypatch, transport_error, expected_code
+    ):
+        """Direct Supervisor transport failures keep structured semantics."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.side_effect = transport_error
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(client, "/addons")
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == expected_code
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_retries_direct_job_group_collision(self, monkeypatch):
+        """Direct REST retains the bounded transient job-group retry."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.side_effect = [
+            httpx.Response(
+                409,
+                json={
+                    "result": "error",
+                    "message": (
+                        "Another job is running for job group addon_core_mosquitto"
+                    ),
+                },
+            ),
+            httpx.Response(200, json={"result": "ok", "data": {"state": "started"}}),
+        ]
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+        sleep = AsyncMock()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ) as factory,
+            patch("ha_mcp.tools.tools_addons.asyncio.sleep", new=sleep),
+        ):
+            result = await _supervisor_api_call(
+                client, "/addons/core_mosquitto/restart", method="POST"
+            )
+
+        assert result == {"success": True, "result": {"state": "started"}}
+        assert direct_client.request.await_count == 2
+        assert factory.call_count == 2
+        sleep.assert_awaited_once_with(1.0)
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_schema_error_on_options_endpoint_classified_as_validation_failed(
         self,
     ):

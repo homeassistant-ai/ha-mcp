@@ -1,6 +1,6 @@
 """Shared factory for direct-Supervisor httpx clients.
 
-Three call sites in the codebase talk directly to the Home Assistant
+Four call sites in the codebase talk directly to the Home Assistant
 Supervisor REST API at ``http://supervisor`` rather than through
 ``HomeAssistantClient.httpx_client`` (which is bound to HA Core, not the
 Supervisor — different base URL, different token, different role gate):
@@ -9,12 +9,14 @@ Supervisor — different base URL, different token, different role gate):
   — fetches addon and system-service logs
 - :func:`ha_mcp.tools.tools_bug_report._fetch_addon_logs` — bundles ha-mcp's
   own addon logs into a bug-report payload
+- :func:`ha_mcp.tools.tools_addons._supervisor_api_call` — manages add-ons and
+  searches the store without routing an add-on token through HA Core
 - :func:`ha_mcp.settings_ui._handlers_server._restart_addon` — POSTs
   ``/addons/self/restart`` from the settings UI
 
-All three share the same boilerplate (base URL, ``Authorization: Bearer
+All four share the same boilerplate (base URL, ``Authorization: Bearer
 ${SUPERVISOR_TOKEN}`` header), so this module supplies a single factory and
-keeps the three sites consistent.
+keeps the four sites consistent.
 """
 
 from __future__ import annotations

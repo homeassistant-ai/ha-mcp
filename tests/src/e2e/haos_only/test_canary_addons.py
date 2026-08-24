@@ -6,14 +6,15 @@ This is the test the testcontainer suite *can't* run cleanly because
 it would have to mock the entire Supervisor API surface (the partial
 mock added in #1192 only covers a few direct REST endpoints).
 
-Three concrete assertions:
+Four concrete assertions:
 1. ``ha_get_app`` (default listing) returns every addon the build
    script installs, by display name.
 2. ``ha_get_app(slug=core_mosquitto)`` returns Supervisor-backed
    detail for a known core slug.
-3. HACS bootstrap actually completed — the "Get HACS" addon installs
-   HACS into ``/config/custom_components/hacs/``, and HACS registers
-   the ``hacs`` integration on first HA Core start; if either step
+3. ``ha_get_app(source="available")`` searches the live Supervisor store.
+4. HACS bootstrap actually completed — the "Get HACS" addon installs
+   HACS into ``/config/custom_components/hacs/``, and HACS registers the
+   ``hacs`` integration on first HA Core start; if either step
    silently failed, the addon would still be present but HACS wouldn't
    be loaded.
 """
@@ -66,9 +67,9 @@ async def test_addons_installed_via_mcp(mcp_client: Any) -> None:
 async def test_supervisor_info_via_mcp(mcp_client: Any) -> None:
     """`ha_get_app` with a known core slug returns Supervisor-backed detail.
 
-    This exercises the WS supervisor/api path through ha-mcp itself — the
-    one the testcontainer can't validate because no Supervisor exists
-    behind that mocked endpoint.
+    This exercises the Supervisor path through ha-mcp itself — direct REST in
+    the in-addon lane and Core's WebSocket proxy in the external lane. The
+    testcontainer cannot validate either against a real Supervisor.
     """
     raw = await mcp_client.call_tool("ha_get_app", {"slug": "core_mosquitto"})
     payload = parse_mcp_result(raw)
@@ -79,6 +80,23 @@ async def test_supervisor_info_via_mcp(mcp_client: Any) -> None:
     assert detail.get("name") == "Mosquitto broker", (
         f"Unexpected addon detail: {detail}"
     )
+
+
+async def test_addon_store_search_via_mcp(mcp_client: Any) -> None:
+    """`ha_get_app(source='available')` reaches the real Supervisor store."""
+
+    raw = await mcp_client.call_tool(
+        "ha_get_app", {"source": "available", "query": "mqtt"}
+    )
+    payload = parse_mcp_result(raw)
+
+    assert payload.get("success"), f"ha_get_app store search failed: {payload}"
+    matches = payload.get("addons", [])
+    assert matches, f"Supervisor store returned no MQTT matches: {payload}"
+    assert any(
+        "mqtt" in f"{addon.get('name', '')} {addon.get('description', '')}".lower()
+        for addon in matches
+    ), f"Supervisor store search returned unrelated results: {matches}"
 
 
 async def test_hacs_bootstrap_completed(mcp_client: Any) -> None:

@@ -25,10 +25,13 @@ from ha_mcp._vendor.websockets.asyncio.client import ClientConnection
 
 from .._version import is_running_in_addon
 from ..client.rest_client import (
+    HomeAssistantAPIError,
     HomeAssistantClient,
     HomeAssistantCommandError,
+    HomeAssistantConnectionError,
     _is_ssl_error,
 )
+from ..client.supervisor_client import make_supervisor_httpx_client
 from ..errors import (
     ErrorCode,
     create_error_response,
@@ -234,6 +237,87 @@ _JOB_COLLISION_RETRY_INITIAL_DELAY = 1.0
 _JOB_COLLISION_RETRY_MAX_DELAY = 5.0
 
 
+def _supervisor_rest_failure(
+    response: httpx.Response,
+    error: object,
+    response_data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Normalize a failed direct REST response without losing HTTP semantics."""
+    error_text = str(error)
+    result: dict[str, Any] = {"success": False, "error": error_text}
+    if response.is_error:
+        result["_status_code"] = response.status_code
+        if response_data is not None:
+            result["_response_data"] = response_data
+        return result
+
+    if not error_text.lower().startswith("command failed:"):
+        result["error"] = f"Command failed: {error_text}"
+    return result
+
+
+async def _supervisor_api_call_once(
+    client: HomeAssistantClient,
+    endpoint: str,
+    method: str,
+    data: dict[str, Any] | None,
+    wait_timeout: float,
+    websocket_kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Call Supervisor through the transport allowed for this install mode."""
+    if not is_running_in_addon():
+        return await client.send_websocket_message(
+            {
+                "type": "supervisor/api",
+                "_wait_timeout": wait_timeout,
+                **websocket_kwargs,
+            }
+        )
+
+    request_kwargs: dict[str, Any] = {}
+    if data is not None:
+        request_kwargs["json"] = data
+    try:
+        async with make_supervisor_httpx_client(
+            timeout=wait_timeout,
+            verify=client.verify_ssl,
+        ) as supervisor_client:
+            response = await supervisor_client.request(
+                method,
+                endpoint,
+                **request_kwargs,
+            )
+    except httpx.TimeoutException as exc:
+        raise TimeoutError(
+            f"Supervisor API {method} {endpoint} timed out after {wait_timeout}s"
+        ) from exc
+    except (httpx.RequestError, OSError) as exc:
+        raise HomeAssistantConnectionError(
+            f"Failed to connect to Supervisor API {endpoint}: {exc}"
+        ) from exc
+
+    try:
+        payload = response.json()
+    except ValueError:
+        body = response.text.strip()
+        error = (
+            body or f"Supervisor returned invalid JSON (HTTP {response.status_code})"
+        )
+        return _supervisor_rest_failure(response, error)
+
+    if not isinstance(payload, dict):
+        return _supervisor_rest_failure(
+            response, f"Supervisor returned an invalid response: {payload!r}"
+        )
+    if response.is_error or payload.get("result") != "ok":
+        error = payload.get("message") or payload.get("error")
+        fallback = f"Supervisor API call failed (HTTP {response.status_code})"
+        return _supervisor_rest_failure(
+            response, error or fallback, response_data=payload
+        )
+    return {"success": True, "result": payload.get("data", {})}
+
+
 async def _supervisor_api_call(
     client: HomeAssistantClient,
     endpoint: str,
@@ -241,9 +325,10 @@ async def _supervisor_api_call(
     data: dict[str, Any] | None = None,
     timeout: int | None = None,
 ) -> dict[str, Any]:
-    """Make a Supervisor API call via WebSocket.
+    """Make a Supervisor API call through the supported install-mode transport.
 
-    Handles connection, command execution, error checking, and cleanup.
+    Add-on installs use their manager-role token against Supervisor REST directly.
+    Other installs retain Home Assistant Core's ``supervisor/api`` WebSocket proxy.
 
     Args:
         client: Home Assistant REST client (provides base_url and token)
@@ -264,23 +349,20 @@ async def _supervisor_api_call(
         kwargs: dict[str, Any] = {"endpoint": endpoint, "method": method}
         if data is not None:
             kwargs["data"] = data
-        # ``timeout`` is the Supervisor-side proxy timeout (how long Supervisor
-        # waits on the underlying REST op). The client's own wait must outlast
-        # it by a margin, otherwise the local await fires first and we abandon a
-        # still-running operation (e.g. a multi-minute add-on install) — the
-        # send_command default is only 30s. Keep them coupled.
+        # On the WebSocket route, ``timeout`` tells the Supervisor proxy how
+        # long to wait on the underlying REST operation. On the direct route,
+        # only the local httpx timeout is needed. In both cases it must outlast
+        # a multi-minute add-on operation; the default local wait is only 30s.
         wait_timeout = 30.0
         if timeout is not None:
             kwargs["timeout"] = timeout
             wait_timeout = float(timeout) + 15.0
 
-        # Route through the shared pooled WebSocket (issue #1813) rather than
-        # opening a dedicated connect/auth handshake per call. ``_wait_timeout``
-        # is consumed by send_command (it never reaches Home Assistant). The
-        # pooled path collapses a failed WS command into
-        # ``{"success": False, "error": ...}``; re-raise it as the same
-        # ``HomeAssistantCommandError`` the dedicated send_command used to raise
-        # so the classifier below maps schema/not-found/etc. identically.
+        # Off-host installs use the shared pooled WebSocket (issue #1813),
+        # while add-on installs use direct Supervisor REST because Supervisor
+        # 2026.08 rejects add-on-originated ``supervisor/api`` commands. Both
+        # transports are normalized to ``{"success": ..., ...}`` so errors
+        # retain the same classification and retry behavior.
         #
         # Supervisor serialises jobs per add-on job group and rejects a
         # state-changing call outright while a still-settling job (a watchdog
@@ -297,8 +379,13 @@ async def _supervisor_api_call(
         attempts = 0
         while True:
             attempts += 1
-            result = await client.send_websocket_message(
-                {"type": "supervisor/api", "_wait_timeout": wait_timeout, **kwargs}
+            result = await _supervisor_api_call_once(
+                client,
+                endpoint,
+                method,
+                data,
+                wait_timeout,
+                kwargs,
             )
 
             if result.get("success"):
@@ -308,6 +395,16 @@ async def _supervisor_api_call(
                 result.get("error", f"Supervisor API call failed: {endpoint}")
             )
             if _JOB_COLLISION_MARKER not in error_text.lower():
+                status_code = result.get("_status_code")
+                if isinstance(status_code, int):
+                    response_data = result.get("_response_data")
+                    raise HomeAssistantAPIError(
+                        error_text,
+                        status_code=status_code,
+                        response_data=(
+                            response_data if isinstance(response_data, dict) else None
+                        ),
+                    )
                 raise HomeAssistantCommandError(error_text)
 
             remaining = deadline - time.monotonic()
@@ -360,7 +457,11 @@ async def _supervisor_api_call(
         logger.error(f"Error calling Supervisor API {endpoint}: {e}")
         exception_to_structured_error(
             e,
-            context={"endpoint": endpoint},
+            context={
+                "endpoint": endpoint,
+                "operation": f"Supervisor API {endpoint}",
+                "timeout_seconds": wait_timeout,
+            },
             suggestions=["Check Home Assistant connection and Supervisor availability"],
         )
         return None  # unreachable: exception_to_structured_error always raises

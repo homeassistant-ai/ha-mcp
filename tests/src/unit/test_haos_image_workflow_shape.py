@@ -132,3 +132,15 @@ def test_cache_key_consumer_discovery_tracks_jobs_individually(
     assert _cache_key_consumers(tmp_path) == [
         (path, f"lane-{index}") for index in range(_CACHE_KEY_CONSUMER_FLOOR)
     ]
+
+
+def test_inaddon_lane_targets_beta_supervisor() -> None:
+    """The real add-on lane catches Supervisor changes before stable promotion."""
+    workflow = _workflow(_WORKFLOW_DIR / "haos-e2e-inaddon-tests.yml")
+    job = workflow["jobs"]["haos-e2e-inaddon"]
+    run_step = next(
+        step for step in _job_steps(job) if step.get("name") == "Run inaddon E2E suite"
+    )
+
+    assert run_step["env"]["HAOS_SUPERVISOR_CHANNEL"] == "beta"
+    assert run_step["env"]["HAOS_SUPERVISOR_MIN_VERSION"] == "2026.08.0"

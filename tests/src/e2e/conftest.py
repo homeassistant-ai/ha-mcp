@@ -57,6 +57,7 @@ from haos_runtime import (
     HAOS_IMAGE_ENV,
     boot_haos_qemu,
     enable_config_entry,
+    ensure_supervisor_channel,
     inject_hacs_token,
     inject_hacs_token_in_qcow2,
     is_haos_backend_selected,
@@ -2103,6 +2104,20 @@ def _bringup_haos_out_of_process_server(
     # cache → only the COPY src/ + uv-sync-project layers
     # re-execute), then wait for the addon's MCP endpoint.
     if inaddon:
+        supervisor_channel = os.environ.get("HAOS_SUPERVISOR_CHANNEL")
+        if supervisor_channel:
+            minimum_version = os.environ.get("HAOS_SUPERVISOR_MIN_VERSION")
+            logger.info(
+                "Inaddon mode: ensuring Supervisor channel=%s minimum=%s",
+                supervisor_channel,
+                minimum_version or "any",
+            )
+            ensure_supervisor_channel(
+                base_url,
+                token,
+                channel=supervisor_channel,
+                minimum_version=minimum_version,
+            )
         logger.info("Inaddon mode: triggering Supervisor addon update for PR source")
         trigger_dev_addon_update(base_url, token, timeout=600.0)
         addon_mcp_url = wait_for_addon_mcp_ready(timeout=180.0)
