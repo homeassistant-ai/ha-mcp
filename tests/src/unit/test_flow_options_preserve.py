@@ -961,6 +961,67 @@ class TestPerStepValues:
             f"The step-scoped value leaked into an unaddressed step: {seen[2]}"
         )
 
+    def test_a_nested_step_scoped_value_never_leaks_either(self) -> None:
+        """An overlay key naming a SECTION scopes its leaves too.
+
+        ``step_scoped`` holds the overlay's top-level keys, so matching the
+        leaf name let every value inside a section through: for
+        ``{"connection": {"province": "TX"}}`` the leaf is ``province``, which
+        is nowhere in ``{"connection"}``. The guard matches the ROOT of the
+        declaration path instead (CodeRabbit review, #2256).
+        """
+
+        def step(step_id: str) -> dict[str, Any]:
+            return {
+                "type": "form",
+                "step_id": step_id,
+                "data_schema": [
+                    {
+                        "type": "expandable",
+                        "name": "connection",
+                        "required": False,
+                        "schema": [
+                            {
+                                "name": "province",
+                                "required": False,
+                                "optional": True,
+                                "description": {"suggested_value": "BW"},
+                            },
+                        ],
+                    },
+                ],
+            }
+
+        reuse_state = _ReuseState()
+        remaining: dict[str, Any] = {
+            "step_values": {"one": {"connection": {"province": "TX"}}}
+        }
+        first = _handle_form_step(
+            "flow-2254",
+            step("one"),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+            keep_current_values=True,
+        )
+        second = _handle_form_step(
+            "flow-2254",
+            step("two"),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+            keep_current_values=True,
+        )
+
+        assert first == {"connection": {"province": "TX"}}
+        assert second == {"connection": {"province": "BW"}}, (
+            f"The nested step-scoped value leaked: {second}"
+        )
+        assert reuse_state.scoped == {}
+        assert reuse_state.flat == {}
+
     def test_an_undeclared_field_inside_step_values_is_reported(self) -> None:
         """A typo'd FIELD inside an entry must not vanish silently.
 

@@ -123,12 +123,17 @@ class _ReuseState:
         """
         dotted = _section_path(path_prefix, name)
         self.filled.add(dotted)
-        if name in self.step_scoped:
+        if dotted.split(".", 1)[0] in self.step_scoped:
             # Supplied by ``step_values`` for THIS step only. ``filled`` still
             # takes it so nothing is injected over it here, but it must never
             # reach ``flat``/``scoped``: those survive the whole walk, and a
             # later step that nobody addressed would then reuse a value the
             # caller scoped to one step instead of its own stored one.
+            #
+            # Matched on the ROOT of the declaration path, not the leaf name:
+            # an overlay key naming a SECTION carries leaves whose own names
+            # are nowhere in ``step_scoped``, so comparing the leaf let every
+            # nested value through (CodeRabbit review, issue #2254).
             return
         if scoped_only:
             self.scoped[dotted] = copy.deepcopy(value)
