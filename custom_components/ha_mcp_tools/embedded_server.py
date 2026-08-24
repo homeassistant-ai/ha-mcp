@@ -363,7 +363,10 @@ class EmbeddedServerManager:
         # exactly like the sys.modules purge does (review finding), so a
         # mutating install is deferred while any registered worker is alive.
         ready_version = await self._async_ensure_package(
-            defer_mutations=_prune_and_check_importing_workers()
+            defer_mutations=(
+                _prune_and_check_importing_workers()
+                or _unowned_fastmcp_runtime_loaded()
+            )
         )
         await self._async_warn_on_dependency_conflicts()
         access_token = await self._async_provision_token()
@@ -639,6 +642,39 @@ class EmbeddedServerManager:
                     _PENDING_INSTALL_DONE = None
             raise
 
+    async def _async_process_requirements_fast_tracked(self) -> None:
+        """Run HA's async requirements path with cancellation-safe tracking."""
+        global _PENDING_INSTALL_DONE
+        done = threading.Event()
+        with _PENDING_INSTALL_LOCK:
+            _PENDING_INSTALL_DONE = done
+
+        try:
+            task = asyncio.create_task(self._async_process_requirements_fast())
+        except BaseException:
+            done.set()
+            with _PENDING_INSTALL_LOCK:
+                if _PENDING_INSTALL_DONE is done:
+                    _PENDING_INSTALL_DONE = None
+            raise
+
+        def _finished(finished_task: asyncio.Task[None]) -> None:
+            global _PENDING_INSTALL_DONE
+            # Retrieve a detached task's exception to avoid an unhandled-task
+            # warning. A still-attached await below receives the same result.
+            with suppress(asyncio.CancelledError):
+                finished_task.exception()
+            done.set()
+            with _PENDING_INSTALL_LOCK:
+                if _PENDING_INSTALL_DONE is done:
+                    _PENDING_INSTALL_DONE = None
+
+        task.add_done_callback(_finished)
+        # Cancelling this bring-up must detach only its awaiter. The requirements
+        # manager may already have dispatched pip, so its task and reservation
+        # live until actual completion and the next bring-up waits them out.
+        await asyncio.shield(task)
+
     async def _async_wait_for_pending_install(self) -> None:
         """Wait out an install job orphaned by a cancelled previous bring-up.
 
@@ -802,11 +838,11 @@ class EmbeddedServerManager:
             and _is_compatible_embedded_version(installed_version)
         )
         deferred = False
-        if fast_path_ok:
-            await self._async_process_requirements_fast()
-        elif defer_mutations:
+        if defer_mutations:
             deferred = True
             await self._async_defer_package_mutations(installed_version)
+        elif fast_path_ok:
+            await self._async_process_requirements_fast_tracked()
         else:
             await self._async_remove_conflicting_dist()
             await self._async_remove_legacy_target(target_dist, installed_version)
@@ -890,25 +926,27 @@ class EmbeddedServerManager:
     ) -> None:
         """Handle the defer-mutations branch of :meth:`_async_ensure_package`.
 
-        A previous bring-up's worker is still importing, so the package files
-        must not be replaced under it. With an importable build on disk
-        (``installed_version`` non-None — importability only, compatibility is
-        checked by the caller afterwards) nothing is touched at all — not even
-        the requirements manager, which installs any unsatisfied spec and
-        would mutate exactly like the deferred force install. When nothing
-        imports there are no distribution files to replace under the live
-        importer, and without an install this bring-up cannot produce a
-        server at all, so the requirements manager still runs.
+        A previous or external worker has process-global dependency code loaded,
+        so no package path may run — including Home Assistant's requirements
+        manager, which installs an unsatisfied stable spec. The external worker
+        can exist even when ``ha-mcp`` itself is not installed, so a first install
+        also fails closed instead of resolving FastMCP beneath that worker.
         """
         _LOGGER.warning(
             "Deferring the ha-mcp install/upgrade: a previous bring-up's "
-            "worker thread is still importing, and replacing the package "
-            "files under it could corrupt that import. The currently "
+            "worker or an external FastMCP consumer is active, and replacing "
+            "package files under it could corrupt the shared runtime. The currently "
             "installed build will be used; reload the integration (or "
             "restart Home Assistant) to apply the update."
         )
         if installed_version is None:
-            await self._async_process_requirements_fast()
+            raise EmbeddedServerError(
+                "A process-global dependency consumer is active while ha-mcp is "
+                "not installed; refusing the first install because it could "
+                "replace loaded FastMCP files. Restart Home Assistant so HA-MCP "
+                "can establish runtime ownership before other MCP integrations.",
+                kind="restart",
+            )
 
     def _replaced_dist_name(self) -> str | None:
         """Return the distribution whose presence could no-op the new spec.
@@ -1932,6 +1970,13 @@ def _prune_and_check_importing_workers() -> bool:
         return bool(_IMPORTING_WORKERS)
 
 
+def _unowned_fastmcp_runtime_loaded() -> bool:
+    """Return whether FastMCP was loaded before HA-MCP established ownership."""
+    return _CACHED_IMPORT_VERSION is None and any(
+        name == "fastmcp" or name.startswith("fastmcp.") for name in sys.modules
+    )
+
+
 # Completion event of the package-mutating install/uninstall job currently on
 # the executor, if any. asyncio cancellation of a bring-up detaches the
 # awaiter, but the executor job keeps running to completion — untracked, an
@@ -1955,6 +2000,12 @@ def _prune_and_check_importing_workers() -> bool:
 # co-occur with a live orphaned job worth waiting on.
 _PENDING_INSTALL_LOCK = threading.Lock()
 _PENDING_INSTALL_DONE: threading.Event | None = None
+
+# Inter-integration contract for process-global FastMCP consumers. Version 1
+# guarantees that every package path honors _IMPORTING_WORKERS before mutation,
+# async requirements work remains registered across cancellation, and a loaded
+# unowned FastMCP runtime blocks HA-MCP's first install.
+FASTMCP_MUTATION_PROTOCOL = 1
 
 
 # Version of the ha_mcp generation currently cached in sys.modules — set by

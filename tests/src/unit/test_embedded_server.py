@@ -3276,6 +3276,55 @@ class TestPendingInstallTracking:
         with es._PENDING_INSTALL_LOCK:
             assert es._PENDING_INSTALL_DONE is None
 
+    async def test_requirements_manager_fast_path_is_tracked(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_PENDING_INSTALL_DONE", None)
+        observed: list[bool] = []
+
+        async def _fast_path() -> None:
+            with es._PENDING_INSTALL_LOCK:
+                observed.append(es._PENDING_INSTALL_DONE is not None)
+
+        monkeypatch.setattr(mgr, "_async_process_requirements_fast", _fast_path)
+
+        await mgr._async_process_requirements_fast_tracked()
+
+        assert observed == [True]
+        with es._PENDING_INSTALL_LOCK:
+            assert es._PENDING_INSTALL_DONE is None
+
+    async def test_cancelled_fast_path_remains_tracked_until_inner_task_finishes(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_PENDING_INSTALL_DONE", None)
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _fast_path() -> None:
+            started.set()
+            await release.wait()
+
+        monkeypatch.setattr(mgr, "_async_process_requirements_fast", _fast_path)
+        outer = asyncio.create_task(mgr._async_process_requirements_fast_tracked())
+        await started.wait()
+
+        outer.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await outer
+        with es._PENDING_INSTALL_LOCK:
+            pending = es._PENDING_INSTALL_DONE
+        assert pending is not None and not pending.is_set()
+
+        release.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert pending.is_set()
+        with es._PENDING_INSTALL_LOCK:
+            assert es._PENDING_INSTALL_DONE is None
+
     async def test_wait_returns_once_orphan_finishes(
         self, tmp_path, monkeypatch, caplog
     ):
@@ -3453,6 +3502,7 @@ class TestImporterAwareBringUp:
 
     def _stub_bring_up(self, mgr, monkeypatch, ensure: AsyncMock) -> None:
         monkeypatch.setattr(mgr, "_async_ensure_package", ensure)
+        monkeypatch.setattr(es, "_unowned_fastmcp_runtime_loaded", lambda: False)
         monkeypatch.setattr(
             mgr, "_async_provision_token", AsyncMock(return_value="tok")
         )
@@ -3514,6 +3564,49 @@ class TestImporterAwareBringUp:
             mgr._thread.join(timeout=2)
 
         assert ensure.await_args.kwargs == {"defer_mutations": False}
+
+    async def test_async_start_defers_when_an_external_fastmcp_runtime_is_loaded(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(es, "_IMPORTING_WORKERS", set())
+        ensure = AsyncMock(return_value="1.2.3")
+        self._stub_bring_up(mgr, monkeypatch, ensure)
+        monkeypatch.setattr(es, "_unowned_fastmcp_runtime_loaded", lambda: True)
+        monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
+
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert ensure.await_args.kwargs == {"defer_mutations": True}
+
+    def test_unowned_fastmcp_runtime_detection(self, monkeypatch):
+        monkeypatch.setattr(es, "_CACHED_IMPORT_VERSION", None)
+        monkeypatch.setitem(sys.modules, "fastmcp.external_consumer", ModuleType("x"))
+
+        assert es._unowned_fastmcp_runtime_loaded() is True
+
+        monkeypatch.setattr(es, "_CACHED_IMPORT_VERSION", "3.4.7")
+        assert es._unowned_fastmcp_runtime_loaded() is False
+
+    async def test_ensure_package_defers_unchanged_fast_path(
+        self, tmp_path, monkeypatch
+    ):
+        """A stable pin cannot bypass a live external-consumer lease."""
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_PIP_SPEC: "ha-mcp==7.12.1"},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: "ha-mcp==7.12.1"},
+        )
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
+        fast = AsyncMock()
+        monkeypatch.setattr(mgr, "_async_process_requirements_fast_tracked", fast)
+
+        ready = await mgr._async_ensure_package(defer_mutations=True)
+
+        assert ready == "7.12.1"
+        fast.assert_not_awaited()
 
     async def test_ensure_package_defers_force_install(
         self, tmp_path, monkeypatch, caplog
@@ -3608,31 +3701,26 @@ class TestImporterAwareBringUp:
         force.assert_not_awaited()
         assert DATA_LAST_PIP_SPEC not in entry.data
 
-    async def test_deferred_with_nothing_installed_still_installs(
+    async def test_deferred_with_nothing_installed_fails_without_installing(
         self, tmp_path, monkeypatch
     ):
-        # defer_mutations with NO build on disk: there are no distribution
-        # files to replace under the live importer, and without an install this
-        # bring-up cannot produce a server at all — the requirements manager
-        # must still run.
+        # A foreign consumer may have FastMCP loaded even when ha-mcp itself is
+        # absent. Installing the first ha-mcp build could replace that shared
+        # dependency, so a live lease must make the transition fail closed.
         mgr, _hass, entry = _manager(tmp_path)
-        monkeypatch.setattr(
-            es,
-            "_installed_ha_mcp_version",
-            MagicMock(side_effect=[None, "7.13.0"]),
-        )
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: None)
         fast = AsyncMock()
         force = AsyncMock()
-        monkeypatch.setattr(mgr, "_async_process_requirements_fast", fast)
+        monkeypatch.setattr(mgr, "_async_process_requirements_fast_tracked", fast)
         monkeypatch.setattr(mgr, "_async_force_install", force)
 
-        ready = await mgr._async_ensure_package(defer_mutations=True)
+        with pytest.raises(es.EmbeddedServerError) as exc:
+            await mgr._async_ensure_package(defer_mutations=True)
 
-        assert ready == "7.13.0"
-        fast.assert_awaited_once()
+        assert exc.value.kind == "restart"
+        assert "refusing the first install" in str(exc.value)
+        fast.assert_not_awaited()
         force.assert_not_awaited()
-        # Still a deferred bring-up: nothing is recorded as installed, so the
-        # next (undeferred) reload applies the configured spec for real.
         assert DATA_LAST_PIP_SPEC not in entry.data
 
 
