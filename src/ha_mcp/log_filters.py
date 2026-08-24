@@ -20,6 +20,8 @@ import anyio
 from fastmcp.exceptions import ToolError
 from pydantic import ValidationError as PydanticValidationError
 
+_diag_logger = logging.getLogger(__name__)
+
 
 class StatelessSessionLogFilter(logging.Filter):
     """Suppress the routine 'Terminating session: None' log from the MCP SDK.
@@ -135,7 +137,22 @@ class SessionDisconnectLogFilter(logging.Filter):
             return True
 
         err = record.exc_info[1]
-        if err is None or not _is_only_closed_resource_errors(err):
+        classified = err is not None and _is_only_closed_resource_errors(err)
+        # TEMPORARY DIAGNOSTIC (2026-08-24, remove once the live install/
+        # classification mismatch reported against this branch is found):
+        # proves whether this filter is even invoked in the deployment where
+        # the demotion isn't showing up, and if so, exactly what exception
+        # shape it saw and how it classified it.
+        _diag_logger.warning(
+            "SessionDisconnectLogFilter saw exc_info on %s: type=%r module=%r "
+            "repr=%.200r classified=%s",
+            record.name,
+            type(err).__name__,
+            type(err).__module__,
+            err,
+            classified,
+        )
+        if not classified:
             return True
 
         record.msg = (
@@ -189,3 +206,14 @@ def install_sdk_log_filters() -> None:
     _add_filter_once("mcp.server.streamable_http", StatelessSessionLogFilter)
     _add_filter_once("mcp.server.streamable_http_manager", SessionDisconnectLogFilter)
     _add_filter_once("fastmcp.server.server", ToolValidationLogFilter)
+    # TEMPORARY DIAGNOSTIC (2026-08-24, remove once the live install/
+    # classification mismatch reported against this branch is found): proves
+    # at startup -- without waiting for a real disconnect race -- whether
+    # each target logger actually ends up carrying its filter.
+    _diag_logger.warning(
+        "install_sdk_log_filters completed: streamable_http=%d "
+        "streamable_http_manager=%d fastmcp.server.server=%d",
+        len(logging.getLogger("mcp.server.streamable_http").filters),
+        len(logging.getLogger("mcp.server.streamable_http_manager").filters),
+        len(logging.getLogger("fastmcp.server.server").filters),
+    )
