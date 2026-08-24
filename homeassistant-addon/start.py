@@ -914,13 +914,13 @@ def main() -> int:
     # Import and register browser landing before server start
     log_info("Importing ha_mcp module...")
     from ha_mcp.__main__ import (
-        StatelessSessionLogFilter,
         _get_server,
         _get_timestamped_uvicorn_log_config,
         _log_startup_version,
         mcp,
         register_browser_landing,
     )
+    from ha_mcp.log_filters import install_sdk_log_filters
     from ha_mcp.settings_ui import register_settings_routes
 
     # Importing ha_mcp pulled in fastmcp, which attached its rich log
@@ -966,9 +966,7 @@ def main() -> int:
     register_settings_routes(
         server_instance.mcp, server_instance, secret_path=secret_path
     )
-    logging.getLogger("mcp.server.streamable_http").addFilter(
-        StatelessSessionLogFilter()
-    )
+    install_sdk_log_filters()
 
     # fastmcp's DNS-rebinding guard is defaulted off in ha_mcp's _create_server
     # (reached above via _get_server() / the `mcp` proxy, before the app is

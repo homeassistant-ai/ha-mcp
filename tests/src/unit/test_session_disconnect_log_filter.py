@@ -3,8 +3,39 @@
 import logging
 
 import anyio
+import pytest
 
-from ha_mcp.__main__ import SessionDisconnectLogFilter
+from ha_mcp.log_filters import (
+    SessionDisconnectLogFilter,
+    _is_only_closed_resource_errors,
+)
+
+
+async def _raise_closed_resource_error() -> None:
+    raise anyio.ClosedResourceError()
+
+
+async def _raise_runtime_error() -> None:
+    raise RuntimeError("real bug")
+
+
+async def _run_in_task_group(*coro_funcs) -> BaseException:
+    """Run each of ``coro_funcs`` as a task-group child and return the raised
+    exception -- reproducing the actual shape mcp.server.lowlevel.server.Server.run()
+    produces: it dispatches each incoming message via
+    ``anyio.create_task_group().start_soon(self._handle_message, ...)``, so a
+    ClosedResourceError raised while responding is raised from a task-group
+    child. anyio always wraps that in an ExceptionGroup, even for a single
+    failure -- a hand-built ``exc_info`` with a bare exception does not
+    reproduce that boundary.
+    """
+    try:
+        async with anyio.create_task_group() as tg:
+            for coro_func in coro_funcs:
+                tg.start_soon(coro_func)
+    except BaseException as exc:
+        return exc
+    raise AssertionError("task group did not raise")
 
 
 class TestSessionDisconnectLogFilter:
@@ -60,6 +91,43 @@ class TestSessionDisconnectLogFilter:
         assert record.levelno == logging.WARNING
         assert record.exc_info is None
 
+    async def test_demotes_real_task_group_exception_group(self):
+        # The shape actually logged in production: mcp.server.lowlevel.server
+        # dispatches message handling via anyio.create_task_group().start_soon,
+        # so a ClosedResourceError from _send_response arrives here wrapped in
+        # an ExceptionGroup, not as a bare exception.
+        caught = await _run_in_task_group(_raise_closed_resource_error)
+        assert isinstance(caught, BaseExceptionGroup)
+
+        record = self._make_record(
+            "mcp.server.streamable_http_manager",
+            "Stateless session crashed",
+            caught,
+        )
+        assert self.log_filter.filter(record) is True
+        assert record.levelno == logging.WARNING
+        assert record.exc_info is None
+        assert "client disconnected before response delivery" in record.getMessage()
+
+    async def test_leaves_mixed_exception_group_at_error(self):
+        # A task group with one ClosedResourceError AND one unrelated failure
+        # signals a real problem alongside the expected disconnect race -- the
+        # whole record must stay at ERROR with its traceback intact.
+        caught = await _run_in_task_group(
+            _raise_closed_resource_error, _raise_runtime_error
+        )
+        assert isinstance(caught, BaseExceptionGroup)
+
+        record = self._make_record(
+            "mcp.server.streamable_http_manager",
+            "Stateless session crashed",
+            caught,
+        )
+        original_exc_info = record.exc_info
+        assert self.log_filter.filter(record) is True
+        assert record.levelno == logging.ERROR
+        assert record.exc_info is original_exc_info
+
     def test_passes_bare_exception_through_untouched(self):
         # An actual server bug on this logger must keep its traceback and
         # ERROR level -- only the known-benign disconnect race is demoted.
@@ -94,6 +162,38 @@ class TestSessionDisconnectLogFilter:
         assert self.log_filter.filter(record) is True
         assert record.levelno == logging.ERROR
 
+
+class TestIsOnlyClosedResourceErrors:
+    """Direct coverage of the recursive classifier the filter relies on."""
+
+    def test_bare_closed_resource_error(self):
+        assert _is_only_closed_resource_errors(anyio.ClosedResourceError()) is True
+
+    def test_bare_other_exception(self):
+        assert _is_only_closed_resource_errors(RuntimeError("x")) is False
+
+    def test_group_of_one_closed_resource_error(self):
+        group = ExceptionGroup("eg", [anyio.ClosedResourceError()])
+        assert _is_only_closed_resource_errors(group) is True
+
+    def test_nested_group_of_closed_resource_errors(self):
+        inner = ExceptionGroup("inner", [anyio.ClosedResourceError()])
+        outer = ExceptionGroup("outer", [inner, anyio.ClosedResourceError()])
+        assert _is_only_closed_resource_errors(outer) is True
+
+    def test_mixed_group_is_rejected(self):
+        group = ExceptionGroup("eg", [anyio.ClosedResourceError(), RuntimeError("x")])
+        assert _is_only_closed_resource_errors(group) is False
+
+    def test_empty_group_is_rejected(self):
+        # Defensive: an ExceptionGroup always carries at least one exception
+        # in practice, but `all([])` is vacuously True -- guard against ever
+        # demoting on a group with nothing in it.
+        with pytest.raises(ValueError):
+            ExceptionGroup("empty", [])
+
+
+class TestSessionDisconnectLogFilterWiring:
     def test_setup_logging_wires_filter_and_demotes_output(self, monkeypatch):
         """Integration: ``_setup_logging`` attaches the filter to the SDK's
         session-manager logger, so a real ``ClosedResourceError``-caused

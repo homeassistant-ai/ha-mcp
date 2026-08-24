@@ -244,6 +244,22 @@ def _worker_startup_failure(exc: BaseException) -> EmbeddedServerError:
     return failure
 
 
+def _install_log_filters_if_available() -> None:
+    """Attach the shared MCP SDK/fastmcp log-noise filters, if this ha-mcp has them.
+
+    Mirrors the ``register_browser_landing`` guard just above ``_serve``'s call
+    site: the installed server version is user-controlled (channel choice,
+    pip-spec override), so an older ha-mcp without ``ha_mcp.log_filters`` must
+    keep serving -- the filters are simply absent there, as they are today.
+    """
+    try:
+        from ha_mcp.log_filters import install_sdk_log_filters
+    except ImportError:
+        # Older installed ha-mcp: no filter helper to install.
+        return
+    install_sdk_log_filters()
+
+
 class EmbeddedServerManager:
     """Manage the lifecycle of the in-process ha-mcp server for one config entry."""
 
@@ -1581,6 +1597,12 @@ class EmbeddedServerManager:
             pass
         else:
             register_browser_landing(server.mcp, self._secret_path)
+
+        # Parity with the CLI HTTP runner: demote the MCP SDK/fastmcp log
+        # noise (routine stateless teardown, benign tool-validation
+        # tracebacks, disconnect-caused "session crashed" tracebacks) that
+        # every other HTTP launcher already filters.
+        _install_log_filters_if_available()
 
         # Own the uvicorn server instead of calling mcp.run_async(): cancelling
         # run_async's task does NOT release the listening socket in-process

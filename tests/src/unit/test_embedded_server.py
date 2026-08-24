@@ -119,20 +119,23 @@ def _rt(rt_id="rt-1", user=None, client_name="", token_type=""):
     )
 
 
-def _stub_ha_mcp_surface(monkeypatch, *, mcp, landing_mod=None) -> None:
+def _stub_ha_mcp_surface(
+    monkeypatch, *, mcp, landing_mod=None, log_filters_mod=None
+) -> None:
     """Install a minimal in-memory ``ha_mcp`` package so ``_serve`` runs hermetically.
 
     Wires a non-sentinel connection (so ``_serve`` passes its refuse-to-serve
     guard), a server whose ``.mcp`` is ``mcp``, no-op settings routes, and a stub
-    uvicorn. Pass ``landing_mod`` to stub ``ha_mcp.browser_landing``; omit it to
-    simulate an OLDER installed server without the landing helper — modeled as a
-    module missing the ``register_browser_landing`` attribute, so the from-import
-    in ``_serve`` raises the same ImportError class its guard catches. Injection
-    (a sys.modules hit) is the only hermetic way to force that failure: deleting
-    the entry is NOT enough, because the editable install (``uv sync``) adds a
-    meta-path finder that resolves ``ha_mcp.*`` by name and would re-import the
-    REAL module even though the parent ``ha_mcp`` is faked with an empty
-    ``__path__`` (live-found in CI).
+    uvicorn. Pass ``landing_mod`` to stub ``ha_mcp.browser_landing`` and
+    ``log_filters_mod`` to stub ``ha_mcp.log_filters``; omit either to simulate
+    an OLDER installed server without that helper — modeled as a module missing
+    the ``register_browser_landing`` / ``install_sdk_log_filters`` attribute, so
+    the from-import in ``_serve`` raises the same ImportError class its guard
+    catches. Injection (a sys.modules hit) is the only hermetic way to force
+    that failure: deleting the entry is NOT enough, because the editable install
+    (``uv sync``) adds a meta-path finder that resolves ``ha_mcp.*`` by name and
+    would re-import the REAL module even though the parent ``ha_mcp`` is faked
+    with an empty ``__path__`` (live-found in CI).
     """
     settings = SimpleNamespace(
         homeassistant_url="http://127.0.0.1:8123", homeassistant_token="jwt"
@@ -168,6 +171,11 @@ def _stub_ha_mcp_surface(monkeypatch, *, mcp, landing_mod=None) -> None:
         landing_mod = ModuleType("ha_mcp.browser_landing")
     ha_mcp_mod.browser_landing = landing_mod
     mods["ha_mcp.browser_landing"] = landing_mod
+    if log_filters_mod is None:
+        # Older-server stand-in, same reasoning as landing_mod above.
+        log_filters_mod = ModuleType("ha_mcp.log_filters")
+    ha_mcp_mod.log_filters = log_filters_mod
+    mods["ha_mcp.log_filters"] = log_filters_mod
     for name, mod in mods.items():
         monkeypatch.setitem(sys.modules, name, mod)
 
@@ -2603,6 +2611,84 @@ class TestServeBrowserLanding:
 
         # _serve got PAST the failed landing import to build the app (ImportError
         # was swallowed, not propagated).
+        assert reached == ["/private_secret"]
+        assert isinstance(mgr._thread_exc, _StopServe)
+
+
+# ---------------------------------------------------------------------------
+# _serve log-filter installation
+# ---------------------------------------------------------------------------
+
+
+class TestServeLogFilters:
+    """Parity with the CLI HTTP runner and the add-on's start.py: _serve must
+    install the shared SDK/fastmcp log-noise filters (routine stateless
+    teardown, benign tool-validation tracebacks, disconnect-caused "session
+    crashed" tracebacks) so the in-process embedded server doesn't log
+    alarming noise the other two launchers already suppress."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_env(self):
+        keys = ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
+        saved = {k: os.environ.get(k) for k in keys}
+        for key in keys:
+            os.environ.pop(key, None)
+        yield
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_serve_installs_log_filters(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+
+        class _StopServe(Exception):
+            pass
+
+        class _FakeMcp:
+            def http_app(self, path, stateless_http):
+                raise _StopServe
+
+        fake_mcp = _FakeMcp()
+        install_calls: list = []
+        log_filters_mod = ModuleType("ha_mcp.log_filters")
+        log_filters_mod.install_sdk_log_filters = lambda: install_calls.append(True)
+        _stub_ha_mcp_surface(
+            monkeypatch, mcp=fake_mcp, log_filters_mod=log_filters_mod
+        )
+
+        mgr._thread_main("tok")
+
+        assert install_calls == [True]
+        assert isinstance(mgr._thread_exc, _StopServe)
+
+    def test_serve_tolerates_missing_log_filters_module(self, tmp_path, monkeypatch):
+        # Backward-compat: an OLDER bundled ha-mcp (the component reaches users
+        # ahead of the server) has no log_filters module. _serve must swallow
+        # the ImportError and keep serving, same as the browser-landing guard.
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+
+        class _StopServe(Exception):
+            pass
+
+        reached: list = []
+
+        class _FakeMcp:
+            def http_app(self, path, stateless_http):
+                reached.append(path)
+                raise _StopServe
+
+        # log_filters_mod omitted ⇒ ha_mcp.log_filters is present but the
+        # helper attribute is absent (import fails).
+        _stub_ha_mcp_surface(monkeypatch, mcp=_FakeMcp())
+
+        mgr._thread_main("tok")
+
         assert reached == ["/private_secret"]
         assert isinstance(mgr._thread_exc, _StopServe)
 
