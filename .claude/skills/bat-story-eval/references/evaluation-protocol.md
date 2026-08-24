@@ -32,7 +32,7 @@ uv run python tests/uat/stories/scripts/ha_query.py \
 Check the exit code first. `ha_query.py` exits non-zero when the agent CLI
 itself failed, and prints `[exit N]` (plus stderr, when there is any) after
 whatever text the CLI managed to produce — `[exit 124]` for a query that hung
-past its timeout. The one non-zero exit without a marker is `Error: <agent>
+past its timeout. The one non-zero exit without a marker is `Error: {agent}
 CLI not found`, which means the agent is not installed: fix the environment
 rather than re-running. A failed query is **not a measurement**: do not score
 it as any of the three outcomes below — re-run it, and if it keeps failing,
