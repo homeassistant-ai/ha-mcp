@@ -901,7 +901,31 @@ async def capture_dashboard_images(
     guard = ThemeGuard.for_capture(
         engine_target.addon_credential, client, armed=theme_requested
     )
-    await guard.take_snapshot()
+    # Bound the wait by the caller's own render budget: they are already
+    # willing to wait that long, and a themed render can easily hold the
+    # bracket longer than a short fixed timeout.
+    await guard.take_snapshot(lock_timeout=options.render_timeout_seconds)
+    if guard.lock_timed_out:
+        # Rendering unserialized here would reintroduce exactly the interleave
+        # the lock exists to prevent (this batch would snapshot the other
+        # batch's transient theme and restore it afterwards), so fail instead.
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                "Another themed dashboard screenshot is still in progress for "
+                "this screenshot-engine account.",
+                details=(
+                    "Themed captures are serialized so their theme "
+                    "snapshot/restore brackets cannot interleave and strand "
+                    "the account on the wrong theme."
+                ),
+                suggestions=[
+                    "Retry once the in-flight capture finishes.",
+                    "Omit theme/dark_mode to capture without the bracket.",
+                ],
+                context={"path": path},
+            )
+        )
     batch_error: ToolError | None = None
     try:
         async with httpx.AsyncClient(
@@ -984,8 +1008,20 @@ async def capture_dashboard_images(
         # A non-ToolError failure (e.g. raised while entering the HTTP client
         # context) would otherwise bypass _reraise_with_guard_warnings and
         # reach the caller's generic handler with the guard's warnings
-        # dropped. Wrap it so a failed restore stays visible either way.
-        batch_error = ToolError(str(exc) or exc.__class__.__name__)
+        # dropped. It must become a *structured* ToolError: the merge helper
+        # parses the message as JSON and re-raises unchanged when that is not
+        # a dict, so wrapping the bare text would still lose the warnings.
+        logger.exception("Dashboard capture batch failed unexpectedly")
+        batch_error = ToolError(
+            json.dumps(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    "Dashboard screenshot capture failed unexpectedly.",
+                    details=f"{exc.__class__.__name__}: {exc}",
+                    context={"path": path},
+                )
+            )
+        )
     finally:
         await guard.restore()
         if capture_warnings is not None:

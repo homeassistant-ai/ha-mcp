@@ -78,10 +78,11 @@ RESTORE_SETTLE_SECONDS = 1.0
 # returning an image.
 COMMAND_TIMEOUT_SECONDS = 5.0
 
-# Longest a batch waits for another batch's bracket to finish. The guard is
-# best-effort, so a wedged holder must degrade to an unguarded render rather
-# than block the capture indefinitely.
-LOCK_WAIT_SECONDS = 5.0
+# Fallback bound on waiting for another batch's bracket, used when the caller
+# supplies no render budget of its own. Callers should pass their render
+# timeout: a themed render routinely holds the bracket for its whole duration,
+# and giving up early would strand the capture.
+LOCK_WAIT_SECONDS = 60.0
 
 # Snapshot-through-restore must be serialized per engine user. Two concurrent
 # batches would otherwise interleave as: A renders and clobbers dark->light,
@@ -176,6 +177,7 @@ class ThemeGuard:
     _snapshot: Any = None
     _snapshot_taken: bool = False
     _lock: Any = None
+    lock_timed_out: bool = False
 
     @classmethod
     def for_capture(
@@ -234,27 +236,34 @@ class ThemeGuard:
         payload = response.get("result") if isinstance(response, dict) else None
         return payload.get("value") if isinstance(payload, dict) else None
 
-    async def take_snapshot(self) -> None:
+    async def take_snapshot(self, *, lock_timeout: float | None = None) -> None:
         """Record the saved theme before the engine renders. Never raises.
 
         Holds the per-engine-user lock until :meth:`restore` releases it, so
-        two overlapping batches cannot interleave snapshot and restore.
+        two overlapping batches cannot interleave snapshot and restore. When
+        the lock cannot be acquired within ``lock_timeout`` this sets
+        :attr:`lock_timed_out` and takes no snapshot; the caller must then
+        abandon the render rather than proceed unserialized, since an
+        unserialized themed batch is precisely the interleave the lock exists
+        to prevent.
         """
         if self.credential is None:
             return
         # Acquired before the read so the whole snapshot->render->restore
         # window is exclusive for this engine user.
         lock = _engine_lock(self.credential)
+        timeout = LOCK_WAIT_SECONDS if lock_timeout is None else lock_timeout
         try:
-            await asyncio.wait_for(lock.acquire(), timeout=LOCK_WAIT_SECONDS)
+            await asyncio.wait_for(lock.acquire(), timeout=timeout)
             self._lock = lock
         except TimeoutError:
-            # Proceed unguarded rather than stall the render; the concurrent
-            # batch holding the lock is doing its own restore.
             logger.warning(
-                "Timed out waiting for another screenshot batch's theme "
-                "bracket; rendering without serialization"
+                "Timed out after %ss waiting for another screenshot batch's "
+                "theme bracket for this engine user",
+                timeout,
             )
+            self.lock_timed_out = True
+            return
         try:
             async with self._session() as ws:
                 self._snapshot = await self._fetch_theme(ws)

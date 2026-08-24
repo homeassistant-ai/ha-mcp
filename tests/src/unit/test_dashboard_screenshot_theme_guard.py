@@ -543,6 +543,46 @@ class TestGuardHardening:
 
         assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
 
+    async def test_lock_timeout_takes_no_snapshot(self) -> None:
+        """A contended bracket must not silently render unserialized."""
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        holder = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+        await holder.take_snapshot()
+
+        blocked = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+        await blocked.take_snapshot(lock_timeout=0.01)
+
+        assert blocked.lock_timed_out is True
+        assert blocked._snapshot_taken is False
+        # It never opened a session, so it cannot restore a transient value.
+        assert len(_FakeWsClient.instances) == 1
+        await holder.restore()
+
+    async def test_timed_out_batch_is_refused_rather_than_rendered(
+        self, monkeypatch: Any
+    ) -> None:
+        """Regression: the saved theme survives a contended themed capture."""
+        from ha_mcp.dashboard_screenshot import capture
+
+        _patch_engine(monkeypatch, _PUPPET_CREDENTIAL)
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        holder = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+        await holder.take_snapshot()
+
+        # MIN_RENDER_TIMEOUT_SECONDS is 1.0, so this is the shortest budget
+        # the validator accepts; anything lower would fail validation instead
+        # and make this test pass for the wrong reason.
+        with pytest.raises(ToolError) as exc_info:
+            await capture.capture_dashboard_images(
+                "lovelace/0", dark_mode=True, render_timeout_seconds=1.0
+            )
+        assert "still in progress" in str(exc_info.value)
+
+        # The refused batch never rendered, so nothing clobbered the theme.
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
+        await holder.restore()
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
+
     async def test_failed_snapshot_does_not_hold_the_lock(self) -> None:
         _FakeWsClient.fail_get = True
         guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
