@@ -675,3 +675,39 @@ class TestEngineAccountIdentity:
 
         result = await tools.ha_manage_theme(action="get_engine_theme")
         assert result["data"]["theme"] == _DARK_THEME
+
+
+class TestCleartextRefusal:
+    """The engine token is never sent in cleartext to a remote host."""
+
+    @pytest.mark.parametrize(
+        "url,refused",
+        [
+            # Supervisor-internal and loopback: the documented trusted zone.
+            ("http://homeassistant:8123", False),
+            ("http://localhost:8123", False),
+            ("http://127.0.0.1:8123", False),
+            ("http://ha.local:8123", False),
+            ("http://192.168.1.10:8123", False),
+            ("http://10.0.0.5:8123", False),
+            ("http://172.16.0.4:8123", False),
+            # Anything else over cleartext puts the token on the wire.
+            ("http://ha.example.com:8123", True),
+            ("http://203.0.113.10:8123", True),
+            # TLS is always fine.
+            ("https://ha.example.com:8123", False),
+        ],
+    )
+    def test_cleartext_policy(self, url: str, refused: bool) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import _refuses_cleartext
+
+        assert _refuses_cleartext(url) is refused
+
+    async def test_remote_cleartext_session_warns_and_sends_nothing(self) -> None:
+        guard = ThemeGuard.for_capture(
+            EngineCredential(url="http://ha.example.com:8123", token="t"), None
+        )
+        await guard.take_snapshot()
+
+        assert _FakeWsClient.instances == []
+        assert guard.warnings

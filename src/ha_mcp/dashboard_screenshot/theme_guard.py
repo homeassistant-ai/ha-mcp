@@ -60,6 +60,34 @@ _UNSET: Any = object()
 # is unset — the Supervisor-internal alias, mirrored from the add-on default.
 DEFAULT_ENGINE_HA_URL = "http://homeassistant:8123"
 
+# Hosts the Supervisor-internal / loopback routes use. Cleartext to these
+# never leaves the host or its container network, which SECURITY.md names as
+# the trusted zone for standard mode. Cleartext to anything else would put the
+# engine account's bearer token on the wire for an on-path attacker, so it is
+# refused rather than sent.
+_LOCAL_HOSTS = frozenset(
+    {"homeassistant", "localhost", "supervisor", "127.0.0.1", "::1", "[::1]"}
+)
+
+
+def _refuses_cleartext(url: str) -> bool:
+    """True when ``url`` would send the token in cleartext to a remote host."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if parsed.scheme != "http":
+        return False
+    host = (parsed.hostname or "").lower()
+    if host in _LOCAL_HOSTS or host.endswith(".local"):
+        return False
+    # Private ranges stay on the local network, the documented trusted zone.
+    return not (
+        host.startswith("10.")
+        or host.startswith("192.168.")
+        or any(host.startswith(f"172.{n}.") for n in range(16, 32))
+    )
+
+
 _RESTORE_HINT = (
     "the engine token's user can re-select their theme under Profile > "
     "General in the Home Assistant UI"
@@ -181,6 +209,11 @@ class ThemeGuard:
         from ..client.websocket_client import HomeAssistantWebSocketClient
 
         assert self.credential is not None
+        if _refuses_cleartext(self.credential.url):
+            raise ConnectionError(
+                "refusing to send the screenshot engine's token in cleartext "
+                f"to a remote host ({self.credential.url}); use https://"
+            )
         ws = HomeAssistantWebSocketClient(
             self.credential.url,
             self.credential.token,

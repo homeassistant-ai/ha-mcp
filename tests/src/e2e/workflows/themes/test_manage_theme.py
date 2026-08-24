@@ -196,3 +196,49 @@ class TestManageTheme:
         assert error.get("code") == "VALIDATION_MISSING_PARAMETER", (
             f"Expected VALIDATION_MISSING_PARAMETER, got: {data}"
         )
+
+    async def test_set_engine_theme_without_value_fails(self, mcp_client):
+        """action='set_engine_theme' without value returns a validation error.
+
+        This check runs before any engine resolution, so it is deterministic
+        whether or not a screenshot engine is configured for the run.
+        """
+        data = await safe_call_tool(
+            mcp_client, "ha_manage_theme", {"action": "set_engine_theme"}
+        )
+
+        assert data.get("success") is False
+        error = data.get("error") or {}
+        assert error.get("code") == "VALIDATION_MISSING_PARAMETER", (
+            f"Expected VALIDATION_MISSING_PARAMETER, got: {data}"
+        )
+
+    async def test_get_engine_theme_fails_actionably_without_an_engine(
+        self, mcp_client
+    ):
+        """The engine-account read never crashes: it succeeds or explains.
+
+        The e2e instance has no screenshot engine, so this exercises the
+        failure contract — a structured error naming why the engine account
+        could not be reached, rather than a raw exception or a silent read of
+        ha-mcp's OWN profile (which is the bug the identity guard prevents).
+        """
+        data = await safe_call_tool(
+            mcp_client, "ha_manage_theme", {"action": "get_engine_theme"}
+        )
+
+        if data.get("success") is True:
+            # An engine IS configured for this run: the value must be the
+            # user-data shape (dict) or None when never configured.
+            theme = data["data"]["theme"]
+            assert theme is None or isinstance(theme, dict), (
+                f"Unexpected engine theme payload: {data}"
+            )
+            return
+
+        error_msg = extract_error_message(data)
+        assert error_msg, f"Failure must carry a message: {data}"
+        assert any(
+            hint in error_msg.lower()
+            for hint in ("engine", "screenshot", "credential", "identified")
+        ), f"Error should explain the engine problem: {data}"
