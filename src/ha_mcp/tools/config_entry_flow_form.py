@@ -423,6 +423,36 @@ def _current_value_backfill(field: dict[str, Any]) -> tuple[Any, bool]:
     return step_owned, False
 
 
+def _edit_mode_submission(
+    field: dict[str, Any],
+    name: str,
+    path_prefix: str,
+    dotted: str,
+    reuse_state: _ReuseState,
+) -> tuple[Any, bool]:
+    """Decide an edit-mode field the caller named no key for at THIS step.
+
+    The caller's intent outranks the step's stored value for the whole walk.
+    ``begin_step`` clears only ``filled``, so by a later step the caller's key
+    is gone from ``remaining_config`` and nothing marks the field as theirs —
+    but ``scoped``/``flat`` still hold what they asked for. Backfilling over
+    that resubmitted the entry's stored value and undid it: a recorded
+    ``None`` is the clear this mode documents, and a recorded value is the one
+    the caller asked to write (Patch76 review, issue #2254).
+
+    Only a field the caller never named anywhere falls through to the step's
+    own value.
+    """
+    recorded = reuse_state.recorded_value(path_prefix, name)
+    if recorded is _MISSING_DEFAULT:
+        return _current_value_backfill(field)
+    if recorded is None:
+        return _NO_SUBMISSION
+    if not reuse_state.claim_write(dotted):
+        return _NO_SUBMISSION
+    return recorded, True
+
+
 def _redeclared_field_submission(
     field: dict[str, Any],
     name: str,
@@ -479,21 +509,7 @@ def _redeclared_field_submission(
     if not allow_reuse or not field.get("required"):
         if not keep_current_values:
             return _NO_SUBMISSION
-        # The caller's intent outranks the step's stored value for the WHOLE
-        # walk. ``begin_step`` clears only ``filled``, so by a later step the
-        # caller's key is gone from ``remaining_config`` and nothing here
-        # marks the field as theirs — but ``scoped``/``flat`` still hold what
-        # they asked for. Backfilling over that resubmitted the stored value
-        # and undid it: a recorded ``None`` is the clear this mode documents,
-        # and a recorded value is the one the caller asked to write.
-        recorded = reuse_state.recorded_value(path_prefix, name)
-        if recorded is not _MISSING_DEFAULT:
-            if recorded is None:
-                return _NO_SUBMISSION
-            if not reuse_state.claim_write(dotted):
-                return _NO_SUBMISSION
-            return recorded, True
-        return _current_value_backfill(field)
+        return _edit_mode_submission(field, name, path_prefix, dotted, reuse_state)
     step_owned = _step_owned_submission_value(field)
     if step_owned is not _MISSING_DEFAULT:
         return step_owned, False
