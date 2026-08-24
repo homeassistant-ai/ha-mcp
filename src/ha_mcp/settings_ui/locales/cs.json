@@ -470,7 +470,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Hromadné ovládání",
-      "description": "Správa více akcí entit v jednom požadavku."
+      "description": "Spravujte explicitní operace nebo jednu deterministickou strukturální hromadnou akce."
     },
     "ha_call_event": {
       "title": "Vyvolat událost",
