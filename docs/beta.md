@@ -190,7 +190,9 @@ The screenshot and dashboard-get tools **detect** this and report it, but
 never write: they read the engine account's saved theme before and after the
 render and, when it changed, emit a warning naming the previous value. Undoing
 it is a separate, explicitly write-annotated call —
-`ha_manage_theme(action="set_engine_theme", value=...)` — so these tools stay
+`ha_manage_theme(action="set_engine_theme", value=..., expected_current=...)`
+— passing both values from the warning, so a theme changed in the meantime is
+refused rather than overwritten — so these tools stay
 honestly `readOnlyHint: True` (#1991). `ha_manage_theme(action=
 "get_engine_theme")` inspects the same value. Note this is the engine
 account's *per-user* profile, a different layer from the backend default that

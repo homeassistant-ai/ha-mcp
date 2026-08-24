@@ -50,6 +50,33 @@ class ThemesTools:
         from ..dashboard_screenshot.theme_guard import ThemeGuard
 
         engine_target = await resolve_engine()
+        if engine_target.addon_credential is None:
+            # An explicitly configured engine URL yields no addon_credential,
+            # so the only fallback is ha-mcp's OWN credential -- which under
+            # the dedicated-engine-account setup this feature recommends is a
+            # different Home Assistant user. Acting on it would read and
+            # overwrite the wrong profile while leaving the engine account
+            # untouched. expected_current cannot save us: it compares values,
+            # not identity, and two users sharing a theme compare equal.
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "The screenshot engine's Home Assistant account cannot be "
+                    "identified, so its theme cannot be read or written.",
+                    suggestions=[
+                        (
+                            "This applies to an explicitly configured engine "
+                            + "URL (a Docker/standalone sidecar), where the "
+                            + "engine's own token is not discoverable."
+                        ),
+                        (
+                            "Restore the theme from that account's own "
+                            + "session: Profile > General in the Home "
+                            + "Assistant UI."
+                        ),
+                    ],
+                )
+            )
         guard = ThemeGuard.for_capture(engine_target.addon_credential, self._client)
         if guard.credential is None:
             raise_tool_error(
@@ -271,8 +298,11 @@ class ThemesTools:
               action="set", theme_name="default")
         - Inspect the engine account's theme: ha_manage_theme(
               action="get_engine_theme")
-        - Undo a screenshot's theme change: ha_manage_theme(
-              action="set_engine_theme", value={"theme": "", "dark": False})
+        - Undo a screenshot's theme change (pass BOTH values from the
+          warning, so a theme changed since then is not overwritten):
+          ha_manage_theme(action="set_engine_theme",
+              value={"theme": "", "dark": False},
+              expected_current={"theme": "default", "dark": True})
         """
         try:
             if action == "list":

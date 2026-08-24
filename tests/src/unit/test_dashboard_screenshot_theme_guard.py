@@ -630,3 +630,48 @@ class TestToolLayerForcePassthrough:
                 force=False,
             )
         assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
+
+
+class TestEngineAccountIdentity:
+    """Engine-theme actions refuse when the engine account is unidentifiable.
+
+    An explicit engine URL yields no addon_credential, so the only fallback is
+    ha-mcp's own credential -- a different user under the dedicated-account
+    setup this feature recommends. expected_current cannot substitute: it
+    compares values, not identity.
+    """
+
+    async def test_refuses_when_no_addon_credential(self, monkeypatch: Any) -> None:
+        from ha_mcp.tools.tools_themes import ThemesTools
+
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://sidecar:10000", addon_credential=None)
+
+        monkeypatch.setattr(
+            "ha_mcp.dashboard_screenshot.provision.resolve_engine", fake_resolve
+        )
+        tools = ThemesTools(_client())
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_theme(action="get_engine_theme")
+
+        assert "cannot be identified" in str(exc_info.value)
+        assert _FakeWsClient.instances == []
+
+    async def test_addon_credential_is_accepted(self, monkeypatch: Any) -> None:
+        from ha_mcp.tools.tools_themes import ThemesTools
+
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(
+                url="http://homeassistant:8123",
+                addon_credential=_PUPPET_CREDENTIAL,
+            )
+
+        monkeypatch.setattr(
+            "ha_mcp.dashboard_screenshot.provision.resolve_engine", fake_resolve
+        )
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        tools = ThemesTools(_client())
+
+        result = await tools.ha_manage_theme(action="get_engine_theme")
+        assert result["data"]["theme"] == _DARK_THEME
