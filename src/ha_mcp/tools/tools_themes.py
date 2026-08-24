@@ -22,7 +22,11 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import summarize_theme_listing, websocket_error_message
+from .util_helpers import (
+    JSON_STRING_COERCION,
+    summarize_theme_listing,
+    websocket_error_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +182,7 @@ class ThemesTools:
         ] = None,
         expected_current: Annotated[
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 description=(
                     "Compare-and-set guard for action='set_engine_theme': the "
@@ -191,6 +196,7 @@ class ThemesTools:
         ] = None,
         value: Annotated[
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 description=(
                     "Frontend user-data theme object when "
