@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import logging
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
@@ -76,8 +77,19 @@ def _refuses_cleartext(url: str) -> bool:
     from urllib.parse import urlparse
 
     parsed = urlparse(url)
-    if parsed.scheme != "http":
+    # Allowlist, not a denylist. The transport maps ONLY https to wss and
+    # everything else to ws (websocket_client.py), so a wss:// engine URL --
+    # the spelling that looks secure and is natural to type for a WebSocket
+    # endpoint -- is silently downgraded to cleartext. Keying on "not http"
+    # waved exactly that through while refusing the honest http:// spelling
+    # of the same mistake. The Supervisor accepts any scheme
+    # (home_assistant_url is a bare str in Puppet's config.yaml) and
+    # addon_credential_from_options passes it through unvalidated, so this is
+    # the place the two rules have to agree.
+    if parsed.scheme == "https":
         return False
+    if parsed.scheme != "http":
+        return True
     host = (parsed.hostname or "").lower()
     if host in _LOCAL_HOSTS or host.endswith(".local"):
         return False
@@ -354,8 +366,9 @@ class ThemeGuard:
         if self.credential_is_engine:
             remedy = (
                 "To restore it, call ha_manage_theme(action="
-                f"'set_engine_theme', value={restore_value!r}, "
-                f"expected_current={current!r}) -- that guard re-checks the "
+                f"'set_engine_theme', value={json.dumps(restore_value)}, "
+                f"expected_current={json.dumps(current)}) -- that guard "
+                "re-checks the "
                 "stored theme immediately before writing and skips the write "
                 "if it changed."
             )

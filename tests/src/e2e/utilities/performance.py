@@ -4,11 +4,11 @@ Performance measurement utilities for E2E testing.
 This module provides timing decorators, context managers, and assertion helpers
 for measuring and validating performance of MCP tool operations.
 
-Baseline targets (from issue #264):
-- ha_get_overview: < 500ms minimal, < 1000ms full
-- ha_search: < 300ms
-- ha_search: < 2000ms
-- ha_call_service: < 200ms
+Enforced baselines live in PERFORMANCE_BASELINES below -- that dict is the
+single source of truth, and the figures are NOT repeated here so the two
+cannot drift. They started from issue #264 and each gained +100ms of headroom
+after runner jitter alone turned ha_call_service red at 212.52ms against a
+200ms target.
 """
 
 import asyncio

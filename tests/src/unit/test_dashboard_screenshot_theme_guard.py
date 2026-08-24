@@ -740,6 +740,16 @@ class TestCleartextRefusal:
             ("http://127.0.0.1.attacker.example:8123", True),
             # TLS is always fine.
             ("https://ha.example.com:8123", False),
+            # Schemes other than http/https are refused. The transport maps
+            # ONLY https to wss and everything else to ws, so wss:// -- the
+            # spelling that looks secure -- is silently downgraded to
+            # cleartext and must not be waved through.
+            ("wss://ha.example.com:8123", True),
+            ("ws://ha.example.com:8123", True),
+            ("wss://homeassistant:8123", True),
+            ("ftp://ha.example.com:8123", True),
+            ("ha.example.com:8123", True),
+            ("", True),
         ],
     )
     def test_cleartext_policy(self, url: str, refused: bool) -> None:
@@ -794,5 +804,14 @@ class TestCredentialProvenance:
 
         warning = guard.warnings[0]
         assert "ha_manage_theme" in warning
-        assert "expected_current=" in warning
         assert "Profile > General" not in warning
+        # The quoted values must be JSON: both parameters carry
+        # JSON_STRING_COERCION, so a Python repr would hand the agent a
+        # string that fails validation for every value but an empty dict.
+        import json as _json
+        import re as _re
+
+        for field in ("value", "expected_current"):
+            quoted = _re.search(rf"{field}=(\{{.*?\}})", warning)
+            assert quoted, f"{field} not quoted in warning: {warning}"
+            _json.loads(quoted.group(1))

@@ -204,7 +204,11 @@ class ThemesTools:
             ThemeAction,
             Field(
                 description=(
-                    "Theme operation: list installed themes or set the default theme."
+                    "Theme operation: 'list' installed themes, 'set' the "
+                    "backend default theme, or read/restore the screenshot "
+                    "engine account's own per-user theme with "
+                    "'get_engine_theme' / 'set_engine_theme' (a different "
+                    "layer from the backend default)."
                 ),
             ),
         ],
