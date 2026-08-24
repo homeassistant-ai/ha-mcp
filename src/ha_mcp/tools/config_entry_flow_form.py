@@ -442,11 +442,14 @@ def _redeclared_field_submission(
 
     1. The field is not required, or reuse is barred for this site because the
        caller named neither it nor the section holding it (``allow_reuse``).
-       Under ``keep_current_values`` the step's own value still goes back, per
-       :func:`_current_value_backfill` — it is the step's data, not the
-       caller's, so barring reuse does not bar it, and a section the backfill
-       itself materializes has to carry what it requires. Otherwise omit:
-       injecting into either on a create flow would invent data.
+       Under ``keep_current_values`` a value the caller recorded ANYWHERE
+       earlier in this walk wins first — resubmitted as theirs, or omitted
+       when it was ``None``, which is the clear. Failing that the step's own
+       value goes back, per :func:`_current_value_backfill` — it is the step's
+       data, not the caller's, so barring reuse does not bar it, and a section
+       the backfill itself materializes has to carry what it requires.
+       Otherwise omit: injecting into either on a create flow would invent
+       data.
     2. The step's own schema supplies a value — a suggestion or a constant's
        only legal value, per :func:`_step_owned_submission_value`: submit that.
        It is schema data rather than a caller key, so it is neither marked
@@ -476,6 +479,20 @@ def _redeclared_field_submission(
     if not allow_reuse or not field.get("required"):
         if not keep_current_values:
             return _NO_SUBMISSION
+        # The caller's intent outranks the step's stored value for the WHOLE
+        # walk. ``begin_step`` clears only ``filled``, so by a later step the
+        # caller's key is gone from ``remaining_config`` and nothing here
+        # marks the field as theirs — but ``scoped``/``flat`` still hold what
+        # they asked for. Backfilling over that resubmitted the stored value
+        # and undid it: a recorded ``None`` is the clear this mode documents,
+        # and a recorded value is the one the caller asked to write.
+        recorded = reuse_state.recorded_value(path_prefix, name)
+        if recorded is not _MISSING_DEFAULT:
+            if recorded is None:
+                return _NO_SUBMISSION
+            if not reuse_state.claim_write(dotted):
+                return _NO_SUBMISSION
+            return recorded, True
         return _current_value_backfill(field)
     step_owned = _step_owned_submission_value(field)
     if step_owned is not _MISSING_DEFAULT:

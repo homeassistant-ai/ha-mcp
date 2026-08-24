@@ -525,6 +525,112 @@ class TestRequiredFieldPathsUnchanged:
         }
         assert result["warnings"] == [_reuse_warning("friendly_name", "details")]
 
+    @staticmethod
+    def _redeclaring_step(step_id: str) -> dict[str, Any]:
+        """Two steps both declaring the same OPTIONAL field, both pre-filled."""
+        return {
+            "type": "form",
+            "step_id": step_id,
+            "data_schema": [
+                {
+                    "name": "province",
+                    "required": False,
+                    "optional": True,
+                    "description": {"suggested_value": "BW"},
+                    "selector": {"select": {"options": ["BW", "BY"]}},
+                },
+            ],
+        }
+
+    def test_a_clear_survives_a_later_step_redeclaring_the_field(self) -> None:
+        """``null`` must stay a clear for the whole walk, not just one step.
+
+        ``begin_step`` clears only ``filled``, and the caller's key was popped
+        from ``remaining_config`` by the first step — so by the second step
+        nothing marks the field as the caller's and the backfill used to
+        resubmit the stored value, silently undoing the clear the tool
+        descriptions promise (Patch76 review, #2256).
+        """
+        reuse_state = _ReuseState()
+        remaining: dict[str, Any] = {"province": None}
+
+        first = _handle_form_step(
+            "flow-2254",
+            self._redeclaring_step("one"),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+            keep_current_values=True,
+        )
+        second = _handle_form_step(
+            "flow-2254",
+            self._redeclaring_step("two"),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+            keep_current_values=True,
+        )
+
+        assert "province" not in first
+        assert "province" not in second, (
+            f"The later step resurrected the cleared field: {second}"
+        )
+
+    def test_a_callers_value_outranks_a_later_steps_suggestion(self) -> None:
+        """The caller asked for BY; the step still suggests the stored BW."""
+        reuse_state = _ReuseState()
+        remaining: dict[str, Any] = {"province": "BY"}
+
+        first = _handle_form_step(
+            "flow-2254",
+            self._redeclaring_step("one"),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+            keep_current_values=True,
+        )
+        second = _handle_form_step(
+            "flow-2254",
+            self._redeclaring_step("two"),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+            keep_current_values=True,
+        )
+
+        assert first["province"] == "BY"
+        assert second["province"] == "BY", (
+            f"The later step overwrote the caller's value: {second}"
+        )
+
+    def test_create_flow_still_drops_a_redeclared_optional_field(self) -> None:
+        """Flag off keeps the pre-#2254 shape: nothing goes back at all."""
+        reuse_state = _ReuseState()
+        remaining: dict[str, Any] = {"province": "BY"}
+
+        _handle_form_step(
+            "flow-2254",
+            self._redeclaring_step("one"),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+        )
+        second = _handle_form_step(
+            "flow-2254",
+            self._redeclaring_step("two"),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+        )
+
+        assert second == {}
+
     def test_required_field_with_only_a_static_default_is_still_omitted(self) -> None:
         """Voluptuous fills it, exactly as it does for the UI's own form."""
         step: dict[str, Any] = {
