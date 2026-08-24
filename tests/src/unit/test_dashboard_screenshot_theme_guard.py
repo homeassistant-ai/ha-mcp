@@ -777,8 +777,13 @@ class TestCredentialProvenance:
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
         await guard.detect_change()
 
-        assert guard.warnings
-        assert "only if both run as the same user" in guard.warnings[0]
+        warning = guard.warnings[0]
+        assert "cannot confirm which account" in warning
+        # Must NOT name the tool: engine-theme actions refuse under exactly
+        # the condition that selected this fallback credential, so pointing
+        # the agent at them would recommend a command that cannot succeed.
+        assert "ha_manage_theme" not in warning
+        assert "Profile > General" in warning
 
     async def test_engine_credential_report_carries_no_caveat(self) -> None:
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
@@ -787,5 +792,7 @@ class TestCredentialProvenance:
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
         await guard.detect_change()
 
-        assert guard.warnings
-        assert "same user" not in guard.warnings[0]
+        warning = guard.warnings[0]
+        assert "ha_manage_theme" in warning
+        assert "expected_current=" in warning
+        assert "Profile > General" not in warning

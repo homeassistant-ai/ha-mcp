@@ -351,25 +351,34 @@ class ThemeGuard:
             self._snapshot,
             current,
         )
+        if self.credential_is_engine:
+            remedy = (
+                "To restore it, call ha_manage_theme(action="
+                f"'set_engine_theme', value={restore_value!r}, "
+                f"expected_current={current!r}) -- that guard re-checks the "
+                "stored theme immediately before writing and skips the write "
+                "if it changed."
+            )
+        else:
+            # Do NOT name ha_manage_theme here: this branch is reached via the
+            # client-credential fallback, which is the same condition under
+            # which the engine-theme actions refuse. Recommending them would
+            # send the agent at a command that cannot succeed.
+            remedy = (
+                "This was observed with ha-mcp's own Home Assistant "
+                "credential rather than the engine's own token, so ha-mcp "
+                "cannot confirm which account it belongs to and will not act "
+                "on it. Restore it from that account's own session: Profile "
+                "> General in the Home Assistant UI."
+            )
         self.warnings.append(
             "The screenshot engine changed the saved frontend theme of the "
             "account its token belongs to, which also changes that account's "
             "live web and mobile sessions. This tool is read-only and will "
-            "not change it back. To restore it, call ha_manage_theme("
-            f"action='set_engine_theme', value={restore_value!r}, "
-            f"expected_current={current!r}) -- the expected_current guard "
-            "refuses the write if anything changed the theme in the "
-            "meantime. To stop this happening at all, give the screenshot "
-            "engine its own Home Assistant user and long-lived token, so "
-            "its writes land on an account nobody looks at."
-            + (
-                ""
-                if self.credential_is_engine
-                else " NOTE: this was observed with ha-mcp's own Home "
-                "Assistant credential rather than the engine's own token, so "
-                "it is the engine's account only if both run as the same "
-                "user. Verify before restoring."
-            )
+            f"not change it back. {remedy} To stop this happening at all, "
+            "give the screenshot engine its own Home Assistant user and "
+            "long-lived token, so its writes land on an account nobody "
+            "looks at."
         )
 
 
