@@ -51,12 +51,23 @@ import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 
-from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX
+from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX, RETRY_DELAYS
 
 from ...conftest import TEST_TOKEN, _retire_stdio_sidecar, _stdio_env
 from ...utilities.wait_helpers import wait_for_condition
 
 logger = logging.getLogger(__name__)
+
+# The nudge's first attempt is immediate, but a launcher can win the race
+# against HA finishing HACS's setup — HACS registers its WS handlers late, and
+# until it does the command comes back ``unknown_command``, which
+# ``_refresh_with_retries`` cannot tell apart from "no HACS installed" and so
+# keeps retrying. The next attempt is ``RETRY_DELAYS[0]`` away, so waiting
+# exactly that long makes these lanes a coin flip on a slow runner: attempt two
+# fires AT the deadline and the marker lands just after the assert. Cover the
+# first retry plus room for the pass itself, and derive it from the schedule so
+# the two cannot drift apart.
+NUDGE_MARKER_TIMEOUT = RETRY_DELAYS[0] + 30.0
 
 
 @pytest.mark.hacs
@@ -84,7 +95,7 @@ async def test_stdio_launcher_runs_the_startup_nudge(
             # and the lifespan cancels the nudge task on the way out.
             found = await wait_for_condition(
                 marker_files,
-                timeout=30,
+                timeout=NUDGE_MARKER_TIMEOUT,
                 condition_name="HACS refresh marker written by the stdio launcher",
             )
             markers = marker_files()
@@ -92,9 +103,12 @@ async def test_stdio_launcher_runs_the_startup_nudge(
         await _retire_stdio_sidecar(tmp_path)
 
     assert found, (
-        "No HACS refresh marker appeared in the subprocess data dir within 30s "
-        "— the startup nudge never completed a pass, so the server lifespan is "
-        "likely not scheduling maybe_refresh_hacs_after_update. Data dir "
+        "No HACS refresh marker appeared in the subprocess data dir within "
+        f"{NUDGE_MARKER_TIMEOUT:.0f}s — the startup nudge never completed a "
+        "pass. Either the server lifespan is not scheduling "
+        "maybe_refresh_hacs_after_update, or every attempt inside that window "
+        "failed (a log full of 'unknown_command' means HA had not registered "
+        "HACS's WS handlers yet and the pass was still retrying). Data dir "
         f"contents: {sorted(p.name for p in tmp_path.iterdir())}"
     )
     assert len(markers) == 1, (
@@ -280,7 +294,7 @@ async def test_web_launcher_runs_the_startup_nudge(
         # connects to the HTTP endpoint at any point in this test.
         found = await wait_for_condition(
             marker_files,
-            timeout=30,
+            timeout=NUDGE_MARKER_TIMEOUT,
             condition_name="HACS refresh marker written by the web launcher",
         )
         markers = marker_files()
@@ -290,9 +304,12 @@ async def test_web_launcher_runs_the_startup_nudge(
 
     assert found, (
         "No HACS refresh marker appeared in the web launcher's data dir within "
-        "30s — the HTTP lifespan is likely not scheduling "
-        "maybe_refresh_hacs_after_update. Data dir contents: "
-        f"{sorted(p.name for p in tmp_path.iterdir())}. Launcher output:\n{output}"
+        f"{NUDGE_MARKER_TIMEOUT:.0f}s — either the HTTP lifespan is not "
+        "scheduling maybe_refresh_hacs_after_update, or every attempt inside "
+        "that window failed ('unknown_command' in the output means HA had not "
+        "registered HACS's WS handlers yet and the pass was still retrying). "
+        f"Data dir contents: {sorted(p.name for p in tmp_path.iterdir())}. "
+        f"Launcher output:\n{output}"
     )
     assert len(markers) == 1, (
         "The nudge writes one marker per HA target and this run had exactly "
