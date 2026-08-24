@@ -63,12 +63,21 @@ def authorization_server_document(base: str) -> dict:
     or signed DCR identities for core, and remain valid across mode switches.
     Public clients use PKCE without a client secret; the registration endpoint
     provides the DCR fallback when a client does not use CIMD.
+
+    ``revocation_endpoint`` is proxy-owned for a second reason (#2248): the
+    refresh token the client holds is a signed envelope, and core's own
+    ``/auth/revoke`` answers 200 without revoking anything for a value it
+    cannot recognise. Only ha_auth mints those, so only this document
+    advertises it. The endpoint takes no client authentication, matching
+    ``token_endpoint_auth_methods_supported``.
     """
     return {
         "issuer": f"{base}{OAUTH_BASE}",
         "authorization_endpoint": f"{base}{OAUTH_BASE}/authorize",
         "token_endpoint": f"{base}{OAUTH_BASE}/token",
         "registration_endpoint": f"{base}{OAUTH_BASE}/register",
+        "revocation_endpoint": f"{base}{OAUTH_BASE}/revoke",
+        "revocation_endpoint_auth_methods_supported": ["none"],
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
