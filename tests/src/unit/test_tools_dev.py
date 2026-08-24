@@ -464,6 +464,26 @@ class TestManageServer:
             },
         )
 
+    async def test_update_source_preserves_fields_beyond_the_known_overrides(self):
+        # The resend is harvested from the flow schema itself, not a hardcoded
+        # key list, so a field the component's options flow grows later is
+        # preserved without this module learning its name. A bare-default
+        # field (channel) still drops out — omission keeps it — and a cleared
+        # override carries no resendable value, so it stays omitted.
+        flow = dict(_SERVER_FLOW_WITH_OVERRIDES)
+        flow["data_schema"] = list(flow["data_schema"]) + [
+            {"name": "future_override", "description": {"suggested_value": "kept"}},
+            {"name": "cleared_override", "description": {"suggested_value": ""}},
+        ]
+        client = _mock_client(entries=[{"entry_id": "server-e"}], flows=[flow])
+        await DevTools(client).ha_dev_manage_server(
+            action="update_source", channel="stable"
+        )
+        submitted = client.submit_options_flow_step.await_args.args[1]
+        assert submitted["future_override"] == "kept"
+        assert "cleared_override" not in submitted
+        assert submitted["channel"] == "stable"
+
     async def test_update_source_new_pip_spec_wins_over_preserved(self):
         # A caller-supplied pip_spec must override the preserved (suggested_value)
         # pin, not be clobbered by it: the preserve dict is seeded first, then the

@@ -37,6 +37,10 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .config_entry_flow_form import (
+    _MISSING_DEFAULT,
+    _step_owned_submission_value,
+)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -71,24 +75,7 @@ WS_SERVER_ENTRY_UPDATE = "ha_mcp_tools/server_entry_update"
 # (custom_components/ha_mcp_tools/const.py OPT_CHANNEL / OPT_PIP_SPEC).
 _OPT_CHANNEL = "channel"
 _OPT_PIP_SPEC = "pip_spec"
-_OPT_SERVER_URL = "server_url"
-_OPT_EXTERNAL_URL = "external_url"
-_OPT_WEBHOOK_ID_OVERRIDE = "webhook_id_override"
-_OPT_SECRET_PATH_OVERRIDE = "secret_path_override"
 _VALID_CHANNELS = ("stable", "dev")
-
-# Optional text fields the component's options flow pre-fills via
-# suggested_value (so the UI can clear them). Because an OMITTED optional field
-# reads as "cleared" rather than "unchanged", a partial update_source submit
-# must resend these at their current values or it would blank the user's
-# server-URL / connect-secret overrides.
-_PRESERVED_OPTION_KEYS = (
-    _OPT_PIP_SPEC,
-    _OPT_SERVER_URL,
-    _OPT_EXTERNAL_URL,
-    _OPT_WEBHOOK_ID_OVERRIDE,
-    _OPT_SECRET_PATH_OVERRIDE,
-)
 
 # Delay before a self-affecting action (embedded entry reload / options
 # submit) fires, so this tool's JSON response flushes to the MCP client
@@ -368,6 +355,32 @@ def _fields_from_flow_schema(flow: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _preserved_flow_overrides(flow: dict[str, Any]) -> dict[str, Any]:
+    """Overrides an open server-entry flow carries stored values for.
+
+    A partial ``update_source`` submit must resend these or it would blank
+    them: an omitted optional field reads as "cleared", not "unchanged". The
+    resend is harvested from ``description.suggested_value`` on the flow's own
+    schema — the clearable text fields, per the same suggestion-over-default
+    rule as the generic walker's ``keep_current_values`` backfill (issue
+    #2254) — rather than a hardcoded key list, so a field added to the
+    component's options flow later cannot be silently wiped here. ``channel``
+    carries only a schema default (= its current value), never a suggestion,
+    so it drops out naturally; an empty or cleared override carries no
+    resendable value and stays omitted, which is how a cleared field stays
+    cleared.
+    """
+    preserved: dict[str, Any] = {}
+    for item in flow.get("data_schema") or []:
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        stored = _step_owned_submission_value(item)
+        if stored is _MISSING_DEFAULT or stored in (None, ""):
+            continue
+        preserved[str(item["name"])] = stored
+    return preserved
+
+
 async def _open_server_entry_flow(
     client: Any, entry_id: str
 ) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
@@ -375,10 +388,10 @@ async def _open_server_entry_flow(
 
     Builds ``current_options`` from the freshly-opened flow's own schema (via
     ``_fields_from_flow_schema``) rather than the component's narrower
-    ``{channel, pip_spec}`` shape, so callers like ``_update_source`` that
-    resend ``_PRESERVED_OPTION_KEYS`` (``server_url`` / ``external_url`` /
-    ``webhook_id_override`` / ``secret_path_override`` — fields the
-    ``server_entry`` capability does not carry) still see them.
+    ``{channel, pip_spec}`` shape, so callers like ``_update_source`` — whose
+    preserved-overrides resend harvests the flow schema itself (``server_url``
+    / ``external_url`` / ``webhook_id_override`` / ``secret_path_override`` —
+    fields the ``server_entry`` capability does not carry) — still see them.
     """
     try:
         flow = await client.start_options_flow(entry_id)
@@ -2047,12 +2060,7 @@ class DevTools:
             )
         entry_id, flow, current = found
 
-        # Resend the user's current overrides (see _PRESERVED_OPTION_KEYS) so a
-        # channel/pip-spec change here does not blank them — an omitted optional
-        # field reads as "cleared", not "unchanged".
-        user_input: dict[str, Any] = {
-            key: current[key] for key in _PRESERVED_OPTION_KEYS if current.get(key)
-        }
+        user_input: dict[str, Any] = _preserved_flow_overrides(flow)
         if channel is not None:
             user_input[_OPT_CHANNEL] = channel
         if pip_spec is not None:
