@@ -545,7 +545,7 @@ class TestSessionCleanup:
         self, monkeypatch: Any
     ) -> None:
         """A disconnect that never completes must not outlive the cleanup."""
-        import ha_mcp.dashboard_screenshot.theme_guard as guard_module
+        from ha_mcp.dashboard_screenshot import theme_guard as guard_module
 
         entered = asyncio.Event()
         tasks: list[Any] = []
