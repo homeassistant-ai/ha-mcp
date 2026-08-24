@@ -231,7 +231,7 @@ class TestIntegrationManagement:
         already backfilled from the step's own suggestion.
 
         ``group`` with ``group_type="sensor"`` is the reachable repro: its
-        options schema extends the basic one with
+        OPTIONS schema extends the basic one with
         ``vol.Optional(CONF_IGNORE_NON_NUMERIC, default=False)``, an OPTIONAL
         field carrying a static default. Set it true, patch a different field,
         and pre-fix it silently fell back to false. Deliberately an e2e rather
@@ -239,6 +239,14 @@ class TestIntegrationManagement:
         hand-written copy of HA's schema serialization, so it would keep
         passing if HA changed how it serializes ``suggested_value``. Only a
         real options flow proves the values actually survive the round trip.
+
+        The baseline is set through the OPTIONS flow, not at create time:
+        ``ignore_non_numeric`` lives in group's ``SENSOR_OPTIONS`` and not in
+        its config schema, so passing it to the add call is dropped as an
+        undeclared key (the tool says so in ``warnings``) and never reaches
+        the entry. That full submit doubles as the control: it proves a
+        complete form still applies every field, so a failure below is the
+        PARTIAL path specifically.
         """
         async with MCPAssertions(mcp_client) as mcp:
             data = await mcp.call_tool_success(
@@ -251,13 +259,33 @@ class TestIntegrationManagement:
                         "entities": [],
                         "hide_members": False,
                         "type": "max",
-                        "ignore_non_numeric": True,
                     },
                 },
             )
             entry_id = data["entry_id"]
 
             try:
+                await wait_for_tool_result(
+                    mcp_client,
+                    tool_name="ha_get_integration",
+                    arguments={"entry_id": entry_id},
+                    predicate=lambda d: d.get("success") is True,
+                    description="added sensor group is registered",
+                )
+
+                # BASELINE via a FULL options submit — every field named.
+                await mcp.call_tool_success(
+                    "ha_set_integration",
+                    {
+                        "entry_id": entry_id,
+                        "config": {
+                            "entities": [],
+                            "hide_members": False,
+                            "type": "max",
+                            "ignore_non_numeric": True,
+                        },
+                    },
+                )
                 await wait_for_tool_result(
                     mcp_client,
                     tool_name="ha_get_integration",
