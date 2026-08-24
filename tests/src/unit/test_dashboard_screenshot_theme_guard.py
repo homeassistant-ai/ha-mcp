@@ -538,7 +538,9 @@ class TestGuardHardening:
 
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
         await first.restore()
-        await pending
+        # Bound to a name: a bare `await <name>` statement is what CodeQL's
+        # py/ineffectual-statement flags.
+        assert await pending is None
         await second.restore()
 
         assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
@@ -602,7 +604,7 @@ class TestGuardHardening:
             await asyncio.wait_for(started.wait(), timeout=1)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await task
+                _ = await task
 
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
         other = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
