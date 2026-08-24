@@ -19,6 +19,7 @@ from ..errors import ErrorCode, create_error_response
 from ..redaction import redact_flow_schema, redaction_enabled
 from .config_entry_flow_form import (
     _MENU_SELECTION_KEYS,
+    _PER_STEP_VALUES_KEY,
     _auto_confirm_form_payload,
     _handle_form_step,
     _ReuseState,
@@ -493,6 +494,27 @@ def _raise_reconfigure_no_answer(
     )
 
 
+def _empty_forms_suggestions(supplied_keys: list[str]) -> list[str]:
+    """Guidance for a flow that consumed none of the caller's keys.
+
+    ``step_values`` is a directive rather than a field, so "check the field
+    names" is the wrong advice when it is what the caller supplied: the likely
+    mistake is a step_id the flow never presents, not a misspelled field.
+    """
+    if _PER_STEP_VALUES_KEY in supplied_keys:
+        return [
+            "Check each step_values step_id against the steps this flow "
+            "actually presents — a step_id the flow never reaches applies "
+            "nothing — and check the field names inside each entry with "
+            "ha_get_integration(entry_id=..., include_schema=True).",
+        ]
+    return [
+        "Check the field names against the flow's data_schema — "
+        "ha_get_integration(entry_id=..., include_schema=True) "
+        "shows the accepted fields — then retry with corrected keys.",
+    ]
+
+
 def _finish_flow_entry(
     flow_id: str,
     current_step: dict[str, Any],
@@ -521,12 +543,7 @@ def _finish_flow_entry(
                 "Flow completed without consuming any of the supplied "
                 "config keys — every form step was submitted empty, so "
                 "the flow saved its defaults, not your values",
-                suggestions=[
-                    "Check the field names against the flow's data_schema — "
-                    "ha_get_integration(entry_id=..., include_schema=True) "
-                    "shows the accepted fields — then retry with corrected "
-                    "keys.",
-                ],
+                suggestions=_empty_forms_suggestions(supplied_keys),
                 context={
                     "flow_id": flow_id,
                     "supplied_keys": supplied_keys,

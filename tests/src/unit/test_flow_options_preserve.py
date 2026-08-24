@@ -1041,6 +1041,52 @@ class TestPerStepValues:
         assert payload == {"host": "10.0.0.5"}
 
 
+class TestEmptyFormsGuidance:
+    """The empty-forms error must point at the right mistake."""
+
+    async def test_a_step_values_only_config_is_told_to_check_step_ids(self) -> None:
+        """step_values is a directive, so "check the field names" misleads.
+
+        A config of nothing but step_values that names a step the flow never
+        presents consumes no field key and trips the empty-forms guard. The
+        likely mistake there is the step_id, not a misspelled field.
+        """
+        submit_fn = AsyncMock(
+            side_effect=[{"type": "create_entry", "result": {"entry_id": "e"}}]
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_flow_steps(
+                client=None,
+                flow_id="flow-2254",
+                initial_step=_workday_options_step(),
+                config={"step_values": {"never_shown": {"days_offset": 3}}},
+                submit_fn=submit_fn,
+                keep_current_values=True,
+            )
+
+        message = str(exc_info.value)
+        assert "step_values step_id" in message
+        assert "a step_id the flow never reaches" in message
+
+    async def test_a_plain_typo_still_gets_the_field_name_guidance(self) -> None:
+        submit_fn = AsyncMock(
+            side_effect=[{"type": "create_entry", "result": {"entry_id": "e"}}]
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await _handle_flow_steps(
+                client=None,
+                flow_id="flow-2254",
+                initial_step=_workday_options_step(),
+                config={"days_ofset": 3},
+                submit_fn=submit_fn,
+                keep_current_values=True,
+            )
+
+        assert "Check the field names" in str(exc_info.value)
+
+
 class TestBackfillIsNotCallerConsumption:
     """Schema data must not make a config of typos look partially applied."""
 
