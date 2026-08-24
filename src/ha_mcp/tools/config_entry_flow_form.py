@@ -20,16 +20,27 @@ from typing import Any
 
 from ..errors import ErrorCode, create_error_response
 from ..redaction import carries_sentinel
-from .config_entry_flow_menu import (
-    _MENU_SELECTION_KEY_ORDER,
-    _PER_STEP_VALUES_KEY,
-)
+from .config_entry_flow_menu import _MENU_SELECTION_KEY_ORDER
 from .helpers import raise_tool_error
 
 # Membership form of the canonical selection-key order — defined here, in the
 # module that checks membership on every form field, and imported onward by
 # the walker.
 _MENU_SELECTION_KEYS = frozenset(_MENU_SELECTION_KEY_ORDER)
+
+# Reserved key carrying per-step field values: ``{step_id: {field: value}}``.
+# The flat config dict is keyed by field NAME alone, so a flow whose steps
+# declare the same field twice — a later step redeclaring it, or one revisited
+# through a menu loop — had no way to say "this value here, that one there, and
+# nothing at all on the third". The walker slices this per form step; a step
+# nobody addresses behaves exactly as before. Same shape of reservation as the
+# selection keys, including their collision risk: ``group_type`` is also a real
+# field on the group integration, and that has been the accepted trade since it
+# was introduced. Lives HERE rather than beside those keys because this module
+# is its only user — a constant defined in one module and read only from
+# another reads as dead to CodeQL's per-module py/unused-global-variable, the
+# same reason ``_MENU_SELECTION_KEYS`` itself sits here.
+_PER_STEP_VALUES_KEY = "step_values"
 
 # Every key the walker consumes as a DIRECTIVE rather than as form data, so
 # none of them is ever submitted to Home Assistant or counted as an ignored
@@ -90,6 +101,7 @@ class _ReuseState:
     flat: dict[str, Any] = dc_field(default_factory=dict)
     filled: set[str] = dc_field(default_factory=set)
     fired: set[str] = dc_field(default_factory=set)
+    step_scoped: set[str] = dc_field(default_factory=set)
     notes: list[str] = dc_field(default_factory=list)
     step_id: str | None = None
 
@@ -111,6 +123,13 @@ class _ReuseState:
         """
         dotted = _section_path(path_prefix, name)
         self.filled.add(dotted)
+        if name in self.step_scoped:
+            # Supplied by ``step_values`` for THIS step only. ``filled`` still
+            # takes it so nothing is injected over it here, but it must never
+            # reach ``flat``/``scoped``: those survive the whole walk, and a
+            # later step that nobody addressed would then reuse a value the
+            # caller scoped to one step instead of its own stored one.
+            return
         if scoped_only:
             self.scoped[dotted] = copy.deepcopy(value)
         else:
@@ -815,7 +834,10 @@ def _consume_all_remaining_keys(
 
 @contextmanager
 def _step_values_applied(
-    remaining_config: dict[str, Any], current_step: dict[str, Any]
+    remaining_config: dict[str, Any],
+    current_step: dict[str, Any],
+    ignored_config_keys: set[str] | None,
+    reuse_state: _ReuseState | None,
 ) -> Iterator[None]:
     """Overlay this step's entry from ``step_values`` for the duration.
 
@@ -842,10 +864,22 @@ def _step_values_applied(
 
     shadowed = {k: remaining_config[k] for k in values if k in remaining_config}
     remaining_config.update(copy.deepcopy(values))
+    if reuse_state is not None:
+        reuse_state.step_scoped |= set(values)
     try:
         yield
     finally:
+        if reuse_state is not None:
+            reuse_state.step_scoped -= set(values)
         for key in values:
+            # Still present = this step's schema never declared it. A field
+            # scoped to one step applies nowhere else, so it would otherwise
+            # vanish without ever being submitted or reported — report it
+            # under its own path before dropping it. Checked BEFORE the
+            # shadowed flat values go back, or a restored flat key would look
+            # like an unconsumed overlay one.
+            if key in remaining_config and ignored_config_keys is not None:
+                ignored_config_keys.add(f"{_PER_STEP_VALUES_KEY}.{step_id}.{key}")
             remaining_config.pop(key, None)
         remaining_config.update(shadowed)
         # Spend this step's entry. What is left at the end of the walk names
@@ -925,7 +959,9 @@ def _handle_form_step(
             remaining_config, consumed_config_keys, reuse_state
         )
 
-    with _step_values_applied(remaining_config, current_step):
+    with _step_values_applied(
+        remaining_config, current_step, ignored_config_keys, reuse_state
+    ):
         return _strip_cleared(
             _consume_form_schema(
                 data_schema,

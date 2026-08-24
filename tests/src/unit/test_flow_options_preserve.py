@@ -931,6 +931,65 @@ class TestPerStepValues:
         assert "step_values" not in payload
         assert ignored == set()
 
+    def test_a_step_scoped_value_never_leaks_to_an_unaddressed_step(self) -> None:
+        """step_values is scoped to its step, including for later reuse.
+
+        The overlay goes through the normal leaf consumer, which records what
+        it consumed in ``_ReuseState`` — and ``flat``/``scoped`` survive the
+        whole walk. Without isolation, a step nobody addressed would reuse the
+        value the caller scoped to one step instead of its own stored one
+        (CodeRabbit review, #2256).
+        """
+        reuse_state = _ReuseState()
+        remaining: dict[str, Any] = {"step_values": {"two": {"province": "TX"}}}
+        seen = [
+            _handle_form_step(
+                "flow-2254",
+                self._step(sid),
+                remaining,
+                None,
+                set(),
+                reuse_state,
+                keep_current_values=True,
+            )
+            for sid in ("one", "two", "three")
+        ]
+
+        assert seen[0] == {"province": "BW"}
+        assert seen[1] == {"province": "TX"}
+        assert seen[2] == {"province": "BW"}, (
+            f"The step-scoped value leaked into an unaddressed step: {seen[2]}"
+        )
+
+    def test_an_undeclared_field_inside_step_values_is_reported(self) -> None:
+        """A typo'd FIELD inside an entry must not vanish silently.
+
+        The overlay keys are dropped after the step, so an undeclared one used
+        to disappear before ignored-key accounting ever saw it — and the
+        reserved outer key suppressed any warning about it, letting the update
+        report success having applied nothing (CodeRabbit review, #2256).
+        """
+        ignored: set[str] = set()
+        remaining: dict[str, Any] = {
+            "province": "BY",
+            "step_values": {"one": {"provinse": "TX"}},
+        }
+        _handle_form_step(
+            "flow-2254",
+            self._step("one"),
+            remaining,
+            ignored,
+            set(),
+            _ReuseState(),
+            keep_current_values=True,
+        )
+
+        assert ignored == {"step_values.one.provinse"}
+        assert any(
+            "step_values.one.provinse" in w
+            for w in _ignored_keys_warnings(ignored, remaining)
+        )
+
     def test_an_unvisited_step_id_is_reported_not_silently_dropped(self) -> None:
         """A typo'd step_id must not quietly do nothing."""
         remaining: dict[str, Any] = {
