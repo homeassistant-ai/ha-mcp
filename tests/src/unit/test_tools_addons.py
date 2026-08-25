@@ -16,7 +16,6 @@ from ha_mcp._vendor.websockets.exceptions import (
     InvalidHandshake,
     InvalidStatus,
 )
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_addons import (
     _apply_response_transform,
     _call_addon_api,
@@ -4829,36 +4828,57 @@ class TestManageAddonActionMode:
         assert mock_call.call_args.args[1] == "/addons/core_ssh/start"
 
     @pytest.mark.asyncio
-    async def test_update_in_addon_uses_core_update_command(self, monkeypatch):
-        """In-app updates avoid Supervisor's direct self-update prohibition."""
+    async def test_self_update_in_addon_returns_manual_guidance(self, monkeypatch):
+        """Direct self-update is rejected before Supervisor returns a false auth error."""
         monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
         tools = self._tools()
-        tools._client.send_websocket_message = AsyncMock(
-            return_value={"success": True, "result": None}
-        )
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value={
+                    "success": True,
+                    "result": {"slug": "local_ha_mcp"},
+                },
+            ) as supervisor_call,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools._execute_action_mode("local_ha_mcp", "update")
 
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert payload["self_slug"] == "local_ha_mcp"
+        assert any(
+            "Apps UI" in suggestion for suggestion in payload["error"]["suggestions"]
+        )
+        supervisor_call.assert_awaited_once_with(tools._client, "/addons/self/info")
+
+    @pytest.mark.asyncio
+    async def test_other_addon_update_in_addon_uses_direct_rest(self, monkeypatch):
+        """An in-app update for a different app remains on direct Supervisor REST."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        tools = self._tools()
         with patch(
             "ha_mcp.tools.tools_addons._supervisor_api_call",
             new_callable=AsyncMock,
-        ) as direct_call:
-            result = await tools._execute_action_mode("local_ha_mcp", "update")
+            side_effect=[
+                {"success": True, "result": {"slug": "local_ha_mcp"}},
+                {"success": True, "result": {}},
+            ],
+        ) as supervisor_call:
+            result = await tools._execute_action_mode("core_ssh", "update")
 
         assert result["success"] is True
-        direct_call.assert_not_awaited()
-        tools._client.send_websocket_message.assert_awaited_once_with(
-            {
-                "type": "hassio/update/addon",
-                "addon": "local_ha_mcp",
-                "backup": False,
-                "_wait_timeout": 1815.0,
-            }
-        )
+        assert supervisor_call.await_count == 2
+        first, second = supervisor_call.await_args_list
+        assert first.args == (tools._client, "/addons/self/info")
+        assert second.args == (tools._client, "/store/addons/core_ssh/update")
+        assert second.kwargs == {"method": "POST", "timeout": 1800}
 
     @pytest.mark.asyncio
     async def test_update_offhost_uses_supervisor_api(self):
         """Non-app installs retain the Supervisor API WebSocket route."""
         tools = self._tools()
-        tools._client.send_websocket_message = AsyncMock()
         with patch(
             "ha_mcp.tools.tools_addons._supervisor_api_call",
             new_callable=AsyncMock,
@@ -4872,66 +4892,26 @@ class TestManageAddonActionMode:
             method="POST",
             timeout=1800,
         )
-        tools._client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
-    @pytest.mark.asyncio
-    async def test_update_in_addon_retries_job_collision(self, monkeypatch):
-        """The Core update exception retains bounded Supervisor job retry."""
+    async def test_update_in_addon_requires_self_identity(self, monkeypatch):
+        """A missing self slug fails closed before a possibly self-targeted update."""
         monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
         tools = self._tools()
-        tools._client.send_websocket_message = AsyncMock(
-            side_effect=[
-                {
-                    "success": False,
-                    "error": "Another job is running for job group addon_local_ha_mcp",
-                },
-                {"success": True, "result": None},
-            ]
-        )
-
-        with patch("ha_mcp.tools.tools_addons.asyncio.sleep", new=AsyncMock()) as sleep:
-            result = await tools._execute_action_mode("local_ha_mcp", "update")
-
-        assert result["success"] is True
-        assert tools._client.send_websocket_message.await_count == 2
-        sleep.assert_awaited_once()
-
-    async def test_update_in_addon_surfaces_core_rejection(self, monkeypatch):
-        """A command rejection remains a structured service failure."""
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
-        tools = self._tools()
-        tools._client.send_websocket_message = AsyncMock(
-            return_value={"success": False, "error": "update blocked"}
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools._execute_action_mode("local_ha_mcp", "update")
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value={"success": True, "result": {}},
+            ) as supervisor_call,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools._execute_action_mode("core_ssh", "update")
 
         payload = _parse_tool_error(exc_info)
         assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert "update blocked" in payload["error"]["message"]
-
-    @pytest.mark.asyncio
-    async def test_update_in_addon_transport_loss_has_unknown_outcome(
-        self, monkeypatch
-    ):
-        """No WebSocket answer does not imply the in-app update was rejected."""
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
-        tools = self._tools()
-        tools._client.send_websocket_message = AsyncMock(
-            side_effect=HomeAssistantConnectionError("connection lost")
-        )
-
-        with pytest.raises(ToolError) as exc_info:
-            await tools._execute_action_mode("local_ha_mcp", "update")
-
-        payload = _parse_tool_error(exc_info)
-        assert payload["error"]["code"] == "CONNECTION_FAILED"
-        assert payload["outcome"] == "unknown"
-        assert any(
-            "ha_get_app" in suggestion for suggestion in payload["error"]["suggestions"]
-        )
+        assert payload["endpoint"] == "/addons/self/info"
+        supervisor_call.assert_awaited_once_with(tools._client, "/addons/self/info")
 
     @pytest.mark.asyncio
     async def test_invalid_action_rejected(self):

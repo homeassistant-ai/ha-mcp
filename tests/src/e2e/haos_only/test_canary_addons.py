@@ -75,8 +75,7 @@ async def test_supervisor_info_via_mcp(mcp_client: Any) -> None:
     async with MCPAssertions(mcp_client) as mcp:
         payload = await mcp.call_tool_success("ha_get_app", {"slug": "core_mosquitto"})
     detail = payload.get("addon") or payload.get("data") or payload
-    # Mosquitto is install=true, start=False in the build — so it should
-    # be installed but not started. Either field name HA returns is fine.
+    # Confirm the known core slug resolves to Mosquitto.
     assert detail.get("name") == "Mosquitto broker", f"Unexpected app detail: {detail}"
 
 

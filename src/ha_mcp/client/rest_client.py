@@ -730,8 +730,9 @@ class HomeAssistantClient:
         Raises:
             HomeAssistantAuthError: 401 response, or ``SUPERVISOR_TOKEN`` empty
                 at call time on the addon branch.
-            HomeAssistantAPIError: 403 (role too low — addon needs hassio_role
-                ``manager``), 404 (unknown slug), or other non-2xx. The
+            HomeAssistantAPIError: 403 (unrecognized token, missing
+                ``hassio_api``, or insufficient ``hassio_role``), 404
+                (unknown slug), or other non-2xx. The
                 ``status_code`` attribute lets callers map to specific
                 suggestions.
             HomeAssistantConnectionError: Network, timeout, or transport error.

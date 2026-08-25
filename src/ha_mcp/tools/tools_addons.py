@@ -2340,74 +2340,42 @@ class AddOnTools:
         {"add_repository", "remove_repository"}
     )
 
-    async def _execute_addon_update_via_core(self, slug: str, timeout: int) -> None:
-        """Update an app through Core when direct Supervisor identity is unsafe.
+    async def _reject_self_update_in_addon(self, slug: str) -> None:
+        """Reject only the direct Supervisor update that would update this app.
 
-        Supervisor forbids an app token from updating the app that owns that
-        token. Core's dedicated update command executes under Core's Supervisor
-        identity and remains available after app-originated ``supervisor/api``
-        commands were blocked.
+        Supervisor identifies direct requests by app token and forbids an app
+        from updating itself. Its Core proxy also blocks privileged
+        ``supervisor/*`` and ``hassio/*`` WebSocket commands from apps, so
+        there is no safe programmatic fallback from this process.
         """
-        command = "hassio/update/addon"
-        deadline = time.monotonic() + _JOB_COLLISION_RETRY_WINDOW
-        delay = _JOB_COLLISION_RETRY_INITIAL_DELAY
-        attempts = 0
-        while True:
-            attempts += 1
-            try:
-                response = await self._client.send_websocket_message(
-                    {
-                        "type": command,
-                        "addon": slug,
-                        "backup": False,
-                        "_wait_timeout": float(timeout) + 15.0,
-                    }
+        response = await _supervisor_api_call(self._client, "/addons/self/info")
+        self_info = response.get("result")
+        self_slug = self_info.get("slug") if isinstance(self_info, dict) else None
+        if not isinstance(self_slug, str) or not self_slug:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Supervisor returned no app identity; refusing an update "
+                    "that could target the running ha-mcp app.",
+                    context={"slug": slug, "endpoint": "/addons/self/info"},
+                    suggestions=[
+                        "Use the Home Assistant Apps UI to update the target app",
+                        "Check Supervisor logs for the missing self app identity",
+                    ],
                 )
-            except HomeAssistantConnectionError as exc:
-                _raise_supervisor_write_outcome_unknown(
-                    ErrorCode.CONNECTION_FAILED,
-                    f"Home Assistant WebSocket transport failed during {command}; "
-                    f"the update outcome is unknown: {exc}",
-                    command,
-                    "WEBSOCKET",
-                )
-
-            if response.get("success"):
-                return
-
-            error = str(
-                response.get("error") or "Home Assistant rejected the app update"
             )
-            if _JOB_COLLISION_MARKER not in error.lower():
-                break
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            logger.info(
-                "Supervisor job-group collision through %s; retrying in %.1fs (%s)",
-                command,
-                delay,
-                error,
-            )
-            await asyncio.sleep(min(delay, remaining))
-            delay = min(delay * 2, _JOB_COLLISION_RETRY_MAX_DELAY)
-
-        suggestions = [
-            "Check the app's update status with ha_get_app before retrying",
-            "Check Home Assistant Core and Supervisor logs for the rejected update",
-        ]
-        if _JOB_COLLISION_MARKER in error.lower():
-            suggestions = [
-                "Another job held this app's job group for over "
-                f"{_JOB_COLLISION_RETRY_WINDOW:.0f}s; check Supervisor logs",
-                "Retry once the in-flight app operation finishes",
-            ]
+        if slug != self_slug:
+            return
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
-                f"Home Assistant failed to update app (add-on) {slug}: {error}",
-                context={"slug": slug, "command": command, "attempts": attempts},
-                suggestions=suggestions,
+                f"App (add-on) {slug} cannot update itself while ha-mcp is "
+                "running inside that app.",
+                context={"slug": slug, "self_slug": self_slug},
+                suggestions=[
+                    "Update the ha-mcp app from the Home Assistant Apps UI",
+                    "After ha-mcp restarts, verify its version with ha_get_app",
+                ],
             )
         )
 
@@ -2430,11 +2398,10 @@ class AddOnTools:
             )
         endpoint = endpoint_tmpl.format(slug=slug)
         if key == "update" and is_running_in_addon():
-            await self._execute_addon_update_via_core(slug, timeout)
-        else:
-            await _supervisor_api_call(
-                self._client, endpoint, method="POST", timeout=timeout
-            )
+            await self._reject_self_update_in_addon(slug)
+        await _supervisor_api_call(
+            self._client, endpoint, method="POST", timeout=timeout
+        )
         return {
             "success": True,
             "action": key,
@@ -3284,7 +3251,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Get installed or available Home Assistant apps, or details for one app.
+        """Get installed or available Home Assistant apps (add-ons), or details for one.
 
         Do not use this tool to change app state or configuration; use
         ``ha_manage_app``. Use ``slug`` for details, ``source="installed"`` for an
@@ -3535,7 +3502,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Manage Home Assistant apps or proxy an app API.
+        """Manage Home Assistant apps (add-ons) or proxy an app API.
 
         Do not use this tool for read-only discovery; call ``ha_get_app`` first.
         Do not infer private app API schemas; consult version-matched app docs,

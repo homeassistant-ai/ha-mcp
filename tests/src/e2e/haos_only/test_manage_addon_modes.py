@@ -31,8 +31,6 @@ Modes and options covered:
 * **``python_transform``** — applies a filter expression on the response
   from a Node-RED HTTP call; pins both the success path and the
   ``PythonSandboxError`` surface.
-* **``request_headers``** — smoke-checks that caller-supplied headers are
-  accepted and the proxy returns a structured response; delivery is not proven.
 
 Slugs are resolved at runtime by display name (see ``_resolve_slug``)
 because Supervisor mints slug prefixes from a SHA of the repository URL
@@ -219,7 +217,7 @@ async def _wait_addon_state(
 
 
 # ---------------------------------------------------------------------------
-# Config mode — options / boot / auto_update / watchdog round-trips
+# Config mode — boot / auto_update / watchdog round-trips
 # ---------------------------------------------------------------------------
 
 
@@ -424,40 +422,6 @@ async def test_proxy_http_get_returns_structured_response(mcp_client: Any) -> No
     )
 
 
-async def test_proxy_http_request_headers_are_accepted(mcp_client: Any) -> None:
-    """Supplying `request_headers` preserves the structured HTTP result shape.
-
-    This smoke test does not inspect Node-RED's received headers, so it verifies
-    argument handling rather than delivery across the wire.
-    """
-    slug = await _resolve_slug(mcp_client, NODERED_NAME)
-    # Strict assertion on ``status_code`` below requires the addon to
-    # actually answer HTTP; wait it out (see ``_wait_addon_running``).
-    await _wait_addon_running(mcp_client, slug)
-    without = await safe_call_tool(
-        mcp_client,
-        "ha_manage_app",
-        {"slug": slug, "path": "/flows", "method": "POST", "body": "[]"},
-    )
-    with_header = await safe_call_tool(
-        mcp_client,
-        "ha_manage_app",
-        {
-            "slug": slug,
-            "path": "/flows",
-            "method": "POST",
-            "body": "[]",
-            "request_headers": {"Node-RED-Deployment-Type": "full"},
-        },
-    )
-    # Both calls should parse to dicts with a status_code; the header-bearing
-    # call must not crash argument handling.
-    assert isinstance(without, dict) and isinstance(without.get("status_code"), int)
-    assert isinstance(with_header, dict) and isinstance(
-        with_header.get("status_code"), int
-    )
-
-
 # ---------------------------------------------------------------------------
 # Proxy with port= (inaddon-only — needs Supervisor's container network)
 # ---------------------------------------------------------------------------
@@ -471,10 +435,9 @@ async def test_proxy_direct_port_inaddon(mcp_client: Any) -> None:
     container network, which is true for the inaddon tier where ha-mcp
     runs as an addon itself. Skipped on the external tier.
 
-    Matter Server exposes ``5580/tcp`` for its WebSocket server; the
-    HTTP GET will return some non-2xx (not an HTTP endpoint) but the
-    tool plumbing — DNS resolution to ``172.30.32.X``, TCP connect,
-    error mapping — is what we're pinning.
+    Matter Server exposes ``5580/tcp`` for its WebSocket server. This smoke
+    probe verifies only that direct-port mode returns a structured HTTP result
+    or connection error; it does not prove a successful TCP exchange.
     """
     slug = await _resolve_slug(mcp_client, MATTER_NAME)
     payload = await safe_call_tool(
@@ -483,8 +446,8 @@ async def test_proxy_direct_port_inaddon(mcp_client: Any) -> None:
         {"slug": slug, "path": "/", "port": 5580, "method": "GET"},
     )
     assert isinstance(payload, dict), f"Tool did not return a dict: {payload!r}"
-    # status_code is present whether the addon answered HTTP or the
-    # proxy mapped a connection error to a structured failure shape.
+    # HTTP responses include status_code; connection failures instead return a
+    # structured error.
     assert "status_code" in payload or "error" in payload, (
         f"Direct-port proxy response missing both status_code and error: {payload!r}"
     )
