@@ -781,7 +781,8 @@ def _reuse_warning(dotted: str, step_id: str) -> str:
         "(a later step redeclaring the field, or the same step revisited "
         "via a menu loop). Pass step_values={'<step_id>': {'<field>': "
         "<value>}} to give a step its own value, or to leave it out of "
-        "that step entirely."
+        "that step entirely; pass a LIST of those objects to supply one "
+        "per encounter when the flow presents the step more than once."
     )
 
 

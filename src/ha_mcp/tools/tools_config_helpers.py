@@ -4714,7 +4714,9 @@ class HelperConfigTools:
                     "the schema allows that field to be empty. A field two "
                     "steps declare gets your one value both times; pass "
                     "step_values={'<step_id>': {'<field>': <value>}} to give "
-                    "a step its own value, or to leave it out of that step. "
+                    "a step its own value, or to leave it out of that step; a "
+                    "LIST of those objects supplies one per encounter when the "
+                    "flow presents a step more than once. "
                     "Field set is delivered as data_schema on the first validation error."
                 ),
                 default=None,

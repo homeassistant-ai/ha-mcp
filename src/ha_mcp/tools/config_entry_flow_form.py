@@ -171,7 +171,8 @@ class _ReuseState:
             "(a later step redeclaring the field, or the same step revisited "
             "via a menu loop). Pass step_values={'<step_id>': {'<field>': "
             "<value>}} to give a step its own value, or to leave it out of "
-            "that step entirely."
+            "that step entirely; pass a LIST of those objects to supply one "
+            "per encounter when the flow presents the step more than once."
         )
         return True
 
@@ -868,27 +869,66 @@ def validate_step_values(config: dict[str, Any]) -> None:
                 f"'{_PER_STEP_VALUES_KEY}' must be an object keyed by step id, "
                 f"got {type(directive).__name__}",
                 suggestions=[f"Pass {_PER_STEP_VALUES_KEY}={example}."],
-                context={_PER_STEP_VALUES_KEY: directive},
+                # TYPE, never the value. A rejected directive can carry a
+                # credential the caller is submitting for the FIRST time, which
+                # Home Assistant does not hold yet — so no read-back has
+                # harvested it and RedactSecretsMiddleware cannot scrub it even
+                # when enabled. raise_tool_error serialises this whole response
+                # into the exception message, and @log_tool_usage records that
+                # as error_message from inside the tool, where only
+                # `parameters` are masked: the value would reach plaintext
+                # mcp_usage.jsonl (Patch76 review, issue #2254). The shape is
+                # what diagnoses a malformed directive anyway.
+                context={"received_type": type(directive).__name__},
             )
         )
 
     for step_id, entry in directive.items():
         entries = entry if isinstance(entry, list) else [entry]
-        bad = [item for item in entries if not isinstance(item, dict)]
-        if bad:
+        if any(not isinstance(item, dict) for item in entries):
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     f"'{_PER_STEP_VALUES_KEY}[{step_id!r}]' must be an object "
                     "of field values, or a list of them for a step the flow "
-                    f"presents more than once — got {type(bad[0]).__name__}",
+                    "presents more than once",
                     suggestions=[
                         f"Pass {_PER_STEP_VALUES_KEY}={example}, or a list of "
                         "those objects to supply one per encounter.",
                     ],
-                    context={"step_id": step_id, "entry": entry},
+                    context={
+                        "step_id": step_id,
+                        "entry_types": [type(item).__name__ for item in entries],
+                    },
                 )
             )
+        # An entry that can apply nothing is a caller mistake in the same way a
+        # malformed one is, and it was reported inconsistently: a bare {} left
+        # a leftover the warning named, while [] and [{}] were popped at their
+        # first encounter and vanished, so the walk reported a clean success
+        # for a directive that did nothing (Patch76 review, issue #2254).
+        if not entries or not any(item for item in entries):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"'{_PER_STEP_VALUES_KEY}[{step_id!r}]' supplies no field "
+                    "values, so it would apply nothing",
+                    suggestions=[
+                        "Name at least one field for the step, or drop the entry.",
+                    ],
+                    context={"step_id": step_id, "entry_count": len(entries)},
+                )
+            )
+
+    if not directive:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"'{_PER_STEP_VALUES_KEY}' is empty, so it would apply nothing",
+                suggestions=[f"Name a step: {_PER_STEP_VALUES_KEY}={example}."],
+                context={},
+            )
+        )
 
 
 @contextmanager

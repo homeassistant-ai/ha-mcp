@@ -481,7 +481,8 @@ def _reuse_warning(dotted: str, step_id: str) -> str:
         "(a later step redeclaring the field, or the same step revisited "
         "via a menu loop). Pass step_values={'<step_id>': {'<field>': "
         "<value>}} to give a step its own value, or to leave it out of "
-        "that step entirely."
+        "that step entirely; pass a LIST of those objects to supply one "
+        "per encounter when the flow presents the step more than once."
     )
 
 
@@ -1259,12 +1260,46 @@ class TestStepValuesValidation:
             {"province": "BY"},
             {"step_values": {"init": {"province": "TX"}}},
             {"step_values": {"init": [{"province": "TX"}, {"province": "NY"}]}},
-            {"step_values": {}},
         ],
-        ids=["absent", "dict-entry", "list-entry", "empty-directive"],
+        ids=["absent", "dict-entry", "list-entry"],
     )
     def test_valid_shapes_pass(self, config: dict[str, Any]) -> None:
         validate_step_values(config)
+
+    @pytest.mark.parametrize(
+        "directive",
+        [{}, {"init": {}}, {"init": []}, {"init": [{}]}],
+        ids=["empty-directive", "empty-entry", "empty-list", "list-of-empty"],
+    )
+    def test_a_directive_that_applies_nothing_is_rejected(
+        self, directive: dict[str, Any]
+    ) -> None:
+        """These reported inconsistently: a bare {} left a leftover the warning
+        named, while [] and [{}] were popped and vanished, so the walk reported
+        a clean success for a directive that did nothing (Patch76 review)."""
+        with pytest.raises(ToolError) as exc_info:
+            validate_step_values({"step_values": directive})
+        assert "apply nothing" in str(exc_info.value)
+
+    def test_a_rejection_reports_shapes_not_submitted_values(self) -> None:
+        """A first-time credential must not ride into the error payload.
+
+        raise_tool_error serialises the response into the exception message and
+        @log_tool_usage records that as error_message from INSIDE the tool,
+        where only `parameters` are masked — so a value here reaches plaintext
+        mcp_usage.jsonl. A value HA does not hold yet was never harvested, so
+        RedactSecretsMiddleware cannot scrub it either (Patch76 review).
+        """
+        secret = "hunter2-not-in-the-log"
+        with pytest.raises(ToolError) as exc_info:
+            validate_step_values(
+                {"step_values": {"user": [{"password": secret}, "oops"]}}
+            )
+        message = str(exc_info.value)
+        assert secret not in message, "A submitted credential reached the error"
+        # The shape still diagnoses the mistake.
+        assert "entry_types" in message
+        assert "str" in message
 
     async def test_the_walker_rejects_before_driving_any_step(self) -> None:
         """It must raise before a single step is submitted."""
