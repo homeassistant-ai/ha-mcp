@@ -1855,8 +1855,6 @@ def _wait_supervisor_ready(
             # then best-effort reconnect and keep polling.
             last_error = e
             LOG.debug("Transient error polling /supervisor/info: %r", e)
-            if time.monotonic() >= deadline:
-                break
             reconnect_err = _reconnect_supervisor_during_wait(ws)
             if reconnect_err is not None:
                 last_error = reconnect_err

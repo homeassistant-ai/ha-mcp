@@ -369,7 +369,7 @@ async def test_proxy_http_get_returns_successful_response(mcp_client: Any) -> No
     async with MCPAssertions(mcp_client) as mcp:
         payload = await mcp.call_tool_success(
             "ha_manage_app",
-            {"slug": slug, "path": "/auth/strategy", "method": "GET"},
+            {"slug": slug, "path": "/", "method": "GET"},
         )
     status = payload.get("status_code")
     assert isinstance(status, int) and status < 400, (
@@ -447,7 +447,7 @@ async def test_python_transform_filters_http_response(mcp_client: Any) -> None:
             "ha_manage_app",
             {
                 "slug": slug,
-                "path": "/auth/strategy",
+                "path": "/",
                 "method": "GET",
                 "python_transform": 'response = {"trimmed": True}',
             },
@@ -463,7 +463,7 @@ async def test_python_transform_sandbox_error_surfaced(mcp_client: Any) -> None:
             "ha_manage_app",
             {
                 "slug": slug,
-                "path": "/auth/strategy",
+                "path": "/",
                 "method": "GET",
                 "python_transform": "import os",
             },

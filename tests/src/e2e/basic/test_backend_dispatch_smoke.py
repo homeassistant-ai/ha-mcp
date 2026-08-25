@@ -104,9 +104,10 @@ _SKIP_CEILING_PER_LANE = {
     # #2270 adds one ``beta_haos_only`` version-attestation item. It runs in
     # the two beta HAOS lanes and adds one collection-time skip elsewhere.
     # Beta variants share backend keys, so they inherit the ceiling increase
-    # while running the attestation instead of skipping it.
+    # while running the attestation instead of skipping it. Its in-app-only
+    # self-update guard adds a second skip outside the in-app lanes.
     "container": 79,  # was 75; +3 embedded_only, +1 beta_haos_only
-    "haos": 57,  # was 53; +3 embedded_only, +1 beta_haos_only
+    "haos": 58,  # observed on #2270 after both new marker-gated tests
     # HAOS stdio is the external HAOS set plus ``external_only`` tests, whose
     # test-process monkeypatches cannot reach the subprocess server. The first
     # full lane run on 2026-08-18 observed 103 collection-time marker skips
@@ -147,8 +148,8 @@ _SKIP_CEILING_PER_LANE = {
     # container_only). Parametrize inflates that to the CI-observed count of
     # 107 in the 2026-08-18 CI run (106 before the self-restart e2e).
     # Read future changes from CI instead of deriving them.
-    # was 108; +3 #2239 conflict, +3 embedded_only, +1 backup external_only
-    "haos_embedded": 116,
+    # #2270 stable observed 118 marker skips; beta observed 117.
+    "haos_embedded": 118,
 }
 
 
