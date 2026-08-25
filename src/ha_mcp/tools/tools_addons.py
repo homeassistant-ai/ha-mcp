@@ -489,6 +489,11 @@ async def _supervisor_api_call_once(
                 endpoint,
                 **request_kwargs,
             )
+    except (httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+        raise HomeAssistantConnectionError(
+            f"Supervisor API {method.upper()} {endpoint} could not start before "
+            f"the {wait_timeout}s timeout: {exc}"
+        ) from exc
     except httpx.TimeoutException as exc:
         verb = method.upper()
         if verb in {"GET", "HEAD"}:
@@ -568,6 +573,31 @@ def _raise_supervisor_api_failure(
     raise HomeAssistantCommandError(error_text)
 
 
+def _supervisor_result_mapping(
+    result: dict[str, Any],
+    endpoint: str,
+    method: str,
+) -> dict[str, Any]:
+    """Require the mapping payload used by every supported Supervisor endpoint."""
+    payload = result.get("result", {})
+    if isinstance(payload, dict):
+        return payload
+
+    verb = method.upper()
+    message = (
+        f"Supervisor API {verb} {endpoint} returned an invalid result payload: "
+        f"{payload!r}"
+    )
+    if verb not in {"GET", "HEAD"}:
+        _raise_supervisor_write_outcome_unknown(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"{message}; the request outcome is unknown.",
+            endpoint,
+            verb,
+        )
+    raise HomeAssistantCommandError(message)
+
+
 async def _supervisor_api_call(
     client: HomeAssistantClient,
     endpoint: str,
@@ -640,7 +670,10 @@ async def _supervisor_api_call(
             )
 
             if result.get("success"):
-                return {"success": True, "result": result.get("result", {})}
+                return {
+                    "success": True,
+                    "result": _supervisor_result_mapping(result, endpoint, method),
+                }
 
             error_text = str(
                 result.get("error", f"Supervisor API call failed: {endpoint}")
@@ -930,7 +963,7 @@ async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, An
     _validate_supervisor_slug(slug)
     response = await _supervisor_api_call(client, f"/addons/{slug}/info")
 
-    addon = response["result"] if isinstance(response["result"], dict) else {}
+    addon = response["result"]
     result: dict[str, Any] = {"success": True, "addon": addon}
 
     if redaction_enabled():
@@ -3000,7 +3033,7 @@ class AddOnTools:
         slug: str,
         path: str | None,
         config_data: dict[str, Any],
-        array_patch: dict[str, Any] | None,
+        proxy_overrides: list[tuple[str, str]],
     ) -> dict[str, Any]:
         """Validate and run a store-repository action (add/remove).
 
@@ -3016,8 +3049,7 @@ class AddOnTools:
             conflicts.append("path")
         if config_data:
             conflicts.append("config parameters")
-        if array_patch is not None:
-            conflicts.append("array_patch")
+        conflicts.extend(display for _, display in proxy_overrides)
         if conflicts:
             raise_tool_error(
                 create_validation_error(
@@ -3212,6 +3244,21 @@ class AddOnTools:
         action: str | None = None,
         repository: str | None = None,
     ) -> dict[str, Any]:
+        config_data = self._build_config_payload(
+            options, network, boot, auto_update, watchdog
+        )
+        proxy_overrides = self._proxy_overrides_basic(
+            method, body, debug, port, offset, limit, websocket
+        ) + self._proxy_overrides_ws_and_extra(
+            wait_for_close,
+            message_limit,
+            message_offset,
+            summarize,
+            python_transform,
+            array_patch,
+            request_headers,
+        )
+
         # Store-repository actions operate on the store, not an app (add-on), so they
         # take `repository` instead of `slug`. Handle them before the slug
         # requirement applies.
@@ -3221,10 +3268,16 @@ class AddOnTools:
                 repository,
                 slug=slug,
                 path=path,
-                config_data=self._build_config_payload(
-                    options, network, boot, auto_update, watchdog
-                ),
-                array_patch=array_patch,
+                config_data=config_data,
+                proxy_overrides=proxy_overrides,
+            )
+        if repository is not None:
+            raise_tool_error(
+                create_validation_error(
+                    "'repository' is valid only with action='add_repository' or "
+                    "action='remove_repository'.",
+                    parameter="repository",
+                )
             )
 
         validate_identifier_not_empty(
@@ -3233,9 +3286,6 @@ class AddOnTools:
             suggestions=["Use ha_get_app() to discover installed app (add-on) slugs"],
         )
         _validate_supervisor_slug(slug)
-        config_data = self._build_config_payload(
-            options, network, boot, auto_update, watchdog
-        )
 
         # Lifecycle mode takes precedence and is mutually exclusive with the
         # proxy / config / array-patch modes.
@@ -3649,15 +3699,18 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
     ) -> dict[str, Any]:
         """Manage Home Assistant apps (add-ons) or proxy an app API.
 
-        Do not use this tool for read-only discovery; call ``ha_get_app`` first.
+        For app inventory, status, and Supervisor metadata, call ``ha_get_app``
+        first; use proxy mode here for documented app-specific read APIs.
         Do not infer private app API schemas; consult version-matched app docs,
         and use ``ha_get_skill_guide`` for complex Home Assistant workflows.
 
         Use exactly one mode: lifecycle/store action, configuration fields,
         ``path`` proxy, or ``path`` with ``array_patch``.
 
-        Requires Home Assistant OS or Supervised. ``options`` is merged; a
-        non-empty ``network`` replaces the full port override map. Prefer
+        Requires Home Assistant OS or Supervised. ``options`` merges top-level
+        keys and one nested mapping level; supply complete values for deeper nested
+        mappings because they are replaced. A non-empty ``network`` replaces the
+        full port override map. Prefer
         Ingress: direct-port access requires a shared container network and may
         require weakening the target app authentication. If a Supervisor
         lifecycle, configuration, or repository write has an unknown outcome,

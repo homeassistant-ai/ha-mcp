@@ -142,12 +142,30 @@ def test_reconnect_refreshes_the_onboarding_access_token() -> None:
     ) as http:
         credentials = onboard(base_url)
         ws = HAWebSocket(base_url, credentials)
-        ws._ws = Mock()
+        old_socket = Mock()
+        ws._ws = old_socket
+        new_socket = Mock()
+        new_socket.recv.side_effect = [
+            json.dumps({"type": "auth_required"}),
+            json.dumps({"type": "auth_ok", "ha_version": "2026.8.0"}),
+        ]
         with (
-            patch.object(HAWebSocket, "__enter__", autospec=True, return_value=ws),
+            patch(
+                "websockets.sync.client.connect",
+                return_value=new_socket,
+            ) as connect,
             patch.object(ws, "_wait_supervisor_api_ready"),
         ):
             ws.reconnect()
+
+    old_socket.close.assert_called_once_with()
+    connect.assert_called_once_with(
+        "ws://127.0.0.1:18123/api/websocket",
+        open_timeout=30,
+        close_timeout=10,
+    )
+    auth_frame = json.loads(new_socket.send.call_args.args[0])
+    assert auth_frame == {"type": "auth", "access_token": "fresh"}
 
     assert credentials.access_token == "fresh"
     http.assert_called_with(

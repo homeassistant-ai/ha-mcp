@@ -70,7 +70,7 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ] \
             && git fetch --depth=1 origin "$BASE_REF" \
             && base_sha=$(git rev-parse "origin/$BASE_REF") \
-            && changed=$(git diff --name-only --diff-filter=ACMRD "$base_sha" HEAD) \
+            && changed=$(git diff --no-renames --name-only --diff-filter=ACMD "$base_sha" HEAD) \
             && [ -n "$changed" ]; then
             echo "Changed files:"; printf '%s\n' "$changed" | sed 's/^/  /'
             run=false

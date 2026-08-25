@@ -4319,6 +4319,62 @@ class TestSupervisorApiCall:
         client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("transport_error", "expected_code"),
+        [
+            pytest.param(
+                httpx.ConnectError("connection refused"),
+                "CONNECTION_FAILED",
+                id="connect-error",
+            ),
+            pytest.param(
+                httpx.ConnectTimeout("connect timed out"),
+                "CONNECTION_TIMEOUT",
+                id="connect-timeout",
+            ),
+            pytest.param(
+                httpx.PoolTimeout("pool timed out"),
+                "CONNECTION_TIMEOUT",
+                id="pool-timeout",
+            ),
+        ],
+    )
+    async def test_addon_mode_pre_send_write_failure_is_not_ambiguous(
+        self, monkeypatch, transport_error, expected_code
+    ):
+        """A write that never left httpx remains safe for an explicit retry."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.side_effect = transport_error
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == expected_code
+        assert "outcome" not in payload
+        direct_client.request.assert_awaited_once()
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_addon_mode_write_timeout_reports_unknown_outcome(self, monkeypatch):
         """A timed-out write tells callers to verify state before retrying."""
         from ha_mcp.tools.tools_addons import _supervisor_api_call
@@ -4466,6 +4522,9 @@ class TestSupervisorApiCall:
             pytest.param(
                 httpx.Response(200, json={"result": "unexpected"}), id="bad-result"
             ),
+            pytest.param(
+                httpx.Response(200, json={"result": "ok", "data": []}), id="bad-data"
+            ),
         ],
     )
     async def test_addon_mode_malformed_write_success_reports_unknown_outcome(
@@ -4501,6 +4560,37 @@ class TestSupervisorApiCall:
         assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
         assert payload["method"] == "POST"
         assert payload["outcome"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_rejects_non_mapping_read_result(self, monkeypatch):
+        """A malformed successful read never becomes an empty successful app."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            200,
+            json={"result": "ok", "data": []},
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(client, "/addons/core_mosquitto/info")
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "invalid result payload" in payload["error"]["message"]
+        assert "outcome" not in payload
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -5704,6 +5794,62 @@ class TestManageAddonRepositoryAction:
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("parameter", "value"),
+        [
+            pytest.param("method", "POST", id="method"),
+            pytest.param("body", {"probe": True}, id="body"),
+            pytest.param("debug", True, id="debug"),
+            pytest.param("port", 8123, id="port"),
+            pytest.param("offset", 1, id="offset"),
+            pytest.param("limit", 1, id="limit"),
+            pytest.param("websocket", True, id="websocket"),
+            pytest.param("wait_for_close", False, id="wait-for-close"),
+            pytest.param("message_limit", 1, id="message-limit"),
+            pytest.param("message_offset", 1, id="message-offset"),
+            pytest.param("summarize", False, id="summarize"),
+            pytest.param("python_transform", "response = response", id="transform"),
+            pytest.param("array_patch", {"operations": []}, id="array-patch"),
+            pytest.param("request_headers", {"X-Test": "value"}, id="headers"),
+        ],
+    )
+    async def test_repository_action_rejects_other_mode_parameter(
+        self, parameter, value
+    ):
+        """Repository actions reject every non-default foreign-mode argument."""
+        tools = self._tools()
+        kwargs = _manage_addon_kwargs(
+            action="add_repository",
+            repository="https://example.com/repo",
+        )
+        kwargs[parameter] = value
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(**kwargs)
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        assert parameter in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("action", [None, "start"])
+    async def test_repository_parameter_requires_repository_action(self, action):
+        """The repository selector is never ignored by another operating mode."""
+        tools = self._tools()
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    slug="core_ssh",
+                    action=action,
+                    repository="https://example.com/repo",
+                )
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        assert payload["parameter"] == "repository"
+
     async def test_add_repository_strips_whitespace(self):
         tools = self._tools()
         with patch(

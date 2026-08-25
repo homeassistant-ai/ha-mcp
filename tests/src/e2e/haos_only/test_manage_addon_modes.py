@@ -1,11 +1,11 @@
 """End-to-end coverage for representative ``ha_manage_app`` operating modes.
 
 The HAOS bake provides a real Supervisor and app set. Lifecycle and config
-cases assert live state changes; proxy HTTP and WebSocket probes only validate
-structured result/error plumbing. They do not establish successful app nginx,
-Ingress, or dashboard connectivity. Unit tests in
-``tests/src/unit/test_tools_addons*.py`` cover the remaining call shapes
-against a stubbed Supervisor.
+cases assert live state changes, while HTTP probes require real responses over
+Ingress and direct-port routes. The WebSocket proxy remains unit-tested because
+the baked ESPHome dashboard has no stable, version-current test endpoint. Unit
+tests in ``tests/src/unit/test_tools_addons*.py`` cover the remaining call
+shapes against a stubbed Supervisor.
 
 Modes and options covered:
 
@@ -17,15 +17,11 @@ Modes and options covered:
   long-timeout ``install`` / ``update`` / ``rebuild`` paths are pinned by unit
   tests rather than run live (a real install rebuilds an app image and would
   add minutes to every CI run).
-* **Proxy HTTP** — a ``GET`` smoke check against Node-RED verifies structured
-  response shapes. It does not pin status classes.
+* **Proxy HTTP** — a ``GET`` smoke check requires a successful Node-RED
+  response through Ingress.
 * **Proxy with ``port=``** — only meaningful in the in-app tier, where the
   ha-mcp server under test runs on Supervisor's app network. Marked
   ``inaddon_only`` so other tiers skip it cleanly.
-* **WebSocket proxy** — sends legacy ESPHome ``/validate`` requests and accepts
-  either a structured success or the current structured handshake failure.
-  These tests exercise route/error plumbing; they do not assert the current
-  dashboard command protocol, summarization, or pagination behavior.
 * **Array-patch** — no live mutation round-trip is covered. The E2E test pins
   structured validation for an empty operation list; mutation is unit-tested.
 * **``python_transform``** — applies a filter expression on the response
@@ -54,25 +50,14 @@ logger = logging.getLogger(__name__)
 
 pytestmark = [pytest.mark.haos_only]
 
-# Tests that assert strictly on ``status_code`` (with no fall-back error
-# branch) need the app (add-on) container to have reached Supervisor's
-# ``started`` state — the bake installs every app with ``start=True``,
-# but the container can take tens of seconds to leave its transient boot
-# phase, which is enough to flake the strict assertion. Timeout sized
-# for cache-cold runners; 2s poll matches sibling lifecycle helpers.
+# Lifecycle state polling allows for cache-cold runners.
 _ADDON_RUNNING_TIMEOUT_S = 120.0
 _ADDON_RUNNING_POLL_S = 2.0
-# States _wait_addon_running recovers from with a start, and how often.
-# "unknown" is deliberately absent: Supervisor reports it mid-transition,
-# where a competing start would race the one already in flight.
-_DEAD_ADDON_STATES: frozenset[str] = frozenset({"stopped", "boot_fail", "error"})
-_ADDON_START_RECOVERIES = 2
 
 
 # Display names as they appear in build_image.py's ADDONS tuple — slugs
 # are looked up dynamically below to survive the SHA-derived slug prefix.
 NODERED_NAME = "Node-RED"
-ESPHOME_NAME = "ESPHome Device Builder"
 MATTER_NAME = "Matter Server"
 APPDAEMON_NAME = "AppDaemon"
 
@@ -106,72 +91,6 @@ async def _resolve_slug(mcp_client: Any, display_name: str) -> str:
     )  # explicit for CodeQL
 
 
-async def _wait_addon_running(
-    mcp_client: Any,
-    slug: str,
-    timeout: float = _ADDON_RUNNING_TIMEOUT_S,
-) -> None:
-    """Block until ``ha_get_app(slug=...)`` reports ``state=started``.
-
-    Use this before any test that asserts on the HTTP/WS contract of an
-    addon (rather than tolerating an addon-not-running structured
-    error). When Supervisor reports the addon as anything other than
-    ``started``, ``ha_manage_app`` raises ``ToolError`` from its
-    running-state guard (``tools_addons.py`` "Verify add-on is running");
-    the JSON-encoded error payload carries the observed transient state.
-    The bake installs addons with ``start=True``, but their containers
-    can take tens of seconds to reach ``started`` — long enough to
-    flake any strict-shape assertion on the proxy path. Mirrors
-    ``_wait_for_state`` in ``test_addon_lifecycle.py`` (same private-
-    sibling convention as ``_resolve_slug``).
-
-    Transient errors from ``ha_get_app`` are caught via the project's
-    canonical ``_POLLING_TRANSIENT_ERRORS`` tuple (see
-    ``tests/src/e2e/utilities/wait_helpers.py``) — the same discipline
-    every other polling helper in the suite uses. Bugs (``TypeError`` /
-    ``AttributeError`` / ``KeyError`` / ``AssertionError``) propagate.
-    The deadline still fires; transient errors can't mask a wedged
-    addon forever.
-
-    A DEAD state gets a bounded start recovery instead of the wait: the
-    bake's ``start=True`` already happened, so an addon at ``error`` /
-    ``boot_fail`` / ``stopped`` never exits that state on its own and
-    waiting turns a recoverable first-boot failure into a lane failure
-    (#2245: Node-RED at ``error`` on the HAOS embedded lane, healthy on
-    the very next start). ``safe_call_tool`` absorbs a start that races
-    Supervisor mid-transition; the poll re-observes the state either way.
-    """
-    deadline = time.monotonic() + timeout
-    last_state: str | None = None
-    recoveries = 0
-    while True:
-        try:
-            detail_raw = await mcp_client.call_tool("ha_get_app", {"slug": slug})
-            detail = parse_mcp_result(detail_raw).get("addon") or {}
-            last_state = detail.get("state")
-        except _POLLING_TRANSIENT_ERRORS as e:
-            logger.debug(f"⚠️ Transient error polling addon {slug!r}: {e}")
-            last_state = f"<transient: {str(e)[:60]}>"
-        if last_state == "started":
-            return
-        if last_state in _DEAD_ADDON_STATES and recoveries < _ADDON_START_RECOVERIES:
-            recoveries += 1
-            logger.warning(
-                f"⚠️ Addon {slug!r} is {last_state!r}; issuing start "
-                f"(recovery {recoveries}/{_ADDON_START_RECOVERIES})"
-            )
-            await safe_call_tool(
-                mcp_client, "ha_manage_app", {"slug": slug, "action": "start"}
-            )
-        if time.monotonic() >= deadline:
-            pytest.fail(
-                f"Addon {slug!r} did not reach state=started within "
-                f"{timeout:.0f}s (last state: {last_state!r}, start "
-                f"recoveries attempted: {recoveries})"
-            )
-        await asyncio.sleep(_ADDON_RUNNING_POLL_S)
-
-
 # Terminal states that must fail a lifecycle assertion rather than count as
 # successful stop completion.
 _UNHEALTHY_ADDON_STATES: frozenset[str] = frozenset({"boot_fail", "unknown", "error"})
@@ -187,8 +106,8 @@ async def _wait_addon_state(
 ) -> str:
     """Block until ``ha_get_app(slug=...)`` reports a state in ``expected``.
 
-    The state-set generalization of ``_wait_addon_running`` for lifecycle
-    actions that drive an addon to ``stopped`` as well as ``started``.
+    Lifecycle actions use this for transitions to ``stopped`` or ``started``.
+    Transient read errors are retried until the deadline.
     States in ``failure_states`` fail immediately. Other unexpected states
     keep polling with the same transient-error discipline until the deadline.
     """
@@ -418,28 +337,21 @@ async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_proxy_http_get_returns_structured_response(mcp_client: Any) -> None:
+async def test_proxy_http_get_returns_successful_response(mcp_client: Any) -> None:
     """`ha_manage_app(path=..., method='GET')` reaches Node-RED through Ingress.
 
-    Pins the tool-contract: the result is a parsed dict that surfaces
-    *either* an int ``status_code`` (HTTP layer reached the addon, even
-    if the addon answered 4xx) *or* a structured error block (proxy /
-    transport failure surfaced before the HTTP layer). Both shapes
-    are valid tool output — the test asserts the dict is well-formed
-    in one of them, not which path won.
+    Requires a real successful response rather than accepting a proxy or
+    transport error as evidence that the route works.
     """
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
-    payload = await safe_call_tool(
-        mcp_client,
-        "ha_manage_app",
-        {"slug": slug, "path": "/auth/strategy", "method": "GET"},
-    )
-    assert isinstance(payload, dict), f"Tool did not return a dict: {payload!r}"
+    async with MCPAssertions(mcp_client) as mcp:
+        payload = await mcp.call_tool_success(
+            "ha_manage_app",
+            {"slug": slug, "path": "/auth/strategy", "method": "GET"},
+        )
     status = payload.get("status_code")
-    has_status = isinstance(status, int)
-    has_error = payload.get("success") is False or "error" in payload
-    assert has_status or has_error, (
-        f"Response should include status_code or a structured error: {payload!r}"
+    assert isinstance(status, int) and status < 400, (
+        f"Node-RED Ingress request did not return a successful status: {payload!r}"
     )
 
 
@@ -450,15 +362,14 @@ async def test_proxy_http_get_returns_structured_response(mcp_client: Any) -> No
 
 @pytest.mark.inaddon_only
 async def test_proxy_direct_port_inaddon(mcp_client: Any) -> None:
-    """`ha_manage_app(path=..., port=...)` bypasses Ingress on the inaddon tier.
+    """Exercise direct-port routing from the in-app HAOS tier.
 
-    Direct-port proxy only works when the MCP host shares Supervisor's
-    container network, which is true for the inaddon tier where ha-mcp
-    runs as an addon itself. Skipped on the external tier.
+    Direct-port proxy only works when the ha-mcp app shares Supervisor's app
+    network, so this probe is skipped on tiers that run ha-mcp elsewhere.
 
-    Matter Server exposes ``5580/tcp`` for its WebSocket server. This smoke
-    probe verifies only that direct-port mode returns a structured HTTP result
-    or connection error; it does not prove a successful TCP exchange.
+    Matter Server exposes ``5580/tcp`` for its WebSocket server. Any HTTP
+    status proves the TCP/HTTP exchange reached that endpoint; the root path
+    need not be a successful Matter API request.
     """
     slug = await _resolve_slug(mcp_client, MATTER_NAME)
     payload = await safe_call_tool(
@@ -467,77 +378,10 @@ async def test_proxy_direct_port_inaddon(mcp_client: Any) -> None:
         {"slug": slug, "path": "/", "port": 5580, "method": "GET"},
     )
     assert isinstance(payload, dict), f"Tool did not return a dict: {payload!r}"
-    # HTTP responses include status_code; connection failures instead return a
-    # structured error.
-    assert "status_code" in payload or "error" in payload, (
-        f"Direct-port proxy response missing both status_code and error: {payload!r}"
+    status = payload.get("status_code")
+    assert isinstance(status, int), (
+        f"Direct-port probe did not complete an HTTP exchange: {payload!r}"
     )
-
-
-# ---------------------------------------------------------------------------
-# WebSocket proxy mode
-# ---------------------------------------------------------------------------
-
-
-# Legacy ESPHome ``/validate`` payload used to exercise the WebSocket route.
-# Current dashboards may reject the upgrade before reading it, which is an
-# accepted structured-error outcome for these compatibility probes.
-_ESPHOME_VALIDATE_CONFIG = {
-    "configuration": ("esphome:\n  name: ha-mcp-test\nesp32:\n  board: esp32dev\n")
-}
-
-
-async def test_proxy_websocket_legacy_validate_returns_structured_result(
-    mcp_client: Any,
-) -> None:
-    """Send a legacy ESPHome `/validate` request through the WebSocket proxy.
-
-    The test pins a structured success-or-error result; it does not require
-    current dashboards to accept the removed legacy endpoint.
-    """
-    slug = await _resolve_slug(mcp_client, ESPHOME_NAME)
-    payload = await safe_call_tool(
-        mcp_client,
-        "ha_manage_app",
-        {
-            "slug": slug,
-            "path": "/validate",
-            "websocket": True,
-            "body": _ESPHOME_VALIDATE_CONFIG,
-            "message_limit": 200,
-        },
-    )
-    assert isinstance(payload, dict), f"Tool did not return a dict: {payload!r}"
-    # Success carries ``messages`` or ``response``; a structured handshake
-    # failure is also an accepted compatibility result.
-    assert "messages" in payload or "response" in payload or "error" in payload, (
-        f"WS proxy response missing message/response field: {payload!r}"
-    )
-
-
-async def test_proxy_websocket_legacy_validate_with_shaping_args(
-    mcp_client: Any,
-) -> None:
-    """Keep shaping arguments structured on a legacy `/validate` request."""
-    slug = await _resolve_slug(mcp_client, ESPHOME_NAME)
-    payload = await safe_call_tool(
-        mcp_client,
-        "ha_manage_app",
-        {
-            "slug": slug,
-            "path": "/validate",
-            "websocket": True,
-            "body": _ESPHOME_VALIDATE_CONFIG,
-            "summarize": False,
-            "message_offset": 1,
-            "message_limit": 5,
-        },
-    )
-    assert isinstance(payload, dict), f"Tool did not return a dict: {payload!r}"
-    msgs = payload.get("messages")
-    if isinstance(msgs, list):
-        # Older dashboards that still return messages must honor the cap.
-        assert len(msgs) <= 5, f"message_limit=5 not honored: got {len(msgs)} messages"
 
 
 # ---------------------------------------------------------------------------
@@ -574,57 +418,32 @@ async def test_array_patch_empty_operations_returns_validation_error(
 
 
 async def test_python_transform_filters_http_response(mcp_client: Any) -> None:
-    """`python_transform` runs the sandboxed expression on the HTTP response.
-
-    Apply ``response = {"trimmed": True}`` to whatever Node-RED returns.
-    The tool's contract: ``response`` is rebound to the transform result
-    and surfaced under the same key in the parsed payload.
-    """
+    """`python_transform` runs after a successful Node-RED HTTP response."""
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
-    payload = await safe_call_tool(
-        mcp_client,
-        "ha_manage_app",
-        {
-            "slug": slug,
-            "path": "/auth/strategy",
-            "method": "GET",
-            "python_transform": 'response = {"trimmed": True}',
-        },
-    )
-    assert isinstance(payload, dict), f"Tool did not return a dict: {payload!r}"
-    transformed = payload.get("response")
-    assert transformed == {"trimmed": True} or payload.get("error"), (
-        f"python_transform output not surfaced: {payload!r}"
-    )
+    async with MCPAssertions(mcp_client) as mcp:
+        payload = await mcp.call_tool_success(
+            "ha_manage_app",
+            {
+                "slug": slug,
+                "path": "/auth/strategy",
+                "method": "GET",
+                "python_transform": 'response = {"trimmed": True}',
+            },
+        )
+    assert payload.get("response") == {"trimmed": True}, payload
 
 
 async def test_python_transform_sandbox_error_surfaced(mcp_client: Any) -> None:
-    """Bad transform code surfaces a structured sandbox error, not a crash.
-
-    A bare ``import os`` is rejected by the sandbox (no imports allowed
-    in expressions). The tool must map that into an error response, not
-    raise an unhandled exception.
-    """
+    """A blocked import surfaces the expected sandbox validation error."""
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
-    payload = await safe_call_tool(
-        mcp_client,
-        "ha_manage_app",
-        {
-            "slug": slug,
-            "path": "/auth/strategy",
-            "method": "GET",
-            "python_transform": "import os",
-        },
-    )
-    assert isinstance(payload, dict), f"Tool did not return a dict: {payload!r}"
-    # Either nested under success=False with an error block, or surfaced
-    # as a top-level error message — both are the structured-error
-    # contract, distinct from a tool-side crash.
-    has_error = (
-        payload.get("success") is False
-        or "error" in payload
-        or "sandbox" in str(payload).lower()
-    )
-    assert has_error, (
-        f"Bad python_transform should surface a structured error, got: {payload!r}"
-    )
+    async with MCPAssertions(mcp_client) as mcp:
+        await mcp.call_tool_failure(
+            "ha_manage_app",
+            {
+                "slug": slug,
+                "path": "/auth/strategy",
+                "method": "GET",
+                "python_transform": "import os",
+            },
+            expected_error="Expression validation failed",
+        )
