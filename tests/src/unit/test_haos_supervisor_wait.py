@@ -830,7 +830,8 @@ def test_configure_beta_variant_tolerates_setup_state_while_polling() -> None:
             minimum_version="2026.08.0",
         )
 
-    ws.reconnect.assert_called_once_with()
+    ws.reconnect.assert_called_once()
+    assert "deadline" in ws.reconnect.call_args.kwargs
     assert ws.supervisor_api.call_args_list[-1] == call(
         "/supervisor/info",
         method="get",
