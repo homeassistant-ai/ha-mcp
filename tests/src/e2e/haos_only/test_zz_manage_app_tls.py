@@ -52,25 +52,35 @@ def _require_tls_ca_path() -> str:
     return ca_path
 
 
-_DIRECT_PORT_READY_TIMEOUT_S = 240.0
+_NODERED_HTTP_READY_TIMEOUT_S = 240.0
 
 
-async def _direct_flows_request(mcp: Client, slug: str) -> dict[str, Any]:
-    """Call Node-RED's direct port, retrying while its HTTP server binds.
+async def _flows_request(
+    mcp: Client, slug: str, *, port: int | None = None
+) -> dict[str, Any]:
+    """Call Node-RED, retrying while its HTTP stack settles after restart.
 
     Supervisor reports ``started`` before the app's nginx binds the mapped
     direct port (CONNECTION_FAILED), and nginx binds before Node-RED itself
-    listens on its upstream socket (502/503/504 with the front door open).
-    Retry only those transient shapes until the app answers with a settled
-    status; every other outcome goes back to the caller's assertions
+    listens on its upstream socket (502/503/504). Core Ingress can expose the
+    same window after Core's TLS restart, so both routes share this readiness
+    gate. Retry only those transient shapes until the app answers with a
+    settled status; every other outcome goes back to the caller's assertions
     unchanged.
     """
-    deadline = time.monotonic() + _DIRECT_PORT_READY_TIMEOUT_S
+    deadline = time.monotonic() + _NODERED_HTTP_READY_TIMEOUT_S
+    request: dict[str, Any] = {
+        "slug": slug,
+        "path": "/flows",
+        "method": "GET",
+    }
+    if port is not None:
+        request["port"] = port
     while True:
         payload = await safe_call_tool(
             mcp,
             "ha_manage_app",
-            {"slug": slug, "path": "/flows", "method": "GET", "port": 1880},
+            request,
         )
         error = payload.get("error")
         code = error.get("code") if isinstance(error, dict) else None
@@ -82,6 +92,16 @@ async def _direct_flows_request(mcp: Client, slug: str) -> dict[str, Any]:
         if not transient or time.monotonic() >= deadline:
             return payload
         await asyncio.sleep(3)
+
+
+async def _direct_flows_request(mcp: Client, slug: str) -> dict[str, Any]:
+    """Call Node-RED's direct port after its HTTP stack is ready."""
+    return await _flows_request(mcp, slug, port=1880)
+
+
+async def _ingress_flows_request(mcp: Client, slug: str) -> dict[str, Any]:
+    """Call Node-RED through Core Ingress after its HTTP stack is ready."""
+    return await _flows_request(mcp, slug)
 
 
 async def _set_front_door(
@@ -218,10 +238,7 @@ async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(
             assert "IP address mismatch" in mismatch, mismatch
             assert "127.0.0.1" in mismatch, mismatch
 
-            fixed_ingress = await assertions.call_tool_success(
-                "ha_manage_app",
-                {"slug": slug, "path": "/flows", "method": "GET"},
-            )
+            fixed_ingress = await _ingress_flows_request(mcp, slug)
             assert fixed_ingress.get("success") is True, fixed_ingress
             assert fixed_ingress.get("status_code") == 200, fixed_ingress
             assert isinstance(fixed_ingress.get("response"), list), fixed_ingress

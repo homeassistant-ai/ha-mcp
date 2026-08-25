@@ -768,8 +768,7 @@ def test_supervisor_update_retry_caps_sleep_to_remaining_budget() -> None:
         "/supervisor/update", method="post", timeout=1.0
     )
     assert [
-        wait_call.kwargs["update_timeout"]
-        for wait_call in wait_ready.call_args_list
+        wait_call.kwargs["update_timeout"] for wait_call in wait_ready.call_args_list
     ] == [1.0, 0.0]
     ws.reconnect.assert_called_once_with(deadline=1.0)
     sleep.assert_called_once_with(0.25)
