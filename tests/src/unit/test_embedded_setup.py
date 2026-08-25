@@ -58,6 +58,7 @@ from custom_components.ha_mcp_tools.coordinator import ServerVersionInfo  # noqa
 def _make_hass() -> MagicMock:
     hass = MagicMock(name="hass")
     hass.data = {}
+    hass.config.skip_pip = False
 
     def _update_entry(entry, *, data=None, **_kw):
         if data is not None:
@@ -1074,6 +1075,16 @@ class TestMaybeAutoUpdate:
         await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
 
         hass.config_entries.async_reload.assert_not_awaited()
+
+    async def test_skip_pip_does_not_reload_or_set_marker(self, monkeypatch):
+        hass = _make_async_hass()
+        hass.config.skip_pip = True
+        entry = _make_entry(options={OPT_AUTO_UPDATE: True})
+
+        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
+
+        hass.config_entries.async_reload.assert_not_awaited()
+        assert DATA_PENDING_UPDATE_NOTIFY not in hass.data.get(DOMAIN, {})
 
     async def test_override_does_not_reload(self, monkeypatch):
         hass = _make_async_hass()
