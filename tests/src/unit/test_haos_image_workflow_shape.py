@@ -91,22 +91,32 @@ def _cache_key_command(path: Path, job_id: str) -> str:
 def _beta_lane_jobs(
     workflow_dir: Path = _WORKFLOW_DIR,
 ) -> set[tuple[str, str, str]]:
-    """Discover jobs whose test step attests a beta Supervisor runtime."""
+    """Discover beta-image jobs independently from runtime attestation."""
     beta_jobs: set[tuple[str, str, str]] = set()
     workflow_paths = sorted((*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")))
     for path in workflow_paths:
         for job_id, job in _workflow(path)["jobs"].items():
             if not isinstance(job, dict):
                 continue
+            beta_signal = False
+            mode: str | None = None
             for step in _job_steps(job):
                 env = step.get("env", {})
+                run = str(step.get("run", ""))
+                step_text = str(step)
+                if isinstance(env, dict):
+                    if env.get("HAOS_BUILD_SUPERVISOR_CHANNEL") == "beta":
+                        beta_signal = True
+                    if isinstance(env.get("HAOS_TEST_MODE"), str):
+                        mode = env["HAOS_TEST_MODE"]
                 if (
-                    isinstance(env, dict)
-                    and env.get("HAOS_EXPECTED_SUPERVISOR_CHANNEL") == "beta"
+                    "version.home-assistant.io/beta.json" in run
+                    or "haos-beta-image-" in step_text
+                    or "/tmp/haos-beta-test-image.qcow2" in step_text
                 ):
-                    beta_jobs.add(
-                        (path.name, str(job_id), str(env.get("HAOS_TEST_MODE")))
-                    )
+                    beta_signal = True
+            if beta_signal:
+                beta_jobs.add((path.name, str(job_id), str(mode)))
     return beta_jobs
 
 
@@ -154,6 +164,29 @@ def test_cache_key_consumer_discovery_tracks_jobs_individually(
     assert _cache_key_consumers(tmp_path) == [
         (path, f"lane-{index}") for index in range(_CACHE_KEY_CONSUMER_FLOOR)
     ]
+
+
+def test_beta_lane_discovery_does_not_depend_on_attestation(tmp_path: Path) -> None:
+    """A beta build is discovered even when runtime attestation is missing."""
+    workflow = {
+        "jobs": {
+            "beta": {
+                "steps": [
+                    {
+                        "run": "curl https://version.home-assistant.io/beta.json",
+                    },
+                    {
+                        "run": "pytest src/e2e",
+                        "env": {"HAOS_TEST_MODE": "inaddon"},
+                    },
+                ]
+            }
+        }
+    }
+    path = tmp_path / "beta.yml"
+    path.write_text(yaml.safe_dump(workflow), encoding="utf-8")
+
+    assert _beta_lane_jobs(tmp_path) == {("beta.yml", "beta", "inaddon")}
 
 
 def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:

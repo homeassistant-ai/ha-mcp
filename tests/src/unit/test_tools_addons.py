@@ -4352,8 +4352,9 @@ class TestSupervisorApiCall:
         assert payload["outcome"] == "unknown"
         suggestions = " ".join(payload["error"]["suggestions"]).lower()
         assert "may have been accepted" in suggestions
-        assert "ha_get_app" in suggestions
-        assert "supervisor" in suggestions
+        assert "do not replay" in suggestions
+        assert "ha_get_app" not in suggestions
+        assert "jobs and logs" in suggestions
         direct_client.request.assert_awaited_once_with(
             "POST", "/addons/core_mosquitto/restart", json={}
         )
@@ -4397,8 +4398,9 @@ class TestSupervisorApiCall:
         assert payload["outcome"] == "unknown"
         suggestions = " ".join(payload["error"]["suggestions"]).lower()
         assert "may have been accepted" in suggestions
-        assert "ha_get_app" in suggestions
-        assert "supervisor" in suggestions
+        assert "do not replay" in suggestions
+        assert "ha_get_app" not in suggestions
+        assert "jobs and logs" in suggestions
         direct_client.request.assert_awaited_once_with(
             "POST", "/addons/core_mosquitto/restart", json={}
         )
@@ -4410,6 +4412,10 @@ class TestSupervisorApiCall:
         [
             pytest.param(httpx.Response(200, content=b"not-json"), id="invalid-json"),
             pytest.param(httpx.Response(200, json=[]), id="non-object-json"),
+            pytest.param(httpx.Response(200, json={}), id="missing-result"),
+            pytest.param(
+                httpx.Response(200, json={"result": "unexpected"}), id="bad-result"
+            ),
         ],
     )
     async def test_addon_mode_malformed_write_success_reports_unknown_outcome(
@@ -5216,6 +5222,72 @@ class TestManageAddonRepositoryAction:
         assert mock_call.call_args.args[1] == "/store/repositories"
         assert mock_call.call_args.kwargs["method"] == "POST"
         assert mock_call.call_args.kwargs["data"] == {"repository": url}
+
+    @pytest.mark.asyncio
+    async def test_offhost_repository_write_preserves_blank_bridge_outcome(
+        self, monkeypatch
+    ):
+        """Repository guidance cannot erase Core's unknown write outcome."""
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        tools = self._tools()
+        tools._client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: ",
+                "error_code": "unknown_error",
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository",
+                    repository="https://example.com/repository",
+                )
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["outcome"] == "unknown"
+        assert payload["method"] == "POST"
+        assert payload["endpoint"] == "/store/repositories"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failure", ["transport", "malformed-success"])
+    async def test_in_app_repository_write_preserves_direct_unknown_outcome(
+        self, monkeypatch, failure
+    ):
+        """Direct REST uncertainty survives repository-specific remapping."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        tools = self._tools()
+        direct_client = AsyncMock()
+        if failure == "transport":
+            direct_client.request.side_effect = httpx.RemoteProtocolError(
+                "server disconnected"
+            )
+        else:
+            direct_client.request.return_value = httpx.Response(200, json={})
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository",
+                    repository="https://example.com/repository",
+                )
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["outcome"] == "unknown"
+        assert payload["method"] == "POST"
+        assert payload["endpoint"] == "/store/repositories"
 
     @pytest.mark.asyncio
     async def test_add_repository_idempotent_when_already_present(self):

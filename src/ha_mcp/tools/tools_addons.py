@@ -306,6 +306,66 @@ def _supervisor_invalid_response(
     return _supervisor_rest_failure(response, error)
 
 
+def _normalize_supervisor_rest_response(
+    response: httpx.Response,
+    endpoint: str,
+    method: str,
+) -> dict[str, Any]:
+    """Normalize a direct Supervisor response and retain write ambiguity."""
+    try:
+        payload = response.json()
+    except ValueError:
+        body = response.text.strip()
+        error = (
+            body or f"Supervisor returned invalid JSON (HTTP {response.status_code})"
+        )
+        return _supervisor_invalid_response(response, error, endpoint, method)
+
+    if not isinstance(payload, dict):
+        return _supervisor_invalid_response(
+            response,
+            f"Supervisor returned an invalid response: {payload!r}",
+            endpoint,
+            method,
+        )
+    result_marker = payload.get("result")
+    valid_result_marker = isinstance(result_marker, str) and result_marker in {
+        "ok",
+        "error",
+    }
+    if response.is_success and not valid_result_marker:
+        return _supervisor_invalid_response(
+            response,
+            f"Supervisor returned an invalid success response: {payload!r}",
+            endpoint,
+            method,
+        )
+    if response.is_error or result_marker != "ok":
+        error = payload.get("message") or payload.get("error")
+        fallback = f"Supervisor API call failed (HTTP {response.status_code})"
+        return _supervisor_rest_failure(
+            response, error or fallback, response_data=payload
+        )
+    return {"success": True, "result": payload.get("data", {})}
+
+
+def _supervisor_unknown_outcome_suggestions(endpoint: str, method: str) -> list[str]:
+    """Return verification guidance suited to the Supervisor operation."""
+    action = endpoint.rstrip("/").rsplit("/", 1)[-1]
+    if action in {"restart", "rebuild"}:
+        return [
+            f"The {action} request may have been accepted, but ha_get_app cannot "
+            "prove whether it ran; do not replay it automatically",
+            f"Inspect Supervisor jobs and logs for {method} {endpoint} before "
+            "deciding whether manual action is needed",
+        ]
+    return [
+        "The request may have been accepted; check the relevant durable state "
+        "with ha_get_app before retrying",
+        f"Check Supervisor jobs and logs for {method} {endpoint}",
+    ]
+
+
 def _raise_supervisor_write_outcome_unknown(
     code: ErrorCode,
     message: str,
@@ -322,11 +382,7 @@ def _raise_supervisor_write_outcome_unknown(
                 "method": method,
                 "outcome": "unknown",
             },
-            suggestions=[
-                "The request may have been accepted; check the relevant state "
-                "with ha_get_app before retrying",
-                f"Check Supervisor jobs and logs for {method} {endpoint}",
-            ],
+            suggestions=_supervisor_unknown_outcome_suggestions(endpoint, method),
         )
     )
 
@@ -439,29 +495,7 @@ async def _supervisor_api_call_once(
             f"Failed to connect to Supervisor API {endpoint}: {exc}"
         ) from exc
 
-    try:
-        payload = response.json()
-    except ValueError:
-        body = response.text.strip()
-        error = (
-            body or f"Supervisor returned invalid JSON (HTTP {response.status_code})"
-        )
-        return _supervisor_invalid_response(response, error, endpoint, method)
-
-    if not isinstance(payload, dict):
-        return _supervisor_invalid_response(
-            response,
-            f"Supervisor returned an invalid response: {payload!r}",
-            endpoint,
-            method,
-        )
-    if response.is_error or payload.get("result") != "ok":
-        error = payload.get("message") or payload.get("error")
-        fallback = f"Supervisor API call failed (HTTP {response.status_code})"
-        return _supervisor_rest_failure(
-            response, error or fallback, response_data=payload
-        )
-    return {"success": True, "result": payload.get("data", {})}
+    return _normalize_supervisor_rest_response(response, endpoint, method)
 
 
 def _raise_supervisor_api_failure(
@@ -2531,6 +2565,8 @@ class AddOnTools:
         Logs the reclassification so a failure that gets demoted to a success
         is never invisible."""
         error_text = str(error)
+        if self._structured_error_outcome(error_text) == "unknown":
+            raise error
         error_code = self._structured_error_code(error_text)
         noop_codes = {None, ErrorCode.SERVICE_CALL_FAILED.value}
         if key == "remove_repository":
@@ -2563,6 +2599,18 @@ class AddOnTools:
             return None
         code = err.get("code")
         return code if isinstance(code, str) else None
+
+    @staticmethod
+    def _structured_error_outcome(error_text: str) -> str | None:
+        """Return the write outcome from a serialized structured ToolError."""
+        try:
+            payload = json.loads(error_text)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        outcome = payload.get("outcome")
+        return outcome if isinstance(outcome, str) else None
 
     @staticmethod
     def _supervisor_error_text(error_text: str) -> str:
@@ -3590,8 +3638,10 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         Ingress: direct-port access requires a shared container network and may
         require weakening the target app authentication. If a Supervisor
         lifecycle, configuration, or repository write has an unknown outcome,
-        verify state with ``ha_get_app`` before retrying. For a proxy or
-        array-patch write, query the target app's own read API before retrying.
+        verify durable state with ``ha_get_app`` before retrying. That cannot
+        prove whether ``restart`` or ``rebuild`` ran; inspect Supervisor jobs
+        and logs and do not automatically replay them. For a proxy or array-patch
+        write, query the target app's own read API before retrying.
         """
         return await tools.manage_addon(
             slug=slug,
