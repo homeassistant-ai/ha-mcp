@@ -3958,6 +3958,18 @@ class TestExtractAddonLogLevel:
         assert _extract_addon_log_level(addon) is None
 
 
+_INVALID_SUPERVISOR_SLUGS = (
+    ".",
+    "..",
+    "../../host/reboot?",
+    "core_ssh/../../host/reboot",
+    "core_ssh?x=1",
+    "core_ssh#fragment",
+    "core%2Fssh",
+    "core ssh",
+)
+
+
 class TestGetAddonInfoLogLevel:
     """Tests for get_addon_info — verifies top-level log_level enrichment."""
 
@@ -4019,12 +4031,30 @@ class TestGetAddonInfoLogLevel:
 
         assert result == error_response
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("slug", _INVALID_SUPERVISOR_SLUGS)
+    async def test_rejects_invalid_supervisor_slug_before_request(self, slug):
+        """A user-controlled slug cannot alter the Supervisor request path."""
+        client = _make_mock_client()
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+            ) as mock_call,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await get_addon_info(client, slug)
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        mock_call.assert_not_awaited()
+
 
 class TestSupervisorApiCall:
     """Test Supervisor routing, retries, and structured error classification.
 
     This includes schema-message handling from issue #993 and the direct app
-    app transport required by Supervisor 2026.08.
+    transport required by Supervisor 2026.08.
     """
 
     @pytest.mark.asyncio
@@ -4683,6 +4713,23 @@ class TestManageAddonActionMode:
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("slug", _INVALID_SUPERVISOR_SLUGS)
+    async def test_lifecycle_rejects_invalid_slug_before_request(self, slug):
+        tools = self._tools()
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+            ) as mock_call,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.manage_addon(**_manage_addon_kwargs(slug=slug, action="start"))
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        mock_call.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_supervisor_failure_propagates(self):
         tools = self._tools()
         with (
@@ -5059,6 +5106,29 @@ class TestManageAddonRepositoryAction:
             )
         payload = _parse_tool_error(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("repository", _INVALID_SUPERVISOR_SLUGS)
+    async def test_remove_repository_rejects_invalid_slug_before_request(
+        self, repository
+    ):
+        tools = self._tools()
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+            ) as mock_call,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="remove_repository", repository=repository
+                )
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        mock_call.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_repository_action_rejects_slug(self):

@@ -62,7 +62,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           # Fail-closed gate: default to RUNNING the suite; skip only when the
-          # PR is proven to contain docs/website changes. Any classifier failure
+          # PR is proven to contain only docs/website changes. Any classifier failure
           # (non-PR event, fetch/rev-parse/diff error, or empty diff) leaves
           # run=true so code cannot be mislabeled as docs-only.
           run=true
@@ -147,7 +147,7 @@ jobs:
         id: key
         # Both beta lanes restore this byte-identical image. The two upstream
         # versions prevent an older beta image from satisfying a newer run;
-        # the hash invalidates it when repository bake inputs change.
+        # the hash invalidates it when any hashed repository bake input changes.
         run: |
           hash=$(git ls-tree -r HEAD \
             tests/haos_image_build \
@@ -164,7 +164,9 @@ jobs:
           path: /tmp/haos-beta-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
 
-      - name: Report image-acquisition path
+      - name: Report beta image cache result
+        # Reports the cache lookup result; a forced local build may still run
+        # after a hit.
         run: |
           echo "::notice title=HAOS image cache::cache-hit=${{ steps.restore-cache.outputs.cache-hit }} key=${{ steps.key.outputs.cache-key }}"
 
@@ -237,7 +239,7 @@ jobs:
         # in-process server entry once, waits for the in-process server's webhook, and
         # mcp_client drives that webhook for the whole suite. external_only tests
         # (out-of-process server unreachable by test-process env/monkeypatch) and
-        # the 3 self-referential haos_only embedded smoke tests skip automatically.
+        # the self-referential haos_only embedded smoke module skips automatically.
         #
         # -n2 --dist loadscope: same per-worker QEMU/overlay parallelism as the
         # other HAOS lanes (#1350); --maxfail=0 overrides pytest.ini's --maxfail=3

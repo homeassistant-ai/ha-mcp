@@ -335,7 +335,7 @@ async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
 
     Exercises ``_execute_action_mode`` → ``_supervisor_api_call`` through
     direct Supervisor REST in the in-app lane and Core's ``supervisor/api``
-    WebSocket proxy in the external and embedded HAOS lanes. It stops, starts,
+    WebSocket proxy in the external, embedded, and stdio HAOS lanes. It stops, starts,
     and restarts the app while asserting the observed state after each action.
     This also covers the per-action timeout plumbing (stop=60s,
     start/restart=120s, each with a 15-second client margin).

@@ -62,7 +62,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           # Fail-closed gate: default to RUNNING the suite; skip only when the
-          # PR is proven to contain docs/website changes. Any classifier failure
+          # PR is proven to contain only docs/website changes. Any classifier failure
           # (non-PR event, fetch/rev-parse/diff error, or empty diff) leaves
           # run=true so code cannot be mislabeled as docs-only.
           run=true
@@ -143,7 +143,7 @@ jobs:
         id: key
         # Both beta lanes restore this byte-identical image. The two upstream
         # versions prevent an older beta image from satisfying a newer run;
-        # the hash invalidates it when repository bake inputs change.
+        # the hash invalidates it when any hashed repository bake input changes.
         run: |
           hash=$(git ls-tree -r HEAD \
             tests/haos_image_build \
@@ -160,9 +160,9 @@ jobs:
           path: /tmp/haos-beta-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
 
-      - name: Report image-acquisition path
-        # Surfaces whether this run restored the shared beta Actions cache or
-        # fell through to a local build.
+      - name: Report beta image cache result
+        # Reports the cache lookup result; a forced local build may still run
+        # after a hit.
         run: |
           echo "::notice title=HAOS image cache::cache-hit=${{ steps.restore-cache.outputs.cache-hit }} key=${{ steps.key.outputs.cache-key }}"
 

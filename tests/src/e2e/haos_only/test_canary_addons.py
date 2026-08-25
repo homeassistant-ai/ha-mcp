@@ -65,7 +65,7 @@ async def test_supervisor_info_via_mcp(mcp_client: Any) -> None:
     """`ha_get_app` with a known core slug returns Supervisor-backed detail.
 
     This exercises direct REST in the in-app lane and Core's WebSocket proxy
-    in the external and embedded HAOS lanes. The testcontainer cannot validate
+    in the external, embedded, and stdio HAOS lanes. The testcontainer cannot validate
     either transport against a real Supervisor.
     """
     raw = await mcp_client.call_tool("ha_get_app", {"slug": "core_mosquitto"})

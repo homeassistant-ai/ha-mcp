@@ -235,6 +235,29 @@ _JOB_COLLISION_MARKER = "another job is running for job group"
 _JOB_COLLISION_RETRY_WINDOW = 60.0
 _JOB_COLLISION_RETRY_INITIAL_DELAY = 1.0
 _JOB_COLLISION_RETRY_MAX_DELAY = 5.0
+# Matches Supervisor's canonical app slug grammar. A whole-segment "." or
+# ".." also matches that grammar, but is not a valid identifier here because
+# an HTTP client can normalize it as path traversal.
+_SUPERVISOR_SLUG_PATTERN = re.compile(r"[-_.A-Za-z0-9]+\Z")
+
+
+def _validate_supervisor_slug(value: str, parameter: str = "slug") -> None:
+    """Reject values that could escape a Supervisor path segment."""
+    if (
+        value not in {".", ".."}
+        and _SUPERVISOR_SLUG_PATTERN.fullmatch(value) is not None
+    ):
+        return
+    raise_tool_error(
+        create_validation_error(
+            f"{parameter!r} must be a valid Supervisor slug.",
+            parameter=parameter,
+            details=(
+                "Use only ASCII letters, numbers, hyphens, underscores, and periods; "
+                "the complete value cannot be '.' or '..'."
+            ),
+        )
+    )
 
 
 def _supervisor_rest_failure(
@@ -720,6 +743,7 @@ async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, An
         Top-level ``log_level`` is surfaced when the add-on exposes one via its
         Supervisor options or schema (e.g., ``"debug"``, ``"info"``, etc.).
     """
+    _validate_supervisor_slug(slug)
     response = await _supervisor_api_call(client, f"/addons/{slug}/info")
     if not response.get("success"):
         return (
@@ -2770,7 +2794,10 @@ class AddOnTools:
                     parameter="repository",
                 )
             )
-        return await self._execute_repository_action(action, repository.strip())
+        repository = repository.strip()
+        if action.lower().strip() == "remove_repository":
+            _validate_supervisor_slug(repository, "repository")
+        return await self._execute_repository_action(action, repository)
 
     @staticmethod
     def _reject_action_mode_conflicts(
@@ -2963,6 +2990,7 @@ class AddOnTools:
             "slug",
             suggestions=["Use ha_get_app() to discover installed add-on slugs"],
         )
+        _validate_supervisor_slug(slug)
         config_data = self._build_config_payload(
             options, network, boot, auto_update, watchdog
         )
