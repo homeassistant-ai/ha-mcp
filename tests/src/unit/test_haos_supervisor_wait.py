@@ -802,6 +802,7 @@ def test_supervisor_update_retry_skips_sleep_when_budget_expires() -> None:
         "/supervisor/update", method="post", timeout=1.0
     )
     wait_ready.assert_called_once_with(
+        ws,
         update_timeout=1.0,
         expected_channel="beta",
         minimum_version="2026.08.0",
@@ -1376,7 +1377,11 @@ def test_wait_core_version_rejects_matching_response_at_deadline() -> None:
             "id": 1,
             "type": "result",
             "success": True,
-            "result": _core_info("2026.8.3"),
+            "result": _core_info(
+                "2026.8.3",
+                version_latest="2026.8.3",
+                update_available=False,
+            ),
         }
     )
     ws._ws = socket

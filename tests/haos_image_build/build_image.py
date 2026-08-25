@@ -771,6 +771,25 @@ class HAWebSocket:
             f"within {timeout:.0f}s after Core restart (attempts={attempts})"
         ) from last_error
 
+    def _raise_unknown_send_outcome(
+        self,
+        connection: Any,
+        *,
+        operation: str,
+    ) -> None:
+        """Invalidate a socket after a timed-out send may have been dispatched."""
+        try:
+            connection.close_socket()
+        except (OSError, RuntimeError) as exc:
+            LOG.debug("WS close error after timed-out send: %r", exc)
+        finally:
+            if self._ws is connection:
+                self._ws = None
+        raise TimeoutError(
+            f"{operation} exceeded its deadline after dispatch; "
+            "command outcome is unknown"
+        )
+
     def _send_with_deadline(
         self,
         message: str,
@@ -813,25 +832,12 @@ class HAWebSocket:
             raise send_errors[0]
         else:
             with dispatch_lock:
-                dispatch_started = send_state["started"]
-            if dispatch_started:
-                try:
-                    _remaining_deadline_budget(deadline, operation)
-                except TimeoutError:
-                    timed_out_after_dispatch = True
+                timed_out_after_dispatch = (
+                    send_state["started"] and time.monotonic() >= deadline
+                )
 
         if timed_out_after_dispatch:
-            try:
-                connection.close_socket()
-            except (OSError, RuntimeError) as exc:
-                LOG.debug("WS close error after timed-out send: %r", exc)
-            finally:
-                if self._ws is connection:
-                    self._ws = None
-            raise TimeoutError(
-                f"{operation} exceeded its deadline after dispatch; "
-                "command outcome is unknown"
-            )
+            self._raise_unknown_send_outcome(connection, operation=operation)
 
     def supervisor_api(
         self,
