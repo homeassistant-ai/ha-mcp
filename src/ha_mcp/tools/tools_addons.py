@@ -603,6 +603,7 @@ def _supervisor_result_mapping(
             context={"endpoint": endpoint, "method": verb},
         )
     )
+    raise AssertionError("unreachable: raise_tool_error always raises")
 
 
 async def _supervisor_api_call(
@@ -2647,6 +2648,7 @@ class AddOnTools:
         if error_code != ErrorCode.SERVICE_CALL_FAILED.value:
             raise error
         self._raise_repo_action_error(key, repository, error_text)
+        raise AssertionError("unreachable: _raise_repo_action_error always raises")
 
     @staticmethod
     def _structured_error_code(error_text: str) -> str | None:
