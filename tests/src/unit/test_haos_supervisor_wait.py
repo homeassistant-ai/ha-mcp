@@ -340,7 +340,7 @@ def test_tolerates_setup_state_from_initial_probe() -> None:
     assert ws.supervisor_api.call_count == 2
     sleep.assert_called_once_with(10.0)
     ws.reconnect.assert_called_once()
-    assert "deadline" in ws.reconnect.call_args.kwargs
+    assert ws.reconnect.call_args.kwargs["deadline"] is not None
 
 
 def test_waits_until_update_clears() -> None:
@@ -831,7 +831,7 @@ def test_configure_beta_variant_tolerates_setup_state_while_polling() -> None:
         )
 
     ws.reconnect.assert_called_once()
-    assert "deadline" in ws.reconnect.call_args.kwargs
+    assert ws.reconnect.call_args.kwargs["deadline"] is not None
     assert ws.supervisor_api.call_args_list[-1] == call(
         "/supervisor/info",
         method="get",
