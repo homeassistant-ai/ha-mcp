@@ -65,6 +65,31 @@ def test_supervisor_api_shares_receive_deadline_across_frames() -> None:
     assert socket.recv.call_args_list == [call(timeout=4.0), call(timeout=2.5)]
 
 
+def test_supervisor_api_expired_deadline_does_not_dispatch() -> None:
+    """An expired command budget cannot produce an uncertain write outcome."""
+    ws = HAWebSocket(
+        "http://127.0.0.1:18123",
+        OAuthCredentials(access_token="access", refresh_token="refresh"),
+    )
+    socket = Mock()
+    ws._ws = socket
+
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=[10.0, 10.0],
+        ),
+        pytest.raises(
+            TimeoutError,
+            match=r"supervisor/api post /core/update send exceeded its deadline",
+        ),
+    ):
+        ws.supervisor_api("/core/update", method="post", data={}, timeout=0.0)
+
+    socket.send.assert_not_called()
+    socket.recv.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("error", "expected_code", "expected_message"),
     [

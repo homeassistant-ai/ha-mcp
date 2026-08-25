@@ -790,6 +790,10 @@ class HAWebSocket:
         }
         if data is not None:
             msg["data"] = data
+        _remaining_deadline_budget(
+            deadline,
+            f"supervisor/api {method} {endpoint} send",
+        )
         self._ws.send(json.dumps(msg))
         # Skip any out-of-band messages (events on subscriptions etc.) and
         # match by id.
