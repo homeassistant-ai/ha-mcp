@@ -76,7 +76,10 @@ async def _flows_request(
     }
     if port is not None:
         request["port"] = port
-    while True:
+    first_request = True
+    payload: dict[str, Any] = {}
+    while first_request or time.monotonic() < deadline:
+        first_request = False
         payload = await safe_call_tool(
             mcp,
             "ha_manage_app",
@@ -89,9 +92,11 @@ async def _flows_request(
             503,
             504,
         )
-        if not transient or time.monotonic() >= deadline:
+        remaining = deadline - time.monotonic()
+        if not transient or remaining <= 0:
             return payload
-        await asyncio.sleep(3)
+        await asyncio.sleep(min(3.0, remaining))
+    return payload
 
 
 async def _direct_flows_request(mcp: Client, slug: str) -> dict[str, Any]:
@@ -99,9 +104,9 @@ async def _direct_flows_request(mcp: Client, slug: str) -> dict[str, Any]:
     return await _flows_request(mcp, slug, port=1880)
 
 
-async def _ingress_flows_request(mcp: Client, slug: str) -> dict[str, Any]:
-    """Call Node-RED through Core Ingress after its HTTP stack is ready."""
-    return await _flows_request(mcp, slug)
+async def _wait_ingress_flows_ready(mcp: Client, slug: str) -> None:
+    """Wait for Node-RED's HTTP stack to settle behind Core Ingress."""
+    await _flows_request(mcp, slug)
 
 
 async def _set_front_door(
@@ -238,8 +243,11 @@ async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(
             assert "IP address mismatch" in mismatch, mismatch
             assert "127.0.0.1" in mismatch, mismatch
 
-            fixed_ingress = await _ingress_flows_request(mcp, slug)
-            assert fixed_ingress.get("success") is True, fixed_ingress
+            await _wait_ingress_flows_ready(mcp, slug)
+            fixed_ingress = await assertions.call_tool_success(
+                "ha_manage_app",
+                {"slug": slug, "path": "/flows", "method": "GET"},
+            )
             assert fixed_ingress.get("status_code") == 200, fixed_ingress
             assert isinstance(fixed_ingress.get("response"), list), fixed_ingress
 
