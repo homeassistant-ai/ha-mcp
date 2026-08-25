@@ -784,16 +784,17 @@ class HomeAssistantClient:
 
         Bypasses ``HomeAssistantClient.httpx_client`` because that client targets
         Home Assistant Core through ``http://supervisor/core/api``, while logs
-        belong to Supervisor at ``http://supervisor``. In app mode both clients
-        use the same ``SUPERVISOR_TOKEN``; both routes require ``hassio_role:
-        manager``. A ``default`` role gets a 403 here — see #1116.
+        belong to Supervisor at ``http://supervisor``. Both clients use the same
+        ``SUPERVISOR_TOKEN``; the Core proxy requires ``homeassistant_api``, while
+        direct Supervisor logs require ``hassio_api`` and ``hassio_role: manager``.
 
         Raises:
             HomeAssistantAuthError: ``SUPERVISOR_TOKEN`` absent at call time,
                 or 401 from Supervisor.
-            HomeAssistantAPIError: 403 (role too low — distinct branch with
-                role hint), 404, other 4xx/5xx. Tries to parse Supervisor's
-                ``{"result":"error","message":"..."}`` JSON envelope before
+            HomeAssistantAPIError: 403 (unrecognized token, missing
+                ``hassio_api``, or insufficient role), 404, other 4xx/5xx.
+                Parses Supervisor's ``{"result":"error","message":"..."}``
+                JSON envelope before
                 falling back to text body / reason phrase / placeholder.
             HomeAssistantConnectionError: Timeout or transport error, with
                 distinct messages so callers can tell them apart.
@@ -839,18 +840,19 @@ class HomeAssistantClient:
         if response.status_code == 401:
             raise HomeAssistantAuthError(f"Invalid Supervisor token for /{path}/logs")
         if response.status_code == 403:
-            # Distinct from 401: token is valid but addon's hassio_role isn't
-            # high enough. Most-likely cause for this exact endpoint at the
-            # time #1116 surfaced (default → manager bump in addon config.yaml
-            # is the same-PR companion fix).
+            # Supervisor uses 403 for an unrecognized app token, missing
+            # hassio_api permission, or a hassio_role that cannot access this
+            # endpoint. The default-to-manager role bump fixed #1116, but it is
+            # not the only possible cause.
             logger.warning(
-                "Supervisor returned 403 for /%s/logs — addon hassio_role may "
-                "be too low (need 'manager')",
+                "Supervisor returned 403 for /%s/logs — check token, hassio_api, "
+                "and hassio_role (need 'manager')",
                 path,
             )
             raise HomeAssistantAPIError(
-                f"Supervisor forbids /{path}/logs (403) — addon's hassio_role "
-                "may be 'default'; need 'manager' or higher",
+                f"Supervisor forbids /{path}/logs (403) — token may be unrecognized, "
+                "app may lack hassio_api, or hassio_role may not allow this endpoint "
+                "(manager required)",
                 status_code=403,
                 response_data={"path": path},
             )
@@ -901,7 +903,8 @@ class HomeAssistantClient:
         Branch on ``is_running_in_addon()`` — mirror of ``get_addon_logs``:
         inside the app (add-on) container goes directly to Supervisor at
         ``http://supervisor/{service}/logs`` with the Supervisor token
-        (``hassio_role: manager`` required). On non-app installs (Docker
+        (``hassio_api`` and ``hassio_role: manager`` required). On non-app
+        installs (Docker
         without Supervisor, pyinstaller, pip pointing at a normal HA URL),
         falls back to the HA Core proxy at ``/api/hassio/{service}/logs``.
 

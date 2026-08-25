@@ -4359,6 +4359,51 @@ class TestSupervisorApiCall:
         client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_addon_mode_write_transport_error_reports_unknown_outcome(
+        self, monkeypatch
+    ):
+        """A write transport error tells callers to verify state before retrying."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.side_effect = httpx.RemoteProtocolError(
+            "server disconnected"
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "CONNECTION_FAILED"
+        assert payload["method"] == "POST"
+        assert payload["outcome"] == "unknown"
+        suggestions = " ".join(payload["error"]["suggestions"]).lower()
+        assert "may have been accepted" in suggestions
+        assert "ha_get_app" in suggestions
+        assert "supervisor" in suggestions
+        direct_client.request.assert_awaited_once_with(
+            "POST", "/addons/core_mosquitto/restart", json={}
+        )
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_addon_mode_retries_direct_job_group_collision(self, monkeypatch):
         """Direct REST retains the common job-group collision backoff path."""
         from ha_mcp.tools.tools_addons import _supervisor_api_call
