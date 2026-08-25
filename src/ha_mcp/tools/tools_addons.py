@@ -312,7 +312,7 @@ def _raise_supervisor_write_outcome_unknown(
     endpoint: str,
     method: str,
 ) -> NoReturn:
-    """Report a failed Supervisor write without implying it is safe to retry."""
+    """Report an inconclusive Supervisor write without implying replay is safe."""
     raise_tool_error(
         create_error_response(
             code,
@@ -339,8 +339,9 @@ async def _supervisor_api_call_via_core(
     websocket_kwargs: dict[str, Any],
 ) -> dict[str, Any]:
     """Call Supervisor through Core and preserve ambiguous write outcomes."""
+    verb = method.upper()
     try:
-        return await client.send_websocket_message(
+        result = await client.send_websocket_message(
             {
                 "type": "supervisor/api",
                 "_wait_timeout": wait_timeout,
@@ -350,7 +351,6 @@ async def _supervisor_api_call_via_core(
     except HomeAssistantCommandNotSent:
         raise
     except (HomeAssistantCommandTimeout, HomeAssistantConnectionError) as exc:
-        verb = method.upper()
         if verb not in {"GET", "HEAD"}:
             code = (
                 ErrorCode.TIMEOUT_OPERATION
@@ -365,6 +365,21 @@ async def _supervisor_api_call_via_core(
                 verb,
             )
         raise
+
+    if (
+        verb not in {"GET", "HEAD"}
+        and result.get("success") is False
+        and result.get("error_code") == "unknown_error"
+        and str(result.get("error", "")).strip().casefold() == "command failed:"
+    ):
+        _raise_supervisor_write_outcome_unknown(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"Home Assistant Core returned a blank Supervisor bridge error for "
+            f"{verb} {endpoint}; the request outcome is unknown.",
+            endpoint,
+            verb,
+        )
+    return result
 
 
 async def _supervisor_api_call_once(
@@ -3573,8 +3588,10 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         Requires Home Assistant OS or Supervised. ``options`` is merged; a
         non-empty ``network`` replaces the full port override map. Prefer
         Ingress: direct-port access requires a shared container network and may
-        require weakening the target app authentication. If a mutating request
-        has an unknown outcome, verify state with ``ha_get_app`` before retrying.
+        require weakening the target app authentication. If a Supervisor
+        lifecycle, configuration, or repository write has an unknown outcome,
+        verify state with ``ha_get_app`` before retrying. For a proxy or
+        array-patch write, query the target app's own read API before retrying.
         """
         return await tools.manage_addon(
             slug=slug,

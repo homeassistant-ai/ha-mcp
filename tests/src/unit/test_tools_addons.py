@@ -4486,6 +4486,35 @@ class TestSupervisorApiCall:
         assert payload["outcome"] == "unknown"
 
     @pytest.mark.asyncio
+    async def test_offhost_blank_unknown_error_write_reports_unknown_outcome(
+        self, monkeypatch
+    ):
+        """Core's blank Supervisor bridge error leaves a write inconclusive."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: ",
+                "error_code": "unknown_error",
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert payload["method"] == "POST"
+        assert payload["outcome"] == "unknown"
+
+    @pytest.mark.asyncio
     async def test_offhost_write_not_sent_is_not_reported_as_unknown(self, monkeypatch):
         """The WebSocket readiness guard proves the write never left the process."""
         from ha_mcp.client.rest_client import HomeAssistantCommandNotSent

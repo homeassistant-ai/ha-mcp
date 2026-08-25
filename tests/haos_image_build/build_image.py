@@ -821,15 +821,9 @@ try:
         TimeoutError,
         _WebSocketException,
     )
-    _SUPERVISOR_UPDATE_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
-        OSError,
-        TimeoutError,
-        _WebSocketException,
-    )
 
 except ImportError:
     _SUPERVISOR_WAIT_TRANSIENT_ERRORS = (WSCommandError, OSError, TimeoutError)
-    _SUPERVISOR_UPDATE_TRANSPORT_ERRORS = (OSError, TimeoutError)
 
 
 def _install_addon_with_retry(
@@ -1987,11 +1981,13 @@ def _configure_core_image_variant(
             data={"version": core_version, "backup": False},
             timeout=1800.0,
         )
-    except _SUPERVISOR_UPDATE_TRANSPORT_ERRORS as exc:
-        # Updating Core may close this WebSocket while the request is being
-        # accepted. Exact-version polling below determines whether the update
-        # succeeded.
-        LOG.info("Core update interrupted the WS transport: %r", exc)
+    except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
+        if not _is_transient_supervisor_error(exc):
+            raise
+        # Updating Core may close the transport or make Core's Supervisor bridge
+        # return a blank unknown_error after dispatch. Exact-version polling below
+        # establishes the actual outcome.
+        LOG.info("Core update outcome inconclusive; polling version: %r", exc)
 
     _wait_http_ok(f"{base_url}/manifest.json", timeout=600.0)
     _wait_core_version(ws, core_version, timeout=600.0)

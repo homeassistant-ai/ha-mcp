@@ -769,3 +769,89 @@ def test_configure_beta_variant_installs_exact_core_version() -> None:
     assert ws.supervisor_api.call_args_list[-1] == call(
         "/core/info", method="get", timeout=30.0
     )
+
+
+def test_configure_beta_variant_polls_after_blank_unknown_core_update_error() -> None:
+    """A blank Core bridge error falls through to exact-version polling."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        {},
+        {},
+        _info(
+            update_available=False,
+            version="2026.08.0",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+        _core_info(
+            "2026.8.2",
+            version_latest="2026.8.3",
+            update_available=True,
+        ),
+        WSCommandError(
+            "supervisor/api post /core/update failed",
+            code="unknown_error",
+            supervisor_message="",
+        ),
+        _core_info(
+            "2026.8.3",
+            version_latest="2026.8.3",
+            update_available=False,
+        ),
+    ]
+
+    with patch("tests.haos_image_build.build_image._wait_http_ok") as wait_http_ok:
+        _configure_supervisor_image_variant(
+            ws,
+            base_url="http://127.0.0.1:18123",
+            channel="beta",
+            minimum_version="2026.08.0",
+            core_version="2026.8.3",
+        )
+
+    wait_http_ok.assert_called_once_with(
+        "http://127.0.0.1:18123/manifest.json", timeout=600.0
+    )
+    assert ws.reconnect.call_count == 1
+    assert ws.supervisor_api.call_args_list[-1] == call(
+        "/core/info", method="get", timeout=30.0
+    )
+
+
+def test_configure_beta_variant_rejects_terminal_core_update_error() -> None:
+    """A nonblank Core bridge rejection remains terminal."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        {},
+        {},
+        _info(
+            update_available=False,
+            version="2026.08.0",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+        _core_info(
+            "2026.8.2",
+            version_latest="2026.8.3",
+            update_available=True,
+        ),
+        WSCommandError(
+            "core update rejected",
+            code="unknown_error",
+            supervisor_message="System is not ready with state: setup",
+        ),
+    ]
+
+    with (
+        patch("tests.haos_image_build.build_image._wait_http_ok") as wait_http_ok,
+        pytest.raises(WSCommandError, match="core update rejected"),
+    ):
+        _configure_supervisor_image_variant(
+            ws,
+            base_url="http://127.0.0.1:18123",
+            channel="beta",
+            minimum_version="2026.08.0",
+            core_version="2026.8.3",
+        )
+
+    wait_http_ok.assert_not_called()
