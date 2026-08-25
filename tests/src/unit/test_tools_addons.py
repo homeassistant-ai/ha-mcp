@@ -5298,6 +5298,45 @@ class TestManageAddonActionMode:
         payload = _parse_tool_error(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("parameter", "value"),
+        [
+            pytest.param("method", "POST", id="method"),
+            pytest.param("body", {"probe": True}, id="body"),
+            pytest.param("debug", True, id="debug"),
+            pytest.param("port", 8123, id="port"),
+            pytest.param("offset", 1, id="offset"),
+            pytest.param("limit", 1, id="limit"),
+            pytest.param("websocket", True, id="websocket"),
+            pytest.param("wait_for_close", False, id="wait-for-close"),
+            pytest.param("message_limit", 1, id="message-limit"),
+            pytest.param("message_offset", 1, id="message-offset"),
+            pytest.param("summarize", False, id="summarize"),
+            pytest.param("python_transform", "response = response", id="transform"),
+            pytest.param("request_headers", {"X-Test": "value"}, id="headers"),
+        ],
+    )
+    async def test_action_rejects_proxy_parameter(self, parameter, value):
+        """Lifecycle actions reject every non-default proxy-mode argument."""
+        tools = self._tools()
+        kwargs = _manage_addon_kwargs(slug="core_ssh", action="start")
+        kwargs[parameter] = value
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+            ) as mock_call,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.manage_addon(**kwargs)
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        assert parameter in str(exc_info.value)
+        mock_call.assert_not_awaited()
+
 
 def _manage_addon_kwargs(**overrides):
     """Build the full ha_manage_app kwargs with defaults, applying overrides.

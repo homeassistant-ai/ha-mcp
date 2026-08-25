@@ -3078,7 +3078,7 @@ class AddOnTools:
         action: str,
         path: str | None,
         config_data: dict[str, Any],
-        array_patch: dict[str, Any] | None,
+        proxy_overrides: list[tuple[str, str]],
     ) -> None:
         """Raise if lifecycle-action mode is combined with another mode's params."""
         conflicts = []
@@ -3086,8 +3086,7 @@ class AddOnTools:
             conflicts.append("path")
         if config_data:
             conflicts.append("config parameters")
-        if array_patch is not None:
-            conflicts.append("array_patch")
+        conflicts.extend(display for _, display in proxy_overrides)
         if conflicts:
             raise_tool_error(
                 create_validation_error(
@@ -3290,7 +3289,9 @@ class AddOnTools:
         # Lifecycle mode takes precedence and is mutually exclusive with the
         # proxy / config / array-patch modes.
         if action is not None:
-            self._reject_action_mode_conflicts(action, path, config_data, array_patch)
+            self._reject_action_mode_conflicts(
+                action, path, config_data, proxy_overrides
+            )
             return await self._execute_action_mode(slug, action)
 
         self._validate_manage_mode(path, config_data)

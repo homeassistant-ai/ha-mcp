@@ -704,8 +704,9 @@ class HomeAssistantClient:
     async def get_addon_logs(self, slug: str, lines: int | None = None) -> str:
         """Fetch an add-on's container logs.
 
-        Branch on ``is_running_in_addon()`` (which keys off ``SUPERVISOR_TOKEN``
-        in env): inside the add-on container goes directly to the Supervisor
+        Branch on ``is_running_in_addon()``, which requires a truthy
+        ``SUPERVISOR_TOKEN`` and excludes ``HA_MCP_EMBEDDED``: inside the app
+        (add-on) container goes directly to the Supervisor
         REST API at ``http://supervisor/addons/{slug}/logs`` with the
         Supervisor token. The HA Core proxy at
         ``/api/hassio/addons/{slug}/logs`` rejects this token+path combination

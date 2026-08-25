@@ -165,7 +165,7 @@ class TestFixtureWiring:
     """
 
     async def test_is_running_in_addon_returns_true(self, supervisor_mock):
-        """SUPERVISOR_TOKEN set → addon-mode branch is taken."""
+        """A token in this non-embedded process selects the app-mode branch."""
         assert is_running_in_addon() is True
 
     async def test_base_url_resolves_to_mock(self, supervisor_mock):

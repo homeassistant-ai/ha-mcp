@@ -22,6 +22,7 @@ from tests.haos_image_build.build_image import (
     OAuthCredentials,
     WSCommandError,
     _configure_supervisor_image_variant,
+    _wait_core_version,
     _wait_supervisor_channel_metadata,
     _wait_supervisor_ready,
     onboard,
@@ -837,6 +838,34 @@ def test_configure_beta_variant_installs_exact_core_version() -> None:
     assert ws.supervisor_api.call_args_list[-1] == call(
         "/core/info", method="get", timeout=30.0
     )
+
+
+def test_wait_core_version_reports_non_convergence() -> None:
+    """A Core update that never reaches the target preserves runtime details."""
+    ws = Mock()
+    old_info = _core_info(
+        "2026.8.2",
+        version_latest="2026.8.3",
+        update_available=True,
+    )
+    ws.supervisor_api.return_value = old_info
+
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=[0.0, 0.0, 1.0, 1.0],
+        ),
+        patch("tests.haos_image_build.build_image.time.sleep") as sleep,
+        pytest.raises(TimeoutError) as exc_info,
+    ):
+        _wait_core_version(ws, "2026.8.3", timeout=1.0)
+
+    message = str(exc_info.value)
+    assert "expected='2026.8.3'" in message
+    assert repr(old_info) in message
+    ws.reconnect.assert_called_once_with()
+    ws.supervisor_api.assert_called_once_with("/core/info", method="get", timeout=30.0)
+    sleep.assert_called_once_with(0.0)
 
 
 def test_configure_beta_variant_polls_after_blank_unknown_core_update_error() -> None:

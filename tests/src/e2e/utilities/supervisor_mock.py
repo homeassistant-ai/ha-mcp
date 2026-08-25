@@ -11,7 +11,8 @@ Implementation: stdlib ``http.server.ThreadingHTTPServer`` on a daemon thread,
 bound to ``127.0.0.1:0``. The fixture sets two env vars the production code
 already keys off of:
 
-- ``SUPERVISOR_TOKEN`` — flips ``is_running_in_addon()`` on
+- ``SUPERVISOR_TOKEN`` — satisfies the token half of
+  ``is_running_in_addon()``; this external-only fixture is not embedded
 - ``SUPERVISOR_BASE_URL`` — points the covered call sites at the mock
 
 Stdlib instead of aiohttp/starlette so no new dev dep is needed for what is
