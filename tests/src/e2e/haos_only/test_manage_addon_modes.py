@@ -446,23 +446,22 @@ async def test_array_patch_empty_operations_returns_validation_error(
 
 
 async def test_python_transform_filters_http_response(mcp_client: Any) -> None:
-    """`python_transform` runs after a successful Node-RED HTTP response."""
-    if is_haos_inaddon_mode():
-        pytest.skip(
-            "In-app servers cannot mint Core-only ingress sessions; "
-            "the in-app HTTP route is covered by the direct-port probe"
-        )
+    """`python_transform` runs after a successful Node-RED HTTP response.
+
+    The in-app tier uses Node-RED's baked-open direct port because an app cannot
+    mint the Core-only session required by HA Ingress.
+    """
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
+    request: dict[str, Any] = {
+        "slug": slug,
+        "path": "/",
+        "method": "GET",
+        "python_transform": 'response = {"trimmed": True}',
+    }
+    if is_haos_inaddon_mode():
+        request.update(path="/flows", port=1880)
     async with MCPAssertions(mcp_client) as mcp:
-        payload = await mcp.call_tool_success(
-            "ha_manage_app",
-            {
-                "slug": slug,
-                "path": "/",
-                "method": "GET",
-                "python_transform": 'response = {"trimmed": True}',
-            },
-        )
+        payload = await mcp.call_tool_success("ha_manage_app", request)
     assert payload.get("response") == {"trimmed": True}, payload
 
 
