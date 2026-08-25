@@ -71,6 +71,7 @@ from .const import (
 )
 
 if TYPE_CHECKING:
+    import httpx
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.util.json import JsonObjectType
     from mcp import types as mcp_types
@@ -222,6 +223,28 @@ async def async_probe_mcp_sdk(hass: HomeAssistant) -> bool:
     return True
 
 
+def _loopback_httpx_client_factory(
+    headers: dict[str, str] | None = None,
+    timeout: httpx.Timeout | None = None,
+    auth: httpx.Auth | None = None,
+) -> httpx.AsyncClient:
+    """``httpx_client_factory`` for the pre-rename SDK's ``streamablehttp_client``.
+
+    That deprecated entry point takes no ``http_client`` — it always builds
+    its own via this factory — but the factory itself IS overridable, so the
+    same ``verify=False`` / ``trust_env=False`` posture as the canonical path
+    in :func:`_mcp_session` still applies: this fallback is loopback-only
+    too, so a real SSL context is pure waste and this call must never be
+    diverted through an environment proxy (which would also leak the URL's
+    embedded ``secret_path`` to it).
+    """
+    import httpx
+
+    return httpx.AsyncClient(
+        headers=headers, timeout=timeout, auth=auth, verify=False, trust_env=False
+    )
+
+
 @asynccontextmanager
 async def _mcp_session(
     url: str,
@@ -273,11 +296,15 @@ async def _mcp_session(
         except ImportError:
             # Pre-rename SDK (an older ha-mcp resolved by a pip-spec override
             # pins an older fastmcp/mcp): same call shape, deprecated name,
-            # and no http_client kwarg — it builds its own default client, so
-            # on those old SDKs the blocking-SSL-setup cost is unavoidable.
+            # and no http_client kwarg — but it does accept a factory for the
+            # client it builds internally, so _loopback_httpx_client_factory
+            # keeps this fallback on the same verify=False/trust_env=False
+            # posture as the canonical path below.
             from mcp.client.streamable_http import streamablehttp_client
 
-            transport = streamablehttp_client(url=url)
+            transport = streamablehttp_client(
+                url=url, httpx_client_factory=_loopback_httpx_client_factory
+            )
         else:
             import httpx
 

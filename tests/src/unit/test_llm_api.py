@@ -770,8 +770,9 @@ class TestPreRenameSdkFallback:
         opened: dict[str, Any] = {}
 
         @asynccontextmanager
-        async def _old_name_client(url):
+        async def _old_name_client(url, httpx_client_factory=None):
             opened["url"] = url
+            opened["httpx_client_factory"] = httpx_client_factory
             yield "read-stream", "write-stream", lambda: None
 
         fake_transport = ModuleType("mcp.client.streamable_http")
@@ -806,3 +807,16 @@ class TestPreRenameSdkFallback:
 
         assert opened["url"] == "http://127.0.0.1:9584/private_x"
         assert opened["streams"] == ("read-stream", "write-stream")
+        # Regression (review finding on #2276): the deprecated entry point
+        # takes no http_client, but it DOES accept a factory for the client
+        # it builds internally — _mcp_session must hand it one that keeps
+        # this fallback off environment proxies too, not just the canonical
+        # path.
+        assert opened["httpx_client_factory"] is llm_api._loopback_httpx_client_factory
+
+    async def test_loopback_factory_builds_a_client_that_ignores_env_proxies(self):
+        client = llm_api._loopback_httpx_client_factory()
+        try:
+            assert client.trust_env is False
+        finally:
+            await client.aclose()
