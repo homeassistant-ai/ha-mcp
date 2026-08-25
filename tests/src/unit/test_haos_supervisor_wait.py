@@ -10,6 +10,7 @@ patched out so polling runs instantly.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import Mock, call, patch
 
@@ -39,6 +40,55 @@ def test_supervisor_api_reports_a_disconnected_websocket() -> None:
         match=r"supervisor/api get /supervisor/info",
     ):
         ws.supervisor_api("/supervisor/info")
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_code", "expected_message"),
+    [
+        pytest.param(
+            {"code": "unknown_error", "message": ""},
+            "unknown_error",
+            "",
+            id="blank-unknown-error",
+        ),
+        pytest.param(
+            {"code": "invalid_format", "message": "invalid request"},
+            "invalid_format",
+            "invalid request",
+            id="terminal-error",
+        ),
+    ],
+)
+def test_supervisor_api_preserves_structured_error_frame(
+    error: dict[str, str],
+    expected_code: str,
+    expected_message: str,
+) -> None:
+    """Actual WebSocket result frames retain code and raw message fields."""
+    ws = HAWebSocket(
+        "http://127.0.0.1:18123",
+        OAuthCredentials(access_token="access", refresh_token="refresh"),
+    )
+    socket = Mock()
+    socket.recv.return_value = json.dumps(
+        {
+            "id": 1,
+            "type": "result",
+            "success": False,
+            "error": error,
+        }
+    )
+    ws._ws = socket
+
+    with pytest.raises(WSCommandError) as exc_info:
+        ws.supervisor_api("/core/update", method="post", data={})
+
+    assert exc_info.value.code == expected_code
+    assert exc_info.value.supervisor_message == expected_message
+    sent = json.loads(socket.send.call_args.args[0])
+    assert sent["type"] == "supervisor/api"
+    assert sent["endpoint"] == "/core/update"
+    assert sent["method"] == "post"
 
 
 def _info(

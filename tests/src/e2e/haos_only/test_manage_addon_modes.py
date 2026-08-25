@@ -1,11 +1,11 @@
 """End-to-end coverage for representative ``ha_manage_app`` operating modes.
 
-Closes the "real tests, not mocks" half of #1350: the unit tests in
-``tests/src/unit/test_tools_addons*.py`` exercise the tool's call-site
-shape against a stubbed Supervisor, but until this file they were the only
-verification that the real Supervisor, app (add-on) nginx, and Ingress wire
-path behave the way the tool expects. The HAOS bake provides a real Supervisor
-and app set, so the covered mode paths are pinned against running services.
+The HAOS bake provides a real Supervisor and app set. Lifecycle and config
+cases assert live state changes; proxy HTTP and WebSocket probes only validate
+structured result/error plumbing. They do not establish successful app nginx,
+Ingress, or dashboard connectivity. Unit tests in
+``tests/src/unit/test_tools_addons*.py`` cover the remaining call shapes
+against a stubbed Supervisor.
 
 Modes and options covered:
 
@@ -19,9 +19,9 @@ Modes and options covered:
   add minutes to every CI run).
 * **Proxy HTTP** — a ``GET`` smoke check against Node-RED verifies structured
   response shapes. It does not pin status classes.
-* **Proxy with ``port=``** — only meaningful on the inaddon tier where
-  the test runner shares Supervisor's container network. Marked
-  ``inaddon_only`` so the external tier skips it cleanly.
+* **Proxy with ``port=``** — only meaningful in the in-app tier, where the
+  ha-mcp server under test runs on Supervisor's app network. Marked
+  ``inaddon_only`` so other tiers skip it cleanly.
 * **WebSocket proxy** — sends legacy ESPHome ``/validate`` requests and accepts
   either a structured success or the current structured handshake failure.
   These tests exercise route/error plumbing; they do not assert the current
