@@ -113,14 +113,18 @@ async def _wait_addon_state(
     """
     deadline = time.monotonic() + timeout
     last_state: str | None = None
-    while True:
+    while (remaining := deadline - time.monotonic()) > 0:
         try:
-            detail_raw = await mcp_client.call_tool("ha_get_app", {"slug": slug})
+            detail_raw = await mcp_client.call_tool(
+                "ha_get_app", {"slug": slug}, timeout=remaining
+            )
             detail = parse_mcp_result(detail_raw).get("addon") or {}
             last_state = detail.get("state")
         except _POLLING_TRANSIENT_ERRORS as e:
             logger.debug(f"⚠️ Transient error polling addon {slug!r}: {e}")
             last_state = f"<transient: {str(e)[:60]}>"
+        if time.monotonic() >= deadline:
+            break
         if last_state in expected:
             return str(last_state)
         if last_state in failure_states:
@@ -128,12 +132,15 @@ async def _wait_addon_state(
                 f"Addon {slug!r} entered unhealthy state {last_state!r}; "
                 f"expected one of {sorted(expected)!r}"
             )
-        if time.monotonic() >= deadline:
-            pytest.fail(
-                f"Addon {slug!r} did not reach a state in {sorted(expected)!r} "
-                f"within {timeout:.0f}s (last state: {last_state!r})"
-            )
-        await asyncio.sleep(_ADDON_RUNNING_POLL_S)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(min(_ADDON_RUNNING_POLL_S, remaining))
+    pytest.fail(
+        f"Addon {slug!r} did not reach a state in {sorted(expected)!r} "
+        f"within {timeout:.0f}s (last state: {last_state!r})"
+    )
+    raise AssertionError("unreachable: pytest.fail always raises")
 
 
 async def _wait_addon_running(

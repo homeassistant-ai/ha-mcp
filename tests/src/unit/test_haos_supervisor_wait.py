@@ -318,10 +318,10 @@ def test_tolerates_transient_error_during_update() -> None:
 
 
 def test_raises_on_update_timeout() -> None:
-    """update_available never clears within the budget -> TimeoutError."""
+    """A response that arrives after the budget is not accepted."""
     ws = Mock()
-    ws.supervisor_api.return_value = _info(update_available=True, version="2026.05.1")
-    # Monotonic sequence: starts at 0, advances past deadline on 3rd call
+    ws.supervisor_api.return_value = _info(update_available=False)
+    # Monotonic sequence: deadline, pre-request budget, post-request expiry.
     monotonic_values = [0.0, 5.0, 15.0]
     with (
         patch(
@@ -332,8 +332,22 @@ def test_raises_on_update_timeout() -> None:
         pytest.raises(TimeoutError),
     ):
         _wait_supervisor_ready(ws, update_timeout=10.0)
-    # Should have made at least 2 calls (initial + 1 loop iteration before timeout)
-    assert ws.supervisor_api.call_count >= 2
+    ws.supervisor_api.assert_called_once_with(
+        "/supervisor/info", method="get", timeout=5.0
+    )
+
+
+def test_zero_update_timeout_makes_no_readiness_request() -> None:
+    """An exhausted readiness budget performs no Supervisor request."""
+    ws = Mock()
+
+    with (
+        patch("tests.haos_image_build.build_image.time.monotonic", return_value=5.0),
+        pytest.raises(TimeoutError),
+    ):
+        _wait_supervisor_ready(ws, update_timeout=0.0)
+
+    ws.supervisor_api.assert_not_called()
 
 
 def test_persistent_error_surfaced_in_timeout() -> None:
@@ -347,8 +361,8 @@ def test_persistent_error_surfaced_in_timeout() -> None:
             "supervisor unavailable", code="unknown_error", supervisor_message=""
         ),
     ]
-    # Monotonic sequence: deadline calc, loop-entry check, post-error check (>deadline)
-    monotonic_values = [0.0, 5.0, 15.0]
+    # Deadline, first probe, first response, second probe, post-sleep, expiry.
+    monotonic_values = [0.0, 0.0, 0.0, 5.0, 5.0, 15.0]
     with (
         patch(
             "tests.haos_image_build.build_image.time.monotonic",
@@ -358,8 +372,7 @@ def test_persistent_error_surfaced_in_timeout() -> None:
         pytest.raises(TimeoutError, match=r"last error.*WSCommandError"),
     ):
         _wait_supervisor_ready(ws, update_timeout=10.0)
-    # Loop ran at least once before timing out
-    assert ws.supervisor_api.call_count >= 2
+    assert ws.supervisor_api.call_count == 2
 
 
 def test_wait_timeout_prefers_the_last_reconnect_error() -> None:
@@ -374,7 +387,7 @@ def test_wait_timeout_prefers_the_last_reconnect_error() -> None:
     with (
         patch(
             "tests.haos_image_build.build_image.time.monotonic",
-            side_effect=[0.0, 5.0, 15.0],
+            side_effect=[0.0, 0.0, 0.0, 5.0, 5.0, 6.0, 15.0],
         ),
         patch("tests.haos_image_build.build_image.time.sleep"),
         pytest.raises(TimeoutError, match="refresh failed"),

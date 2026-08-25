@@ -1795,6 +1795,21 @@ def _reconnect_supervisor_during_wait(ws: HAWebSocket) -> BaseException | None:
     return None
 
 
+def _supervisor_readiness_probe_budget(
+    deadline: float, *, delay: bool
+) -> float | None:
+    """Return the next readiness request budget within the deadline."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None
+    if delay:
+        time.sleep(min(10.0, remaining))
+        remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None
+    return min(30.0, remaining)
+
+
 def _wait_supervisor_ready(
     ws: HAWebSocket,
     *,
@@ -1818,14 +1833,20 @@ def _wait_supervisor_ready(
     info: dict[str, Any] = {}
     last_version: object = None
     last_error: BaseException | None = None
-    first_probe = True
     first_success = True
-    while first_probe or time.monotonic() < deadline:
-        if not first_probe:
-            time.sleep(10.0)
+    first_probe = True
+    while (
+        request_timeout := _supervisor_readiness_probe_budget(
+            deadline, delay=not first_probe
+        )
+    ) is not None:
         first_probe = False
         try:
-            info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
+            info = ws.supervisor_api(
+                "/supervisor/info",
+                method="get",
+                timeout=request_timeout,
+            )
         except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as e:
             if not _is_transient_supervisor_readiness_error(e):
                 raise
@@ -1834,10 +1855,14 @@ def _wait_supervisor_ready(
             # then best-effort reconnect and keep polling.
             last_error = e
             LOG.debug("Transient error polling /supervisor/info: %r", e)
+            if time.monotonic() >= deadline:
+                break
             reconnect_err = _reconnect_supervisor_during_wait(ws)
             if reconnect_err is not None:
                 last_error = reconnect_err
             continue
+        if time.monotonic() >= deadline:
+            break
         version = info.get("version")
         ready = _supervisor_info_ready(
             info,
@@ -2003,7 +2028,7 @@ def _apply_supervisor_image_update(
         try:
             _wait_supervisor_ready(
                 ws,
-                update_timeout=max(deadline - time.monotonic(), 1.0),
+                update_timeout=max(deadline - time.monotonic(), 0.0),
                 expected_channel=channel,
                 minimum_version=minimum_version,
             )
