@@ -22,11 +22,15 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import summarize_theme_listing, websocket_error_message
+from .util_helpers import (
+    JSON_STRING_COERCION,
+    summarize_theme_listing,
+    websocket_error_message,
+)
 
 logger = logging.getLogger(__name__)
 
-ThemeAction = Literal["list", "set"]
+ThemeAction = Literal["list", "set", "get_engine_theme", "set_engine_theme"]
 
 
 class ThemesTools:
@@ -34,6 +38,137 @@ class ThemesTools:
 
     def __init__(self, client: Any) -> None:
         self._client = client
+
+    async def _engine_credential(self) -> Any:
+        """Resolve the screenshot engine user's credential, or fail clearly.
+
+        The engine writes its own token user's profile, which in a dedicated
+        engine-account setup is NOT the account ha-mcp itself authenticates
+        as -- so these actions cannot simply reuse ha-mcp's own client.
+        """
+        from ..config import get_global_settings
+        from ..dashboard_screenshot.provision import resolve_engine
+        from ..dashboard_screenshot.theme_guard import ThemeGuard
+
+        explicit_url = (
+            get_global_settings().dashboard_screenshot_engine_url or ""
+        ).strip()
+        engine_target = await resolve_engine()
+        # An explicit URL is never provably paired with a credential. Even on
+        # HA OS, _addon_credential_best_effort() hands back the DISCOVERED
+        # Puppet app's credential without checking it identifies the engine
+        # that URL points at -- so a sidecar URL plus a running app yields a
+        # credential for the wrong account. That was a safe no-op while the
+        # guard only wrote back its own snapshot; it is not safe now that
+        # these actions read and write a profile on request.
+        if explicit_url or engine_target.addon_credential is None:
+            # An explicitly configured engine URL yields no addon_credential,
+            # so the only fallback is ha-mcp's OWN credential -- which under
+            # the dedicated-engine-account setup this feature recommends is a
+            # different Home Assistant user. Acting on it would read and
+            # overwrite the wrong profile while leaving the engine account
+            # untouched. expected_current cannot save us: it compares values,
+            # not identity, and two users sharing a theme compare equal.
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "The screenshot engine's Home Assistant account cannot be "
+                    "identified, so its theme cannot be read or written.",
+                    suggestions=[
+                        (
+                            "This applies whenever an engine URL is set "
+                            + "explicitly: the engine's own token is not "
+                            + "discoverable, and a credential discovered via "
+                            + "the Supervisor is not provably that engine's."
+                        ),
+                        (
+                            "Restore the theme from that account's own "
+                            + "session: Profile > General in the Home "
+                            + "Assistant UI."
+                        ),
+                    ],
+                )
+            )
+        guard = ThemeGuard.for_capture(engine_target.addon_credential, self._client)
+        if guard.credential is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "No screenshot-engine credential is discoverable in this "
+                    "deployment, so the engine account's theme cannot be read "
+                    "or written.",
+                    suggestions=[
+                        "This action only applies where a screenshot engine "
+                        "is configured.",
+                    ],
+                )
+            )
+        return guard.credential
+
+    async def _get_engine_theme(self) -> dict[str, Any]:
+        """Read the screenshot engine account's saved per-user theme."""
+        from ..dashboard_screenshot.theme_guard import read_engine_theme
+
+        credential = await self._engine_credential()
+        return {"success": True, "data": {"theme": await read_engine_theme(credential)}}
+
+    async def _set_engine_theme(
+        self,
+        action: str,
+        value: dict[str, Any] | None,
+        expected_current: dict[str, Any] | None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Restore the screenshot engine account's saved per-user theme."""
+        from ..dashboard_screenshot.theme_guard import (
+            ThemeChangedError,
+            write_engine_theme,
+        )
+
+        if value is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "value is required when action='set_engine_theme'",
+                    context={"action": action},
+                    suggestions=[
+                        "Use the value quoted in the screenshot tool's "
+                        + "warning, e.g. {'theme': '', 'dark': False}",
+                    ],
+                )
+            )
+        credential = await self._engine_credential()
+        try:
+            # expected_current=None is an explicit "expect no stored theme",
+            # not an omission -- only force skips the guard.
+            await write_engine_theme(
+                credential, value, expected_current=expected_current, force=force
+            )
+        except ThemeChangedError as guard_error:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "The engine account's saved theme is no longer the value "
+                    "this restore expected, so it was not overwritten.",
+                    context={
+                        "action": action,
+                        "expected_current": expected_current,
+                        "actual_current": guard_error.actual,
+                    },
+                    suggestions=[
+                        (
+                            "Something else changed the theme since the "
+                            + "warning was emitted -- confirm the intended "
+                            + "value before retrying."
+                        ),
+                        (
+                            "Re-read it with ha_manage_theme("
+                            + "action='get_engine_theme')."
+                        ),
+                    ],
+                )
+            )
+        return {"success": True, "data": {"theme": value}}
 
     async def _list_themes(self) -> dict[str, Any]:
         """Fetch installed theme names and defaults via websocket."""
@@ -69,7 +204,11 @@ class ThemesTools:
             ThemeAction,
             Field(
                 description=(
-                    "Theme operation: list installed themes or set the default theme."
+                    "Theme operation: 'list' installed themes, 'set' the "
+                    "backend default theme, or read/restore the screenshot "
+                    "engine account's own per-user theme with "
+                    "'get_engine_theme' / 'set_engine_theme' (a different "
+                    "layer from the backend default)."
                 ),
             ),
         ],
@@ -80,6 +219,49 @@ class ThemesTools:
                     "Theme name when action='set'. Must be an installed theme; "
                     "'default' restores the built-in theme, 'none' resets the "
                     "chosen mode to the built-in default."
+                ),
+                default=None,
+            ),
+        ] = None,
+        expected_current: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Guard for action='set_engine_theme': the stored theme is "
+                    "read immediately before the write and the write is "
+                    "skipped if it no longer equals this. Omitting this value "
+                    "or passing null both mean 'expect no stored theme', "
+                    "enforced like any other value; the guard is always "
+                    "applied unless force is set. Best-effort, not atomic -- Home Assistant exposes no "
+                    "conditional write, so a change landing between that read "
+                    "and the write is not caught. Pass the expected_current "
+                    "value quoted in the screenshot tool's warning."
+                ),
+                default=None,
+            ),
+        ] = None,
+        force: Annotated[
+            bool,
+            Field(
+                description=(
+                    "action='set_engine_theme' only: skip the expected_current "
+                    "guard and overwrite unconditionally. Leave false unless "
+                    "you intend to discard whatever is stored."
+                ),
+                default=False,
+            ),
+        ] = False,
+        value: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Frontend user-data theme object when "
+                    "action='set_engine_theme', e.g. {'theme': '', "
+                    "'dark': False}. An empty dict restores default/auto "
+                    "behavior. Take this verbatim from the warning a "
+                    "screenshot tool emitted."
                 ),
                 default=None,
             ),
@@ -107,6 +289,18 @@ class ThemesTools:
         current defaults; action='set' selects the backend default theme
         (optionally per light/dark mode).
 
+        SCREENSHOT-ENGINE ACTIONS (per-user, not the backend default):
+        Taking a dashboard screenshot makes the Puppet engine write the saved
+        theme of the Home Assistant user its token belongs to, which also
+        flips that user's live web and mobile sessions. The screenshot tools
+        are read-only and only *report* this; use action='set_engine_theme'
+        with the value quoted in their warning to put it back, and
+        action='get_engine_theme' to inspect it. These act on that engine
+        account's per-user profile via frontend/set_user_data, which is a
+        different layer from the backend default that action='set' changes.
+        Giving the engine its own dedicated user and token avoids the issue
+        entirely.
+
         Caveats: action='set' changes the backend-selected default only -
         users who explicitly picked a theme in their profile keep their
         choice. Theme names are validated by Home Assistant at call time.
@@ -118,10 +312,25 @@ class ThemesTools:
               action="set", theme_name="nord", mode="dark")
         - Restore built-in default: ha_manage_theme(
               action="set", theme_name="default")
+        - Inspect the engine account's theme: ha_manage_theme(
+              action="get_engine_theme")
+        - Undo a screenshot's theme change (pass BOTH values from the
+          warning, so a theme changed since then is not overwritten):
+          ha_manage_theme(action="set_engine_theme",
+              value={"theme": "", "dark": False},
+              expected_current={"theme": "default", "dark": True})
         """
         try:
             if action == "list":
                 return {"success": True, "data": await self._list_themes()}
+
+            if action == "get_engine_theme":
+                return await self._get_engine_theme()
+
+            if action == "set_engine_theme":
+                return await self._set_engine_theme(
+                    action, value, expected_current, force
+                )
 
             if not theme_name:
                 raise_tool_error(

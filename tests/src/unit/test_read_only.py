@@ -272,6 +272,25 @@ class TestExemptionRules:
         rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_radio"].blocked_write
         assert (rule(args) is None) is allowed
 
+    @pytest.mark.parametrize(
+        "args,allowed",
+        [
+            ({"action": "list"}, True),
+            # No pure-read duplicate exists, and Read Only Mode still surfaces
+            # the capture warning naming this value -- so it stays inspectable.
+            ({"action": "get_engine_theme"}, True),
+            # Both writes stay blocked: the backend default and the
+            # engine-account restore.
+            ({"action": "set", "theme_name": "nord"}, False),
+            ({"action": "set_engine_theme", "value": {"theme": ""}}, False),
+            # A missing action fails closed -- never a silent read.
+            ({}, False),
+        ],
+    )
+    def test_manage_theme(self, args, allowed):
+        rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_theme"].blocked_write
+        assert (rule(args) is None) is allowed
+
 
 @pytest.mark.anyio
 class TestMiddleware:
@@ -639,6 +658,7 @@ class TestExemptTableContract:
             "ha_manage_radio",
             "ha_manage_updates",
             "ha_manage_security_policy",
+            "ha_manage_theme",
         }
 
     def test_every_exemption_describes_whats_allowed(self):
@@ -662,6 +682,7 @@ _EXEMPT_TOOL_MODULES = {
     "ha_manage_radio": "tools_radio.py",
     "ha_manage_updates": "tools_updates.py",
     "ha_manage_security_policy": "tools_security_policy.py",
+    "ha_manage_theme": "tools_themes.py",
 }
 
 # INDEPENDENT, hardcoded manifests of the argument names each exempt
@@ -673,6 +694,7 @@ _EXEMPT_TOOL_MODULES = {
 # tool likewise fails this test, telling the maintainer to re-review the
 # read-only predicate.
 _EXEMPT_INSPECTED_ARGS = {
+    "ha_manage_theme": {"action"},
     "ha_manage_backup": {"scope", "action"},
     "ha_manage_app": {
         "action",
@@ -715,6 +737,20 @@ _ADDON_CONFIG_WRITE_PARAMS_MANIFEST = (
 # dispatch fields the predicate inspects) would silently classify as a
 # read in Read Only Mode.
 _EXEMPT_GATED_OR_READ_ARGS = {
+    "ha_manage_theme": {
+        # Consumed only under the action dispatch the predicate inspects:
+        # the backend-default write payload ('set')...
+        "theme_name",
+        "mode",
+        # ...and the engine-account restore payload plus its compare guard
+        # ('set_engine_theme'). Both actions are blocked outright, so these
+        # carry no mutation capability of their own in read-only mode.
+        "value",
+        "expected_current",
+        # Unconditional-overwrite escape hatch on set_engine_theme, itself a
+        # blocked action in read-only mode.
+        "force",
+    },
     "ha_manage_backup": {
         # Consumed only under the (scope, action) dispatch the predicate
         # inspects: snapshot create/restore payloads...
