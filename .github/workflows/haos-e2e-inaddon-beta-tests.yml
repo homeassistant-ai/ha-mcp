@@ -266,12 +266,15 @@ jobs:
         # when nothing else can be in flight.
         run: |
           cd tests
-          uv run pytest ${{ github.event.inputs.pytest_paths || 'src/e2e/' }} \
+          # Inputs are data, intentionally word-split into pytest arguments.
+          # shellcheck disable=SC2086
+          uv run pytest $PYTEST_PATHS \
             -n2 --dist loadscope -v --tb=short --maxfail=0 \
-            -m "not addon_disruptive" ${{ github.event.inputs.pytest_args }}
-          uv run pytest ${{ github.event.inputs.pytest_paths || 'src/e2e/' }} \
+            -m "not addon_disruptive" $PYTEST_ARGS
+          # shellcheck disable=SC2086
+          uv run pytest $PYTEST_PATHS \
             -n0 -v --tb=short --maxfail=0 \
-            -m addon_disruptive ${{ github.event.inputs.pytest_args }} \
+            -m addon_disruptive $PYTEST_ARGS \
             || { rc=$?; [ "$rc" -eq 5 ] && echo "no disruptive tests in selection"; [ "$rc" -eq 5 ]; }
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
@@ -279,6 +282,8 @@ jobs:
           HAOS_TEST_MODE: inaddon
           HAOS_EXPECTED_SUPERVISOR_CHANNEL: beta
           HAOS_EXPECTED_SUPERVISOR_MIN_VERSION: ${{ steps.versions.outputs.supervisor_version }}
+          PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
+          PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
           HAOS_EXPECTED_CORE_VERSION: ${{ steps.versions.outputs.core_version }}
           # Feeds conftest's HACS token injection (qcow2 pre-boot edit)
           # so HACS repo adds don't hit the unauthenticated shared-IP

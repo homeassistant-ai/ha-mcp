@@ -5667,7 +5667,7 @@ class TestManageAddonRepositoryAction:
         suggestions = " ".join(
             [err_obj.get("suggestion", "")] + err_obj.get("suggestions", [])
         )
-        assert "add-on repository URL" in suggestions
+        assert "app (add-on) repository URL" in suggestions
         assert "connection" not in suggestions.lower()
 
     async def test_remove_repository_in_use_suggests_uninstall(self):

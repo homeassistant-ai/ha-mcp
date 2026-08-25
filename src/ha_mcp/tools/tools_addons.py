@@ -369,8 +369,8 @@ def _supervisor_unknown_outcome_suggestions(endpoint: str, method: str) -> list[
     action = endpoint.rstrip("/").rsplit("/", 1)[-1]
     if action in {"restart", "rebuild"}:
         return [
-            f"The {action} request may have been accepted, but ha_get_app cannot "
-            "prove whether it ran; do not replay it automatically",
+            f"The {action} request may have been accepted; do not replay it "
+            "automatically",
             f"Inspect Supervisor jobs and logs for {method} {endpoint} before "
             "deciding whether manual action is needed",
         ]
@@ -499,8 +499,9 @@ async def _supervisor_api_call_once(
     except httpx.TimeoutException as exc:
         verb = method.upper()
         if verb in {"GET", "HEAD"}:
-            raise TimeoutError(
-                f"Supervisor API {verb} {endpoint} timed out after {wait_timeout}s"
+            raise HomeAssistantConnectionError(
+                f"Supervisor API {verb} {endpoint} connection timed out after "
+                f"{wait_timeout}s"
             ) from exc
         _raise_supervisor_write_outcome_unknown(
             ErrorCode.TIMEOUT_OPERATION,
@@ -597,7 +598,13 @@ def _supervisor_result_mapping(
             endpoint,
             verb,
         )
-    raise HomeAssistantCommandError(message)
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            message,
+            context={"endpoint": endpoint, "method": verb},
+        )
+    )
 
 
 async def _supervisor_api_call(
@@ -3695,7 +3702,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 "(e.g., 'https://github.com/balloob/home-assistant-addons'). For "
                 "remove_repository: the repository slug (e.g., '0f1cc410', as shown "
                 "in ha_get_app(source='available')). Required for those actions; "
-                "ignored otherwise.",
+                "rejected otherwise.",
                 default=None,
             ),
         ] = None,
