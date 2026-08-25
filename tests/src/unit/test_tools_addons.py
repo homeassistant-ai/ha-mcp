@@ -3365,13 +3365,14 @@ class TestListAddonsStats:
             await list_addons(client, include_stats=True)
 
     @pytest.mark.asyncio
-    async def test_running_addon_requires_a_valid_slug_for_stats(self):
+    @pytest.mark.parametrize("invalid_slug", [None, "../supervisor", ".", ".."])
+    async def test_running_addon_requires_a_valid_slug_for_stats(self, invalid_slug):
         """Malformed Supervisor data cannot become an /addons/None request."""
         import copy
 
         client = _make_mock_client()
         response = copy.deepcopy(_ADDONS_LIST_RESPONSE)
-        response["result"]["addons"][0]["slug"] = None
+        response["result"]["addons"][0]["slug"] = invalid_slug
 
         with (
             patch(
@@ -3578,7 +3579,7 @@ class TestManageAddon:
         assert isinstance(warnings, list) and warnings, (
             f"Expected non-empty warnings list, got: {result}"
         )
-        assert any("not in add-on schema were ignored" in w for w in warnings), (
+        assert any("not in app (add-on) schema were ignored" in w for w in warnings), (
             f"Expected ignored-field warning content; got: {warnings!r}"
         )
 
@@ -4082,17 +4083,17 @@ class TestSupervisorApiCall:
     """Test Supervisor routing, retries, and structured error classification.
 
     This includes schema-message handling from issue #993 and the direct app
-    transport required by Supervisor 2026.08.
+    transport introduced in Supervisor 2026.08.
     """
 
     @pytest.mark.asyncio
     async def test_addon_mode_uses_direct_supervisor_rest(self, monkeypatch):
         """App installs must not tunnel Supervisor calls through HA Core WS.
 
-        Supervisor 2026.08 blocks app-originated ``supervisor/api`` commands
-        because Core would execute them with Core's broader token. The app's
-        own manager-role token remains authorized for ``/addons`` and ``/store``
-        over the direct Supervisor REST API.
+        Supervisor's app-to-Core proxy blocks app-originated ``supervisor/api``
+        commands because Core would execute them with Core's broader token. The
+        app's manager-role token remains authorized for ``/addons`` and ``/store``
+        over direct Supervisor REST; this boundary was introduced in 2026.08.
         """
         from ha_mcp.tools.tools_addons import _supervisor_api_call
 
@@ -4261,8 +4262,10 @@ class TestSupervisorApiCall:
         assert payload["error"]["code"] == expected_code
         if status_code == 401:
             suggestions = " ".join(payload["error"]["suggestions"]).lower()
-            assert "managed by the supervisor" in suggestions
-            assert "core restart" in suggestions
+            assert "restart the ha-mcp app" in suggestions
+            assert "supervisor logs" in suggestions
+            assert "core restart" not in suggestions
+            assert "home-assistant.log" not in suggestions
             assert "home_assistant_token" not in suggestions
         if status_code == 403:
             assert payload["status_code"] == 403
@@ -4312,6 +4315,47 @@ class TestSupervisorApiCall:
 
         payload = _parse_tool_error(exc_info)
         assert payload["error"]["code"] == expected_code
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_write_timeout_reports_unknown_outcome(self, monkeypatch):
+        """A timed-out write tells callers to verify state before retrying."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.side_effect = httpx.ReadTimeout("read timed out")
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "TIMEOUT_OPERATION"
+        assert payload["method"] == "POST"
+        assert payload["outcome"] == "unknown"
+        suggestions = " ".join(payload["error"]["suggestions"]).lower()
+        assert "may have been accepted" in suggestions
+        assert "ha_get_app" in suggestions
+        assert "supervisor" in suggestions
+        direct_client.request.assert_awaited_once_with(
+            "POST", "/addons/core_mosquitto/restart", json={}
+        )
         client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio

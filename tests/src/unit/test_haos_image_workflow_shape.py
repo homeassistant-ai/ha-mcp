@@ -160,6 +160,14 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
         assert beta_path.is_file(), f"missing beta lane cloned from {stable_name}"
         workflow = _workflow(beta_path)
         job = workflow["jobs"][beta_job_id]
+
+        triggers = workflow[True]
+        assert triggers["pull_request"] is None
+        assert triggers["push"]["branches"] == ["master"]
+        assert triggers["schedule"]
+        assert all(entry.get("cron") for entry in triggers["schedule"])
+        assert job["needs"] == "changes"
+        assert "needs.changes.outputs.run != 'false'" in job["if"]
         steps = _job_steps(job)
 
         resolve = next(

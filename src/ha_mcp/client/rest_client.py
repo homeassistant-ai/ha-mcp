@@ -775,18 +775,18 @@ class HomeAssistantClient:
 
         ``path`` is everything between ``http://supervisor/`` and ``/logs``:
 
-        - ``"addons/<slug>"`` for add-on container logs
+        - ``"addons/<slug>"`` for app (add-on) container logs
         - ``"<service>"`` (where service ∈ {supervisor, host, core, dns, audio,
           cli, multicast, observer}) for system-service logs
 
         ``lines`` maps to the endpoint's ``?lines=`` journald-window query
         param; omitted → Supervisor's 100-line default window.
 
-        Bypasses ``HomeAssistantClient.httpx_client`` because the Supervisor
-        endpoint uses a different base URL (``http://supervisor``) and a
-        different token (``SUPERVISOR_TOKEN``) than HA Core REST. Both
-        endpoints require the addon's ``hassio_role`` to be ``manager`` (not
-        ``default``); a ``default`` role gets a 403 here — see #1116.
+        Bypasses ``HomeAssistantClient.httpx_client`` because that client targets
+        Home Assistant Core through ``http://supervisor/core/api``, while logs
+        belong to Supervisor at ``http://supervisor``. In app mode both clients
+        use the same ``SUPERVISOR_TOKEN``; both routes require ``hassio_role:
+        manager``. A ``default`` role gets a 403 here — see #1116.
 
         Raises:
             HomeAssistantAuthError: ``SUPERVISOR_TOKEN`` absent at call time,
@@ -899,16 +899,16 @@ class HomeAssistantClient:
         and will raise ``HomeAssistantAPIError`` on any unknown path (404).
 
         Branch on ``is_running_in_addon()`` — mirror of ``get_addon_logs``:
-        inside the addon container goes directly to Supervisor at
+        inside the app (add-on) container goes directly to Supervisor at
         ``http://supervisor/{service}/logs`` with the Supervisor token
-        (``hassio_role: manager`` required). On non-addon installs (Docker
+        (``hassio_role: manager`` required). On non-app installs (Docker
         without Supervisor, pyinstaller, pip pointing at a normal HA URL),
         falls back to the HA Core proxy at ``/api/hassio/{service}/logs``.
 
-        All seven slugs are whitelisted in HA Core's hassio proxy
+        All eight service slugs are whitelisted in HA Core's hassio proxy
         (``homeassistant/components/hassio/http.py`` — ``PATHS_ADMIN``), so
         an admin LLA is sufficient to reach any of them from outside the
-        addon.
+        app.
 
         Closes #1260: pre-fix this method had only the addon-direct branch,
         so non-addon installs (the Docker image, uvx ha-mcp, etc.) hit the

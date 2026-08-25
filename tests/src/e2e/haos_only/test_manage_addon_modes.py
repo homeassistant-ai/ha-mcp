@@ -1,14 +1,13 @@
-"""End-to-end coverage for every ``ha_manage_app`` operating mode.
+"""End-to-end coverage for representative ``ha_manage_app`` operating modes.
 
 Closes the "real tests, not mocks" half of #1350: the unit tests in
 ``tests/src/unit/test_tools_addons*.py`` exercise the tool's call-site
-shape against a stubbed Supervisor, but until this file they were the
-only verification that the *real* Supervisor + addon nginx + Ingress
-wire path behaves the way the tool expects. The HAOS bake provides a
-real Supervisor and a real addon set, so every mode of the tool is now
-pinned against running services.
+shape against a stubbed Supervisor, but until this file they were the only
+verification that the real Supervisor, app (add-on) nginx, and Ingress wire
+path behave the way the tool expects. The HAOS bake provides a real Supervisor
+and app set, so the covered mode paths are pinned against running services.
 
-Modes covered (one test class each):
+Modes and options covered:
 
 * **Config mode** — ``options`` / ``boot`` / ``auto_update`` / ``watchdog``
   round-trips. ``network`` is not covered because the addons in the bake
