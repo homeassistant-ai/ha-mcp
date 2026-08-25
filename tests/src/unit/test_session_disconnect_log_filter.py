@@ -7,13 +7,19 @@ import pytest
 
 from ha_mcp.log_filters import (
     SessionDisconnectLogFilter,
-    _is_only_closed_resource_errors,
+    _is_only_disconnect_teardown_errors,
 )
 
 
 async def _raise_closed_resource_error() -> None:
-    """Raise the exact exception the disconnect race produces."""
+    """Raise one of the two exceptions the disconnect race can produce."""
     raise anyio.ClosedResourceError()
+
+
+async def _raise_broken_resource_error() -> None:
+    """Raise the other exception the same disconnect race can produce --
+    which one depends on which end of the memory stream closed first."""
+    raise anyio.BrokenResourceError()
 
 
 async def _raise_runtime_error() -> None:
@@ -100,6 +106,20 @@ class TestSessionDisconnectLogFilter:
         assert record.levelno == logging.WARNING
         assert record.exc_info is None
 
+    def test_demotes_stateless_session_crash_from_broken_resource_error(self):
+        """The disconnect race's other exception type: which one surfaces
+        depends on which end of the memory stream closed first, but both
+        are the same benign situation."""
+        err = anyio.BrokenResourceError()
+        record = self._make_record(
+            "mcp.server.streamable_http_manager",
+            "Stateless session crashed",
+            err,
+        )
+        assert self.log_filter.filter(record) is True
+        assert record.levelno == logging.WARNING
+        assert record.exc_info is None
+
     async def test_demotes_real_task_group_exception_group(self):
         """The shape actually logged in production: mcp.server.lowlevel.server
         dispatches message handling via anyio.create_task_group().start_soon,
@@ -117,6 +137,21 @@ class TestSessionDisconnectLogFilter:
         assert record.levelno == logging.WARNING
         assert record.exc_info is None
         assert "client disconnected before response delivery" in record.getMessage()
+
+    async def test_demotes_real_task_group_exception_group_broken_resource(self):
+        """Same production shape, but with BrokenResourceError as the leaf --
+        the other half of the disconnect-race pair."""
+        caught = await _run_in_task_group(_raise_broken_resource_error)
+        assert isinstance(caught, BaseExceptionGroup)
+
+        record = self._make_record(
+            "mcp.server.streamable_http_manager",
+            "Stateless session crashed",
+            caught,
+        )
+        assert self.log_filter.filter(record) is True
+        assert record.levelno == logging.WARNING
+        assert record.exc_info is None
 
     async def test_leaves_mixed_exception_group_at_error(self):
         """A task group with one ClosedResourceError AND one unrelated failure
@@ -174,32 +209,58 @@ class TestSessionDisconnectLogFilter:
         assert record.levelno == logging.ERROR
 
 
-class TestIsOnlyClosedResourceErrors:
+class TestIsOnlyDisconnectTeardownErrors:
     """Direct coverage of the recursive classifier the filter relies on."""
 
     def test_bare_closed_resource_error(self):
         """A bare ClosedResourceError matches on its own."""
-        assert _is_only_closed_resource_errors(anyio.ClosedResourceError()) is True
+        assert _is_only_disconnect_teardown_errors(anyio.ClosedResourceError()) is True
+
+    def test_bare_broken_resource_error(self):
+        """A bare BrokenResourceError matches too -- the other half of the
+        disconnect-race pair (sibling Exception subclasses, neither a
+        subclass of the other, so this needs its own explicit check)."""
+        assert _is_only_disconnect_teardown_errors(anyio.BrokenResourceError()) is True
 
     def test_bare_other_exception(self):
         """An unrelated bare exception never matches."""
-        assert _is_only_closed_resource_errors(RuntimeError("x")) is False
+        assert _is_only_disconnect_teardown_errors(RuntimeError("x")) is False
 
     def test_group_of_one_closed_resource_error(self):
         """A single-item group wrapping just the known-benign exception matches."""
         group = ExceptionGroup("eg", [anyio.ClosedResourceError()])
-        assert _is_only_closed_resource_errors(group) is True
+        assert _is_only_disconnect_teardown_errors(group) is True
+
+    def test_group_of_one_broken_resource_error(self):
+        """Same, for the BrokenResourceError half of the pair."""
+        group = ExceptionGroup("eg", [anyio.BrokenResourceError()])
+        assert _is_only_disconnect_teardown_errors(group) is True
+
+    def test_group_mixing_both_benign_types(self):
+        """A group with both ClosedResourceError and BrokenResourceError
+        leaves is still all-benign -- e.g. concurrent responses racing the
+        same teardown from opposite ends."""
+        group = ExceptionGroup(
+            "eg", [anyio.ClosedResourceError(), anyio.BrokenResourceError()]
+        )
+        assert _is_only_disconnect_teardown_errors(group) is True
 
     def test_nested_group_of_closed_resource_errors(self):
         """Nested groups are unwrapped recursively, matching all-benign leaves."""
         inner = ExceptionGroup("inner", [anyio.ClosedResourceError()])
         outer = ExceptionGroup("outer", [inner, anyio.ClosedResourceError()])
-        assert _is_only_closed_resource_errors(outer) is True
+        assert _is_only_disconnect_teardown_errors(outer) is True
+
+    def test_nested_group_with_broken_resource_error_leaf(self):
+        """Nested groups recurse correctly for the BrokenResourceError half too."""
+        inner = ExceptionGroup("inner", [anyio.BrokenResourceError()])
+        outer = ExceptionGroup("outer", [inner, anyio.ClosedResourceError()])
+        assert _is_only_disconnect_teardown_errors(outer) is True
 
     def test_mixed_group_is_rejected(self):
         """A group with even one non-benign leaf must not match."""
         group = ExceptionGroup("eg", [anyio.ClosedResourceError(), RuntimeError("x")])
-        assert _is_only_closed_resource_errors(group) is False
+        assert _is_only_disconnect_teardown_errors(group) is False
 
     def test_empty_group_is_rejected(self):
         """Defensive: an ExceptionGroup always carries at least one exception

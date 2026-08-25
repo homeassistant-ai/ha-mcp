@@ -85,25 +85,40 @@ class ToolValidationLogFilter(logging.Filter):
         return True
 
 
-def _is_only_closed_resource_errors(err: BaseException) -> bool:
-    """True if ``err`` is (or an ExceptionGroup wrapping only) ClosedResourceError.
+_DISCONNECT_TEARDOWN_ERRORS = (anyio.ClosedResourceError, anyio.BrokenResourceError)
+
+
+def _is_only_disconnect_teardown_errors(err: BaseException) -> bool:
+    """True if ``err`` is (or an ExceptionGroup wrapping only) a benign
+    streamable-HTTP memory-stream teardown error.
 
     ``mcp.server.lowlevel.server.Server.run()`` dispatches each incoming
-    message via ``anyio.create_task_group().start_soon(...)``, so a
-    ``ClosedResourceError`` raised while delivering one message's response
-    is raised from a task-group child -- anyio always wraps that in an
-    ``ExceptionGroup``, even for a single failure. The exception a "session
-    crashed" log record carries is therefore
-    ``ExceptionGroup(...[ClosedResourceError])``, not a bare
-    ``ClosedResourceError``. Recurse through (possibly nested) groups; any
-    non-``ClosedResourceError`` leaf means this is not the known-benign
-    disconnect race, so the caller should leave the record alone.
+    message via ``anyio.create_task_group().start_soon(...)``, so an error
+    raised while delivering one message's response is raised from a
+    task-group child -- anyio always wraps that in an ``ExceptionGroup``,
+    even for a single failure. The exception a "session crashed" log record
+    carries is therefore ``ExceptionGroup(...[<teardown error>])``, not a
+    bare one.
+
+    Both ``ClosedResourceError`` and ``BrokenResourceError`` -- sibling
+    ``Exception`` subclasses, neither a subclass of the other -- can surface
+    here for the same disconnect race: which one depends on which end
+    closed first (our end closing raises ``Closed``; the peer's
+    ``streamable_http`` ``terminate()`` closing first can wake a parked
+    sender into raising ``Broken`` instead, even though the situation is
+    identical from the caller's perspective). This repo already treats the
+    two as an equivalent pair for streamable-HTTP memory-stream teardown
+    elsewhere -- see ``tests/src/haos_runtime.py``'s transient-error tuple.
+
+    Recurse through (possibly nested) groups; any other leaf type means
+    this is not the known-benign disconnect race, so the caller should
+    leave the record alone.
     """
-    if isinstance(err, anyio.ClosedResourceError):
+    if isinstance(err, _DISCONNECT_TEARDOWN_ERRORS):
         return True
     if isinstance(err, BaseExceptionGroup):
         return bool(err.exceptions) and all(
-            _is_only_closed_resource_errors(sub) for sub in err.exceptions
+            _is_only_disconnect_teardown_errors(sub) for sub in err.exceptions
         )
     return False
 
@@ -118,8 +133,9 @@ class SessionDisconnectLogFilter(logging.Filter):
     timeout -- lets the SDK finish serving the response and tear the
     transport down while ``app.run()`` is still working; the eventual attempt
     to deliver the response then writes into an already-closed memory stream
-    and raises ``anyio.ClosedResourceError`` (wrapped in an ``ExceptionGroup``
-    -- see ``_is_only_closed_resource_errors``). The SDK already catches this
+    and raises ``anyio.ClosedResourceError`` or ``anyio.BrokenResourceError``
+    (wrapped in an ``ExceptionGroup`` -- see
+    ``_is_only_disconnect_teardown_errors``). The SDK already catches this
     (``except Exception: logger.exception(...)`` in both the stateless and
     stateful session runners of mcp/server/streamable_http_manager.py) -- it
     just logs it as an alarming ERROR-level traceback. That's an expected
@@ -135,7 +151,7 @@ class SessionDisconnectLogFilter(logging.Filter):
             return True
 
         err = record.exc_info[1]
-        if err is None or not _is_only_closed_resource_errors(err):
+        if err is None or not _is_only_disconnect_teardown_errors(err):
             return True
 
         record.msg = (

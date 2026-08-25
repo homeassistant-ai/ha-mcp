@@ -2694,6 +2694,86 @@ class TestServeLogFilters:
         assert isinstance(mgr._thread_exc, _StopServe)
 
 
+class TestInstallLogFiltersIfAvailable:
+    """Direct unit coverage of _install_log_filters_if_available()'s branch
+    logic. CodeRabbit review finding: the _serve()-level tests above only
+    assert that serving continues either way, never that the SILENT
+    "older ha-mcp" case and the WARNING cases are actually distinguishable
+    by their log output -- dropping the err.name check entirely would leave
+    the suite green while every older install started logging noise on
+    every startup. These tests call the function directly (no need for the
+    full _stub_ha_mcp_surface/_thread_main harness) and assert on caplog.
+    """
+
+    def setup_method(self):
+        """Snapshot ha_mcp.* sys.modules entries so each test's fakes don't
+        leak into the next -- ha_mcp is genuinely importable in this test
+        process (unlike the fully-stubbed harness the heavier _serve()-level
+        tests above build)."""
+        self._saved = {
+            name: sys.modules.get(name) for name in ("ha_mcp", "ha_mcp.log_filters")
+        }
+
+    def teardown_method(self):
+        """Restore the snapshotted sys.modules entries exactly."""
+        for name, mod in self._saved.items():
+            if mod is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = mod
+
+    def test_genuinely_missing_module_is_silent(self, caplog):
+        """The true 'older ha-mcp, module doesn't exist yet' case: point the
+        faked ha_mcp package's own __path__ at nothing, so Python's real
+        import machinery genuinely cannot find log_filters.py and raises
+        ModuleNotFoundError(name='ha_mcp.log_filters') -- not a hand-built
+        stand-in. This is exactly the branch CodeRabbit found untested."""
+        fake_ha_mcp = ModuleType("ha_mcp")
+        fake_ha_mcp.__path__ = []  # nothing to search -- a genuine "not found"
+        sys.modules["ha_mcp"] = fake_ha_mcp
+        sys.modules.pop("ha_mcp.log_filters", None)
+
+        with caplog.at_level("WARNING", logger=es._LOGGER.name):
+            es._install_log_filters_if_available()
+
+        assert caplog.records == []
+
+    def test_module_present_but_attribute_missing_warns(self, caplog):
+        """The existing ImportError case (module exists, helper attribute
+        doesn't) must actually log a WARNING -- the discriminating half of
+        the same gap: a prior test proved serving continues, not that the
+        output differs from the silent case above."""
+        sys.modules["ha_mcp.log_filters"] = ModuleType("ha_mcp.log_filters")
+
+        with caplog.at_level("WARNING", logger=es._LOGGER.name):
+            es._install_log_filters_if_available()
+
+        assert "Could not install MCP SDK log-noise filters" in caplog.text
+
+    def test_different_missing_dependency_warns_and_names_it(self, monkeypatch, caplog):
+        """A ModuleNotFoundError for anything OTHER than ha_mcp.log_filters
+        itself (e.g. a stale fastmcp/pydantic left over from a previous
+        install -- _purge_ha_mcp_modules deliberately never reinstalls
+        third-party dependencies) is not the older-server case and must
+        warn, naming the actual missing dependency rather than staying
+        silent."""
+        sys.modules.pop("ha_mcp.log_filters", None)
+        real_import = __import__
+
+        def _fake_import(name, *args, **kwargs):
+            if name == "ha_mcp.log_filters":
+                raise ModuleNotFoundError("No module named 'fastmcp'", name="fastmcp")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", _fake_import)
+
+        with caplog.at_level("WARNING", logger=es._LOGGER.name):
+            es._install_log_filters_if_available()
+
+        assert "fastmcp" in caplog.text
+        assert "Could not install MCP SDK log-noise filters" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # start / stop lifecycle + idempotency
 # ---------------------------------------------------------------------------
