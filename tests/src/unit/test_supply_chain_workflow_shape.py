@@ -201,6 +201,16 @@ def test_renovate_log_levels_make_failures_actionable_without_warning_noise() ->
     )
 
 
+# Directory names that hold a NESTED working copy rather than repository
+# content: the gitignored `worktree/` tree this project's own workflow tells
+# contributors to use, and the agent worktrees under `.claude/`. Renovate only
+# ever sees tracked files, so a Dockerfile inside one of these is not something
+# its rules must account for. Without this filter the assertion below fails on
+# any machine that has a worktree checked out, which is every machine following
+# AGENTS.md.
+_IGNORED_TREES = frozenset({"worktree", ".claude", "node_modules", ".venv"})
+
+
 def test_python_runtime_automation_is_digest_only() -> None:
     config = json.loads((_REPO_ROOT / "renovate.json").read_text(encoding="utf-8"))
     package_rules = config["packageRules"]
@@ -227,9 +237,12 @@ def test_python_runtime_automation_is_digest_only() -> None:
     }, "webhook-proxy images change only through the dev-first promotion workflow"
 
     python_dockerfiles = {
-        path.relative_to(_REPO_ROOT).as_posix()
+        rel
         for path in _REPO_ROOT.rglob("Dockerfile")
-        if "FROM python:" in path.read_text(encoding="utf-8")
+        if not _IGNORED_TREES.intersection(
+            (rel := path.relative_to(_REPO_ROOT).as_posix()).split("/")
+        )
+        and "FROM python:" in path.read_text(encoding="utf-8")
     }
     assert python_dockerfiles - set(proxy_rule["matchFileNames"]) == {
         "Dockerfile",
