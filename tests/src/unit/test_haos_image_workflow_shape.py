@@ -88,6 +88,28 @@ def _cache_key_command(path: Path, job_id: str) -> str:
     return script[start:end]
 
 
+def _beta_lane_jobs(
+    workflow_dir: Path = _WORKFLOW_DIR,
+) -> set[tuple[str, str, str]]:
+    """Discover jobs whose test step attests a beta Supervisor runtime."""
+    beta_jobs: set[tuple[str, str, str]] = set()
+    workflow_paths = sorted((*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")))
+    for path in workflow_paths:
+        for job_id, job in _workflow(path)["jobs"].items():
+            if not isinstance(job, dict):
+                continue
+            for step in _job_steps(job):
+                env = step.get("env", {})
+                if (
+                    isinstance(env, dict)
+                    and env.get("HAOS_EXPECTED_SUPERVISOR_CHANNEL") == "beta"
+                ):
+                    beta_jobs.add(
+                        (path.name, str(job_id), str(env.get("HAOS_TEST_MODE")))
+                    )
+    return beta_jobs
+
+
 def test_haos_image_cache_key_command_matches_every_consumer() -> None:
     for path, job_id in _cache_key_consumers():
         consumer = f"{path.name}:{job_id}"
@@ -154,6 +176,10 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
     )
     beta_resolvers: list[str] = []
     beta_cache_keys: list[str] = []
+    assert _beta_lane_jobs() == {
+        (beta_name, beta_job_id, mode)
+        for beta_name, beta_job_id, mode, _stable_name, _stable_job_id in lane_specs
+    }
 
     for beta_name, beta_job_id, mode, stable_name, stable_job_id in lane_specs:
         beta_path = _WORKFLOW_DIR / beta_name

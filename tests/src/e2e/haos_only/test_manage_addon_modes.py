@@ -13,9 +13,10 @@ Modes and options covered:
   ``options`` and ``network`` remain unit-tested.
 * **Action (lifecycle) mode** — ``stop`` / ``start`` / ``restart`` against a
   real running app, asserting the Supervisor state after each. The
-  long-timeout ``install`` / ``update`` / ``rebuild`` path is pinned by the
-  unit tests rather than run live (a real install rebuilds an app image and
-  would add minutes to every CI run).
+  in-app self-update guard is checked without submitting an update. Other
+  long-timeout ``install`` / ``update`` / ``rebuild`` paths are pinned by unit
+  tests rather than run live (a real install rebuilds an app image and would
+  add minutes to every CI run).
 * **Proxy HTTP** — ``GET`` / ``POST`` smoke checks against Node-RED verify
   structured response shapes. They do not pin status classes or prove custom
   header delivery.
@@ -45,6 +46,7 @@ import time
 from typing import Any
 
 import pytest
+from haos_runtime import HA_MCP_DEV_ADDON_SLUG
 
 from ..utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
 from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
@@ -324,6 +326,25 @@ async def test_config_watchdog_roundtrip(mcp_client: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.inaddon_only
+@pytest.mark.addon_disruptive
+async def test_action_self_update_returns_manual_guidance(mcp_client: Any) -> None:
+    """The live self slug is recognized before Supervisor receives an update."""
+    async with MCPAssertions(mcp_client) as mcp:
+        payload = await mcp.call_tool_failure(
+            "ha_manage_app",
+            {"slug": HA_MCP_DEV_ADDON_SLUG, "action": "update"},
+            expected_error="cannot update itself",
+        )
+
+    assert payload.get("error", {}).get("code") == "SERVICE_CALL_FAILED"
+    assert payload.get("self_slug") == HA_MCP_DEV_ADDON_SLUG
+    assert any(
+        "Apps UI" in suggestion
+        for suggestion in payload.get("error", {}).get("suggestions", [])
+    )
+
+
 async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
     """`ha_manage_app(action=...)` drives a real app (add-on) lifecycle.
 
@@ -339,8 +360,9 @@ async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
     one test (restored at the end) does not perturb the proxy/WS suites.
 
     The long-timeout install/update/rebuild path (1800s) is pinned by
-    ``TestSupervisorApiCallTimeout``; a live install would rebuild an app
-    image and add minutes to every CI run, so it is not exercised end-to-end.
+    ``TestSupervisorApiCallTimeout``; the separate self-update test exercises
+    only the local guard. A live install would rebuild an app image and add
+    minutes to every CI run, so no update operation is submitted end-to-end.
     """
     slug = await _resolve_slug(mcp_client, APPDAEMON_NAME)
     async with MCPAssertions(mcp_client) as mcp:

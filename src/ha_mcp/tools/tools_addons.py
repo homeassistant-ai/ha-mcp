@@ -29,6 +29,8 @@ from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantClient,
     HomeAssistantCommandError,
+    HomeAssistantCommandNotSent,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
     _is_ssl_error,
 )
@@ -285,6 +287,25 @@ def _supervisor_rest_failure(
     return result
 
 
+def _supervisor_invalid_response(
+    response: httpx.Response,
+    error: object,
+    endpoint: str,
+    method: str,
+) -> dict[str, Any]:
+    """Classify a malformed direct response without replaying an accepted write."""
+    verb = method.upper()
+    if response.is_success and verb not in {"GET", "HEAD"}:
+        _raise_supervisor_write_outcome_unknown(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"Supervisor API {verb} {endpoint} returned an invalid success response; "
+            "the request outcome is unknown.",
+            endpoint,
+            verb,
+        )
+    return _supervisor_rest_failure(response, error)
+
+
 def _raise_supervisor_write_outcome_unknown(
     code: ErrorCode,
     message: str,
@@ -310,6 +331,42 @@ def _raise_supervisor_write_outcome_unknown(
     )
 
 
+async def _supervisor_api_call_via_core(
+    client: HomeAssistantClient,
+    endpoint: str,
+    method: str,
+    wait_timeout: float,
+    websocket_kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Call Supervisor through Core and preserve ambiguous write outcomes."""
+    try:
+        return await client.send_websocket_message(
+            {
+                "type": "supervisor/api",
+                "_wait_timeout": wait_timeout,
+                **websocket_kwargs,
+            }
+        )
+    except HomeAssistantCommandNotSent:
+        raise
+    except (HomeAssistantCommandTimeout, HomeAssistantConnectionError) as exc:
+        verb = method.upper()
+        if verb not in {"GET", "HEAD"}:
+            code = (
+                ErrorCode.TIMEOUT_OPERATION
+                if isinstance(exc, HomeAssistantCommandTimeout)
+                else ErrorCode.CONNECTION_FAILED
+            )
+            _raise_supervisor_write_outcome_unknown(
+                code,
+                f"Home Assistant WebSocket returned no answer for Supervisor "
+                f"{verb} {endpoint}; the request outcome is unknown: {exc}",
+                endpoint,
+                verb,
+            )
+        raise
+
+
 async def _supervisor_api_call_once(
     client: HomeAssistantClient,
     endpoint: str,
@@ -320,12 +377,8 @@ async def _supervisor_api_call_once(
 ) -> dict[str, Any]:
     """Call Supervisor through the transport allowed for this install mode."""
     if not is_running_in_addon():
-        return await client.send_websocket_message(
-            {
-                "type": "supervisor/api",
-                "_wait_timeout": wait_timeout,
-                **websocket_kwargs,
-            }
+        return await _supervisor_api_call_via_core(
+            client, endpoint, method, wait_timeout, websocket_kwargs
         )
 
     request_kwargs: dict[str, Any] = {}
@@ -378,11 +431,14 @@ async def _supervisor_api_call_once(
         error = (
             body or f"Supervisor returned invalid JSON (HTTP {response.status_code})"
         )
-        return _supervisor_rest_failure(response, error)
+        return _supervisor_invalid_response(response, error, endpoint, method)
 
     if not isinstance(payload, dict):
-        return _supervisor_rest_failure(
-            response, f"Supervisor returned an invalid response: {payload!r}"
+        return _supervisor_invalid_response(
+            response,
+            f"Supervisor returned an invalid response: {payload!r}",
+            endpoint,
+            method,
         )
     if response.is_error or payload.get("result") != "ok":
         error = payload.get("message") or payload.get("error")
@@ -3484,6 +3540,9 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 "Store-repository mode: 'add_repository' / 'remove_repository' "
                 "register or unregister a custom app store repository — these "
                 "use the 'repository' param instead of 'slug'. "
+                "When ha-mcp runs as an app, it can update other apps but cannot "
+                "update its own running slug; update ha-mcp from the Home Assistant "
+                "Apps UI. "
                 "Mutually exclusive with path / config parameters / array_patch. "
                 "HA OS / Supervised only.",
                 default=None,
