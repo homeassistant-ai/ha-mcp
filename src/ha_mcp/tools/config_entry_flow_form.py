@@ -852,9 +852,13 @@ def validate_step_values(config: dict[str, Any]) -> None:
     Accepted: a dict of ``step_id -> entry``, where an entry is a dict of field
     values, or a LIST of such dicts consumed one per encounter of that step.
     """
-    directive = config.get(_PER_STEP_VALUES_KEY)
-    if directive is None:
+    # Key PRESENCE is the test, not truthiness: an explicit ``None`` is a
+    # caller who meant to pass a directive and got the shape wrong, and the
+    # reserved key hides it from ignored-key reporting, so returning early on
+    # it would let the walk apply the rest and report a clean success.
+    if _PER_STEP_VALUES_KEY not in config:
         return
+    directive = config[_PER_STEP_VALUES_KEY]
 
     example = "{'<step_id>': {'<field>': <value>}}"
     if not isinstance(directive, dict):

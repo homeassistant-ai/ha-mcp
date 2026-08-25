@@ -1235,8 +1235,8 @@ class TestStepValuesValidation:
 
     @pytest.mark.parametrize(
         "directive",
-        ["oops", 42, ["init"]],
-        ids=["string", "number", "list"],
+        ["oops", 42, ["init"], None],
+        ids=["string", "number", "list", "explicit-null"],
     )
     def test_a_non_object_directive_is_rejected(self, directive: Any) -> None:
         with pytest.raises(ToolError) as exc_info:
