@@ -417,6 +417,16 @@ uv run hamcp-test-env --no-interactive   # For automation
 
 Test token centralized in `tests/test_constants.py`.
 
+**Unit tests** (`tests/src/unit/`, no Docker) — run them in parallel, as CI does
+(`pr.yml`); serial takes 25+ minutes for ~11k tests:
+
+```bash
+uv run pytest tests/src/unit/ -n auto --tb=short
+```
+
+`tests/pytest.ini` sets `--maxfail=3`, so a run reporting "3 failed" has stopped
+early rather than finished — pass `--maxfail=0` when you need the full picture.
+
 ### Code Quality
 
 C901 (mccabe complexity ≤10) is enforced repo-wide with zero per-file exemptions (issue #925 cleared the grandfathered list) — never reintroduce a `["C901"]` per-file-ignore; extract helpers instead.
@@ -896,7 +906,10 @@ empty, so the English a `tools` entry translates is read from the tool
 definition in `src/ha_mcp/tools/` — the `title=` kwarg and the summary
 paragraph of the docstring, or the `FEATURE_GATED_TOOLS` stub where a gated
 tool shows one instead. Editing that summary moves the English out from under
-six catalogs; the pipeline retranslates them. One deliberate exception: a
+six catalogs; the pipeline retranslates them. A parameter's
+`Field(description=...)` is NOT in the baseline — only the title and the
+docstring summary are — so editing one owes no translation work. One
+deliberate exception: a
 change to a feature-gated tool's PARSED docstring (its stub unchanged) is
 stub-review work, not translation work — the pipeline holds that baseline key
 stale, and the locale-sync run stays red until a human confirms the stub
