@@ -1672,25 +1672,17 @@ def _wait_supervisor_ready(
     expected_channel: str | None = None,
     minimum_version: str | None = None,
 ) -> dict[str, Any]:
-    """Wait for the Supervisor to respond AND finish self-updating.
+    """Wait until Supervisor satisfies update and image-variant constraints.
 
-    HAOS pins only the OS version (HAOS_VERSION); the Supervisor it bundles
-    self-updates asynchronously after boot to the latest version on its
-    channel. Until that finishes, ``need_update`` is True and every store
-    operation guarded by ``JobCondition.SUPERVISOR_UPDATED`` (the first one
-    here is ``_add_repository`` -> POST /store/repositories, right after this
-    call) is rejected with "supervisor needs to be updated first". That race
-    is what broke the publish bake intermittently: a run that hit the store
-    before the self-update landed failed at add_repository; a run that caught
-    a later channel version sailed past it and failed elsewhere.
+    HAOS pins only the OS version; its bundled Supervisor self-updates
+    asynchronously after boot. A ready response must advertise
+    ``version_latest`` and have no pending update. When supplied,
+    ``expected_channel`` and ``minimum_version`` further constrain the running
+    Supervisor.
 
-    Poll /supervisor/info until ``update_available`` clears (the running
-    version reaches ``version_latest``) so the caller's store calls run
-    against an up-to-date Supervisor. The Supervisor version still floats to
-    the channel head per build: there is no clean way to pin the bundled
-    Supervisor offline (it ships as a container layer in the HAOS image, and
-    ``need_update`` is evaluated against the live channel), so this makes the
-    bake deterministic in outcome, not in the Supervisor version it lands on.
+    ``install_addons`` relies on this readiness before its first store
+    operation. Beta image configuration uses the same predicate after channel
+    selection and update.
     """
     info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
     LOG.info(

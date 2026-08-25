@@ -1,13 +1,12 @@
-"""E2E tests for the direct-Supervisor httpx call sites against a mock sidecar.
+"""E2E tests for a direct-Supervisor httpx subset against a mock sidecar.
 
-Closes the coverage gap from issue #1129: prior to this, the three call sites
-that hit ``http://supervisor`` directly (logs via rest_client, bug-report addon
-log fetch, settings_ui addon self-restart) had only mock-based unit tests. Now
-they exercise the real socket path against a stdlib ``http.server`` sidecar
-served from ``tests/src/e2e/utilities/supervisor_mock.py``.
+The sidecar exercises the real socket path for log collection and app
+self-restart, closing the coverage gap identified in issue #1129. It is served
+from ``tests/src/e2e/utilities/supervisor_mock.py``.
 
-Out of scope (intentional): the WS-proxy ``supervisor/api`` path used by
-``tools_addons.py``. See #1129 for why that's deferred.
+In app mode, ``tools_addons.py`` also uses direct Supervisor REST for
+``/addons`` and ``/store``. Those management endpoints are covered by unit
+tests and the real HAOS lanes, not this sidecar.
 """
 
 from __future__ import annotations

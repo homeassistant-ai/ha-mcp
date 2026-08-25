@@ -1,23 +1,24 @@
 """Mock Supervisor REST sidecar for E2E tests.
 
-Stands in for ``http://supervisor`` so the three direct-Supervisor httpx call
-sites — ``rest_client._supervisor_logs_get``, ``tools_bug_report._fetch_addon_logs``,
-``settings_ui._restart_addon`` — can be exercised end-to-end. Production runs
-against a real Supervisor; this mock makes the contract testable in CI without
-needing HAOS / Supervised infrastructure.
+Stands in for ``http://supervisor`` so the log and self-restart subset of
+direct-Supervisor httpx calls can be exercised end-to-end. Production runs
+against a real Supervisor; this mock makes that subset testable in CI without
+HAOS / Supervised infrastructure. App-management calls from ``tools_addons``
+use additional ``/addons`` and ``/store`` endpoints covered by unit tests
+and the real HAOS lanes.
 
 Implementation: stdlib ``http.server.ThreadingHTTPServer`` on a daemon thread,
 bound to ``127.0.0.1:0``. The fixture sets two env vars the production code
 already keys off of:
 
 - ``SUPERVISOR_TOKEN`` — flips ``is_running_in_addon()`` on
-- ``SUPERVISOR_BASE_URL`` — points the three call sites at the mock
+- ``SUPERVISOR_BASE_URL`` — points the covered call sites at the mock
 
 Stdlib instead of aiohttp/starlette so no new dev dep is needed for what is
 ultimately a tiny canned-response server. Runs in a thread so it doesn't share
 the test event loop and can't deadlock against in-process MCP server work.
 
-Endpoints implemented (only what the code actually calls):
+Endpoints implemented for this fixture:
 
 - ``GET /{service}/logs`` for service ∈ {supervisor, host, core, dns, audio,
   cli, multicast, observer} — the eight Supervisor-managed system services

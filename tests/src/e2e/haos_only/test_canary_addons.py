@@ -6,8 +6,8 @@ The testcontainer suite cannot run these checks against a real Supervisor
 because its partial mock covers only a few direct REST endpoints.
 
 Five concrete assertions:
-1. ``ha_get_app`` (default listing) returns every app the build script
-   installs, by display name.
+1. ``ha_get_app`` (default listing) contains every entry from ``ADDONS``
+   plus ``GET_HACS_ADDON``, by display name.
 2. ``ha_get_app(slug=core_mosquitto)`` returns Supervisor-backed detail.
 3. ``ha_get_app(source="available")`` searches the live Supervisor store.
 4. Beta lanes boot the Supervisor channel/minimum and exact Core version
@@ -24,15 +24,15 @@ from typing import Any
 import pytest
 from packaging.version import Version
 
-from ..utilities.assertions import parse_mcp_result
+from ..utilities.assertions import MCPAssertions
 
 LOG = logging.getLogger(__name__)
 
 
-# Mirrors build_image.py's ADDONS tuple plus GET_HACS_ADDON. Keep this
-# expected app set in sync with the image builder. It is not shared because
-# that script lives outside pytest's normal import path; drift fails loudly
-# through the missing-name assertion below.
+# Mirrors build_image.py's ADDONS tuple plus GET_HACS_ADDON. It lives outside
+# pytest's normal import path, so this list is maintained manually. Missing
+# expected entries fail loudly; additional builder-installed apps are not
+# detected by this subset assertion.
 INSTALLED_ADDON_NAMES = (
     "Mosquitto broker",
     "Node-RED",
@@ -45,10 +45,9 @@ INSTALLED_ADDON_NAMES = (
 
 
 async def test_addons_installed_via_mcp(mcp_client: Any) -> None:
-    """`ha_get_app` (no args) lists every app the build script installed."""
-    raw = await mcp_client.call_tool("ha_get_app", {})
-    payload = parse_mcp_result(raw)
-    assert payload.get("success"), f"ha_get_app returned failure: {payload}"
+    """`ha_get_app` lists each curated app expected by this canary."""
+    async with MCPAssertions(mcp_client) as mcp:
+        payload = await mcp.call_tool_success("ha_get_app", {})
 
     installed_names = {a.get("name") for a in payload.get("addons", [])}
     LOG.info("Installed apps on booted HAOS: %s", sorted(installed_names))
@@ -65,12 +64,11 @@ async def test_supervisor_info_via_mcp(mcp_client: Any) -> None:
     """`ha_get_app` with a known core slug returns Supervisor-backed detail.
 
     This exercises direct REST in the in-app lane and Core's WebSocket proxy
-    in the external, embedded, and stdio HAOS lanes. The testcontainer cannot validate
-    either transport against a real Supervisor.
+    in the external, embedded, and stdio HAOS lanes. The testcontainer cannot
+    validate either transport against a real Supervisor.
     """
-    raw = await mcp_client.call_tool("ha_get_app", {"slug": "core_mosquitto"})
-    payload = parse_mcp_result(raw)
-    assert payload.get("success"), f"ha_get_app(core_mosquitto) failed: {payload}"
+    async with MCPAssertions(mcp_client) as mcp:
+        payload = await mcp.call_tool_success("ha_get_app", {"slug": "core_mosquitto"})
     detail = payload.get("addon") or payload.get("data") or payload
     # Mosquitto is install=true, start=False in the build — so it should
     # be installed but not started. Either field name HA returns is fine.
@@ -80,12 +78,10 @@ async def test_supervisor_info_via_mcp(mcp_client: Any) -> None:
 async def test_addon_store_search_via_mcp(mcp_client: Any) -> None:
     """`ha_get_app(source='available')` reaches the real Supervisor store."""
 
-    raw = await mcp_client.call_tool(
-        "ha_get_app", {"source": "available", "query": "mqtt"}
-    )
-    payload = parse_mcp_result(raw)
-
-    assert payload.get("success"), f"ha_get_app store search failed: {payload}"
+    async with MCPAssertions(mcp_client) as mcp:
+        payload = await mcp.call_tool_success(
+            "ha_get_app", {"source": "available", "query": "mqtt"}
+        )
     matches = payload.get("addons", [])
     assert matches, f"Supervisor store returned no MQTT matches: {payload}"
     assert any(
@@ -146,15 +142,8 @@ async def test_hacs_available_in_emitted_image(mcp_client: Any) -> None:
     so this validates final runtime availability rather than isolating which
     image-build step supplied the integration.
     """
-    raw = await mcp_client.call_tool(
-        "ha_get_hacs_info",
-        {"action": "search", "installed_only": True, "max_results": 1},
-    )
-    payload = parse_mcp_result(raw)
-    # ha_get_hacs_info returns {"success": True, "data": {...}, "metadata":
-    # {...}} — ``success`` at the top level above the timezone wrapper. The
-    # legacy nested {"data": {"success": ...}} shape remains accepted.
-    inner = payload.get("data", payload) if isinstance(payload, dict) else {}
-    assert payload.get("success") or inner.get("success"), (
-        f"HACS integration not reachable via ha_get_hacs_info: {payload}"
-    )
+    async with MCPAssertions(mcp_client) as mcp:
+        await mcp.call_tool_success(
+            "ha_get_hacs_info",
+            {"action": "search", "installed_only": True, "max_results": 1},
+        )

@@ -462,11 +462,11 @@ async def _supervisor_api_call(
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                # A group still held after the whole window is wedged, not
-                # settling. Raise a ToolError here (the guard below re-raises
-                # it untouched) so the caller gets guidance about the stuck
-                # job instead of the generic connectivity suggestion the
-                # exception handler attaches to every other failure.
+                # The retry budget is exhausted; the group may be stuck or
+                # legitimately occupied by a long-running operation. Raise a
+                # ToolError here so the caller gets guidance about the busy
+                # job instead of the generic connectivity suggestion attached
+                # to other failures.
                 waited = _JOB_COLLISION_RETRY_WINDOW - remaining
                 logger.warning(
                     "Supervisor job group still busy on %s after %.0fs "
@@ -745,10 +745,6 @@ async def get_addon_info(client: HomeAssistantClient, slug: str) -> dict[str, An
     """
     _validate_supervisor_slug(slug)
     response = await _supervisor_api_call(client, f"/addons/{slug}/info")
-    if not response.get("success"):
-        return (
-            response  # TODO(tech-debt): should raise ToolError per AGENTS.md Pattern B
-        )
 
     addon = response["result"] if isinstance(response["result"], dict) else {}
     result: dict[str, Any] = {"success": True, "addon": addon}

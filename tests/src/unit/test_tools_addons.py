@@ -4015,23 +4015,6 @@ class TestGetAddonInfoLogLevel:
         assert "log_level" not in result
 
     @pytest.mark.asyncio
-    async def test_passes_through_supervisor_error(self):
-        """Error responses shouldn't gain a synthetic log_level field."""
-        client = _make_mock_client()
-        error_response = {
-            "success": False,
-            "error": {"code": "RESOURCE_NOT_FOUND", "message": "no supervisor"},
-        }
-        with patch(
-            "ha_mcp.tools.tools_addons._supervisor_api_call",
-            new_callable=AsyncMock,
-            return_value=error_response,
-        ):
-            result = await get_addon_info(client, "whatever")
-
-        assert result == error_response
-
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("slug", _INVALID_SUPERVISOR_SLUGS)
     async def test_rejects_invalid_supervisor_slug_before_request(self, slug):
         """A user-controlled slug cannot alter the Supervisor request path."""

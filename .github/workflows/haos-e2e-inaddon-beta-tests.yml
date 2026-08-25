@@ -249,8 +249,8 @@ jobs:
       - name: Run inaddon E2E suite
         # HAOS_TEST_MODE=inaddon flips conftest.py's HAOS dispatch into
         # the inaddon branch: app source is overwritten with PR source before
-        # boot, Supervisor update is triggered, and mcp_client uses HTTP
-        # transport to the app's MCP endpoint.
+        # boot, Supervisor is asked to update/rebuild that app, and mcp_client
+        # uses HTTP transport to the app's MCP endpoint.
         #
         # Mirrors the stable inaddon lane's full-suite selection.
         # external_only-marked tests skip automatically.
