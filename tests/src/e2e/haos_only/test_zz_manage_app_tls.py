@@ -157,6 +157,17 @@ async def test_manage_app_reproduces_legacy_tls_failure_then_uses_fix(
             MCPAssertions(mcp) as assertions,
         ):
             slug = await _resolve_slug(mcp, NODERED_NAME)
+            initial_detail = (
+                await assertions.call_tool_success("ha_get_app", {"slug": slug})
+            ).get("addon") or {}
+            if initial_detail.get("state") != "started":
+                # Core's protocol restart can terminate Node-RED while its
+                # Supervisor WebSocket proxy reconnects. Start it again so the
+                # TLS assertions begin from a settled app state.
+                await assertions.call_tool_success(
+                    "ha_manage_app",
+                    {"slug": slug, "action": "start"},
+                )
             await _wait_addon_running(mcp, slug)
             detail = (
                 await assertions.call_tool_success("ha_get_app", {"slug": slug})

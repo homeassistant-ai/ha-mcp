@@ -25,6 +25,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -762,6 +763,45 @@ class HAWebSocket:
             f"within {timeout:.0f}s after Core restart (attempts={attempts})"
         ) from last_error
 
+    def _send_with_deadline(
+        self,
+        message: str,
+        *,
+        deadline: float,
+        operation: str,
+    ) -> None:
+        """Send one frame within a deadline, cancelling a stalled socket write."""
+        connection = self._ws
+        if connection is None:
+            raise ConnectionError(f"WebSocket is not connected for {operation}")
+        _remaining_deadline_budget(deadline, operation)
+        send_errors: list[Exception] = []
+
+        def send() -> None:
+            try:
+                _remaining_deadline_budget(deadline, operation)
+                connection.send(message)
+            except Exception as exc:
+                send_errors.append(exc)
+
+        worker = threading.Thread(target=send, name="haos-ws-send", daemon=True)
+        worker.start()
+        worker.join(max(0.0, deadline - time.monotonic()))
+        if worker.is_alive():
+            try:
+                connection.close_socket()
+            except (OSError, RuntimeError) as exc:
+                LOG.debug("WS close error after stalled send: %r", exc)
+            finally:
+                if self._ws is connection:
+                    self._ws = None
+            raise TimeoutError(
+                f"{operation} exceeded its deadline after dispatch; "
+                "command outcome is unknown"
+            )
+        if send_errors:
+            raise send_errors[0]
+
     def supervisor_api(
         self,
         endpoint: str,
@@ -790,11 +830,12 @@ class HAWebSocket:
         }
         if data is not None:
             msg["data"] = data
-        _remaining_deadline_budget(
-            deadline,
-            f"supervisor/api {method} {endpoint} send",
+        message = json.dumps(msg)
+        self._send_with_deadline(
+            message,
+            deadline=deadline,
+            operation=f"supervisor/api {method} {endpoint} send",
         )
-        self._ws.send(json.dumps(msg))
         # Skip any out-of-band messages (events on subscriptions etc.) and
         # match by id.
         while True:

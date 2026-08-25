@@ -11,6 +11,7 @@ patched out so polling runs instantly.
 from __future__ import annotations
 
 import json
+from threading import Event
 from typing import Any
 from unittest.mock import Mock, call, patch
 
@@ -58,15 +59,15 @@ def test_supervisor_api_shares_receive_deadline_across_frames() -> None:
 
     with patch(
         "tests.haos_image_build.build_image.time.monotonic",
-        side_effect=[10.0, 11.0, 12.5],
+        side_effect=[10.0, 10.5, 10.5, 10.5, 11.0, 12.5],
     ):
         assert ws.supervisor_api("/supervisor/info", timeout=5.0) == {}
 
     assert socket.recv.call_args_list == [call(timeout=4.0), call(timeout=2.5)]
 
 
-def test_supervisor_api_expired_deadline_does_not_dispatch() -> None:
-    """An expired command budget cannot produce an uncertain write outcome."""
+def test_supervisor_api_expiry_during_serialization_does_not_dispatch() -> None:
+    """Serialization time is charged before a command can be dispatched."""
     ws = HAWebSocket(
         "http://127.0.0.1:18123",
         OAuthCredentials(access_token="access", refresh_token="refresh"),
@@ -77,17 +78,56 @@ def test_supervisor_api_expired_deadline_does_not_dispatch() -> None:
     with (
         patch(
             "tests.haos_image_build.build_image.time.monotonic",
-            side_effect=[10.0, 10.0],
+            side_effect=[10.0, 12.0],
         ),
+        patch(
+            "tests.haos_image_build.build_image.json.dumps",
+            return_value='{"serialized": true}',
+        ) as serialize,
         pytest.raises(
             TimeoutError,
             match=r"supervisor/api post /core/update send exceeded its deadline",
         ),
     ):
-        ws.supervisor_api("/core/update", method="post", data={}, timeout=0.0)
+        ws.supervisor_api("/core/update", method="post", data={}, timeout=1.0)
 
+    serialize.assert_called_once()
     socket.send.assert_not_called()
     socket.recv.assert_not_called()
+
+
+def test_supervisor_api_stalled_send_is_bounded() -> None:
+    """A stalled socket write is cancelled within the command's deadline."""
+    ws = HAWebSocket(
+        "http://127.0.0.1:18123",
+        OAuthCredentials(access_token="access", refresh_token="refresh"),
+    )
+    socket = Mock()
+    release_send = Event()
+
+    def stalled_send(_: str) -> None:
+        release_send.wait()
+
+    socket.send.side_effect = stalled_send
+    socket.close_socket.side_effect = release_send.set
+    ws._ws = socket
+
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            return_value=10.0,
+        ),
+        pytest.raises(
+            TimeoutError,
+            match="command outcome is unknown",
+        ),
+    ):
+        ws.supervisor_api("/core/update", method="post", data={}, timeout=0.01)
+
+    socket.send.assert_called_once()
+    socket.close_socket.assert_called_once()
+    socket.recv.assert_not_called()
+    assert ws._ws is None
 
 
 @pytest.mark.parametrize(
