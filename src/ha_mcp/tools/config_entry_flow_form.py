@@ -852,6 +852,9 @@ def validate_step_values(config: dict[str, Any]) -> None:
 
     Accepted: a dict of ``step_id -> entry``, where an entry is a dict of field
     values, or a LIST of such dicts consumed one per encounter of that step.
+    An empty dict inside such a list is a per-encounter no-op — that encounter
+    behaves as it would with no directive at all — but an entry that applies
+    nothing anywhere is rejected.
     """
     # Key PRESENCE is the test, not truthiness: an explicit ``None`` is a
     # caller who meant to pass a directive and got the shape wrong, and the
@@ -883,12 +886,17 @@ def validate_step_values(config: dict[str, Any]) -> None:
             )
         )
 
-    # The step id is a caller-controlled key, and nothing echoed a NESTED one
-    # before this directive existed — the walker's own supplied_keys reports
-    # only top-level names. These errors reach the usage log unmasked (see the
-    # note above), so report the entry's POSITION instead: it is what the
-    # caller needs to find the entry in their own directive, and it cannot
-    # carry a value they typed (CodeRabbit review, issue #2254).
+    # Report the entry's POSITION, not the caller's step id: these errors reach
+    # the usage log unmasked (see the note above), and a step id is a
+    # caller-controlled key. The position still says which entry is wrong and
+    # cannot carry a value they typed (CodeRabbit review, issue #2254).
+    #
+    # Scoped to VALUES deliberately. Caller-supplied field NAMES do reach the
+    # same logged path — ``step_values.<step_id>.<field>`` goes into
+    # ``ignored_config_keys``, which ``_unconsumed_reconfigure_keys`` unions
+    # into the reconfigure abort error — and that is kept, because naming the
+    # field is the whole diagnostic for a typo and a name is not the secret a
+    # value is (Patch76 review, issue #2254).
     for index, entry in enumerate(directive.values(), start=1):
         where = f"{_PER_STEP_VALUES_KEY} entry #{index}"
         entries = entry if isinstance(entry, list) else [entry]
@@ -908,12 +916,18 @@ def validate_step_values(config: dict[str, Any]) -> None:
                     },
                 )
             )
-        # An entry that can apply nothing is a caller mistake in the same way a
-        # malformed one is, and it was reported inconsistently: a bare {} left
-        # a leftover the warning named, while [] and [{}] were popped at their
-        # first encounter and vanished, so the walk reported a clean success
-        # for a directive that did nothing (Patch76 review, issue #2254).
-        if not entries or not any(item for item in entries):
+        # An entry that can apply NOTHING AT ALL is a caller mistake in the
+        # same way a malformed one is, and it was reported inconsistently: a
+        # bare {} left a leftover the warning named, while [] and [{}] were
+        # popped at their first encounter and vanished, so the walk reported a
+        # clean success for a directive that did nothing (Patch76 review).
+        #
+        # An empty object INSIDE a longer list is deliberately not that: it
+        # means "leave this encounter as it would be without the directive",
+        # which nothing else expresses — omitting the step affects every
+        # encounter, and {"field": None} is an explicit clear rather than a
+        # fallback. So the test spans the whole entry rather than each item.
+        if not any(entries):
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -931,7 +945,6 @@ def validate_step_values(config: dict[str, Any]) -> None:
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"'{_PER_STEP_VALUES_KEY}' is empty, so it would apply nothing",
                 suggestions=[f"Name a step: {_PER_STEP_VALUES_KEY}={example}."],
-                context={},
             )
         )
 

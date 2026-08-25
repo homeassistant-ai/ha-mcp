@@ -1134,6 +1134,40 @@ class TestPerStepValues:
         # Dry: the step's own stored value takes over again.
         assert seen[2]["province"] == "BW"
 
+    def test_an_empty_object_in_a_list_is_a_per_encounter_no_op(self) -> None:
+        """The one empty shape that is a capability, not a mistake.
+
+        It means "leave this encounter as it would be without the directive",
+        which nothing else expresses: omitting the step affects EVERY
+        encounter, and {"field": None} is an explicit clear rather than a
+        fallback. The rejection deliberately spans the whole entry rather than
+        each item, so this survives while [] and [{}] do not (Patch76 review).
+        """
+        reuse_state = _ReuseState()
+        remaining: dict[str, Any] = {
+            "province": "BW",
+            "step_values": {"init": [{}, {"province": "NY"}]},
+        }
+        seen = [
+            _handle_form_step(
+                "flow-2254",
+                self._step("init"),
+                remaining,
+                None,
+                set(),
+                reuse_state,
+                keep_current_values=True,
+            )["province"]
+            for _ in range(2)
+        ]
+
+        # Encounter one falls back to what it would have been; two is addressed.
+        assert seen == ["BW", "NY"]
+        # ...while an entry that applies nothing anywhere is still rejected.
+        for dead in ([{}], [], {}, [{}, {}]):
+            with pytest.raises(ToolError):
+                validate_step_values({"step_values": {"init": dead}})
+
     def test_a_leftover_list_tail_is_reported(self) -> None:
         """A tail left over means the step ran fewer times than expected."""
         remaining: dict[str, Any] = {
