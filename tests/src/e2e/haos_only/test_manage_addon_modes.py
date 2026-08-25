@@ -17,8 +17,9 @@ Modes and options covered:
   long-timeout ``install`` / ``update`` / ``rebuild`` paths are pinned by unit
   tests rather than run live (a real install rebuilds an app image and would
   add minutes to every CI run).
-* **Proxy HTTP** — a ``GET`` smoke check requires a successful Node-RED
-  response through Ingress.
+* **Proxy HTTP** — outside the in-app tier, a ``GET`` smoke check requires a
+  successful Node-RED response through Ingress. In-app routing is covered by
+  the direct-port probe because ingress session creation is Core-only.
 * **Proxy with ``port=``** — only meaningful in the in-app tier, where the
   ha-mcp server under test runs on Supervisor's app network. Marked
   ``inaddon_only`` so other tiers skip it cleanly.
@@ -41,7 +42,7 @@ import time
 from typing import Any
 
 import pytest
-from haos_runtime import HA_MCP_DEV_ADDON_SLUG
+from haos_runtime import HA_MCP_DEV_ADDON_SLUG, is_haos_inaddon_mode
 
 from ..utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
 from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
@@ -365,6 +366,11 @@ async def test_proxy_http_get_returns_successful_response(mcp_client: Any) -> No
     Requires a real successful response rather than accepting a proxy or
     transport error as evidence that the route works.
     """
+    if is_haos_inaddon_mode():
+        pytest.skip(
+            "In-app servers cannot mint Core-only ingress sessions; "
+            "the in-app HTTP route is covered by the direct-port probe"
+        )
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
     async with MCPAssertions(mcp_client) as mcp:
         payload = await mcp.call_tool_success(
@@ -441,6 +447,11 @@ async def test_array_patch_empty_operations_returns_validation_error(
 
 async def test_python_transform_filters_http_response(mcp_client: Any) -> None:
     """`python_transform` runs after a successful Node-RED HTTP response."""
+    if is_haos_inaddon_mode():
+        pytest.skip(
+            "In-app servers cannot mint Core-only ingress sessions; "
+            "the in-app HTTP route is covered by the direct-port probe"
+        )
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
     async with MCPAssertions(mcp_client) as mcp:
         payload = await mcp.call_tool_success(
