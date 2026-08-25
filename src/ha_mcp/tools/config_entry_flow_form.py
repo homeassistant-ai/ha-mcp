@@ -4,17 +4,22 @@ Extracted from ``config_entry_flow.py`` (which holds the public create/update
 entry points) when that module crossed the ~1000-line split threshold. Turns a
 step's serialized ``data_schema`` plus the caller's config dict into the payload
 to submit, and tracks what was consumed so a later step redeclaring a field can
-be filled. Imports the menu selection keys from ``config_entry_flow_menu``
-(never submitted as form data); ``config_entry_flow_walker`` imports from here.
+be filled. Flows that edit an existing object pass ``keep_current_values``,
+so a field the caller left out goes back as the step presented it instead of
+being dropped (issue #2254). Imports the menu selection keys from
+``config_entry_flow_menu`` (never submitted as form data);
+``config_entry_flow_walker`` imports from here.
 """
 
 import copy
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any
 
 from ..errors import ErrorCode, create_error_response
+from ..redaction import carries_sentinel
 from .config_entry_flow_menu import _MENU_SELECTION_KEY_ORDER
 from .helpers import raise_tool_error
 
@@ -22,6 +27,25 @@ from .helpers import raise_tool_error
 # module that checks membership on every form field, and imported onward by
 # the walker.
 _MENU_SELECTION_KEYS = frozenset(_MENU_SELECTION_KEY_ORDER)
+
+# Reserved key carrying per-step field values: ``{step_id: {field: value}}``.
+# The flat config dict is keyed by field NAME alone, so a flow whose steps
+# declare the same field twice — a later step redeclaring it, or one revisited
+# through a menu loop — had no way to say "this value here, that one there, and
+# nothing at all on the third". The walker slices this per form step; a step
+# nobody addresses behaves exactly as before. Same shape of reservation as the
+# selection keys, including their collision risk: ``group_type`` is also a real
+# field on the group integration, and that has been the accepted trade since it
+# was introduced. Lives HERE rather than beside those keys because this module
+# is its only user — a constant defined in one module and read only from
+# another reads as dead to CodeQL's per-module py/unused-global-variable, the
+# same reason ``_MENU_SELECTION_KEYS`` itself sits here.
+_PER_STEP_VALUES_KEY = "step_values"
+
+# Every key the walker consumes as a DIRECTIVE rather than as form data, so
+# none of them is ever submitted to Home Assistant or counted as an ignored
+# field the flow failed to declare.
+_RESERVED_CONFIG_KEYS = _MENU_SELECTION_KEYS | {_PER_STEP_VALUES_KEY}
 
 _MISSING_DEFAULT = object()
 # "Submit nothing for this field" — see _redeclared_field_submission.
@@ -77,6 +101,7 @@ class _ReuseState:
     flat: dict[str, Any] = dc_field(default_factory=dict)
     filled: set[str] = dc_field(default_factory=set)
     fired: set[str] = dc_field(default_factory=set)
+    step_scoped: set[str] = dc_field(default_factory=set)
     notes: list[str] = dc_field(default_factory=list)
     step_id: str | None = None
 
@@ -98,6 +123,21 @@ class _ReuseState:
         """
         dotted = _section_path(path_prefix, name)
         self.filled.add(dotted)
+        if name in self.step_scoped or dotted.split(".", 1)[0] in self.step_scoped:
+            # Supplied by ``step_values`` for THIS step only. ``filled`` still
+            # takes it so nothing is injected over it here, but it must never
+            # reach ``flat``/``scoped``: those survive the whole walk, and a
+            # later step that nobody addressed would then reuse a value the
+            # caller scoped to one step instead of its own stored one.
+            #
+            # BOTH the popped key and the ROOT of the declaration path are
+            # matched, because an overlay key reaches a leaf two ways. Naming
+            # the SECTION gives leaves whose own names are nowhere in
+            # ``step_scoped`` (so the root must be checked), while a FLAT key
+            # is accepted for a leaf a section declares, which makes the root
+            # the section name and equally absent (so the key must be too).
+            # Either check alone leaks the other shape (issue #2254).
+            return
         if scoped_only:
             self.scoped[dotted] = copy.deepcopy(value)
         else:
@@ -129,7 +169,10 @@ class _ReuseState:
             f"Resubmitted '{dotted}' at step '{self.step_id}': supplied once "
             "but requested by more than one step encounter in this flow "
             "(a later step redeclaring the field, or the same step revisited "
-            "via a menu loop — per-visit values cannot be expressed)"
+            "via a menu loop). Pass step_values={'<step_id>': {'<field>': "
+            "<value>}} to give a step its own value, or to leave it out of "
+            "that step entirely; pass a LIST of those objects to supply one "
+            "per encounter when the flow presents the step more than once."
         )
         return True
 
@@ -145,7 +188,7 @@ def _record_ignored_section_keys(
     ignored_config_keys.update(
         f"{section_path}.{key}" if section_path else key
         for key in remaining_config
-        if key not in _MENU_SELECTION_KEYS
+        if key not in _RESERVED_CONFIG_KEYS
     )
 
 
@@ -196,12 +239,21 @@ def _ignored_keys_warnings(
     """Build warnings for caller-supplied config keys no flow step consumed."""
     warnings: list[str] = []
     ignored = ignored_config_keys | {
-        key for key in remaining_config if key not in _MENU_SELECTION_KEYS
+        key for key in remaining_config if key not in _RESERVED_CONFIG_KEYS
     }
     if ignored:
         warnings.append(
             "Ignored config keys not declared by the Home Assistant flow "
             f"schema: {', '.join(sorted(ignored))}"
+        )
+    leftover_steps = remaining_config.get(_PER_STEP_VALUES_KEY)
+    if isinstance(leftover_steps, dict) and leftover_steps:
+        warnings.append(
+            "step_values entries were never applied: "
+            f"{', '.join(sorted(str(k) for k in leftover_steps))}. A step_id "
+            "the flow never presents applies nothing; a list is consumed one "
+            "entry per encounter, so a leftover tail means the flow presented "
+            "that step fewer times than the list expects."
         )
     leftover_menu_keys = _MENU_SELECTION_KEYS & remaining_config.keys()
     if leftover_menu_keys:
@@ -245,6 +297,7 @@ def _consume_section_schema(
     *,
     allow_reuse: bool = True,
     explicit_source: bool = False,
+    keep_current_values: bool = False,
 ) -> dict[str, Any]:
     """Consume config values for a nested flow section.
 
@@ -272,6 +325,7 @@ def _consume_section_schema(
                 reuse_state,
                 allow_reuse=allow_reuse,
                 explicit_source=True,
+                keep_current_values=keep_current_values,
             )
         )
         _record_ignored_section_keys(
@@ -290,9 +344,13 @@ def _consume_section_schema(
             reuse_state,
             allow_reuse=allow_reuse,
             explicit_source=explicit_source,
+            keep_current_values=keep_current_values,
         )
     )
-    return nested_data
+    # Strip before returning, so the caller's "did this section get anything?"
+    # check counts real values and a section holding only clears is dropped
+    # rather than submitted as sentinels.
+    return _strip_cleared(nested_data)
 
 
 def _mark_consumed(
@@ -363,12 +421,122 @@ def _step_owned_submission_value(field: dict[str, Any]) -> Any:
     return _MISSING_DEFAULT
 
 
+# Marks a field the caller cleared. A clear cannot be expressed by simply
+# leaving the key out: a REQUIRED section is pre-seeded with the step's own
+# values by _required_section_defaults BEFORE anything is consumed, so an
+# omitted key just lets that seed survive the merge and resubmits the value
+# the caller asked to drop. The sentinel rides through the merge in the key's
+# place and is stripped once the section is assembled (issue #2254).
+_CLEARED = object()
+
+
+def _strip_cleared(form_data: dict[str, Any]) -> dict[str, Any]:
+    """Drop every key a clear marked, at any depth. Mutates and returns."""
+    for name in [k for k, v in form_data.items() if v is _CLEARED]:
+        del form_data[name]
+    for value in form_data.values():
+        if isinstance(value, dict):
+            _strip_cleared(value)
+    return form_data
+
+
+def _is_redacted_value(value: Any) -> bool:
+    """True when a step-owned value is, or contains, a redaction sentinel.
+
+    ``redact_secrets`` rewrites a deep copy of a schema for error contexts, so
+    the live step a walk submits against should never carry a sentinel.
+    Backfill is the one place that turns schema data back into submitted data,
+    though, so the check is made anyway: writing ``<redacted: set>`` into a
+    password field would replace a working secret with a placeholder.
+    """
+    if isinstance(value, list):
+        return any(carries_sentinel(item) for item in value)
+    return carries_sentinel(value)
+
+
+def _current_value_backfill(field: dict[str, Any]) -> tuple[Any, bool]:
+    """Resubmit what an edit-mode step carries for a field the caller left out.
+
+    Options, reconfigure and subentry-reconfigure steps arrive pre-filled by
+    Home Assistant's ``add_suggested_values_to_schema``, and the UI's save
+    posts every box back, so a field nobody named has to be submitted as the
+    step presented it or the save rewrites it (issue #2254). Returns
+    ``_NO_SUBMISSION`` when the step supplies no value of its own: a bare
+    ``"default"`` is the static schema value, which voluptuous fills in for an
+    omitted key exactly as it does for the UI's own form.
+    """
+    step_owned = _step_owned_submission_value(field)
+    if step_owned is _MISSING_DEFAULT or _is_redacted_value(step_owned):
+        return _NO_SUBMISSION
+    return step_owned, False
+
+
+def _clears_by_omission(field: dict[str, Any]) -> bool:
+    """Whether leaving this field OUT is how the caller clears it.
+
+    Only for a field that is neither required nor carrying a ``"default"``:
+    there, an absent key simply stays absent. Anything else has a value
+    voluptuous substitutes for the omission — the static default, which is a
+    different value than the caller asked for and would report success while
+    clearing nothing — so the ``None`` is submitted instead and Home Assistant
+    decides whether null is meaningful for that field.
+
+    The single source of truth for both sites that answer this question:
+    :func:`_consume_leaf_field`, where the caller's key is popped, and
+    :func:`_edit_mode_submission`, where a later encounter of the same field
+    has to reach the same verdict (Patch76 review, issue #2254).
+    """
+    return not field.get("required") and "default" not in field
+
+
+def _edit_mode_submission(
+    field: dict[str, Any],
+    name: str,
+    path_prefix: str,
+    dotted: str,
+    reuse_state: _ReuseState,
+) -> tuple[Any, bool]:
+    """Decide an edit-mode field the caller named no key for at THIS step.
+
+    The caller's intent outranks the step's stored value for the whole walk.
+    ``begin_step`` clears only ``filled``, so by a later step the caller's key
+    is gone from ``remaining_config`` and nothing marks the field as theirs —
+    but ``scoped``/``flat`` still hold what they asked for. Backfilling over
+    that resubmitted the entry's stored value and undid it: a recorded
+    ``None`` is the clear this mode documents, and a recorded value is the one
+    the caller asked to write (Patch76 review, issue #2254).
+
+    Only a field the caller never named anywhere falls through to the step's
+    own value — as does one whose reused write is already spent, rather than
+    letting an omission apply a static default over what is stored.
+    """
+    recorded = reuse_state.recorded_value(path_prefix, name)
+    if recorded is _MISSING_DEFAULT:
+        return _current_value_backfill(field)
+    if recorded is None:
+        # The caller cleared it. Express that the same way the popping site
+        # did, or the clear stops holding at its second encounter.
+        return _NO_SUBMISSION if _clears_by_omission(field) else (None, True)
+    if not reuse_state.claim_write(dotted):
+        # The one reused write per (step, path) is spent — a menu loop is
+        # revisiting this step. Falling back to omission would let voluptuous
+        # substitute the field's STATIC default over the entry's stored value,
+        # which is the very wipe this mode exists to stop, so send what the
+        # step presented instead (CodeRabbit review, issue #2254). The
+        # required-field branch still omits: there, omission raises HA's own
+        # loud "required key not provided" rather than losing data silently.
+        return _current_value_backfill(field)
+    return recorded, True
+
+
 def _redeclared_field_submission(
     field: dict[str, Any],
     name: str,
     path_prefix: str,
     reuse_state: _ReuseState | None,
     allow_reuse: bool,
+    *,
+    keep_current_values: bool = False,
 ) -> tuple[Any, bool]:
     """Decide what to submit for a declared field the caller named no key for here.
 
@@ -378,9 +546,16 @@ def _redeclared_field_submission(
     and the caller's value for this step outranks anything injected. Otherwise,
     in order:
 
-    1. The field is not required: omit it. Nothing is ever injected into an
-       optional field, or into a section that is neither required nor named by
-       the caller (``allow_reuse``) — materializing either would invent data.
+    1. The field is not required, or reuse is barred for this site because the
+       caller named neither it nor the section holding it (``allow_reuse``).
+       Under ``keep_current_values`` a value the caller recorded ANYWHERE
+       earlier in this walk wins first — resubmitted as theirs, or omitted
+       when it was ``None``, which is the clear. Failing that the step's own
+       value goes back, per :func:`_current_value_backfill` — it is the step's
+       data, not the caller's, so barring reuse does not bar it, and a section
+       the backfill itself materializes has to carry what it requires.
+       Otherwise omit: injecting into either on a create flow would invent
+       data.
     2. The step's own schema supplies a value — a suggestion or a constant's
        only legal value, per :func:`_step_owned_submission_value`: submit that.
        It is schema data rather than a caller key, so it is neither marked
@@ -397,23 +572,34 @@ def _redeclared_field_submission(
        spend the one write allowed per (step, path).
 
     Mutates ``reuse_state`` on the fourth branch. Menu selection keys never
-    reach here. Motivating regression (issue #2057): an options flow —
-    LocalTuya's — that declares the same field on an early step and again on a
-    later one.
+    reach here. Motivating regressions: issue #2057, an options flow
+    (LocalTuya's) that declares the same field on an early step and again on a
+    later one; issue #2254, a one-field options patch that reset every field
+    the caller did not name back to its static schema default.
     """
-    if reuse_state is None or not allow_reuse:
+    if reuse_state is None:
         return _NO_SUBMISSION
     dotted = _section_path(path_prefix, name)
     if dotted in reuse_state.filled:
         return _NO_SUBMISSION
-    if not field.get("required"):
-        return _NO_SUBMISSION
+    if not allow_reuse or not field.get("required"):
+        if not keep_current_values:
+            return _NO_SUBMISSION
+        return _edit_mode_submission(field, name, path_prefix, dotted, reuse_state)
+    recorded = reuse_state.recorded_value(path_prefix, name)
+    if recorded is None:
+        # An explicit clear. The popping site submitted this ``None``
+        # verbatim, and so must every later encounter: letting the step's own
+        # value or a static default win here silently reinstates the very
+        # thing the caller asked to drop. Narrow on purpose — a recorded
+        # VALUE still loses to the step's own, which predates this PR and is
+        # what issue #2057 settled.
+        return None, True
     step_owned = _step_owned_submission_value(field)
     if step_owned is not _MISSING_DEFAULT:
         return step_owned, False
     if "default" in field:
         return _NO_SUBMISSION
-    recorded = reuse_state.recorded_value(path_prefix, name)
     if recorded is _MISSING_DEFAULT:
         return _NO_SUBMISSION
     if not reuse_state.claim_write(dotted):
@@ -432,6 +618,7 @@ def _consume_leaf_field(
     *,
     allow_reuse: bool = True,
     explicit_source: bool = False,
+    keep_current_values: bool = False,
 ) -> None:
     """Fill ``name`` in ``form_data`` from the caller's config or from the step itself.
 
@@ -441,17 +628,37 @@ def _consume_leaf_field(
     the flat caller dict. With no key to pop,
     :func:`_redeclared_field_submission` chooses between omitting the field,
     submitting the step's own value, and resubmitting the recorded one.
+
+    Under ``keep_current_values`` an explicit ``None`` on an optional field
+    with no ``"default"`` is a clear rather than a value: the key is consumed
+    and recorded, but left out of the payload, because for such a field
+    omission is the only way to express a clear — the value simply stays
+    absent (issue #2254).
+
+    A field that carries a ``"default"`` is submitted with ``None`` verbatim
+    instead. Omitting it would let voluptuous substitute the static schema
+    default, which is a different value than the caller asked for and would
+    report success while quietly not clearing anything; submitting lets Home
+    Assistant decide whether ``None`` is meaningful for that field and say so
+    if it is not. A required field submits ``None`` verbatim for the same
+    reason.
     """
     if name in remaining_config:
         value = remaining_config.pop(name)
-        form_data[name] = value
+        clearing = keep_current_values and value is None and _clears_by_omission(field)
+        form_data[name] = _CLEARED if clearing else value
         _mark_consumed(consumed_config_keys, path_prefix, name)
         if reuse_state is not None:
             reuse_state.record(path_prefix, name, value, scoped_only=explicit_source)
         return
 
     value, from_caller = _redeclared_field_submission(
-        field, name, path_prefix, reuse_state, allow_reuse
+        field,
+        name,
+        path_prefix,
+        reuse_state,
+        allow_reuse,
+        keep_current_values=keep_current_values,
     )
     if value is _MISSING_DEFAULT:
         return
@@ -471,6 +678,7 @@ def _consume_declared_section(
     *,
     allow_reuse: bool,
     explicit_source: bool,
+    keep_current_values: bool,
 ) -> None:
     """Merge one section field's data into ``form_data``.
 
@@ -501,6 +709,7 @@ def _consume_declared_section(
         allow_reuse=allow_reuse
         and (bool(field.get("required")) or explicit_section is not None),
         explicit_source=explicit_source,
+        keep_current_values=keep_current_values,
     )
     if not nested_data:
         return
@@ -520,6 +729,7 @@ def _consume_form_schema(
     *,
     allow_reuse: bool = True,
     explicit_source: bool = False,
+    keep_current_values: bool = False,
 ) -> dict[str, Any]:
     """Consume matching config values and shape nested flow sections.
 
@@ -528,7 +738,8 @@ def _consume_form_schema(
     Unknown keys inside explicit section dicts are added to
     ``ignored_config_keys`` with their dotted section path. A declared field the
     caller named no key for is filled per
-    :func:`_redeclared_field_submission`.
+    :func:`_redeclared_field_submission`, which ``keep_current_values`` puts
+    into the edit-mode contract described there.
     """
     form_data: dict[str, Any] = {}
 
@@ -548,10 +759,11 @@ def _consume_form_schema(
                 reuse_state,
                 allow_reuse=allow_reuse,
                 explicit_source=explicit_source,
+                keep_current_values=keep_current_values,
             )
             continue
 
-        if isinstance(name, str) and name not in _MENU_SELECTION_KEYS:
+        if isinstance(name, str) and name not in _RESERVED_CONFIG_KEYS:
             _consume_leaf_field(
                 field,
                 name,
@@ -562,6 +774,7 @@ def _consume_form_schema(
                 path_prefix,
                 allow_reuse=allow_reuse,
                 explicit_source=explicit_source,
+                keep_current_values=keep_current_values,
             )
 
     return form_data
@@ -607,7 +820,7 @@ def _consume_all_remaining_keys(
     """
     form_data: dict[str, Any] = {}
     for key in list(remaining_config.keys()):
-        if key in _MENU_SELECTION_KEYS:
+        if key in _RESERVED_CONFIG_KEYS:
             continue
         value = remaining_config.pop(key)
         form_data[key] = value
@@ -629,6 +842,187 @@ def _consume_all_remaining_keys(
     return form_data
 
 
+def validate_step_values(config: dict[str, Any]) -> None:
+    """Reject a malformed ``step_values`` directive before the walk starts.
+
+    The reserved key is consumed as a directive, so a malformed one is invisible
+    to ignored-key reporting: the walk would complete, report success, and have
+    applied nothing the caller asked for. A caller error is a tool-level
+    failure, so it raises rather than warns (CodeRabbit review, issue #2254).
+
+    Accepted: a dict of ``step_id -> entry``, where an entry is a dict of field
+    values, or a LIST of such dicts consumed one per encounter of that step.
+    An empty dict inside such a list is a per-encounter no-op — that encounter
+    behaves as it would with no directive at all — but an entry that applies
+    nothing anywhere is rejected.
+    """
+    # Key PRESENCE is the test, not truthiness: an explicit ``None`` is a
+    # caller who meant to pass a directive and got the shape wrong, and the
+    # reserved key hides it from ignored-key reporting, so returning early on
+    # it would let the walk apply the rest and report a clean success.
+    if _PER_STEP_VALUES_KEY not in config:
+        return
+    directive = config[_PER_STEP_VALUES_KEY]
+
+    example = "{'<step_id>': {'<field>': <value>}}"
+    if not isinstance(directive, dict):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"'{_PER_STEP_VALUES_KEY}' must be an object keyed by step id, "
+                f"got {type(directive).__name__}",
+                suggestions=[f"Pass {_PER_STEP_VALUES_KEY}={example}."],
+                # TYPE, never the value. A rejected directive can carry a
+                # credential the caller is submitting for the FIRST time, which
+                # Home Assistant does not hold yet — so no read-back has
+                # harvested it and RedactSecretsMiddleware cannot scrub it even
+                # when enabled. raise_tool_error serialises this whole response
+                # into the exception message, and @log_tool_usage records that
+                # as error_message from inside the tool, where only
+                # `parameters` are masked: the value would reach plaintext
+                # mcp_usage.jsonl (Patch76 review, issue #2254). The shape is
+                # what diagnoses a malformed directive anyway.
+                context={"received_type": type(directive).__name__},
+            )
+        )
+
+    # Report the entry's POSITION, not the caller's step id: these errors reach
+    # the usage log unmasked (see the note above), and a step id is a
+    # caller-controlled key. The position still says which entry is wrong and
+    # cannot carry a value they typed (CodeRabbit review, issue #2254).
+    #
+    # Scoped to VALUES deliberately. Caller-supplied field NAMES do reach the
+    # same logged path — ``step_values.<step_id>.<field>`` goes into
+    # ``ignored_config_keys``, which ``_unconsumed_reconfigure_keys`` unions
+    # into the reconfigure abort error — and that is kept, because naming the
+    # field is the whole diagnostic for a typo and a name is not the secret a
+    # value is (Patch76 review, issue #2254).
+    for index, entry in enumerate(directive.values(), start=1):
+        where = f"{_PER_STEP_VALUES_KEY} entry #{index}"
+        entries = entry if isinstance(entry, list) else [entry]
+        if any(not isinstance(item, dict) for item in entries):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"{where} must be an object of field values, or a list "
+                    "of them for a step the flow presents more than once",
+                    suggestions=[
+                        f"Pass {_PER_STEP_VALUES_KEY}={example}, or a list of "
+                        "those objects to supply one per encounter.",
+                    ],
+                    context={
+                        "entry_index": index,
+                        "entry_types": [type(item).__name__ for item in entries],
+                    },
+                )
+            )
+        # An entry that can apply NOTHING AT ALL is a caller mistake in the
+        # same way a malformed one is, and it was reported inconsistently: a
+        # bare {} left a leftover the warning named, while [] and [{}] were
+        # popped at their first encounter and vanished, so the walk reported a
+        # clean success for a directive that did nothing (Patch76 review).
+        #
+        # An empty object INSIDE a longer list is deliberately not that: it
+        # means "leave this encounter as it would be without the directive",
+        # which nothing else expresses — omitting the step affects every
+        # encounter, and {"field": None} is an explicit clear rather than a
+        # fallback. So the test spans the whole entry rather than each item.
+        if not any(entries):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"{where} supplies no field values, so it would apply nothing",
+                    suggestions=[
+                        "Name at least one field for the step, or drop the entry.",
+                    ],
+                    context={"entry_index": index, "entry_count": len(entries)},
+                )
+            )
+
+    if not directive:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"'{_PER_STEP_VALUES_KEY}' is empty, so it would apply nothing",
+                suggestions=[f"Name a step: {_PER_STEP_VALUES_KEY}={example}."],
+            )
+        )
+
+
+@contextmanager
+def _step_values_applied(
+    remaining_config: dict[str, Any],
+    current_step: dict[str, Any],
+    ignored_config_keys: set[str] | None,
+    reuse_state: _ReuseState | None,
+) -> Iterator[None]:
+    """Overlay this step's entry from ``step_values`` for the duration.
+
+    The flat config dict is keyed by field name alone, so a field two steps
+    declare could only ever carry one value for both. Inside this block the
+    step's own entry SHADOWS the flat value, and on the way out the flat value
+    is restored so a later step still sees it — addressing one step therefore
+    never spends the caller's flat value, and a step nobody addresses behaves
+    exactly as it did before.
+
+    An overlaid key the step turns out not to declare is dropped rather than
+    left behind: it belongs to this step, so it must not leak into a later
+    one or be reported as a field no step declared.
+    """
+    overlay = remaining_config.get(_PER_STEP_VALUES_KEY)
+    step_id = current_step.get("step_id")
+    if not isinstance(overlay, dict):
+        yield
+        return
+
+    raw = overlay.get(step_id)
+    # A LIST is consumed one entry per encounter, its un-consumed tail
+    # replacing the key until it runs dry — the same shape ``next_step_id``
+    # uses for a menu the flow revisits, and the only one that can express a
+    # loop. A single dict applies once and is spent, which is why taking the
+    # warning's advice used to reach FEWER encounters than the flat key it
+    # replaces. The caller's list object is never mutated.
+    is_list = isinstance(raw, list)
+    head = (raw[0] if raw else None) if is_list else raw
+    values = head if isinstance(head, dict) and head else {}
+    if not values and not is_list:
+        yield
+        return
+
+    shadowed = {k: remaining_config[k] for k in values if k in remaining_config}
+    if values:
+        remaining_config.update(copy.deepcopy(values))
+        if reuse_state is not None:
+            reuse_state.step_scoped |= set(values)
+    try:
+        yield
+    finally:
+        if values and reuse_state is not None:
+            reuse_state.step_scoped -= set(values)
+        for key in values:
+            # Still present = this step's schema never declared it. A field
+            # scoped to one step applies nowhere else, so it would otherwise
+            # vanish without ever being submitted or reported — report it
+            # under its own path before dropping it. Checked BEFORE the
+            # shadowed flat values go back, or a restored flat key would look
+            # like an unconsumed overlay one.
+            if key in remaining_config and ignored_config_keys is not None:
+                ignored_config_keys.add(f"{_PER_STEP_VALUES_KEY}.{step_id}.{key}")
+            remaining_config.pop(key, None)
+        remaining_config.update(shadowed)
+        # Spend this encounter. A list leaves its tail for the next visit; a
+        # dict is spent outright. What survives the whole walk is reported
+        # rather than silently doing nothing, the same way an un-consumed
+        # menu selection is.
+        tail = raw[1:] if isinstance(raw, list) else []
+        if tail:
+            overlay[step_id] = tail
+        else:
+            overlay.pop(step_id, None)
+        if not overlay:
+            remaining_config.pop(_PER_STEP_VALUES_KEY, None)
+
+
 def _handle_form_step(
     flow_id: str,
     current_step: dict[str, Any],
@@ -636,6 +1030,8 @@ def _handle_form_step(
     ignored_config_keys: set[str] | None = None,
     consumed_config_keys: set[str] | None = None,
     reuse_state: _ReuseState | None = None,
+    *,
+    keep_current_values: bool = False,
 ) -> dict[str, Any]:
     """Validate a form step and return form data to submit.
 
@@ -653,6 +1049,16 @@ def _handle_form_step(
     its own — resubmitted once from an earlier step's caller value with a
     warning. Nothing is injected into an optional field, or into a section
     neither marked required nor named by the caller.
+
+    ``keep_current_values`` switches that last sentence off for the flows that
+    edit an existing object — options, reconfigure, subentry reconfigure. Their
+    steps arrive pre-filled with the stored values and the UI's save posts all
+    of them back, so a declared field the caller left out is submitted with the
+    step's own value wherever the step supplies one (issue #2254); a field the
+    caller set to ``None`` is a clear, submitted as an omission only where the
+    field has no schema default to be substituted in its place (see
+    :func:`_consume_leaf_field`). It takes a ``reuse_state`` to work: the record is what keeps
+    a backfill off a path the caller already filled in this same step.
 
     When ``data_schema`` is absent (HA didn't tell us field names), falls
     back to legacy behaviour: submit all non-menu keys and clear them. This
@@ -684,11 +1090,17 @@ def _handle_form_step(
             remaining_config, consumed_config_keys, reuse_state
         )
 
-    return _consume_form_schema(
-        data_schema,
-        remaining_config,
-        ignored_config_keys,
-        consumed_config_keys,
-        "",
-        reuse_state,
-    )
+    with _step_values_applied(
+        remaining_config, current_step, ignored_config_keys, reuse_state
+    ):
+        return _strip_cleared(
+            _consume_form_schema(
+                data_schema,
+                remaining_config,
+                ignored_config_keys,
+                consumed_config_keys,
+                "",
+                reuse_state,
+                keep_current_values=keep_current_values,
+            )
+        )
