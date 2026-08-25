@@ -732,24 +732,14 @@ class HAWebSocket:
         # Skip any out-of-band messages (events on subscriptions etc.) and
         # match by id.
         while True:
-            resp = json.loads(self._ws.recv())
-            if resp.get("id") != msg_id:
-                continue
-            if not resp.get("success", True):
-                err = resp.get("error") or {}
-                raw_code = err.get("code") if isinstance(err, dict) else None
-                code = raw_code if isinstance(raw_code, str) else None
-                supervisor_message = (
-                    err.get("message")
-                    if isinstance(err, dict) and isinstance(err.get("message"), str)
-                    else None
-                )
-                raise WSCommandError(
-                    f"supervisor/api {method} {endpoint} failed: {err}",
-                    code=code,
-                    supervisor_message=supervisor_message,
-                )
-            return resp.get("result", {}) or {}
+            result = _parse_supervisor_api_frame(
+                self._ws.recv(),
+                msg_id=msg_id,
+                method=method,
+                endpoint=endpoint,
+            )
+            if result is not None:
+                return result
 
 
 class WSCommandError(RuntimeError):
@@ -770,6 +760,58 @@ class WSCommandError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.supervisor_message = supervisor_message
+
+
+def _parse_supervisor_api_frame(
+    raw: str | bytes,
+    *,
+    msg_id: int,
+    method: str,
+    endpoint: str,
+) -> dict[str, Any] | None:
+    """Validate one WebSocket frame and return a matching command result."""
+    try:
+        resp = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"supervisor/api {method} {endpoint} returned an invalid "
+            f"WebSocket result: {exc} (raw={raw!r})"
+        ) from exc
+    if not isinstance(resp, dict):
+        raise RuntimeError(
+            f"supervisor/api {method} {endpoint} returned an invalid "
+            f"WebSocket result: expected an object, got {resp!r}"
+        )
+    if resp.get("id") != msg_id:
+        return None
+    if resp.get("type") != "result" or not isinstance(resp.get("success"), bool):
+        raise RuntimeError(
+            f"supervisor/api {method} {endpoint} returned an invalid "
+            f"WebSocket result frame: {resp!r}"
+        )
+    if not resp["success"]:
+        err = resp.get("error") or {}
+        raw_code = err.get("code") if isinstance(err, dict) else None
+        code = raw_code if isinstance(raw_code, str) else None
+        supervisor_message = (
+            err.get("message")
+            if isinstance(err, dict) and isinstance(err.get("message"), str)
+            else None
+        )
+        raise WSCommandError(
+            f"supervisor/api {method} {endpoint} failed: {err}",
+            code=code,
+            supervisor_message=supervisor_message,
+        )
+    result = resp.get("result")
+    if result is None:
+        return {}
+    if not isinstance(result, dict):
+        raise RuntimeError(
+            f"supervisor/api {method} {endpoint} returned an invalid "
+            f"WebSocket result payload: {result!r}"
+        )
+    return result
 
 
 class _SupervisorReadinessTimeout(TimeoutError):

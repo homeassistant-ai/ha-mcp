@@ -92,6 +92,57 @@ def test_supervisor_api_preserves_structured_error_frame(
     assert sent["method"] == "post"
 
 
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pytest.param([], id="non-mapping-frame"),
+        pytest.param(
+            {"id": 1, "type": "event", "success": True, "result": {}},
+            id="wrong-frame-type",
+        ),
+        pytest.param(
+            {"id": 1, "type": "result", "result": {}},
+            id="missing-success",
+        ),
+        pytest.param(
+            {"id": 1, "type": "result", "success": "yes", "result": {}},
+            id="non-boolean-success",
+        ),
+        pytest.param(
+            {"id": 1, "type": "result", "success": True, "result": []},
+            id="non-mapping-result",
+        ),
+    ],
+)
+def test_supervisor_api_rejects_malformed_result_frames(frame: Any) -> None:
+    """A matching frame must satisfy the complete command-result contract."""
+    ws = HAWebSocket(
+        "http://127.0.0.1:18123",
+        OAuthCredentials(access_token="access", refresh_token="refresh"),
+    )
+    socket = Mock()
+    socket.recv.return_value = json.dumps(frame)
+    ws._ws = socket
+
+    with pytest.raises(RuntimeError, match="invalid WebSocket result"):
+        ws.supervisor_api("/supervisor/info")
+
+
+def test_supervisor_api_accepts_null_write_result_as_empty_mapping() -> None:
+    """A successful write acknowledgement may omit a result payload."""
+    ws = HAWebSocket(
+        "http://127.0.0.1:18123",
+        OAuthCredentials(access_token="access", refresh_token="refresh"),
+    )
+    socket = Mock()
+    socket.recv.return_value = json.dumps(
+        {"id": 1, "type": "result", "success": True, "result": None}
+    )
+    ws._ws = socket
+
+    assert ws.supervisor_api("/supervisor/reload", method="post") == {}
+
+
 def _info(
     update_available: bool,
     version: str = "2026.06.1",
