@@ -607,9 +607,17 @@ class HAWebSocket:
         auth_req = json.loads(self._recv_auth_frame(deadline))
         if auth_req.get("type") != "auth_required":
             raise RuntimeError(f"Unexpected WS handshake message: {auth_req}")
-        self._ws.send(
-            json.dumps({"type": "auth", "access_token": self._credentials.access_token})
+        auth_message = json.dumps(
+            {"type": "auth", "access_token": self._credentials.access_token}
         )
+        if deadline is None:
+            self._ws.send(auth_message)
+        else:
+            self._send_with_deadline(
+                auth_message,
+                deadline=deadline,
+                operation="WebSocket authentication send",
+            )
         auth_resp = json.loads(self._recv_auth_frame(deadline))
         if auth_resp.get("type") != "auth_ok":
             raise RuntimeError(f"WS auth rejected: {auth_resp}")
@@ -2034,7 +2042,13 @@ def _wait_core_version(
     while time.monotonic() < deadline:
         try:
             ws.reconnect(deadline=deadline)
-            last_info = ws.supervisor_api("/core/info", method="get", timeout=30.0)
+            request_timeout = min(
+                30.0,
+                _remaining_deadline_budget(deadline, "Core version check"),
+            )
+            last_info = ws.supervisor_api(
+                "/core/info", method="get", timeout=request_timeout
+            )
         except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
             if not _is_transient_supervisor_readiness_error(exc):
                 raise
@@ -2048,7 +2062,9 @@ def _wait_core_version(
                 last_info.get("version"),
                 expected_version,
             )
-        time.sleep(max(0.0, min(5.0, deadline - time.monotonic())))
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(5.0, remaining))
 
     last_err_suffix = f"; last error: {last_error!r}" if last_error else ""
     raise TimeoutError(
@@ -2085,10 +2101,10 @@ def _wait_supervisor_channel_metadata(
     """Wait for channel metadata and return whether Supervisor needs updating."""
     last_info: dict[str, Any] | None = None
     last_error: BaseException | None = None
-    while time.monotonic() < deadline:
+    while (request_timeout := deadline - time.monotonic()) > 0:
         try:
             last_info = ws.supervisor_api(
-                "/supervisor/info", method="get", timeout=30.0
+                "/supervisor/info", method="get", timeout=min(30.0, request_timeout)
             )
         except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
             if not _is_transient_supervisor_readiness_error(exc):
@@ -2102,7 +2118,9 @@ def _wait_supervisor_channel_metadata(
             )
             if reconnect_error is not None:
                 last_error = reconnect_error
-            time.sleep(5.0)
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(5.0, remaining))
             continue
 
         latest = last_info.get("version_latest")
@@ -2120,7 +2138,9 @@ def _wait_supervisor_channel_metadata(
                 return False
             if last_info.get("update_available"):
                 return True
-        time.sleep(5.0)
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(5.0, remaining))
 
     last_err_suffix = f"; last error: {last_error!r}" if last_error else ""
     raise TimeoutError(
@@ -2172,7 +2192,12 @@ def _apply_supervisor_image_update(
                 context="after Supervisor update",
                 deadline=deadline,
             )
-            time.sleep(5.0)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    "Supervisor did not reconnect before the beta-image deadline"
+                ) from exc
+            time.sleep(min(5.0, remaining))
 
 
 def _configure_core_image_variant(

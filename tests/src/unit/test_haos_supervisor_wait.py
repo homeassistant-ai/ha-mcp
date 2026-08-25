@@ -22,6 +22,8 @@ from tests.haos_image_build.build_image import (
     HAWebSocket,
     OAuthCredentials,
     WSCommandError,
+    _SupervisorReadinessTimeout,
+    _apply_supervisor_image_update,
     _configure_supervisor_image_variant,
     _reconnect_during_supervisor_update,
     _wait_core_version,
@@ -365,6 +367,37 @@ def test_reconnect_refreshes_the_onboarding_access_token() -> None:
     )
 
 
+def test_deadline_connect_bounds_the_authentication_send() -> None:
+    """A reconnect deadline also bounds the authentication frame send."""
+    ws = HAWebSocket(
+        "http://127.0.0.1:18123",
+        OAuthCredentials(access_token="access", refresh_token="refresh"),
+    )
+    socket = Mock()
+    socket.recv.side_effect = [
+        json.dumps({"type": "auth_required"}),
+        json.dumps({"type": "auth_ok", "ha_version": "2026.8.0"}),
+    ]
+    auth_message = json.dumps({"type": "auth", "access_token": "access"})
+
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            return_value=1.0,
+        ),
+        patch("websockets.sync.client.connect", return_value=socket),
+        patch.object(ws, "_send_with_deadline") as send,
+    ):
+        ws._connect(deadline=10.0)
+
+    send.assert_called_once_with(
+        auth_message,
+        deadline=10.0,
+        operation="WebSocket authentication send",
+    )
+    socket.send.assert_not_called()
+
+
 def test_reconnect_rejects_a_refresh_response_without_an_access_token() -> None:
     """A malformed refresh response fails before WebSocket authentication."""
     base_url = "http://127.0.0.1:18123"
@@ -600,9 +633,9 @@ def test_channel_metadata_timeout_includes_the_last_transient_error() -> None:
     with (
         patch(
             "tests.haos_image_build.build_image.time.monotonic",
-            side_effect=[0.0, 2.0],
+            side_effect=[0.0, 0.75, 1.0],
         ),
-        patch("tests.haos_image_build.build_image.time.sleep"),
+        patch("tests.haos_image_build.build_image.time.sleep") as sleep,
         pytest.raises(TimeoutError, match=r"last error.*WSCommandError"),
     ):
         _wait_supervisor_channel_metadata(
@@ -611,6 +644,12 @@ def test_channel_metadata_timeout_includes_the_last_transient_error() -> None:
             minimum_version="2026.08.0",
             deadline=1.0,
         )
+
+    ws.supervisor_api.assert_called_once_with(
+        "/supervisor/info", method="get", timeout=1.0
+    )
+    ws.reconnect.assert_called_once_with(deadline=1.0)
+    sleep.assert_called_once_with(0.25)
 
 
 def test_channel_metadata_timeout_prefers_the_last_reconnect_error() -> None:
@@ -622,9 +661,9 @@ def test_channel_metadata_timeout_prefers_the_last_reconnect_error() -> None:
     with (
         patch(
             "tests.haos_image_build.build_image.time.monotonic",
-            side_effect=[0.0, 2.0],
+            side_effect=[0.0, 1.0, 1.0],
         ),
-        patch("tests.haos_image_build.build_image.time.sleep"),
+        patch("tests.haos_image_build.build_image.time.sleep") as sleep,
         pytest.raises(TimeoutError, match="refresh failed"),
     ):
         _wait_supervisor_channel_metadata(
@@ -635,6 +674,7 @@ def test_channel_metadata_timeout_prefers_the_last_reconnect_error() -> None:
         )
 
     ws.reconnect.assert_called_once_with(deadline=1.0)
+    sleep.assert_not_called()
 
 
 def test_supervisor_update_reconnect_propagates_deadline() -> None:
@@ -651,6 +691,63 @@ def test_supervisor_update_reconnect_propagates_deadline() -> None:
     )
 
     ws.reconnect.assert_called_once_with(deadline=10.0)
+
+
+def test_supervisor_update_retry_caps_sleep_to_remaining_budget() -> None:
+    """A near-expiry Supervisor retry cannot sleep past its deadline."""
+    ws = Mock()
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=[0.0, 0.0, 0.75, 1.0],
+        ),
+        patch(
+            "tests.haos_image_build.build_image._wait_supervisor_ready",
+            side_effect=[
+                ConnectionError("restart"),
+                _SupervisorReadinessTimeout("done"),
+            ],
+        ),
+        patch("tests.haos_image_build.build_image.time.sleep") as sleep,
+        pytest.raises(_SupervisorReadinessTimeout, match="done"),
+    ):
+        _apply_supervisor_image_update(
+            ws,
+            channel="beta",
+            minimum_version="2026.08.0",
+            deadline=1.0,
+            timeout=1.0,
+        )
+
+    ws.reconnect.assert_called_once_with(deadline=1.0)
+    sleep.assert_called_once_with(0.25)
+
+
+def test_supervisor_update_retry_skips_sleep_when_budget_expires() -> None:
+    """An exhausted Supervisor retry budget performs no backoff sleep."""
+    ws = Mock()
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=[0.0, 0.0, 1.0],
+        ),
+        patch(
+            "tests.haos_image_build.build_image._wait_supervisor_ready",
+            side_effect=ConnectionError("restart"),
+        ),
+        patch("tests.haos_image_build.build_image.time.sleep") as sleep,
+        pytest.raises(TimeoutError, match="beta-image deadline"),
+    ):
+        _apply_supervisor_image_update(
+            ws,
+            channel="beta",
+            minimum_version="2026.08.0",
+            deadline=1.0,
+            timeout=1.0,
+        )
+
+    ws.reconnect.assert_called_once_with(deadline=1.0)
+    sleep.assert_not_called()
 
 
 def test_wait_rejects_terminal_supervisor_error_without_retry() -> None:
@@ -1192,7 +1289,7 @@ def test_wait_core_version_reports_non_convergence() -> None:
     with (
         patch(
             "tests.haos_image_build.build_image.time.monotonic",
-            side_effect=[0.0, 0.0, 1.0, 1.0],
+            side_effect=[0.0, 0.0, 0.5, 1.0, 1.0],
         ),
         patch("tests.haos_image_build.build_image.time.sleep") as sleep,
         pytest.raises(TimeoutError) as exc_info,
@@ -1203,8 +1300,27 @@ def test_wait_core_version_reports_non_convergence() -> None:
     assert "expected='2026.8.3'" in message
     assert repr(old_info) in message
     ws.reconnect.assert_called_once_with(deadline=1.0)
-    ws.supervisor_api.assert_called_once_with("/core/info", method="get", timeout=30.0)
-    sleep.assert_called_once_with(0.0)
+    ws.supervisor_api.assert_called_once_with("/core/info", method="get", timeout=0.5)
+    sleep.assert_not_called()
+
+
+def test_wait_core_version_skips_probe_after_reconnect_exhausts_budget() -> None:
+    """No Core version probe starts after reconnect consumes the deadline."""
+    ws = Mock()
+
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=[0.0, 0.0, 1.0, 1.0, 1.0],
+        ),
+        patch("tests.haos_image_build.build_image.time.sleep") as sleep,
+        pytest.raises(TimeoutError, match="Core version check"),
+    ):
+        _wait_core_version(ws, "2026.8.3", timeout=1.0)
+
+    ws.reconnect.assert_called_once_with(deadline=1.0)
+    ws.supervisor_api.assert_not_called()
+    sleep.assert_not_called()
 
 
 def test_configure_beta_variant_polls_after_blank_unknown_core_update_error() -> None:
