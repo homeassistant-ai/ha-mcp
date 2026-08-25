@@ -1781,6 +1781,20 @@ def _supervisor_info_ready(
     )
 
 
+def _reconnect_supervisor_during_wait(ws: HAWebSocket) -> BaseException | None:
+    """Best-effort reconnect while Supervisor/Core restarts."""
+    try:
+        ws.reconnect()
+    except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as reconnect_err:
+        if not _is_transient_supervisor_readiness_error(reconnect_err):
+            raise
+        # Handler-start timeouts and transport failures are expected while
+        # Supervisor/Core restarts; keep them visible in CI logs.
+        LOG.warning("reconnect during update wait failed: %r", reconnect_err)
+        return reconnect_err
+    return None
+
+
 def _wait_supervisor_ready(
     ws: HAWebSocket,
     *,
@@ -1820,14 +1834,8 @@ def _wait_supervisor_ready(
             # then best-effort reconnect and keep polling.
             last_error = e
             LOG.debug("Transient error polling /supervisor/info: %r", e)
-            try:
-                ws.reconnect()
-            except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as reconnect_err:
-                if not _is_transient_supervisor_readiness_error(reconnect_err):
-                    raise
-                # Handler-start timeouts and transport failures are expected
-                # while Supervisor/Core restarts; keep them visible in CI logs.
-                LOG.warning("reconnect during update wait failed: %r", reconnect_err)
+            reconnect_err = _reconnect_supervisor_during_wait(ws)
+            if reconnect_err is not None:
                 last_error = reconnect_err
             continue
         version = info.get("version")
