@@ -846,3 +846,52 @@ class TestSessionDeadlineIsCentral:
                     pass
 
         assert _FakeWsClient.instances[0].disconnected is True
+
+
+class TestRefusalReasons:
+    """The two refusals are distinct and must not borrow each other's words."""
+
+    def test_local_wss_is_refused_as_an_unsupported_scheme(self) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import _refusal_reason
+
+        reason = _refusal_reason("wss://homeassistant:8123")
+        assert reason is not None
+        # http://homeassistant is ALLOWED and maps to the identical wire URL,
+        # so calling this "cleartext to a remote host" is simply false, and
+        # "use https://" is not available for a Supervisor-internal endpoint.
+        assert "remote host" not in reason
+        assert "unsupported scheme" in reason
+
+    def test_remote_http_keeps_the_cleartext_reason(self) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import _refusal_reason
+
+        reason = _refusal_reason("http://ha.example.com:8123")
+        assert reason is not None
+        assert "remote host" in reason
+
+    def test_allowed_urls_have_no_reason(self) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import _refusal_reason
+
+        assert _refusal_reason("http://homeassistant:8123") is None
+        assert _refusal_reason("https://ha.example.com:8123") is None
+
+
+class TestReadOnlyModeRemedy:
+    """Read Only Mode blocks the restore, so the report must not name it."""
+
+    async def test_remedy_does_not_name_a_blocked_action(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import theme_guard as guard_module
+
+        monkeypatch.setattr(guard_module, "_read_only_mode", lambda: True)
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+        await guard.take_snapshot()
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
+        await guard.detect_change()
+
+        warning = guard.warnings[0]
+        assert "Read Only Mode" in warning
+        assert "set_engine_theme" not in warning
+        assert "Profile > General" in warning

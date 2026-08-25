@@ -72,8 +72,52 @@ _LOCAL_HOSTS = frozenset(
 )
 
 
+def _read_only_mode() -> bool:
+    """Whether server Read Only Mode is on. Never raises.
+
+    Read through a helper so the report has one seam: Read Only Mode blocks
+    set_engine_theme at call time while captures keep running, so the remedy
+    must know about it.
+    """
+    try:
+        from ..config import get_global_settings
+
+        return bool(get_global_settings().read_only_mode)
+    except Exception:  # pragma: no cover - settings must never break a read
+        return False
+
+
+def _refusal_reason(url: str) -> str | None:
+    """Why ``url`` must not carry the engine token, or None when it may.
+
+    The two refusals are distinct and must say so. An unsupported scheme is
+    refused because the transport maps ONLY https to wss and everything else
+    to cleartext ws -- so wss://homeassistant and the ALLOWED
+    http://homeassistant produce the identical wire URL, and calling that
+    "cleartext to a remote host" is simply wrong. "Use https://" is also not
+    available advice for a Supervisor-internal endpoint.
+    """
+    from urllib.parse import urlparse
+
+    scheme = urlparse(url).scheme
+    if not _refuses_cleartext(url):
+        return None
+    if scheme not in ("http", "https"):
+        return (
+            f"refusing an engine URL with the unsupported scheme {scheme!r} "
+            f"({url}): the WebSocket transport maps only https to wss and "
+            "every other scheme to cleartext ws, so this would not be "
+            "encrypted. Use http:// for a local endpoint or https:// "
+            "otherwise."
+        )
+    return (
+        "refusing to send the screenshot engine's token in cleartext to a "
+        f"remote host ({url}); use https://"
+    )
+
+
 def _refuses_cleartext(url: str) -> bool:
-    """True when ``url`` would send the token in cleartext to a remote host."""
+    """True when ``url`` must not carry the engine token."""
     from urllib.parse import urlparse
 
     parsed = urlparse(url)
@@ -234,11 +278,9 @@ class ThemeGuard:
         from ..client.websocket_client import HomeAssistantWebSocketClient
 
         assert self.credential is not None
-        if _refuses_cleartext(self.credential.url):
-            raise ConnectionError(
-                "refusing to send the screenshot engine's token in cleartext "
-                f"to a remote host ({self.credential.url}); use https://"
-            )
+        refusal = _refusal_reason(self.credential.url)
+        if refusal is not None:
+            raise ConnectionError(refusal)
         ws = HomeAssistantWebSocketClient(
             self.credential.url,
             self.credential.token,
@@ -366,7 +408,21 @@ class ThemeGuard:
             self._snapshot,
             current,
         )
-        if self.credential_is_engine:
+        # Read Only Mode blocks set_engine_theme at call time (_theme_write
+        # allows only list and get_engine_theme), while the capture itself
+        # still runs -- ha_get_dashboard_screenshot is readOnlyHint: True --
+        # and still reaches this branch. Naming the action there would send
+        # the agent at a command that cannot succeed, the same rule the
+        # client-credential branch already follows.
+        if _read_only_mode():
+            remedy = (
+                "Server Read Only Mode is on, so ha-mcp will not restore "
+                "it: captures keep running there, but every theme write is "
+                "blocked at call time. Restore it from that account's own "
+                "session, Profile > General in the Home Assistant UI, or "
+                "turn Read Only Mode off first."
+            )
+        elif self.credential_is_engine:
             remedy = (
                 "To restore it, call ha_manage_theme(action="
                 f"'set_engine_theme', value={json.dumps(restore_value)}, "
