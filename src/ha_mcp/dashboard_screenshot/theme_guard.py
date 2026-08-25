@@ -408,13 +408,21 @@ class ThemeGuard:
             self._snapshot,
             current,
         )
-        # Read Only Mode blocks set_engine_theme at call time (_theme_write
-        # allows only list and get_engine_theme), while the capture itself
-        # still runs -- ha_get_dashboard_screenshot is readOnlyHint: True --
-        # and still reaches this branch. Naming the action there would send
-        # the agent at a command that cannot succeed, the same rule the
-        # client-credential branch already follows.
-        if _read_only_mode():
+        # Order matters: report the condition that actually governs. The
+        # identity block is unconditional -- with a fallback credential the
+        # restore is refused whether or not Read Only Mode is on -- while the
+        # read-only block lifts when the flag is turned off. Testing
+        # read-only first told a reader in BOTH states to turn the flag off,
+        # advice that unblocks nothing when the credential is unproven.
+        if not self.credential_is_engine:
+            remedy = (
+                "This was observed with ha-mcp's own Home Assistant "
+                "credential rather than the engine's own token, so ha-mcp "
+                "cannot confirm which account it belongs to and will not act "
+                "on it. Restore it from that account's own session: Profile "
+                "> General in the Home Assistant UI."
+            )
+        elif _read_only_mode():
             remedy = (
                 "Server Read Only Mode is on, so ha-mcp will not restore "
                 "it: captures keep running there, but every theme write is "
@@ -422,26 +430,13 @@ class ThemeGuard:
                 "session, Profile > General in the Home Assistant UI, or "
                 "turn Read Only Mode off first."
             )
-        elif self.credential_is_engine:
+        else:
             remedy = (
                 "To restore it, call ha_manage_theme(action="
                 f"'set_engine_theme', value={json.dumps(restore_value)}, "
                 f"expected_current={json.dumps(current)}) -- that guard "
-                "re-checks the "
-                "stored theme immediately before writing and skips the write "
-                "if it changed."
-            )
-        else:
-            # Do NOT name ha_manage_theme here: this branch is reached via the
-            # client-credential fallback, which is the same condition under
-            # which the engine-theme actions refuse. Recommending them would
-            # send the agent at a command that cannot succeed.
-            remedy = (
-                "This was observed with ha-mcp's own Home Assistant "
-                "credential rather than the engine's own token, so ha-mcp "
-                "cannot confirm which account it belongs to and will not act "
-                "on it. Restore it from that account's own session: Profile "
-                "> General in the Home Assistant UI."
+                "re-checks the stored theme immediately before writing and "
+                "skips the write if it changed."
             )
         self.warnings.append(
             "The screenshot engine changed the saved frontend theme of the "

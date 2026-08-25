@@ -895,3 +895,53 @@ class TestReadOnlyModeRemedy:
         assert "Read Only Mode" in warning
         assert "set_engine_theme" not in warning
         assert "Profile > General" in warning
+
+
+class TestRemedyPrecedence:
+    """All four combinations report the block that actually governs."""
+
+    async def _report(self, monkeypatch: Any, read_only: bool, engine: bool) -> str:
+        from ha_mcp.dashboard_screenshot import theme_guard as guard_module
+
+        monkeypatch.setattr(guard_module, "_read_only_mode", lambda: read_only)
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        guard = ThemeGuard.for_capture(
+            _PUPPET_CREDENTIAL if engine else None,
+            None if engine else _client(),
+        )
+        await guard.take_snapshot()
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
+        await guard.detect_change()
+        return guard.warnings[0]
+
+    async def test_fallback_credential_wins_over_read_only(
+        self, monkeypatch: Any
+    ) -> None:
+        """Read Only on + fallback: turning the flag off would not unblock it.
+
+        The identity refusal applies in both flag states, so advising the
+        reader to turn Read Only Mode off would send them to a state where
+        the restore is still refused, for a reason the flag does not touch.
+        """
+        warning = await self._report(monkeypatch, read_only=True, engine=False)
+        assert "cannot confirm which account" in warning
+        assert "turn Read Only Mode off" not in warning
+
+    async def test_read_only_reported_when_credential_is_proven(
+        self, monkeypatch: Any
+    ) -> None:
+        warning = await self._report(monkeypatch, read_only=True, engine=True)
+        assert "Read Only Mode is on" in warning
+        assert "set_engine_theme" not in warning
+
+    async def test_actionable_restore_when_neither_blocks(
+        self, monkeypatch: Any
+    ) -> None:
+        warning = await self._report(monkeypatch, read_only=False, engine=True)
+        assert "set_engine_theme" in warning
+
+    async def test_fallback_credential_with_read_only_off(
+        self, monkeypatch: Any
+    ) -> None:
+        warning = await self._report(monkeypatch, read_only=False, engine=False)
+        assert "cannot confirm which account" in warning
