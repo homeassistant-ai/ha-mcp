@@ -1087,6 +1087,9 @@ class DeepSearchMixin(SceneSearchMixin):
                 "dashboard_title": title,
                 "score": 100,
                 "match_in_config": True,
+                # Dashboards are not a search/related item type, so this is
+                # always False; emitted so every config record carries the key.
+                "match_in_references": False,
             }
         return list(records.values()), failed
 
@@ -1162,6 +1165,7 @@ class DeepSearchMixin(SceneSearchMixin):
                             "dashboard_title": title,
                             "score": config_score,
                             "match_in_config": True,
+                            "match_in_references": False,
                             "config": config,
                         }
                     ], False
@@ -1315,6 +1319,16 @@ class DeepSearchMixin(SceneSearchMixin):
         self._apply_scene_partial_flag(response, scene_stats)
         self._apply_per_type_partial_flag(
             response,
+            # Scenes are a graph bucket too, so a scene-only search whose
+            # configs all failed must still get the scope sentence explaining
+            # that plain references were covered anyway. Without this the
+            # caller reads the scene "not scanned" fragment with no statement
+            # of what the graph still accounted for.
+            scene_body_incomplete=bool(
+                scene_stats.get("skipped")
+                or scene_stats.get("failed")
+                or scene_stats.get("timeout")
+            ),
             automation_skipped=automation_skipped,
             script_skipped=script_skipped,
             automation_failed=automation_failed,
@@ -1354,6 +1368,7 @@ class DeepSearchMixin(SceneSearchMixin):
         graph_dropped: dict[str, set[str]] | None = None,
         graph_surfaces_skipped: set[str] | None = None,
         graph_unavailable: bool = False,
+        scene_body_incomplete: bool = False,
     ) -> None:
         """Set ``partial: True`` when the deep-search per-type fetch path lost
         data — either the Attempt-C wall-clock budget exhausted
@@ -1496,7 +1511,8 @@ class DeepSearchMixin(SceneSearchMixin):
                 graph_dropped=graph_dropped,
                 graph_surfaces_skipped=graph_surfaces_skipped,
                 graph_unavailable=graph_unavailable,
-                body_scan_incomplete=bool(
+                body_scan_incomplete=scene_body_incomplete
+                or bool(
                     automation_skipped
                     or automation_failed
                     or automation_yaml_skipped

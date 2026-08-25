@@ -498,11 +498,14 @@ class TestGraphHonesty:
     async def test_consumers_ha_reports_but_we_do_not_model_are_disclosed(
         self, mock_client, smart_tools
     ):
-        """A group containing the entity breaks on rename and must be named.
+        """A group containing the entity breaks on rename and must be disclosed.
 
         ha_search has no group/person match shape, but discarding them AND
-        claiming the reference list is complete is what turns a scoping
-        decision into a false negative.
+        claiming the reference list is complete turns a scoping decision into a
+        false negative. Disclosed as a COUNT, never as ids: under enforce mode
+        the outbound scan refuses any response carrying a hidden entity_id, so
+        naming them would fail the whole search and leak what that mode exists
+        to conceal.
         """
         mock_client.send_websocket_message = AsyncMock(
             return_value=_related_response(
@@ -515,7 +518,11 @@ class TestGraphHonesty:
             query=QUERY, search_types=["automation"], limit=20
         )
 
-        assert "group.downstairs" in self._reason(response)
+        reason = self._reason(response)
+        assert "1 group(s)" in reason
+        assert "group.downstairs" not in reason, (
+            "a concealed-surface id was named in partial_reason"
+        )
 
     @pytest.mark.asyncio
     async def test_surfaces_excluded_by_search_types_are_disclosed(
@@ -914,4 +921,129 @@ class TestGraphApplicability:
         assert "could not be consulted" not in (response.get("partial_reason") or "")
         assert not response.get("partial"), (
             f"complete search reported partial: {response.get('partial_reason')}"
+        )
+
+
+class TestGraphAnswerGuards:
+    """Two ways a graph answer can be wrong without being an error."""
+
+    @pytest.mark.asyncio
+    async def test_a_bucket_of_unreadable_elements_is_not_a_successful_empty(self):
+        """Elements we cannot read must not pass as "no references here".
+
+        If HA (or a proxy) ever changed the payload to objects rather than id
+        strings, filtering them out while reporting success would let the
+        response claim every plain reference was counted, on the strength of a
+        bucket it had entirely discarded.
+        """
+        from ha_mcp.tools.smart_search import _graph
+
+        client = MagicMock()
+        _graph.reset_unsupported_cache(client)
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {"automation": [{"entity_id": "automation.foo"}]},
+            }
+        )
+
+        assert await _graph.fetch_related_buckets(client, QUERY) is None
+        _graph.reset_unsupported_cache(client)
+
+    @pytest.mark.asyncio
+    async def test_an_empty_bucket_is_still_a_readable_answer(self):
+        """The mirror: HA legitimately reporting an empty list is not a failure.
+
+        Without this, tightening the guard above would turn every clean search
+        into "the graph could not be consulted".
+        """
+        from ha_mcp.tools.smart_search import _graph
+
+        client = MagicMock()
+        _graph.reset_unsupported_cache(client)
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {"automation": []}}
+        )
+
+        result = await _graph.fetch_related_buckets(client, QUERY)
+        assert result is not None
+        assert result.buckets == {}
+        _graph.reset_unsupported_cache(client)
+
+    @pytest.mark.asyncio
+    async def test_the_graph_lookup_is_bounded_by_its_own_short_timeout(self):
+        """An optional lookup must not stall the scan it exists to improve.
+
+        It is awaited before any config fetch starts, so inheriting the client's
+        30s command default would hold every entity_id search behind an
+        unresponsive graph, potentially past the caller's own tool timeout.
+        """
+        from ha_mcp.tools.smart_search import _graph
+
+        client = MagicMock()
+        _graph.reset_unsupported_cache(client)
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {}}
+        )
+
+        await _graph.fetch_related_buckets(client, QUERY)
+
+        sent = client.send_websocket_message.await_args.args[0]
+        assert sent["_wait_timeout"] == _graph._GRAPH_TIMEOUT_S
+        assert sent["_wait_timeout"] < 30, "must be shorter than the client default"
+        _graph.reset_unsupported_cache(client)
+
+
+class TestSceneOnlySearchGetsTheScopeSentence:
+    """Scenes are a graph bucket, so their incompleteness must reach the gate."""
+
+    @pytest.mark.asyncio
+    async def test_a_scene_only_search_with_failed_configs_still_scopes_the_unknown(
+        self,
+    ):
+        """A failed scene scan must still say what the graph accounted for.
+
+        The scope sentence was gated on automation and script counters only, so
+        a scene-only search whose configs all failed reported "scenes not
+        scanned" with no statement that every plain reference was covered
+        anyway. The caller is left assuming the reference list is as broken as
+        the scan.
+        """
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        client.get_states = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "scene.movie_night",
+                    "state": "scening",
+                    "attributes": {"friendly_name": "Movie Night"},
+                }
+            ]
+        )
+        client.get_scene_config = AsyncMock(side_effect=RuntimeError("REST 500"))
+        client.send_websocket_message = AsyncMock(
+            side_effect=lambda message: (
+                {
+                    "success": True,
+                    "result": [
+                        {
+                            "entity_id": "scene.movie_night",
+                            "unique_id": "movie_night",
+                            "platform": "homeassistant",
+                        }
+                    ],
+                }
+                if message.get("type") == "config/entity_registry/list"
+                else _related_response(scene=["scene.movie_night"])
+            )
+        )
+        tools = _make_tools(client)
+
+        response = await tools.deep_search(
+            query=QUERY, search_types=["scene"], limit=20
+        )
+
+        reason = response.get("partial_reason") or ""
+        assert "reference graph was consulted" in reason, (
+            f"scene incompleteness did not reach the scope gate: {reason!r}"
         )

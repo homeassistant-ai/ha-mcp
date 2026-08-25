@@ -117,6 +117,10 @@ class GraphResult:
 # ``send_websocket_message`` logs each rejection at ERROR — the log-spam
 # regression of issue #1889. Negative only: a successful graph must be
 # re-read every search, since it changes whenever HA reloads a config.
+# The graph runs ahead of the config scan it exists to improve, so it gets a
+# short leash rather than send_command's 30s default.
+_GRAPH_TIMEOUT_S = 5.0
+
 _UNSUPPORTED_TTL_S = 300.0
 # Suppression needs the rejection twice. HA registers the ``search`` command
 # during setup and accepts WebSocket clients BEFORE every integration has
@@ -183,7 +187,7 @@ def reset_unsupported_cache(client: Any) -> None:
     """Forget a client's rejection history.
 
     The seam the suppression tests use to isolate module-level state, since
-    ``_UNSUPPORTED_SINCE`` and ``_UNSUPPORTED_STRIKES`` outlive any one test.
+    the ``_UNSUPPORTED`` map outlives any one test.
     Nothing in production calls it: the cache is keyed by the long-lived REST
     client, which outlives reconnects and HA restarts, so the TTL is the only
     automatic recovery an install gets. That is deliberate rather than
@@ -237,8 +241,19 @@ def _parse_related(payload: Any) -> GraphResult | None:
             continue
         if item_type not in _KNOWN_ITEM_TYPES:
             continue
-        understood = True
         entity_ids = {i for i in ids if isinstance(i, str) and i}
+        if ids and not entity_ids:
+            # A bucket Home Assistant populated but whose elements this code
+            # cannot read (a shape change upstream, say). Dropping them while
+            # reporting success would let the response claim every plain
+            # reference was counted on the strength of a bucket it discarded.
+            logger.debug(
+                "search/related bucket %r held %d unreadable element(s)",
+                item_type,
+                len(ids),
+            )
+            return None
+        understood = True
         if not entity_ids:
             continue
         if bucket := _ITEM_TYPE_TO_BUCKET.get(item_type):
@@ -272,6 +287,11 @@ async def fetch_related_buckets(client: Any, entity_id: str) -> GraphResult | No
                 "type": "search/related",
                 "item_type": "entity",
                 "item_id": entity_id,
+                # The graph is an optimisation consulted BEFORE the config
+                # scan, so inheriting send_command's 30s default would stall
+                # every search behind an unresponsive optional lookup. Popped
+                # by the client; never reaches Home Assistant.
+                "_wait_timeout": _GRAPH_TIMEOUT_S,
             }
         )
     except Exception as e:
@@ -501,12 +521,17 @@ def _graph_partial_reasons(
     for item_type, ids in sorted((graph_dropped or {}).items()):
         if not ids:
             continue
-        named = ", ".join(sorted(ids))
+        # Count only, never the ids. Under enforce mode the outbound scan
+        # refuses any response carrying a hidden entity_id, so naming them here
+        # would fail the whole search AND leak what that mode conceals; a
+        # collection read omits silently by design. The count still tells the
+        # caller its reference list is not the whole story.
         reasons.append(
             f"Home Assistant also reports {len(ids)} {item_type}(s) "
-            f"referencing this entity ({named}). ha_search does not model that "
-            f"surface, so they are named here rather than listed as matches; "
-            f"they break on a rename like any other reference."
+            f"referencing this entity. ha_search does not model that surface, "
+            f"so they are counted here rather than listed as matches; they "
+            f"break on a rename like any other reference. Home Assistant's own "
+            f"Related view lists them."
         )
     if graph_surfaces_skipped:
         surfaces = ", ".join(sorted(graph_surfaces_skipped))

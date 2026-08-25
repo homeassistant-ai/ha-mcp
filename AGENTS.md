@@ -421,7 +421,7 @@ Test token centralized in `tests/test_constants.py`.
 (`pr.yml`); serial takes 25+ minutes for ~11k tests:
 
 ```bash
-uv run pytest tests/src/unit/ -n auto --tb=short
+cd tests && uv run pytest src/unit/ -n auto --tb=short
 ```
 
 `tests/pytest.ini` sets `--maxfail=3`, so a run reporting "3 failed" has stopped
