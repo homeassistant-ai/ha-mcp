@@ -4024,7 +4024,7 @@ class TestSupervisorApiCall:
     """Test Supervisor routing, retries, and structured error classification.
 
     This includes schema-message handling from issue #993 and the direct app
-    (add-on) transport required by Supervisor 2026.08.
+    app transport required by Supervisor 2026.08.
     """
 
     @pytest.mark.asyncio
@@ -4074,7 +4074,7 @@ class TestSupervisorApiCall:
     async def test_addon_mode_posts_json_and_classifies_supervisor_error(
         self, monkeypatch
     ):
-        """Direct REST preserves request bodies and Supervisor error messages."""
+        """Direct REST sends JSON and classifies Supervisor validation failures."""
         from ha_mcp.tools.tools_addons import _supervisor_api_call
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
@@ -4115,6 +4115,44 @@ class TestSupervisorApiCall:
         direct_client.request.assert_awaited_once_with(
             "POST", "/addons/core_ssh/options", json=submitted
         )
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "/store/addons/example/install",
+            "/store/addons/example/update",
+            "/addons/example/rebuild",
+            "/addons/example/uninstall",
+        ],
+    )
+    async def test_addon_mode_posts_empty_json_for_schema_actions(
+        self, monkeypatch, endpoint
+    ):
+        """Body-validating Supervisor actions receive an empty JSON object."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            200,
+            json={"result": "ok", "data": {}},
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+            return_value=context,
+            create=True,
+        ):
+            await _supervisor_api_call(client, endpoint, method="POST")
+
+        direct_client.request.assert_awaited_once_with("POST", endpoint, json={})
         client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -4163,6 +4201,17 @@ class TestSupervisorApiCall:
 
         payload = _parse_tool_error(exc_info)
         assert payload["error"]["code"] == expected_code
+        if status_code == 403:
+            assert payload["status_code"] == 403
+            assert (
+                "token rejection or insufficient API role"
+                in payload["error"]["message"]
+            )
+            suggestions = " ".join(payload["error"]["suggestions"])
+            assert "refresh" in suggestions
+            assert "hassio_api" in suggestions
+            assert "hassio_role" in suggestions
+
         client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -4309,12 +4358,11 @@ class TestSupervisorApiCall:
 
 
 class TestSupervisorApiCallTimeout:
-    """The local transport wait must outlast the Supervisor-side timeout.
+    """Long operations need an extended local transport wait.
 
-    Both transports default to a 30-second local wait. A long Supervisor
-    operation (app install/update/rebuild gets ``timeout=1800``) needs
-    the local wait raised in lockstep, or the client abandons a
-    still-running install after 30s even though the server keeps working.
+    The WebSocket route forwards the operation timeout and waits 15 seconds
+    longer. Direct REST applies the same margin to its httpx timeout. Both
+    routes default locally to 30 seconds when no override is supplied.
     """
 
     @pytest.mark.asyncio
@@ -4348,7 +4396,7 @@ class TestSupervisorApiCallTimeout:
 
         factory.assert_called_once_with(timeout=1815.0, verify=client.verify_ssl)
         direct_client.request.assert_awaited_once_with(
-            "POST", "/addons/core_mosquitto/update"
+            "POST", "/addons/core_mosquitto/update", json={}
         )
         client.send_websocket_message.assert_not_awaited()
 

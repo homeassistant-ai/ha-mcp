@@ -35,10 +35,9 @@ from typing import Any
 
 LOG = logging.getLogger("haos_image_build")
 
-# Pin both the HAOS release and the addon set. Renovate watches the comment
-# annotation below for the HAOS bump; the addon list is hand-curated in #1281
-# and intentionally short for v1. Once the canary is stable, follow-up PRs can
-# expand the list and migrate more existing E2E tests over.
+# Pin both the HAOS release and app set. Renovate watches the annotation below
+# for the HAOS bump; the app set is hand-curated to cover distinct E2E shapes
+# without unnecessarily inflating the cached image.
 #
 # renovate: datasource=github-releases depName=home-assistant/operating-system
 HAOS_VERSION = "18.2"
@@ -78,10 +77,10 @@ SSH_HOST_PORT = int(os.environ.get("HAOS_BUILD_SSH_PORT", "12222"))
 # Arch under /usr/share/edk2-ovmf).
 OVMF_CODE_PATH = os.environ.get("HAOS_BUILD_OVMF", "/usr/share/OVMF/OVMF_CODE.fd")
 
-# Optional image variant used by the dedicated Supervisor-beta E2E lane. The
-# normal shared image leaves this unset and keeps following stable. The beta
-# cache-prime sets both values from version.home-assistant.io/beta.json so a
-# new Supervisor beta produces a new image cache identity.
+# Optional image variant used by the Supervisor-beta E2E lanes. The normal
+# shared image leaves these settings unset and keeps following stable. Both
+# beta lanes resolve their Supervisor minimum and exact Core version from
+# beta.json; the in-app lane saves the shared cache.
 SUPERVISOR_CHANNEL = os.environ.get("HAOS_BUILD_SUPERVISOR_CHANNEL")
 SUPERVISOR_MIN_VERSION = os.environ.get("HAOS_BUILD_SUPERVISOR_MIN_VERSION")
 CORE_VERSION = os.environ.get("HAOS_BUILD_CORE_VERSION")
@@ -648,7 +647,7 @@ class HAWebSocket:
                     raise
                 elapsed = time.monotonic() - start
                 if elapsed >= timeout:
-                    raise RuntimeError(
+                    raise TimeoutError(
                         f"hassio supervisor/api WS handler did not register "
                         f"within {timeout:.0f}s after Core restart "
                         f"(attempts={attempts})"
@@ -1720,27 +1719,20 @@ def _wait_supervisor_ready(
         try:
             info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
         except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as e:
-            # A Supervisor self-update restarts Supervisor; Core may return a
-            # structured WSCommandError OR drop the WS transport during that
-            # restart window. Record the error so a persistent failure is
-            # reported in the timeout message, then best-effort reconnect and
-            # keep polling.
+            if not _is_transient_supervisor_error(e):
+                raise
+            # A Supervisor self-update can return a transient command error or
+            # drop the WebSocket. Preserve the failure for timeout diagnostics,
+            # then best-effort reconnect and keep polling.
             last_error = e
             LOG.debug("Transient error polling /supervisor/info: %r", e)
             try:
                 ws.reconnect()
-            except _SUPERVISOR_WAIT_TRANSIENT_ERRORS + (RuntimeError,) as reconnect_err:
-                # Handshake-stage WS errors (InvalidStatus / InvalidHandshake /
-                # ConnectionClosed) raise WebSocketException, which is NOT a
-                # subclass of OSError / RuntimeError / TimeoutError — covered
-                # here via _SUPERVISOR_WAIT_TRANSIENT_ERRORS. RuntimeError stays
-                # for symmetry with the poll-catch above (generic Supervisor
-                # restart-window RuntimeError that isn't a WSCommandError).
-                # WARNING level: surface the reconnect failure in CI logs. A
-                # one-off failure is harmless (the loop keeps polling until the
-                # deadline); a persistent one would otherwise only show up as
-                # the *poll* error in the final TimeoutError, so WARNING makes
-                # the reconnect pattern visible.
+            except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as reconnect_err:
+                if not _is_transient_supervisor_error(reconnect_err):
+                    raise
+                # Handler-start timeouts and transport failures are expected
+                # while Supervisor/Core restarts; keep them visible in CI logs.
                 LOG.warning("reconnect during update wait failed: %r", reconnect_err)
             continue
         version = info.get("version")
@@ -1808,7 +1800,7 @@ def _reconnect_during_supervisor_update(
     """Best-effort reconnect during a Supervisor restart window."""
     try:
         ws.reconnect()
-    except _SUPERVISOR_WAIT_TRANSIENT_ERRORS + (RuntimeError,) as exc:
+    except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
         if not _is_transient_supervisor_error(exc):
             raise
         LOG.warning("Reconnect %s failed: %r", context, exc)
@@ -1928,8 +1920,9 @@ def _configure_core_image_variant(
             timeout=1800.0,
         )
     except _SUPERVISOR_UPDATE_TRANSPORT_ERRORS as exc:
-        # Updating Core replaces its container and closes this WebSocket after
-        # Supervisor has accepted the update.
+        # Updating Core may close this WebSocket while the request is being
+        # accepted. Exact-version polling below determines whether the update
+        # succeeded.
         LOG.info("Core update interrupted the WS transport: %r", exc)
 
     _wait_http_ok(f"{base_url}/manifest.json", timeout=600.0)
@@ -1946,12 +1939,12 @@ def _configure_supervisor_image_variant(
     core_version: str | None = None,
     timeout: float = 600.0,
 ) -> None:
-    """Bake requested Supervisor and Core versions into this qcow2 variant."""
-    if channel is None and core_version is None:
+    """Configure a Supervisor channel/minimum and exact Core image variant."""
+    if channel is None and minimum_version is None and core_version is None:
         return
     if channel is None:
-        raise ValueError("A Core image variant requires a Supervisor channel")
-    if channel not in {"stable", "beta", "dev"}:
+        raise ValueError("Image variant settings require a Supervisor channel")
+    if channel not in {"stable", "beta"}:
         raise ValueError(f"Unsupported Supervisor channel: {channel!r}")
     if minimum_version is not None:
         _supervisor_version_key(minimum_version)
@@ -2312,12 +2305,12 @@ def install_addons(ws: HAWebSocket) -> dict[str, str]:
 
 
 def install_hacs(ws: HAWebSocket, base_url: str) -> None:
-    """Bootstrap HACS via the Get HACS addon.
+    """Install HACS via the Get HACS app (add-on).
 
-    The supported HAOS install path: register the Get HACS repo, install +
-    run the addon, which writes HACS files into /config/custom_components/.
-    A core restart picks up the new component; the HACS config flow then
-    completes on first boot of the canary test.
+    The supported HAOS path registers the Get HACS repository, installs and
+    runs the app, and writes HACS into ``/config/custom_components``. A Core
+    restart loads the component. ``bake_test_state`` later overlays the seeded
+    HACS config entry used by the emitted image's runtime canary.
 
     HACS-driven custom-component churn is the largest source of E2E flake
     the testcontainer suite cannot reproduce (#1281), so it must be in the
@@ -2391,9 +2384,6 @@ def build(work_dir: Path, output: Path) -> None:
             # access token and starts it).
             install_screenshot_engine(ws)
             install_advanced_ssh(ws)
-            # TODO(#1281 follow-up): integrations (ESPHome companion, Node-RED
-            # companion, Local Calendar, Sun verification) and mock RTSP/MQTT
-            # feeders. The canary test only needs addon lifecycle for now.
             stop_qemu(qemu, ws)
     except Exception:
         LOG.exception("Image build failed — leaving qcow2 in %s for inspection", qcow2)

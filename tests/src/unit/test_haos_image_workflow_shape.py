@@ -135,24 +135,27 @@ def test_cache_key_consumer_discovery_tracks_jobs_individually(
 
 
 def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
-    """Both selected deployment modes use one version-locked beta qcow2."""
+    """Both beta workflows share one manifest-keyed qcow2 cache contract."""
     lane_specs = (
         (
             "haos-e2e-inaddon-beta-tests.yml",
             "haos-e2e-inaddon-beta",
+            "inaddon",
             "haos-e2e-inaddon-tests.yml",
             "haos-e2e-inaddon",
         ),
         (
             "haos-e2e-embedded-beta-tests.yml",
             "haos-e2e-embedded-beta",
+            "embedded",
             "haos-e2e-embedded-tests.yml",
             "haos-e2e-embedded",
         ),
     )
+    beta_resolvers: list[str] = []
     beta_cache_keys: list[str] = []
 
-    for beta_name, beta_job_id, stable_name, stable_job_id in lane_specs:
+    for beta_name, beta_job_id, mode, stable_name, stable_job_id in lane_specs:
         beta_path = _WORKFLOW_DIR / beta_name
         assert beta_path.is_file(), f"missing beta lane cloned from {stable_name}"
         workflow = _workflow(beta_path)
@@ -167,6 +170,7 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
         assert "version.home-assistant.io/beta.json" in resolve["run"]
         assert '["supervisor"]' in resolve["run"]
         assert '["homeassistant"]["qemux86-64"]' in resolve["run"]
+        beta_resolvers.append(resolve["run"])
 
         cache_key = next(
             step for step in steps if step.get("name") == "Compute beta image cache key"
@@ -194,6 +198,21 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
             step for step in steps if step.get("name") == "Restore image from cache"
         )
         assert restore["with"]["path"] == "/tmp/haos-beta-test-image.qcow2"
+
+        run_step = next(
+            step for step in steps if step.get("env", {}).get("HAOS_TEST_MODE")
+        )
+        run_env = run_step["env"]
+        assert run_env["HAOS_TEST_MODE"] == mode
+        assert run_env["HAOS_TEST_IMAGE_PATH"] == "/tmp/haos-beta-test-image.qcow2"
+        assert run_env["HAOS_EXPECTED_SUPERVISOR_CHANNEL"] == "beta"
+        assert run_env["HAOS_EXPECTED_SUPERVISOR_MIN_VERSION"] == (
+            "${{ steps.versions.outputs.supervisor_version }}"
+        )
+        assert run_env["HAOS_EXPECTED_CORE_VERSION"] == (
+            "${{ steps.versions.outputs.core_version }}"
+        )
+        assert "src/e2e/" in run_step["run"]
         assert (
             workflow[True]["workflow_dispatch"]["inputs"]["pytest_paths"]["default"]
             == "src/e2e/"
@@ -208,4 +227,5 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
         )
         assert "env" not in stable_build
 
+    assert beta_resolvers[0] == beta_resolvers[1]
     assert beta_cache_keys[0] == beta_cache_keys[1]

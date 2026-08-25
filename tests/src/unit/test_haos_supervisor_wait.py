@@ -1,12 +1,11 @@
-"""Unit tests for ``build_image._wait_supervisor_ready``.
+"""Unit tests for HAOS Supervisor/Core image-variant readiness helpers.
 
 HAOS pins only the OS version; the bundled Supervisor self-updates to the
 channel head after boot. Until that finishes ``need_update`` is True and store
-operations are blocked by ``JobCondition.SUPERVISOR_UPDATED`` (the first one is
-``add_repository``). The helper polls ``/supervisor/info`` until
-``update_available`` clears so the caller's store calls run against an
-up-to-date Supervisor. These tests mock the WebSocket so they need no booted
-HAOS; ``time.sleep`` is patched out so the poll loop runs instantly.
+operations are blocked by ``JobCondition.SUPERVISOR_UPDATED``. The helpers wait
+for readiness, select the requested channel, and install an exact Core version.
+These tests mock the WebSocket so they need no booted HAOS; ``time.sleep`` is
+patched out so polling runs instantly.
 """
 
 from __future__ import annotations
@@ -148,11 +147,35 @@ def test_persistent_error_surfaced_in_timeout() -> None:
     assert ws.supervisor_api.call_count >= 2
 
 
-def test_wait_requires_the_requested_channel_and_minimum_version() -> None:
-    """A settled stable image cannot satisfy the beta image contract."""
+def test_wait_rejects_terminal_supervisor_error_without_retry() -> None:
+    """A terminal Supervisor command error propagates immediately."""
     ws = Mock()
     ws.supervisor_api.side_effect = [
-        _info(update_available=False, channel="stable"),
+        _info(update_available=True, version="2026.07.5"),
+        WSCommandError("invalid request", code="invalid_format"),
+    ]
+
+    with (
+        patch("tests.haos_image_build.build_image.time.sleep") as sleep,
+        pytest.raises(WSCommandError, match="invalid request"),
+    ):
+        _wait_supervisor_ready(ws)
+
+    assert ws.supervisor_api.call_count == 2
+    sleep.assert_called_once_with(10.0)
+    ws.reconnect.assert_not_called()
+
+
+def test_wait_requires_requested_channel() -> None:
+    """A settled image on the wrong channel keeps polling."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        _info(
+            update_available=False,
+            version="2026.08.0",
+            version_latest="2026.08.0",
+            channel="stable",
+        ),
         _info(
             update_available=False,
             version="2026.08.0",
@@ -169,8 +192,78 @@ def test_wait_requires_the_requested_channel_and_minimum_version() -> None:
         )
 
     assert result["channel"] == "beta"
+    sleep.assert_called_once_with(10.0)
+
+
+def test_wait_requires_requested_minimum_version() -> None:
+    """A settled beta below the minimum version keeps polling."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        _info(
+            update_available=False,
+            version="2026.07.5",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+        _info(
+            update_available=False,
+            version="2026.08.0",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+    ]
+
+    with patch("tests.haos_image_build.build_image.time.sleep") as sleep:
+        result = _wait_supervisor_ready(
+            ws,
+            expected_channel="beta",
+            minimum_version="2026.08.0",
+        )
+
     assert result["version"] == "2026.08.0"
     sleep.assert_called_once_with(10.0)
+
+
+def test_configure_variant_is_noop_when_settings_are_unset() -> None:
+    """The stable image path performs no Supervisor/Core mutations."""
+    ws = Mock()
+
+    _configure_supervisor_image_variant(
+        ws,
+        channel=None,
+        minimum_version=None,
+    )
+
+    ws.supervisor_api.assert_not_called()
+    ws.reconnect.assert_not_called()
+
+
+def test_configure_variant_rejects_minimum_without_channel() -> None:
+    """A version floor cannot be silently ignored without a channel."""
+    ws = Mock()
+
+    with pytest.raises(ValueError, match="require a Supervisor channel"):
+        _configure_supervisor_image_variant(
+            ws,
+            channel=None,
+            minimum_version="2026.08.0",
+        )
+
+    ws.supervisor_api.assert_not_called()
+
+
+def test_configure_variant_rejects_unsupported_dev_channel() -> None:
+    """The versionless update flow supports stable and beta channels only."""
+    ws = Mock()
+
+    with pytest.raises(ValueError, match="Unsupported Supervisor channel"):
+        _configure_supervisor_image_variant(
+            ws,
+            channel="dev",
+            minimum_version="2026.09.0.dev1234",
+        )
+
+    ws.supervisor_api.assert_not_called()
 
 
 def test_configure_beta_variant_skips_update_when_image_is_current() -> None:

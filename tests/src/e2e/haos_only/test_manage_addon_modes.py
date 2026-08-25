@@ -331,23 +331,22 @@ async def test_config_watchdog_roundtrip(mcp_client: Any) -> None:
 
 
 async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
-    """`ha_manage_app(action=...)` drives a real addon through its lifecycle.
+    """`ha_manage_app(action=...)` drives a real app (add-on) lifecycle.
 
-    Exercises ``_execute_action_mode`` → ``_supervisor_api_call`` →
-    direct Supervisor REST end-to-end from the app: stop the addon, start it,
-    restart it, and assert the observed Supervisor state after each. This also
-    covers per-action timeout plumbing (stop=60s, start/restart=120s, each with
-    a 15-second client margin); the prior 30-second hard cap would have
-    spuriously failed a start that takes longer than 30 seconds to settle.
+    Exercises ``_execute_action_mode`` → ``_supervisor_api_call`` through
+    direct Supervisor REST in the in-app lane and Core's ``supervisor/api``
+    WebSocket proxy in the external and embedded HAOS lanes. It stops, starts,
+    and restarts the app while asserting the observed state after each action.
+    This also covers the per-action timeout plumbing (stop=60s,
+    start/restart=120s, each with a 15-second client margin).
 
-    AppDaemon is the target — it's installed and running in the bake and is
+    AppDaemon is the target — it is installed and running in the bake and is
     not proxied by any other test in this module, so cycling its run state in
-    a single test (restored at the end) doesn't perturb the proxy/WS suites.
+    one test (restored at the end) does not perturb the proxy/WS suites.
 
-    The long-timeout install/update/rebuild path (1800s) is pinned
-    deterministically by the unit tests (``TestSupervisorApiCallTimeout``); a
-    live install here would rebuild an addon image and add minutes to every
-    CI run, so it is intentionally not exercised end-to-end.
+    The long-timeout install/update/rebuild path (1800s) is pinned by
+    ``TestSupervisorApiCallTimeout``; a live install would rebuild an app
+    image and add minutes to every CI run, so it is not exercised end-to-end.
     """
     slug = await _resolve_slug(mcp_client, APPDAEMON_NAME)
     original = (

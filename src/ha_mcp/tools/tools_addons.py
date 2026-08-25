@@ -242,7 +242,7 @@ def _supervisor_rest_failure(
     error: object,
     response_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Normalize direct REST failure and retain non-2xx status metadata."""
+    """Normalize direct REST failure and retain 4xx/5xx status metadata."""
     error_text = str(error)
     result: dict[str, Any] = {"success": False, "error": error_text}
     if response.is_error:
@@ -275,8 +275,11 @@ async def _supervisor_api_call_once(
         )
 
     request_kwargs: dict[str, Any] = {}
-    if data is not None:
-        request_kwargs["json"] = data
+    if data is not None or method.upper() == "POST":
+        # Supervisor's install/update/rebuild/uninstall handlers validate an
+        # optional schema by parsing request.json(), so bodyless POST actions
+        # must still carry an empty JSON object.
+        request_kwargs["json"] = data or {}
     try:
         async with make_supervisor_httpx_client(
             timeout=wait_timeout,
@@ -336,12 +339,15 @@ def _raise_supervisor_api_failure(
         raise_tool_error(
             create_error_response(
                 ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
-                error_text,
+                (
+                    f"{error_text}. Supervisor denied the app request; HTTP 403 "
+                    "can mean either token rejection or insufficient API role."
+                ),
                 context={"endpoint": endpoint, "status_code": 403},
                 suggestions=[
-                    "The app token is valid but its Supervisor role "
-                    "does not permit this operation",
-                    "Check the ha-mcp app's hassio_role and hassio_api configuration",
+                    "Restart the app to refresh its Supervisor-managed token",
+                    "Check the ha-mcp app's hassio_api and hassio_role configuration",
+                    "Check Supervisor logs for an invalid token or missing API permission",
                 ],
             )
         )
@@ -387,7 +393,7 @@ async def _supervisor_api_call(
         # On the WebSocket route, ``timeout`` tells the Supervisor proxy how
         # long to wait on the underlying REST operation. On the direct route,
         # only the local httpx timeout is needed. In both cases it must outlast
-        # a multi-minute add-on operation; the default local wait is only 30s.
+        # a multi-minute app operation; the default local wait is only 30s.
         wait_timeout = 30.0
         if timeout is not None:
             kwargs["timeout"] = timeout
@@ -397,15 +403,16 @@ async def _supervisor_api_call(
         # App installs call Supervisor REST directly because Supervisor 2026.08
         # filters app-originated ``supervisor/api`` commands at its Core proxy.
         # Both transports feed the common retry and error-normalization path:
-        # direct non-2xx responses retain status metadata, while WebSocket
+        # direct 4xx/5xx responses retain status metadata, while WebSocket
         # failures are classified from the returned message.
         #
         # Supervisor serialises jobs per app job group and rejects a
         # state-changing call while a still-settling job (a watchdog restart,
         # a prior start/stop, or a store reload) holds that group. The rejection
         # happens before the job body runs, so retrying cannot double-execute.
-        # Retry attempts begin only while the shared deadline remains; an
-        # individual transport attempt still uses its normal request timeout.
+        # Each collision response checks the shared retry deadline before
+        # backing off. Individual attempts retain their transport timeout, so
+        # the final retry and total elapsed time may extend past that window.
         # Any other failure raises immediately.
         deadline = time.monotonic() + _JOB_COLLISION_RETRY_WINDOW
         delay = _JOB_COLLISION_RETRY_INITIAL_DELAY

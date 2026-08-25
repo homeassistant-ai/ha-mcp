@@ -5,9 +5,10 @@ a short-lived client configured for the Supervisor base URL and
 ``SUPERVISOR_TOKEN``. They include log collection, app management, settings
 and backup operations, screenshot-engine discovery, and app restart.
 
-These calls cannot use ``HomeAssistantClient.httpx_client``, which is bound to
-Home Assistant Core with a different base URL, token, and role gate. This
-module centralizes the direct transport setup.
+These calls cannot use ``HomeAssistantClient.httpx_client``, which targets
+Home Assistant Core rather than Supervisor. In app mode it carries the same
+token value, but requests use a different base URL and authorization surface.
+This module centralizes the direct transport setup.
 """
 
 from __future__ import annotations

@@ -9,14 +9,8 @@ name: HAOS E2E Tests (embedded beta)
 # mcp_client to its webhook. The stable embedded workflow and cache are unchanged.
 
 on:
-  # No workflow-level `paths:` filter on purpose. This check is a REQUIRED
-  # status check, and a path-filtered workflow that doesn't trigger leaves the
-  # required check Pending forever, wedging the merge of any PR that doesn't
-  # touch the listed paths. Instead we trigger on every PR and let the
-  # `changes` job below decide whether the heavy suite runs: a job skipped via
-  # `if:` reports Success to a required check (unlike a workflow-level
-  # path-skip, which reports nothing). See the `changes` job for the run/skip
-  # rule (skip only pure docs/website; addon + bake inputs always run).
+  # Run on every pull request so beta compatibility stays visible. The
+  # `changes` job skips the QEMU suite only for docs/website-only changes.
   pull_request:
   push:
     branches: [master]
@@ -49,12 +43,9 @@ env:
   LIBGUESTFS_BACKEND: direct
 
 jobs:
-  # Gate the heavy suite: run on any code/test/config/addon change, skip ONLY
-  # when every changed file is pure docs/website. Skipping happens at the JOB
-  # level (via `if:` below) so a skipped run reports Success to the required
-  # check; a workflow-level `paths:` skip would instead report nothing and
-  # wedge the merge. Add-on + bake-input dirs are baked into the qcow2, so
-  # their non-doc files DO affect the suite and always count as code.
+  # Gate the heavy suite: run on code, tests, configuration, app, or bake-input
+  # changes; skip only when every changed file is documentation or website
+  # content. Non-documentation app and bake-input files count as code.
   changes:
     name: Detect relevant changes
     runs-on: ubuntu-latest
@@ -70,11 +61,10 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          # Fail-closed gate: default to RUNNING the suite; skip ONLY when we can
-          # prove the PR changed nothing but docs/website. Any classifier failure
-          # (non-PR event, base fetch / rev-parse / diff error, empty diff) leaves
-          # run=true — branch protection treats a skipped REQUIRED job as passing,
-          # so a fail-open classifier could let code merge untested.
+          # Fail-closed gate: default to RUNNING the suite; skip only when the
+          # PR is proven to contain docs/website changes. Any classifier failure
+          # (non-PR event, fetch/rev-parse/diff error, or empty diff) leaves
+          # run=true so code cannot be mislabeled as docs-only.
           run=true
           if [ "${{ github.event_name }}" = "pull_request" ] \
             && git fetch --depth=1 origin "$BASE_REF" \
@@ -86,13 +76,13 @@ jobs:
             while IFS= read -r f; do
               [ -z "$f" ] && continue
               case "$f" in
-                # Markdown docs inside the addon / component dirs are user-facing
-                # docs (DOCS.md, README, CHANGELOG), not bake inputs — they don't
-                # change what the suite tests, so they skip like any other docs.
+                # Markdown docs inside the app/component directories are user-facing
+                # docs (DOCS.md, README, CHANGELOG), not bake inputs, so they skip
+                # like other documentation.
                 homeassistant-addon/*.md|homeassistant-addon-dev/*.md|homeassistant-addon-webhook-proxy/*.md|custom_components/ha_mcp_tools/*.md)
                   continue ;;
-                # Bake inputs / addon dirs are baked into the qcow2 / shipped —
-                # their non-doc files change what the suite tests, so they count as code.
+                # Bake inputs and app directories are baked into the qcow2 or
+                # shipped, so their non-doc files count as code.
                 homeassistant-addon/*|homeassistant-addon-dev/*|homeassistant-addon-webhook-proxy/*|custom_components/ha_mcp_tools/*|tests/haos_image_build/*|tests/initial_test_state/*)
                   run=true; break ;;
                 # Pure docs / website do not, on their own, warrant the suite.
@@ -112,22 +102,13 @@ jobs:
   haos-e2e-embedded-beta:
     name: HAOS E2E Tests (embedded beta)
     needs: changes
-    # A skipped job reports Success to the required status check (unlike a
-    # workflow-level path-skip, which never reports). See the `changes` job.
-    # Skipping requires a classifier that SUCCEEDED and said `false` out loud.
-    # Two ways this used to fail open: an `if:` with no status-check function
-    # implicitly ANDs with success(), so a failed classifier skipped this suite
-    # and reported Success (a runner hiccup in a 5-minute filter job waving code
-    # through untested); and an empty `run` — which is what a non-success
-    # classifier leaves behind — read the same as "docs-only". Any value other
-    # than `false` now runs. `!cancelled()` keeps a real cancellation cancelling.
+    # Run unless the classifier succeeds and explicitly confirms docs-only.
+    # Any missing/failed classifier result runs fail-closed; a real cancellation
+    # remains cancelled.
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
     runs-on: ubuntu-22.04
-    # 60 (vs the external/inaddon lanes' 45): the embedded lane pays a per-worker
-    # session-setup cost the others don't — enabling the entry kicks off a runtime
-    # pip install of the whole fastmcp tree INSIDE the resource-constrained QEMU
-    # guest (~minutes) before the webhook answers, and both xdist workers pay it in
-    # parallel at the front of the run. The extra headroom covers that bring-up.
+    # The embedded beta lane receives extra headroom for the per-worker runtime
+    # package installation inside the resource-constrained QEMU guest.
     timeout-minutes: 90
 
     steps:
@@ -203,7 +184,7 @@ jobs:
 
       - name: Free disk space for the local build
         # On a cache miss (or a forced rebuild) the qcow2 is built locally; its
-        # download (~1.5 GB xz) + decompress (~7 GB qcow2) + boot + addon-install
+        # download (~1.5 GB xz) + decompress (~7 GB qcow2) + boot + app install
         # peaks at the edge of the runner's ~14 GB SSD, so prune the ~30 GB of
         # preinstalled tooling the bake does not use. Keep /opt/hostedtoolcache:
         # Python from there is on PATH for build_image.py. See haos-e2e-tests.yml
@@ -269,6 +250,9 @@ jobs:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-beta-test-image.qcow2
           HAOS_TEST_MODE: embedded
+          HAOS_EXPECTED_SUPERVISOR_CHANNEL: beta
+          HAOS_EXPECTED_SUPERVISOR_MIN_VERSION: ${{ steps.versions.outputs.supervisor_version }}
+          HAOS_EXPECTED_CORE_VERSION: ${{ steps.versions.outputs.core_version }}
           # Feeds conftest's HACS token injection (qcow2 pre-boot edit) so HACS
           # repo adds don't hit the unauthenticated shared-IP GitHub rate limit —
           # the recurring HACS-install flake.
