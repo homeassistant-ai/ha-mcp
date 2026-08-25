@@ -28,10 +28,10 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp==3.4.6",
+    "fastmcp==3.4.7",
     "httpx[socks]==0.28.1",
     "pydantic==2.13.4",
-    "python-dotenv==1.2.2",
+    "python-dotenv==1.2.3",
     "truststore==0.10.4",
     # websockets is deliberately ABSENT from this list: ha-mcp ships its own
     # private copy (src/ha_mcp/_vendor/websockets, pinned in the vendor

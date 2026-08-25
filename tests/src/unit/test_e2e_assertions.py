@@ -29,7 +29,11 @@ import json
 import pytest
 
 from tests.src.e2e.error_handling.test_network_errors import _hard_failures
-from tests.src.e2e.utilities.assertions import assert_mcp_success, parse_mcp_result
+from tests.src.e2e.utilities.assertions import (
+    assert_mcp_failure,
+    assert_mcp_success,
+    parse_mcp_result,
+)
 
 
 def test_pending_restart_is_a_successful_mcp_result() -> None:
@@ -221,3 +225,59 @@ class TestHardFailureClassifier:
         healthy_bulk = {"successful_commands": 2, "failed_commands": 0}
         results = [exc, tolerated, tool_error, healthy_bulk, {"success": True}]
         assert _hard_failures(results) == [exc, tool_error]
+
+
+class TestFailureAssertionRejectsEverySuccessShape:
+    """``assert_mcp_failure`` must reject anything ``assert_mcp_success``
+    accepts.
+
+    It used to guard on a bare ``if data.get("success")``, so the tools that
+    succeed WITHOUT that key sailed through as failures: ``ha_manage_app``'s
+    options/network write returns ``{"status": "pending_restart"}``, and
+    bulk-operation payloads carry ``total_operations``/``results`` with no
+    ``success`` field. An expected-failure test whose tool regressed to one
+    of those shapes passed silently -- and 30 of the 61 ``call_tool_failure``
+    call sites omit ``expected_error``, so nothing downstream caught it
+    either. This is the exact class of harness bug that degrades into a
+    green run, which is why it is pinned here rather than in the e2e suite.
+    """
+
+    @pytest.mark.parametrize(
+        ("shape", "why"),
+        [
+            ({"success": True}, "explicit success"),
+            ({"status": "pending_restart"}, "ha_manage_app write, no success key"),
+            (
+                {"total_operations": 2, "successful_commands": 2},
+                "bulk payload, no success key",
+            ),
+            ({"results": [], "operation_ids": ["a"]}, "bulk payload via results"),
+            ({"data": {"x": 1}}, "data present, no error, no success key"),
+        ],
+    )
+    def test_success_shapes_are_not_accepted_as_failures(self, shape, why) -> None:
+        with pytest.raises(AssertionError, match="should have failed but succeeded"):
+            assert_mcp_failure(shape, why)
+
+    @pytest.mark.parametrize(
+        "shape",
+        [
+            {"success": False, "error": {"code": "VALIDATION_FAILED"}},
+            {"success": False, "error": "boom"},
+            {"error": "boom"},
+        ],
+    )
+    def test_genuine_failures_still_pass(self, shape) -> None:
+        assert assert_mcp_failure(shape, "op") == shape
+
+    def test_expected_error_still_matched_on_a_genuine_failure(self) -> None:
+        shape = {"success": False, "error": {"message": "config_hash mismatch"}}
+        assert_mcp_failure(shape, "op", "config_hash")
+        with pytest.raises(AssertionError, match="doesn't contain"):
+            assert_mcp_failure(shape, "op", "not_present")
+
+    def test_pending_restart_with_an_explicit_error_is_a_real_failure(self) -> None:
+        """The success predicate guards ``pending_restart`` on ``error is
+        None``, so a write that reports both must stay a failure here."""
+        shape = {"status": "pending_restart", "error": "supervisor rejected it"}
+        assert assert_mcp_failure(shape, "op") == shape
