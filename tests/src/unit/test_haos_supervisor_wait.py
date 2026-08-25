@@ -130,6 +130,52 @@ def test_supervisor_api_stalled_send_is_bounded() -> None:
     assert ws._ws is None
 
 
+def test_supervisor_api_queued_send_timeout_does_not_dispatch() -> None:
+    """A queued worker is cancelled without reporting an unknown outcome."""
+    ws = HAWebSocket(
+        "http://127.0.0.1:18123",
+        OAuthCredentials(access_token="access", refresh_token="refresh"),
+    )
+    socket = Mock()
+    ws._ws = socket
+    queued_targets: list[Any] = []
+
+    class QueuedThread:
+        def __init__(self, *, target: Any, **_: Any) -> None:
+            queued_targets.append(target)
+
+        def start(self) -> None:
+            pass
+
+        def join(self, timeout: float | None = None) -> None:
+            del timeout
+
+        def is_alive(self) -> bool:
+            return True
+
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=[10.0, 10.0, 11.0],
+        ),
+        patch(
+            "tests.haos_image_build.build_image.threading.Thread",
+            QueuedThread,
+        ),
+        pytest.raises(
+            TimeoutError,
+            match="exceeded its deadline before dispatch",
+        ),
+    ):
+        ws.supervisor_api("/core/update", method="post", data={}, timeout=1.0)
+
+    queued_targets[0]()
+    socket.send.assert_not_called()
+    socket.close_socket.assert_not_called()
+    socket.recv.assert_not_called()
+    assert ws._ws is socket
+
+
 @pytest.mark.parametrize(
     ("error", "expected_code", "expected_message"),
     [

@@ -776,10 +776,16 @@ class HAWebSocket:
             raise ConnectionError(f"WebSocket is not connected for {operation}")
         _remaining_deadline_budget(deadline, operation)
         send_errors: list[Exception] = []
+        dispatch_lock = threading.Lock()
+        send_state = {"cancelled": False, "started": False}
 
         def send() -> None:
             try:
-                _remaining_deadline_budget(deadline, operation)
+                with dispatch_lock:
+                    if send_state["cancelled"]:
+                        return
+                    _remaining_deadline_budget(deadline, operation)
+                    send_state["started"] = True
                 connection.send(message)
             except Exception as exc:
                 send_errors.append(exc)
@@ -788,6 +794,12 @@ class HAWebSocket:
         worker.start()
         worker.join(max(0.0, deadline - time.monotonic()))
         if worker.is_alive():
+            with dispatch_lock:
+                if not send_state["started"]:
+                    send_state["cancelled"] = True
+                    raise TimeoutError(
+                        f"{operation} exceeded its deadline before dispatch"
+                    )
             try:
                 connection.close_socket()
             except (OSError, RuntimeError) as exc:
