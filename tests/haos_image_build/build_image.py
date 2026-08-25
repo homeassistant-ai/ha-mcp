@@ -778,6 +778,7 @@ class HAWebSocket:
             raise ConnectionError(
                 f"WebSocket is not connected for supervisor/api {method} {endpoint}"
             )
+        deadline = time.monotonic() + timeout
         self._next_id += 1
         msg_id = self._next_id
         msg: dict[str, Any] = {
@@ -794,7 +795,12 @@ class HAWebSocket:
         # match by id.
         while True:
             result = _parse_supervisor_api_frame(
-                self._ws.recv(),
+                self._ws.recv(
+                    timeout=_remaining_deadline_budget(
+                        deadline,
+                        f"supervisor/api {method} {endpoint} receive",
+                    )
+                ),
                 msg_id=msg_id,
                 method=method,
                 endpoint=endpoint,

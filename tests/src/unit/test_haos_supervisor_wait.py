@@ -43,6 +43,28 @@ def test_supervisor_api_reports_a_disconnected_websocket() -> None:
         ws.supervisor_api("/supervisor/info")
 
 
+def test_supervisor_api_shares_receive_deadline_across_frames() -> None:
+    """Skipped WebSocket frames consume the command's receive budget."""
+    ws = HAWebSocket(
+        "http://127.0.0.1:18123",
+        OAuthCredentials(access_token="access", refresh_token="refresh"),
+    )
+    socket = Mock()
+    socket.recv.side_effect = [
+        json.dumps({"id": 99, "type": "event", "event": {}}),
+        json.dumps({"id": 1, "type": "result", "success": True, "result": {}}),
+    ]
+    ws._ws = socket
+
+    with patch(
+        "tests.haos_image_build.build_image.time.monotonic",
+        side_effect=[10.0, 11.0, 12.5],
+    ):
+        assert ws.supervisor_api("/supervisor/info", timeout=5.0) == {}
+
+    assert socket.recv.call_args_list == [call(timeout=4.0), call(timeout=2.5)]
+
+
 @pytest.mark.parametrize(
     ("error", "expected_code", "expected_message"),
     [
