@@ -875,14 +875,15 @@ class HomeAssistantClient:
     async def _get_addon_logs_via_supervisor(
         self, slug: str, lines: int | None = None
     ) -> str:
-        """Fetch add-on container logs directly from Supervisor's REST API.
+        """Fetch app (add-on) container logs directly from Supervisor REST.
 
-        Distinct from ``tools_bug_report._fetch_addon_logs``: that helper is
-        hardcoded to ``/addons/self/logs`` and silently swallows failures
-        (it's an aux-data fetch for bug reports, fine to skip on error). This
-        helper takes arbitrary slugs and surfaces failures as exceptions
-        because callers (``ha_get_logs(source="supervisor", slug=...)``) need
-        them. Both endpoints require ``hassio_role: manager``.
+        Distinct from ``tools_bug_report._fetch_addon_logs``: that auxiliary
+        helper uses the app self-service path ``/addons/self/logs`` and may skip
+        failures. This helper takes arbitrary slugs and surfaces failures because
+        callers (``ha_get_logs(source="supervisor", slug=...)``) need them.
+        Arbitrary app-log slugs require a recognized app token with ``hassio_api``
+        and ``hassio_role: manager``; ``/addons/self/logs`` bypasses the role and
+        API-permission checks but still requires a recognized app token.
 
         Delegates to ``_supervisor_logs_get`` so error handling stays in
         lockstep with ``_get_system_service_logs``.

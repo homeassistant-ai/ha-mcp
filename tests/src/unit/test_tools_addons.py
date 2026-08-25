@@ -4082,8 +4082,9 @@ class TestGetAddonInfoLogLevel:
 class TestSupervisorApiCall:
     """Test Supervisor routing, retries, and structured error classification.
 
-    This includes schema-message handling from issue #993 and the direct app
-    transport introduced in Supervisor 2026.08.
+    This includes schema-message handling from issue #993 and the direct REST
+    fallback adopted after Supervisor 2026.08 began blocking app-originated
+    ``supervisor/api`` frames.
     """
 
     @pytest.mark.asyncio

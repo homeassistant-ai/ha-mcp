@@ -10,35 +10,35 @@ and app set, so the covered mode paths are pinned against running services.
 Modes and options covered:
 
 * **Config mode** — ``options`` / ``boot`` / ``auto_update`` / ``watchdog``
-  round-trips. ``network`` is not covered because the addons in the bake
+  round-trips. ``network`` is not covered because the apps in the bake
   all have ``host_network: false`` *or* their declared ports are not in
   the writable form Supervisor accepts (Matter Server's ``5580/tcp: null``
   rejects the value-with-port shape); the contract is exercised by the
   unit tests.
 * **Action (lifecycle) mode** — ``stop`` / ``start`` / ``restart`` against a
-  real running addon, asserting the Supervisor state after each. The
+  real running app, asserting the Supervisor state after each. The
   long-timeout ``install`` / ``update`` / ``rebuild`` path is pinned by the
-  unit tests rather than run live (a real install rebuilds an addon image and
+  unit tests rather than run live (a real install rebuilds an app image and
   would add minutes to every CI run).
 * **Proxy HTTP** — ``GET`` / ``POST`` against Node-RED endpoints. The
   Ingress proxy accepts the tool's auth headers, so requests reach the
-  addon's nginx; assertions cover both successful 2xx responses (Node-RED
+  app's nginx; assertions cover both successful 2xx responses (Node-RED
   ``/auth/strategy``) and the structured-error path (Node-RED ``/flows``
   on a deploy with the wrong header, which Node-RED rejects with 4xx).
 * **Proxy with ``port=``** — only meaningful on the inaddon tier where
   the test runner shares Supervisor's container network. Marked
   ``inaddon_only`` so the external tier skips it cleanly.
-* **WebSocket proxy** — ESPHome ``/validate`` accepts an inline config,
-  streams a multi-line response. Tests cover ``summarize=True`` (default)
-  collapsing the dump and ``summarize=False`` returning every line.
-  ``message_offset`` and ``message_limit`` are pinned in the same flow.
+* **WebSocket proxy** — sends legacy ESPHome ``/validate`` requests and accepts
+  either a structured success or the current structured handshake failure.
+  These tests exercise route/error plumbing; they do not assert the current
+  dashboard command protocol, summarization, or pagination behavior.
 * **Array-patch** — Node-RED ``/flows`` is the canonical array-patch
   endpoint. Tests cover the ``op=upsert`` / ``op=delete`` shapes.
 * **``python_transform``** — applies a filter expression on the response
   from a Node-RED HTTP call; pins both the success path and the
   ``PythonSandboxError`` surface.
 * **``request_headers``** — confirms Node-RED's
-  ``Node-RED-Deployment-Type`` header reaches the addon (the tool layers
+  ``Node-RED-Deployment-Type`` header reaches the app (the tool layers
   internal Ingress headers on top, so this proves caller-supplied
   headers aren't silently stripped).
 
@@ -64,8 +64,8 @@ logger = logging.getLogger(__name__)
 pytestmark = [pytest.mark.haos_only]
 
 # Tests that assert strictly on ``status_code`` (with no fall-back error
-# branch) need the addon's container to have reached Supervisor's
-# ``started`` state — the bake installs every addon with ``start=True``,
+# branch) need the app (add-on) container to have reached Supervisor's
+# ``started`` state — the bake installs every app with ``start=True``,
 # but the container can take tens of seconds to leave its transient boot
 # phase, which is enough to flake the strict assertion. Timeout sized
 # for cache-cold runners; 2s poll matches sibling lifecycle helpers.
@@ -500,19 +500,21 @@ async def test_proxy_direct_port_inaddon(mcp_client: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-# Smallest ESPHome config that ``/validate`` accepts — exercises the
-# WS proxy without depending on real hardware. ESPHome echoes the YAML
-# as part of its dump.
+# Legacy ESPHome ``/validate`` payload used to exercise the WebSocket route.
+# Current dashboards may reject the upgrade before reading it, which is an
+# accepted structured-error outcome for these compatibility probes.
 _ESPHOME_VALIDATE_CONFIG = {
     "configuration": ("esphome:\n  name: ha-mcp-test\nesp32:\n  board: esp32dev\n")
 }
 
 
-async def test_proxy_websocket_validate_summarize(mcp_client: Any) -> None:
-    """`ha_manage_app(path='/validate', websocket=True)` returns shaped output.
+async def test_proxy_websocket_legacy_validate_returns_structured_result(
+    mcp_client: Any,
+) -> None:
+    """Send a legacy ESPHome `/validate` request through the WebSocket proxy.
 
-    Default ``summarize=True`` collapses ESPHome's config dump into
-    elision markers while preserving any INFO/WARN/ERROR signal lines.
+    The test pins a structured success-or-error result; it does not require
+    current dashboards to accept the removed legacy endpoint.
     """
     slug = await _resolve_slug(mcp_client, ESPHOME_NAME)
     payload = await safe_call_tool(
@@ -527,15 +529,17 @@ async def test_proxy_websocket_validate_summarize(mcp_client: Any) -> None:
         },
     )
     assert isinstance(payload, dict), f"Tool did not return a dict: {payload!r}"
-    # The WS proxy returns either ``messages`` (raw list) or ``response``
-    # (post-transform). Either field's presence is the contract.
+    # Success carries ``messages`` or ``response``; a structured handshake
+    # failure is also an accepted compatibility result.
     assert "messages" in payload or "response" in payload or "error" in payload, (
         f"WS proxy response missing message/response field: {payload!r}"
     )
 
 
-async def test_proxy_websocket_validate_raw_pagination(mcp_client: Any) -> None:
-    """`message_offset` + `message_limit` apply before summarize on the raw stream."""
+async def test_proxy_websocket_legacy_validate_with_shaping_args(
+    mcp_client: Any,
+) -> None:
+    """Keep shaping arguments structured on a legacy `/validate` request."""
     slug = await _resolve_slug(mcp_client, ESPHOME_NAME)
     payload = await safe_call_tool(
         mcp_client,
@@ -553,7 +557,7 @@ async def test_proxy_websocket_validate_raw_pagination(mcp_client: Any) -> None:
     assert isinstance(payload, dict), f"Tool did not return a dict: {payload!r}"
     msgs = payload.get("messages")
     if isinstance(msgs, list):
-        # message_limit caps the returned list size — strict upper bound.
+        # Older dashboards that still return messages must honor the cap.
         assert len(msgs) <= 5, f"message_limit=5 not honored: got {len(msgs)} messages"
 
 

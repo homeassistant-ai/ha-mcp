@@ -3332,20 +3332,20 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         websocket: Annotated[
             bool,
             Field(
-                description="Proxy mode only. Use WebSocket instead of HTTP — for an app (add-on) "
-                "WebSocket API (e.g. the ESPHome dashboard's '/ws' command channel; see the "
-                "docstring's ESPHome section). Sends 'body' as the initial message, collects "
-                "responses. Default: false.",
+                description="Proxy mode only. Use WebSocket instead of HTTP for an app "
+                "(add-on) WebSocket API. Sends 'body' as the initial message and collects "
+                "responses; command names and body schemas are app/version-specific. "
+                "Default: false.",
                 default=False,
             ),
         ] = False,
         wait_for_close: Annotated[
             bool,
             Field(
-                description="Proxy mode only. WebSocket: True: wait for the server to close the stream "
-                "(run-to-completion ops like an ESPHome compile/validate). False: return after the first "
-                "response batch — use for a one-shot command/response or a bounded log capture on a channel "
-                "that stays open (e.g. ESPHome '/ws'). Default: true.",
+                description="Proxy mode only. WebSocket: True waits for the server to close a "
+                "run-to-completion stream. False returns after the first response batch; use "
+                "for one-shot command/response or bounded capture on a channel that stays "
+                "open. Default: true.",
                 default=True,
             ),
         ] = True,
@@ -3399,7 +3399,10 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             dict[str, Any] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Config mode: Host port mappings (e.g., {'5800/tcp': 8081}).",
+                description="Config mode: Complete desired host-port override map "
+                "(e.g., {'5800/tcp': 8081}). A non-empty map replaces current "
+                "overrides, so omitted entries are cleared. Omit 'network' (or "
+                "pass an empty map) to leave mappings unchanged.",
                 default=None,
             ),
         ] = None,
@@ -3503,10 +3506,14 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         repository (e.g. balloob's apps) is the missing step that lets an
         assistant then install an app from it via ``action="install"``.
 
-        **Config mode** (when any of options/network/boot/auto_update/watchdog is provided):
-        Updates the app's Supervisor configuration via POST /addons/{slug}/options.
-        All config parameters are optional; only provided fields are updated — current values
-        are fetched and merged automatically (including one level of nested dicts).
+        **Config mode** (when any of options/network/boot/auto_update/watchdog is
+        provided): Updates the app's Supervisor configuration via
+        POST /addons/{slug}/options. ``options`` is merged one level deep with
+        the current options. A non-empty ``network`` value is submitted as the
+        complete desired host-port override map and replaces existing overrides;
+        entries omitted from that map are cleared. Omit ``network`` or pass an
+        empty map to leave current mappings unchanged. Scalar fields are updated
+        only when provided.
 
         **Proxy mode** (when path is provided without array_patch):
         Uses Supervisor Ingress by default: app deployments connect directly
@@ -3520,28 +3527,14 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         the exact `ha_manage_app(options=...)` remedy and its security
         tradeoff; prefer Ingress when it works.
 
-        **ESPHome Device Builder dashboard:** config and log
-        access is a WebSocket JSON-command API, NOT REST. The legacy endpoints
-        are gone — `GET /edit?configuration=` now returns the dashboard SPA, and
-        the old `/compile` `/validate` `/logs` WebSocket paths (which took
-        `{"type": "spawn", ...}` bodies) reject the upgrade (HTTP 200). Use
-        instead:
-        - HTTP `GET /devices` → JSON list of configured devices; each entry's
-          `configuration` field is the YAML filename to pass below.
-        - WebSocket `path="/ws"` with body
-          `{"command": "<cmd>", "message_id": "1", "args": {...}}`. The server
-          sends a `server_info` message first, then one reply per `message_id`.
-          Wire-confirmed commands: `devices/get_config` `{configuration}` → raw
-          YAML (in the reply's `result`); `devices/logs` (stream)
-          `{configuration, port: "OTA"}` → live device logs. Also exposed by the
-          dashboard frontend (command/arg names not wire-tested here):
-          `devices/update_config` `{configuration, content}` → save,
-          `devices/validate`, `firmware/compile`.
-        - The `/ws` channel stays open, so for a one-shot read or a bounded log
-          capture pass `wait_for_close=False` with `message_limit` (and
-          `message_offset` to skip the server_info / config-banner preamble).
-          Reach the dashboard through Ingress — omit `port`; direct `port=` does
-          not route to it.
+        **App-specific WebSocket APIs:** The tool transports the supplied body;
+        it does not define private command names or argument schemas, which can
+        change between app versions. Consult the app's version-matched API
+        documentation for those shapes and use ``ha_get_skill_guide`` for Home
+        Assistant workflow guidance. For a one-shot response or bounded capture
+        on a long-lived channel, pass ``wait_for_close=False`` with
+        ``message_limit``. Ingress is the default; use ``port`` only when the app
+        intentionally exposes a mapped direct-access port.
 
         **Array-patch mode** (when path AND array_patch are provided):
         Atomic "GET array, mutate, POST array" workflow for app APIs whose write
@@ -3551,11 +3544,11 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         full array. Designed for Node-RED /flows and similar endpoints.
 
         **Response shaping (proxy mode):**
-        - WebSocket streams can be noisy (e.g. the ESPHome dashboard's devices/logs
-          dumps the device's full config banner on connect), which is what
-          `summarize` is for. INFO/WARNING/ERROR/exit lines always pass through
-          it, and pagination via `message_offset` / `message_limit` works on the
-          raw collected list before summarize runs.
+        - WebSocket streams can be noisy (for example, config dumps and log
+          output), which is what `summarize` is for. INFO/WARNING/ERROR/exit
+          lines always pass through it, and pagination via `message_offset` /
+          `message_limit` works on the raw collected list before summarize
+          runs.
         - `python_transform` runs after slicing and summarize, and before the
           response size cap, so it can narrow an oversized response back under
           the limit. What `response` binds to and what may be done to it is on
@@ -3574,16 +3567,15 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         - Add a store repository: ha_manage_app(action="add_repository", repository="https://github.com/balloob/home-assistant-addons")
         - Remove a store repository: ha_manage_app(action="remove_repository", repository="0f1cc410")
         - Set app option: ha_manage_app(slug="...", options={"log_level": "debug"})
-          Note: only the fields you provide are updated — current values are fetched first
-          and merged automatically. Fields not in the app's schema are ignored with a warning.
+          Note: only provided option keys are updated; current options are
+          fetched and merged. Fields outside the app schema produce a warning.
         - Disable auto-update: ha_manage_app(slug="...", auto_update=False)
-        - Change host port: ha_manage_app(slug="...", network={"5800/tcp": 8082})
+        - Set complete host-port overrides:
+          ha_manage_app(slug="...", network={"5800/tcp": 8082})
+          Entries omitted from a non-empty network map are cleared.
         - Set boot mode: ha_manage_app(slug="...", boot="manual")
         - Call HTTP API: ha_manage_app(slug="...", path="/api/events")
         - Direct port: ha_manage_app(slug="...", path="/flows", port=1880) — if the app rejects it, the error names the 'leave_front_door_open' remedy and its security trade-off; prefer Ingress.
-        - ESPHome list devices (HTTP): ha_manage_app(slug="<prefix>_esphome", path="/devices")
-        - ESPHome read a device's YAML (WS one-shot): ha_manage_app(slug="<prefix>_esphome", path="/ws", websocket=True, wait_for_close=False, message_limit=2, body={"command": "devices/get_config", "message_id": "1", "args": {"configuration": "device.yaml"}})
-        - ESPHome live logs (WS, bounded): ha_manage_app(slug="<prefix>_esphome", path="/ws", websocket=True, wait_for_close=False, message_limit=60, body={"command": "devices/logs", "message_id": "1", "args": {"configuration": "device.yaml", "port": "OTA"}})
         - Filter WS errors only: ha_manage_app(slug="...", path="/ws", websocket=True, python_transform="response = [m for m in response if 'ERROR' in str(m) or 'WARN' in str(m)]")
         - HTTP subset: ha_manage_app(slug="...", path="/flows", python_transform="response = [f['id'] for f in response]")
         - Array-patch (Node-RED, rename a node):
