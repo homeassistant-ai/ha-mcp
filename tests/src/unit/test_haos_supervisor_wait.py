@@ -23,6 +23,7 @@ from tests.haos_image_build.build_image import (
     OAuthCredentials,
     WSCommandError,
     _configure_supervisor_image_variant,
+    _reconnect_during_supervisor_update,
     _wait_core_version,
     _wait_supervisor_channel_metadata,
     _wait_supervisor_ready,
@@ -633,6 +634,24 @@ def test_channel_metadata_timeout_prefers_the_last_reconnect_error() -> None:
             deadline=1.0,
         )
 
+    ws.reconnect.assert_called_once_with(deadline=1.0)
+
+
+def test_supervisor_update_reconnect_propagates_deadline() -> None:
+    """Supervisor update reconnects retain the image-build deadline."""
+    ws = Mock()
+
+    assert (
+        _reconnect_during_supervisor_update(
+            ws,
+            context="during test",
+            deadline=10.0,
+        )
+        is None
+    )
+
+    ws.reconnect.assert_called_once_with(deadline=10.0)
+
 
 def test_wait_rejects_terminal_supervisor_error_without_retry() -> None:
     """A terminal Supervisor command error propagates immediately."""
@@ -1183,7 +1202,7 @@ def test_wait_core_version_reports_non_convergence() -> None:
     message = str(exc_info.value)
     assert "expected='2026.8.3'" in message
     assert repr(old_info) in message
-    ws.reconnect.assert_called_once_with()
+    ws.reconnect.assert_called_once_with(deadline=1.0)
     ws.supervisor_api.assert_called_once_with("/core/info", method="get", timeout=30.0)
     sleep.assert_called_once_with(0.0)
 

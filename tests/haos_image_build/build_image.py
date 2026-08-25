@@ -2033,7 +2033,7 @@ def _wait_core_version(
 
     while time.monotonic() < deadline:
         try:
-            ws.reconnect()
+            ws.reconnect(deadline=deadline)
             last_info = ws.supervisor_api("/core/info", method="get", timeout=30.0)
         except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
             if not _is_transient_supervisor_readiness_error(exc):
@@ -2062,10 +2062,11 @@ def _reconnect_during_supervisor_update(
     ws: HAWebSocket,
     *,
     context: str,
+    deadline: float,
 ) -> BaseException | None:
     """Best-effort reconnect during a Supervisor restart window."""
     try:
-        ws.reconnect()
+        ws.reconnect(deadline=deadline)
     except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
         if not _is_transient_supervisor_readiness_error(exc):
             raise
@@ -2097,6 +2098,7 @@ def _wait_supervisor_channel_metadata(
             reconnect_error = _reconnect_during_supervisor_update(
                 ws,
                 context="during Supervisor channel reload",
+                deadline=deadline,
             )
             if reconnect_error is not None:
                 last_error = reconnect_error
@@ -2168,6 +2170,7 @@ def _apply_supervisor_image_update(
             _reconnect_during_supervisor_update(
                 ws,
                 context="after Supervisor update",
+                deadline=deadline,
             )
             time.sleep(5.0)
 
