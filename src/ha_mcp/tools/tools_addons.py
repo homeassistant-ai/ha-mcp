@@ -498,7 +498,7 @@ async def _supervisor_api_call_once(
         verb = method.upper()
         if verb in {"GET", "HEAD"}:
             raise HomeAssistantConnectionError(
-                f"Supervisor API {verb} {endpoint} connection timed out after "
+                f"Supervisor API {verb} {endpoint} request timeout after "
                 f"{wait_timeout}s"
             ) from exc
         _raise_supervisor_write_outcome_unknown(
