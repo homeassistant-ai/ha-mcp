@@ -9,22 +9,16 @@ and app set, so the covered mode paths are pinned against running services.
 
 Modes and options covered:
 
-* **Config mode** — ``options`` / ``boot`` / ``auto_update`` / ``watchdog``
-  round-trips. ``network`` is not covered because the apps in the bake
-  all have ``host_network: false`` *or* their declared ports are not in
-  the writable form Supervisor accepts (Matter Server's ``5580/tcp: null``
-  rejects the value-with-port shape); the contract is exercised by the
-  unit tests.
+* **Config mode** — ``boot`` / ``auto_update`` / ``watchdog`` round-trips.
+  ``options`` and ``network`` remain unit-tested.
 * **Action (lifecycle) mode** — ``stop`` / ``start`` / ``restart`` against a
   real running app, asserting the Supervisor state after each. The
   long-timeout ``install`` / ``update`` / ``rebuild`` path is pinned by the
   unit tests rather than run live (a real install rebuilds an app image and
   would add minutes to every CI run).
-* **Proxy HTTP** — ``GET`` / ``POST`` against Node-RED endpoints. The
-  Ingress proxy accepts the tool's auth headers, so requests reach the
-  app's nginx; assertions cover both successful 2xx responses (Node-RED
-  ``/auth/strategy``) and the structured-error path (Node-RED ``/flows``
-  on a deploy with the wrong header, which Node-RED rejects with 4xx).
+* **Proxy HTTP** — ``GET`` / ``POST`` smoke checks against Node-RED verify
+  structured response shapes. They do not pin status classes or prove custom
+  header delivery.
 * **Proxy with ``port=``** — only meaningful on the inaddon tier where
   the test runner shares Supervisor's container network. Marked
   ``inaddon_only`` so the external tier skips it cleanly.
@@ -32,15 +26,13 @@ Modes and options covered:
   either a structured success or the current structured handshake failure.
   These tests exercise route/error plumbing; they do not assert the current
   dashboard command protocol, summarization, or pagination behavior.
-* **Array-patch** — Node-RED ``/flows`` is the canonical array-patch
-  endpoint. Tests cover the ``op=upsert`` / ``op=delete`` shapes.
+* **Array-patch** — no live mutation round-trip is covered. The E2E test pins
+  structured validation for an empty operation list; mutation is unit-tested.
 * **``python_transform``** — applies a filter expression on the response
   from a Node-RED HTTP call; pins both the success path and the
   ``PythonSandboxError`` surface.
-* **``request_headers``** — confirms Node-RED's
-  ``Node-RED-Deployment-Type`` header reaches the app (the tool layers
-  internal Ingress headers on top, so this proves caller-supplied
-  headers aren't silently stripped).
+* **``request_headers``** — smoke-checks that caller-supplied headers are
+  accepted and the proxy returns a structured response; delivery is not proven.
 
 Slugs are resolved at runtime by display name (see ``_resolve_slug``)
 because Supervisor mints slug prefixes from a SHA of the repository URL
@@ -422,17 +414,11 @@ async def test_proxy_http_get_returns_structured_response(mcp_client: Any) -> No
     )
 
 
-async def test_proxy_http_request_headers_pass_through(mcp_client: Any) -> None:
-    """`request_headers` reach the addon (the tool layers Ingress headers on top).
+async def test_proxy_http_request_headers_are_accepted(mcp_client: Any) -> None:
+    """Supplying `request_headers` preserves the structured HTTP result shape.
 
-    Node-RED's ``/flows`` POST contract demands the
-    ``Node-RED-Deployment-Type`` header; without it the deploy is rejected
-    with a 400 referencing the missing header. We don't actually want to
-    deploy anything here — the test just confirms that supplying the
-    caller header changes the response shape vs. omitting it. The
-    deploy-type header is a strong sentinel: Node-RED's error text
-    differs between "missing required header" and "header value
-    invalid", which proves the value crossed the wire.
+    This smoke test does not inspect Node-RED's received headers, so it verifies
+    argument handling rather than delivery across the wire.
     """
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
     # Strict assertion on ``status_code`` below requires the addon to
@@ -454,9 +440,8 @@ async def test_proxy_http_request_headers_pass_through(mcp_client: Any) -> None:
             "request_headers": {"Node-RED-Deployment-Type": "full"},
         },
     )
-    # Both calls should at least parse to dicts with a status_code. The
-    # contract verified here is that caller-supplied headers don't
-    # crash the tool and aren't silently dropped before the proxy.
+    # Both calls should parse to dicts with a status_code; the header-bearing
+    # call must not crash argument handling.
     assert isinstance(without, dict) and isinstance(without.get("status_code"), int)
     assert isinstance(with_header, dict) and isinstance(
         with_header.get("status_code"), int
@@ -566,15 +551,10 @@ async def test_proxy_websocket_legacy_validate_with_shaping_args(
 # ---------------------------------------------------------------------------
 
 
-async def test_array_patch_flows_no_ops_roundtrip(mcp_client: Any) -> None:
-    """`array_patch` with an empty op list is the cheapest probe of the mode.
-
-    Verifies the GET-mutate-POST machinery wires up without actually
-    changing Node-RED's flow set. The tool fetches /flows, applies zero
-    operations, then writes the unchanged array back. Asserts the
-    returned summary mentions ``ops_applied=0`` (or the equivalent
-    success indicator from tools_addons.py's array-patch builder).
-    """
+async def test_array_patch_empty_operations_returns_validation_error(
+    mcp_client: Any,
+) -> None:
+    """An empty array-patch operation list returns a structured validation error."""
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
     payload = await safe_call_tool(
         mcp_client,
@@ -582,17 +562,16 @@ async def test_array_patch_flows_no_ops_roundtrip(mcp_client: Any) -> None:
         {
             "slug": slug,
             "path": "/flows",
-            "array_patch": {"ops": []},
+            "array_patch": {"operations": []},
             "request_headers": {"Node-RED-Deployment-Type": "full"},
         },
     )
     assert isinstance(payload, dict), f"Tool did not return a dict: {payload!r}"
-    # Both success and addon-side rejection (4xx from Node-RED if the
-    # /flows POST is gated) parse to dicts — the contract is "tool
-    # didn't crash on the round-trip", not "addon accepted the write".
-    assert "status_code" in payload or "ops_applied" in payload or "error" in payload, (
-        f"Array-patch response missing expected fields: {payload!r}"
-    )
+    assert payload.get("success") is False, payload
+    error = payload.get("error")
+    assert isinstance(error, dict), payload
+    assert error.get("code") == "VALIDATION_FAILED", error
+    assert payload.get("parameter") == "array_patch.operations", payload
 
 
 # ---------------------------------------------------------------------------

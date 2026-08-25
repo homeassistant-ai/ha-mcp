@@ -255,21 +255,17 @@ class TestMockResilience:
     async def test_insufficient_role_supervisor_call_surfaces_403(
         self, mcp_client, supervisor_mock, monkeypatch
     ):
-        """Valid token but addon hassio_role too low → 403 → structured tool error.
+        """The fixture's low-role sentinel produces a structured 403 tool error.
 
         Covers the role-mismatch branch in ``_get_system_service_log`` added
         alongside the #1116 fix (the addon's ``hassio_role`` bump from
         ``default`` → ``manager`` was the matching production change). Without
         this E2E the 403-handling path has no real-socket coverage.
 
-        Asserts both:
-          - the error code is AUTH_INVALID_TOKEN (today _classify_api_status
-            maps both 401 and 403 to this — distinguishing them would need a
-            new ErrorCode), and
-          - the role-specific suggestion (``hassio_role must be 'manager'``)
-            from the 403 branch reaches the caller.
-        The second assertion is what proves the 403 branch fired specifically,
-        not the 401 branch (which has a different suggestion set).
+        Supervisor 403 responses are ambiguous: an unrecognized app token,
+        missing ``hassio_api``, or an insufficient role can all cause one.
+        The assertions verify the shared 403 classification and role remediation,
+        not that Supervisor identified the fixture's precise cause.
         """
         monkeypatch.setenv("SUPERVISOR_TOKEN", MOCK_INSUFFICIENT_ROLE_TOKEN)
         result = await safe_call_tool(

@@ -28,7 +28,7 @@ from tests.haos_image_build.build_image import (
 
 
 def test_supervisor_api_reports_a_disconnected_websocket() -> None:
-    """A failed reconnect leaves a diagnostic transport error, not an assertion."""
+    """A disconnected WebSocket produces a diagnostic transport error."""
     ws = HAWebSocket(
         "http://127.0.0.1:18123",
         OAuthCredentials(access_token="access", refresh_token="refresh"),

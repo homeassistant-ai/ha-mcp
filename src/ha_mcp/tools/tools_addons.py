@@ -3546,15 +3546,15 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         **Response shaping (proxy mode):**
         - WebSocket streams can be noisy (for example, config dumps and log
           output), which is what `summarize` is for. INFO/WARNING/ERROR/exit
-          lines always pass through it, and pagination via `message_offset` /
-          `message_limit` works on the raw collected list before summarize
-          runs.
+          patterns found within the first 2,000 serialized characters of a
+          message pass through it. Pagination via `message_offset` /
+          `message_limit` works on the raw collected list before summarization.
         - `python_transform` runs after slicing and summarize, and before the
           response size cap, so it can narrow an oversized response back under
           the limit. What `response` binds to and what may be done to it is on
-          the parameter itself. Only the interaction is here: undecodable
-          WebSocket frames arrive as ANSI-stripped strings, and elision markers
-          as `{"elided": N, "note": "..."}` dicts when summarize ran.
+          the parameter itself. Non-JSON text frames are returned as ANSI-stripped
+          strings, binary frames are ignored, and summarization may insert
+          `{"elided": N, "note": "..."}` markers.
 
         **WARNING:** Setting boot="auto"/"manual" will fail for apps whose Supervisor
         metadata locks the boot mode. The Supervisor returns an error in this case.
