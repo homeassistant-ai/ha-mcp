@@ -136,6 +136,21 @@ async def _wait_addon_state(
         await asyncio.sleep(_ADDON_RUNNING_POLL_S)
 
 
+async def _wait_addon_running(
+    mcp_client: Any,
+    slug: str,
+    timeout: float = _ADDON_RUNNING_TIMEOUT_S,
+) -> None:
+    """Block until an app reaches ``started`` for sibling HAOS tests."""
+    await _wait_addon_state(
+        mcp_client,
+        slug,
+        frozenset({"started"}),
+        failure_states=frozenset({"boot_fail", "error"}),
+        timeout=timeout,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Config mode — boot / auto_update / watchdog round-trips
 # ---------------------------------------------------------------------------
