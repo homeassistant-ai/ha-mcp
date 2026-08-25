@@ -2722,16 +2722,30 @@ class TestInstallLogFiltersIfAvailable:
             else:
                 sys.modules[name] = mod
 
-    def test_genuinely_missing_module_is_silent(self, caplog):
-        """The true 'older ha-mcp, module doesn't exist yet' case: point the
-        faked ha_mcp package's own __path__ at nothing, so Python's real
-        import machinery genuinely cannot find log_filters.py and raises
-        ModuleNotFoundError(name='ha_mcp.log_filters') -- not a hand-built
-        stand-in. This is exactly the branch CodeRabbit found untested."""
-        fake_ha_mcp = ModuleType("ha_mcp")
-        fake_ha_mcp.__path__ = []  # nothing to search -- a genuine "not found"
-        sys.modules["ha_mcp"] = fake_ha_mcp
+    def test_genuinely_missing_module_is_silent(self, monkeypatch, caplog):
+        """The true 'older ha-mcp, module doesn't exist yet' case. Patches
+        builtins.__import__ to deterministically raise
+        ModuleNotFoundError(name='ha_mcp.log_filters') for that exact name,
+        the same technique test_different_missing_dependency_warns_and_names_it
+        uses below -- NOT faking the parent ha_mcp package's __path__: this
+        repo's editable install (uv sync) adds a meta-path finder that
+        resolves ha_mcp.* by name and would re-import the REAL module even
+        with an empty __path__ on the faked parent ("live-found in CI" per
+        _stub_ha_mcp_surface's own docstring above), which would make this
+        test pass vacuously -- no exception raised at all, not the silent
+        branch actually exercised. This is exactly the branch CodeRabbit
+        found untested."""
         sys.modules.pop("ha_mcp.log_filters", None)
+        real_import = __import__
+
+        def _fake_import(name, *args, **kwargs):
+            if name == "ha_mcp.log_filters":
+                raise ModuleNotFoundError(
+                    "No module named 'ha_mcp.log_filters'", name="ha_mcp.log_filters"
+                )
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", _fake_import)
 
         with caplog.at_level("WARNING", logger=es._LOGGER.name):
             es._install_log_filters_if_available()
