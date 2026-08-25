@@ -285,7 +285,7 @@
     "backup.bulk.confirm": "¿Eliminar todas las copias de seguridad que coinciden con: {filters}?",
     "backup.bulk.deleted": "Se han eliminado {count} copia(s) de seguridad",
     "filesystem.custom.title": "Directorios de sistema de archivos personalizados (avanzado)",
-    "filesystem.custom.help": "Directorios adicionales (uno por línea) en los que las herramientas de archivos pueden <strong>leer y escribir</strong>. Se admiten rutas relativas a la configuración y los volúmenes hermanos de HAOS permitidos. Se aplica de inmediato.",
+    "filesystem.custom.help": "Rutas adicionales (una por línea) que las herramientas de archivos pueden <strong>leer y escribir</strong>. Se admiten rutas de configuración relativas y volúmenes paralelos permitidos de HAOS. Cada entrada permite esa ruta y todo lo que esté por debajo; los nombres de archivo relativos a la configuración, como <code>sensor.yaml</code>, se pueden introducir directamente. Se aplica de inmediato.",
     "filesystem.custom.blocked": "Siempre bloqueados: {paths}, el recorrido de rutas (<code>..</code>) y las rutas absolutas fuera de los volúmenes de HAOS permitidos.",
     "filesystem.custom.enable_first": "Activa arriba las funciones beta y las herramientas de sistema de archivos para poder editar.",
     "filesystem.custom.unavailable": "Los directorios personalizados no están disponibles ahora mismo.",
