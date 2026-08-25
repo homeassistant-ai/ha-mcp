@@ -3318,7 +3318,7 @@ class TestListAddonsStats:
             if endpoint == "/addons":
                 return _ADDONS_LIST_RESPONSE
             if endpoint == "/addons/core_matter_server/stats":
-                raise Exception("Connection reset")
+                raise ToolError("Connection reset")
             if endpoint == "/addons/music_assistant/stats":
                 return _MUSIC_STATS_RESPONSE
             return {"success": False}
@@ -3339,6 +3339,30 @@ class TestListAddonsStats:
         music_stats = addons["music_assistant"]["stats"]
         assert music_stats is not None
         assert music_stats["memory_percent"] == 10.8
+        assert result["warnings"] == [
+            "Statistics unavailable for app 'core_matter_server': Connection reset"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_unexpected_stats_error_propagates(self):
+        """Programmer errors in a stats response are not degraded to null."""
+        client = _make_mock_client()
+
+        async def mock_supervisor_api(client, endpoint, **kwargs):
+            if endpoint == "/addons":
+                return _ADDONS_LIST_RESPONSE
+            if endpoint == "/addons/core_matter_server/stats":
+                raise TypeError("malformed stats payload")
+            return _MUSIC_STATS_RESPONSE
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                side_effect=mock_supervisor_api,
+            ),
+            pytest.raises(TypeError, match="malformed stats payload"),
+        ):
+            await list_addons(client, include_stats=True)
 
     @pytest.mark.asyncio
     async def test_no_stats_key_without_include_stats(self):
@@ -4266,7 +4290,7 @@ class TestSupervisorApiCall:
 
     @pytest.mark.asyncio
     async def test_addon_mode_retries_direct_job_group_collision(self, monkeypatch):
-        """Direct REST retains the transient job-group retry deadline."""
+        """Direct REST retains the common job-group collision backoff path."""
         from ha_mcp.tools.tools_addons import _supervisor_api_call
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
@@ -4938,6 +4962,39 @@ class TestManageAddonRepositoryAction:
             await tools.manage_addon(
                 **_manage_addon_kwargs(action="remove_repository", repository="x")
             )
+
+    @pytest.mark.asyncio
+    async def test_repository_action_preserves_auth_error_category(self):
+        """Repository guidance must not replace Supervisor authorization errors."""
+        tools = self._tools()
+        err = ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "AUTH_INSUFFICIENT_PERMISSIONS",
+                        "message": "Supervisor denied this app role",
+                    },
+                }
+            )
+        )
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                side_effect=err,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository", repository="https://example.com/repo"
+                )
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "AUTH_INSUFFICIENT_PERMISSIONS"
 
     @pytest.mark.asyncio
     async def test_add_repository_other_error_gives_repo_specific_suggestion(self):

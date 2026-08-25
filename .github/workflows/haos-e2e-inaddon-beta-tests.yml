@@ -77,9 +77,8 @@ jobs:
             while IFS= read -r f; do
               [ -z "$f" ] && continue
               case "$f" in
-                # Markdown docs inside the app/component directories are user-facing
-                # docs (DOCS.md, README, CHANGELOG), not bake inputs, so they skip
-                # like other documentation.
+                # Markdown-only app/component changes are treated as docs-only
+                # because they do not alter runtime behavior.
                 homeassistant-addon/*.md|homeassistant-addon-dev/*.md|homeassistant-addon-webhook-proxy/*.md|custom_components/ha_mcp_tools/*.md)
                   continue ;;
                 # Bake inputs and app directories are baked into the qcow2 or

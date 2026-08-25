@@ -1,8 +1,9 @@
 """E2E tests for a direct-Supervisor httpx subset against a mock sidecar.
 
-The sidecar exercises the real socket path for log collection and app
-self-restart, closing the coverage gap identified in issue #1129. It is served
-from ``tests/src/e2e/utilities/supervisor_mock.py``.
+The sidecar exercises production log call sites over a real socket. Its
+``/addons/self/restart`` endpoint is covered by a raw wire-contract probe;
+settings-handler behavior remains unit-tested. It is served from
+``tests/src/e2e/utilities/supervisor_mock.py``.
 
 In app mode, ``tools_addons.py`` also uses direct Supervisor REST for
 ``/addons`` and ``/store``. Those management endpoints are covered by unit
@@ -81,7 +82,7 @@ class TestGetLogsSystemService:
 
     @pytest.mark.parametrize("service", sorted(SYSTEM_SERVICES))
     async def test_each_system_service(self, mcp_client, supervisor_mock, service: str):
-        """All seven Supervisor-managed services are reachable."""
+        """Every Supervisor-managed service is reachable."""
         async with MCPAssertions(mcp_client) as mcp:
             result = await mcp.call_tool_success(
                 "ha_get_logs",
@@ -131,9 +132,8 @@ class TestSettingsUiRestart:
 
     Tested via a raw httpx call rather than constructing a starlette Request,
     because the request shape is irrelevant to the Supervisor wire contract;
-    the wire contract is what this PR adds coverage for. The handler's branch
-    logic (success / token-missing / connection drop) is already covered by
-    unit tests in tests/src/unit/test_settings_ui.py.
+    the handler's success, token-missing, and connection-drop branches remain
+    covered by unit tests in tests/src/unit/test_settings_ui.py.
     """
 
     async def test_restart_request_succeeds(self, supervisor_mock):

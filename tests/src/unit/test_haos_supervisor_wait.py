@@ -90,7 +90,7 @@ def test_tolerates_transient_error_during_update() -> None:
     ws = Mock()
     ws.supervisor_api.side_effect = [
         _info(update_available=True, version="2026.05.1"),
-        WSCommandError("restart", code="system_error"),
+        WSCommandError("restart", code="unknown_error", supervisor_message=""),
         OSError("connection reset"),
         WebSocketException("connection closed"),
         _info(update_available=False, version="2026.06.1"),
@@ -130,7 +130,9 @@ def test_persistent_error_surfaced_in_timeout() -> None:
     # tolerant loop, so it must succeed for the loop to be exercised).
     ws.supervisor_api.side_effect = [
         _info(update_available=True, version="2026.05.1"),
-        WSCommandError("supervisor unavailable", code="system_error"),
+        WSCommandError(
+            "supervisor unavailable", code="unknown_error", supervisor_message=""
+        ),
     ]
     # Monotonic sequence: deadline calc, loop-entry check, post-error check (>deadline)
     monotonic_values = [0.0, 5.0, 15.0]
@@ -266,6 +268,22 @@ def test_configure_variant_rejects_unsupported_dev_channel() -> None:
     ws.supervisor_api.assert_not_called()
 
 
+def test_configure_variant_rejects_core_without_base_url_before_mutation() -> None:
+    """A missing Core URL fails before changing the Supervisor channel."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = AssertionError("unexpected mutation")
+
+    with pytest.raises(ValueError, match="requires the Home Assistant base URL"):
+        _configure_supervisor_image_variant(
+            ws,
+            channel="beta",
+            minimum_version="2026.08.0",
+            core_version="2026.8.3",
+        )
+
+    ws.supervisor_api.assert_not_called()
+
+
 def test_configure_beta_variant_skips_update_when_image_is_current() -> None:
     """An already-current beta image only needs options/reload verification."""
     ws = Mock()
@@ -353,7 +371,7 @@ def test_configure_beta_variant_tolerates_restart_before_version_settles() -> No
             channel="beta",
         ),
         {},
-        WSCommandError("restarting", code="system_error"),
+        WSCommandError("restarting", code="unknown_error", supervisor_message=""),
         _info(
             update_available=False,
             version="2026.08.0",
@@ -377,7 +395,7 @@ def test_configure_beta_variant_tolerates_restart_before_version_settles() -> No
 
 
 def test_configure_beta_variant_tolerates_restart_error_from_update_call() -> None:
-    """A restart error from the accepted update call falls through to polling."""
+    """An inconclusive restart-window error falls through to readiness polling."""
     ws = Mock()
     ws.supervisor_api.side_effect = [
         {},
@@ -388,7 +406,7 @@ def test_configure_beta_variant_tolerates_restart_error_from_update_call() -> No
             version_latest="2026.08.0",
             channel="beta",
         ),
-        WSCommandError("restarting", code="unknown_error"),
+        WSCommandError("restarting", code="unknown_error", supervisor_message=""),
         _info(
             update_available=False,
             version="2026.08.0",
@@ -408,6 +426,35 @@ def test_configure_beta_variant_tolerates_restart_error_from_update_call() -> No
         method="get",
         timeout=30.0,
     )
+
+
+def test_configure_beta_variant_rejects_permanent_unknown_update_error() -> None:
+    """A bridged permanent rejection is not mistaken for a restart."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        {},
+        {},
+        _info(
+            update_available=True,
+            version="2026.07.5",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+        WSCommandError(
+            "update rejected",
+            code="unknown_error",
+            supervisor_message="System is not ready with state: setup",
+        ),
+    ]
+
+    with pytest.raises(WSCommandError, match="update rejected"):
+        _configure_supervisor_image_variant(
+            ws,
+            channel="beta",
+            minimum_version="2026.08.0",
+        )
+
+    assert ws.supervisor_api.call_count == 4
 
 
 def test_configure_beta_variant_rejects_terminal_update_error() -> None:
@@ -435,6 +482,33 @@ def test_configure_beta_variant_rejects_terminal_update_error() -> None:
     assert ws.supervisor_api.call_count == 4
 
 
+def test_configure_beta_variant_preserves_readiness_timeout_details() -> None:
+    """A settled-but-stale Supervisor reports version diagnostics on timeout."""
+    ws = Mock()
+    pending = _info(
+        update_available=True,
+        version="2026.07.5",
+        version_latest="2026.08.0",
+        channel="beta",
+    )
+    ws.supervisor_api.side_effect = [{}, {}, pending, {}, pending]
+
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=[0.0, 0.0, 0.0, 0.0, 2.0, 2.0],
+        ),
+        patch("tests.haos_image_build.build_image.time.sleep"),
+        pytest.raises(TimeoutError, match="did not finish self-updating"),
+    ):
+        _configure_supervisor_image_variant(
+            ws,
+            channel="beta",
+            minimum_version="2026.08.0",
+            timeout=1.0,
+        )
+
+
 def test_configure_beta_variant_accepts_dev_supervisor_versions() -> None:
     """A beta manifest may temporarily advertise a calendar dev build."""
     ws = Mock()
@@ -445,6 +519,29 @@ def test_configure_beta_variant_accepts_dev_supervisor_versions() -> None:
             update_available=False,
             version="2026.09.0.dev1234",
             version_latest="2026.09.0.dev1234",
+            channel="beta",
+        ),
+    ]
+
+    _configure_supervisor_image_variant(
+        ws,
+        channel="beta",
+        minimum_version="2026.09.0.dev1234",
+    )
+
+    assert ws.supervisor_api.call_count == 3
+
+
+def test_configure_beta_variant_accepts_final_for_dev_minimum() -> None:
+    """A final calendar release satisfies its matching development floor."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        {},
+        {},
+        _info(
+            update_available=False,
+            version="2026.09.0",
+            version_latest="2026.09.0",
             channel="beta",
         ),
     ]

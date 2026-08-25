@@ -2,7 +2,7 @@
 """Build the HAOS test image used by the HAOS E2E tier (#1281).
 
 The script boots a vanilla HAOS qcow2 inside QEMU/KVM, runs first-user
-onboarding to obtain a long-lived access token, registers the ha-mcp addon
+onboarding to obtain an OAuth access token, registers the ha-mcp addon
 repository, installs the addons listed in ``ADDONS``, performs the HACS
 bootstrap, then powers HAOS off and emits an uncompressed qcow2 image.
 
@@ -695,9 +695,15 @@ class HAWebSocket:
             if not resp.get("success", True):
                 err = resp.get("error") or {}
                 code = err.get("code") if isinstance(err, dict) else None
+                supervisor_message = (
+                    err.get("message")
+                    if isinstance(err, dict) and isinstance(err.get("message"), str)
+                    else None
+                )
                 raise WSCommandError(
                     f"supervisor/api {method} {endpoint} failed: {err}",
                     code=code,
+                    supervisor_message=supervisor_message,
                 )
             return resp.get("result", {}) or {}
 
@@ -705,14 +711,25 @@ class HAWebSocket:
 class WSCommandError(RuntimeError):
     """Supervisor/Core WS-level failure with the structured error code.
 
-    Carries the ``error.code`` field from the WS response so callers can
-    branch on it (e.g. retry on ``"unknown_command"`` after a Core
-    restart) without parsing the str() representation of the exception.
+    Carries the ``error.code`` and raw ``error.message`` fields from the WS
+    response so callers can distinguish a proxy interruption from a permanent
+    Supervisor rejection without parsing the exception string.
     """
 
-    def __init__(self, message: str, *, code: str | None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None,
+        supervisor_message: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.supervisor_message = supervisor_message
+
+
+class _SupervisorReadinessTimeout(TimeoutError):
+    """Supervisor stayed reachable but did not meet readiness constraints."""
 
 
 def _add_repository(ws: HAWebSocket, repo_url: str) -> None:
@@ -1640,11 +1657,11 @@ def _supervisor_version_key(version: object) -> tuple[int, int, int, int, int]:
 
 def _is_transient_supervisor_error(exc: BaseException) -> bool:
     """Return whether a Supervisor restart can plausibly produce ``exc``."""
-    return not isinstance(exc, WSCommandError) or exc.code in {
-        "system_error",
-        "unknown_command",
-        "unknown_error",
-    }
+    if not isinstance(exc, WSCommandError):
+        return True
+    if exc.code == "unknown_command":
+        return True
+    return exc.code == "unknown_error" and exc.supervisor_message == ""
 
 
 def _supervisor_info_ready(
@@ -1739,7 +1756,7 @@ def _wait_supervisor_ready(
             LOG.info("Supervisor self-update complete: version=%s", version)
             return info
     last_err_suffix = f"; last error: {last_error!r}" if last_error else ""
-    raise TimeoutError(
+    raise _SupervisorReadinessTimeout(
         f"Supervisor did not finish self-updating within {update_timeout:.0f}s "
         f"(last version={last_version}, "
         f"latest={info.get('version_latest')}{last_err_suffix})"
@@ -1861,9 +1878,9 @@ def _apply_supervisor_image_update(
     except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
         if not _is_transient_supervisor_error(exc):
             raise
-        # Updating Supervisor restarts its container and may interrupt Core's
-        # proxy after the command has already been accepted.
-        LOG.info("Supervisor update interrupted by its restart: %r", exc)
+        # Selected bridge/transport errors are inconclusive during a Supervisor
+        # restart; readiness polling below establishes the actual outcome.
+        LOG.info("Supervisor update outcome inconclusive during restart: %r", exc)
 
     while True:
         try:
@@ -1874,6 +1891,8 @@ def _apply_supervisor_image_update(
                 minimum_version=minimum_version,
             )
             return
+        except _SupervisorReadinessTimeout:
+            raise
         except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
             if not _is_transient_supervisor_error(exc):
                 raise
@@ -1944,6 +1963,8 @@ def _configure_supervisor_image_variant(
         _supervisor_version_key(minimum_version)
     if core_version is not None and not core_version:
         raise ValueError("Core version cannot be empty")
+    if core_version is not None and base_url is None:
+        raise ValueError("A Core image variant requires the Home Assistant base URL")
 
     LOG.info(
         "Configuring Supervisor image variant: channel=%s minimum=%s",
@@ -1975,8 +1996,6 @@ def _configure_supervisor_image_variant(
 
     if core_version is None:
         return
-    if base_url is None:
-        raise ValueError("A Core image variant requires the Home Assistant base URL")
 
     _configure_core_image_variant(
         ws,

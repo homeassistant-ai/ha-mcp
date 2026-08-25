@@ -1,8 +1,8 @@
 """
-Add-on management tools for Home Assistant MCP Server.
+App management tools for Home Assistant MCP Server.
 
-Provides tools to list installed and available add-ons via the Supervisor API,
-and to call add-on web APIs through Home Assistant's Ingress proxy.
+Provides tools to list installed and available apps via the Supervisor API,
+and to call app web APIs through Home Assistant's Ingress proxy.
 
 Note: These tools only work with Home Assistant OS or Supervised installations.
 """
@@ -829,36 +829,42 @@ async def list_addons(
         Dictionary with installed add-ons and their status.
     """
     response = await _supervisor_api_call(client, "/addons")
-    if not response.get("success"):
-        return (
-            response  # TODO(tech-debt): should raise ToolError per AGENTS.md Pattern B
-        )
 
     data = response["result"]
     addons = data.get("addons", [])
 
     # Fetch stats for running addons in parallel to avoid sequential overhead
     stats_by_slug: dict[str, dict[str, Any] | None] = {}
+    stats_warnings: list[str] = []
     if include_stats:
         running_slugs = [a.get("slug") for a in addons if a.get("state") == "started"]
 
-        async def _fetch_stats(slug: str) -> tuple[str, dict[str, Any] | None]:
+        async def _fetch_stats(
+            slug: str,
+        ) -> tuple[str, dict[str, Any] | None, str | None]:
             try:
                 resp = await _supervisor_api_call(client, f"/addons/{slug}/stats")
-                if resp.get("success"):
-                    s = resp["result"]
-                    return slug, {
+                s = resp["result"]
+                return (
+                    slug,
+                    {
                         "cpu_percent": s.get("cpu_percent"),
                         "memory_percent": s.get("memory_percent"),
                         "memory_usage": s.get("memory_usage"),
                         "memory_limit": s.get("memory_limit"),
-                    }
-            except Exception as exc:
-                logger.warning("Failed to fetch stats for addon %s: %s", slug, exc)
-            return slug, None
+                    },
+                    None,
+                )
+            except ToolError as exc:
+                warning = f"Statistics unavailable for app {slug!r}: {exc}"
+                logger.warning("%s", warning)
+                return slug, None, warning
 
         results = await asyncio.gather(*[_fetch_stats(slug) for slug in running_slugs])
-        stats_by_slug = dict(results)
+        for slug, stats, warning in results:
+            stats_by_slug[slug] = stats
+            if warning is not None:
+                stats_warnings.append(warning)
 
     # Format add-on information
     formatted_addons = []
@@ -883,7 +889,7 @@ async def list_addons(
     running_count = sum(1 for a in addons if a.get("state") == "started")
     update_count = sum(1 for a in addons if a.get("update_available"))
 
-    return {
+    result: dict[str, Any] = {
         "success": True,
         "addons": formatted_addons,
         "summary": {
@@ -893,6 +899,9 @@ async def list_addons(
             "updates_available": update_count,
         },
     }
+    if stats_warnings:
+        result["warnings"] = stats_warnings
+    return result
 
 
 async def list_available_addons(
@@ -2325,17 +2334,14 @@ class AddOnTools:
         # Make the actions idempotent: adding a repo Supervisor already has
         # ("already in the store") or removing one it doesn't have are both the
         # desired end state, so report success instead of a confusing error (the
-        # "add repo then install" flow re-adds freely). _supervisor_api_call
-        # raises a ToolError on failure; the returned-failure branch is a
-        # defensive fallback.
+        # "add repo then install" flow re-adds freely). _supervisor_api_call raises
+        # a ToolError on every failure.
         try:
-            result = await _supervisor_api_call(
+            await _supervisor_api_call(
                 self._client, endpoint, method=method, data=data, timeout=timeout
             )
-        except ToolError as e:
-            return self._repo_noop_or_raise(key, repository, str(e))
-        if not result.get("success"):
-            return self._repo_noop_or_raise(key, repository, str(result))
+        except ToolError as error:
+            return self._repo_noop_or_raise(key, repository, error)
         return {
             "success": True,
             "action": key,
@@ -2344,12 +2350,13 @@ class AddOnTools:
         }
 
     def _repo_noop_or_raise(
-        self, key: str, repository: str, error_text: str
+        self, key: str, repository: str, error: ToolError
     ) -> dict[str, Any]:
         """Reclassify an idempotent no-op failure as success, else raise.
 
         Logs the reclassification so a failure that gets demoted to a success
         is never invisible."""
+        error_text = str(error)
         noop = self._repo_noop_verb(key, self._supervisor_error_text(error_text))
         if noop:
             logger.info(
@@ -2359,21 +2366,35 @@ class AddOnTools:
                 noop,
             )
             return self._repo_noop_result(key, repository, noop)
+        if (
+            self._structured_error_code(error_text)
+            != ErrorCode.SERVICE_CALL_FAILED.value
+        ):
+            raise error
         self._raise_repo_action_error(key, repository, error_text)
-        return None  # unreachable: _raise_repo_action_error always raises
+
+    @staticmethod
+    def _structured_error_code(error_text: str) -> str | None:
+        """Return the code from a serialized structured ToolError."""
+        try:
+            payload = json.loads(error_text)
+        except (ValueError, TypeError):
+            return None
+        err = payload.get("error") if isinstance(payload, dict) else None
+        if not isinstance(err, dict):
+            return None
+        code = err.get("code")
+        return code if isinstance(code, str) else None
 
     @staticmethod
     def _supervisor_error_text(error_text: str) -> str:
         """Extract just the Supervisor-reported error from a serialized failure.
 
-        ``_supervisor_api_call`` wraps a failure as a ToolError whose JSON
-        carries a generic ``message`` ("Supervisor API call failed:
-        /store/repositories/<slug>") plus the raw Supervisor response in
-        ``details``. The endpoint in ``message`` always contains
-        "repositories", so scanning the whole blob would make any
-        repository-action failure look repository-scoped. Return ``details``
-        (what Supervisor actually said) — falling back to ``message`` or the
-        raw text — so idempotency matching keys only on the real cause."""
+        Structured failures may carry Supervisor text in ``details`` after
+        WebSocket/error normalization or directly in ``message`` for REST and
+        command failures. Return ``details`` first, falling back to ``message``
+        or the raw text, so idempotency matching considers only the real cause
+        rather than other serialized error metadata."""
         try:
             payload = json.loads(error_text)
         except (ValueError, TypeError):
@@ -2416,10 +2437,9 @@ class AddOnTools:
     def _raise_repo_action_error(key: str, repository: str, detail: str) -> NoReturn:
         """Raise a repository-action-specific error.
 
-        ``_supervisor_api_call`` attaches a generic "check your HA connection"
-        suggestion to every failure, which is misleading for a store-repository
-        domain error (bad URL, or a repo still used by installed add-ons). Give
-        actionable, action-specific guidance instead.
+        Only ``SERVICE_CALL_FAILED`` domain errors reach this helper. Replace
+        their generic connectivity suggestion with actionable guidance for an
+        invalid repository URL or a repository still used by installed apps.
         """
         if key == "add_repository":
             suggestions = [
