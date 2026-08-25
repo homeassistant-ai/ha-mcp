@@ -1795,9 +1795,7 @@ def _reconnect_supervisor_during_wait(ws: HAWebSocket) -> BaseException | None:
     return None
 
 
-def _supervisor_readiness_probe_budget(
-    deadline: float, *, delay: bool
-) -> float | None:
+def _supervisor_readiness_probe_budget(deadline: float, *, delay: bool) -> float | None:
     """Return the next readiness request budget within the deadline."""
     remaining = deadline - time.monotonic()
     if remaining <= 0:
