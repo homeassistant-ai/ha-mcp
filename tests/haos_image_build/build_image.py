@@ -1800,30 +1800,16 @@ def _wait_supervisor_ready(
     operation. Beta image configuration uses the same predicate after channel
     selection and update.
     """
-    info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
-    LOG.info(
-        "Supervisor ready: version=%s version_latest=%s arch=%s",
-        info.get("version"),
-        info.get("version_latest"),
-        info.get("arch"),
-    )
-    if _supervisor_info_ready(
-        info,
-        expected_channel=expected_channel,
-        minimum_version=minimum_version,
-    ):
-        return info
-
-    LOG.info(
-        "Supervisor self-update pending (%s -> %s); waiting before store ops...",
-        info.get("version"),
-        info.get("version_latest"),
-    )
     deadline = time.monotonic() + update_timeout
-    last_version = info.get("version")
+    info: dict[str, Any] = {}
+    last_version: object = None
     last_error: BaseException | None = None
-    while time.monotonic() < deadline:
-        time.sleep(10.0)
+    first_probe = True
+    first_success = True
+    while first_probe or time.monotonic() < deadline:
+        if not first_probe:
+            time.sleep(10.0)
+        first_probe = False
         try:
             info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
         except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as e:
@@ -1845,14 +1831,30 @@ def _wait_supervisor_ready(
                 last_error = reconnect_err
             continue
         version = info.get("version")
-        if version != last_version:
-            LOG.info("Supervisor version changed: %s -> %s", last_version, version)
-            last_version = version
-        if _supervisor_info_ready(
+        ready = _supervisor_info_ready(
             info,
             expected_channel=expected_channel,
             minimum_version=minimum_version,
-        ):
+        )
+        if first_success:
+            LOG.info(
+                "Supervisor ready: version=%s version_latest=%s arch=%s",
+                info.get("version"),
+                info.get("version_latest"),
+                info.get("arch"),
+            )
+            first_success = False
+            if ready:
+                return info
+            LOG.info(
+                "Supervisor self-update pending (%s -> %s); waiting before store ops...",
+                info.get("version"),
+                info.get("version_latest"),
+            )
+        elif version != last_version:
+            LOG.info("Supervisor version changed: %s -> %s", last_version, version)
+        last_version = version
+        if ready:
             LOG.info("Supervisor self-update complete: version=%s", version)
             return info
     last_err_suffix = f"; last error: {last_error!r}" if last_error else ""

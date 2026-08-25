@@ -263,6 +263,27 @@ def test_returns_immediately_when_up_to_date() -> None:
     sleep.assert_not_called()
 
 
+def test_tolerates_setup_state_from_initial_probe() -> None:
+    """A setup-state error on the first readiness probe is retried."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        WSCommandError(
+            "not ready",
+            code="unknown_error",
+            supervisor_message="System is not ready with state: setup",
+        ),
+        _info(update_available=False),
+    ]
+
+    with patch("tests.haos_image_build.build_image.time.sleep") as sleep:
+        result = _wait_supervisor_ready(ws)
+
+    assert result["version"] == "2026.06.1"
+    assert ws.supervisor_api.call_count == 2
+    sleep.assert_called_once_with(10.0)
+    ws.reconnect.assert_called_once_with()
+
+
 def test_waits_until_update_clears() -> None:
     """Polls /supervisor/info until update_available flips False."""
     ws = Mock()
@@ -318,9 +339,8 @@ def test_raises_on_update_timeout() -> None:
 def test_persistent_error_surfaced_in_timeout() -> None:
     """Persistent WSCommandError -> timeout message includes last error."""
     ws = Mock()
-    # Initial read sees a pending update; the poll then hits a persistent
-    # WSCommandError until the deadline (the initial read is outside the
-    # tolerant loop, so it must succeed for the loop to be exercised).
+    # Initial read sees a pending update; later probes hit a transient
+    # WSCommandError until the deadline.
     ws.supervisor_api.side_effect = [
         _info(update_available=True, version="2026.05.1"),
         WSCommandError(
