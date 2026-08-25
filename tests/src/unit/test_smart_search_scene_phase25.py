@@ -2,9 +2,10 @@
 augmentation and partial-failure surfacing.
 
 Phase 2.5 covers the case where HA derives a scene's entity_id from its
-``name`` slug rather than its storage key — bulk-fetched configs are
-keyed by the storage key, so Phase 3 lookup via entity-id slug would
-miss them without the registry-driven alias step.
+``name`` slug rather than its storage key. The per-id config endpoint answers
+only to the storage key while the scoring pass works in slugs, so without the
+registry-derived translation a renamed scene is classified as
+integration-managed, never fetched, and silently drops out of the results.
 
 The partial-failure surfacing covers Boy-Scout finding from PR #1168
 review: when the Attempt-C per-id fetch hits the wall-clock budget or
@@ -18,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools.smart_search import SmartSearchTools
 
 
@@ -42,10 +44,9 @@ class TestSceneRegistryAugmentation:
 
     The registry maps each scene's storage ``unique_id`` to its actual
     ``entity_id`` (which HA derives from the scene's ``name``). When the two
-    diverge (the typical case once a scene is renamed in the UI), the bulk
-    fetch keys the config by the storage id while Phase-3 scoring iterates
-    by entity_id slug. Phase 2.5 backfills the slug-keyed alias so the
-    lookup connects.
+    diverge (the typical case once a scene is renamed in the UI), the per-id
+    endpoint answers only to the storage id while the scoring pass looks up by
+    entity_id slug. Phase 2.5 supplies the translation that connects them.
     """
 
     @pytest.fixture
@@ -61,10 +62,10 @@ class TestSceneRegistryAugmentation:
                 ),
             ]
         )
-        # Each test points _request at its scene list — the REST endpoint is
-        # the only bulk path (the WS fallback was removed in #1889: its
-        # command types never existed in HA core).
-        client._request = AsyncMock(side_effect=Exception("REST bulk unavailable"))
+        # Scene configs are read one id at a time via ``get_scene_config``;
+        # each test supplies its own. ``_request`` is not on that path, so any
+        # call through it is a bug rather than a fixture the test relies on.
+        client._request = AsyncMock(side_effect=AssertionError("unexpected REST call"))
         return client
 
     async def test_registry_augmentation_aliases_renamed_scene(
@@ -76,29 +77,30 @@ class TestSceneRegistryAugmentation:
         Storage key  : ``night_light_led_desk_strip``
         entity_id    : ``scene.led_desk_strip_night_light``
 
-        Without Phase 2.5 the bulk-fetched config lives at
-        ``all_scene_configs['night_light_led_desk_strip']`` while Phase-3
-        looks it up at ``all_scene_configs['led_desk_strip_night_light']`` —
-        the augmentation backfills the second key as an alias of the first.
+        Without Phase 2.5 the config is reachable only under
+        the storage id ``night_light_led_desk_strip`` while the scoring pass
+        looks it up under the slug ``led_desk_strip_night_light`` — the
+        registry map is what lets the fetch ask for the first and file the
+        answer under the second.
         """
 
-        # REST bulk returns the scene config keyed by the *storage* id.
-        # Registry list returns the unique_id → entity_id mapping that
-        # diverges from the storage id — Phase 2.5 backfills the alias.
-        mock_client._request = AsyncMock(
-            return_value=[
-                {
+        # The per-id endpoint is keyed by STORAGE id, while the search
+        # enumerates scenes by entity-id SLUG. Fetching the slug 404s; only a
+        # request for the storage id returns the config.
+        async def _get_scene_config(scene_id: str) -> dict[str, Any]:
+            if scene_id != "night_light_led_desk_strip":
+                raise HomeAssistantAPIError("API error: 404 - Resource not found", 404)
+            return {
+                "config": {
                     "id": "night_light_led_desk_strip",
                     "name": "LED Desk Strip Night Light",
                     "entities": {
-                        "light.led_desk_strip": {
-                            "state": "on",
-                            "brightness": 30,
-                        }
+                        "light.led_desk_strip": {"state": "on", "brightness": 30}
                     },
                 }
-            ]
-        )
+            }
+
+        mock_client.get_scene_config = AsyncMock(side_effect=_get_scene_config)
 
         async def _ws_handler(message: dict[str, Any]) -> dict[str, Any]:
             msg_type = message.get("type")
@@ -109,6 +111,7 @@ class TestSceneRegistryAugmentation:
                         {
                             "entity_id": "scene.led_desk_strip_night_light",
                             "unique_id": "night_light_led_desk_strip",
+                            "platform": "homeassistant",
                         }
                     ],
                 }
@@ -129,8 +132,10 @@ class TestSceneRegistryAugmentation:
         assert len(scenes) == 1, f"Expected 1 scene match, got: {scenes}"
         match = scenes[0]
         assert match["entity_id"] == "scene.led_desk_strip_night_light"
-        # Critical: config is non-None — the augmentation routed the bulk
-        # config through the entity_id-slug key successfully.
+        # Critical: config is non-None. A renamed scene is fetched by its
+        # storage id and returned under its slug; comparing the slug against
+        # the storage-keyed HA-managed set instead would classify it as
+        # integration-managed and silently skip its config.
         assert match.get("config") is not None
         assert "entities" in match["config"]
         assert "light.led_desk_strip" in match["config"]["entities"]
@@ -145,16 +150,14 @@ class TestSceneRegistryAugmentation:
         """
         unrenamed_entity = _make_scene_entity("scene.movie_night", "Movie Night")
         mock_client.get_states = AsyncMock(return_value=[unrenamed_entity])
-        mock_client._request = AsyncMock(
-            return_value=[
-                {
+        mock_client.get_scene_config = AsyncMock(
+            return_value={
+                "config": {
                     "id": "movie_night",
                     "name": "Movie Night",
-                    "entities": {
-                        "light.living_room": {"state": "off"},
-                    },
+                    "entities": {"light.living_room": {"state": "off"}},
                 }
-            ]
+            }
         )
 
         async def _ws_handler(message: dict[str, Any]) -> dict[str, Any]:
@@ -177,8 +180,9 @@ class TestSceneRegistryAugmentation:
         assert result["success"] is True
         scenes = result.get("scenes", [])
         assert len(scenes) == 1, f"Augmentation failure must not lose match: {scenes}"
-        # storage_id and entity_id slug coincide, so Phase 3 finds the
-        # config via the storage-id key directly.
+        # With the registry unavailable there is no way to tell HA-managed
+        # from integration-managed scenes, so every scene is attempted; the
+        # slug doubles as the storage id here and the fetch succeeds.
         assert scenes[0]["config"] is not None
 
 
@@ -878,20 +882,19 @@ class TestIndexSceneRegistryEntry:
     """
 
     @staticmethod
-    def _empty_outputs() -> tuple[dict[str, Any], set[str], dict[str, str]]:
-        return {}, set(), {}
+    def _empty_outputs() -> tuple[set[str], dict[str, str]]:
+        return set(), {}
 
     def test_homeassistant_platform_entry_recorded_as_managed(self) -> None:
         from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
 
-        configs, uids, slug_map = self._empty_outputs()
+        uids, slug_map = self._empty_outputs()
         SceneSearchMixin._index_scene_registry_entry(
             {
                 "entity_id": "scene.movie_night",
                 "unique_id": "movie_night_storage_uid",
                 "platform": "homeassistant",
             },
-            configs,
             uids,
             slug_map,
         )
@@ -905,14 +908,13 @@ class TestIndexSceneRegistryEntry:
         through per-id fetch and 404)."""
         from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
 
-        configs, uids, slug_map = self._empty_outputs()
+        uids, slug_map = self._empty_outputs()
         SceneSearchMixin._index_scene_registry_entry(
             {
                 "entity_id": "scene.hue_movie",
                 "unique_id": "hue_movie_uid",
                 "platform": "hue",
             },
-            configs,
             uids,
             slug_map,
         )
@@ -925,14 +927,13 @@ class TestIndexSceneRegistryEntry:
         "homeassistant"``."""
         from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
 
-        configs, uids, slug_map = self._empty_outputs()
+        uids, slug_map = self._empty_outputs()
         SceneSearchMixin._index_scene_registry_entry(
             {
                 "entity_id": "light.kitchen",
                 "unique_id": "kitchen_light_uid",
                 "platform": "homeassistant",
             },
-            configs,
             uids,
             slug_map,
         )
@@ -944,46 +945,15 @@ class TestIndexSceneRegistryEntry:
         silently ignored — happens on partially-restored registries."""
         from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
 
-        configs, uids, slug_map = self._empty_outputs()
+        uids, slug_map = self._empty_outputs()
         SceneSearchMixin._index_scene_registry_entry(
             {
                 "entity_id": "scene.partial",
                 "unique_id": None,
                 "platform": "homeassistant",
             },
-            configs,
             uids,
             slug_map,
         )
         assert uids == set()
         assert slug_map == {}
-
-    def test_slug_aliased_to_existing_config_under_storage_key(self) -> None:
-        """When a config is already bulk-fetched under its storage key and
-        the entity_id slug differs, the registry walk must add a slug-keyed
-        alias pointing at the same config dict — that's the whole reason
-        Phase 2.5 exists (HA's slugify diverges from `.replace()` chains).
-        """
-        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
-
-        # Config bulk-fetched under storage key "ee04b...".
-        existing_config = {"id": "ee04b1a2", "name": "Movie Night"}
-        configs: dict[str, dict[str, Any]] = {"ee04b1a2": existing_config}
-        uids: set[str] = set()
-        slug_map: dict[str, str] = {}
-
-        # Registry says: this scene's entity_id is "scene.movie_night" but
-        # its unique_id (== storage key) is "ee04b1a2".
-        SceneSearchMixin._index_scene_registry_entry(
-            {
-                "entity_id": "scene.movie_night",
-                "unique_id": "ee04b1a2",
-                "platform": "homeassistant",
-            },
-            configs,
-            uids,
-            slug_map,
-        )
-
-        # Phase-3 lookup via slug now lands on the bulk-fetched config.
-        assert configs.get("movie_night") is existing_config
