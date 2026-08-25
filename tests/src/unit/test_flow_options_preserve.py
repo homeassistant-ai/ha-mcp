@@ -1301,6 +1301,21 @@ class TestStepValuesValidation:
         assert "entry_types" in message
         assert "str" in message
 
+    def test_a_rejection_reports_a_position_not_the_step_id(self) -> None:
+        """A step id is a caller-controlled key and reaches the same log.
+
+        Nothing echoed a NESTED caller key before this directive existed —
+        the walker's supplied_keys reports only top-level names — so the
+        position is reported instead. It still says WHICH entry is wrong
+        without carrying anything the caller typed (CodeRabbit review).
+        """
+        secret = "sk-not-in-the-log"
+        with pytest.raises(ToolError) as exc_info:
+            validate_step_values({"step_values": {"init": {"a": 1}, secret: {}}})
+        message = str(exc_info.value)
+        assert secret not in message, "A step id reached the error payload"
+        assert "entry #2" in message, message
+
     async def test_the_walker_rejects_before_driving_any_step(self) -> None:
         """It must raise before a single step is submitted."""
         submit_fn = AsyncMock()

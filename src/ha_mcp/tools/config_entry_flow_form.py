@@ -883,21 +883,27 @@ def validate_step_values(config: dict[str, Any]) -> None:
             )
         )
 
-    for step_id, entry in directive.items():
+    # The step id is a caller-controlled key, and nothing echoed a NESTED one
+    # before this directive existed — the walker's own supplied_keys reports
+    # only top-level names. These errors reach the usage log unmasked (see the
+    # note above), so report the entry's POSITION instead: it is what the
+    # caller needs to find the entry in their own directive, and it cannot
+    # carry a value they typed (CodeRabbit review, issue #2254).
+    for index, entry in enumerate(directive.values(), start=1):
+        where = f"{_PER_STEP_VALUES_KEY} entry #{index}"
         entries = entry if isinstance(entry, list) else [entry]
         if any(not isinstance(item, dict) for item in entries):
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"'{_PER_STEP_VALUES_KEY}[{step_id!r}]' must be an object "
-                    "of field values, or a list of them for a step the flow "
-                    "presents more than once",
+                    f"{where} must be an object of field values, or a list "
+                    "of them for a step the flow presents more than once",
                     suggestions=[
                         f"Pass {_PER_STEP_VALUES_KEY}={example}, or a list of "
                         "those objects to supply one per encounter.",
                     ],
                     context={
-                        "step_id": step_id,
+                        "entry_index": index,
                         "entry_types": [type(item).__name__ for item in entries],
                     },
                 )
@@ -911,12 +917,11 @@ def validate_step_values(config: dict[str, Any]) -> None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"'{_PER_STEP_VALUES_KEY}[{step_id!r}]' supplies no field "
-                    "values, so it would apply nothing",
+                    f"{where} supplies no field values, so it would apply nothing",
                     suggestions=[
                         "Name at least one field for the step, or drop the entry.",
                     ],
-                    context={"step_id": step_id, "entry_count": len(entries)},
+                    context={"entry_index": index, "entry_count": len(entries)},
                 )
             )
 
