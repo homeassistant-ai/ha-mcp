@@ -285,7 +285,7 @@
     "backup.bulk.confirm": "Alle backups verwijderen die overeenkomen met: {filters}?",
     "backup.bulk.deleted": "{count} backup(s) verwijderd",
     "filesystem.custom.title": "Aangepaste bestandssysteemmappen (geavanceerd)",
-    "filesystem.custom.help": "Extra mappen (één per regel) die bestandstools mogen <strong>lezen en schrijven</strong>. Relatieve configuratiepaden en toegestane HAOS-siblingvolumes worden ondersteund. Wordt onmiddellijk toegepast.",
+    "filesystem.custom.help": "Extra paden (één per regel) die bestandstools mogen <strong>lezen en schrijven</strong>. Relatieve configuratiepaden en toegestane HAOS-sibling-volumes worden ondersteund. Elke invoer geeft toegang tot dat pad en alles daaronder; configuratie-gerelateerde bestandsnamen, zoals <code>sensor.yaml</code>, kunnen direct worden ingevoerd. Is direct van kracht.",
     "filesystem.custom.blocked": "Altijd geblokkeerd: {paths}, padtraversal (<code>..</code>), en absolute paden buiten toegestane HAOS-volumes.",
     "filesystem.custom.enable_first": "Schakel bètafuncties en bestandssysteemtools hierboven in om te bewerken.",
     "filesystem.custom.unavailable": "Aangepaste mappen zijn momenteel niet beschikbaar.",
