@@ -173,25 +173,25 @@ async def _wait_addon_running(
         await asyncio.sleep(_ADDON_RUNNING_POLL_S)
 
 
-# Supervisor reports a stopped addon as ``stopped``; the others are
-# terminal-but-unhealthy states a lifecycle action could land in.
-_STOPPED_STATES: frozenset[str] = frozenset(
-    {"stopped", "boot_fail", "unknown", "error"}
-)
+# Terminal states that must fail a lifecycle assertion rather than count as
+# successful stop completion.
+_UNHEALTHY_ADDON_STATES: frozenset[str] = frozenset({"boot_fail", "unknown", "error"})
 
 
 async def _wait_addon_state(
     mcp_client: Any,
     slug: str,
     expected: frozenset[str],
+    *,
+    failure_states: frozenset[str] = frozenset(),
     timeout: float = _ADDON_RUNNING_TIMEOUT_S,
 ) -> str:
     """Block until ``ha_get_app(slug=...)`` reports a state in ``expected``.
 
     The state-set generalization of ``_wait_addon_running`` for lifecycle
-    actions that drive an addon to ``stopped`` as well as ``started``. Same
-    transient-error discipline (``_POLLING_TRANSIENT_ERRORS`` retried, bugs
-    propagate, the deadline still fires).
+    actions that drive an addon to ``stopped`` as well as ``started``.
+    States in ``failure_states`` fail immediately. Other unexpected states
+    keep polling with the same transient-error discipline until the deadline.
     """
     deadline = time.monotonic() + timeout
     last_state: str | None = None
@@ -205,6 +205,11 @@ async def _wait_addon_state(
             last_state = f"<transient: {str(e)[:60]}>"
         if last_state in expected:
             return str(last_state)
+        if last_state in failure_states:
+            pytest.fail(
+                f"Addon {slug!r} entered unhealthy state {last_state!r}; "
+                f"expected one of {sorted(expected)!r}"
+            )
         if time.monotonic() >= deadline:
             pytest.fail(
                 f"Addon {slug!r} did not reach a state in {sorted(expected)!r} "
@@ -358,7 +363,12 @@ async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
 
         try:
             await _action("stop")
-            await _wait_addon_state(mcp_client, slug, _STOPPED_STATES)
+            await _wait_addon_state(
+                mcp_client,
+                slug,
+                frozenset({"stopped"}),
+                failure_states=_UNHEALTHY_ADDON_STATES,
+            )
 
             await _action("start")
             await _wait_addon_state(mcp_client, slug, frozenset({"started"}))

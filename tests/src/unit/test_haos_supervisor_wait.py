@@ -472,7 +472,7 @@ def test_configure_beta_variant_skips_update_when_image_is_current() -> None:
 
 
 def test_configure_beta_variant_installs_advertised_update() -> None:
-    """A newly advertised beta is installed before the qcow2 is emitted."""
+    """A newly advertised beta triggers update and exact-version readiness polling."""
     ws = Mock()
     ws.supervisor_api.side_effect = [
         {},

@@ -653,8 +653,7 @@ async def _resolve_http_route(
       network.
     - Running as the HA app (add-on) (`is_running_in_addon()` true) → direct
       `<addon_ip>:<addon_ingress_port>` with `X-Ingress-Path` and
-      `X-Hass-Source: core.ingress` headers. This is the path the app variant
-      always took on master; routing through HA Core's
+      `X-Hass-Source: core.ingress` headers. Routing through HA Core's
       `/api/hassio_ingress/...` proxy regresses here because
       `client.base_url` is `http://supervisor/core` (a Supervisor proxy
       mount that demands `Authorization: Bearer $SUPERVISOR_TOKEN`).
@@ -2341,6 +2340,77 @@ class AddOnTools:
         {"add_repository", "remove_repository"}
     )
 
+    async def _execute_addon_update_via_core(self, slug: str, timeout: int) -> None:
+        """Update an app through Core when direct Supervisor identity is unsafe.
+
+        Supervisor forbids an app token from updating the app that owns that
+        token. Core's dedicated update command executes under Core's Supervisor
+        identity and remains available after app-originated ``supervisor/api``
+        commands were blocked.
+        """
+        command = "hassio/update/addon"
+        deadline = time.monotonic() + _JOB_COLLISION_RETRY_WINDOW
+        delay = _JOB_COLLISION_RETRY_INITIAL_DELAY
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                response = await self._client.send_websocket_message(
+                    {
+                        "type": command,
+                        "addon": slug,
+                        "backup": False,
+                        "_wait_timeout": float(timeout) + 15.0,
+                    }
+                )
+            except HomeAssistantConnectionError as exc:
+                _raise_supervisor_write_outcome_unknown(
+                    ErrorCode.CONNECTION_FAILED,
+                    f"Home Assistant WebSocket transport failed during {command}; "
+                    f"the update outcome is unknown: {exc}",
+                    command,
+                    "WEBSOCKET",
+                )
+
+            if response.get("success"):
+                return
+
+            error = str(
+                response.get("error") or "Home Assistant rejected the app update"
+            )
+            if _JOB_COLLISION_MARKER not in error.lower():
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            logger.info(
+                "Supervisor job-group collision through %s; retrying in %.1fs (%s)",
+                command,
+                delay,
+                error,
+            )
+            await asyncio.sleep(min(delay, remaining))
+            delay = min(delay * 2, _JOB_COLLISION_RETRY_MAX_DELAY)
+
+        suggestions = [
+            "Check the app's update status with ha_get_app before retrying",
+            "Check Home Assistant Core and Supervisor logs for the rejected update",
+        ]
+        if _JOB_COLLISION_MARKER in error.lower():
+            suggestions = [
+                "Another job held this app's job group for over "
+                f"{_JOB_COLLISION_RETRY_WINDOW:.0f}s; check Supervisor logs",
+                "Retry once the in-flight app operation finishes",
+            ]
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Home Assistant failed to update app (add-on) {slug}: {error}",
+                context={"slug": slug, "command": command, "attempts": attempts},
+                suggestions=suggestions,
+            )
+        )
+
     async def _execute_action_mode(self, slug: str, action: str) -> dict[str, Any]:
         """Run a Supervisor app (add-on) lifecycle action (install/start/stop/etc.).
 
@@ -2359,9 +2429,12 @@ class AddOnTools:
                 )
             )
         endpoint = endpoint_tmpl.format(slug=slug)
-        await _supervisor_api_call(
-            self._client, endpoint, method="POST", timeout=timeout
-        )
+        if key == "update" and is_running_in_addon():
+            await self._execute_addon_update_via_core(slug, timeout)
+        else:
+            await _supervisor_api_call(
+                self._client, endpoint, method="POST", timeout=timeout
+            )
         return {
             "success": True,
             "action": key,
@@ -3211,36 +3284,14 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Get Home Assistant Apps (formerly known as add-ons, and this tool as ha_get_addon) - list installed, available, or get details for one.
+        """Get installed or available Home Assistant apps, or details for one app.
 
-        This tool retrieves app information based on the parameters:
-        - slug provided: Returns detailed info for a single app (ingress, ports, options, state)
-        - source='installed' (default): Lists currently installed apps
-        - source='available': Lists apps available in the Supervisor app store
+        Do not use this tool to change app state or configuration; use
+        ``ha_manage_app``. Use ``slug`` for details, ``source="installed"`` for an
+        inventory, or ``source="available"`` for store discovery.
 
-        **Note:** This tool only works with Home Assistant OS or Supervised installations.
-
-        **SINGLE APP (slug provided):**
-        Returns comprehensive details including ingress entry, ports, options, state,
-        and (when the app exposes one) a top-level ``log_level`` reflecting the
-        current Supervisor option — useful for confirming ha_manage_app log_level changes.
-        Useful for discovering what APIs an app exposes before calling ha_manage_app.
-
-        **INSTALLED APPS (source='installed'):**
-        Returns apps with version, state (started/stopped), and update availability.
-        - include_stats: Optionally include CPU/memory usage statistics
-
-        **AVAILABLE APPS (source='available'):**
-        Returns apps from official and custom repositories that can be installed.
-        - repository: Filter by repository slug (e.g., 'core', 'community')
-        - query: Search by name or description (case-insensitive)
-
-        **Example Usage:**
-        - List installed apps: ha_get_app()
-        - Get Node-RED details: ha_get_app(slug="<prefix>_nodered")
-        - List with resource usage: ha_get_app(include_stats=True)
-        - List available apps: ha_get_app(source="available")
-        - Search for MQTT: ha_get_app(source="available", query="mqtt")
+        Requires Home Assistant OS or Supervised. ``include_stats`` applies only
+        to installed-app listings.
         """
         return await tools.get_addon(
             source=source,
@@ -3484,120 +3535,20 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Manage a Home Assistant App (formerly known as an add-on, and this tool as ha_manage_addon) — update its configuration or call its internal API.
+        """Manage Home Assistant apps or proxy an app API.
 
-        Five mutually exclusive operating modes:
+        Do not use this tool for read-only discovery; call ``ha_get_app`` first.
+        Do not infer private app API schemas; consult version-matched app docs,
+        and use ``ha_get_skill_guide`` for complex Home Assistant workflows.
 
-        **Lifecycle mode** (when ``action`` is one of install/uninstall/start/
-        stop/restart/rebuild/update):
-        Runs a Supervisor app action on ``slug``. ``install`` / ``update`` go
-        through the store (the app's repository must be registered — it shows
-        up in ``ha_get_app(source="available")``); the rest act on an installed
-        app. This is how an assistant brings an app online for the user
-        (e.g. installing + starting the dashboard screenshot engine).
+        Use exactly one mode: lifecycle/store action, configuration fields,
+        ``path`` proxy, or ``path`` with ``array_patch``.
 
-        **Store-repository mode** (when ``action`` is ``add_repository`` or
-        ``remove_repository``):
-        Registers or unregisters a custom app store repository. These actions
-        operate on the store rather than an installed app, so they take the
-        ``repository`` param and no ``slug``: ``add_repository`` POSTs the
-        repository URL to ``/store/repositories``; ``remove_repository`` DELETEs
-        ``/store/repositories/{slug}`` by the repository's slug. Adding a
-        repository (e.g. balloob's apps) is the missing step that lets an
-        assistant then install an app from it via ``action="install"``.
-
-        **Config mode** (when any of options/network/boot/auto_update/watchdog is
-        provided): Updates the app's Supervisor configuration via
-        POST /addons/{slug}/options. ``options`` is merged one level deep with
-        the current options. A non-empty ``network`` value is submitted as the
-        complete desired host-port override map and replaces existing overrides;
-        entries omitted from that map are cleared. Omit ``network`` or pass an
-        empty map to leave current mappings unchanged. Scalar fields are updated
-        only when provided.
-
-        **Proxy mode** (when path is provided without array_patch):
-        Uses Supervisor Ingress by default: app deployments connect directly
-        to the sibling app's ingress port with ingress headers, while non-app
-        deployments use Home Assistant Core's Ingress proxy. `port=...`
-        bypasses Ingress entirely and connects to the app's container port;
-        that mode requires the MCP host to share Home Assistant's container
-        network (in practice, the HAOS app deployment). Apps such as Node-RED
-        may reject direct requests unless `leave_front_door_open` is enabled
-        in their options and the app is restarted. Authentication errors name
-        the exact `ha_manage_app(options=...)` remedy and its security
-        tradeoff; prefer Ingress when it works.
-
-        **App-specific WebSocket APIs:** The tool transports the supplied body;
-        it does not define private command names or argument schemas, which can
-        change between app versions. Consult the app's version-matched API
-        documentation for those shapes and use ``ha_get_skill_guide`` for Home
-        Assistant workflow guidance. For a one-shot response or bounded capture
-        on a long-lived channel, pass ``wait_for_close=False`` with
-        ``message_limit``. Ingress is the default; use ``port`` only when the app
-        intentionally exposes a mapped direct-access port.
-
-        **Array-patch mode** (when path AND array_patch are provided):
-        Atomic "GET array, mutate, POST array" workflow for app APIs whose write
-        contract is "send the whole resource collection back". Operations are applied
-        in order to a working copy; if any op fails validation (unknown id, collision,
-        malformed shape) nothing is posted. Returns a compact summary instead of the
-        full array. Designed for Node-RED /flows and similar endpoints.
-
-        **Response shaping (proxy mode):**
-        - WebSocket streams can be noisy (for example, config dumps and log
-          output), which is what `summarize` is for. INFO/WARNING/ERROR/exit
-          patterns found within the first 2,000 serialized characters of a
-          message pass through it. Pagination via `message_offset` /
-          `message_limit` works on the raw collected list before summarization.
-        - `python_transform` runs after slicing and summarize, and before the
-          response size cap, so it can narrow an oversized response back under
-          the limit. What `response` binds to and what may be done to it is on
-          the parameter itself. Non-JSON text frames are returned as ANSI-stripped
-          strings, binary frames are ignored, and summarization may insert
-          `{"elided": N, "note": "..."}` markers.
-
-        **WARNING:** Setting boot="auto"/"manual" will fail for apps whose Supervisor
-        metadata locks the boot mode. The Supervisor returns an error in this case.
-
-        **NOTE:** This tool only works with Home Assistant OS or Supervised installations.
-
-        **Examples:**
-        - Install an app: ha_manage_app(slug="...", action="install")
-        - Start an app: ha_manage_app(slug="...", action="start")
-        - Add a store repository: ha_manage_app(action="add_repository", repository="https://github.com/balloob/home-assistant-addons")
-        - Remove a store repository: ha_manage_app(action="remove_repository", repository="0f1cc410")
-        - Set app option: ha_manage_app(slug="...", options={"log_level": "debug"})
-          Note: only provided option keys are updated; current options are
-          fetched and merged. Fields outside the app schema produce a warning.
-        - Disable auto-update: ha_manage_app(slug="...", auto_update=False)
-        - Set complete host-port overrides:
-          ha_manage_app(slug="...", network={"5800/tcp": 8082})
-          Entries omitted from a non-empty network map are cleared.
-        - Set boot mode: ha_manage_app(slug="...", boot="manual")
-        - Call HTTP API: ha_manage_app(slug="...", path="/api/events")
-        - Direct port: ha_manage_app(slug="...", path="/flows", port=1880) — if the app rejects it, the error names the 'leave_front_door_open' remedy and its security trade-off; prefer Ingress.
-        - Filter WS errors only: ha_manage_app(slug="...", path="/ws", websocket=True, python_transform="response = [m for m in response if 'ERROR' in str(m) or 'WARN' in str(m)]")
-        - HTTP subset: ha_manage_app(slug="...", path="/flows", python_transform="response = [f['id'] for f in response]")
-        - Array-patch (Node-RED, rename a node):
-            ha_manage_app(
-                slug="a0d7b954_nodered", path="/flows",
-                array_patch={"operations": [
-                    {"op": "patch", "id": "abc123", "patches": {"name": "New Name"}},
-                ]},
-            )
-        - Array-patch (Node-RED, replace one tab's nodes atomically):
-            ha_manage_app(
-                slug="a0d7b954_nodered", path="/flows",
-                array_patch={"operations": [
-                    {"op": "delete_where", "field": "z", "value": "tab-id"},
-                    {"op": "add", "item": {"id": "n1", "type": "inject", "z": "tab-id", ...}},
-                    {"op": "add", "item": {"id": "n2", "type": "function", "z": "tab-id", ...}},
-                ]},
-                request_headers={"Node-RED-Deployment-Type": "full"},
-            )
-        - Custom request headers (proxy mode):
-            ha_manage_app(slug="...", path="/api/state",
-                            request_headers={"Accept": "text/plain"})
+        Requires Home Assistant OS or Supervised. ``options`` is merged; a
+        non-empty ``network`` replaces the full port override map. Prefer
+        Ingress: direct-port access requires a shared container network and may
+        require weakening the target app authentication. If a mutating request
+        has an unknown outcome, verify state with ``ha_get_app`` before retrying.
         """
         return await tools.manage_addon(
             slug=slug,

@@ -50,8 +50,9 @@ def make_supervisor_httpx_client(
 
     Raises:
         RuntimeError: ``SUPERVISOR_TOKEN`` is unset or empty in the
-            environment. Callers translate that failure for their own
-            response surface. Detecting it here prevents a malformed
+            environment. Callers must either gate construction on token
+            presence or translate this exception for their response surface.
+            Detecting it here prevents a malformed
             ``Authorization: Bearer `` header from masking the missing
             environment variable as a token rejection from Supervisor.
 

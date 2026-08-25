@@ -786,7 +786,9 @@ class HomeAssistantClient:
         Home Assistant Core through ``http://supervisor/core/api``, while logs
         belong to Supervisor at ``http://supervisor``. Both clients use the same
         ``SUPERVISOR_TOKEN``; the Core proxy requires ``homeassistant_api``, while
-        direct Supervisor logs require ``hassio_api`` and ``hassio_role: manager``.
+        system-service and arbitrary app-log paths require ``hassio_api`` and
+        ``hassio_role: manager``. The recognized-app-token exception is
+        ``/addons/self/logs``.
 
         Raises:
             HomeAssistantAuthError: ``SUPERVISOR_TOKEN`` absent at call time,
@@ -898,8 +900,8 @@ class HomeAssistantClient:
         ``service`` must be one of the eight Supervisor-managed services:
         ``supervisor``, ``host``, ``core``, ``dns``, ``audio``, ``cli``,
         ``multicast``, ``observer``. Caller is responsible for validating
-        ``service`` against the allowed set; this helper does no validation
-        and will raise ``HomeAssistantAPIError`` on any unknown path (404).
+        ``service``; this helper performs no validation, and unsupported paths
+        are rejected by the selected direct-Supervisor or Core-proxy route.
 
         Branch on ``is_running_in_addon()`` — mirror of ``get_addon_logs``:
         inside the app (add-on) container goes directly to Supervisor at
@@ -913,12 +915,6 @@ class HomeAssistantClient:
         (``homeassistant/components/hassio/http.py`` — ``PATHS_ADMIN``), so
         an admin LLA is sufficient to reach any of them from outside the
         app.
-
-        Closes #1260: pre-fix this method had only the addon-direct branch,
-        so non-addon installs (the Docker image, uvx ha-mcp, etc.) hit the
-        ``SUPERVISOR_TOKEN``-absent fail-fast in ``_supervisor_logs_get`` for
-        every service, while the sibling ``source="supervisor"`` (addon
-        logs) call kept working through its own Core-proxy fallback.
         """
         if is_running_in_addon():
             return await self._supervisor_logs_get(service, lines=lines)
