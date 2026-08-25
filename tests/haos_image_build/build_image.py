@@ -1747,6 +1747,22 @@ def _is_transient_supervisor_error(exc: BaseException) -> bool:
     return exc.code == "unknown_error" and exc.supervisor_message == ""
 
 
+def _is_transient_supervisor_readiness_error(exc: BaseException) -> bool:
+    """Return whether readiness polling can retry a Supervisor failure.
+
+    Mutation responses stay strict because their outcome can be ambiguous. A
+    read during a known restart window may also observe Supervisor's setup
+    state before the API becomes ready again.
+    """
+    return _is_transient_supervisor_error(exc) or (
+        isinstance(exc, WSCommandError)
+        and exc.code == "unknown_error"
+        and (exc.supervisor_message or "").startswith(
+            "System is not ready with state: "
+        )
+    )
+
+
 def _supervisor_info_ready(
     info: dict[str, Any],
     *,
@@ -1811,7 +1827,7 @@ def _wait_supervisor_ready(
         try:
             info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
         except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as e:
-            if not _is_transient_supervisor_error(e):
+            if not _is_transient_supervisor_readiness_error(e):
                 raise
             # A Supervisor self-update can return a transient command error or
             # drop the WebSocket. Preserve the failure for timeout diagnostics,
@@ -1821,7 +1837,7 @@ def _wait_supervisor_ready(
             try:
                 ws.reconnect()
             except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as reconnect_err:
-                if not _is_transient_supervisor_error(reconnect_err):
+                if not _is_transient_supervisor_readiness_error(reconnect_err):
                     raise
                 # Handler-start timeouts and transport failures are expected
                 # while Supervisor/Core restarts; keep them visible in CI logs.
@@ -1863,7 +1879,7 @@ def _wait_core_version(
             ws.reconnect()
             last_info = ws.supervisor_api("/core/info", method="get", timeout=30.0)
         except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
-            if not _is_transient_supervisor_error(exc):
+            if not _is_transient_supervisor_readiness_error(exc):
                 raise
             last_error = exc
             LOG.debug("Core still restarting after update: %r", exc)
@@ -1894,7 +1910,7 @@ def _reconnect_during_supervisor_update(
     try:
         ws.reconnect()
     except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
-        if not _is_transient_supervisor_error(exc):
+        if not _is_transient_supervisor_readiness_error(exc):
             raise
         LOG.warning("Reconnect %s failed: %r", context, exc)
         return exc
@@ -1917,7 +1933,7 @@ def _wait_supervisor_channel_metadata(
                 "/supervisor/info", method="get", timeout=30.0
             )
         except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
-            if not _is_transient_supervisor_error(exc):
+            if not _is_transient_supervisor_readiness_error(exc):
                 raise
             last_error = exc
             LOG.debug("Transient Supervisor reload failure: %r", exc)
@@ -1985,7 +2001,7 @@ def _apply_supervisor_image_update(
         except _SupervisorReadinessTimeout:
             raise
         except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
-            if not _is_transient_supervisor_error(exc):
+            if not _is_transient_supervisor_readiness_error(exc):
                 raise
             if time.monotonic() >= deadline:
                 raise TimeoutError(

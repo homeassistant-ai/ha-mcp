@@ -703,6 +703,47 @@ def test_configure_beta_variant_tolerates_restart_error_from_update_call() -> No
     )
 
 
+def test_configure_beta_variant_tolerates_setup_state_while_polling() -> None:
+    """A setup-state read during restart is retried after the update POST."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        {},
+        {},
+        _info(
+            update_available=True,
+            version="2026.07.5",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+        {},
+        WSCommandError(
+            "not ready",
+            code="unknown_error",
+            supervisor_message="System is not ready with state: setup",
+        ),
+        _info(
+            update_available=False,
+            version="2026.08.0",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+    ]
+
+    with patch("tests.haos_image_build.build_image.time.sleep"):
+        _configure_supervisor_image_variant(
+            ws,
+            channel="beta",
+            minimum_version="2026.08.0",
+        )
+
+    ws.reconnect.assert_called_once_with()
+    assert ws.supervisor_api.call_args_list[-1] == call(
+        "/supervisor/info",
+        method="get",
+        timeout=30.0,
+    )
+
+
 def test_configure_beta_variant_rejects_permanent_unknown_update_error() -> None:
     """A bridged permanent rejection is not mistaken for a restart."""
     ws = Mock()
