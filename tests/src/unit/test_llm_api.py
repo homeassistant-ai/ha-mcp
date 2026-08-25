@@ -94,9 +94,8 @@ def _fake_session(
     init_result = SimpleNamespace(instructions=instructions)
 
     @asynccontextmanager
-    async def fake_mcp_session(url, http_client=None):
+    async def fake_mcp_session(url):
         session.url = url
-        session.http_client = http_client
         if raise_on_open is not None:
             raise raise_on_open
         if delay:
@@ -690,14 +689,24 @@ class TestModeDefault:
         assert [t.name for t in instance.tools] == ["ha_search_tools", "ha_call_tool"]
 
 
-class TestSharedHttpClientPassthrough:
-    async def test_canonical_sdk_receives_hass_shared_client(self, monkeypatch):
-        # The blocking-SSL-setup fix (live-found by HA's event-loop monitor):
-        # sessions must hand HA's shared httpx client to the SDK so it never
-        # constructs its own inside the loop. Faked at the sys.modules level
-        # so _mcp_session's REAL wiring runs.
+class TestLoopbackHttpClientTimeout:
+    async def test_sdk_receives_a_dedicated_client_with_generous_timeout(
+        self, monkeypatch
+    ):
+        # Regression test (kpop-timeout investigation): _mcp_session used to
+        # hand the SDK Home Assistant's shared httpx client
+        # (helpers.httpx_client.get_async_client). HA never configures that
+        # client with an explicit timeout, so it silently carried httpx's own
+        # hardcoded 5-second default — and the SDK applies no timeout of its
+        # own when a caller-provided client is passed, so that 5s became the
+        # REAL wire-level ceiling for every tool call regardless of how
+        # generous _CALL_TOOL_TIMEOUT_SECONDS looked. _mcp_session must
+        # instead build its own client with an explicit, generous timeout.
+        # Faked at the sys.modules level so _mcp_session's REAL wiring runs.
         import sys
         from types import ModuleType
+
+        import httpx
 
         opened: dict[str, Any] = {}
 
@@ -729,13 +738,18 @@ class TestSharedHttpClientPassthrough:
         monkeypatch.setitem(sys.modules, "mcp.client.streamable_http", fake_transport)
         monkeypatch.setitem(sys.modules, "mcp.client.session", fake_session_mod)
 
-        shared_client = object()
-        async with llm_api._mcp_session(
-            "http://127.0.0.1:9584/private_x", shared_client
-        ):
-            pass
+        async with llm_api._mcp_session("http://127.0.0.1:9584/private_x"):
+            used_client = opened["http_client"]
+            assert isinstance(used_client, httpx.AsyncClient)
+            assert used_client.timeout == httpx.Timeout(
+                llm_api._CALL_TOOL_TIMEOUT_SECONDS
+            )
+            # Not httpx's hardcoded default — the exact bug being fixed.
+            assert used_client.timeout != httpx.Timeout(5.0)
+            assert not used_client.is_closed
 
-        assert opened["http_client"] is shared_client
+        # Scoped to this one session: closed when the session exits.
+        assert used_client.is_closed
 
 
 class TestPreRenameSdkFallback:

@@ -50,7 +50,7 @@ import asyncio
 import importlib
 import logging
 from collections.abc import AsyncIterator, Iterable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -58,7 +58,6 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import llm
-from homeassistant.helpers.httpx_client import get_async_client
 from voluptuous_openapi import convert_to_voluptuous
 
 from .const import (
@@ -226,47 +225,63 @@ async def async_probe_mcp_sdk(hass: HomeAssistant) -> bool:
 @asynccontextmanager
 async def _mcp_session(
     url: str,
-    http_client: Any = None,
 ) -> AsyncIterator[tuple[ClientSession, mcp_types.InitializeResult]]:
     """Open an initialized MCP session against the loopback server.
 
     Imports resolve from ``sys.modules`` — :func:`async_probe_mcp_sdk` did the
     real (blocking) import on the executor before the API was registered.
 
-    ``http_client`` is Home Assistant's shared httpx client
-    (``helpers.httpx_client.get_async_client``). Passing it is what keeps
-    this loop-safe: without it the SDK constructs its own httpx client per
-    session, whose SSL setup loads the CA bundle SYNCHRONOUSLY inside HA's
-    event loop (live-found — HA's blocking-call monitor flagged this exact
-    line). HA's shared client is built against the process-cached SSL
-    context, and the SDK does not close caller-owned clients (HA core's mcp
-    integration relies on the same contract).
+    Builds a throwaway httpx client scoped to this one session rather than
+    reusing Home Assistant's shared one (``helpers.httpx_client.
+    get_async_client`` — the prior approach): the SDK applies NO timeout of
+    its own when a caller-provided client is passed, so whatever timeout
+    THAT client happens to carry becomes the real wire-level ceiling. HA's
+    shared client is built with no explicit ``timeout=``, so it silently
+    carries httpx's own hardcoded 5-second default — capping every tool call
+    at 5 seconds of read-idle no matter how generous
+    ``_CALL_TOOL_TIMEOUT_SECONDS`` / ``_LIST_TOOLS_TIMEOUT_SECONDS`` looked
+    (live-found investigating a ~60s Assist-pipeline hang: a real tool doing
+    real work never got anywhere near its own asyncio budget).
+
+    ``verify=False`` is not a security relaxation: ``url`` is always
+    ``http://127.0.0.1:<port>...`` (see ``async_register_llm_api``) — a
+    plain-HTTP loopback call that never negotiates TLS — so building a real
+    SSL context would be pure waste. It also keeps this loop-safe the same
+    way the shared client did: an SSL context built with ``verify=True``
+    loads the system CA bundle SYNCHRONOUSLY (live-found — HA's
+    blocking-call monitor flagged this exact line when the SDK built its own
+    default client), and skipping verification skips that load entirely.
+    The client is entered on the exit stack so it closes with the rest of
+    the session.
     """
     from mcp.client.session import ClientSession
 
-    try:
-        from mcp.client.streamable_http import streamable_http_client
+    async with AsyncExitStack() as stack:
+        try:
+            from mcp.client.streamable_http import streamable_http_client
+        except ImportError:
+            # Pre-rename SDK (an older ha-mcp resolved by a pip-spec override
+            # pins an older fastmcp/mcp): same call shape, deprecated name,
+            # and no http_client kwarg — it builds its own default client, so
+            # on those old SDKs the blocking-SSL-setup cost is unavoidable.
+            from mcp.client.streamable_http import streamablehttp_client
 
-        transport = (
-            streamable_http_client(url=url, http_client=http_client)
-            if http_client is not None
-            else streamable_http_client(url=url)
+            transport = streamablehttp_client(url=url)
+        else:
+            import httpx
+
+            http_client = await stack.enter_async_context(
+                httpx.AsyncClient(
+                    verify=False,
+                    timeout=httpx.Timeout(_CALL_TOOL_TIMEOUT_SECONDS),
+                )
+            )
+            transport = streamable_http_client(url=url, http_client=http_client)
+
+        read_stream, write_stream, _ = await stack.enter_async_context(transport)
+        session = await stack.enter_async_context(
+            ClientSession(read_stream, write_stream)
         )
-    except ImportError:
-        # Pre-rename SDK (an older ha-mcp resolved by a pip-spec override
-        # pins an older fastmcp/mcp): same call shape, deprecated name, but
-        # no http_client kwarg — it builds its own client, so on those old
-        # SDKs the blocking-SSL-setup warning is the accepted cost.
-        from mcp.client.streamable_http import (
-            streamablehttp_client,
-        )
-
-        transport = streamablehttp_client(url=url)
-
-    async with (
-        transport as (read_stream, write_stream, _),
-        ClientSession(read_stream, write_stream) as session,
-    ):
         init_result = await session.initialize()
         yield session, init_result
 
@@ -350,7 +365,7 @@ async def _forward_tool_call(
     try:
         async with (
             asyncio.timeout(_CALL_TOOL_TIMEOUT_SECONDS),
-            _mcp_session(server_url, get_async_client(hass)) as (session, _init),
+            _mcp_session(server_url) as (session, _init),
         ):
             result = await session.call_tool(name, arguments)
     except _transport_errors() as err:
@@ -496,7 +511,7 @@ class HaMcpLlmApi(llm.API):
         try:
             async with (
                 asyncio.timeout(_LIST_TOOLS_TIMEOUT_SECONDS),
-                _mcp_session(self.server_url, get_async_client(self.hass)) as (
+                _mcp_session(self.server_url) as (
                     session,
                     init_result,
                 ),
