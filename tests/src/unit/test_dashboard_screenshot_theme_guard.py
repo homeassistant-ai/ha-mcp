@@ -1,21 +1,18 @@
 """Unit tests for the dashboard-screenshot theme guard (issue #1909).
 
-Stock Puppet dispatched a ``settheme`` event on cold renders, and Home
-Assistant persisted it server-side on the engine token user's profile —
-flipping that user's real sessions to light mode. The guard snapshots the
-saved theme before a capture batch and restores it afterwards.
-
-The capture-time bracket is currently DISABLED (#1991): upstream Puppet fixed
-the cold-render dispatch, so ``capture.py`` no longer calls the guard's
-snapshot/restore. The guard code itself is retained (and unchanged), so the
-unit tests below still cover its credential resolution and snapshot/restore
-semantics against a fake WebSocket client. ``TestCaptureBracketDisabled``
-asserts the bracket stays off — capture opens no guard sessions and adds no
-warnings — guarding against a silent re-enable.
+Puppet dispatches a ``settheme`` event on cold renders, and Home Assistant
+persists it server-side on the engine token user's profile — flipping that
+user's real sessions. The guard detects that change and reports it so the
+agent can undo it with ``ha_manage_theme``; it never writes itself. These cover
+credential resolution and detection semantics against a fake WebSocket
+client, plus ``TestCaptureBracket``, which asserts that a capture reads but
+issues no ``frontend/set_user_data`` at all — the property that keeps the
+screenshot tools honestly ``readOnlyHint: True``.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, ClassVar
@@ -177,8 +174,8 @@ class TestCredentialResolution:
 
 
 class TestSnapshotRestore:
-    async def test_restore_writes_back_clobbered_theme(self) -> None:
-        """Regression #1909: an engine write is undone by the restore."""
+    async def test_detect_reports_clobbered_theme_without_writing(self) -> None:
+        """#1909, read-only form: the change is reported, never undone."""
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
         guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
 
@@ -187,9 +184,17 @@ class TestSnapshotRestore:
         # The engine's settheme dispatch persists light mode server-side.
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
 
-        await guard.restore()
-        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
-        assert guard.warnings == []
+        await guard.detect_change()
+
+        # The guard issued no write: the clobber is still in place.
+        assert _set_calls() == []
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _CLOBBERED_THEME
+        assert guard.changed_from == _DARK_THEME
+        assert len(guard.warnings) == 1
+        warning = guard.warnings[0]
+        assert "ha_manage_theme" in warning
+        assert "set_engine_theme" in warning
+        assert "own Home Assistant user" in warning
 
     async def test_sessions_use_the_resolved_credential(self) -> None:
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
@@ -199,32 +204,14 @@ class TestSnapshotRestore:
             ("http://homeassistant:8123", "puppet-token")
         ]
 
-    async def test_restore_skips_write_when_unchanged(self) -> None:
+    async def test_detect_is_silent_when_theme_unchanged(self) -> None:
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
         guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
-
         await guard.take_snapshot()
-        await guard.restore()
-
+        await guard.detect_change()
         assert _set_calls() == []
-
-    async def test_unconfigured_theme_stays_unwritten_when_unchanged(self) -> None:
-        guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
-        await guard.take_snapshot()
-        await guard.restore()
-        assert _set_calls() == []
-
-    async def test_never_configured_theme_restores_as_empty_settings(self) -> None:
-        # Live frontend sessions ignore a null subscription push, so a
-        # never-configured baseline restores as {} — equivalent "no explicit
-        # selection" semantics that subscribed sessions actually re-apply.
-        guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
-
-        await guard.take_snapshot()
-
-        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
-        await guard.restore()
-        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == {}
+        assert guard.warnings == []
+        assert guard.changed_from is None
 
     @pytest.mark.parametrize(
         "response", [{"success": True, "result": None}, None, "not-a-dict"]
@@ -243,18 +230,18 @@ class TestSnapshotRestore:
         guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
         await guard.take_snapshot()
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
-        await guard.restore()
+        await guard.detect_change()
         assert len(_FakeWsClient.instances) == 2
         assert all(ws.disconnected for ws in _FakeWsClient.instances)
 
     async def test_inactive_guard_touches_nothing(self) -> None:
         guard = ThemeGuard.for_capture(None, None)
         await guard.take_snapshot()
-        await guard.restore()
+        await guard.detect_change()
         assert _FakeWsClient.instances == []
         assert guard.warnings == []
 
-    async def test_snapshot_failure_warns_and_disables_restore(self) -> None:
+    async def test_snapshot_failure_warns_and_disables_detection(self) -> None:
         _FakeWsClient.fail_get = True
         guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
 
@@ -262,9 +249,10 @@ class TestSnapshotRestore:
         assert len(guard.warnings) == 1
 
         _FakeWsClient.fail_get = False
-        await guard.restore()
-        # Without a trustworthy snapshot the guard must not write anything.
+        await guard.detect_change()
+        # Without a trustworthy snapshot there is nothing to compare against.
         assert _set_calls() == []
+        assert guard.changed_from is None
 
     @pytest.mark.parametrize("reason", ["auth_invalid", None])
     async def test_connect_failure_warns_without_raising(
@@ -275,10 +263,10 @@ class TestSnapshotRestore:
         guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
         await guard.take_snapshot()
         assert len(guard.warnings) == 1
-        await guard.restore()
+        await guard.detect_change()
         assert _set_calls() == []
 
-    async def test_restore_waits_for_engine_write_to_settle(
+    async def test_detection_waits_for_engine_write_to_settle(
         self, monkeypatch: Any
     ) -> None:
         """The post-capture read must not race Puppet's async user-data save."""
@@ -294,19 +282,39 @@ class TestSnapshotRestore:
 
         guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
         await guard.take_snapshot()
-        await guard.restore()
+        await guard.detect_change()
         assert sleeps == [1.5]
 
-    async def test_restore_failure_warns_without_raising(self) -> None:
+    async def test_detection_read_failure_warns_without_raising(self) -> None:
         _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
         guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
         await guard.take_snapshot()
 
-        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
-        _FakeWsClient.fail_set = True
-        await guard.restore()
+        _FakeWsClient.fail_get = True
+        await guard.detect_change()
         assert len(guard.warnings) == 1
-        assert "restoring it failed" in guard.warnings[0]
+        assert "Could not check whether" in guard.warnings[0]
+        assert _set_calls() == []
+
+
+class TestEngineThemeHelpers:
+    """The write path lives behind ha_manage_theme, not the capture path."""
+
+    async def test_read_engine_theme_returns_saved_value(self) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import read_engine_theme
+
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        assert await read_engine_theme(_PUPPET_CREDENTIAL) == _DARK_THEME
+
+    async def test_write_engine_theme_sets_the_value(self) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import write_engine_theme
+
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
+        # The guard is on by default now, so an unconditional write is
+        # explicit: omitting expected_current means "expect no stored theme".
+        await write_engine_theme(_PUPPET_CREDENTIAL, dict(_DARK_THEME), force=True)
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
+        assert len(_set_calls()) == 1
 
 
 class _FakeResponse:
@@ -334,6 +342,7 @@ class _ClobberingEngineClient:
     """Fake httpx.AsyncClient whose render flips the stored theme to light."""
 
     status_code: ClassVar[int] = 200
+    clobber: ClassVar[bool] = True
 
     def __init__(self, *_a: Any, **_kw: Any) -> None:
         pass
@@ -349,7 +358,8 @@ class _ClobberingEngineClient:
     ) -> _FakeStreamContext:
         # Rendering makes the engine's frontend session persist light mode,
         # exactly like Puppet's cold-browser settheme dispatch does.
-        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
+        if type(self).clobber:
+            _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
         return _FakeStreamContext(_FakeResponse(type(self).status_code, _PNG))
 
 
@@ -364,15 +374,18 @@ def _patch_engine(monkeypatch: Any, addon_credential: EngineCredential | None) -
     monkeypatch.setattr(capture, "resolve_engine", fake_resolve)
     monkeypatch.setattr(capture.httpx, "AsyncClient", _ClobberingEngineClient)
     _ClobberingEngineClient.status_code = 200
+    _ClobberingEngineClient.clobber = True
 
 
-class TestCaptureBracketDisabled:
-    """The ThemeGuard bracket around capture_dashboard_images is DISABLED
-    (#1991). Upstream Puppet no longer clobbers the theme on cold renders, so
-    ha-mcp opens no snapshot/restore sessions and adds no guard warnings. These
-    guard against the bracket being silently re-enabled."""
+class TestCaptureBracket:
+    """Capture reads the engine user's theme and reports changes, never writes.
 
-    async def test_capture_opens_no_guard_sessions_and_leaves_theme(
+    The no-write property is what keeps the screenshot and dashboard-get tools
+    honestly ``readOnlyHint: True`` (#1991, PR #2014) while still surfacing the
+    engine's #1909 clobber to the agent.
+    """
+
+    async def test_capture_reports_the_clobber_and_writes_nothing(
         self, monkeypatch: Any
     ) -> None:
         from ha_mcp.dashboard_screenshot import capture
@@ -386,19 +399,35 @@ class TestCaptureBracketDisabled:
         )
 
         assert captures[0].data == _PNG
-        # No snapshot/restore WebSocket sessions were opened.
-        assert _FakeWsClient.instances == []
-        # The bracket did not run: the fake engine still simulates the old
-        # clobber, and ha-mcp no longer undoes it (real Puppet no longer
-        # causes it).
+        # Two read sessions (before + after); no write of any kind.
+        assert len(_FakeWsClient.instances) == 2
+        assert _set_calls() == []
+        # The fake engine clobbered the theme and it stays clobbered.
         assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _CLOBBERED_THEME
-        assert capture_warnings == []
+        assert len(capture_warnings) == 1
+        assert "ha_manage_theme" in capture_warnings[0]
 
-    async def test_client_credential_fallback_opens_no_guard_sessions(
+    async def test_unchanged_theme_produces_no_warning(self, monkeypatch: Any) -> None:
+        """A non-clobbering engine must not nag the agent."""
+        from ha_mcp.dashboard_screenshot import capture
+
+        _patch_engine(monkeypatch, _PUPPET_CREDENTIAL)
+        _ClobberingEngineClient.clobber = False
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        capture_warnings: list[str] = []
+
+        await capture.capture_dashboard_images(
+            "lovelace/0", capture_warnings=capture_warnings
+        )
+
+        assert capture_warnings == []
+        assert _set_calls() == []
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
+
+    async def test_client_credential_fallback_detects_the_clobber(
         self, monkeypatch: Any
     ) -> None:
-        """Sidecar/standalone mode: even with a usable client credential the
-        disabled bracket opens no guard sessions."""
+        """Sidecar/standalone mode: the client credential drives detection."""
         from ha_mcp.dashboard_screenshot import capture
 
         _patch_engine(monkeypatch, None)
@@ -409,11 +438,16 @@ class TestCaptureBracketDisabled:
         )
 
         assert captures[0].data == _PNG
-        assert _FakeWsClient.instances == []
+        assert [(ws.url, ws.token) for ws in _FakeWsClient.instances] == [
+            ("http://ha.local:8123", "own-token"),
+            ("http://ha.local:8123", "own-token"),
+        ]
+        assert _set_calls() == []
 
-    async def test_capture_failure_raises_without_guard_warnings(
+    async def test_capture_failure_still_reports_the_clobber(
         self, monkeypatch: Any
     ) -> None:
+        """A failed render still leaves the theme flipped -- say so."""
         import json
 
         from ha_mcp.dashboard_screenshot import capture
@@ -425,9 +459,489 @@ class TestCaptureBracketDisabled:
         with pytest.raises(ToolError) as exc_info:
             await capture.capture_dashboard_images("lovelace/0")
 
-        # No guard sessions opened, and no guard warning on the error payload.
-        assert _FakeWsClient.instances == []
+        assert _set_calls() == []
         payload = json.loads(str(exc_info.value))
-        assert not any(
-            "restoring it failed" in warning for warning in payload.get("warnings", [])
+        assert any(
+            "ha_manage_theme" in warning for warning in payload.get("warnings", [])
         )
+
+
+class TestCompareAndSetWrite:
+    """The restore is a compare-and-set, not a blind overwrite."""
+
+    async def test_write_refuses_when_current_does_not_match(self) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import (
+            ThemeChangedError,
+            write_engine_theme,
+        )
+
+        # Someone changed the theme after the warning was emitted.
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = {"theme": "nord"}
+        with pytest.raises(ThemeChangedError) as exc_info:
+            await write_engine_theme(
+                _PUPPET_CREDENTIAL,
+                dict(_DARK_THEME),
+                expected_current=dict(_CLOBBERED_THEME),
+            )
+
+        assert exc_info.value.actual == {"theme": "nord"}
+        assert _set_calls() == []
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == {"theme": "nord"}
+
+    async def test_write_proceeds_when_current_matches(self) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import write_engine_theme
+
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
+        await write_engine_theme(
+            _PUPPET_CREDENTIAL,
+            dict(_DARK_THEME),
+            expected_current=dict(_CLOBBERED_THEME),
+        )
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
+
+    async def test_warning_carries_both_values_for_the_guard(self) -> None:
+        """The agent needs expected_current, not just the value to restore."""
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+        await guard.take_snapshot()
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
+        await guard.detect_change()
+
+        warning = guard.warnings[0]
+        assert "value=" in warning
+        assert "expected_current=" in warning
+
+
+class TestSessionCleanup:
+    """A cancelled guard session must not strand its WebSocket."""
+
+    async def test_cancelled_connect_still_disconnects(self, monkeypatch: Any) -> None:
+        """SESSION_TIMEOUT_SECONDS cancels via CancelledError, a BaseException.
+
+        connect() sits inside the session's try/finally precisely so that
+        cancellation there still runs disconnect(); leaving it outside
+        stranded the socket and its background reader task.
+        """
+        started = asyncio.Event()
+
+        async def hang_connect(self: Any) -> bool:
+            started.set()
+            await asyncio.sleep(3600)
+            return True
+
+        with monkeypatch.context() as patched:
+            patched.setattr(_FakeWsClient, "connect", hang_connect)
+            guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+            task = asyncio.ensure_future(guard.take_snapshot())
+            await asyncio.wait_for(started.wait(), timeout=1)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                _ = await task
+
+        assert len(_FakeWsClient.instances) == 1
+        assert _FakeWsClient.instances[0].disconnected is True
+
+    async def test_blocked_disconnect_is_cancelled_not_orphaned(
+        self, monkeypatch: Any
+    ) -> None:
+        """A disconnect that never completes must not outlive the cleanup."""
+        from ha_mcp.dashboard_screenshot import theme_guard as guard_module
+
+        entered = asyncio.Event()
+        tasks: list[Any] = []
+
+        async def hang_disconnect(self: Any) -> None:
+            entered.set()
+            await asyncio.sleep(3600)
+
+        real_ensure = asyncio.ensure_future
+
+        def tracking_ensure(coro: Any, **kw: Any) -> Any:
+            task = real_ensure(coro, **kw)
+            tasks.append(task)
+            return task
+
+        with monkeypatch.context() as patched:
+            patched.setattr(_FakeWsClient, "disconnect", hang_disconnect)
+            patched.setattr(guard_module, "CLOSE_TIMEOUT_SECONDS", 0.01)
+            patched.setattr(guard_module.asyncio, "ensure_future", tracking_ensure)
+            _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+            guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+            await guard.take_snapshot()
+            await asyncio.wait_for(entered.wait(), timeout=1)
+
+        # The cleanup owned the blocked close and finished with it settled,
+        # rather than leaving it pending against a live socket.
+        assert tasks, "cleanup should have created a disconnect task"
+        assert all(t.done() for t in tasks), "disconnect task left pending"
+
+
+class TestNullExpectedCurrentGuard:
+    """An explicit null expected_current must guard, not mean 'unguarded'."""
+
+    async def test_null_expected_current_refuses_when_a_theme_appeared(
+        self,
+    ) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import (
+            ThemeChangedError,
+            write_engine_theme,
+        )
+
+        # Warning observed a never-configured theme (None); by the time the
+        # agent restores, the user has picked one.
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        with pytest.raises(ThemeChangedError):
+            await write_engine_theme(
+                _PUPPET_CREDENTIAL, dict(_CLOBBERED_THEME), expected_current=None
+            )
+        assert _set_calls() == []
+
+    async def test_null_expected_current_writes_when_still_null(self) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import write_engine_theme
+
+        await write_engine_theme(
+            _PUPPET_CREDENTIAL, dict(_DARK_THEME), expected_current=None
+        )
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
+
+    async def test_force_skips_the_guard(self) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import write_engine_theme
+
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        await write_engine_theme(
+            _PUPPET_CREDENTIAL,
+            dict(_CLOBBERED_THEME),
+            expected_current=None,
+            force=True,
+        )
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _CLOBBERED_THEME
+
+
+class TestToolLayerForcePassthrough:
+    """force must survive the public dispatch, not just the helper signature.
+
+    The helper tests call write_engine_theme() directly, so they cannot see a
+    dispatch that drops the argument -- which is how an inert force flag
+    shipped once already. These go through ha_manage_theme itself.
+    """
+
+    async def _tools(self) -> Any:
+        from ha_mcp.tools.tools_themes import ThemesTools
+
+        tools = ThemesTools(_client())
+
+        async def fake_credential() -> Any:
+            return _PUPPET_CREDENTIAL
+
+        tools._engine_credential = fake_credential  # type: ignore[method-assign]
+        return tools
+
+    async def test_force_reaches_the_write(self) -> None:
+        tools = await self._tools()
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+
+        # expected_current deliberately mismatches: only a real force
+        # passthrough down the public path lets this write land.
+        result = await tools.ha_manage_theme(
+            action="set_engine_theme",
+            value=dict(_CLOBBERED_THEME),
+            expected_current=None,
+            force=True,
+        )
+
+        assert result["success"] is True
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _CLOBBERED_THEME
+
+    async def test_without_force_the_mismatch_is_refused(self) -> None:
+        tools = await self._tools()
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+
+        with pytest.raises(ToolError):
+            await tools.ha_manage_theme(
+                action="set_engine_theme",
+                value=dict(_CLOBBERED_THEME),
+                expected_current=None,
+                force=False,
+            )
+        assert _FakeWsClient.user_data[THEME_USER_DATA_KEY] == _DARK_THEME
+
+
+class TestEngineAccountIdentity:
+    """Engine-theme actions refuse when the engine account is unidentifiable.
+
+    An explicit engine URL yields no addon_credential, so the only fallback is
+    ha-mcp's own credential -- a different user under the dedicated-account
+    setup this feature recommends. expected_current cannot substitute: it
+    compares values, not identity.
+    """
+
+    async def test_refuses_when_no_addon_credential(self, monkeypatch: Any) -> None:
+        from ha_mcp.tools.tools_themes import ThemesTools
+
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(url="http://sidecar:10000", addon_credential=None)
+
+        monkeypatch.setattr(
+            "ha_mcp.dashboard_screenshot.provision.resolve_engine", fake_resolve
+        )
+        tools = ThemesTools(_client())
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_theme(action="get_engine_theme")
+
+        assert "cannot be identified" in str(exc_info.value)
+        assert _FakeWsClient.instances == []
+
+    async def test_addon_credential_is_accepted(self, monkeypatch: Any) -> None:
+        from ha_mcp.tools.tools_themes import ThemesTools
+
+        async def fake_resolve() -> EngineTarget:
+            return EngineTarget(
+                url="http://homeassistant:8123",
+                addon_credential=_PUPPET_CREDENTIAL,
+            )
+
+        monkeypatch.setattr(
+            "ha_mcp.dashboard_screenshot.provision.resolve_engine", fake_resolve
+        )
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        tools = ThemesTools(_client())
+
+        result = await tools.ha_manage_theme(action="get_engine_theme")
+        assert result["data"]["theme"] == _DARK_THEME
+
+
+class TestCleartextRefusal:
+    """The engine token is never sent in cleartext to a remote host."""
+
+    @pytest.mark.parametrize(
+        "url,refused",
+        [
+            # Supervisor-internal and loopback: the documented trusted zone.
+            ("http://homeassistant:8123", False),
+            ("http://localhost:8123", False),
+            ("http://127.0.0.1:8123", False),
+            ("http://ha.local:8123", False),
+            ("http://192.168.1.10:8123", False),
+            ("http://10.0.0.5:8123", False),
+            ("http://172.16.0.4:8123", False),
+            # Anything else over cleartext puts the token on the wire.
+            ("http://ha.example.com:8123", True),
+            # A genuinely public address. (203.0.113.x is RFC 5737 TEST-NET,
+            # which Python's ipaddress reports as private, so it is not a
+            # valid stand-in for "remote".)
+            ("http://8.8.8.8:8123", True),
+            # DNS names that merely LOOK like private ranges resolve wherever
+            # their owner points them -- string prefix matching would have
+            # handed the token to an external host.
+            ("http://10.attacker.example:8123", True),
+            ("http://192.168.attacker.example:8123", True),
+            ("http://172.16.attacker.example:8123", True),
+            ("http://127.0.0.1.attacker.example:8123", True),
+            # TLS is always fine.
+            ("https://ha.example.com:8123", False),
+            # Schemes other than http/https are refused. The transport maps
+            # ONLY https to wss and everything else to ws, so wss:// -- the
+            # spelling that looks secure -- is silently downgraded to
+            # cleartext and must not be waved through.
+            ("wss://ha.example.com:8123", True),
+            ("ws://ha.example.com:8123", True),
+            ("wss://homeassistant:8123", True),
+            ("ftp://ha.example.com:8123", True),
+            ("ha.example.com:8123", True),
+            ("", True),
+        ],
+    )
+    def test_cleartext_policy(self, url: str, refused: bool) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import _refuses_cleartext
+
+        assert _refuses_cleartext(url) is refused
+
+    async def test_remote_cleartext_session_warns_and_sends_nothing(self) -> None:
+        guard = ThemeGuard.for_capture(
+            EngineCredential(url="http://ha.example.com:8123", token="t"), None
+        )
+        await guard.take_snapshot()
+
+        assert _FakeWsClient.instances == []
+        assert guard.warnings
+
+
+class TestCredentialProvenance:
+    """A client-fallback credential is not provably the engine's account."""
+
+    def test_addon_credential_is_provably_the_engine(self) -> None:
+        guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, _client())
+        assert guard.credential_is_engine is True
+
+    def test_client_fallback_is_not_provably_the_engine(self) -> None:
+        guard = ThemeGuard.for_capture(None, _client())
+        assert guard.credential is not None
+        assert guard.credential_is_engine is False
+
+    async def test_uncertain_provenance_is_stated_in_the_report(self) -> None:
+        """The agent must not restore a profile we cannot vouch for."""
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        guard = ThemeGuard.for_capture(None, _client())
+        await guard.take_snapshot()
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
+        await guard.detect_change()
+
+        warning = guard.warnings[0]
+        assert "cannot confirm which account" in warning
+        # Must NOT name the tool: engine-theme actions refuse under exactly
+        # the condition that selected this fallback credential, so pointing
+        # the agent at them would recommend a command that cannot succeed.
+        assert "ha_manage_theme" not in warning
+        assert "Profile > General" in warning
+
+    async def test_engine_credential_report_carries_no_caveat(self) -> None:
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+        await guard.take_snapshot()
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
+        await guard.detect_change()
+
+        warning = guard.warnings[0]
+        assert "ha_manage_theme" in warning
+        assert "Profile > General" not in warning
+        # The quoted values must be JSON: both parameters carry
+        # JSON_STRING_COERCION, so a Python repr would hand the agent a
+        # string that fails validation for every value but an empty dict.
+        import json as _json
+        import re as _re
+
+        for field in ("value", "expected_current"):
+            quoted = _re.search(rf"{field}=(\{{.*?\}})", warning)
+            assert quoted, f"{field} not quoted in warning: {warning}"
+            _json.loads(quoted.group(1))
+
+
+class TestSessionDeadlineIsCentral:
+    """The bound belongs to _session, so new entry points inherit it.
+
+    It previously lived at each of the four call sites, which meant a future
+    entry point would inherit the cleartext refusal (_session is the single
+    construction site) but silently not the deadline.
+    """
+
+    async def test_any_session_user_inherits_the_deadline(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import theme_guard as guard_module
+
+        async def hang_connect(self: Any) -> bool:
+            await asyncio.sleep(3600)
+            return True
+
+        with monkeypatch.context() as patched:
+            patched.setattr(_FakeWsClient, "connect", hang_connect)
+            patched.setattr(guard_module, "SESSION_TIMEOUT_SECONDS", 0.02)
+            guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+
+            # A caller that does NOT wrap the session in its own timeout --
+            # i.e. any new entry point -- must still be bounded.
+            with pytest.raises(TimeoutError):
+                async with guard._session():
+                    pass
+
+        assert _FakeWsClient.instances[0].disconnected is True
+
+
+class TestRefusalReasons:
+    """The two refusals are distinct and must not borrow each other's words."""
+
+    def test_local_wss_is_refused_as_an_unsupported_scheme(self) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import _refusal_reason
+
+        reason = _refusal_reason("wss://homeassistant:8123")
+        assert reason is not None
+        # http://homeassistant is ALLOWED and maps to the identical wire URL,
+        # so calling this "cleartext to a remote host" is simply false, and
+        # "use https://" is not available for a Supervisor-internal endpoint.
+        assert "remote host" not in reason
+        assert "unsupported scheme" in reason
+
+    def test_remote_http_keeps_the_cleartext_reason(self) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import _refusal_reason
+
+        reason = _refusal_reason("http://ha.example.com:8123")
+        assert reason is not None
+        assert "remote host" in reason
+
+    def test_allowed_urls_have_no_reason(self) -> None:
+        from ha_mcp.dashboard_screenshot.theme_guard import _refusal_reason
+
+        assert _refusal_reason("http://homeassistant:8123") is None
+        assert _refusal_reason("https://ha.example.com:8123") is None
+
+
+class TestReadOnlyModeRemedy:
+    """Read Only Mode blocks the restore, so the report must not name it."""
+
+    async def test_remedy_does_not_name_a_blocked_action(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import theme_guard as guard_module
+
+        monkeypatch.setattr(guard_module, "_read_only_mode", lambda: True)
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        guard = ThemeGuard.for_capture(_PUPPET_CREDENTIAL, None)
+        await guard.take_snapshot()
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
+        await guard.detect_change()
+
+        warning = guard.warnings[0]
+        assert "Read Only Mode" in warning
+        assert "set_engine_theme" not in warning
+        assert "Profile > General" in warning
+
+
+class TestRemedyPrecedence:
+    """All four combinations report the block that actually governs."""
+
+    async def _report(self, monkeypatch: Any, read_only: bool, engine: bool) -> str:
+        from ha_mcp.dashboard_screenshot import theme_guard as guard_module
+
+        monkeypatch.setattr(guard_module, "_read_only_mode", lambda: read_only)
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_DARK_THEME)
+        guard = ThemeGuard.for_capture(
+            _PUPPET_CREDENTIAL if engine else None,
+            None if engine else _client(),
+        )
+        await guard.take_snapshot()
+        _FakeWsClient.user_data[THEME_USER_DATA_KEY] = dict(_CLOBBERED_THEME)
+        await guard.detect_change()
+        return guard.warnings[0]
+
+    async def test_fallback_credential_wins_over_read_only(
+        self, monkeypatch: Any
+    ) -> None:
+        """Read Only on + fallback: turning the flag off would not unblock it.
+
+        The identity refusal applies in both flag states, so advising the
+        reader to turn Read Only Mode off would send them to a state where
+        the restore is still refused, for a reason the flag does not touch.
+        """
+        warning = await self._report(monkeypatch, read_only=True, engine=False)
+        assert "cannot confirm which account" in warning
+        assert "turn Read Only Mode off" not in warning
+
+    async def test_read_only_reported_when_credential_is_proven(
+        self, monkeypatch: Any
+    ) -> None:
+        warning = await self._report(monkeypatch, read_only=True, engine=True)
+        assert "Read Only Mode is on" in warning
+        assert "set_engine_theme" not in warning
+
+    async def test_actionable_restore_when_neither_blocks(
+        self, monkeypatch: Any
+    ) -> None:
+        warning = await self._report(monkeypatch, read_only=False, engine=True)
+        assert "set_engine_theme" in warning
+
+    async def test_fallback_credential_with_read_only_off(
+        self, monkeypatch: Any
+    ) -> None:
+        warning = await self._report(monkeypatch, read_only=False, engine=False)
+        assert "cannot confirm which account" in warning

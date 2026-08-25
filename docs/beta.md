@@ -177,18 +177,31 @@ token grants. If the token is missing or invalid, Puppet lands on the login
 page and (by its design) restarts; ha-mcp surfaces this as a clear "set the
 engine's access token" error rather than a silent failure.
 
-Puppet's theme and dark-mode renderer controls used to dispatch Home
-Assistant's `settheme` event on every cold render, which Home Assistant
-persisted on the frontend profile of the user whose token the engine runs with
-— and synced to that user's real web and mobile sessions, flipping a dark-mode
-user's whole UI to light on every screenshot (#1909). Recent Puppet versions
-fixed that cold-render dispatch, so ha-mcp's snapshot/restore bracket around
-each capture is now disabled (#1991); the guard code is retained so it can be
-switched back on if a future engine regression reintroduces the write. If you
-run an older Puppet build, update the app (or your self-hosted sidecar
-image) — older engines still persist the theme selection and will keep
-flipping it. A dedicated Puppet account remains a sound belt-and-suspenders
-setup. Language selection is local to Puppet's browser session.
+Puppet dispatches Home Assistant's `settheme` event on cold renders, which
+Home Assistant persists on the frontend profile of the user whose token the
+engine runs with — and syncs to that user's real web and mobile sessions,
+flipping that user's whole UI on every screenshot (#1909). Upstream stopped
+the dispatch for renders that request no theme
+(balloob/home-assistant-addons#89), but by its own title only for that case,
+and it is unreleased as of Puppet 2.6.0 — so on current releases every render
+writes.
+
+The screenshot and dashboard-get tools **detect** this and report it, but
+never write: they read the engine account's saved theme before and after the
+render and, when it changed, emit a warning naming the previous value. Undoing
+it is a separate, explicitly write-annotated call —
+`ha_manage_theme(action="set_engine_theme", value=..., expected_current=...)`
+— passing both values from the warning, so a theme changed in the meantime is
+refused rather than overwritten — so these tools stay
+honestly `readOnlyHint: True` (#1991). `ha_manage_theme(action=
+"get_engine_theme")` inspects the same value. Note this is the engine
+account's *per-user* profile, a different layer from the backend default that
+`action="set"` changes.
+
+**Give the engine its own Home Assistant user and long-lived token** and the
+problem stops mattering: the write lands on an account nobody looks at, so no
+real session is disturbed. The warning is still emitted — ha-mcp has no signal
+telling it an account is dedicated — but it becomes safe to ignore. Language selection is local to Puppet's browser session.
 
 To change the Puppet engine app's own options (such as `keep_browser_open`)
 or to restart it, use `ha_manage_app`; the screenshot tools only render and
@@ -262,10 +275,15 @@ render failure to a warning so it never breaks a write that already committed.
 `include_screenshot` (get) does not commit a dashboard/config write, and the
 screenshot *is* the requested payload, so a total render failure surfaces as
 an error (matching the standalone `ha_get_dashboard_screenshot` tool) rather
-than a warning a caller might miss. Because Puppet can persist theme/dark
-preferences (and the theme-restore bracket writes frontend user data to undo
-that), screenshot operations are blocked in server Read Only Mode; ordinary
-dashboard get/list/search calls remain available.
+than a warning a caller might miss. Screenshot operations stay **available** in server Read
+Only Mode: both entry points are `readOnlyHint: True`, so the transform does
+not hide them and the middleware does not block them (#1991 removed the
+exemption that used to block them, pinned by
+`test_dashboard_config_screenshot_now_passes`). Rendering still makes Puppet
+persist theme/dark preferences on the engine account, and ha-mcp still reports
+that in warnings — so in Read Only Mode you get the warning but cannot act on
+it, since `ha_manage_theme` is exempted only for its read actions
+(`get_engine_theme` inspects the value; `set_engine_theme` stays blocked).
 
 **Raw rendered paths remain constrained.** `ha_get_dashboard_screenshot`
 validates legacy `dashboard_path` values (rejects URLs, query strings,

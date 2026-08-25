@@ -285,7 +285,7 @@
     "backup.bulk.confirm": "删除所有匹配以下条件的备份：{filters}？",
     "backup.bulk.deleted": "已删除 {count} 个备份",
     "filesystem.custom.title": "自定义文件系统目录（高级）",
-    "filesystem.custom.help": "文件工具可以<strong>读和写</strong>的额外目录（每行一个）。支持相对配置路径和允许的 HAOS 同级卷。立即生效。",
+    "filesystem.custom.help": "文件工具可<strong>读取和写入</strong>的额外路径（每行一个）。支持相对配置路径和允许的 HAOS 同级卷。每个条目允许访问该路径及其下的所有内容；可以直接输入配置相对文件名，例如 <code>sensor.yaml</code>。立即生效。",
     "filesystem.custom.blocked": "始终被阻止：{paths}、路径穿越（<code>..</code>）以及允许 HAOS 卷之外的绝对路径。",
     "filesystem.custom.enable_first": "请先在上方启用测试版功能和文件系统工具才能编辑。",
     "filesystem.custom.unavailable": "自定义目录当前不可用。",
@@ -501,7 +501,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "批量控制",
-      "description": "在单个请求中管理多个实体操作。"
+      "description": "管理显式操作或一个确定性的结构化批量操作。"
     },
     "ha_call_event": {
       "title": "调用事件",

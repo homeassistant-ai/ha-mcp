@@ -96,7 +96,7 @@
     "selector.server_webhook_auth.options.none": "1b3203cbe5e624d1"
   },
   "settings UI tool titles and descriptions": {
-    "ha_bulk_control.description": "fbdeb7a63568a7c8",
+    "ha_bulk_control.description": "449ffd466e68784b",
     "ha_bulk_control.title": "190bca20de2f1453",
     "ha_call_event.description": "12e6ed8f553d1408",
     "ha_call_event.title": "a387066396d34c39",
@@ -525,7 +525,7 @@
     "messages.features.tool_search_max_results.label": "8d44cca7f87827f5",
     "messages.filesystem.custom.blocked": "97ba9688146ab018",
     "messages.filesystem.custom.enable_first": "af1cdb1ff7ac6e62",
-    "messages.filesystem.custom.help": "4c1d89bf05c174ce",
+    "messages.filesystem.custom.help": "64a002c27b773cb2",
     "messages.filesystem.custom.save": "bbf726de4c1b791f",
     "messages.filesystem.custom.saved_rejected": "60ca210cb49b783d",
     "messages.filesystem.custom.title": "366e83aded2db5b9",

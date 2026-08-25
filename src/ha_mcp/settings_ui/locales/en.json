@@ -285,7 +285,7 @@
     "backup.bulk.confirm": "Delete all backups matching: {filters}?",
     "backup.bulk.deleted": "Deleted {count} backup(s)",
     "filesystem.custom.title": "Custom filesystem directories (advanced)",
-    "filesystem.custom.help": "Extra directories (one per line) that file tools may <strong>read and write</strong>. Relative config paths and allowed HAOS sibling volumes are supported. Applies immediately.",
+    "filesystem.custom.help": "Extra paths (one per line) that file tools may <strong>read and write</strong>. Relative config paths and allowed HAOS sibling volumes are supported. Each entry allows that path and anything below it; config-relative filenames, such as <code>sensor.yaml</code>, can be entered directly. Applies immediately.",
     "filesystem.custom.blocked": "Always blocked: {paths}, path traversal (<code>..</code>), and absolute paths outside allowed HAOS volumes.",
     "filesystem.custom.enable_first": "Enable beta features and filesystem tools above to edit.",
     "filesystem.custom.unavailable": "Custom directories are currently unavailable.",

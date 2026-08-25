@@ -699,11 +699,11 @@
           "default": false
         },
         "theme": {
-          "type": "Annotated[str | None, Field(description=\"Installed Home Assistant frontend theme name, applied to this render. The engine user's saved theme preference is restored after the capture (best effort).\")]",
+          "type": "Annotated[str | None, Field(description=\"Installed Home Assistant frontend theme name, applied to this render. The engine persists this on the engine account's profile; this tool reports the change in warnings but does not undo it (see ha_manage_theme action='set_engine_theme').\")]",
           "default": null
         },
         "dark_mode": {
-          "type": "Annotated[bool, Field(description=\"Render the requested theme in dark mode, applied to this render. The engine user's saved theme preference is restored after the capture (best effort).\")]",
+          "type": "Annotated[bool, Field(description=\"Render the requested theme in dark mode, applied to this render. The engine persists this on the engine account's profile; this tool reports the change in warnings but does not undo it (see ha_manage_theme action='set_engine_theme').\")]",
           "default": false
         },
         "language": {
@@ -3415,14 +3415,26 @@
   {
     "name": "ha_manage_theme",
     "title": "Manage Frontend Themes",
-    "description": "Manage Home Assistant frontend themes.\n\nWhen NOT to use: themes are YAML files - Home Assistant has no API to\ncreate or edit them. Installing community themes goes through HACS\n(ha_manage_hacs); editing custom theme files goes through\nha_config_set_yaml (beta, edits themes/<name>.yaml keyed by theme name\nand attempts an automatic theme reload).\n\nWhen to use: action='list' discovers installed theme names and the\ncurrent defaults; action='set' selects the backend default theme\n(optionally per light/dark mode).\n\nCaveats: action='set' changes the backend-selected default only -\nusers who explicitly picked a theme in their profile keep their\nchoice. Theme names are validated by Home Assistant at call time.\n\nEXAMPLES:\n- List themes: ha_manage_theme(action=\"list\")\n- Set default theme: ha_manage_theme(action=\"set\", theme_name=\"nord\")\n- Set dark-mode theme: ha_manage_theme(\n      action=\"set\", theme_name=\"nord\", mode=\"dark\")\n- Restore built-in default: ha_manage_theme(\n      action=\"set\", theme_name=\"default\")",
+    "description": "Manage Home Assistant frontend themes.\n\nWhen NOT to use: themes are YAML files - Home Assistant has no API to\ncreate or edit them. Installing community themes goes through HACS\n(ha_manage_hacs); editing custom theme files goes through\nha_config_set_yaml (beta, edits themes/<name>.yaml keyed by theme name\nand attempts an automatic theme reload).\n\nWhen to use: action='list' discovers installed theme names and the\ncurrent defaults; action='set' selects the backend default theme\n(optionally per light/dark mode).\n\nSCREENSHOT-ENGINE ACTIONS (per-user, not the backend default):\nTaking a dashboard screenshot makes the Puppet engine write the saved\ntheme of the Home Assistant user its token belongs to, which also\nflips that user's live web and mobile sessions. The screenshot tools\nare read-only and only *report* this; use action='set_engine_theme'\nwith the value quoted in their warning to put it back, and\naction='get_engine_theme' to inspect it. These act on that engine\naccount's per-user profile via frontend/set_user_data, which is a\ndifferent layer from the backend default that action='set' changes.\nGiving the engine its own dedicated user and token avoids the issue\nentirely.\n\nCaveats: action='set' changes the backend-selected default only -\nusers who explicitly picked a theme in their profile keep their\nchoice. Theme names are validated by Home Assistant at call time.\n\nEXAMPLES:\n- List themes: ha_manage_theme(action=\"list\")\n- Set default theme: ha_manage_theme(action=\"set\", theme_name=\"nord\")\n- Set dark-mode theme: ha_manage_theme(\n      action=\"set\", theme_name=\"nord\", mode=\"dark\")\n- Restore built-in default: ha_manage_theme(\n      action=\"set\", theme_name=\"default\")\n- Inspect the engine account's theme: ha_manage_theme(\n      action=\"get_engine_theme\")\n- Undo a screenshot's theme change (pass BOTH values from the\n  warning, so a theme changed since then is not overwritten):\n  ha_manage_theme(action=\"set_engine_theme\",\n      value={\"theme\": \"\", \"dark\": False},\n      expected_current={\"theme\": \"default\", \"dark\": True})",
     "inputSchema": {
       "properties": {
         "action": {
-          "type": "Annotated[ThemeAction, Field(description='Theme operation: list installed themes or set the default theme.')]"
+          "type": "Annotated[ThemeAction, Field(description=\"Theme operation: 'list' installed themes, 'set' the backend default theme, or read/restore the screenshot engine account's own per-user theme with 'get_engine_theme' / 'set_engine_theme' (a different layer from the backend default).\")]"
         },
         "theme_name": {
           "type": "Annotated[str | None, Field(description=\"Theme name when action='set'. Must be an installed theme; 'default' restores the built-in theme, 'none' resets the chosen mode to the built-in default.\", default=None)]",
+          "default": null
+        },
+        "expected_current": {
+          "type": "Annotated[dict[str, Any] | None, JSON_STRING_COERCION, Field(description=\"Guard for action='set_engine_theme': the stored theme is read immediately before the write and the write is skipped if it no longer equals this. Omitting this value or passing null both mean 'expect no stored theme', enforced like any other value; the guard is always applied unless force is set. Best-effort, not atomic -- Home Assistant exposes no conditional write, so a change landing between that read and the write is not caught. Pass the expected_current value quoted in the screenshot tool's warning.\", default=None)]",
+          "default": null
+        },
+        "force": {
+          "type": "Annotated[bool, Field(description=\"action='set_engine_theme' only: skip the expected_current guard and overwrite unconditionally. Leave false unless you intend to discard whatever is stored.\", default=False)]",
+          "default": false
+        },
+        "value": {
+          "type": "Annotated[dict[str, Any] | None, JSON_STRING_COERCION, Field(description=\"Frontend user-data theme object when action='set_engine_theme', e.g. {'theme': '', 'dark': False}. An empty dict restores default/auto behavior. Take this verbatim from the warning a screenshot tool emitted.\", default=None)]",
           "default": null
         },
         "mode": {

@@ -285,7 +285,7 @@
     "backup.bulk.confirm": "다음 조건에 맞는 백업을 모두 삭제할까요? {filters}",
     "backup.bulk.deleted": "백업 {count}개를 삭제했습니다",
     "filesystem.custom.title": "사용자 지정 파일 시스템 디렉터리(고급)",
-    "filesystem.custom.help": "파일 도구가 <strong>읽고 쓸 수 있는</strong> 추가 디렉터리입니다(한 줄에 하나). 설정 디렉터리 기준 상대 경로와 허용된 HAOS 형제 볼륨을 지원합니다. 즉시 적용됩니다.",
+    "filesystem.custom.help": "파일 도구가 <strong>읽고 쓸 수 있는</strong> 추가 경로입니다(줄당 하나). 상대 설정 경로 및 허용된 HAOS 상위 볼륨이 지원됩니다. 각 항목은 해당 경로 및 그 하위의 모든 항목을 허용하며, <code>sensor.yaml</code>과 같은 설정 상대 파일 이름을 직접 입력할 수 있습니다. 즉시 적용됩니다.",
     "filesystem.custom.blocked": "항상 차단됨: {paths}, 경로 탈출(<code>..</code>), 허용된 HAOS 볼륨 밖의 절대 경로.",
     "filesystem.custom.enable_first": "편집하려면 위에서 베타 기능과 파일 시스템 도구를 켜세요.",
     "filesystem.custom.unavailable": "현재 사용자 지정 디렉터리를 사용할 수 없습니다.",
@@ -501,7 +501,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "일괄 제어",
-      "description": "여러 엔티티 작업을 한 번의 요청으로 처리합니다."
+      "description": "명시적 작업 또는 하나의 결정론적 구조적 일괄 작업을 관리합니다."
     },
     "ha_call_event": {
       "title": "이벤트 호출",

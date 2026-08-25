@@ -65,6 +65,7 @@ _TOKEN_TYPE_LLAT = es.TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
 
 def _make_hass(tmp_path) -> MagicMock:
     hass = MagicMock(name="hass")
+    hass.config.skip_pip = False
     hass.config.path = lambda sub: str(tmp_path / sub)
 
     async def _executor(func, *args):
@@ -413,6 +414,128 @@ class TestChannelResolution:
 
 
 class TestEnsurePackage:
+    async def test_skip_pip_uses_compatible_externally_managed_package(
+        self, tmp_path, monkeypatch
+    ):
+        """skip_pip must bypass every package mutation and preserve markers."""
+        data = {
+            DATA_SECRET_PATH: "/p",
+            DATA_LAST_PIP_SPEC: "ha-mcp==7.11.0",
+            DATA_PENDING_INSTALL_VERSION: "7.12.0",
+        }
+        mgr, hass, entry = _manager(
+            tmp_path,
+            options={OPT_PIP_SPEC: "ha-mcp==99.0.0"},
+            data=data,
+        )
+        hass.config.skip_pip = True
+        process = AsyncMock(side_effect=AssertionError("requirements mutation"))
+        force_install = MagicMock(side_effect=AssertionError("package install"))
+        uninstall = MagicMock(side_effect=AssertionError("package uninstall"))
+        monkeypatch.setattr(es, "async_process_requirements", process)
+        monkeypatch.setattr(es, "_force_install_package", force_install)
+        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
+        monkeypatch.setattr(
+            es,
+            "_installed_dist_version",
+            lambda dist: "7.12.1" if dist == DIST_NAME_STABLE else None,
+        )
+
+        version = await mgr._async_ensure_package()
+
+        assert version == "7.12.1"
+        assert entry.data == data
+
+    @pytest.mark.parametrize(
+        ("channel", "installed_dist", "installed_version", "expected_dist"),
+        [
+            (
+                CHANNEL_STABLE,
+                DIST_NAME_DEV,
+                "7.12.1.dev1",
+                DIST_NAME_STABLE,
+            ),
+            (CHANNEL_DEV, DIST_NAME_STABLE, "7.12.1", DIST_NAME_DEV),
+        ],
+    )
+    async def test_skip_pip_rejects_package_from_other_channel(
+        self,
+        tmp_path,
+        monkeypatch,
+        channel,
+        installed_dist,
+        installed_version,
+        expected_dist,
+    ):
+        mgr, hass, _entry = _manager(tmp_path, options={OPT_CHANNEL: channel})
+        hass.config.skip_pip = True
+        versions = {installed_dist: installed_version}
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: installed_version)
+        monkeypatch.setattr(es, "_installed_dist_version", versions.get)
+
+        with pytest.raises(
+            es.EmbeddedServerError,
+            match=rf"configured {channel} channel expects {expected_dist}.*{installed_dist}",
+        ):
+            await mgr._async_ensure_package()
+
+    async def test_skip_pip_reports_missing_externally_managed_package(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, hass, _entry = _manager(tmp_path)
+        hass.config.skip_pip = True
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: None)
+        monkeypatch.setattr(es, "_installed_dist_version", lambda _dist: None)
+
+        with pytest.raises(
+            es.EmbeddedServerError,
+            match=r"skip_pip.*system package manager.*7\.10\.0",
+        ) as exc_info:
+            await mgr._async_ensure_package()
+
+        assert exc_info.value.kind == "package"
+
+    async def test_skip_pip_reports_incompatible_externally_managed_package(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, hass, _entry = _manager(tmp_path)
+        hass.config.skip_pip = True
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.9.0")
+        monkeypatch.setattr(
+            es,
+            "_installed_dist_version",
+            lambda dist: "7.9.0" if dist == DIST_NAME_STABLE else None,
+        )
+
+        with pytest.raises(
+            es.EmbeddedServerError,
+            match=r"externally managed ha-mcp 7\.9\.0.*7\.10\.0 or newer",
+        ) as exc_info:
+            await mgr._async_ensure_package()
+
+        assert exc_info.value.kind == "package"
+
+    async def test_skip_pip_reports_ambiguous_externally_managed_packages(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, hass, _entry = _manager(tmp_path)
+        hass.config.skip_pip = True
+        versions = {
+            DIST_NAME_STABLE: "7.12.1",
+            DIST_NAME_DEV: "7.13.0.dev1",
+        }
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.12.1")
+        monkeypatch.setattr(es, "_installed_dist_version", versions.get)
+
+        with pytest.raises(
+            es.EmbeddedServerError,
+            match=r"Both ha-mcp 7\.12\.1 and ha-mcp-dev 7\.13\.0\.dev1",
+        ) as exc_info:
+            await mgr._async_ensure_package()
+
+        assert exc_info.value.kind == "package"
+
     async def test_fast_path_only_for_unchanged_override(self, tmp_path, monkeypatch):
         # The fast path is reserved for an explicit pip-spec override: an
         # unchanged, already-installed pin delegates the "already satisfied?"
