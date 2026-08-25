@@ -447,6 +447,39 @@ class TestEnsurePackage:
         assert version == "7.12.1"
         assert entry.data == data
 
+    @pytest.mark.parametrize(
+        ("channel", "installed_dist", "installed_version", "expected_dist"),
+        [
+            (
+                CHANNEL_STABLE,
+                DIST_NAME_DEV,
+                "7.12.1.dev1",
+                DIST_NAME_STABLE,
+            ),
+            (CHANNEL_DEV, DIST_NAME_STABLE, "7.12.1", DIST_NAME_DEV),
+        ],
+    )
+    async def test_skip_pip_rejects_package_from_other_channel(
+        self,
+        tmp_path,
+        monkeypatch,
+        channel,
+        installed_dist,
+        installed_version,
+        expected_dist,
+    ):
+        mgr, hass, _entry = _manager(tmp_path, options={OPT_CHANNEL: channel})
+        hass.config.skip_pip = True
+        versions = {installed_dist: installed_version}
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: installed_version)
+        monkeypatch.setattr(es, "_installed_dist_version", versions.get)
+
+        with pytest.raises(
+            es.EmbeddedServerError,
+            match=rf"configured {channel} channel expects {expected_dist}.*{installed_dist}",
+        ):
+            await mgr._async_ensure_package()
+
     async def test_skip_pip_reports_missing_externally_managed_package(
         self, tmp_path, monkeypatch
     ):

@@ -861,7 +861,7 @@ class EmbeddedServerManager:
         calls Home Assistant's requirements manager, UV, or the config-entry
         marker writers used by manual and automatic installs.
         """
-        installed_version: str | None = await self._hass.async_add_executor_job(
+        importable_version: str | None = await self._hass.async_add_executor_job(
             _installed_ha_mcp_version
         )
         stable_version: str | None = await self._hass.async_add_executor_job(
@@ -870,12 +870,22 @@ class EmbeddedServerManager:
         dev_version: str | None = await self._hass.async_add_executor_job(
             _installed_dist_version, DIST_NAME_DEV
         )
+        target_dist = dist_for_channel(self._channel)
+        target_version = (
+            stable_version if target_dist == DIST_NAME_STABLE else dev_version
+        )
+        other_dist = (
+            DIST_NAME_DEV if target_dist == DIST_NAME_STABLE else DIST_NAME_STABLE
+        )
+        other_version = (
+            dev_version if target_dist == DIST_NAME_STABLE else stable_version
+        )
 
-        if installed_version is None:
+        if importable_version is None:
             raise EmbeddedServerError(
                 "Home Assistant was started with skip_pip enabled, so HA-MCP "
                 "will not install the externally managed server package. Use "
-                "the system package manager to install ha-mcp "
+                f"the system package manager to install {target_dist} "
                 f"{MIN_EMBEDDED_SERVER_VERSION} or newer, then reload this "
                 "integration.",
                 kind="package",
@@ -892,9 +902,20 @@ class EmbeddedServerManager:
                 kind="package",
             )
 
-        if not _is_compatible_embedded_version(installed_version):
+        if target_version is None:
             raise EmbeddedServerError(
-                f"The externally managed ha-mcp {installed_version} is "
+                f"The configured {self._channel} channel expects {target_dist}, "
+                f"but only {other_dist} {other_version} is installed while "
+                "skip_pip is enabled. Use the system package manager to install "
+                f"{target_dist} {MIN_EMBEDDED_SERVER_VERSION} or newer, or "
+                f"change the HA-MCP release channel to match {other_dist}, then "
+                "reload this integration.",
+                kind="package",
+            )
+
+        if not _is_compatible_embedded_version(target_version):
+            raise EmbeddedServerError(
+                f"The externally managed {target_dist} {target_version} is "
                 "incompatible while skip_pip is enabled; this in-process "
                 f"component requires {MIN_EMBEDDED_SERVER_VERSION} or newer. "
                 "Upgrade it with the system package manager, then reload this "
@@ -903,11 +924,13 @@ class EmbeddedServerManager:
             )
 
         _LOGGER.info(
-            "HA-MCP externally managed server package ready (version %s; "
-            "skip_pip enabled)",
-            installed_version,
+            "HA-MCP externally managed %s package ready (version %s; "
+            "skip_pip enabled, channel %s)",
+            target_dist,
+            target_version,
+            self._channel,
         )
-        return installed_version
+        return target_version
 
     async def _async_remove_legacy_target(
         self, target_dist: str, installed_version: str | None
