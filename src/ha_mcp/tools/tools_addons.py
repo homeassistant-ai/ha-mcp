@@ -312,6 +312,19 @@ def _normalize_supervisor_rest_response(
     method: str,
 ) -> dict[str, Any]:
     """Normalize a direct Supervisor response and retain write ambiguity."""
+    verb = method.upper()
+    if response.status_code >= 500 and verb not in {"GET", "HEAD"}:
+        response_body = response.text.strip()
+        _raise_supervisor_write_outcome_unknown(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"Supervisor API {verb} {endpoint} returned HTTP "
+            f"{response.status_code}; the request outcome is unknown.",
+            endpoint,
+            verb,
+            status_code=response.status_code,
+            response_body=response_body or None,
+        )
+
     try:
         payload = response.json()
     except ValueError:
@@ -371,17 +384,25 @@ def _raise_supervisor_write_outcome_unknown(
     message: str,
     endpoint: str,
     method: str,
+    *,
+    status_code: int | None = None,
+    response_body: str | None = None,
 ) -> NoReturn:
     """Report an inconclusive Supervisor write without implying replay is safe."""
+    context: dict[str, Any] = {
+        "endpoint": endpoint,
+        "method": method,
+        "outcome": "unknown",
+    }
+    if status_code is not None:
+        context["status_code"] = status_code
+    if response_body:
+        context["response_body"] = response_body
     raise_tool_error(
         create_error_response(
             code,
             message,
-            context={
-                "endpoint": endpoint,
-                "method": method,
-                "outcome": "unknown",
-            },
+            context=context,
             suggestions=_supervisor_unknown_outcome_suggestions(endpoint, method),
         )
     )
@@ -1566,7 +1587,7 @@ async def _call_addon_ws(
             processes the response. The variable ``response`` is bound to
             the list of parsed messages (``list[dict | str]``); the value
             of ``response`` after execution replaces ``messages`` in the
-            output. See ``ha_manage_app`` docstring for details.
+            output. Use ``ha_get_skill_guide`` for advanced transform patterns.
 
     Returns:
         Dictionary with collected messages, metadata, and status.
@@ -2201,10 +2222,10 @@ async def _call_addon_api(
             placeholder. Used by array_patch mode in ha_manage_app, which
             needs the full parsed response in memory to apply operations
             even when the JSON is larger than _MAX_RESPONSE_SIZE.
-        extra_headers: Optional caller-supplied request headers. Layered
-            under the proxy's internal framing (`X-Ingress-Path`,
-            `X-Hass-Source`, `Cookie`, `Content-Type`) so the framing
-            always wins on collision. Use this to set addon-API
+        extra_headers: Optional caller-supplied request headers. Ingress route
+            headers override matching caller values; direct-port routes add no
+            internal headers. When a body is supplied, its derived
+            `Content-Type` overrides a caller value. Use this for app API
             requirements like Node-RED's `Node-RED-Deployment-Type` header.
     """
     # 1. Sanitize path to prevent traversal attacks (including URL-encoded)
@@ -2240,9 +2261,9 @@ async def _call_addon_api(
     # 3. Resolve route (direct-port / app-mode / off-host).
     url, headers = await _resolve_http_route(client, addon, normalized, port)
 
-    # 4. Layer caller-supplied headers UNDER the proxy's framing so internal
-    # headers (X-Ingress-Path, X-Hass-Source, Cookie, Content-Type) always
-    # win on collision — a caller cannot forge ingress identity.
+    # 4. Layer caller headers under any ingress routing headers. Direct-port
+    # routes have no internal headers; ingress route identity always wins on
+    # collision. Content-Type is derived from the body below, when present.
     if extra_headers:
         merged = dict(extra_headers)
         merged.update(headers)
@@ -3538,8 +3559,9 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             Field(
                 description="Config mode: Complete desired host-port override map "
                 "(e.g., {'5800/tcp': 8081}). A non-empty map replaces current "
-                "overrides, so omitted entries are cleared. Omit 'network' (or "
-                "pass an empty map) to leave mappings unchanged.",
+                "overrides, so omitted entries are cleared. Omit 'network' to leave "
+                "mappings unchanged. An empty map is ignored and does not by itself "
+                "select config mode.",
                 default=None,
             ),
         ] = None,
@@ -3572,8 +3594,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                     "Array-patch mode: atomically GET a JSON array endpoint, "
                     "apply ordered ops, then POST the mutated array back. "
                     "Requires 'path'; mutually exclusive with body / websocket / "
-                    "offset / limit and config params. See the docstring Examples "
-                    "and ha_get_skill_guide for op shapes."
+                    "offset / limit and config params. Use ha_get_skill_guide for "
+                    "operation shapes."
                 ),
                 default=None,
             ),
@@ -3585,10 +3607,11 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 description=(
                     "Proxy/array-patch mode: extra HTTP headers for the app (add-on) API. "
                     "Useful for app-specific requirements such as Node-RED's "
-                    "`Node-RED-Deployment-Type: full`. The proxy's internal framing "
-                    "(`X-Ingress-Path`, `X-Hass-Source`, `Cookie`, `Content-Type`) is "
-                    "layered on top, so caller-supplied values for those keys are "
-                    "overridden. Not valid in config or websocket mode."
+                    "`Node-RED-Deployment-Type: full`. Ingress routing headers "
+                    "override caller values on Ingress routes; direct-port calls "
+                    "have no internal routing headers. `Content-Type` is derived "
+                    "from the body when supplied. Not valid in config or websocket "
+                    "mode."
                 ),
                 default=None,
             ),

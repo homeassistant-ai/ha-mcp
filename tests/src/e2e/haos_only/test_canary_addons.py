@@ -5,14 +5,15 @@ booted HAOS image with the curated app set installed by ``build_image.py``.
 The testcontainer suite cannot run these checks against a real Supervisor
 because its partial mock covers only a few direct REST endpoints.
 
-Five concrete assertions:
+Six concrete assertions:
 1. ``ha_get_app`` (default listing) contains every entry from ``ADDONS``
    plus ``GET_HACS_ADDON``, by display name.
 2. ``ha_get_app(slug=core_mosquitto)`` returns Supervisor-backed detail.
 3. ``ha_get_app(source="available")`` searches the live Supervisor store.
-4. Beta lanes boot the Supervisor channel/minimum and exact Core version
+4. The in-app lane submits a harmless duplicate repository write.
+5. Beta lanes boot the Supervisor channel/minimum and exact Core version
    resolved from the live beta manifest.
-5. HACS is loaded and reachable through its MCP tool in the emitted image.
+6. HACS is loaded and reachable through its MCP tool in the emitted image.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ INSTALLED_ADDON_NAMES = (
     "MQTT IO",
     "Get HACS",
 )
+BAKED_REPOSITORY_URL = "https://github.com/homeassistant-ai/ha-mcp"
 
 
 async def test_addons_installed_via_mcp(mcp_client: Any) -> None:
@@ -99,6 +101,23 @@ async def test_addon_store_search_via_mcp(mcp_client: Any) -> None:
         "mqtt" in f"{addon.get('name', '')} {addon.get('description', '')}".lower()
         for addon in matches
     ), f"Supervisor store search returned unrelated results: {matches}"
+
+
+@pytest.mark.inaddon_only
+async def test_addon_store_duplicate_write_via_mcp(mcp_client: Any) -> None:
+    """The in-app tool can write directly to the real Supervisor store API."""
+    async with MCPAssertions(mcp_client) as mcp:
+        payload = await mcp.call_tool_success(
+            "ha_manage_app",
+            {
+                "action": "add_repository",
+                "repository": BAKED_REPOSITORY_URL,
+            },
+        )
+
+    assert payload.get("action") == "add_repository"
+    assert payload.get("repository") == BAKED_REPOSITORY_URL
+    assert "no change needed" in str(payload.get("message", "")).lower()
 
 
 @pytest.mark.beta_haos_only

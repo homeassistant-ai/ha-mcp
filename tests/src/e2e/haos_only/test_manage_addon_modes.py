@@ -17,9 +17,8 @@ Modes and options covered:
   long-timeout ``install`` / ``update`` / ``rebuild`` paths are pinned by unit
   tests rather than run live (a real install rebuilds an app image and would
   add minutes to every CI run).
-* **Proxy HTTP** — ``GET`` / ``POST`` smoke checks against Node-RED verify
-  structured response shapes. They do not pin status classes or prove custom
-  header delivery.
+* **Proxy HTTP** — a ``GET`` smoke check against Node-RED verifies structured
+  response shapes. It does not pin status classes.
 * **Proxy with ``port=``** — only meaningful on the inaddon tier where
   the test runner shares Supervisor's container network. Marked
   ``inaddon_only`` so the external tier skips it cleanly.

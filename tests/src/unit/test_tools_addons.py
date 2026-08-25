@@ -4410,6 +4410,56 @@ class TestSupervisorApiCall:
     @pytest.mark.parametrize(
         "response",
         [
+            pytest.param(
+                httpx.Response(
+                    500,
+                    json={"result": "error", "message": "internal server error"},
+                ),
+                id="json",
+            ),
+            pytest.param(httpx.Response(503, text="service unavailable"), id="text"),
+        ],
+    )
+    async def test_addon_mode_write_server_error_reports_unknown_outcome(
+        self, monkeypatch, response
+    ):
+        """A 5xx cannot prove whether Supervisor applied the received write."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = response
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert payload["method"] == "POST"
+        assert payload["outcome"] == "unknown"
+        assert payload["status_code"] == response.status_code
+        assert payload["response_body"] == response.text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "response",
+        [
             pytest.param(httpx.Response(200, content=b"not-json"), id="invalid-json"),
             pytest.param(httpx.Response(200, json=[]), id="non-object-json"),
             pytest.param(httpx.Response(200, json={}), id="missing-result"),
