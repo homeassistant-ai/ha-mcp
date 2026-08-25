@@ -293,12 +293,8 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
         assert run_env["PYTEST_ARGS"] == "${{ github.event.inputs.pytest_args }}"
         assert "$PYTEST_PATHS" in run_step["run"]
         assert "$PYTEST_ARGS" in run_step["run"]
-        assert (
-            "${{ github.event.inputs.pytest_paths" not in run_step["run"]
-        )
-        assert (
-            "${{ github.event.inputs.pytest_args" not in run_step["run"]
-        )
+        assert "${{ github.event.inputs.pytest_paths" not in run_step["run"]
+        assert "${{ github.event.inputs.pytest_args" not in run_step["run"]
         assert "src/e2e/" in run_env["PYTEST_PATHS"]
         assert (
             workflow[True]["workflow_dispatch"]["inputs"]["pytest_paths"]["default"]

@@ -332,9 +332,7 @@ def _normalize_supervisor_rest_response(
         error_message = (
             body or f"Supervisor returned invalid JSON (HTTP {response.status_code})"
         )
-        return _supervisor_invalid_response(
-            response, error_message, endpoint, method
-        )
+        return _supervisor_invalid_response(response, error_message, endpoint, method)
 
     if not isinstance(payload, dict):
         return _supervisor_invalid_response(
