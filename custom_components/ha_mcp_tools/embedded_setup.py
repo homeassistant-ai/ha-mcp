@@ -608,6 +608,10 @@ async def async_maybe_auto_update(
     logged at debug and skipped; the next refresh retries. Genuine bugs
     propagate per the repo's no-silent-failure convention.
     """
+    if hass.config.skip_pip:
+        # The system package manager owns ha-mcp; never reload to mutate it.
+        return
+
     if not bool(entry.options.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)):
         # Auto-update turned off: stay on the currently-installed version.
         return

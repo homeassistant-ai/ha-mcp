@@ -285,7 +285,7 @@
     "backup.bulk.confirm": "Ta bort alla säkerhetskopior som matchar: {filters}?",
     "backup.bulk.deleted": "Tog bort {count} säkerhetskopia(or)",
     "filesystem.custom.title": "Anpassade filsystemkataloger (avancerat)",
-    "filesystem.custom.help": "Extra kataloger (en per rad) som filverktyg får <strong>läsa och skriva</strong>. Relativa konfigurationssökvägar och tillåtna HAOS-syskonvolymer stöds. Tillämpas omedelbart.",
+    "filesystem.custom.help": "Extra sökvägar (en per rad) som filverktyg får <strong>läsa och skriva</strong> till. Relativa konfigurationssökvägar och tillåtna tillhörande HAOS-volymer stöds. Varje post tillåter den sökvägen och allt under den; konfigurationsrelativa filnamn, som <code>sensor.yaml</code>, kan anges direkt. Gäller omedelbart.",
     "filesystem.custom.blocked": "Alltid blockerad: {paths}, sökvägsgenomgång (<code>..</code>), och absoluta sökvägar utanför tillåtna HAOS-volymer.",
     "filesystem.custom.enable_first": "Aktivera beta-funktioner och filsystemverktyg ovan för att redigera.",
     "filesystem.custom.unavailable": "Anpassade kataloger är för närvarande otillgängliga.",

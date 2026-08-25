@@ -196,16 +196,20 @@ class DashboardScreenshotTools:
             str | None,
             Field(
                 description="Installed Home Assistant frontend theme name, "
-                "applied to this render. The engine user's saved theme "
-                "preference is restored after the capture (best effort)."
+                "applied to this render. The engine persists this on the "
+                "engine account's profile; this tool reports the change in "
+                "warnings but does not undo it (see ha_manage_theme "
+                "action='set_engine_theme')."
             ),
         ] = None,
         dark_mode: Annotated[
             bool,
             Field(
                 description="Render the requested theme in dark mode, applied "
-                "to this render. The engine user's saved theme preference is "
-                "restored after the capture (best effort)."
+                "to this render. The engine persists this on the engine "
+                "account's profile; this tool reports the change in warnings "
+                "but does not undo it (see ha_manage_theme "
+                "action='set_engine_theme')."
             ),
         ] = False,
         language: Annotated[

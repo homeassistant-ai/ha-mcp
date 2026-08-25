@@ -285,7 +285,7 @@
     "backup.bulk.confirm": "Usunąć wszystkie kopie zapasowe pasujące do: {filters}?",
     "backup.bulk.deleted": "Usunięto {count} kopii zapasowych",
     "filesystem.custom.title": "Niestandardowe katalogi systemu plików (zaawansowane)",
-    "filesystem.custom.help": "Dodatkowe katalogi (jeden na linię), do których narzędzia plików mogą <strong>odczytywać i zapisywać</strong>. Obsługiwane są względne ścieżki konfiguracji i dozwolone woluminy równorzędne HAOS. Obowiązuje natychmiast.",
+    "filesystem.custom.help": "Dodatkowe ścieżki (po jednej w linii), do których narzędzia plikowe mogą <strong>mieć dostęp do odczytu i zapisu</strong>. Obsługiwane są względne ścieżki konfiguracji oraz dozwolone wolumeny pokrewne HAOS. Każdy wpis zezwala na tę ścieżkę oraz wszystko, co się w niej znajduje; nazwy plików względne dla konfiguracji, takie jak <code>sensor.yaml</code>, można wpisywać bezpośrednio. Wchodzi w życie natychmiast.",
     "filesystem.custom.blocked": "Zawsze blokowane: {paths}, przechodzenie po ścieżkach (<code>..</code>) oraz ścieżki bezwzględne poza dozwolonymi woluminami HAOS.",
     "filesystem.custom.enable_first": "Włącz funkcje beta i narzędzia systemu plików powyżej, aby edytować.",
     "filesystem.custom.unavailable": "Niestandardowe katalogi są obecnie niedostępne.",

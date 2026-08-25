@@ -153,6 +153,19 @@ def _updates_write(args: dict[str, Any]) -> str | None:
     return f"action={action!r}"
 
 
+def _theme_write(args: dict[str, Any]) -> str | None:
+    # Reads (allowed): listing installed themes and inspecting the screenshot
+    # engine account's saved per-user theme. The latter has no pure-read
+    # duplicate anywhere, and it is exactly what a caller needs in Read Only
+    # Mode: captures still make the engine persist a theme and still warn about
+    # it, so the value must stay inspectable even when restoring it is blocked.
+    # Both writes -- the backend default ('set') and the engine-account restore
+    # ('set_engine_theme') -- stay blocked. A missing action fails closed.
+    if args.get("action") in ("list", "get_engine_theme"):
+        return None
+    return f"action={args.get('action')!r}"
+
+
 def _radio_write(args: dict[str, Any]) -> str | None:
     action = args.get("action")
     # Reads (allowed): per-node diagnostics, the integration/network summary,
@@ -195,6 +208,11 @@ def _radio_write(args: dict[str, Any]) -> str | None:
 # against the real registered catalog at PR time, so the two sets
 # cannot drift apart silently.
 READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
+    "ha_manage_theme": ReadOnlyExemption(
+        _theme_write,
+        "listing installed themes (action='list') and reading the screenshot "
+        "engine account's saved theme (action='get_engine_theme')",
+    ),
     "ha_manage_backup": ReadOnlyExemption(
         _backup_write,
         "listing, viewing, and diffing per-edit backups (scope='edits', "

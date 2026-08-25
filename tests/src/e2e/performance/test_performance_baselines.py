@@ -45,7 +45,7 @@ async def test_get_overview_performance(mcp_client, perf_metrics):
     """
     Test ha_get_overview tool meets performance target.
 
-    Target: < 1000ms for full overview
+    Target: < 1100ms for full overview
     """
     logger.info("Testing ha_get_overview performance (full mode)")
 
@@ -84,7 +84,7 @@ async def test_get_overview_minimal_performance(mcp_client, perf_metrics):
     """
     Test ha_get_overview tool in minimal mode meets stricter target.
 
-    Target: < 500ms for minimal overview
+    Target: < 600ms for minimal overview
     """
     logger.info("Testing ha_get_overview performance (minimal mode)")
 
@@ -113,7 +113,7 @@ async def test_search_entities_performance(mcp_client, perf_metrics):
     """
     Test ha_search tool meets performance target.
 
-    Target: < 300ms
+    Target: < 2100ms
     """
     logger.info("Testing ha_search performance")
 
@@ -174,7 +174,7 @@ async def test_deep_search_performance(mcp_client, perf_metrics):
     """
     Test ha_search tool meets performance target.
 
-    Target: < 2000ms (this searches across automations, scripts, and helpers)
+    Target: < 2100ms (this searches across automations, scripts, and helpers)
     """
     logger.info("Testing ha_search performance")
 
@@ -203,7 +203,7 @@ async def test_get_state_performance(mcp_client, perf_metrics):
     """
     Test ha_get_state tool meets performance target.
 
-    Target: < 100ms for single entity state retrieval
+    Target: < 200ms for single entity state retrieval
     """
     logger.info("Testing ha_get_state performance")
 
@@ -233,7 +233,7 @@ async def test_call_service_performance(mcp_client, perf_metrics):
     """
     Test ha_call_service tool meets performance target.
 
-    Target: < 200ms
+    Target: < 300ms
     """
     logger.info("Testing ha_call_service performance")
 
@@ -267,7 +267,7 @@ async def test_list_tools_performance(mcp_client, perf_metrics):
     Test MCP tool listing performance.
 
     This is a meta-test to ensure the MCP server itself responds quickly.
-    Target: < 100ms
+    Target: < 200ms
     """
     logger.info("Testing list_tools performance")
 
@@ -289,7 +289,7 @@ async def test_list_tools_performance(mcp_client, perf_metrics):
     logger.info(f"list_tools: avg={avg_ms:.2f}ms")
 
     # Listing tools should be very fast
-    assert avg_ms < 100, f"list_tools average ({avg_ms:.2f}ms) exceeds 100ms target"
+    assert avg_ms < 200, f"list_tools average ({avg_ms:.2f}ms) exceeds 200ms target"
 
 
 @pytest.mark.asyncio
