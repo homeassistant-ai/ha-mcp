@@ -397,7 +397,10 @@ class TestSceneIntegrationFilter:
         assert "match status is unknown" in reason.lower()
         # Integration-managed scenes are surfaced separately so their
         # 100+ count on Hue installs doesn't read as "everything broken".
-        assert "integration-managed" in reason.lower(), (
+        # Assert the COUNT fragment, not the bare phrase: several clauses
+        # mention "integration-managed", so matching the phrase alone would
+        # pass even if the integration/failure split were not reported at all.
+        assert "2 integration-managed scenes are scored by attribute only" in reason, (
             f"partial_reason should distinguish integration scenes: {reason!r}"
         )
 
