@@ -801,17 +801,30 @@ class HAWebSocket:
         worker = threading.Thread(target=send, name="haos-ws-send", daemon=True)
         worker.start()
         worker.join(max(0.0, deadline - time.monotonic()))
-        if worker.is_alive():
+        timed_out_after_dispatch = worker.is_alive()
+        if timed_out_after_dispatch:
             with dispatch_lock:
                 if not send_state["started"]:
                     send_state["cancelled"] = True
                     raise TimeoutError(
                         f"{operation} exceeded its deadline before dispatch"
                     )
+        elif send_errors:
+            raise send_errors[0]
+        else:
+            with dispatch_lock:
+                dispatch_started = send_state["started"]
+            if dispatch_started:
+                try:
+                    _remaining_deadline_budget(deadline, operation)
+                except TimeoutError:
+                    timed_out_after_dispatch = True
+
+        if timed_out_after_dispatch:
             try:
                 connection.close_socket()
             except (OSError, RuntimeError) as exc:
-                LOG.debug("WS close error after stalled send: %r", exc)
+                LOG.debug("WS close error after timed-out send: %r", exc)
             finally:
                 if self._ws is connection:
                     self._ws = None
@@ -819,8 +832,6 @@ class HAWebSocket:
                 f"{operation} exceeded its deadline after dispatch; "
                 "command outcome is unknown"
             )
-        if send_errors:
-            raise send_errors[0]
 
     def supervisor_api(
         self,
@@ -871,6 +882,10 @@ class HAWebSocket:
                 endpoint=endpoint,
             )
             if result is not None:
+                _remaining_deadline_budget(
+                    deadline,
+                    f"supervisor/api {method} {endpoint} receive",
+                )
                 return result
 
 

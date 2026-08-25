@@ -62,7 +62,7 @@ def test_supervisor_api_shares_receive_deadline_across_frames() -> None:
 
     with patch(
         "tests.haos_image_build.build_image.time.monotonic",
-        side_effect=[10.0, 10.5, 10.5, 10.5, 11.0, 12.5],
+        side_effect=[10.0, 10.5, 10.5, 10.5, 10.5, 11.0, 12.5, 12.5],
     ):
         assert ws.supervisor_api("/supervisor/info", timeout=5.0) == {}
 
@@ -130,6 +130,51 @@ def test_supervisor_api_stalled_send_is_bounded() -> None:
     socket.send.assert_called_once()
     socket.close_socket.assert_called_once()
     socket.recv.assert_not_called()
+    assert ws._ws is None
+
+
+def test_send_completion_after_deadline_invalidates_socket() -> None:
+    """A send completing at its deadline still has an unknown outcome."""
+    ws = HAWebSocket(
+        "http://127.0.0.1:18123",
+        OAuthCredentials(access_token="access", refresh_token="refresh"),
+    )
+    socket = Mock()
+    ws._ws = socket
+
+    class CompletedThread:
+        def __init__(self, *, target: Any, **_: Any) -> None:
+            self._target = target
+
+        def start(self) -> None:
+            pass
+
+        def join(self, timeout: float | None = None) -> None:
+            del timeout
+            self._target()
+
+        def is_alive(self) -> bool:
+            return False
+
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=[10.0, 10.0, 10.0, 11.0],
+        ),
+        patch(
+            "tests.haos_image_build.build_image.threading.Thread",
+            CompletedThread,
+        ),
+        pytest.raises(TimeoutError, match="command outcome is unknown"),
+    ):
+        ws._send_with_deadline(
+            "{}",
+            deadline=11.0,
+            operation="test supervisor send",
+        )
+
+    socket.send.assert_called_once_with("{}")
+    socket.close_socket.assert_called_once()
     assert ws._ws is None
 
 
@@ -707,7 +752,7 @@ def test_supervisor_update_retry_caps_sleep_to_remaining_budget() -> None:
                 ConnectionError("restart"),
                 _SupervisorReadinessTimeout("done"),
             ],
-        ),
+        ) as wait_ready,
         patch("tests.haos_image_build.build_image.time.sleep") as sleep,
         pytest.raises(_SupervisorReadinessTimeout, match="done"),
     ):
@@ -719,6 +764,13 @@ def test_supervisor_update_retry_caps_sleep_to_remaining_budget() -> None:
             timeout=1.0,
         )
 
+    ws.supervisor_api.assert_called_once_with(
+        "/supervisor/update", method="post", timeout=1.0
+    )
+    assert [
+        wait_call.kwargs["update_timeout"]
+        for wait_call in wait_ready.call_args_list
+    ] == [1.0, 0.0]
     ws.reconnect.assert_called_once_with(deadline=1.0)
     sleep.assert_called_once_with(0.25)
 
@@ -734,7 +786,7 @@ def test_supervisor_update_retry_skips_sleep_when_budget_expires() -> None:
         patch(
             "tests.haos_image_build.build_image._wait_supervisor_ready",
             side_effect=ConnectionError("restart"),
-        ),
+        ) as wait_ready,
         patch("tests.haos_image_build.build_image.time.sleep") as sleep,
         pytest.raises(TimeoutError, match="beta-image deadline"),
     ):
@@ -746,6 +798,14 @@ def test_supervisor_update_retry_skips_sleep_when_budget_expires() -> None:
             timeout=1.0,
         )
 
+    ws.supervisor_api.assert_called_once_with(
+        "/supervisor/update", method="post", timeout=1.0
+    )
+    wait_ready.assert_called_once_with(
+        update_timeout=1.0,
+        expected_channel="beta",
+        minimum_version="2026.08.0",
+    )
     ws.reconnect.assert_called_once_with(deadline=1.0)
     sleep.assert_not_called()
 
@@ -1301,6 +1361,42 @@ def test_wait_core_version_reports_non_convergence() -> None:
     assert repr(old_info) in message
     ws.reconnect.assert_called_once_with(deadline=1.0)
     ws.supervisor_api.assert_called_once_with("/core/info", method="get", timeout=0.5)
+    sleep.assert_not_called()
+
+
+def test_wait_core_version_rejects_matching_response_at_deadline() -> None:
+    """A matching Core response received at the deadline is not accepted."""
+    ws = HAWebSocket(
+        "http://127.0.0.1:18123",
+        OAuthCredentials(access_token="access", refresh_token="refresh"),
+    )
+    socket = Mock()
+    socket.recv.return_value = json.dumps(
+        {
+            "id": 1,
+            "type": "result",
+            "success": True,
+            "result": _core_info("2026.8.3"),
+        }
+    )
+    ws._ws = socket
+
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=[0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        ),
+        patch.object(ws, "reconnect") as reconnect,
+        patch.object(ws, "_send_with_deadline") as send,
+        patch("tests.haos_image_build.build_image.time.sleep") as sleep,
+        pytest.raises(TimeoutError) as exc_info,
+    ):
+        _wait_core_version(ws, "2026.8.3", timeout=1.0)
+
+    assert "receive exceeded its deadline" in str(exc_info.value)
+    reconnect.assert_called_once_with(deadline=1.0)
+    send.assert_called_once()
+    socket.recv.assert_called_once_with(timeout=1.0)
     sleep.assert_not_called()
 
 
