@@ -251,6 +251,17 @@ async def _mcp_session(
     loads the system CA bundle SYNCHRONOUSLY (live-found — HA's
     blocking-call monitor flagged this exact line when the SDK built its own
     default client), and skipping verification skips that load entirely.
+
+    ``trust_env=False`` for the same "this is loopback, not the network"
+    reason: httpx defaults to reading ``HTTP_PROXY``/``NO_PROXY`` from the
+    environment, and ``127.0.0.1`` is not exempt unless ``NO_PROXY``
+    explicitly lists it. Under an ``HTTP_PROXY`` that doesn't, this call
+    would leave the loopback listener entirely and go out through the
+    configured proxy instead — which also hands the proxy ``url``'s
+    embedded ``secret_path`` (the private endpoint credential). Disabling
+    env trust removes both failure modes; nothing here should ever consult
+    a proxy.
+
     The client is entered on the exit stack so it closes with the rest of
     the session.
     """
@@ -273,6 +284,7 @@ async def _mcp_session(
             http_client = await stack.enter_async_context(
                 httpx.AsyncClient(
                     verify=False,
+                    trust_env=False,
                     timeout=httpx.Timeout(_CALL_TOOL_TIMEOUT_SECONDS),
                 )
             )

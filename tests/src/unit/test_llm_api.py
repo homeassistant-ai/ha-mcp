@@ -746,6 +746,10 @@ class TestLoopbackHttpClientTimeout:
             )
             # Not httpx's hardcoded default — the exact bug being fixed.
             assert used_client.timeout != httpx.Timeout(5.0)
+            # Must never consult HTTP_PROXY/NO_PROXY for a loopback call: an
+            # env proxy would both misroute the request and leak url's
+            # embedded secret_path to the proxy (review finding).
+            assert used_client.trust_env is False
             assert not used_client.is_closed
 
         # Scoped to this one session: closed when the session exits.
