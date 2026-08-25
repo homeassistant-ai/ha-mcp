@@ -253,6 +253,64 @@ def test_reconnect_rejects_a_refresh_response_without_an_access_token() -> None:
             ws.reconnect()
 
 
+def test_reconnect_propagates_one_absolute_deadline() -> None:
+    """Every blocking reconnect phase consumes the same absolute deadline."""
+    ws = HAWebSocket(
+        "http://127.0.0.1:18123",
+        OAuthCredentials(access_token="access", refresh_token="refresh"),
+    )
+
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=[1.0, 2.0, 4.0],
+        ),
+        patch.object(ws, "_refresh_access_token") as refresh,
+        patch.object(ws, "_connect") as connect,
+        patch.object(ws, "_wait_supervisor_api_ready") as wait_ready,
+    ):
+        ws.reconnect(deadline=10.0)
+
+    refresh.assert_called_once_with(timeout=8.0)
+    connect.assert_called_once_with(deadline=10.0)
+    wait_ready.assert_called_once_with(timeout=6.0)
+
+
+def test_supervisor_api_readiness_respects_probe_and_sleep_budget() -> None:
+    """A readiness probe and its backoff cannot overrun their shared budget."""
+    ws = HAWebSocket(
+        "http://127.0.0.1:18123",
+        OAuthCredentials(access_token="access", refresh_token="refresh"),
+    )
+    unknown_command = WSCommandError(
+        "handler not registered",
+        code="unknown_command",
+        supervisor_message="Unknown command.",
+    )
+
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=[0.0, 0.0, 2.5, 3.0],
+        ),
+        patch.object(
+            ws,
+            "supervisor_api",
+            side_effect=unknown_command,
+        ) as supervisor_api,
+        patch("tests.haos_image_build.build_image.time.sleep") as sleep,
+        pytest.raises(TimeoutError, match="within 3s"),
+    ):
+        ws._wait_supervisor_api_ready(timeout=3.0)
+
+    supervisor_api.assert_called_once_with(
+        "/supervisor/info",
+        method="get",
+        timeout=3.0,
+    )
+    sleep.assert_called_once_with(0.5)
+
+
 def test_returns_immediately_when_up_to_date() -> None:
     """No update pending: a single /supervisor/info read, no polling."""
     ws = Mock()
@@ -281,7 +339,8 @@ def test_tolerates_setup_state_from_initial_probe() -> None:
     assert result["version"] == "2026.06.1"
     assert ws.supervisor_api.call_count == 2
     sleep.assert_called_once_with(10.0)
-    ws.reconnect.assert_called_once_with()
+    ws.reconnect.assert_called_once()
+    assert "deadline" in ws.reconnect.call_args.kwargs
 
 
 def test_waits_until_update_clears() -> None:
@@ -393,6 +452,8 @@ def test_wait_timeout_prefers_the_last_reconnect_error() -> None:
         pytest.raises(TimeoutError, match="refresh failed"),
     ):
         _wait_supervisor_ready(ws, update_timeout=10.0)
+
+    ws.reconnect.assert_called_once_with(deadline=10.0)
 
 
 def test_channel_metadata_timeout_includes_the_last_transient_error() -> None:

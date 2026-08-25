@@ -337,6 +337,14 @@ def _attempt_budget(deadline: float, want: float) -> float:
     return max(0.1, min(want, deadline - time.monotonic()))
 
 
+def _remaining_deadline_budget(deadline: float, operation: str) -> float:
+    """Return positive time remaining or fail before starting an operation."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError(f"{operation} exceeded its deadline")
+    return remaining
+
+
 def _wait_any_port(
     ports: tuple[int, ...], host: str = "127.0.0.1", timeout: float = 180.0
 ) -> int:
@@ -572,20 +580,36 @@ class HAWebSocket:
         self._next_id = 0
 
     def __enter__(self) -> HAWebSocket:
+        self._connect()
+        return self
+
+    def _connect(self, *, deadline: float | None = None) -> None:
+        """Open and authenticate a WebSocket within an optional deadline."""
         # Imported lazily so the module still imports on systems without the
         # websockets package (e.g. local lint without the build venv).
         from websockets.sync.client import connect
 
-        self._ws = connect(self._ws_url, open_timeout=30, close_timeout=10)
+        if deadline is None:
+            open_timeout: float = 30
+            close_timeout: float = 10
+        else:
+            remaining = _remaining_deadline_budget(deadline, "WebSocket connect")
+            open_timeout = min(30.0, remaining)
+            close_timeout = min(10.0, remaining)
+        self._ws = connect(
+            self._ws_url,
+            open_timeout=open_timeout,
+            close_timeout=close_timeout,
+        )
         # HA WS handshake: server sends auth_required → client sends auth →
         # server replies auth_ok or auth_invalid.
-        auth_req = json.loads(self._ws.recv())
+        auth_req = json.loads(self._recv_auth_frame(deadline))
         if auth_req.get("type") != "auth_required":
             raise RuntimeError(f"Unexpected WS handshake message: {auth_req}")
         self._ws.send(
             json.dumps({"type": "auth", "access_token": self._credentials.access_token})
         )
-        auth_resp = json.loads(self._ws.recv())
+        auth_resp = json.loads(self._recv_auth_frame(deadline))
         if auth_resp.get("type") != "auth_ok":
             raise RuntimeError(f"WS auth rejected: {auth_resp}")
         LOG.info(
@@ -593,7 +617,14 @@ class HAWebSocket:
             self._ws_url,
             auth_resp.get("ha_version"),
         )
-        return self
+
+    def _recv_auth_frame(self, deadline: float | None) -> str | bytes:
+        """Receive one authentication frame within an optional deadline."""
+        if deadline is None:
+            return self._ws.recv()
+        return self._ws.recv(
+            timeout=_remaining_deadline_budget(deadline, "WebSocket authentication")
+        )
 
     def __exit__(self, *_: object) -> None:
         if self._ws is not None:
@@ -602,17 +633,22 @@ class HAWebSocket:
             except (OSError, RuntimeError) as e:
                 LOG.debug("WS close error (already-closed or transport): %r", e)
 
-    def _refresh_access_token(self) -> None:
+    def _refresh_access_token(self, *, timeout: float | None = None) -> None:
         """Exchange the refresh token before opening a replacement WebSocket."""
-        token_resp = _http(
-            "POST",
-            f"{self._base_url}/auth/token",
-            form={
-                "client_id": self._base_url,
-                "grant_type": "refresh_token",
-                "refresh_token": self._credentials.refresh_token,
-            },
-        )
+        form = {
+            "client_id": self._base_url,
+            "grant_type": "refresh_token",
+            "refresh_token": self._credentials.refresh_token,
+        }
+        if timeout is None:
+            token_resp = _http("POST", f"{self._base_url}/auth/token", form=form)
+        else:
+            token_resp = _http(
+                "POST",
+                f"{self._base_url}/auth/token",
+                form=form,
+                timeout=timeout,
+            )
         access_token = token_resp.get("access_token")
         if not isinstance(access_token, str) or not access_token:
             raise RuntimeError("OAuth refresh returned no access token")
@@ -623,13 +659,17 @@ class HAWebSocket:
             self._credentials.refresh_token = rotated_refresh_token
         self._credentials.access_token = access_token
 
-    def reconnect(self) -> None:
+    def reconnect(self, *, deadline: float | None = None) -> None:
         """Tear down the current WS and re-establish + re-auth.
 
         Used after /core/restart: HA Core kicks every WS connection on restart.
         The initial OAuth access token expires after 30 minutes, so reconnects
         exchange the retained refresh token before opening and authenticating
         the replacement socket.
+
+        When a deadline is supplied, token refresh, socket connection and
+        authentication, readiness probes, and backoff sleeps all share that
+        absolute deadline.
 
         ``_wait_http_ok(/manifest.json)`` confirms HA Core's HTTP layer
         is up before we get here, but Core's WS layer can be accepting
@@ -644,6 +684,8 @@ class HAWebSocket:
         registered, so callers can fire-and-trust their next
         supervisor_api call.
         """
+        if deadline is not None:
+            _remaining_deadline_budget(deadline, "WebSocket reconnect")
         if self._ws is not None:
             try:
                 self._ws.close()
@@ -651,9 +693,18 @@ class HAWebSocket:
                 LOG.debug("WS close error during reconnect: %r", e)
             self._ws = None
         self._next_id = 0
-        self._refresh_access_token()
-        self.__enter__()
-        self._wait_supervisor_api_ready()
+        if deadline is None:
+            self._refresh_access_token()
+            self._connect()
+            self._wait_supervisor_api_ready()
+            return
+        self._refresh_access_token(
+            timeout=_remaining_deadline_budget(deadline, "OAuth token refresh")
+        )
+        self._connect(deadline=deadline)
+        self._wait_supervisor_api_ready(
+            timeout=_remaining_deadline_budget(deadline, "Supervisor API readiness")
+        )
 
     def _wait_supervisor_api_ready(self, timeout: float = 60.0) -> None:
         """Poll ``supervisor/api`` until Core's dispatcher accepts it.
@@ -666,12 +717,20 @@ class HAWebSocket:
         keeps a wedged restart from hanging the whole build.
         """
         start = time.monotonic()
+        deadline = start + timeout
         delay = 1.0
         attempts = 0
-        while True:
+        last_error: WSCommandError | None = None
+        while (remaining := deadline - time.monotonic()) > 0:
             attempts += 1
             try:
-                self.supervisor_api("/supervisor/info", method="get", timeout=10.0)
+                self.supervisor_api(
+                    "/supervisor/info",
+                    method="get",
+                    timeout=min(10.0, remaining),
+                )
+                if time.monotonic() >= deadline:
+                    break
                 if attempts > 1:
                     LOG.info(
                         "supervisor/api ready after %d attempts (%.1fs)",
@@ -685,21 +744,23 @@ class HAWebSocket:
                     # renamed endpoint, etc.) — propagate so a regression
                     # isn't masked as "still booting".
                     raise
+                last_error = e
                 elapsed = time.monotonic() - start
-                if elapsed >= timeout:
-                    raise TimeoutError(
-                        f"hassio supervisor/api WS handler did not register "
-                        f"within {timeout:.0f}s after Core restart "
-                        f"(attempts={attempts})"
-                    ) from e
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    break
                 LOG.debug(
                     "Waiting for hassio supervisor/api handler "
                     "(attempt %d, elapsed %.1fs)",
                     attempts,
                     elapsed,
                 )
-                time.sleep(delay)
+                time.sleep(min(delay, remaining))
                 delay = min(delay * 1.5, 5.0)
+        raise TimeoutError(
+            f"hassio supervisor/api WS handler did not register "
+            f"within {timeout:.0f}s after Core restart (attempts={attempts})"
+        ) from last_error
 
     def supervisor_api(
         self,
@@ -1781,10 +1842,12 @@ def _supervisor_info_ready(
     )
 
 
-def _reconnect_supervisor_during_wait(ws: HAWebSocket) -> BaseException | None:
+def _reconnect_supervisor_during_wait(
+    ws: HAWebSocket, *, deadline: float
+) -> BaseException | None:
     """Best-effort reconnect while Supervisor/Core restarts."""
     try:
-        ws.reconnect()
+        ws.reconnect(deadline=deadline)
     except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as reconnect_err:
         if not _is_transient_supervisor_readiness_error(reconnect_err):
             raise
@@ -1853,7 +1916,7 @@ def _wait_supervisor_ready(
             # then best-effort reconnect and keep polling.
             last_error = e
             LOG.debug("Transient error polling /supervisor/info: %r", e)
-            reconnect_err = _reconnect_supervisor_during_wait(ws)
+            reconnect_err = _reconnect_supervisor_during_wait(ws, deadline=deadline)
             if reconnect_err is not None:
                 last_error = reconnect_err
             continue
