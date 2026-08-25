@@ -57,7 +57,7 @@ from typing import Any
 
 import pytest
 
-from ..utilities.assertions import parse_mcp_result, safe_call_tool
+from ..utilities.assertions import MCPAssertions, parse_mcp_result, safe_call_tool
 from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
 
 logger = logging.getLogger(__name__)
@@ -349,54 +349,48 @@ async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
     image and add minutes to every CI run, so it is not exercised end-to-end.
     """
     slug = await _resolve_slug(mcp_client, APPDAEMON_NAME)
-    original = (
-        parse_mcp_result(await mcp_client.call_tool("ha_get_app", {"slug": slug})).get(
-            "addon"
+    async with MCPAssertions(mcp_client) as mcp:
+        baseline = await mcp.call_tool_success("ha_get_app", {"slug": slug})
+        original = (baseline.get("addon") or {}).get("state")
+        assert original in {"started", "stopped"}, (
+            f"AppDaemon has no restorable baseline state: {baseline}"
         )
-        or {}
-    ).get("state")
 
-    async def _action(action: str) -> dict[str, Any]:
-        payload = parse_mcp_result(
-            await mcp_client.call_tool(
+        async def _action(action: str) -> dict[str, Any]:
+            payload = await mcp.call_tool_success(
                 "ha_manage_app", {"slug": slug, "action": action}
             )
-        )
-        assert payload.get("success"), (
-            f"ha_manage_app(action={action!r}) failed: {payload}"
-        )
-        assert payload.get("action") == action, (
-            f"action echo mismatch: expected {action!r}, got {payload!r}"
-        )
-        return payload
+            assert payload.get("action") == action, (
+                f"action echo mismatch: expected {action!r}, got {payload!r}"
+            )
+            return payload
 
-    try:
-        await _action("stop")
-        await _wait_addon_state(mcp_client, slug, _STOPPED_STATES)
+        try:
+            await _action("stop")
+            await _wait_addon_state(mcp_client, slug, _STOPPED_STATES)
 
-        await _action("start")
-        await _wait_addon_state(mcp_client, slug, frozenset({"started"}))
+            await _action("start")
+            await _wait_addon_state(mcp_client, slug, frozenset({"started"}))
 
-        await _action("restart")
-        await _wait_addon_state(mcp_client, slug, frozenset({"started"}))
-    finally:
-        # Restore the addon's original run state so sibling tests (and reruns)
-        # see the baked baseline regardless of how this test exited.
-        if original == "started":
+            await _action("restart")
+            await _wait_addon_state(mcp_client, slug, frozenset({"started"}))
+        finally:
+            # Restore the addon's original run state so sibling tests (and reruns)
+            # see the baked baseline regardless of how this test exited.
             try:
-                detail = (
-                    parse_mcp_result(
-                        await mcp_client.call_tool("ha_get_app", {"slug": slug})
-                    ).get("addon")
-                    or {}
-                )
-                if detail.get("state") != "started":
-                    await mcp_client.call_tool(
-                        "ha_manage_app", {"slug": slug, "action": "start"}
+                detail = await safe_call_tool(mcp_client, "ha_get_app", {"slug": slug})
+                current = (detail.get("addon") or {}).get("state")
+                if current != original:
+                    restore_action = "start" if original == "started" else "stop"
+                    await safe_call_tool(
+                        mcp_client,
+                        "ha_manage_app",
+                        {"slug": slug, "action": restore_action},
                     )
-                    await _wait_addon_state(mcp_client, slug, frozenset({"started"}))
             except Exception:  # pragma: no cover - cleanup best-effort
-                logger.exception("Failed to restore AppDaemon to started")
+                logger.exception(
+                    "Failed to restore AppDaemon to original state %s", original
+                )
 
 
 # ---------------------------------------------------------------------------

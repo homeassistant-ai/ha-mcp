@@ -90,14 +90,12 @@ async def test_addon_store_search_via_mcp(mcp_client: Any) -> None:
     ), f"Supervisor store search returned unrelated results: {matches}"
 
 
+@pytest.mark.beta_haos_only
 async def test_beta_image_versions_match_manifest(ha_client: Any) -> None:
     """Beta lanes attest the versions running inside the booted HAOS VM."""
     expected_channel = os.environ.get("HAOS_EXPECTED_SUPERVISOR_CHANNEL")
     expected_supervisor = os.environ.get("HAOS_EXPECTED_SUPERVISOR_MIN_VERSION")
     expected_core = os.environ.get("HAOS_EXPECTED_CORE_VERSION")
-    expectations = (expected_channel, expected_supervisor, expected_core)
-    if not any(expectations):
-        pytest.skip("stable HAOS lane has no beta version contract")
     assert expected_channel is not None
     assert expected_supervisor is not None
     assert expected_core is not None

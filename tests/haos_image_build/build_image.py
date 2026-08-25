@@ -1858,10 +1858,12 @@ def _apply_supervisor_image_update(
     """Install and wait for the Supervisor version advertised by its channel."""
     try:
         ws.supervisor_api("/supervisor/update", method="post", timeout=timeout)
-    except _SUPERVISOR_UPDATE_TRANSPORT_ERRORS as exc:
-        # Updating Supervisor restarts its container and may drop Core's proxy
-        # connection after the command has already been accepted.
-        LOG.info("Supervisor update interrupted the WS transport: %r", exc)
+    except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
+        if not _is_transient_supervisor_error(exc):
+            raise
+        # Updating Supervisor restarts its container and may interrupt Core's
+        # proxy after the command has already been accepted.
+        LOG.info("Supervisor update interrupted by its restart: %r", exc)
 
     while True:
         try:

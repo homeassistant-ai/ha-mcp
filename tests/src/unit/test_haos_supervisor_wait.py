@@ -376,6 +376,65 @@ def test_configure_beta_variant_tolerates_restart_before_version_settles() -> No
     )
 
 
+def test_configure_beta_variant_tolerates_restart_error_from_update_call() -> None:
+    """A restart error from the accepted update call falls through to polling."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        {},
+        {},
+        _info(
+            update_available=True,
+            version="2026.07.5",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+        WSCommandError("restarting", code="unknown_error"),
+        _info(
+            update_available=False,
+            version="2026.08.0",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+    ]
+
+    _configure_supervisor_image_variant(
+        ws,
+        channel="beta",
+        minimum_version="2026.08.0",
+    )
+
+    assert ws.supervisor_api.call_args_list[-1] == call(
+        "/supervisor/info",
+        method="get",
+        timeout=30.0,
+    )
+
+
+def test_configure_beta_variant_rejects_terminal_update_error() -> None:
+    """A non-restart Supervisor error from the update call remains terminal."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        {},
+        {},
+        _info(
+            update_available=True,
+            version="2026.07.5",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+        WSCommandError("invalid update", code="invalid_format"),
+    ]
+
+    with pytest.raises(WSCommandError, match="invalid update"):
+        _configure_supervisor_image_variant(
+            ws,
+            channel="beta",
+            minimum_version="2026.08.0",
+        )
+
+    assert ws.supervisor_api.call_count == 4
+
+
 def test_configure_beta_variant_accepts_dev_supervisor_versions() -> None:
     """A beta manifest may temporarily advertise a calendar dev build."""
     ws = Mock()
