@@ -46,6 +46,13 @@ logger = logging.getLogger(__name__)
 # overflowed the previous 20MB cap (#1721).
 MAX_WS_MESSAGE_BYTES = 64 * 1024 * 1024
 
+# How long :meth:`HomeAssistantWebSocketClient.send_command` waits for a reply
+# when the caller names no ``_wait_timeout``. Named rather than inlined because
+# callers that schedule retries have to budget around it: a caller whose retry
+# delay assumes a fast failure will start its next attempt one whole timeout
+# later than it planned when the command hangs instead.
+DEFAULT_COMMAND_WAIT_TIMEOUT = 30.0
+
 
 def _extract_ws_error(error: Any) -> tuple[str, str | None]:
     """Split an HA WebSocket ``error`` payload into ``(message, code)``.
@@ -621,10 +628,11 @@ class HomeAssistantWebSocketClient:
         Args:
             command_type: Type of command to send
             _wait_timeout: Seconds to wait for the response (consumed from
-                ``kwargs``, not forwarded to Home Assistant). Defaults to 30s,
-                which suits fast commands; long-running ones (e.g. a
-                ``supervisor/api`` add-on install) must raise this so the
-                client doesn't give up before Home Assistant replies.
+                ``kwargs``, not forwarded to Home Assistant). Defaults to
+                ``DEFAULT_COMMAND_WAIT_TIMEOUT``, which suits fast commands;
+                long-running ones (e.g. a ``supervisor/api`` add-on install)
+                must raise this so the client doesn't give up before Home
+                Assistant replies.
             **kwargs: Command parameters (merged into the outgoing message)
 
         Returns:
@@ -644,7 +652,7 @@ class HomeAssistantWebSocketClient:
         # break that call shape under mypy. The leading underscore keeps it out
         # of the HA message namespace — HA WebSocket fields never start with
         # one — so it can never shadow a real command field when popped.
-        wait_timeout: float = kwargs.pop("_wait_timeout", 30.0)
+        wait_timeout: float = kwargs.pop("_wait_timeout", DEFAULT_COMMAND_WAIT_TIMEOUT)
 
         message_id = self.get_next_message_id()
         message = {"id": message_id, "type": command_type, **kwargs}

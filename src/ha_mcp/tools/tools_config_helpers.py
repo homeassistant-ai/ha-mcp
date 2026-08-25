@@ -4709,6 +4709,14 @@ class HelperConfigTools:
                     "generic_thermostat, switch_as_x, generic_hygrostat, "
                     "history_stats, mold_indicator). "
                     "Ignored for simple helper types. "
+                    "On update it is a patch: a field you omit keeps its "
+                    "current value, and a field set to null is cleared where "
+                    "the schema allows that field to be empty. A field two "
+                    "steps declare gets your one value both times; pass "
+                    "step_values={'<step_id>': {'<field>': <value>}} to give "
+                    "a step its own value, or to leave it out of that step; a "
+                    "LIST of those objects supplies one per encounter when the "
+                    "flow presents a step more than once. "
                     "Field set is delivered as data_schema on the first validation error."
                 ),
                 default=None,
@@ -4775,7 +4783,10 @@ class HelperConfigTools:
 
         Behavior notes:
         - UPDATE preserves type-specific fields not re-passed (rename never wipes
-          initial/icon/etc. for any simple helper).
+          initial/icon/etc. for any simple helper). Flow-helper and config
+          subentry updates behave the same way: a field omitted from `config`
+          keeps its current value, and a field set to null is cleared where
+          the schema allows that field to be empty.
         - Pass `action="create"` or `action="update"` to disambiguate intent.
           For SIMPLE/FLOW helpers, omitted action falls back to the implicit
           `helper_id`-presence discriminator. For config subentries, omitted
