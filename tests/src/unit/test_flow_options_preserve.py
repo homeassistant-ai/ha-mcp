@@ -1163,6 +1163,11 @@ class TestPerStepValues:
 
         # Encounter one falls back to what it would have been; two is addressed.
         assert seen == ["BW", "NY"]
+        # Put the SAME shape through the validator. Without this the two halves
+        # test different code — _handle_form_step never calls the validator,
+        # only the walkers do — so tightening `any` to `all` would kill the
+        # capability with the suite still green (Patch76 review, #2256).
+        validate_step_values({"step_values": {"init": [{}, {"province": "NY"}]}})
         # ...while an entry that applies nothing anywhere is still rejected.
         for dead in ([{}], [], {}, [{}, {}]):
             with pytest.raises(ToolError):
