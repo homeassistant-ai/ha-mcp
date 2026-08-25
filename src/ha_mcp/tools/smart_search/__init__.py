@@ -20,9 +20,8 @@ from ...utils.fuzzy_search import create_fuzzy_searcher
 # keep resolving.
 from ._config import (
     AUTOMATION_CONFIG_TIME_BUDGET,
-    BULK_REST_TIMEOUT,
-    BULK_WEBSOCKET_TIMEOUT,
     DEFAULT_CONCURRENCY_LIMIT,
+    ENTITY_REGISTRY_TIMEOUT,
     INDIVIDUAL_CONFIG_TIMEOUT,
     INDIVIDUAL_FETCH_BATCH_SIZE,
     SCENE_CONFIG_TIME_BUDGET,

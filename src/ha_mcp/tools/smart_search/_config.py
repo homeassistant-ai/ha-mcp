@@ -10,13 +10,13 @@ from ha_mcp.config import get_global_settings
 # Default concurrency limit for parallel operations
 DEFAULT_CONCURRENCY_LIMIT = 20
 
-# Bulk fetch timeouts (in seconds)
-BULK_REST_TIMEOUT = 5.0  # Timeout for bulk REST endpoint calls
-BULK_WEBSOCKET_TIMEOUT = 3.0  # Timeout for bulk WebSocket calls
+# Timeout for the entity-registry WebSocket list used by the scene walk.
+ENTITY_REGISTRY_TIMEOUT = 3.0
 
 
-# Attempt-C (per-id fallback; the letter predates the removal of the phantom
-# WS bulk tier in #1889 and is kept as a proper name) tuning knobs. Sourced from the resolved
+# Per-id config-fetch tuning knobs. The code calls this pass "Attempt C":
+# a proper name left from when two earlier bulk tiers were tried first,
+# both since removed as phantoms (#1889, #2258). It is now the only pass. Sourced from the resolved
 # Settings (issues #1538 / #1784) so the env var, the web Settings UI
 # override file, and the field defaults all flow through one precedence path
 # — and so add-on users (who cannot set raw env vars) can tune them from the
@@ -25,7 +25,7 @@ BULK_WEBSOCKET_TIMEOUT = 3.0  # Timeout for bulk WebSocket calls
 # carry a restart-required notice in the UI).
 _settings = get_global_settings()
 
-# Time budgets for fallback individual fetching (in seconds).
+# Wall-clock budgets for the per-id config fetch (in seconds).
 AUTOMATION_CONFIG_TIME_BUDGET = _settings.automation_config_time_budget
 SCRIPT_CONFIG_TIME_BUDGET = _settings.script_config_time_budget
 SCENE_CONFIG_TIME_BUDGET = _settings.scene_config_time_budget
