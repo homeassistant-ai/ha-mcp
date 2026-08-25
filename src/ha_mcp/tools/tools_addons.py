@@ -1,8 +1,9 @@
 """
-App management tools for Home Assistant MCP Server.
+App (add-on) management tools for Home Assistant MCP Server.
 
-Provides tools to list installed and available apps via the Supervisor API,
-and to call app web APIs through Home Assistant's Ingress proxy.
+Provides tools to manage apps through Supervisor and to call app web APIs using
+the applicable route: an explicit container port, direct sibling ingress in app
+mode, or Home Assistant Core's Ingress proxy in non-app modes.
 
 Note: These tools only work with Home Assistant OS or Supervised installations.
 """
@@ -422,7 +423,8 @@ async def _supervisor_api_call(
             kwargs["timeout"] = timeout
             wait_timeout = float(timeout) + 15.0
 
-        # Off-host installs use the shared pooled WebSocket (issue #1813).
+        # Non-app deployments, including embedded mode, use the shared pooled
+        # Home Assistant Core WebSocket (issue #1813).
         # App installs call Supervisor REST directly because Supervisor 2026.08
         # filters app-originated ``supervisor/api`` commands at its Core proxy.
         # Both transports feed the common retry and error-normalization path:
@@ -515,7 +517,6 @@ async def _supervisor_api_call(
                 "operation": f"Supervisor API {endpoint}",
                 "timeout_seconds": wait_timeout,
             },
-            suggestions=["Check Home Assistant connection and Supervisor availability"],
         )
         return None  # unreachable: exception_to_structured_error always raises
 
@@ -555,8 +556,8 @@ async def _create_ingress_session(client: HomeAssistantClient) -> str:
     """Create a Supervisor ingress session and return its token.
 
     App mode uses a direct sibling-ingress route and never calls this helper.
-    Off-host installs mint sessions through Home Assistant Core's
-    ``supervisor/api`` WebSocket command. The returned token is set as the
+    Non-app deployments, including embedded mode, mint sessions through Home
+    Assistant Core's ``supervisor/api`` WebSocket command. The token is set as the
     ``ingress_session`` cookie on requests to Core's
     ``/api/hassio_ingress/<addon_token>/...`` endpoint, which Supervisor
     validates before proxying to the app container. Sessions are valid for
@@ -565,8 +566,6 @@ async def _create_ingress_session(client: HomeAssistantClient) -> str:
     response = await _supervisor_api_call(
         client, "/ingress/session", method="POST", data={}
     )
-    if not response.get("success"):
-        raise_tool_error(response)
 
     session = response.get("result", {}).get("session")
     if not isinstance(session, str) or not session:
@@ -816,6 +815,19 @@ def _extract_addon_log_level(addon: dict[str, Any]) -> str | None:
     return None
 
 
+def _running_addon_slugs(addons: list[dict[str, Any]]) -> list[str]:
+    """Return valid slugs for installed apps that Supervisor reports as running."""
+    running_slugs: list[str] = []
+    for addon in addons:
+        if addon.get("state") != "started":
+            continue
+        slug = addon.get("slug")
+        if not isinstance(slug, str) or not slug:
+            raise TypeError("Supervisor returned a running app without a valid slug")
+        running_slugs.append(slug)
+    return running_slugs
+
+
 async def list_addons(
     client: HomeAssistantClient, include_stats: bool = False
 ) -> dict[str, Any]:
@@ -837,7 +849,7 @@ async def list_addons(
     stats_by_slug: dict[str, dict[str, Any] | None] = {}
     stats_warnings: list[str] = []
     if include_stats:
-        running_slugs = [a.get("slug") for a in addons if a.get("state") == "started"]
+        running_slugs = _running_addon_slugs(addons)
 
         async def _fetch_stats(
             slug: str,
@@ -920,8 +932,6 @@ async def list_available_addons(
         Dictionary with available add-ons and repositories.
     """
     response = await _supervisor_api_call(client, "/store")
-    if not response.get("success"):
-        return response
 
     data = response["result"]
     repositories = data.get("repositories", [])
@@ -2183,10 +2193,7 @@ class AddOnTools:
         query: str | None,
     ) -> dict[str, Any]:
         if slug:
-            result = await get_addon_info(self._client, slug)
-            if not result.get("success"):
-                raise_tool_error(result)
-            return result
+            return await get_addon_info(self._client, slug)
 
         effective_source = (source or "installed").lower()
 
@@ -2203,8 +2210,6 @@ class AddOnTools:
                 )
             )
 
-        if not result.get("success"):
-            raise_tool_error(result)
         return result
 
     @staticmethod
@@ -2294,11 +2299,9 @@ class AddOnTools:
                 )
             )
         endpoint = endpoint_tmpl.format(slug=slug)
-        result = await _supervisor_api_call(
+        await _supervisor_api_call(
             self._client, endpoint, method="POST", timeout=timeout
         )
-        if not result.get("success"):
-            raise_tool_error(result)
         return {
             "success": True,
             "action": key,
@@ -2357,6 +2360,10 @@ class AddOnTools:
         Logs the reclassification so a failure that gets demoted to a success
         is never invisible."""
         error_text = str(error)
+        error_code = self._structured_error_code(error_text)
+        if error_code is not None and error_code != ErrorCode.SERVICE_CALL_FAILED.value:
+            raise error
+
         noop = self._repo_noop_verb(key, self._supervisor_error_text(error_text))
         if noop:
             logger.info(
@@ -2366,10 +2373,7 @@ class AddOnTools:
                 noop,
             )
             return self._repo_noop_result(key, repository, noop)
-        if (
-            self._structured_error_code(error_text)
-            != ErrorCode.SERVICE_CALL_FAILED.value
-        ):
+        if error_code != ErrorCode.SERVICE_CALL_FAILED.value:
             raise error
         self._raise_repo_action_error(key, repository, error_text)
 
@@ -2496,14 +2500,6 @@ class AddOnTools:
             info_result = await _supervisor_api_call(
                 self._client, f"/addons/{slug}/info"
             )
-            if not info_result.get("success"):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        f"Add-on '{slug}' not found or Supervisor unavailable",
-                        details=str(info_result),
-                    )
-                )
             addon_info = info_result.get("result", {})
 
             # Merge caller's options into current options (fixes partial-update
@@ -2540,25 +2536,12 @@ class AddOnTools:
 
             config_data["options"] = merged_options
 
-        result = await _supervisor_api_call(
+        await _supervisor_api_call(
             self._client,
             f"/addons/{slug}/options",
             method="POST",
             data=config_data,
         )
-        if not result.get("success"):
-            error_detail = str(result)
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_FAILED,
-                    f"Supervisor rejected configuration for add-on '{slug}'",
-                    details=error_detail,
-                    suggestions=[
-                        "Fetch current options via ha_get_app(slug) to see required fields",
-                        "Re-submit all required option fields together",
-                    ],
-                )
-            )
         submitted_fields = list(config_data.keys())
         if {"options", "network"} & config_data.keys():
             response: dict = {
@@ -3100,20 +3083,12 @@ class AddOnTools:
         )
 
 
-# Terminology boundary, deliberate: the tool names, titles, tags and the first
-# docstring line of each tool follow Home Assistant's 2026.2 rename to "Apps",
-# because those are what an agent reads and what the locale catalogs translate.
-# The docstring bodies keep "add-on" for the Supervisor surface they describe:
-# the slugs and the option names kept the old spelling, and so did the REST
-# paths this server calls. /addons is the documented default route, served by
-# the v1 app; /v2/apps is a separate surface, mounted only when the
-# supervisor_v2_api feature flag is on (it defaults to off, arrived in
-# 2026-04, and is absent from older Supervisors), and its list contract is not
-# even the same shape. So neither finishing the rename into the bodies nor
-# reverting the first line for consistency is the fix.
+# User-facing prose uses app (add-on) on first mention and app thereafter.
+# Retain legacy spelling only in concrete identifiers and API paths such as
+# /addons, app slugs, and existing symbol names.
 def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -> None:
     """
-    Register add-on management tools with the MCP server.
+    Register app (add-on) management tools with the MCP server.
 
     Args:
         mcp: FastMCP server instance

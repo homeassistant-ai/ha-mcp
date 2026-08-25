@@ -2,7 +2,7 @@
 
 Several code paths call the Home Assistant Supervisor REST API directly with
 a short-lived client configured for the Supervisor base URL and
-``SUPERVISOR_TOKEN``. They include log collection, app management, settings
+``SUPERVISOR_TOKEN``. They include log collection, app (add-on) management,
 and backup operations, screenshot-engine discovery, and app restart.
 
 These calls cannot use ``HomeAssistantClient.httpx_client``, which targets

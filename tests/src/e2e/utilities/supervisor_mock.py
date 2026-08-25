@@ -3,7 +3,7 @@
 Stands in for ``http://supervisor`` so the log and self-restart subset of
 direct-Supervisor httpx calls can be exercised end-to-end. Production runs
 against a real Supervisor; this mock makes that subset testable in CI without
-HAOS / Supervised infrastructure. App-management calls from ``tools_addons``
+HAOS / Supervised infrastructure. App (add-on) management calls from ``tools_addons``
 use additional ``/addons`` and ``/store`` endpoints covered by unit tests
 and the real HAOS lanes.
 
@@ -22,8 +22,8 @@ Endpoints implemented for this fixture:
 
 - ``GET /{service}/logs`` for service ∈ {supervisor, host, core, dns, audio,
   cli, multicast, observer} — the eight Supervisor-managed system services
-- ``GET /addons/{slug}/logs`` and ``GET /addons/self/logs`` — addon container logs
-- ``POST /addons/self/restart`` — addon self-restart (Supervisor envelope reply)
+- ``GET /addons/{slug}/logs`` and ``GET /addons/self/logs`` — app container logs
+- ``POST /addons/self/restart`` — app self-restart (Supervisor envelope reply)
 
 This fixture returns 401 for an unrecognized bearer and 403 for the explicit
 low-role sentinel. It intentionally does not reproduce Supervisor's exact

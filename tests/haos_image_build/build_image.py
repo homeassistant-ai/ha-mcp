@@ -2,8 +2,8 @@
 """Build the HAOS test image used by the HAOS E2E tier (#1281).
 
 The script boots a vanilla HAOS qcow2 inside QEMU/KVM, runs first-user
-onboarding to obtain an OAuth access token, registers the ha-mcp addon
-repository, installs the addons listed in ``ADDONS``, performs the HACS
+onboarding to obtain OAuth credentials, registers the ha-mcp app (add-on)
+repository, installs the apps listed in ``ADDONS``, performs the HACS
 bootstrap, then powers HAOS off and emits an uncompressed qcow2 image.
 
 Invoke from a Linux host with /dev/kvm available — both the local developer
@@ -494,14 +494,20 @@ def stop_qemu(proc: subprocess.Popen[bytes], ws: HAWebSocket | None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def onboard(base_url: str) -> str:
-    """Create the first user and return a short-lived access token.
+@dataclass(repr=False)
+class OAuthCredentials:
+    """Refreshable credentials used throughout a potentially long image build."""
 
-    The token only needs to live for the duration of the build session
-    (addon installs, HACS bootstrap, shutdown). The canary test re-derives
-    its own token at runtime by logging in with the known username/password
-    via /auth/login_flow — that way no token needs to be baked into the
-    pre-built qcow2.
+    access_token: str
+    refresh_token: str
+
+
+def onboard(base_url: str) -> OAuthCredentials:
+    """Create the first user and return refreshable OAuth credentials.
+
+    The canary test re-derives its own token at runtime by logging in with the
+    known username/password via /auth/login_flow, so no credential is baked
+    into the pre-built qcow2.
     """
     LOG.info("Onboarding first user")
     resp = _http(
@@ -528,7 +534,16 @@ def onboard(base_url: str) -> str:
             "code": auth_code,
         },
     )
-    return token_resp["access_token"]
+    access_token = token_resp.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise RuntimeError("OAuth authorization exchange returned no access token")
+    refresh_token = token_resp.get("refresh_token")
+    if not isinstance(refresh_token, str) or not refresh_token:
+        raise RuntimeError("OAuth authorization exchange returned no refresh token")
+    return OAuthCredentials(
+        access_token=access_token,
+        refresh_token=refresh_token,
+    )
 
 
 class HAWebSocket:
@@ -547,12 +562,13 @@ class HAWebSocket:
     procedural build flow doesn't need an asyncio rewrite.
     """
 
-    def __init__(self, base_url: str, token: str) -> None:
+    def __init__(self, base_url: str, credentials: OAuthCredentials) -> None:
+        self._base_url = base_url
         self._ws_url = (
             base_url.replace("http://", "ws://").replace("https://", "wss://")
             + "/api/websocket"
         )
-        self._token = token
+        self._credentials = credentials
         self._ws = None  # type: ignore[var-annotated]
         self._next_id = 0
 
@@ -567,7 +583,9 @@ class HAWebSocket:
         auth_req = json.loads(self._ws.recv())
         if auth_req.get("type") != "auth_required":
             raise RuntimeError(f"Unexpected WS handshake message: {auth_req}")
-        self._ws.send(json.dumps({"type": "auth", "access_token": self._token}))
+        self._ws.send(
+            json.dumps({"type": "auth", "access_token": self._credentials.access_token})
+        )
         auth_resp = json.loads(self._ws.recv())
         if auth_resp.get("type") != "auth_ok":
             raise RuntimeError(f"WS auth rejected: {auth_resp}")
@@ -585,12 +603,34 @@ class HAWebSocket:
             except (OSError, RuntimeError) as e:
                 LOG.debug("WS close error (already-closed or transport): %r", e)
 
+    def _refresh_access_token(self) -> None:
+        """Exchange the refresh token before opening a replacement WebSocket."""
+        token_resp = _http(
+            "POST",
+            f"{self._base_url}/auth/token",
+            form={
+                "client_id": self._base_url,
+                "grant_type": "refresh_token",
+                "refresh_token": self._credentials.refresh_token,
+            },
+        )
+        access_token = token_resp.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise RuntimeError("OAuth refresh returned no access token")
+        rotated_refresh_token = token_resp.get("refresh_token")
+        if rotated_refresh_token is not None:
+            if not isinstance(rotated_refresh_token, str) or not rotated_refresh_token:
+                raise RuntimeError("OAuth refresh returned an invalid refresh token")
+            self._credentials.refresh_token = rotated_refresh_token
+        self._credentials.access_token = access_token
+
     def reconnect(self) -> None:
         """Tear down the current WS and re-establish + re-auth.
 
-        Used after /core/restart: HA Core kicks every WS connection on
-        restart, so any subsequent supervisor_api call needs a fresh
-        connection (the access_token survives the restart).
+        Used after /core/restart: HA Core kicks every WS connection on restart.
+        The initial OAuth access token expires after 30 minutes, so reconnects
+        exchange the retained refresh token before opening and authenticating
+        the replacement socket.
 
         ``_wait_http_ok(/manifest.json)`` confirms HA Core's HTTP layer
         is up before we get here, but Core's WS layer can be accepting
@@ -612,6 +652,7 @@ class HAWebSocket:
                 LOG.debug("WS close error during reconnect: %r", e)
             self._ws = None
         self._next_id = 0
+        self._refresh_access_token()
         self.__enter__()
         self._wait_supervisor_api_ready()
 
@@ -694,7 +735,8 @@ class HAWebSocket:
                 continue
             if not resp.get("success", True):
                 err = resp.get("error") or {}
-                code = err.get("code") if isinstance(err, dict) else None
+                raw_code = err.get("code") if isinstance(err, dict) else None
+                code = raw_code if isinstance(raw_code, str) else None
                 supervisor_message = (
                     err.get("message")
                     if isinstance(err, dict) and isinstance(err.get("message"), str)
@@ -1634,6 +1676,9 @@ def install_screenshot_engine(ws: HAWebSocket) -> str:
     return slug
 
 
+_CORE_VERSION_RE = re.compile(r"^\d{4}\.\d{1,2}\.\d+(?:\.dev\d+|b\d+)?$")
+
+
 def _supervisor_version_key(version: object) -> tuple[int, int, int, int, int]:
     """Return a comparable key for Supervisor's calendar version."""
     if not isinstance(version, str):
@@ -1824,6 +1869,7 @@ def _wait_supervisor_channel_metadata(
 ) -> bool:
     """Wait for channel metadata and return whether Supervisor needs updating."""
     last_info: dict[str, Any] | None = None
+    last_error: BaseException | None = None
     while time.monotonic() < deadline:
         try:
             last_info = ws.supervisor_api(
@@ -1832,6 +1878,7 @@ def _wait_supervisor_channel_metadata(
         except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
             if not _is_transient_supervisor_error(exc):
                 raise
+            last_error = exc
             LOG.debug("Transient Supervisor reload failure: %r", exc)
             _reconnect_during_supervisor_update(
                 ws,
@@ -1857,10 +1904,11 @@ def _wait_supervisor_channel_metadata(
                 return True
         time.sleep(5.0)
 
+    last_err_suffix = f"; last error: {last_error!r}" if last_error else ""
     raise TimeoutError(
         "Supervisor channel metadata did not become ready before the "
         f"image-build deadline: channel={channel!r}, "
-        f"minimum={minimum_version!r}, info={last_info!r}"
+        f"minimum={minimum_version!r}, info={last_info!r}{last_err_suffix}"
     )
 
 
@@ -1961,8 +2009,8 @@ def _configure_supervisor_image_variant(
         raise ValueError(f"Unsupported Supervisor channel: {channel!r}")
     if minimum_version is not None:
         _supervisor_version_key(minimum_version)
-    if core_version is not None and not core_version:
-        raise ValueError("Core version cannot be empty")
+    if core_version is not None and _CORE_VERSION_RE.fullmatch(core_version) is None:
+        raise ValueError(f"Invalid Core version: {core_version!r}")
     if core_version is not None and base_url is None:
         raise ValueError("A Core image variant requires the Home Assistant base URL")
 
@@ -2375,9 +2423,9 @@ def build(work_dir: Path, output: Path) -> None:
     try:
         _wait_any_port((HA_HOST_PORT, HA_ALT_HOST_PORT), timeout=180)
         base_url = _discover_ha_base_url(timeout=600)
-        token = onboard(base_url)
-        _check_core_auth(base_url, token)
-        with HAWebSocket(base_url, token) as ws:
+        credentials = onboard(base_url)
+        _check_core_auth(base_url, credentials.access_token)
+        with HAWebSocket(base_url, credentials) as ws:
             _configure_supervisor_image_variant(
                 ws,
                 base_url=base_url,

@@ -375,7 +375,7 @@ async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
             await _action("restart")
             await _wait_addon_state(mcp_client, slug, frozenset({"started"}))
         finally:
-            # Restore the addon's original run state so sibling tests (and reruns)
+            # Restore the app's original run state so sibling tests (and reruns)
             # see the baked baseline regardless of how this test exited.
             try:
                 detail = await safe_call_tool(mcp_client, "ha_get_app", {"slug": slug})

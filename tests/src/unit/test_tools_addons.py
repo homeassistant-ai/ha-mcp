@@ -1266,7 +1266,7 @@ class TestCreateIngressSession:
 
     @pytest.mark.asyncio
     async def test_supervisor_error_response_propagates(self):
-        """When _supervisor_api_call returns success=False, the error is raised."""
+        """An error raised by _supervisor_api_call propagates unchanged."""
         from ha_mcp.tools.tools_addons import _create_ingress_session
 
         client = _make_mock_client()
@@ -1282,7 +1282,7 @@ class TestCreateIngressSession:
             patch(
                 "ha_mcp.tools.tools_addons._supervisor_api_call",
                 new_callable=AsyncMock,
-                return_value=error_response,
+                side_effect=ToolError(json.dumps(error_response)),
             ),
             pytest.raises(ToolError) as exc_info,
         ):
@@ -3365,6 +3365,27 @@ class TestListAddonsStats:
             await list_addons(client, include_stats=True)
 
     @pytest.mark.asyncio
+    async def test_running_addon_requires_a_valid_slug_for_stats(self):
+        """Malformed Supervisor data cannot become an /addons/None request."""
+        import copy
+
+        client = _make_mock_client()
+        response = copy.deepcopy(_ADDONS_LIST_RESPONSE)
+        response["result"]["addons"][0]["slug"] = None
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value=response,
+            ) as mock_call,
+            pytest.raises(TypeError, match="running app without a valid slug"),
+        ):
+            await list_addons(client, include_stats=True)
+
+        mock_call.assert_awaited_once_with(client, "/addons")
+
+    @pytest.mark.asyncio
     async def test_no_stats_key_without_include_stats(self):
         """When include_stats=False, addons should not have a stats key."""
         client = _make_mock_client()
@@ -4238,6 +4259,11 @@ class TestSupervisorApiCall:
 
         payload = _parse_tool_error(exc_info)
         assert payload["error"]["code"] == expected_code
+        if status_code == 401:
+            suggestions = " ".join(payload["error"]["suggestions"]).lower()
+            assert "managed by the supervisor" in suggestions
+            assert "core restart" in suggestions
+            assert "home_assistant_token" not in suggestions
         if status_code == 403:
             assert payload["status_code"] == 403
             assert (
@@ -4743,10 +4769,17 @@ class TestManageAddonActionMode:
             patch(
                 "ha_mcp.tools.tools_addons._supervisor_api_call",
                 new_callable=AsyncMock,
-                return_value={
-                    "success": False,
-                    "error": {"code": "SERVICE_CALL_FAILED", "message": "boom"},
-                },
+                side_effect=ToolError(
+                    json.dumps(
+                        {
+                            "success": False,
+                            "error": {
+                                "code": "SERVICE_CALL_FAILED",
+                                "message": "boom",
+                            },
+                        }
+                    )
+                ),
             ),
             pytest.raises(ToolError) as exc_info,
         ):
@@ -4973,7 +5006,10 @@ class TestManageAddonRepositoryAction:
                     "success": False,
                     "error": {
                         "code": "AUTH_INSUFFICIENT_PERMISSIONS",
-                        "message": "Supervisor denied this app role",
+                        "message": (
+                            "Supervisor denied this app role even though the "
+                            "repository is already in the store"
+                        ),
                     },
                 }
             )
@@ -5225,10 +5261,17 @@ class TestManageAddonRepositoryAction:
             patch(
                 "ha_mcp.tools.tools_addons._supervisor_api_call",
                 new_callable=AsyncMock,
-                return_value={
-                    "success": False,
-                    "error": {"code": "SERVICE_CALL_FAILED", "message": "boom"},
-                },
+                side_effect=ToolError(
+                    json.dumps(
+                        {
+                            "success": False,
+                            "error": {
+                                "code": "SERVICE_CALL_FAILED",
+                                "message": "boom",
+                            },
+                        }
+                    )
+                ),
             ),
             pytest.raises(ToolError) as exc_info,
         ):

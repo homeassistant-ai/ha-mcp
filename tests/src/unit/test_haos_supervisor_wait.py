@@ -17,9 +17,12 @@ import pytest
 from websockets.exceptions import WebSocketException
 
 from tests.haos_image_build.build_image import (
+    HAWebSocket,
     WSCommandError,
     _configure_supervisor_image_variant,
+    _wait_supervisor_channel_metadata,
     _wait_supervisor_ready,
+    onboard,
 )
 
 
@@ -58,6 +61,61 @@ def _core_info(
         "watchdog": True,
         "wait_boot": 600,
     }
+
+
+def test_reconnect_refreshes_the_onboarding_access_token() -> None:
+    """A long beta build gets a fresh access token before every reconnect."""
+    base_url = "http://127.0.0.1:18123"
+    http_responses = [
+        {"auth_code": "code"},
+        {"access_token": "stale", "refresh_token": "refresh"},
+        {"access_token": "fresh"},
+    ]
+
+    with patch(
+        "tests.haos_image_build.build_image._http", side_effect=http_responses
+    ) as http:
+        credentials = onboard(base_url)
+        ws = HAWebSocket(base_url, credentials)
+        ws._ws = Mock()
+        with (
+            patch.object(HAWebSocket, "__enter__", autospec=True, return_value=ws),
+            patch.object(ws, "_wait_supervisor_api_ready"),
+        ):
+            ws.reconnect()
+
+    assert credentials.access_token == "fresh"
+    http.assert_called_with(
+        "POST",
+        f"{base_url}/auth/token",
+        form={
+            "client_id": base_url,
+            "grant_type": "refresh_token",
+            "refresh_token": "refresh",
+        },
+    )
+
+
+def test_reconnect_rejects_a_refresh_response_without_an_access_token() -> None:
+    """A malformed refresh response fails before WebSocket authentication."""
+    base_url = "http://127.0.0.1:18123"
+    with patch(
+        "tests.haos_image_build.build_image._http",
+        side_effect=[
+            {"auth_code": "code"},
+            {"access_token": "stale", "refresh_token": "refresh"},
+            {},
+        ],
+    ):
+        credentials = onboard(base_url)
+        ws = HAWebSocket(base_url, credentials)
+        ws._ws = Mock()
+        with (
+            patch.object(HAWebSocket, "__enter__", autospec=True, return_value=ws),
+            patch.object(ws, "_wait_supervisor_api_ready"),
+            pytest.raises(RuntimeError, match="no access token"),
+        ):
+            ws.reconnect()
 
 
 def test_returns_immediately_when_up_to_date() -> None:
@@ -147,6 +205,29 @@ def test_persistent_error_surfaced_in_timeout() -> None:
         _wait_supervisor_ready(ws, update_timeout=10.0)
     # Loop ran at least once before timing out
     assert ws.supervisor_api.call_count >= 2
+
+
+def test_channel_metadata_timeout_includes_the_last_transient_error() -> None:
+    """A beta-channel reload timeout preserves its final transport detail."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = WSCommandError(
+        "supervisor unavailable", code="unknown_error", supervisor_message=""
+    )
+
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=[0.0, 2.0],
+        ),
+        patch("tests.haos_image_build.build_image.time.sleep"),
+        pytest.raises(TimeoutError, match=r"last error.*WSCommandError"),
+    ):
+        _wait_supervisor_channel_metadata(
+            ws,
+            channel="beta",
+            minimum_version="2026.08.0",
+            deadline=1.0,
+        )
 
 
 def test_wait_rejects_terminal_supervisor_error_without_retry() -> None:
@@ -279,6 +360,23 @@ def test_configure_variant_rejects_core_without_base_url_before_mutation() -> No
             channel="beta",
             minimum_version="2026.08.0",
             core_version="2026.8.3",
+        )
+
+    ws.supervisor_api.assert_not_called()
+
+
+def test_configure_variant_rejects_invalid_core_version_before_mutation() -> None:
+    """An invalid Core release identifier cannot reach Supervisor update APIs."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = AssertionError("unexpected mutation")
+
+    with pytest.raises(ValueError, match="Invalid Core version"):
+        _configure_supervisor_image_variant(
+            ws,
+            base_url="http://127.0.0.1:18123",
+            channel="beta",
+            minimum_version="2026.08.0",
+            core_version="../latest",
         )
 
     ws.supervisor_api.assert_not_called()
