@@ -189,8 +189,9 @@ class TestMockResilience:
     async def test_concurrent_log_fetches(self, mcp_client, supervisor_mock):
         """Five parallel ha_get_logs calls all succeed.
 
-        The mock and the MCP server share the test event loop; if either
-        serialises requests incorrectly this surfaces as a hang or an error.
+        The MCP calls share pytest's event loop while the threaded mock handles
+        concurrent socket requests; serialization problems surface as a hang or
+        error.
         """
         async with MCPAssertions(mcp_client) as mcp:
             results = await asyncio.gather(
@@ -228,7 +229,7 @@ class TestMockResilience:
         Exercises the auth-failure path through the full ha_get_logs →
         _supervisor_logs_get → mock chain. The explicit
         ``except HomeAssistantAuthError`` clause in
-        ``_get_system_service_log`` (added alongside this PR) routes the
+        ``_get_system_service_log`` routes the
         401 through ``exception_to_structured_error`` so callers get a
         structured ``code`` + remediation suggestions instead of the raw
         FastMCP wrap they used to get.

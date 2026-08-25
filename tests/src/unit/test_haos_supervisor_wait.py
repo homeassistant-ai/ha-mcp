@@ -18,12 +18,27 @@ from websockets.exceptions import WebSocketException
 
 from tests.haos_image_build.build_image import (
     HAWebSocket,
+    OAuthCredentials,
     WSCommandError,
     _configure_supervisor_image_variant,
     _wait_supervisor_channel_metadata,
     _wait_supervisor_ready,
     onboard,
 )
+
+
+def test_supervisor_api_reports_a_disconnected_websocket() -> None:
+    """A failed reconnect leaves a diagnostic transport error, not an assertion."""
+    ws = HAWebSocket(
+        "http://127.0.0.1:18123",
+        OAuthCredentials(access_token="access", refresh_token="refresh"),
+    )
+
+    with pytest.raises(
+        ConnectionError,
+        match=r"supervisor/api get /supervisor/info",
+    ):
+        ws.supervisor_api("/supervisor/info")
 
 
 def _info(
@@ -207,6 +222,26 @@ def test_persistent_error_surfaced_in_timeout() -> None:
     assert ws.supervisor_api.call_count >= 2
 
 
+def test_wait_timeout_prefers_the_last_reconnect_error() -> None:
+    """A failed reconnect is the most recent readiness-timeout diagnostic."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        _info(update_available=True, version="2026.05.1"),
+        ConnectionError("poll failed"),
+    ]
+    ws.reconnect.side_effect = ConnectionError("refresh failed")
+
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=[0.0, 5.0, 15.0],
+        ),
+        patch("tests.haos_image_build.build_image.time.sleep"),
+        pytest.raises(TimeoutError, match="refresh failed"),
+    ):
+        _wait_supervisor_ready(ws, update_timeout=10.0)
+
+
 def test_channel_metadata_timeout_includes_the_last_transient_error() -> None:
     """A beta-channel reload timeout preserves its final transport detail."""
     ws = Mock()
@@ -221,6 +256,28 @@ def test_channel_metadata_timeout_includes_the_last_transient_error() -> None:
         ),
         patch("tests.haos_image_build.build_image.time.sleep"),
         pytest.raises(TimeoutError, match=r"last error.*WSCommandError"),
+    ):
+        _wait_supervisor_channel_metadata(
+            ws,
+            channel="beta",
+            minimum_version="2026.08.0",
+            deadline=1.0,
+        )
+
+
+def test_channel_metadata_timeout_prefers_the_last_reconnect_error() -> None:
+    """A failed reconnect is the final channel-reload timeout diagnostic."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = ConnectionError("poll failed")
+    ws.reconnect.side_effect = ConnectionError("refresh failed")
+
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=[0.0, 2.0],
+        ),
+        patch("tests.haos_image_build.build_image.time.sleep"),
+        pytest.raises(TimeoutError, match="refresh failed"),
     ):
         _wait_supervisor_channel_metadata(
             ws,
@@ -581,7 +638,7 @@ def test_configure_beta_variant_rejects_terminal_update_error() -> None:
 
 
 def test_configure_beta_variant_preserves_readiness_timeout_details() -> None:
-    """A settled-but-stale Supervisor reports version diagnostics on timeout."""
+    """A still-pending Supervisor reports version diagnostics on timeout."""
     ws = Mock()
     pending = _info(
         update_available=True,
@@ -654,7 +711,7 @@ def test_configure_beta_variant_accepts_final_for_dev_minimum() -> None:
 
 
 def test_configure_beta_variant_installs_exact_core_version() -> None:
-    """The shared beta qcow2 contains Core from the same beta manifest."""
+    """Beta image setup requests and verifies the manifest's exact Core version."""
     ws = Mock()
     ws.supervisor_api.side_effect = [
         {},

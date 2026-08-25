@@ -505,9 +505,8 @@ class OAuthCredentials:
 def onboard(base_url: str) -> OAuthCredentials:
     """Create the first user and return refreshable OAuth credentials.
 
-    The canary test re-derives its own token at runtime by logging in with the
-    known username/password via /auth/login_flow, so no credential is baked
-    into the pre-built qcow2.
+    The canary logs in at runtime using the known CI account, so the build does
+    not copy an OAuth access or refresh token value into the emitted qcow2.
     """
     LOG.info("Onboarding first user")
     resp = _http(
@@ -714,7 +713,10 @@ class HAWebSocket:
         Raises RuntimeError on a non-success response (HA's WS contract uses
         ``{"id": N, "type": "result", "success": false, "error": {...}}``).
         """
-        assert self._ws is not None
+        if self._ws is None:
+            raise ConnectionError(
+                f"WebSocket is not connected for supervisor/api {method} {endpoint}"
+            )
         self._next_id += 1
         msg_id = self._next_id
         msg: dict[str, Any] = {
@@ -771,7 +773,7 @@ class WSCommandError(RuntimeError):
 
 
 class _SupervisorReadinessTimeout(TimeoutError):
-    """Supervisor stayed reachable but did not meet readiness constraints."""
+    """Supervisor readiness exhausted its deadline before all constraints held."""
 
 
 def _add_repository(ws: HAWebSocket, repo_url: str) -> None:
@@ -1788,6 +1790,7 @@ def _wait_supervisor_ready(
                 # Handler-start timeouts and transport failures are expected
                 # while Supervisor/Core restarts; keep them visible in CI logs.
                 LOG.warning("reconnect during update wait failed: %r", reconnect_err)
+                last_error = reconnect_err
             continue
         version = info.get("version")
         if version != last_version:
@@ -1850,7 +1853,7 @@ def _reconnect_during_supervisor_update(
     ws: HAWebSocket,
     *,
     context: str,
-) -> None:
+) -> BaseException | None:
     """Best-effort reconnect during a Supervisor restart window."""
     try:
         ws.reconnect()
@@ -1858,6 +1861,8 @@ def _reconnect_during_supervisor_update(
         if not _is_transient_supervisor_error(exc):
             raise
         LOG.warning("Reconnect %s failed: %r", context, exc)
+        return exc
+    return None
 
 
 def _wait_supervisor_channel_metadata(
@@ -1880,10 +1885,12 @@ def _wait_supervisor_channel_metadata(
                 raise
             last_error = exc
             LOG.debug("Transient Supervisor reload failure: %r", exc)
-            _reconnect_during_supervisor_update(
+            reconnect_error = _reconnect_during_supervisor_update(
                 ws,
                 context="during Supervisor channel reload",
             )
+            if reconnect_error is not None:
+                last_error = reconnect_error
             time.sleep(5.0)
             continue
 

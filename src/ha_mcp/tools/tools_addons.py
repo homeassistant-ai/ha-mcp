@@ -2361,7 +2361,10 @@ class AddOnTools:
         is never invisible."""
         error_text = str(error)
         error_code = self._structured_error_code(error_text)
-        if error_code is not None and error_code != ErrorCode.SERVICE_CALL_FAILED.value:
+        noop_codes = {None, ErrorCode.SERVICE_CALL_FAILED.value}
+        if key == "remove_repository":
+            noop_codes.add(ErrorCode.RESOURCE_NOT_FOUND.value)
+        if error_code not in noop_codes:
             raise error
 
         noop = self._repo_noop_verb(key, self._supervisor_error_text(error_text))
@@ -3112,16 +3115,16 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         source: Annotated[
             Literal["installed", "available"] | None,
             Field(
-                description="Add-on source: 'installed' (default) for currently installed add-ons, "
-                "'available' for add-ons in the store that can be installed.",
+                description="App (add-on) source: 'installed' (default) for currently installed apps, "
+                "'available' for apps in the store that can be installed.",
                 default=None,
             ),
         ] = None,
         slug: Annotated[
             str | None,
             Field(
-                description="Add-on slug for detailed info (e.g., '<prefix>_nodered'). "
-                "Slug prefixes vary by add-on repository — omit to list all add-ons "
+                description="App (add-on) slug for detailed info (e.g., '<prefix>_nodered'). "
+                "Slug prefixes vary by app repository — omit to list all apps "
                 "and discover the actual installed slug.",
                 default=None,
             ),
@@ -3143,40 +3146,40 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         query: Annotated[
             str | None,
             Field(
-                description="Search filter for add-on names/descriptions (only for source='available')",
+                description="App (add-on) name/description filter (only for source='available')",
                 default=None,
             ),
         ] = None,
     ) -> dict[str, Any]:
         """Get Home Assistant Apps (formerly known as add-ons, and this tool as ha_get_addon) - list installed, available, or get details for one.
 
-        This tool retrieves add-on information based on the parameters:
-        - slug provided: Returns detailed info for a single add-on (ingress, ports, options, state)
-        - source='installed' (default): Lists currently installed add-ons
-        - source='available': Lists add-ons available in the add-on store
+        This tool retrieves app information based on the parameters:
+        - slug provided: Returns detailed info for a single app (ingress, ports, options, state)
+        - source='installed' (default): Lists currently installed apps
+        - source='available': Lists apps available in the Supervisor app store
 
         **Note:** This tool only works with Home Assistant OS or Supervised installations.
 
-        **SINGLE ADD-ON (slug provided):**
+        **SINGLE APP (slug provided):**
         Returns comprehensive details including ingress entry, ports, options, state,
-        and (when the add-on exposes one) a top-level ``log_level`` reflecting the
+        and (when the app exposes one) a top-level ``log_level`` reflecting the
         current Supervisor option — useful for confirming ha_manage_app log_level changes.
-        Useful for discovering what APIs an add-on exposes before calling ha_manage_app.
+        Useful for discovering what APIs an app exposes before calling ha_manage_app.
 
-        **INSTALLED ADD-ONS (source='installed'):**
-        Returns add-ons with version, state (started/stopped), and update availability.
+        **INSTALLED APPS (source='installed'):**
+        Returns apps with version, state (started/stopped), and update availability.
         - include_stats: Optionally include CPU/memory usage statistics
 
-        **AVAILABLE ADD-ONS (source='available'):**
-        Returns add-ons from official and custom repositories that can be installed.
+        **AVAILABLE APPS (source='available'):**
+        Returns apps from official and custom repositories that can be installed.
         - repository: Filter by repository slug (e.g., 'core', 'community')
         - query: Search by name or description (case-insensitive)
 
         **Example Usage:**
-        - List installed add-ons: ha_get_app()
+        - List installed apps: ha_get_app()
         - Get Node-RED details: ha_get_app(slug="<prefix>_nodered")
         - List with resource usage: ha_get_app(include_stats=True)
-        - List available add-ons: ha_get_app(source="available")
+        - List available apps: ha_get_app(source="available")
         - Search for MQTT: ha_get_app(source="available", query="mqtt")
         """
         return await tools.get_addon(
@@ -3202,8 +3205,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         slug: Annotated[
             str,
             Field(
-                description="Add-on slug (e.g., '<prefix>_nodered', '<prefix>_frigate'). "
-                "Slug prefixes vary by add-on repository — call ha_get_app() "
+                description="App (add-on) slug (e.g., '<prefix>_nodered', '<prefix>_frigate'). "
+                "Slug prefixes vary by app repository — call ha_get_app() "
                 "to discover the actual installed slug. Required for every mode "
                 "except the store-repository actions "
                 "(action='add_repository'/'remove_repository'), which use "
@@ -3214,7 +3217,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         path: Annotated[
             str | None,
             Field(
-                description="Proxy mode: API path relative to the add-on root "
+                description="Proxy mode: API path relative to the app (add-on) root "
                 "(e.g., '/flows', '/api/events', '/api/stats'). "
                 "Required for proxy mode; mutually exclusive with config parameters.",
                 default=None,
@@ -3269,7 +3272,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         websocket: Annotated[
             bool,
             Field(
-                description="Proxy mode only. Use WebSocket instead of HTTP — for an add-on's "
+                description="Proxy mode only. Use WebSocket instead of HTTP — for an app (add-on) "
                 "WebSocket API (e.g. the ESPHome dashboard's '/ws' command channel; see the "
                 "docstring's ESPHome section). Sends 'body' as the initial message, collects "
                 "responses. Default: false.",
@@ -3328,7 +3331,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             dict[str, Any] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Config mode: Add-on configuration values (the 'Configuration' tab in the UI).",
+                description="Config mode: App (add-on) configuration values (the 'Configuration' tab in the UI).",
                 default=None,
             ),
         ] = None,
@@ -3350,7 +3353,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         auto_update: Annotated[
             bool | None,
             Field(
-                description="Config mode: Enable or disable automatic updates for this add-on.",
+                description="Config mode: Enable or disable automatic updates for this app (add-on).",
                 default=None,
             ),
         ] = None,
@@ -3380,8 +3383,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Proxy/array-patch mode: extra HTTP headers to send to the addon API. "
-                    "Useful for addon-specific requirements such as Node-RED's "
+                    "Proxy/array-patch mode: extra HTTP headers for the app (add-on) API. "
+                    "Useful for app-specific requirements such as Node-RED's "
                     "`Node-RED-Deployment-Type: full`. The proxy's internal framing "
                     "(`X-Ingress-Path`, `X-Hass-Source`, `Cookie`, `Content-Type`) is "
                     "layered on top, so caller-supplied values for those keys are "
@@ -3393,12 +3396,12 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         action: Annotated[
             str | None,
             Field(
-                description="Lifecycle mode: run a Supervisor add-on action. One of "
+                description="Lifecycle mode: run a Supervisor app (add-on) action. One of "
                 "'install', 'uninstall', 'start', 'stop', 'restart', 'rebuild', "
-                "'update'. 'install'/'update' require the add-on's repository to be "
+                "'update'. 'install'/'update' require the app's repository to be "
                 "registered (it appears in ha_get_app(source='available')). "
                 "Store-repository mode: 'add_repository' / 'remove_repository' "
-                "register or unregister a custom add-on store repository — these "
+                "register or unregister a custom app store repository — these "
                 "use the 'repository' param instead of 'slug'. "
                 "Mutually exclusive with path / config parameters / array_patch. "
                 "HA OS / Supervised only.",
@@ -3424,40 +3427,40 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
         **Lifecycle mode** (when ``action`` is one of install/uninstall/start/
         stop/restart/rebuild/update):
-        Runs a Supervisor add-on action on ``slug``. ``install`` / ``update`` go
-        through the store (the add-on's repository must be registered — it shows
+        Runs a Supervisor app action on ``slug``. ``install`` / ``update`` go
+        through the store (the app's repository must be registered — it shows
         up in ``ha_get_app(source="available")``); the rest act on an installed
-        add-on. This is how an assistant brings an add-on online for the user
+        app. This is how an assistant brings an app online for the user
         (e.g. installing + starting the dashboard screenshot engine).
 
         **Store-repository mode** (when ``action`` is ``add_repository`` or
         ``remove_repository``):
-        Registers or unregisters a custom add-on store repository. These actions
-        operate on the store rather than an installed add-on, so they take the
+        Registers or unregisters a custom app store repository. These actions
+        operate on the store rather than an installed app, so they take the
         ``repository`` param and no ``slug``: ``add_repository`` POSTs the
         repository URL to ``/store/repositories``; ``remove_repository`` DELETEs
         ``/store/repositories/{slug}`` by the repository's slug. Adding a
-        repository (e.g. balloob's add-ons) is the missing step that lets an
-        assistant then install an add-on from it via ``action="install"``.
+        repository (e.g. balloob's apps) is the missing step that lets an
+        assistant then install an app from it via ``action="install"``.
 
         **Config mode** (when any of options/network/boot/auto_update/watchdog is provided):
-        Updates the add-on's Supervisor configuration via POST /addons/{slug}/options.
+        Updates the app's Supervisor configuration via POST /addons/{slug}/options.
         All config parameters are optional; only provided fields are updated — current values
         are fetched and merged automatically (including one level of nested dicts).
 
         **Proxy mode** (when path is provided without array_patch):
-        Routes HTTP or WebSocket requests through Home Assistant's Ingress
-        proxy by default (works on HAOS, Supervised, and off-host PyPI/uvx
-        installs). Pass `port=...` to bypass Ingress and connect directly to
-        an add-on's container port — that mode requires the MCP host to
-        share Home Assistant's container network (in practice: the HAOS app
-        (add-on) deployment). Apps such as Node-RED may reject direct requests
-        unless `leave_front_door_open` is enabled in their options and the app
-        is restarted. Authentication errors name the exact
-        `ha_manage_app(options=...)` remedy and its security tradeoff; prefer
-        Ingress when it works.
+        Uses Supervisor Ingress by default: app deployments connect directly
+        to the sibling app's ingress port with ingress headers, while non-app
+        deployments use Home Assistant Core's Ingress proxy. `port=...`
+        bypasses Ingress entirely and connects to the app's container port;
+        that mode requires the MCP host to share Home Assistant's container
+        network (in practice, the HAOS app deployment). Apps such as Node-RED
+        may reject direct requests unless `leave_front_door_open` is enabled
+        in their options and the app is restarted. Authentication errors name
+        the exact `ha_manage_app(options=...)` remedy and its security
+        tradeoff; prefer Ingress when it works.
 
-        **ESPHome Device Builder dashboard (current rewrite):** config and log
+        **ESPHome Device Builder dashboard:** config and log
         access is a WebSocket JSON-command API, NOT REST. The legacy endpoints
         are gone — `GET /edit?configuration=` now returns the dashboard SPA, and
         the old `/compile` `/validate` `/logs` WebSocket paths (which took
@@ -3481,7 +3484,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
           not route to it.
 
         **Array-patch mode** (when path AND array_patch are provided):
-        Atomic "GET array, mutate, POST array" workflow for addon APIs whose write
+        Atomic "GET array, mutate, POST array" workflow for app APIs whose write
         contract is "send the whole resource collection back". Operations are applied
         in order to a working copy; if any op fails validation (unknown id, collision,
         malformed shape) nothing is posted. Returns a compact summary instead of the
@@ -3500,19 +3503,19 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
           WebSocket frames arrive as ANSI-stripped strings, and elision markers
           as `{"elided": N, "note": "..."}` dicts when summarize ran.
 
-        **WARNING:** Setting boot="auto"/"manual" will fail for add-ons whose Supervisor
+        **WARNING:** Setting boot="auto"/"manual" will fail for apps whose Supervisor
         metadata locks the boot mode. The Supervisor returns an error in this case.
 
         **NOTE:** This tool only works with Home Assistant OS or Supervised installations.
 
         **Examples:**
-        - Install an add-on: ha_manage_app(slug="...", action="install")
-        - Start an add-on: ha_manage_app(slug="...", action="start")
+        - Install an app: ha_manage_app(slug="...", action="install")
+        - Start an app: ha_manage_app(slug="...", action="start")
         - Add a store repository: ha_manage_app(action="add_repository", repository="https://github.com/balloob/home-assistant-addons")
         - Remove a store repository: ha_manage_app(action="remove_repository", repository="0f1cc410")
-        - Set add-on option: ha_manage_app(slug="...", options={"log_level": "debug"})
+        - Set app option: ha_manage_app(slug="...", options={"log_level": "debug"})
           Note: only the fields you provide are updated — current values are fetched first
-          and merged automatically. Fields not in the add-on's schema are ignored with a warning.
+          and merged automatically. Fields not in the app's schema are ignored with a warning.
         - Disable auto-update: ha_manage_app(slug="...", auto_update=False)
         - Change host port: ha_manage_app(slug="...", network={"5800/tcp": 8082})
         - Set boot mode: ha_manage_app(slug="...", boot="manual")

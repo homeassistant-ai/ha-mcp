@@ -49,7 +49,12 @@ async def test_addons_installed_via_mcp(mcp_client: Any) -> None:
     async with MCPAssertions(mcp_client) as mcp:
         payload = await mcp.call_tool_success("ha_get_app", {})
 
-    installed_names = {a.get("name") for a in payload.get("addons", [])}
+    addons = payload.get("addons", [])
+    summary = payload.get("summary", {})
+    assert summary.get("total_installed") == len(addons)
+    assert "filters_applied" not in payload
+    assert all(addon.get("installed") is True and "state" in addon for addon in addons)
+    installed_names = {addon.get("name") for addon in addons}
     LOG.info("Installed apps on booted HAOS: %s", sorted(installed_names))
 
     missing = [name for name in INSTALLED_ADDON_NAMES if name not in installed_names]
@@ -83,6 +88,13 @@ async def test_addon_store_search_via_mcp(mcp_client: Any) -> None:
             "ha_get_app", {"source": "available", "query": "mqtt"}
         )
     matches = payload.get("addons", [])
+    assert payload.get("filters_applied") == {
+        "repository": None,
+        "query": "mqtt",
+    }
+    assert isinstance(payload.get("repositories"), list)
+    assert payload.get("summary", {}).get("total_available") == len(matches)
+    assert all("available" in addon for addon in matches)
     assert matches, f"Supervisor store returned no MQTT matches: {payload}"
     assert any(
         "mqtt" in f"{addon.get('name', '')} {addon.get('description', '')}".lower()

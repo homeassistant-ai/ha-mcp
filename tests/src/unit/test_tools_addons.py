@@ -4967,6 +4967,43 @@ class TestManageAddonRepositoryAction:
         assert result["action"] == "remove_repository"
 
     @pytest.mark.asyncio
+    async def test_addon_mode_remove_missing_repository_is_idempotent(
+        self, monkeypatch
+    ):
+        """A direct Supervisor REST 404 still represents the desired end state."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        tools = self._tools()
+        response = httpx.Response(
+            404,
+            json={
+                "result": "error",
+                "message": "Repository deadbeef does not exist in the store",
+            },
+        )
+        direct_client = AsyncMock()
+        direct_client.request.return_value = response
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+            return_value=context,
+        ):
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="remove_repository", repository="deadbeef"
+                )
+            )
+
+        assert result["success"] is True
+        assert result["action"] == "remove_repository"
+        assert result["repository"] == "deadbeef"
+        direct_client.request.assert_awaited_once_with(
+            "DELETE", "/store/repositories/deadbeef"
+        )
+
+    @pytest.mark.asyncio
     async def test_remove_repository_unrelated_not_found_still_raises(self):
         """A failure that merely mentions 'not found' for a non-repository
         reason (e.g. a dependent add-on) must NOT be reclassified as a
