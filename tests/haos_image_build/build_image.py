@@ -19,6 +19,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -76,6 +77,14 @@ SSH_HOST_PORT = int(os.environ.get("HAOS_BUILD_SSH_PORT", "12222"))
 # HAOS_BUILD_OVMF on other distros (Fedora ships it under /usr/share/edk2,
 # Arch under /usr/share/edk2-ovmf).
 OVMF_CODE_PATH = os.environ.get("HAOS_BUILD_OVMF", "/usr/share/OVMF/OVMF_CODE.fd")
+
+# Optional image variant used by the dedicated Supervisor-beta E2E lane. The
+# normal shared image leaves this unset and keeps following stable. The beta
+# cache-prime sets both values from version.home-assistant.io/beta.json so a
+# new Supervisor beta produces a new image cache identity.
+SUPERVISOR_CHANNEL = os.environ.get("HAOS_BUILD_SUPERVISOR_CHANNEL")
+SUPERVISOR_MIN_VERSION = os.environ.get("HAOS_BUILD_SUPERVISOR_MIN_VERSION")
+CORE_VERSION = os.environ.get("HAOS_BUILD_CORE_VERSION")
 
 
 @dataclass(frozen=True)
@@ -752,8 +761,15 @@ try:
         TimeoutError,
         _WebSocketException,
     )
+    _SUPERVISOR_UPDATE_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
+        OSError,
+        TimeoutError,
+        _WebSocketException,
+    )
+
 except ImportError:
     _SUPERVISOR_WAIT_TRANSIENT_ERRORS = (WSCommandError, OSError, TimeoutError)
+    _SUPERVISOR_UPDATE_TRANSPORT_ERRORS = (OSError, TimeoutError)
 
 
 def _install_addon_with_retry(
@@ -1602,7 +1618,61 @@ def install_screenshot_engine(ws: HAWebSocket) -> str:
     return slug
 
 
-def _wait_supervisor_ready(ws: HAWebSocket, *, update_timeout: float = 600.0) -> None:
+def _supervisor_version_key(version: object) -> tuple[int, int, int, int, int]:
+    """Return a comparable key for Supervisor's calendar version."""
+    if not isinstance(version, str):
+        raise RuntimeError(f"Supervisor returned an invalid version: {version!r}")
+    match = re.fullmatch(
+        r"(\d{4})\.(\d{1,2})\.(\d+)(?:\.dev(\d+))?",
+        version,
+    )
+    if match is None:
+        raise RuntimeError(f"Supervisor returned an invalid version: {version!r}")
+    year, month, patch, dev = match.groups()
+    # A final release sorts after its development builds.
+    return (
+        int(year),
+        int(month),
+        int(patch),
+        int(dev is None),
+        int(dev or 0),
+    )
+
+
+def _is_transient_supervisor_error(exc: BaseException) -> bool:
+    """Return whether a Supervisor restart can plausibly produce ``exc``."""
+    return not isinstance(exc, WSCommandError) or exc.code in {
+        "system_error",
+        "unknown_command",
+        "unknown_error",
+    }
+
+
+def _supervisor_info_ready(
+    info: dict[str, Any],
+    *,
+    expected_channel: str | None,
+    minimum_version: str | None,
+) -> bool:
+    """Return whether Supervisor has settled on the requested image variant."""
+    if expected_channel is not None and info.get("channel") != expected_channel:
+        return False
+    if info.get("update_available") or not info.get("version_latest"):
+        return False
+    if minimum_version is None:
+        return True
+    return _supervisor_version_key(info.get("version")) >= _supervisor_version_key(
+        minimum_version
+    )
+
+
+def _wait_supervisor_ready(
+    ws: HAWebSocket,
+    *,
+    update_timeout: float = 600.0,
+    expected_channel: str | None = None,
+    minimum_version: str | None = None,
+) -> dict[str, Any]:
     """Wait for the Supervisor to respond AND finish self-updating.
 
     HAOS pins only the OS version (HAOS_VERSION); the Supervisor it bundles
@@ -1630,8 +1700,12 @@ def _wait_supervisor_ready(ws: HAWebSocket, *, update_timeout: float = 600.0) ->
         info.get("version_latest"),
         info.get("arch"),
     )
-    if not info.get("update_available") and info.get("version_latest"):
-        return
+    if _supervisor_info_ready(
+        info,
+        expected_channel=expected_channel,
+        minimum_version=minimum_version,
+    ):
+        return info
 
     LOG.info(
         "Supervisor self-update pending (%s -> %s); waiting before store ops...",
@@ -1673,14 +1747,254 @@ def _wait_supervisor_ready(ws: HAWebSocket, *, update_timeout: float = 600.0) ->
         if version != last_version:
             LOG.info("Supervisor version changed: %s -> %s", last_version, version)
             last_version = version
-        if not info.get("update_available") and info.get("version_latest"):
+        if _supervisor_info_ready(
+            info,
+            expected_channel=expected_channel,
+            minimum_version=minimum_version,
+        ):
             LOG.info("Supervisor self-update complete: version=%s", version)
-            return
+            return info
     last_err_suffix = f"; last error: {last_error!r}" if last_error else ""
     raise TimeoutError(
         f"Supervisor did not finish self-updating within {update_timeout:.0f}s "
         f"(last version={last_version}, "
         f"latest={info.get('version_latest')}{last_err_suffix})"
+    )
+
+
+def _wait_core_version(
+    ws: HAWebSocket,
+    expected_version: str,
+    *,
+    timeout: float = 600.0,
+) -> dict[str, Any]:
+    """Reconnect until Supervisor reports the requested Core version."""
+    deadline = time.monotonic() + timeout
+    last_info: dict[str, Any] | None = None
+    last_error: BaseException | None = None
+
+    while time.monotonic() < deadline:
+        try:
+            ws.reconnect()
+            last_info = ws.supervisor_api("/core/info", method="get", timeout=30.0)
+        except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
+            if not _is_transient_supervisor_error(exc):
+                raise
+            last_error = exc
+            LOG.debug("Core still restarting after update: %r", exc)
+        else:
+            if last_info.get("version") == expected_version:
+                return last_info
+            LOG.info(
+                "Core update still settling: running=%s expected=%s",
+                last_info.get("version"),
+                expected_version,
+            )
+        time.sleep(max(0.0, min(5.0, deadline - time.monotonic())))
+
+    last_err_suffix = f"; last error: {last_error!r}" if last_error else ""
+    raise TimeoutError(
+        "Core did not install the requested version within "
+        f"{timeout:.0f}s (expected={expected_version!r}, "
+        f"info={last_info!r}{last_err_suffix})"
+    )
+
+
+def _reconnect_during_supervisor_update(
+    ws: HAWebSocket,
+    *,
+    context: str,
+) -> None:
+    """Best-effort reconnect during a Supervisor restart window."""
+    try:
+        ws.reconnect()
+    except _SUPERVISOR_WAIT_TRANSIENT_ERRORS + (RuntimeError,) as exc:
+        if not _is_transient_supervisor_error(exc):
+            raise
+        LOG.warning("Reconnect %s failed: %r", context, exc)
+
+
+def _wait_supervisor_channel_metadata(
+    ws: HAWebSocket,
+    *,
+    channel: str,
+    minimum_version: str | None,
+    deadline: float,
+) -> bool:
+    """Wait for channel metadata and return whether Supervisor needs updating."""
+    last_info: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        try:
+            last_info = ws.supervisor_api(
+                "/supervisor/info", method="get", timeout=30.0
+            )
+        except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
+            if not _is_transient_supervisor_error(exc):
+                raise
+            LOG.debug("Transient Supervisor reload failure: %r", exc)
+            _reconnect_during_supervisor_update(
+                ws,
+                context="during Supervisor channel reload",
+            )
+            time.sleep(5.0)
+            continue
+
+        latest = last_info.get("version_latest")
+        latest_is_usable = minimum_version is None or (
+            isinstance(latest, str)
+            and _supervisor_version_key(latest)
+            >= _supervisor_version_key(minimum_version)
+        )
+        if last_info.get("channel") == channel and latest_is_usable:
+            if _supervisor_info_ready(
+                last_info,
+                expected_channel=channel,
+                minimum_version=minimum_version,
+            ):
+                return False
+            if last_info.get("update_available"):
+                return True
+        time.sleep(5.0)
+
+    raise TimeoutError(
+        "Supervisor channel metadata did not become ready before the "
+        f"image-build deadline: channel={channel!r}, "
+        f"minimum={minimum_version!r}, info={last_info!r}"
+    )
+
+
+def _apply_supervisor_image_update(
+    ws: HAWebSocket,
+    *,
+    channel: str,
+    minimum_version: str | None,
+    deadline: float,
+    timeout: float,
+) -> None:
+    """Install and wait for the Supervisor version advertised by its channel."""
+    try:
+        ws.supervisor_api("/supervisor/update", method="post", timeout=timeout)
+    except _SUPERVISOR_UPDATE_TRANSPORT_ERRORS as exc:
+        # Updating Supervisor restarts its container and may drop Core's proxy
+        # connection after the command has already been accepted.
+        LOG.info("Supervisor update interrupted the WS transport: %r", exc)
+
+    while True:
+        try:
+            _wait_supervisor_ready(
+                ws,
+                update_timeout=max(deadline - time.monotonic(), 1.0),
+                expected_channel=channel,
+                minimum_version=minimum_version,
+            )
+            return
+        except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
+            if not _is_transient_supervisor_error(exc):
+                raise
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    "Supervisor did not reconnect before the beta-image deadline"
+                ) from exc
+            LOG.debug("Supervisor still restarting after update: %r", exc)
+            _reconnect_during_supervisor_update(
+                ws,
+                context="after Supervisor update",
+            )
+            time.sleep(5.0)
+
+
+def _configure_core_image_variant(
+    ws: HAWebSocket,
+    *,
+    base_url: str,
+    core_version: str,
+) -> None:
+    """Install and verify the requested Home Assistant Core version."""
+    core_info = ws.supervisor_api("/core/info", method="get", timeout=30.0)
+    if core_info.get("version") == core_version:
+        LOG.info("Core beta already installed: version=%s", core_version)
+        return
+
+    LOG.info(
+        "Updating Core for beta image: %s -> %s",
+        core_info.get("version"),
+        core_version,
+    )
+    try:
+        ws.supervisor_api(
+            "/core/update",
+            method="post",
+            data={"version": core_version, "backup": False},
+            timeout=1800.0,
+        )
+    except _SUPERVISOR_UPDATE_TRANSPORT_ERRORS as exc:
+        # Updating Core replaces its container and closes this WebSocket after
+        # Supervisor has accepted the update.
+        LOG.info("Core update interrupted the WS transport: %r", exc)
+
+    _wait_http_ok(f"{base_url}/manifest.json", timeout=600.0)
+    _wait_core_version(ws, core_version, timeout=600.0)
+    LOG.info("Core beta installed: version=%s", core_version)
+
+
+def _configure_supervisor_image_variant(
+    ws: HAWebSocket,
+    *,
+    base_url: str | None = None,
+    channel: str | None,
+    minimum_version: str | None,
+    core_version: str | None = None,
+    timeout: float = 600.0,
+) -> None:
+    """Bake requested Supervisor and Core versions into this qcow2 variant."""
+    if channel is None and core_version is None:
+        return
+    if channel is None:
+        raise ValueError("A Core image variant requires a Supervisor channel")
+    if channel not in {"stable", "beta", "dev"}:
+        raise ValueError(f"Unsupported Supervisor channel: {channel!r}")
+    if minimum_version is not None:
+        _supervisor_version_key(minimum_version)
+    if core_version is not None and not core_version:
+        raise ValueError("Core version cannot be empty")
+
+    LOG.info(
+        "Configuring Supervisor image variant: channel=%s minimum=%s",
+        channel,
+        minimum_version or "any",
+    )
+    ws.supervisor_api(
+        "/supervisor/options",
+        method="post",
+        data={"channel": channel},
+        timeout=30.0,
+    )
+    ws.supervisor_api("/supervisor/reload", method="post", timeout=120.0)
+
+    deadline = time.monotonic() + timeout
+    if _wait_supervisor_channel_metadata(
+        ws,
+        channel=channel,
+        minimum_version=minimum_version,
+        deadline=deadline,
+    ):
+        _apply_supervisor_image_update(
+            ws,
+            channel=channel,
+            minimum_version=minimum_version,
+            deadline=deadline,
+            timeout=timeout,
+        )
+
+    if core_version is None:
+        return
+    if base_url is None:
+        raise ValueError("A Core image variant requires the Home Assistant base URL")
+
+    _configure_core_image_variant(
+        ws,
+        base_url=base_url,
+        core_version=core_version,
     )
 
 
@@ -2058,6 +2372,13 @@ def build(work_dir: Path, output: Path) -> None:
         token = onboard(base_url)
         _check_core_auth(base_url, token)
         with HAWebSocket(base_url, token) as ws:
+            _configure_supervisor_image_variant(
+                ws,
+                base_url=base_url,
+                channel=SUPERVISOR_CHANNEL,
+                minimum_version=SUPERVISOR_MIN_VERSION,
+                core_version=CORE_VERSION,
+            )
             install_addons(ws)
             install_hacs(ws, base_url)
             install_ha_mcp_dev_addon(ws)

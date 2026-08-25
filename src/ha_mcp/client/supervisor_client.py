@@ -1,22 +1,13 @@
 """Shared factory for direct-Supervisor httpx clients.
 
-Four call sites in the codebase talk directly to the Home Assistant
-Supervisor REST API at ``http://supervisor`` rather than through
-``HomeAssistantClient.httpx_client`` (which is bound to HA Core, not the
-Supervisor — different base URL, different token, different role gate):
+Several code paths call the Home Assistant Supervisor REST API directly with
+a short-lived client configured for the Supervisor base URL and
+``SUPERVISOR_TOKEN``. They include log collection, app management, settings
+and backup operations, screenshot-engine discovery, and app restart.
 
-- :meth:`ha_mcp.client.rest_client.HomeAssistantClient._supervisor_logs_get`
-  — fetches addon and system-service logs
-- :func:`ha_mcp.tools.tools_bug_report._fetch_addon_logs` — bundles ha-mcp's
-  own addon logs into a bug-report payload
-- :func:`ha_mcp.tools.tools_addons._supervisor_api_call` — manages add-ons and
-  searches the store without routing an add-on token through HA Core
-- :func:`ha_mcp.settings_ui._handlers_server._restart_addon` — POSTs
-  ``/addons/self/restart`` from the settings UI
-
-All four share the same boilerplate (base URL, ``Authorization: Bearer
-${SUPERVISOR_TOKEN}`` header), so this module supplies a single factory and
-keeps the four sites consistent.
+These calls cannot use ``HomeAssistantClient.httpx_client``, which is bound to
+Home Assistant Core with a different base URL, token, and role gate. This
+module centralizes the direct transport setup.
 """
 
 from __future__ import annotations
@@ -58,14 +49,10 @@ def make_supervisor_httpx_client(
 
     Raises:
         RuntimeError: ``SUPERVISOR_TOKEN`` is unset or empty in the
-            environment. Each call site has its own absent-token policy
-            (a rich :class:`HomeAssistantAuthError`, a silent ``""``
-            return, or a 400 ``JSONResponse``) that does not share a
-            common shape, so the factory cannot translate. Detecting the
-            absence at construction time prevents a malformed
-            ``Authorization: Bearer `` header from being read as a token
-            rejection by Supervisor, which would mask the missing-env-var
-            root cause.
+            environment. Callers translate that failure for their own
+            response surface. Detecting it here prevents a malformed
+            ``Authorization: Bearer `` header from masking the missing
+            environment variable as a token rejection from Supervisor.
 
     Note:
         ``SUPERVISOR_TOKEN`` is read from env at construction time and

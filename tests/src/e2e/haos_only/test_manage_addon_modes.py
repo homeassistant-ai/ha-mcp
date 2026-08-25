@@ -334,11 +334,11 @@ async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
     """`ha_manage_app(action=...)` drives a real addon through its lifecycle.
 
     Exercises ``_execute_action_mode`` → ``_supervisor_api_call`` →
-    ``send_command`` end-to-end against the real Supervisor: stop the addon,
-    start it, restart it, asserting the observed Supervisor state after each.
-    This also covers the per-action timeout plumbing (stop=60s, start/restart
-    =120s map to a local await of timeout+15s); the prior 30s hard cap would
-    have spuriously failed a start that takes longer than 30s to settle.
+    direct Supervisor REST end-to-end from the app: stop the addon, start it,
+    restart it, and assert the observed Supervisor state after each. This also
+    covers per-action timeout plumbing (stop=60s, start/restart=120s, each with
+    a 15-second client margin); the prior 30-second hard cap would have
+    spuriously failed a start that takes longer than 30 seconds to settle.
 
     AppDaemon is the target — it's installed and running in the bake and is
     not proxied by any other test in this module, so cycling its run state in

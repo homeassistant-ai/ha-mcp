@@ -134,13 +134,78 @@ def test_cache_key_consumer_discovery_tracks_jobs_individually(
     ]
 
 
-def test_inaddon_lane_targets_beta_supervisor() -> None:
-    """The real add-on lane catches Supervisor changes before stable promotion."""
-    workflow = _workflow(_WORKFLOW_DIR / "haos-e2e-inaddon-tests.yml")
-    job = workflow["jobs"]["haos-e2e-inaddon"]
-    run_step = next(
-        step for step in _job_steps(job) if step.get("name") == "Run inaddon E2E suite"
+def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
+    """Both selected deployment modes use one version-locked beta qcow2."""
+    lane_specs = (
+        (
+            "haos-e2e-inaddon-beta-tests.yml",
+            "haos-e2e-inaddon-beta",
+            "haos-e2e-inaddon-tests.yml",
+            "haos-e2e-inaddon",
+        ),
+        (
+            "haos-e2e-embedded-beta-tests.yml",
+            "haos-e2e-embedded-beta",
+            "haos-e2e-embedded-tests.yml",
+            "haos-e2e-embedded",
+        ),
     )
+    beta_cache_keys: list[str] = []
 
-    assert run_step["env"]["HAOS_SUPERVISOR_CHANNEL"] == "beta"
-    assert run_step["env"]["HAOS_SUPERVISOR_MIN_VERSION"] == "2026.08.0"
+    for beta_name, beta_job_id, stable_name, stable_job_id in lane_specs:
+        beta_path = _WORKFLOW_DIR / beta_name
+        assert beta_path.is_file(), f"missing beta lane cloned from {stable_name}"
+        workflow = _workflow(beta_path)
+        job = workflow["jobs"][beta_job_id]
+        steps = _job_steps(job)
+
+        resolve = next(
+            step
+            for step in steps
+            if step.get("name") == "Resolve current beta Supervisor and Core versions"
+        )
+        assert "version.home-assistant.io/beta.json" in resolve["run"]
+        assert '["supervisor"]' in resolve["run"]
+        assert '["homeassistant"]["qemux86-64"]' in resolve["run"]
+
+        cache_key = next(
+            step for step in steps if step.get("name") == "Compute beta image cache key"
+        )
+        cache_script = cache_key["run"]
+        assert "haos-beta-image-" in cache_script
+        assert "steps.versions.outputs.supervisor_version" in cache_script
+        assert "steps.versions.outputs.core_version" in cache_script
+        beta_cache_keys.append(cache_script)
+
+        build = next(
+            step
+            for step in steps
+            if step.get("name") == "Build image locally (cache miss or forced rebuild)"
+        )
+        assert build["env"] == {
+            "HAOS_BUILD_SUPERVISOR_CHANNEL": "beta",
+            "HAOS_BUILD_SUPERVISOR_MIN_VERSION": (
+                "${{ steps.versions.outputs.supervisor_version }}"
+            ),
+            "HAOS_BUILD_CORE_VERSION": "${{ steps.versions.outputs.core_version }}",
+        }
+
+        restore = next(
+            step for step in steps if step.get("name") == "Restore image from cache"
+        )
+        assert restore["with"]["path"] == "/tmp/haos-beta-test-image.qcow2"
+        assert (
+            workflow[True]["workflow_dispatch"]["inputs"]["pytest_paths"]["default"]
+            == "src/e2e/"
+        )
+
+        stable = _workflow(_WORKFLOW_DIR / stable_name)
+        stable_steps = _job_steps(stable["jobs"][stable_job_id])
+        stable_build = next(
+            step
+            for step in stable_steps
+            if step.get("name") == "Build image locally (cache miss or forced rebuild)"
+        )
+        assert "env" not in stable_build
+
+    assert beta_cache_keys[0] == beta_cache_keys[1]

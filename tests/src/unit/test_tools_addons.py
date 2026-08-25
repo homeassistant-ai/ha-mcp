@@ -4021,20 +4021,18 @@ class TestGetAddonInfoLogLevel:
 
 
 class TestSupervisorApiCall:
-    """Tests for Supervisor schema error classification via _classify_by_message.
+    """Test Supervisor routing, retries, and structured error classification.
 
-    The generic classifier in helpers.py routes Supervisor vol.Invalid
-    errors to VALIDATION_FAILED regardless of endpoint (issue #993).
-    These tests pin that behaviour so the greedy "auth" substring bug
-    stays fixed at the source — not patched at a single call site.
+    This includes schema-message handling from issue #993 and the direct app
+    (add-on) transport required by Supervisor 2026.08.
     """
 
     @pytest.mark.asyncio
     async def test_addon_mode_uses_direct_supervisor_rest(self, monkeypatch):
-        """Addon installs must not tunnel Supervisor calls through HA Core WS.
+        """App installs must not tunnel Supervisor calls through HA Core WS.
 
-        Supervisor 2026.08 blocks add-on-originated ``supervisor/api`` commands
-        because Core would execute them with Core's broader token. The add-on's
+        Supervisor 2026.08 blocks app-originated ``supervisor/api`` commands
+        because Core would execute them with Core's broader token. The app's
         own manager-role token remains authorized for ``/addons`` and ``/store``
         over the direct Supervisor REST API.
         """
@@ -4124,6 +4122,8 @@ class TestSupervisorApiCall:
         ("status_code", "message", "expected_code"),
         [
             (401, "Unauthorized", "AUTH_INVALID_TOKEN"),
+            (400, "App is not running", "SERVICE_CALL_FAILED"),
+            (403, "Forbidden", "AUTH_INSUFFICIENT_PERMISSIONS"),
             (404, "Add-on not found", "RESOURCE_NOT_FOUND"),
             (500, "Supervisor unavailable", "SERVICE_CALL_FAILED"),
         ],
@@ -4204,7 +4204,7 @@ class TestSupervisorApiCall:
 
     @pytest.mark.asyncio
     async def test_addon_mode_retries_direct_job_group_collision(self, monkeypatch):
-        """Direct REST retains the bounded transient job-group retry."""
+        """Direct REST retains the transient job-group retry deadline."""
         from ha_mcp.tools.tools_addons import _supervisor_api_call
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
@@ -4309,13 +4309,48 @@ class TestSupervisorApiCall:
 
 
 class TestSupervisorApiCallTimeout:
-    """The client's local await must outlast the Supervisor-side timeout.
+    """The local transport wait must outlast the Supervisor-side timeout.
 
-    ``send_command`` defaults to a 30s local wait. A long Supervisor
-    operation (add-on install/update/rebuild gets ``timeout=1800``) needs
-    the local await raised in lockstep, or the client abandons a
+    Both transports default to a 30-second local wait. A long Supervisor
+    operation (app install/update/rebuild gets ``timeout=1800``) needs
+    the local wait raised in lockstep, or the client abandons a
     still-running install after 30s even though the server keeps working.
     """
+
+    @pytest.mark.asyncio
+    async def test_addon_long_timeout_extends_direct_rest_wait(self, monkeypatch):
+        """The app transport gives a long Supervisor operation the same margin."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            200,
+            json={"result": "ok", "data": {}},
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+            return_value=context,
+            create=True,
+        ) as factory:
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/update",
+                method="POST",
+                timeout=1800,
+            )
+
+        factory.assert_called_once_with(timeout=1815.0, verify=client.verify_ssl)
+        direct_client.request.assert_awaited_once_with(
+            "POST", "/addons/core_mosquitto/update"
+        )
+        client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_long_timeout_extends_local_wait(self):

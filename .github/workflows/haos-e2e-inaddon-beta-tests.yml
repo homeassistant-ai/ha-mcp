@@ -1,23 +1,12 @@
-name: HAOS E2E Tests (inaddon)
+name: HAOS E2E Tests (inaddon beta)
 
-# Parallel to haos-e2e-tests.yml — exercises the SAME test suite against
-# the SAME cached qcow2, but routes ``mcp_client`` to the ha-mcp dev
-# addon's HTTP endpoint INSIDE the booted HAOS instead of using an
-# in-process FastMCP server. This is the deployment path real users hit
-# when they install the addon + cloudflared on a real HAOS install.
+# Beta twin of haos-e2e-inaddon-tests.yml. It runs the same full suite
+# through the real app (add-on) deployment path, but restores a separate qcow2
+# baked with the current beta Supervisor and beta Home Assistant Core.
 #
-# The HAOS_TEST_MODE=inaddon env flips conftest.py's HAOS dispatch:
-# refresh_dev_addon_source_in_qcow2 overwrites the addon source (apps/local
-# on Supervisor 2026.06.0+, else legacy addons/local) with PR source + bumps
-# config.yaml ``version:`` → Supervisor detects an update on next boot →
-# trigger_dev_addon_update calls supervisor/api addons/{slug}/update via WS →
-# Docker rebuilds with layer cache → addon restarts with PR source →
-# mcp_client connects via HTTP transport.
-#
-# v1 scope: run ONLY tests/src/e2e/haos_only/ (the canary suite) so the
-# initial green CI gives us a fast feedback loop. Once the full inaddon
-# plumbing is verified, expand to the full src/e2e/ tree (gated by
-# external_only / inaddon_only markers).
+# HAOS_TEST_MODE=inaddon refreshes the dev app source in each worker overlay,
+# asks Supervisor to rebuild and start it, then connects mcp_client to the
+# app's HTTP endpoint. The stable inaddon workflow and cache remain unchanged.
 
 on:
   # No workflow-level `paths:` filter on purpose. This check is a REQUIRED
@@ -29,6 +18,10 @@ on:
   # path-skip, which reports nothing). See the `changes` job for the run/skip
   # rule (skip only pure docs/website; addon + bake inputs always run).
   pull_request:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       pytest_args:
@@ -116,8 +109,8 @@ jobs:
           echo "run=$run"
           echo "run=$run" >> "$GITHUB_OUTPUT"
 
-  haos-e2e-inaddon:
-    name: HAOS E2E Tests (inaddon)
+  haos-e2e-inaddon-beta:
+    name: HAOS E2E Tests (inaddon beta)
     needs: changes
     # A skipped job reports Success to the required status check (unlike a
     # workflow-level path-skip, which never reports). See the `changes` job.
@@ -130,7 +123,7 @@ jobs:
     # than `false` now runs. `!cancelled()` keeps a real cancellation cancelling.
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 75
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -140,15 +133,33 @@ jobs:
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
 
-      - name: Compute image cache key
+      - name: Resolve current beta Supervisor and Core versions
+        id: versions
+        run: |
+          metadata=$(curl --fail --silent --show-error \
+            https://version.home-assistant.io/beta.json)
+          supervisor_version=$(python3 -c \
+            'import json, sys; print(json.load(sys.stdin)["supervisor"])' \
+            <<<"$metadata")
+          core_version=$(python3 -c \
+            'import json, sys; print(json.load(sys.stdin)["homeassistant"]["qemux86-64"])' \
+            <<<"$metadata")
+          if ! [[ "$supervisor_version" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]+([.]dev[0-9]+)?$ ]]; then
+            echo "::error::Unexpected beta Supervisor version: $supervisor_version"
+            exit 1
+          fi
+          if ! [[ "$core_version" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]+([.]dev[0-9]+|b[0-9]+)?$ ]]; then
+            echo "::error::Unexpected beta Core version: $core_version"
+            exit 1
+          fi
+          echo "supervisor_version=$supervisor_version" >> "$GITHUB_OUTPUT"
+          echo "core_version=$core_version" >> "$GITHUB_OUTPUT"
+
+      - name: Compute beta image cache key
         id: key
-        # Shared with haos-e2e-tests.yml: both lanes consume the same
-        # qcow2. The bake (build_image.py::build) unconditionally calls
-        # stage_dev_addon_source + install_ha_mcp_dev_addon, so the baked
-        # image is already addon-baked and works for both tiers. Inaddon's
-        # refresh_dev_addon_source_in_qcow2 overwrites the addon source at
-        # test time, so PR-level addon changes don't need to invalidate the
-        # cache here.
+        # Both beta lanes restore this byte-identical image. The two upstream
+        # versions prevent an older beta image from satisfying a newer run;
+        # the hash invalidates it when repository bake inputs change.
         run: |
           hash=$(git ls-tree -r HEAD \
             tests/haos_image_build \
@@ -156,13 +167,13 @@ jobs:
             custom_components/ha_mcp_tools \
             homeassistant-addon-webhook-proxy \
             | sha256sum | cut -d' ' -f1 | head -c16)
-          echo "cache-key=haos-image-$hash" >> "$GITHUB_OUTPUT"
+          echo "cache-key=haos-beta-image-${{ steps.versions.outputs.supervisor_version }}-${{ steps.versions.outputs.core_version }}-$hash" >> "$GITHUB_OUTPUT"
 
       - name: Restore image from cache
         id: restore-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: /tmp/haos-test-image.qcow2
+          path: /tmp/haos-beta-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
 
       - name: Report image-acquisition path
@@ -208,30 +219,35 @@ jobs:
 
       - name: Build image locally (cache miss or forced rebuild)
         if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
+        env:
+          HAOS_BUILD_SUPERVISOR_CHANNEL: beta
+          HAOS_BUILD_SUPERVISOR_MIN_VERSION: ${{ steps.versions.outputs.supervisor_version }}
+          HAOS_BUILD_CORE_VERSION: ${{ steps.versions.outputs.core_version }}
         run: |
           python3 tests/haos_image_build/build_image.py --verbose \
-            --output /tmp/haos-test-image.qcow2
+            --output /tmp/haos-beta-test-image.qcow2
 
-      # No cache-save step here on purpose. The external lane
-      # (haos-e2e-tests.yml) computes the same cache key (#1407) and
-      # always tries to save the same qcow2; both lanes start in
-      # parallel on the same PR push, so whichever lost the save race
-      # was burning ~25s on a tar+zstd-write of a 12 GB qcow2 that
-      # the actions/cache service then refused with
-      # "another job may be creating this cache." Letting only the
-      # external lane save eliminates the wasted work without
-      # changing what gets cached — both lanes still restore from the
-      # shared key on the next run.
-      #
-      # The shared-key bet is safe because both lanes consume the SAME
-      # byte-identical qcow2: the cache key hashes the bake-input paths
-      # only, so a cache miss builds one qcow2 that the saving lane writes
-      # to the shared key for both to restore, and PR-level addon/source
-      # overrides happen *in-VM at test time* (see
-      # ``refresh_dev_addon_source_in_qcow2`` /
-      # ``refresh_recorder_in_qcow2`` in conftest.py) on each
-      # worker's per-worker overlay — never on the base qcow2 that
-      # gets cached.
+      - name: Compress beta image for Actions cache
+        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
+        run: |
+          qemu-img convert -c -O qcow2 \
+            /tmp/haos-beta-test-image.qcow2 \
+            /tmp/haos-beta-test-image.qcow2.compressed
+          mv /tmp/haos-beta-test-image.qcow2.compressed \
+            /tmp/haos-beta-test-image.qcow2
+          qemu-img check /tmp/haos-beta-test-image.qcow2
+          bytes=$(stat -c%s /tmp/haos-beta-test-image.qcow2)
+          if [ "$bytes" -lt 1073741824 ]; then
+            echo "::error::Compressed beta qcow2 is suspiciously small: $bytes bytes"
+            exit 1
+          fi
+
+      - name: Save beta image cache
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: /tmp/haos-beta-test-image.qcow2
+          key: ${{ steps.key.outputs.cache-key }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
@@ -245,7 +261,7 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Confirm image present
-        run: ls -lh /tmp/haos-test-image.qcow2
+        run: ls -lh /tmp/haos-beta-test-image.qcow2
 
       - name: Run inaddon E2E suite
         # HAOS_TEST_MODE=inaddon flips conftest.py's HAOS dispatch into
@@ -253,9 +269,8 @@ jobs:
         # before boot, Supervisor update is triggered, mcp_client uses
         # HTTP transport to the addon's MCP endpoint.
         #
-        # v1: targets src/e2e/haos_only/ only (canary tier). Widen via
-        # workflow_dispatch pytest_paths input once the inaddon plumbing
-        # is stable. external_only-marked tests skip automatically.
+        # Mirrors the stable inaddon lane's full-suite selection.
+        # external_only-marked tests skip automatically.
         #
         # -n2 --dist loadscope: pytest-xdist parallelizes across 2 workers,
         # each booting its own QEMU (per-worker port offset + qcow2 overlay
@@ -277,7 +292,7 @@ jobs:
             || { rc=$?; [ "$rc" -eq 5 ] && echo "no disruptive tests in selection"; [ "$rc" -eq 5 ]; }
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
-          HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
+          HAOS_TEST_IMAGE_PATH: /tmp/haos-beta-test-image.qcow2
           HAOS_TEST_MODE: inaddon
           # Feeds conftest's HACS token injection (qcow2 pre-boot edit)
           # so HACS repo adds don't hit the unauthenticated shared-IP
@@ -288,16 +303,16 @@ jobs:
         if: always()
         run: |
           sudo chmod +r /boot/vmlinuz-* || true
-          mkdir -p /tmp/haos-inaddon-diagnostics
+          mkdir -p /tmp/haos-inaddon-beta-diagnostics
           # A bake-stage failure leaves its serial log + image under
           # /tmp/haos-build (build_image.py's work dir); capture them so
           # the artifact is never empty on the failure hardest to see
           # (2026-08-05: day-of-release HA 2026.8.0 bake timeouts shipped
           # an empty artifact).
-          cp /tmp/haos-build/haos-serial.log /tmp/haos-inaddon-diagnostics/bake-serial.log 2>/dev/null || true
+          cp /tmp/haos-build/haos-serial.log /tmp/haos-inaddon-beta-diagnostics/bake-serial.log 2>/dev/null || true
           # In pytest-xdist (parallel) mode each worker boots its OWN
-          # backing-file overlay (haos-test-image-<worker>.qcow2); the base
-          # /tmp/haos-test-image.qcow2 is never booted, so the per-PR source
+          # backing-file overlay (haos-beta-test-image-<worker>.qcow2); the base
+          # /tmp/haos-beta-test-image.qcow2 is never booted, so the per-PR source
           # refresh and the HA Core runtime state live on the OVERLAYS, not
           # the base. The overlays persist after the session (the worker
           # fixture registers no teardown unlink), and guestfish reads them
@@ -307,9 +322,9 @@ jobs:
           # only the un-refreshed base, so the addon-dir / config.yaml checks
           # could never observe the refresh result they claimed to verify.
           shopt -s nullglob
-          targets=(/tmp/haos-test-image-gw*.qcow2)
+          targets=(/tmp/haos-beta-test-image-gw*.qcow2)
           if [ ${#targets[@]} -eq 0 ]; then
-            targets=(/tmp/haos-test-image.qcow2)
+            targets=(/tmp/haos-beta-test-image.qcow2)
           fi
           if [ ! -f "${targets[0]}" ] && [ -f /tmp/haos-build/haos-test-image.qcow2 ]; then
             # Bake-stage failure: probe the half-baked image instead.
@@ -317,7 +332,7 @@ jobs:
           fi
           for img in "${targets[@]}"; do
             label=$(basename "$img" .qcow2)
-            outdir=/tmp/haos-inaddon-diagnostics/$label
+            outdir=/tmp/haos-inaddon-beta-diagnostics/$label
             mkdir -p "$outdir"
             echo "=== extracting diagnostics from $img ==="
             # /supervisor/homeassistant/.storage state + log files (HA Core).
@@ -358,20 +373,20 @@ jobs:
             echo "--- [$label] addon config.yaml ---"
             cat "$outdir/config.yaml" || true
           done
-          ls -laR /tmp/haos-inaddon-diagnostics/ || true
+          ls -laR /tmp/haos-inaddon-beta-diagnostics/ || true
           # The HACS token injection (conftest pre-boot edit) puts GITHUB_TOKEN
           # into core.config_entries inside the extracted storage.tar files.
           # Redact them (fail-closed: an unredactable tar is deleted) so no
           # credential persists into the downloadable artifact.
-          python3 scripts/redact_diagnostics_secrets.py /tmp/haos-inaddon-diagnostics
+          python3 scripts/redact_diagnostics_secrets.py /tmp/haos-inaddon-beta-diagnostics
 
       - name: Upload HAOS inaddon diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: haos-inaddon-diagnostics
+          name: haos-inaddon-beta-diagnostics
           path: |
-            /tmp/haos-inaddon-diagnostics/
+            /tmp/haos-inaddon-beta-diagnostics/
             # conftest's finally-block dumps HA Core + Supervisor logs into
             # /tmp/haos-diagnostics; surface those too so we can see why
             # ``addons/{slug}/update`` failed with "unknown error".

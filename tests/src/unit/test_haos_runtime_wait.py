@@ -18,7 +18,6 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.src import haos_runtime
 from tests.src.haos_runtime import _wait_supervisor_update_done
 
 _SETTLED = {
@@ -75,33 +74,6 @@ class _FakeWS:
         return json.dumps(resp)
 
 
-class _SupervisorChannelWS(_FakeWS):
-    """Context-managed WS fake with the real HA authentication prelude."""
-
-    def __init__(self, responses: list[dict[str, Any]]) -> None:
-        super().__init__(
-            [
-                {"type": "auth_required"},
-                {"type": "auth_ok"},
-                *responses,
-            ]
-        )
-        self.sent_frames: list[dict[str, Any]] = []
-
-    def __enter__(self) -> _SupervisorChannelWS:
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        return None
-
-    def send(self, raw: str) -> None:
-        frame = json.loads(raw)
-        self.sent_frames.append(frame)
-        if "id" in frame:
-            self._last_id = frame["id"]
-            self.sent_ids.append(frame["id"])
-
-
 def _next_id() -> Callable[[], int]:
     counter = {"n": 0}
 
@@ -134,65 +106,6 @@ def test_pending_then_settles() -> None:
     ):
         _wait_supervisor_update_done(ws, 1000.0, _next_id())
     assert ws.sent_ids == [1, 2]
-
-
-def test_wait_returns_the_settled_supervisor_info() -> None:
-    """Callers can assert the version/channel that actually settled."""
-    ws = _FakeWS([_SETTLED])
-
-    with patch("tests.src.haos_runtime.time.monotonic", return_value=0.0):
-        result = _wait_supervisor_update_done(ws, 1000.0, _next_id())
-
-    assert result == _SETTLED["result"]
-
-
-def test_ensure_supervisor_channel_updates_and_verifies_beta() -> None:
-    """The HAOS harness upgrades stable Supervisor before add-on tests run."""
-    fake_ws = _SupervisorChannelWS(
-        [
-            {"success": True, "result": {}},  # /supervisor/options
-            {"success": True, "result": {}},  # /supervisor/reload
-            {
-                "success": True,
-                "result": {
-                    "channel": "beta",
-                    "version": "2026.07.5",
-                    "version_latest": "2026.08.0",
-                    "update_available": True,
-                },
-            },
-            {"success": True, "result": {}},  # /supervisor/update
-            {
-                "success": True,
-                "result": {
-                    "channel": "beta",
-                    "version": "2026.08.0",
-                    "version_latest": "2026.08.0",
-                    "update_available": False,
-                },
-            },
-        ]
-    )
-
-    with patch("websockets.sync.client.connect", return_value=fake_ws):
-        result = haos_runtime.ensure_supervisor_channel(
-            "http://127.0.0.1:18123",
-            "ha-token",
-            channel="beta",
-            minimum_version="2026.08.0",
-        )
-
-    commands = [frame for frame in fake_ws.sent_frames if "id" in frame]
-    assert [frame["endpoint"] for frame in commands] == [
-        "/supervisor/options",
-        "/supervisor/reload",
-        "/supervisor/info",
-        "/supervisor/update",
-        "/supervisor/info",
-    ]
-    assert commands[0]["data"] == {"channel": "beta"}
-    assert result["channel"] == "beta"
-    assert result["version"] == "2026.08.0"
 
 
 def test_persistent_failure_surfaced_in_timeout() -> None:

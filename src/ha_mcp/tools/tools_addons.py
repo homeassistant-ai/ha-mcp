@@ -242,7 +242,7 @@ def _supervisor_rest_failure(
     error: object,
     response_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Normalize a failed direct REST response without losing HTTP semantics."""
+    """Normalize direct REST failure and retain non-2xx status metadata."""
     error_text = str(error)
     result: dict[str, Any] = {"success": False, "error": error_text}
     if response.is_error:
@@ -318,6 +318,40 @@ async def _supervisor_api_call_once(
     return {"success": True, "result": payload.get("data", {})}
 
 
+def _raise_supervisor_api_failure(
+    result: dict[str, Any],
+    endpoint: str,
+) -> NoReturn:
+    """Raise the structured exception represented by a non-retryable result."""
+    error_text = str(result.get("error", f"Supervisor API call failed: {endpoint}"))
+    status_code = result.get("_status_code")
+    response_data = result.get("_response_data")
+    if status_code in {401, 404}:
+        raise HomeAssistantAPIError(
+            error_text,
+            status_code=status_code,
+            response_data=response_data if isinstance(response_data, dict) else None,
+        )
+    if status_code == 403:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+                error_text,
+                context={"endpoint": endpoint, "status_code": 403},
+                suggestions=[
+                    "The app token is valid but its Supervisor role "
+                    "does not permit this operation",
+                    "Check the ha-mcp app's hassio_role and hassio_api configuration",
+                ],
+            )
+        )
+    if isinstance(status_code, int) and not error_text.lower().startswith(
+        "command failed:"
+    ):
+        error_text = f"Command failed: {error_text}"
+    raise HomeAssistantCommandError(error_text)
+
+
 async def _supervisor_api_call(
     client: HomeAssistantClient,
     endpoint: str,
@@ -327,19 +361,20 @@ async def _supervisor_api_call(
 ) -> dict[str, Any]:
     """Make a Supervisor API call through the supported install-mode transport.
 
-    Add-on installs use their manager-role token against Supervisor REST directly.
+    App (add-on) installs use their manager-role token against Supervisor REST.
     Other installs retain Home Assistant Core's ``supervisor/api`` WebSocket proxy.
 
     Args:
-        client: Home Assistant REST client (provides base_url and token)
+        client: Home Assistant client used for off-host WebSocket calls and
+            as the TLS-verification source for direct REST.
         endpoint: Supervisor API endpoint (e.g., "/addons", "/addons/{slug}/info")
         method: HTTP method (default "GET")
         data: Optional request body data
         timeout: Optional timeout override
 
-    A transient Supervisor job-group collision is retried with backoff, so a
-    contended add-on endpoint can block for up to
-    ``_JOB_COLLISION_RETRY_WINDOW`` before returning or raising.
+    A transient Supervisor job-group collision is retried while the
+    ``_JOB_COLLISION_RETRY_WINDOW`` deadline remains. Individual transport
+    attempts retain their normal timeout, so total elapsed time can exceed it.
 
     Returns:
         ``{"success": True, "result": ...}``. Every failure raises — this
@@ -358,22 +393,20 @@ async def _supervisor_api_call(
             kwargs["timeout"] = timeout
             wait_timeout = float(timeout) + 15.0
 
-        # Off-host installs use the shared pooled WebSocket (issue #1813),
-        # while add-on installs use direct Supervisor REST because Supervisor
-        # 2026.08 rejects add-on-originated ``supervisor/api`` commands. Both
-        # transports are normalized to ``{"success": ..., ...}`` so errors
-        # retain the same classification and retry behavior.
+        # Off-host installs use the shared pooled WebSocket (issue #1813).
+        # App installs call Supervisor REST directly because Supervisor 2026.08
+        # filters app-originated ``supervisor/api`` commands at its Core proxy.
+        # Both transports feed the common retry and error-normalization path:
+        # direct non-2xx responses retain status metadata, while WebSocket
+        # failures are classified from the returned message.
         #
-        # Supervisor serialises jobs per add-on job group and rejects a
-        # state-changing call outright while a still-settling job (a watchdog
-        # restart, a prior start/stop, a store reload) holds that group. The
-        # rejection happens before the job body runs, so nothing was applied
-        # and retrying cannot double-execute. The holder clears within seconds
-        # and the caller can do nothing useful with the failure, so ride it out
-        # inside one bounded window. The window is total rather than
-        # per-attempt, so a wedged group gives up once the window elapses
-        # instead of after some fixed retry count. Any other failure raises
-        # immediately, without retrying.
+        # Supervisor serialises jobs per app job group and rejects a
+        # state-changing call while a still-settling job (a watchdog restart,
+        # a prior start/stop, or a store reload) holds that group. The rejection
+        # happens before the job body runs, so retrying cannot double-execute.
+        # Retry attempts begin only while the shared deadline remains; an
+        # individual transport attempt still uses its normal request timeout.
+        # Any other failure raises immediately.
         deadline = time.monotonic() + _JOB_COLLISION_RETRY_WINDOW
         delay = _JOB_COLLISION_RETRY_INITIAL_DELAY
         attempts = 0
@@ -395,17 +428,7 @@ async def _supervisor_api_call(
                 result.get("error", f"Supervisor API call failed: {endpoint}")
             )
             if _JOB_COLLISION_MARKER not in error_text.lower():
-                status_code = result.get("_status_code")
-                if isinstance(status_code, int):
-                    response_data = result.get("_response_data")
-                    raise HomeAssistantAPIError(
-                        error_text,
-                        status_code=status_code,
-                        response_data=(
-                            response_data if isinstance(response_data, dict) else None
-                        ),
-                    )
-                raise HomeAssistantCommandError(error_text)
+                _raise_supervisor_api_failure(result, endpoint)
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -501,13 +524,13 @@ def _addon_connection_failure_suggestions(
 async def _create_ingress_session(client: HomeAssistantClient) -> str:
     """Create a Supervisor ingress session and return its token.
 
-    Sessions are minted via the WS `supervisor/api` proxy (which HA Core
-    authenticates on our behalf), so this works the same on HAOS, Supervised,
-    and PyPI/uvx hosts. The returned token is set as the `ingress_session`
-    cookie on requests to HA Core's `/api/hassio_ingress/<addon_token>/...`
-    endpoint, which Supervisor validates before proxying to the add-on
-    container. Sessions are valid for ~15 minutes; we mint a fresh one per
-    call to avoid managing lifetime.
+    App mode uses a direct sibling-ingress route and never calls this helper.
+    Off-host installs mint sessions through Home Assistant Core's
+    ``supervisor/api`` WebSocket command. The returned token is set as the
+    ``ingress_session`` cookie on requests to Core's
+    ``/api/hassio_ingress/<addon_token>/...`` endpoint, which Supervisor
+    validates before proxying to the app container. Sessions are valid for
+    approximately 15 minutes; a fresh one is minted per call.
     """
     response = await _supervisor_api_call(
         client, "/ingress/session", method="POST", data={}

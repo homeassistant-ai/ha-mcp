@@ -12,20 +12,52 @@ HAOS; ``time.sleep`` is patched out so the poll loop runs instantly.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import pytest
 from websockets.exceptions import WebSocketException
 
-from tests.haos_image_build.build_image import WSCommandError, _wait_supervisor_ready
+from tests.haos_image_build.build_image import (
+    WSCommandError,
+    _configure_supervisor_image_variant,
+    _wait_supervisor_ready,
+)
 
 
-def _info(update_available: bool, version: str = "2026.06.1") -> dict[str, Any]:
+def _info(
+    update_available: bool,
+    version: str = "2026.06.1",
+    *,
+    version_latest: str = "2026.06.1",
+    channel: str = "stable",
+) -> dict[str, Any]:
     return {
         "version": version,
-        "version_latest": "2026.06.1",
+        "version_latest": version_latest,
         "update_available": update_available,
         "arch": "amd64",
+        "channel": channel,
+    }
+
+
+def _core_info(
+    version: str,
+    *,
+    version_latest: str,
+    update_available: bool,
+) -> dict[str, Any]:
+    return {
+        "version": version,
+        "version_latest": version_latest,
+        "update_available": update_available,
+        "arch": "amd64",
+        "machine": "qemux86-64",
+        "image": "ghcr.io/home-assistant/qemux86-64-homeassistant",
+        "boot": True,
+        "port": 8123,
+        "ssl": False,
+        "watchdog": True,
+        "wait_boot": 600,
     }
 
 
@@ -114,3 +146,222 @@ def test_persistent_error_surfaced_in_timeout() -> None:
         _wait_supervisor_ready(ws, update_timeout=10.0)
     # Loop ran at least once before timing out
     assert ws.supervisor_api.call_count >= 2
+
+
+def test_wait_requires_the_requested_channel_and_minimum_version() -> None:
+    """A settled stable image cannot satisfy the beta image contract."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        _info(update_available=False, channel="stable"),
+        _info(
+            update_available=False,
+            version="2026.08.0",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+    ]
+
+    with patch("tests.haos_image_build.build_image.time.sleep") as sleep:
+        result = _wait_supervisor_ready(
+            ws,
+            expected_channel="beta",
+            minimum_version="2026.08.0",
+        )
+
+    assert result["channel"] == "beta"
+    assert result["version"] == "2026.08.0"
+    sleep.assert_called_once_with(10.0)
+
+
+def test_configure_beta_variant_skips_update_when_image_is_current() -> None:
+    """An already-current beta image only needs options/reload verification."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        {},
+        {},
+        _info(
+            update_available=False,
+            version="2026.08.0",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+    ]
+
+    _configure_supervisor_image_variant(
+        ws,
+        channel="beta",
+        minimum_version="2026.08.0",
+    )
+
+    assert ws.supervisor_api.call_args_list == [
+        call(
+            "/supervisor/options",
+            method="post",
+            data={"channel": "beta"},
+            timeout=30.0,
+        ),
+        call("/supervisor/reload", method="post", timeout=120.0),
+        call("/supervisor/info", method="get", timeout=30.0),
+    ]
+
+
+def test_configure_beta_variant_installs_advertised_update() -> None:
+    """A newly advertised beta is installed before the qcow2 is emitted."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        {},
+        {},
+        _info(
+            update_available=True,
+            version="2026.07.5",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+        {},
+        _info(
+            update_available=False,
+            version="2026.08.0",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+    ]
+
+    _configure_supervisor_image_variant(
+        ws,
+        channel="beta",
+        minimum_version="2026.08.0",
+    )
+
+    assert (
+        call(
+            "/supervisor/update",
+            method="post",
+            timeout=600.0,
+        )
+        in ws.supervisor_api.call_args_list
+    )
+    assert ws.supervisor_api.call_args_list[-1] == call(
+        "/supervisor/info",
+        method="get",
+        timeout=30.0,
+    )
+
+
+def test_configure_beta_variant_tolerates_restart_before_version_settles() -> None:
+    """A Supervisor restart-window error cannot abort a requested beta update."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        {},
+        {},
+        _info(
+            update_available=True,
+            version="2026.07.5",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+        {},
+        WSCommandError("restarting", code="system_error"),
+        _info(
+            update_available=False,
+            version="2026.08.0",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+    ]
+
+    with patch("tests.haos_image_build.build_image.time.sleep"):
+        _configure_supervisor_image_variant(
+            ws,
+            channel="beta",
+            minimum_version="2026.08.0",
+        )
+
+    assert ws.supervisor_api.call_args_list[-1] == call(
+        "/supervisor/info",
+        method="get",
+        timeout=30.0,
+    )
+
+
+def test_configure_beta_variant_accepts_dev_supervisor_versions() -> None:
+    """A beta manifest may temporarily advertise a calendar dev build."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        {},
+        {},
+        _info(
+            update_available=False,
+            version="2026.09.0.dev1234",
+            version_latest="2026.09.0.dev1234",
+            channel="beta",
+        ),
+    ]
+
+    _configure_supervisor_image_variant(
+        ws,
+        channel="beta",
+        minimum_version="2026.09.0.dev1234",
+    )
+
+    assert ws.supervisor_api.call_count == 3
+
+
+def test_configure_beta_variant_installs_exact_core_version() -> None:
+    """The shared beta qcow2 contains Core from the same beta manifest."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        {},
+        {},
+        _info(
+            update_available=False,
+            version="2026.08.0",
+            version_latest="2026.08.0",
+            channel="beta",
+        ),
+        _core_info(
+            "2026.8.2",
+            version_latest="2026.8.3",
+            update_available=True,
+        ),
+        WebSocketException("Core restarted"),
+        _core_info(
+            "2026.8.2",
+            version_latest="2026.8.3",
+            update_available=True,
+        ),
+        _core_info(
+            "2026.8.3",
+            version_latest="2026.8.3",
+            update_available=False,
+        ),
+    ]
+
+    with (
+        patch("tests.haos_image_build.build_image._wait_http_ok") as wait_http_ok,
+        patch("tests.haos_image_build.build_image.time.sleep") as sleep,
+    ):
+        _configure_supervisor_image_variant(
+            ws,
+            base_url="http://127.0.0.1:18123",
+            channel="beta",
+            minimum_version="2026.08.0",
+            core_version="2026.8.3",
+        )
+
+    assert (
+        call(
+            "/core/update",
+            method="post",
+            data={"version": "2026.8.3", "backup": False},
+            timeout=1800.0,
+        )
+        in ws.supervisor_api.call_args_list
+    )
+    wait_http_ok.assert_called_once_with(
+        "http://127.0.0.1:18123/manifest.json", timeout=600.0
+    )
+    assert ws.reconnect.call_count == 2
+    sleep.assert_called_once()
+    assert ws.supervisor_api.call_args_list[-1] == call(
+        "/core/info", method="get", timeout=30.0
+    )
