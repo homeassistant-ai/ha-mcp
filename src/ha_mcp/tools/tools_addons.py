@@ -69,6 +69,12 @@ _MAX_RESPONSE_SIZE = 50 * 1024
 # Supervisor is local to the app network, so connection acquisition should
 # remain short even when an app operation needs a multi-minute response budget.
 _SUPERVISOR_ACQUIRE_TIMEOUT = 10.0
+_SUPERVISOR_AVAILABILITY_SUGGESTION = (
+    "Check Home Assistant connection and Supervisor availability"
+)
+_SUPERVISOR_RESPONSE_TRUNCATION_SUFFIX = (
+    f"\n[Supervisor response truncated to {_MAX_RESPONSE_SIZE // 1024} KiB]"
+)
 
 # Hard safety cap on WebSocket messages collected per call. `message_limit`
 # can lower this but never raise it.
@@ -310,6 +316,15 @@ def _supervisor_invalid_response(
     return _supervisor_rest_failure(response, error)
 
 
+def _bounded_supervisor_response_text(response: httpx.Response) -> str:
+    """Return a model-safe Supervisor response body with visible truncation."""
+    body = response.text.strip()
+    if len(body) <= _MAX_RESPONSE_SIZE:
+        return body
+    prefix_size = _MAX_RESPONSE_SIZE - len(_SUPERVISOR_RESPONSE_TRUNCATION_SUFFIX)
+    return body[:prefix_size] + _SUPERVISOR_RESPONSE_TRUNCATION_SUFFIX
+
+
 def _normalize_supervisor_rest_response(
     response: httpx.Response,
     endpoint: str,
@@ -321,7 +336,7 @@ def _normalize_supervisor_rest_response(
         300 <= response.status_code < 400 or response.status_code >= 500
     )
     if write_outcome_unknown:
-        response_body = response.text.strip()[:_MAX_RESPONSE_SIZE]
+        response_body = _bounded_supervisor_response_text(response)
         _raise_supervisor_write_outcome_unknown(
             ErrorCode.SERVICE_CALL_FAILED,
             f"Supervisor API {verb} {endpoint} returned HTTP "
@@ -335,7 +350,7 @@ def _normalize_supervisor_rest_response(
     try:
         payload = response.json()
     except ValueError:
-        body = response.text.strip()
+        body = _bounded_supervisor_response_text(response)
         error_message = (
             body or f"Supervisor returned invalid JSON (HTTP {response.status_code})"
         )
@@ -750,21 +765,24 @@ async def _supervisor_api_call(
         raise
     except Exception as e:
         logger.error(f"Error calling Supervisor API {endpoint}: {e}")
-        suggestions = None
-        if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
-            suggestions = [
-                "Check Home Assistant connection and Supervisor availability"
-            ]
-        exception_to_structured_error(
+        error_response = exception_to_structured_error(
             e,
             context={
                 "endpoint": endpoint,
                 "operation": f"Supervisor API {endpoint}",
                 "timeout_seconds": wait_timeout,
             },
-            suggestions=suggestions,
+            raise_error=False,
         )
-        return None  # unreachable: exception_to_structured_error always raises
+        error_details = error_response.get("error")
+        if (
+            isinstance(error_details, dict)
+            and error_details.get("code") == ErrorCode.RESOURCE_NOT_FOUND.value
+        ):
+            error_details["suggestion"] = _SUPERVISOR_AVAILABILITY_SUGGESTION
+            error_details["suggestions"] = [_SUPERVISOR_AVAILABILITY_SUGGESTION]
+        raise_tool_error(error_response)
+        return None  # unreachable: raise_tool_error always raises
 
 
 def _addon_connection_failure_suggestions(
