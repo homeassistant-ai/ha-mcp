@@ -6,7 +6,8 @@ name: HAOS E2E Tests (inaddon beta)
 #
 # HAOS_TEST_MODE=inaddon refreshes the dev app source in each worker overlay,
 # asks Supervisor to rebuild and start it, then connects mcp_client to the
-# app's HTTP endpoint. The stable inaddon workflow and cache remain unchanged.
+# app's HTTP endpoint. The stable lane retains its existing workflow and
+# ``haos-image-*`` cache namespace.
 
 on:
   # Run on every pull request so beta compatibility stays visible. The
@@ -296,24 +297,18 @@ jobs:
           # (2026-08-05: day-of-release HA 2026.8.0 bake timeouts shipped
           # an empty artifact).
           cp /tmp/haos-build/haos-serial.log /tmp/haos-inaddon-beta-diagnostics/bake-serial.log 2>/dev/null || true
-          # In pytest-xdist (parallel) mode each worker boots its OWN
-          # backing-file overlay (haos-beta-test-image-<worker>.qcow2); the base
-          # /tmp/haos-beta-test-image.qcow2 is never booted, so the per-PR source
-          # refresh and the HA Core runtime state live on the OVERLAYS, not
-          # the base. The overlays persist after the session (the worker
-          # fixture registers no teardown unlink), and guestfish reads them
-          # through their absolute backing path. Probe every overlay; fall
-          # back to the base image only for a single-worker (master) run that
-          # mutates it directly. #1594 secondary defect: the old step probed
-          # only the un-refreshed base, so the app-dir / config.yaml checks
-          # could never observe the refresh result they claimed to verify.
+          # The parallel xdist phase boots one backing-file overlay per worker.
+          # The later serial addon_disruptive phase uses worker ID master and
+          # boots the base image directly. Overlays persist after the session,
+          # so probe every overlay plus the base when present to capture state
+          # from both phases. If the bake failed before either path existed,
+          # probe the half-baked build image instead.
           shopt -s nullglob
           targets=(/tmp/haos-beta-test-image-gw*.qcow2)
-          if [ ${#targets[@]} -eq 0 ]; then
-            targets=(/tmp/haos-beta-test-image.qcow2)
+          if [ -f /tmp/haos-beta-test-image.qcow2 ]; then
+            targets+=(/tmp/haos-beta-test-image.qcow2)
           fi
-          if [ ! -f "${targets[0]}" ] && [ -f /tmp/haos-build/haos-test-image.qcow2 ]; then
-            # Bake-stage failure: probe the half-baked image instead.
+          if [ ${#targets[@]} -eq 0 ] && [ -f /tmp/haos-build/haos-test-image.qcow2 ]; then
             targets=(/tmp/haos-build/haos-test-image.qcow2)
           fi
           for img in "${targets[@]}"; do

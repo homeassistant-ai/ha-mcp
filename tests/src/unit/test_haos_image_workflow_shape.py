@@ -218,6 +218,16 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
             == "src/e2e/"
         )
 
+        if mode == "inaddon":
+            diagnostics = next(
+                step
+                for step in steps
+                if step.get("name", "").startswith("Extract HAOS")
+            )
+            diagnostics_script = diagnostics["run"]
+            assert "targets=(/tmp/haos-beta-test-image-gw*.qcow2)" in diagnostics_script
+            assert "targets+=(/tmp/haos-beta-test-image.qcow2)" in diagnostics_script
+
         stable = _workflow(_WORKFLOW_DIR / stable_name)
         stable_steps = _job_steps(stable["jobs"][stable_job_id])
         stable_build = next(

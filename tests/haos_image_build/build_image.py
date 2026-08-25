@@ -1653,7 +1653,7 @@ def _supervisor_info_ready(
     expected_channel: str | None,
     minimum_version: str | None,
 ) -> bool:
-    """Return whether Supervisor has settled on the requested image variant."""
+    """Return whether Supervisor meets the requested channel and version floor."""
     if expected_channel is not None and info.get("channel") != expected_channel:
         return False
     if info.get("update_available") or not info.get("version_latest"):

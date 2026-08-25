@@ -6,7 +6,8 @@ name: HAOS E2E Tests (embedded beta)
 #
 # HAOS_TEST_MODE=embedded stages the checkout-built wheel and feature flags in
 # each worker overlay, enables the in-process server entry, and connects
-# mcp_client to its webhook. The stable embedded workflow and cache are unchanged.
+# mcp_client to its webhook. The stable lane retains its existing workflow and
+# ``haos-image-*`` cache namespace.
 
 on:
   # Run on every pull request so beta compatibility stays visible. The
