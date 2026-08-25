@@ -4126,7 +4126,13 @@ class TestSupervisorApiCall:
             "success": True,
             "result": {"addons": [{"slug": "core_mqtt"}]},
         }
-        factory.assert_called_once_with(timeout=30.0, verify=False)
+        supervisor_timeout = factory.call_args.kwargs["timeout"]
+        assert isinstance(supervisor_timeout, httpx.Timeout)
+        assert supervisor_timeout.connect == 10.0
+        assert supervisor_timeout.read == 30.0
+        assert supervisor_timeout.write == 30.0
+        assert supervisor_timeout.pool == 10.0
+        assert factory.call_args.kwargs["verify"] is False
         direct_client.request.assert_awaited_once_with("GET", "/addons")
         client.send_websocket_message.assert_not_awaited()
 
@@ -4278,6 +4284,11 @@ class TestSupervisorApiCall:
             assert "refresh" in suggestions
             assert "hassio_api" in suggestions
             assert "hassio_role" in suggestions
+        if status_code == 404:
+            assert (
+                payload["error"]["suggestion"]
+                == "Check Home Assistant connection and Supervisor availability"
+            )
 
         client.send_websocket_message.assert_not_awaited()
 
@@ -4370,6 +4381,8 @@ class TestSupervisorApiCall:
 
         payload = _parse_tool_error(exc_info)
         assert payload["error"]["code"] == expected_code
+        if isinstance(transport_error, (httpx.ConnectTimeout, httpx.PoolTimeout)):
+            assert "10.0s connection-acquisition timeout" in payload["error"]["message"]
         assert "outcome" not in payload
         direct_client.request.assert_awaited_once()
         client.send_websocket_message.assert_not_awaited()
@@ -4511,6 +4524,77 @@ class TestSupervisorApiCall:
         assert payload["outcome"] == "unknown"
         assert payload["status_code"] == response.status_code
         assert payload["response_body"] == response.text
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_write_server_error_caps_response_body(self, monkeypatch):
+        """An unknown-outcome error never returns an unbounded response body."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            503,
+            text="x" * (50 * 1024 + 1),
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["response_body"] == "x" * (50 * 1024)
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_write_redirect_reports_unknown_outcome(self, monkeypatch):
+        """A redirect cannot prove whether Supervisor applied the received write."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            307,
+            headers={"location": "/addons/core_mosquitto/restart"},
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert payload["method"] == "POST"
+        assert payload["outcome"] == "unknown"
+        assert payload["status_code"] == 307
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -4826,7 +4910,13 @@ class TestSupervisorApiCallTimeout:
                 timeout=1800,
             )
 
-        factory.assert_called_once_with(timeout=1815.0, verify=client.verify_ssl)
+        supervisor_timeout = factory.call_args.kwargs["timeout"]
+        assert isinstance(supervisor_timeout, httpx.Timeout)
+        assert supervisor_timeout.connect == 10.0
+        assert supervisor_timeout.read == 1815.0
+        assert supervisor_timeout.write == 1815.0
+        assert supervisor_timeout.pool == 10.0
+        assert factory.call_args.kwargs["verify"] is client.verify_ssl
         direct_client.request.assert_awaited_once_with(
             "POST", "/addons/core_mosquitto/update", json={}
         )

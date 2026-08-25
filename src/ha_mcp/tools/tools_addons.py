@@ -66,6 +66,10 @@ logger = logging.getLogger(__name__)
 # Maximum response size to return from app (add-on) API calls (50 KB)
 _MAX_RESPONSE_SIZE = 50 * 1024
 
+# Supervisor is local to the app network, so connection acquisition should
+# remain short even when an app operation needs a multi-minute response budget.
+_SUPERVISOR_ACQUIRE_TIMEOUT = 10.0
+
 # Hard safety cap on WebSocket messages collected per call. `message_limit`
 # can lower this but never raise it.
 _MAX_WS_MESSAGES = 1000
@@ -313,8 +317,11 @@ def _normalize_supervisor_rest_response(
 ) -> dict[str, Any]:
     """Normalize a direct Supervisor response and retain write ambiguity."""
     verb = method.upper()
-    if response.status_code >= 500 and verb not in {"GET", "HEAD"}:
-        response_body = response.text.strip()
+    write_outcome_unknown = verb not in {"GET", "HEAD"} and (
+        300 <= response.status_code < 400 or response.status_code >= 500
+    )
+    if write_outcome_unknown:
+        response_body = response.text.strip()[:_MAX_RESPONSE_SIZE]
         _raise_supervisor_write_outcome_unknown(
             ErrorCode.SERVICE_CALL_FAILED,
             f"Supervisor API {verb} {endpoint} returned HTTP "
@@ -479,9 +486,15 @@ async def _supervisor_api_call_once(
         # optional schema by parsing request.json(), so bodyless POST actions
         # must still carry an empty JSON object.
         request_kwargs["json"] = data or {}
+    acquire_timeout = min(wait_timeout, _SUPERVISOR_ACQUIRE_TIMEOUT)
+    transport_timeout = httpx.Timeout(
+        wait_timeout,
+        connect=acquire_timeout,
+        pool=acquire_timeout,
+    )
     try:
         async with make_supervisor_httpx_client(
-            timeout=wait_timeout,
+            timeout=transport_timeout,
             verify=client.verify_ssl,
         ) as supervisor_client:
             response = await supervisor_client.request(
@@ -492,7 +505,7 @@ async def _supervisor_api_call_once(
     except (httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
         raise HomeAssistantConnectionError(
             f"Supervisor API {method.upper()} {endpoint} could not start before "
-            f"the {wait_timeout}s timeout: {exc}"
+            f"the {acquire_timeout}s connection-acquisition timeout: {exc}"
         ) from exc
     except httpx.TimeoutException as exc:
         verb = method.upper()
@@ -737,6 +750,11 @@ async def _supervisor_api_call(
         raise
     except Exception as e:
         logger.error(f"Error calling Supervisor API {endpoint}: {e}")
+        suggestions = None
+        if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
+            suggestions = [
+                "Check Home Assistant connection and Supervisor availability"
+            ]
         exception_to_structured_error(
             e,
             context={
@@ -744,6 +762,7 @@ async def _supervisor_api_call(
                 "operation": f"Supervisor API {endpoint}",
                 "timeout_seconds": wait_timeout,
             },
+            suggestions=suggestions,
         )
         return None  # unreachable: exception_to_structured_error always raises
 
