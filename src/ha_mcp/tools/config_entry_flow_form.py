@@ -123,17 +123,20 @@ class _ReuseState:
         """
         dotted = _section_path(path_prefix, name)
         self.filled.add(dotted)
-        if dotted.split(".", 1)[0] in self.step_scoped:
+        if name in self.step_scoped or dotted.split(".", 1)[0] in self.step_scoped:
             # Supplied by ``step_values`` for THIS step only. ``filled`` still
             # takes it so nothing is injected over it here, but it must never
             # reach ``flat``/``scoped``: those survive the whole walk, and a
             # later step that nobody addressed would then reuse a value the
             # caller scoped to one step instead of its own stored one.
             #
-            # Matched on the ROOT of the declaration path, not the leaf name:
-            # an overlay key naming a SECTION carries leaves whose own names
-            # are nowhere in ``step_scoped``, so comparing the leaf let every
-            # nested value through (CodeRabbit review, issue #2254).
+            # BOTH the popped key and the ROOT of the declaration path are
+            # matched, because an overlay key reaches a leaf two ways. Naming
+            # the SECTION gives leaves whose own names are nowhere in
+            # ``step_scoped`` (so the root must be checked), while a FLAT key
+            # is accepted for a leaf a section declares, which makes the root
+            # the section name and equally absent (so the key must be too).
+            # Either check alone leaks the other shape (issue #2254).
             return
         if scoped_only:
             self.scoped[dotted] = copy.deepcopy(value)
@@ -245,10 +248,11 @@ def _ignored_keys_warnings(
     leftover_steps = remaining_config.get(_PER_STEP_VALUES_KEY)
     if isinstance(leftover_steps, dict) and leftover_steps:
         warnings.append(
-            "step_values named steps this flow never presented: "
-            f"{', '.join(sorted(str(k) for k in leftover_steps))}. Those "
-            "values were not applied — check the step_id against the "
-            "step the flow actually shows."
+            "step_values entries were never applied: "
+            f"{', '.join(sorted(str(k) for k in leftover_steps))}. A step_id "
+            "the flow never presents applies nothing; a list is consumed one "
+            "entry per encounter, so a leftover tail means the flow presented "
+            "that step fewer times than the list expects."
         )
     leftover_menu_keys = _MENU_SELECTION_KEYS & remaining_config.keys()
     if leftover_menu_keys:
@@ -862,19 +866,30 @@ def _step_values_applied(
     if not isinstance(overlay, dict):
         yield
         return
-    values = overlay.get(step_id)
-    if not isinstance(values, dict) or not values:
+
+    raw = overlay.get(step_id)
+    # A LIST is consumed one entry per encounter, its un-consumed tail
+    # replacing the key until it runs dry — the same shape ``next_step_id``
+    # uses for a menu the flow revisits, and the only one that can express a
+    # loop. A single dict applies once and is spent, which is why taking the
+    # warning's advice used to reach FEWER encounters than the flat key it
+    # replaces. The caller's list object is never mutated.
+    is_list = isinstance(raw, list)
+    head = (raw[0] if raw else None) if is_list else raw
+    values = head if isinstance(head, dict) and head else {}
+    if not values and not is_list:
         yield
         return
 
     shadowed = {k: remaining_config[k] for k in values if k in remaining_config}
-    remaining_config.update(copy.deepcopy(values))
-    if reuse_state is not None:
-        reuse_state.step_scoped |= set(values)
+    if values:
+        remaining_config.update(copy.deepcopy(values))
+        if reuse_state is not None:
+            reuse_state.step_scoped |= set(values)
     try:
         yield
     finally:
-        if reuse_state is not None:
+        if values and reuse_state is not None:
             reuse_state.step_scoped -= set(values)
         for key in values:
             # Still present = this step's schema never declared it. A field
@@ -887,12 +902,15 @@ def _step_values_applied(
                 ignored_config_keys.add(f"{_PER_STEP_VALUES_KEY}.{step_id}.{key}")
             remaining_config.pop(key, None)
         remaining_config.update(shadowed)
-        # Spend this step's entry. What is left at the end of the walk names
-        # steps the flow never presented — a typo'd step_id, or a branch the
-        # menu selections never reached — and gets warned about rather than
-        # silently doing nothing, the same way an un-consumed menu selection
-        # is reported.
-        del overlay[step_id]
+        # Spend this encounter. A list leaves its tail for the next visit; a
+        # dict is spent outright. What survives the whole walk is reported
+        # rather than silently doing nothing, the same way an un-consumed
+        # menu selection is.
+        tail = raw[1:] if isinstance(raw, list) else []
+        if tail:
+            overlay[step_id] = tail
+        else:
+            overlay.pop(step_id, None)
         if not overlay:
             remaining_config.pop(_PER_STEP_VALUES_KEY, None)
 

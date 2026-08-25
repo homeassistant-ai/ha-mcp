@@ -1022,6 +1022,133 @@ class TestPerStepValues:
         assert reuse_state.scoped == {}
         assert reuse_state.flat == {}
 
+    def test_a_flat_overlay_key_on_a_section_leaf_never_leaks(self) -> None:
+        """The mirror of the nested case: a flat key filling a section leaf.
+
+        The walker accepts a flat key for a leaf a section declares, which
+        makes the declaration ROOT the section name — nowhere in
+        ``step_scoped`` — so the root check alone let it into cross-step
+        reuse (Patch76 review, #2256).
+        """
+
+        def step(step_id: str) -> dict[str, Any]:
+            return {
+                "type": "form",
+                "step_id": step_id,
+                "data_schema": [
+                    {
+                        "type": "expandable",
+                        "name": "connection",
+                        "required": False,
+                        "schema": [
+                            {
+                                "name": "province",
+                                "required": False,
+                                "optional": True,
+                                "description": {"suggested_value": "BW"},
+                            },
+                        ],
+                    },
+                ],
+            }
+
+        reuse_state = _ReuseState()
+        remaining: dict[str, Any] = {"step_values": {"one": {"province": "TX"}}}
+        first = _handle_form_step(
+            "flow-2254",
+            step("one"),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+            keep_current_values=True,
+        )
+        second = _handle_form_step(
+            "flow-2254",
+            step("two"),
+            remaining,
+            None,
+            set(),
+            reuse_state,
+            keep_current_values=True,
+        )
+
+        assert first == {"connection": {"province": "TX"}}
+        assert second == {"connection": {"province": "BW"}}, (
+            f"The flat step-scoped key leaked into an unaddressed step: {second}"
+        )
+        assert reuse_state.flat == {}
+
+    def test_a_list_entry_is_consumed_one_per_encounter(self) -> None:
+        """One entry per step id cannot express a loop; a list can.
+
+        Mirrors ``next_step_id``: the un-consumed tail replaces the key until
+        it runs dry. A single dict applies once and is spent, which is why
+        taking the resubmission warning's advice used to reach FEWER
+        encounters than the flat key it replaces (Patch76 review, #2256).
+        """
+        reuse_state = _ReuseState()
+        remaining: dict[str, Any] = {
+            "step_values": {
+                "init": [{"province": "TX"}, {"province": "NY"}, {"province": "CA"}]
+            }
+        }
+        seen = [
+            _handle_form_step(
+                "flow-2254",
+                self._step("init"),
+                remaining,
+                None,
+                set(),
+                reuse_state,
+                keep_current_values=True,
+            )["province"]
+            for _ in range(3)
+        ]
+
+        assert seen == ["TX", "NY", "CA"]
+        assert remaining == {}
+
+    def test_a_list_entry_can_clear_on_one_visit_only(self) -> None:
+        reuse_state = _ReuseState()
+        remaining: dict[str, Any] = {
+            "step_values": {"init": [{"province": None}, {"province": "NY"}]}
+        }
+        seen = [
+            _handle_form_step(
+                "flow-2254",
+                self._step("init"),
+                remaining,
+                None,
+                set(),
+                reuse_state,
+                keep_current_values=True,
+            )
+            for _ in range(3)
+        ]
+
+        assert "province" not in seen[0]
+        assert seen[1]["province"] == "NY"
+        # Dry: the step's own stored value takes over again.
+        assert seen[2]["province"] == "BW"
+
+    def test_a_leftover_list_tail_is_reported(self) -> None:
+        """A tail left over means the step ran fewer times than expected."""
+        remaining: dict[str, Any] = {
+            "step_values": {"init": [{"province": "TX"}, {"province": "NY"}]}
+        }
+        _handle_form_step(
+            "flow-2254",
+            self._step("init"),
+            remaining,
+            None,
+            set(),
+            _ReuseState(),
+            keep_current_values=True,
+        )
+        warnings = _ignored_keys_warnings(set(), remaining)
+        assert any("never applied" in w and "init" in w for w in warnings), warnings
+
     def test_an_undeclared_field_inside_step_values_is_reported(self) -> None:
         """A typo'd FIELD inside an entry must not vanish silently.
 
@@ -1067,7 +1194,7 @@ class TestPerStepValues:
             keep_current_values=True,
         )
         warnings = _ignored_keys_warnings(set(), remaining)
-        assert any("never presented" in w and "typo_step" in w for w in warnings), (
+        assert any("never applied" in w and "typo_step" in w for w in warnings), (
             f"An unapplied step_values entry went unreported: {warnings}"
         )
 
