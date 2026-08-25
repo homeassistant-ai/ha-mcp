@@ -261,22 +261,16 @@ def _install_log_filters_if_available() -> None:
     nothing: log cosmetics must never block startup, but they also must
     never fail invisibly.
     """
-    # TEMPORARY DIAGNOSTIC (2026-08-25, remove once the live install/
-    # classification mismatch reported against this branch is found): proves
-    # this function is actually entered, using embedded_server's OWN logger
-    # (already proven visible throughout this deployment) rather than the
-    # new module's, in case that one is somehow not surfacing.
-    _LOGGER.warning("_install_log_filters_if_available: entered")
     try:
         from ha_mcp.log_filters import install_sdk_log_filters
     except ModuleNotFoundError as err:
-        # TEMPORARY: always log now, including the previously-silent
-        # "older ha-mcp" case, to see exactly what's missing.
-        _LOGGER.warning(
-            "_install_log_filters_if_available: ModuleNotFoundError name=%r msg=%s",
-            err.name,
-            err,
-        )
+        if err.name != "ha_mcp.log_filters":
+            _LOGGER.warning(
+                "Could not install MCP SDK log-noise filters (missing "
+                "dependency %s); continuing without them: %s",
+                err.name,
+                err,
+            )
         return
     except ImportError as err:
         _LOGGER.warning(
@@ -284,7 +278,6 @@ def _install_log_filters_if_available() -> None:
             err,
         )
         return
-    _LOGGER.warning("_install_log_filters_if_available: import succeeded, installing")
     try:
         install_sdk_log_filters()
     except Exception as err:
