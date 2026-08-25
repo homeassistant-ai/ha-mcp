@@ -30,6 +30,7 @@ from ha_mcp.tools.config_entry_flow_form import (
     _handle_form_step,
     _ignored_keys_warnings,
     _ReuseState,
+    validate_step_values,
 )
 from ha_mcp.tools.config_entry_flow_walker import (
     ReconfigureStatus,
@@ -1227,6 +1228,59 @@ class TestPerStepValues:
             keep_current_values=True,
         )
         assert payload == {"host": "10.0.0.5"}
+
+
+class TestStepValuesValidation:
+    """A malformed directive raises rather than silently applying nothing."""
+
+    @pytest.mark.parametrize(
+        "directive",
+        ["oops", 42, ["init"]],
+        ids=["string", "number", "list"],
+    )
+    def test_a_non_object_directive_is_rejected(self, directive: Any) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            validate_step_values({"step_values": directive})
+        assert "must be an object keyed by step id" in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "entry",
+        ["TX", 42, ["TX"], [{"a": 1}, "TX"]],
+        ids=["string", "number", "list-of-string", "list-with-bad-tail"],
+    )
+    def test_a_non_object_entry_is_rejected(self, entry: Any) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            validate_step_values({"step_values": {"init": entry}})
+        assert "must be an object of field values" in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"province": "BY"},
+            {"step_values": {"init": {"province": "TX"}}},
+            {"step_values": {"init": [{"province": "TX"}, {"province": "NY"}]}},
+            {"step_values": {}},
+        ],
+        ids=["absent", "dict-entry", "list-entry", "empty-directive"],
+    )
+    def test_valid_shapes_pass(self, config: dict[str, Any]) -> None:
+        validate_step_values(config)
+
+    async def test_the_walker_rejects_before_driving_any_step(self) -> None:
+        """It must raise before a single step is submitted."""
+        submit_fn = AsyncMock()
+
+        with pytest.raises(ToolError):
+            await _handle_flow_steps(
+                client=None,
+                flow_id="flow-2254",
+                initial_step=_workday_options_step(),
+                config={"days_offset": 3, "step_values": {"init": "TX"}},
+                submit_fn=submit_fn,
+                keep_current_values=True,
+            )
+
+        submit_fn.assert_not_awaited()
 
 
 class TestEmptyFormsGuidance:

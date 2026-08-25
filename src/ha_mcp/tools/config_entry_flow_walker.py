@@ -24,6 +24,7 @@ from .config_entry_flow_form import (
     _handle_form_step,
     _ReuseState,
     _success_warnings,
+    validate_step_values,
 )
 from .config_entry_flow_menu import (
     _flow_step_budget,
@@ -854,6 +855,7 @@ async def _handle_flow_steps(
     """
     if submit_fn is None:
         submit_fn = client.submit_config_flow_step
+    validate_step_values(config)
     remaining_config = dict(config)
     current_step = initial_step
     last_menu_choice: str | None = None
@@ -1102,6 +1104,7 @@ async def _handle_config_subentry_flow_steps(
     resubmits the step's own value for every declared field the caller named
     no key for, so a partial patch stops wiping the rest of the subentry.
     """
+    validate_step_values(config)
     remaining_config = dict(config)
     current_step = initial_step
     last_menu_choice: str | None = None

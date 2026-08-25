@@ -841,6 +841,52 @@ def _consume_all_remaining_keys(
     return form_data
 
 
+def validate_step_values(config: dict[str, Any]) -> None:
+    """Reject a malformed ``step_values`` directive before the walk starts.
+
+    The reserved key is consumed as a directive, so a malformed one is invisible
+    to ignored-key reporting: the walk would complete, report success, and have
+    applied nothing the caller asked for. A caller error is a tool-level
+    failure, so it raises rather than warns (CodeRabbit review, issue #2254).
+
+    Accepted: a dict of ``step_id -> entry``, where an entry is a dict of field
+    values, or a LIST of such dicts consumed one per encounter of that step.
+    """
+    directive = config.get(_PER_STEP_VALUES_KEY)
+    if directive is None:
+        return
+
+    example = "{'<step_id>': {'<field>': <value>}}"
+    if not isinstance(directive, dict):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"'{_PER_STEP_VALUES_KEY}' must be an object keyed by step id, "
+                f"got {type(directive).__name__}",
+                suggestions=[f"Pass {_PER_STEP_VALUES_KEY}={example}."],
+                context={_PER_STEP_VALUES_KEY: directive},
+            )
+        )
+
+    for step_id, entry in directive.items():
+        entries = entry if isinstance(entry, list) else [entry]
+        bad = [item for item in entries if not isinstance(item, dict)]
+        if bad:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"'{_PER_STEP_VALUES_KEY}[{step_id!r}]' must be an object "
+                    "of field values, or a list of them for a step the flow "
+                    f"presents more than once — got {type(bad[0]).__name__}",
+                    suggestions=[
+                        f"Pass {_PER_STEP_VALUES_KEY}={example}, or a list of "
+                        "those objects to supply one per encounter.",
+                    ],
+                    context={"step_id": step_id, "entry": entry},
+                )
+            )
+
+
 @contextmanager
 def _step_values_applied(
     remaining_config: dict[str, Any],
