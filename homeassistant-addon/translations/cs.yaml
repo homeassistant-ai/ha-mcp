@@ -1,0 +1,175 @@
+---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/cs.json (keys addon.*, features.*,
+# addon_stable.*); regenerate with: python scripts/generate_locales.py
+configuration:
+  backup_hint:
+    name: Úroveň návrhu snímku celé HA (pro LLM)
+    description: 'Upravuje znění nápovědy, kterou LLM vidí v popisu nástroje
+
+      `ha_manage_backup(scope=''snapshot'')` pro to, kdy navrhnout úplnou zálohu Home
+      Assistant tarballu před rizikovými operacemi
+
+      (např. hromadné mazání zařízení). Ovlivňuje POUZE tuto jednu větu výzvy směřující
+      k LLM.
+
+
+      Pro automatické snímky automatizací / skriptů / pomocníků /
+
+      atd. pro každou úpravu použijte samostatný přepínač **Povolit automatické zálohování
+      úprav** níže.'
+  secret_path:
+    name: Přepsání tajné cesty
+    description: 'Volitelná vlastní HTTP cesta pro server MCP. Ponechte prázdné pro
+      použití automaticky generované zabezpečené cesty.
+
+      '
+  enable_tool_search:
+    name: Povolit vyhledávání nástrojů
+    description: 'Nahradit úplný katalog nástrojů vyhledáváním. Snižuje klidový kontext
+      přibližně o 90 %, na asi 5 tisíc tokenů. ⚠️ NEZAPÍNEJTE toto v klientech s vlastním
+      vestavěným vyhledáváním nástrojů / odloženými nástroji (claude.ai, Claude Desktop,
+      Claude Code) – obě vrstvy vyhledávání se střetávají a vestavěné vyhledávání
+      nástrojů v klientovi je zde lepší volbou; nechte to vypnuté. Zda jsou nástroje
+      odloženy, závisí na kombinaci vašeho klienta a modelu: použijte toto, když vaše
+      nastavení načítá celý katalog předem – modely bez nativních odložených nástrojů
+      (např. Gemini, lokální modely kompatibilní s OpenAI, Claude Haiku), klienti,
+      kteří vkládají všechna schémata nástrojů bez ohledu na model (např. GitHub Copilot
+      CLI), nebo menší kontextová okna. Některé modely Codex a ChatGPT také obsahují
+      odložené nástroje – ověřte si funkce přímo u svého klienta/modelu, abyste to
+      nenechávali zbytečně zapnuté. Nástroje se vyhledávají přes ha_search_tools a
+      spouštějí se přes kategorizované proxy (read/write/delete). Vyžaduje restart
+      aplikace (doplněku), aby se projevila změna – poté znovu připojte nebo obnovte
+      MCP server ve svém AI klientovi, aby se znovu načetl seznam nástrojů. Samotný
+      restart aplikace (doplněku) NEAKTUALIZUJE mezipaměť seznamu nástrojů klienta;
+      toto platí po změně jakéhokoli nastavení zde.'
+  tool_search_max_results:
+    name: Max. výsledků vyhledávání nástrojů
+    description: 'Maximální počet nástrojů vrácených ha_search_tools, když je povoleno
+      vyhledávání nástrojů. Nižší hodnoty (2-3) šetří kontextové tokeny, ale mohou
+      přehlédnout relevantní nástroje. Rozsah: 2-10. Vyžaduje restart.'
+  enable_tool_security_policies:
+    name: Povolit zásady zabezpečení nástrojů (pokročilé)
+    description: Podmiňuje vysoce rizikové volání nástrojů (ovládání zámků/alarmů,
+      zápisy automatizací atd.) schválením uživatelem. Když je volán chráněný nástroj,
+      agent řekne uživateli, aby otevřel záložku Zásady zabezpečení nástrojů ve webovém
+      rozhraní a klikl na Schválit, než volání pokračuje. Pravidla pro jednotlivé
+      nástroje s volitelnými podmínkami argumentů se konfigurují na záložce Zásady
+      zabezpečení nástrojů. Ve výchozím nastavení vypnuto. Vyžaduje restart, aby se
+      projevilo.
+  enable_security_policy_tool:
+    name: Povolit agentům AI upravovat bezpečnostní zásady nástrojů
+    description: 'Registruje nástroj ha_manage_security_policy, který umožňuje připojeným
+      agentům AI číst a přepisovat bezpečnostní zásady nástrojů — včetně odstranění
+      bran schválení. Ve výchozím nastavení vypnuto. Nezávisle na možnosti „Zásady
+      zabezpečení nástrojů“ výše: toto řídí, kdo může pravidla upravovat, nikoli zda
+      jsou vynucována. Nástroj nemůže vidět ani rozhodovat o čekajících schváleních.
+      Chcete-li zachovat lidskou kontrolu, zablokujte nástroj před jeho povolením:
+      zapněte „security gated“ pro „Manage Security Policy“ na kartě Nástroje ve webovém
+      uživatelském rozhraní. Vyžaduje restart, aby se projevilo.'
+  read_only_mode:
+    name: Režim pouze pro čtení
+    description: Vypne všechny nástroje pro zápis a odstraní schopnost nástrojů provádět
+      jakékoli zápisy nebo destruktivní volání. Smíšené nástroje pro čtení/zápis –
+      zálohy, aplikace (doplňky), preference energie, hlasové pipelines a režim kódu,
+      pokud je povolen – zůstávají k dispozici se zablokovanými operacemi zápisu.
+      Stejný přepínač jako na kartě Tools ve webovém rozhraní. Ve výchozím nastavení
+      vypnuto. K projevům změn je vyžadován restart.
+  redact_secrets:
+    name: Redigovat tajemství
+    description: Skrývá tajné údaje z odpovědí nástrojů, než se dostanou k AI asistenci.
+      Možnosti aplikace (doplňku) a pole integrací označená jako hesla jsou nahrazena
+      značkou nastaveno/prázdno (takže zůstává možné odpovědět na otázku „je tento
+      pověření nastaveno?“), a z odpovědí ostatních nástrojů jsou odstraněny tajné
+      hodnoty, které server již viděl (hodnoty kratší než 6 znaků se přeskakují, protože
+      nahrazování drobných fragmentů by poškodilo nesouvisející výstup). Pole, která
+      nejsou svým schématem označena jako hesla, nelze detekovat. Ve výchozím nastavení
+      vypnuto.
+  enable_mandatory_bps:
+    name: Připojit dovednosti osvědčených postupů při zápisu
+    description: 'Hlavní přepínač pro funkci doručování obsahu dovedností nástrojů
+      pro zápis (problém #1182). Pokud je povoleno (výchozí), šest konfiguračních
+      nástrojů pro zápis (automatizace, skripty, scény, pomocníci, řídicí panely,
+      čistý YAML) připojí kanonické referenční soubory osvědčených postupů Home Assistant
+      pod `skill_content` při každém úspěšném zápisu, plus automaticky vloží jakékoli
+      referenční sekce citované varováními o osvědčených postupech. Každý nástroj
+      také zpřístupňuje parametr `MandatoryBPS` pro každé volání, který může agent
+      nastavit na false při následných voláních, jakmile má obsah. Když je tento hlavní
+      přepínač vypnutý, ŽÁDNÝ `skill_content` není odeslán bez ohledu na parametr
+      pro každé volání nebo varování BP. Doporučeno ZAPNUTO jako první volba; vypněte
+      pouze pro modely s velmi malými kontextovými okny. Vypnutí této funkce může
+      snížit přesnost zápisu. Vyžaduje restart, aby se projevilo.'
+  enable_strict_mandatory_bps:
+    name: Přísný režim osvědčených postupů
+    description: 'Přísný režim: zabraňuje klientovi používat nástroj, dokud neprokáže,
+      že si přečetl osvědčené postupy. Pokud je zapnuto, šest nástrojů pro zápis osvědčených
+      postupů (automatizace, skripty, scény, pomocníci, řídicí panely, čistý YAML)
+      je blokováno a vrátí chybu, která klientovi nařídí přečíst si dovednost osvědčených
+      postupů pomocí ha_get_skill_guide a vrátit potvrzovací klíč, který tam získá.
+      Pokud je zapnuto, nástroj ha_get_skill_guide je uzamčen jako povolený — je jediným
+      vydavatelem potvrzovacího klíče. Je podřízeno výše uvedené možnosti „Připojit
+      dovednosti osvědčených postupů při zápisu“ a je neaktivní, pokud je tato nadřazená
+      možnost vypnuta. Vyžaduje restart, aby se projevilo.'
+  disabled_tools:
+    name: Zakázané nástroje (oddělené čárkami)
+    description: Nástroje zde uvedené jsou vynuceně vypnuty a uzamčeny ve webovém
+      uživatelském rozhraní Nastavení (karta Nástroje) — nelze je tam znovu povolit,
+      aniž byste nejprve zrušili toto nastavení. Malá sada povinných nástrojů (ha_search,
+      ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) nelze zakázat
+      a zůstávají spuštěny, i když jsou zde uvedeny. ha_get_skill_guide lze zakázat
+      pouze, když je vypnut režim přísných osvědčených postupů (enable_strict_mandatory_bps).
+      Názvy nástrojů oddělené čárkami (např. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Připnuté nástroje (oddělené čárkami)
+    description: Nástroje zde uvedené jsou uzamčeny jako připnuté — zobrazují se v
+      horní části karty Nástroje a nelze je odepnout z webového uživatelského rozhraní
+      Nastavení, aniž byste nejprve zrušili toto nastavení. Užitečné v kombinaci s
+      vyhledáváním nástrojů. Názvy nástrojů oddělené čárkami.
+  enable_auto_backup:
+    name: Povolit automatické zálohování úprav
+    description: 'Pořídí snímek pro každou entitu před každým zabaleným zápisem/destruktivním
+      voláním nástroje MCP (automatizace, skript, scéna, pomocník, dashboard, zdroj
+      dashboardu, štítek, kategorie, skupina, zóna, oblast, kalendář, úkol, entita,
+      zařízení, integrace a související nástroje pro odebrání/smazání). Omezení automatické
+      zálohy určuje, jak často se to děje: 0 (výchozí) zachytí při každém takovém
+      volání, N>0 maximálně jeden snímek za N minut na entitu. Snímky jsou uloženy
+      jako soubory YAML pod /data/ha_mcp_backups/ (přepsání přes HAMCP_BACKUP_DIR)
+      a jsou uvedeny, obnoveny nebo smazány přes kartu Zálohy ve webovém uživatelském
+      rozhraní nastavení nebo přes ha_manage_backup(scope=''edits'', ...). Pro tyto
+      domény je zachycení nejlepším možným úsilím — selhání zaznamená VAROVÁNÍ a zápis
+      pokračuje. Nástroje pro soubory a raw-YAML jsou výjimkou: ha_write_file, ha_delete_file
+      a ha_config_set_yaml považují snímek za předpoklad, takže zápis přes ně je odmítnut,
+      pokud je tato možnost vypnuta, a neúspěšné zachycení jej blokuje. Ve výchozím
+      nastavení zapnuto; zrušení zaškrtnutí se odhlásí od zachycení nejlepším úsilím
+      a vyřadí s nimi nástroje pro soubory a raw-YAML z provozu. Vyžaduje restart,
+      aby se projevilo.'
+  auto_backup_throttle_minutes:
+    name: Omezení automatické zálohy (minuty)
+    description: Okno omezení pro každou entitu. 0 (výchozí) zachytí snímek při každém
+      zabaleném zápisu. N>0 zachytí maximálně jeden snímek za N minut na entitu. Rozsah
+      0–1440.
+  auto_backup_retain_per_entity:
+    name: Uchovávání automatických záloh (na entitu)
+    description: Maximální počet snímků uchovávaných na entitu. Starší snímky nad
+      tento limit jsou při každém úspěšném zachycení vyřazeny. Výchozí 100, rozsah
+      1–10000.
+  enable_snapshot_delete:
+    name: Povolit smazání snímků
+    description: Umožňuje ha_manage_backup mazat úplné HA snapshot tarbally (scope='snapshot',
+      action='delete'). Ve výchozím nastavení vypnuto — snímek může být posledním
+      bodem obnovy po chybné změně, takže zde musí člověk souhlasit. I když je zapnuto,
+      plánované zálohy, nejnovější zbývající snímek a cokoli mladšího než níže uvedený
+      věkový limit zůstávají chráněny.
+  snapshot_delete_min_age_days:
+    name: Minimální stáří snímku pro smazání (dny)
+    description: Snímek musí být alespoň takto starý, než může být smazán. Rozsah
+      0–365; 0 zakáže dolní hranici (ochrany nejnovějšího snímku a plánované zálohy
+      stále platí). Výchozí 7.
+  verify_ssl:
+    name: Ověřit certifikát TLS
+    description: Ověřit TLS certifikát serveru Home Assistant. Aplikace (doplněk)
+      se připojuje přes proxy Supervisor, takže to obvykle nemá žádný vliv a mělo
+      by to zůstat zapnuté. Zakazujte pouze v případě, že jste přenastavili aplikaci
+      (doplněk) tak, aby komunikovala s HA přes veřejný HTTPS hostname s The self-signed
+      certifikátem nebo neshodou hostname. Vypnutí oslabuje zabezpečení přenosu –
+      nechte zapnuté, pokud víte, že to potřebujete. Vyžaduje restart, aby se projevilo.

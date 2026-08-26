@@ -1,0 +1,120 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+reviews:
+  auto_review:
+    drafts: true
+    base_branches:
+      - ".*"
+    # Drafts here iterate push -> CI -> fix, which blows past the default
+    # 5-commit pause and leaves the PR silently unreviewed. 0 disables the
+    # pause so review keeps running until it stops finding anything.
+    #
+    # The documented cost, accepted deliberately: incremental reviews draw on
+    # the same per-developer hourly allowance as manual ones, and 0 "can make
+    # active branches use review allowance quickly"; CodeRabbit recommends 1 or
+    # 2 for busy branches. Taken anyway because running out is loud and cheap —
+    # a rate-limited push gets a comment plus a deliberately-passing "Review
+    # rate limited" check, never blocks merge, and neither consumes a review nor
+    # delays the next one. The `rate limit` command reports whether reviews are
+    # available without spending one. OSS projects sit on a 1-10/hour band that
+    # varies with project popularity, so the real headroom here is unknown.
+    auto_pause_after_reviewed_commits: 0
+    # Bot-authored PRs are knowingly excluded from automatic review. Nothing
+    # configured produced today's skips — `@coderabbitai configuration`
+    # reports all defaults — so they rested on undocumented bot-author
+    # handling; stated explicitly here so they survive a change to it.
+    # dependabot/renovate PRs have never been reviewed. github-actions[bot]
+    # authors the webhook-proxy promote PRs: dev -> stable copies whose
+    # content was already reviewed in the dev PRs, so an automatic second
+    # pass duplicates it. A promote that folds in more than a version bump
+    # (the #1977 case) gets `@coderabbitai review` on demand — this key only
+    # gates auto_review. Mirrors the Codex auto-admission skip list in
+    # pr-codex-review-request.yml (pinned by test_coderabbit_config.py).
+    # Exact, case-sensitive logins — no wildcards.
+    ignore_usernames:
+      - "dependabot[bot]"
+      - "ha-mcp-renovate[bot]"
+      - "github-actions[bot]"
+issue_enrichment:
+  # Replaces the retired GitHub Models triage bot (issue-triage.yml). The docs
+  # claim enrichment is "enabled by default", but the schema this file points
+  # at says the default is false — and the schema wins: no issue opened since
+  # the app install got an enrichment comment until this was set explicitly.
+  # Enrichment posts one comment per new/edited issue: possible duplicates,
+  # related issues and PRs, suggested assignees, and a Create Plan checkbox.
+  auto_enrich:
+    enabled: true
+  labeling:
+    # false by default — without it CodeRabbit only *suggests* labels in the
+    # enrichment comment instead of applying them.
+    auto_apply_labels: true
+    # The instruction set mirrors the old triage bot's classifications —
+    # minus `invalid`, dropped deliberately: spam gets closed, not labeled —
+    # plus the bug-class/scope taxonomy from AGENTS.md § Issue Labels. Issue
+    # templates already self-apply their labels; these instructions mostly
+    # cover blank issues and misfiled templates. Labels must match existing
+    # repo labels exactly — CodeRabbit does not create them.
+    labeling_instructions:
+      - label: bug
+        instructions: >-
+          Broken or incorrect behavior: crashes, tool call failures, wrong
+          data returned, regressions. Includes agent-behavior bugs where the
+          AI picked the wrong tool or misused parameters because a tool
+          description misled it — those are bugs even when no error is thrown.
+      - label: enhancement
+        instructions: >-
+          Requests for new features or improvements that do not exist yet:
+          new tools, new parameters, new deployment options, better output.
+      - label: question
+        instructions: >-
+          How-to or usage questions with no clear defect and no feature
+          request.
+      - label: documentation
+        instructions: >-
+          Documentation gaps or corrections: README, setup guides, tool
+          docstrings, the project website.
+      - label: runtime-bug
+        instructions: >-
+          Bug during normal operation after a successful startup: a tool call
+          fails, returns wrong data, or behaves incorrectly while the server
+          is otherwise running fine.
+      - label: startup-bug
+        instructions: >-
+          Bug during startup, install, connect, or authentication: the server
+          never reaches a working state. Includes uvx/pip/docker/add-on
+          install failures and client connection failures.
+      - label: agent-behavior
+        instructions: >-
+          The AI agent misbehaves without a code error: selects the wrong
+          tool, misunderstands parameters, loops, or gives up unnecessarily.
+          The fix is descriptive text (docstring, description, example), not
+          code.
+      - label: upstream
+        instructions: >-
+          Root cause is an upstream dependency, not ha-mcp code: Home
+          Assistant core, FastMCP, the MCP SDK, or a client app such as
+          Claude Desktop.
+      - label: Network misconfiguration
+        instructions: >-
+          ha-mcp itself works but the user cannot reach it: reverse proxy,
+          DNS, TLS, port forwarding, or other remote-access setup problems on
+          the user's network.
+  planning:
+    # Plans stay manual — `@coderabbitai plan` or the Create Plan checkbox in
+    # the enrichment comment. auto_planning defaults to *enabled* with an
+    # empty label list, and the docs define matching behaviour only for
+    # non-empty lists; explicit false keeps "plan every issue" from becoming
+    # the accidental reading of that gap.
+    enabled: true
+    auto_planning:
+      enabled: false
+knowledge_base:
+  code_guidelines:
+    # AGENTS.md is auto-detected; a guideline file is scoped to its own
+    # directory tree, so the styleguide needs an explicit applyTo to reach
+    # anything outside .gemini/. Three patterns, because minimatch defaults to
+    # dot: false and a bare ** therefore skips every dotted name: non-dot paths,
+    # dotfiles at any depth (.coderabbit.yaml, tests/.env.test), and the
+    # contents of dot-directories (.github/, .claude/, .gemini/).
+    filePatterns:
+      - files: ".gemini/styleguide.md"
+        applyTo: "**,**/.*,**/.*/**"

@@ -4,6 +4,7 @@ These tests verify environment variable validation, logging setup,
 and the OIDC server startup path without requiring a real OIDC provider.
 """
 
+import logging
 import os
 from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,6 +14,7 @@ import pytest
 # Sentinel used by MockOIDCProxy below to distinguish "kwarg not passed" from
 # "kwarg passed with a falsy/None value" for the optional constructor args.
 _UNSET = object()
+_OIDC_PROXY_PATCH_TARGET = "ha_mcp.auth.oidc_compat.HaMcpOIDCProxy"
 
 
 def _make_mock_oidc_proxy(capture: dict) -> type:
@@ -23,9 +25,9 @@ def _make_mock_oidc_proxy(capture: dict) -> type:
     a kwarg not listed here, this raises TypeError instead of silently
     swallowing it — catching drift in *our own* call, not in FastMCP's
     constructor (see ``TestOIDCProxySignatureSubset`` for that check).
-    ``allowed_client_redirect_uris``, ``verify_id_token``, and ``audience``
-    are optional in production, so they default to the ``_UNSET`` sentinel
-    here and are only recorded in ``capture`` when actually passed.
+    ``required_scopes`` is mandatory in production. The remaining optional
+    constructor arguments default to the ``_UNSET`` sentinel and are only
+    recorded in ``capture`` when actually passed.
     """
 
     class MockOIDCProxy:
@@ -37,6 +39,7 @@ def _make_mock_oidc_proxy(capture: dict) -> type:
             client_secret,
             base_url,
             require_authorization_consent,
+            required_scopes,
             jwt_signing_key,
             allowed_client_redirect_uris=_UNSET,
             verify_id_token=_UNSET,
@@ -47,6 +50,7 @@ def _make_mock_oidc_proxy(capture: dict) -> type:
             capture["client_secret"] = client_secret
             capture["base_url"] = base_url
             capture["require_authorization_consent"] = require_authorization_consent
+            capture["required_scopes"] = required_scopes
             capture["jwt_signing_key"] = jwt_signing_key
             if allowed_client_redirect_uris is not _UNSET:
                 capture["allowed_client_redirect_uris"] = allowed_client_redirect_uris
@@ -54,6 +58,12 @@ def _make_mock_oidc_proxy(capture: dict) -> type:
                 capture["verify_id_token"] = verify_id_token
             if audience is not _UNSET:
                 capture["audience"] = audience
+
+        def setup_scope_compatibility(self):
+            """Record that the entrypoint activated OIDC scope compatibility."""
+            capture["setup_scope_compatibility_calls"] = (
+                capture.get("setup_scope_compatibility_calls", 0) + 1
+            )
 
     return MockOIDCProxy
 
@@ -266,13 +276,109 @@ class TestMainOidcLogging:
 
         assert setup_logging_calls[0]["level"] == "INFO"
 
+    def test_setup_logging_configures_fastmcp_logger(self, monkeypatch):
+        """LOG_LEVEL should apply to FastMCP's non-propagating logger."""
+        import fastmcp
+
+        import ha_mcp.__main__ as main_module
+
+        fastmcp_logger = logging.getLogger("fastmcp")
+        streamable_http_logger = logging.getLogger("mcp.server.streamable_http")
+        fastmcp_server_logger = logging.getLogger("fastmcp.server.server")
+        original_level = fastmcp_logger.level
+        original_handlers = fastmcp_logger.handlers[:]
+        original_propagate = fastmcp_logger.propagate
+        original_formatters = [handler.formatter for handler in original_handlers]
+        original_streamable_http_filters = streamable_http_logger.filters[:]
+        original_fastmcp_server_filters = fastmcp_server_logger.filters[:]
+        try:
+            monkeypatch.setattr(fastmcp.settings, "log_enabled", True)
+            fastmcp_logger.setLevel(logging.INFO)
+            main_module._setup_logging("DEBUG", force=False)
+            assert fastmcp_logger.getEffectiveLevel() == logging.DEBUG
+            assert fastmcp_logger.handlers == original_handlers
+            assert fastmcp_logger.propagate is original_propagate
+            assert all(
+                handler.formatter is formatter
+                for handler, formatter in zip(
+                    fastmcp_logger.handlers, original_formatters, strict=True
+                )
+            )
+        finally:
+            fastmcp_logger.setLevel(original_level)
+            fastmcp_logger.handlers[:] = original_handlers
+            fastmcp_logger.propagate = original_propagate
+            for handler, formatter in zip(
+                original_handlers, original_formatters, strict=True
+            ):
+                handler.setFormatter(formatter)
+            streamable_http_logger.filters[:] = original_streamable_http_filters
+            fastmcp_server_logger.filters[:] = original_fastmcp_server_filters
+
+    def test_setup_logging_preserves_fastmcp_logging_opt_out(self, monkeypatch, caplog):
+        """FASTMCP_LOG_ENABLED=false should suppress FastMCP records."""
+        import fastmcp
+
+        import ha_mcp.__main__ as main_module
+
+        fastmcp_logger = logging.getLogger("fastmcp")
+        fastmcp_server_logger = logging.getLogger("fastmcp.server.server")
+        streamable_http_logger = logging.getLogger("mcp.server.streamable_http")
+        original_fastmcp_state = (
+            fastmcp_logger.level,
+            fastmcp_logger.handlers[:],
+            fastmcp_logger.propagate,
+            fastmcp_logger.disabled,
+        )
+        original_server_state = (
+            fastmcp_server_logger.level,
+            fastmcp_server_logger.handlers[:],
+            fastmcp_server_logger.propagate,
+            fastmcp_server_logger.disabled,
+            fastmcp_server_logger.filters[:],
+        )
+        original_streamable_http_filters = streamable_http_logger.filters[:]
+        try:
+            monkeypatch.setattr(fastmcp.settings, "log_enabled", False)
+            # Reproduce FastMCP's fresh disabled-startup state: configure_logging
+            # returns before installing handlers or disabling propagation.
+            fastmcp_logger.setLevel(logging.NOTSET)
+            fastmcp_logger.handlers.clear()
+            fastmcp_logger.propagate = True
+            fastmcp_logger.disabled = False
+            fastmcp_server_logger.setLevel(logging.NOTSET)
+            fastmcp_server_logger.handlers.clear()
+            fastmcp_server_logger.propagate = True
+            fastmcp_server_logger.disabled = False
+
+            with caplog.at_level(logging.DEBUG):
+                main_module._setup_logging("DEBUG", force=False)
+                fastmcp_server_logger.critical("disabled-fastmcp-sentinel")
+
+            assert "disabled-fastmcp-sentinel" not in caplog.messages
+        finally:
+            (
+                fastmcp_logger.level,
+                fastmcp_logger.handlers[:],
+                fastmcp_logger.propagate,
+                fastmcp_logger.disabled,
+            ) = original_fastmcp_state
+            (
+                fastmcp_server_logger.level,
+                fastmcp_server_logger.handlers[:],
+                fastmcp_server_logger.propagate,
+                fastmcp_server_logger.disabled,
+                fastmcp_server_logger.filters[:],
+            ) = original_server_state
+            streamable_http_logger.filters[:] = original_streamable_http_filters
+
 
 class TestRunOidcServer:
     """Tests for _run_oidc_server async function."""
 
     @pytest.mark.asyncio
-    async def test_creates_oidc_proxy(self):
-        """_run_oidc_server should create an OIDCProxy with correct args."""
+    async def test_creates_oidc_proxy_with_required_openid_scope(self):
+        """OIDC mode should require openid and enable scope compatibility."""
         import ha_mcp.__main__ as main_module
 
         proxy_init_args: dict = {}
@@ -285,9 +391,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -295,9 +399,7 @@ class TestRunOidcServer:
 
         with (
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(
@@ -323,6 +425,8 @@ class TestRunOidcServer:
         assert proxy_init_args["client_secret"] == "test-secret"
         assert proxy_init_args["base_url"] == "https://mcp.example.com"
         assert proxy_init_args["require_authorization_consent"] == "external"
+        assert proxy_init_args["required_scopes"] == ["openid"]
+        assert proxy_init_args.get("setup_scope_compatibility_calls", 0) == 1
 
     @pytest.mark.asyncio
     async def test_jwt_signing_key_passed_from_env(self):
@@ -339,9 +443,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -352,9 +454,7 @@ class TestRunOidcServer:
                 os.environ, {"OIDC_JWT_SIGNING_KEY": "test-jwt-key"}, clear=False
             ),
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(
@@ -389,9 +489,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -403,9 +501,7 @@ class TestRunOidcServer:
         with (
             patch.dict(os.environ, env_without_key, clear=True),
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(
@@ -440,7 +536,7 @@ class TestRunOidcServer:
         async def fake_coro(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(side_effect=lambda **kwargs: fake_coro(**kwargs))
+        mock_mcp.run_async = MagicMock(side_effect=fake_coro)
         mock_server.mcp = mock_mcp
 
         async def capture_run_with_shutdown(coro):
@@ -448,7 +544,7 @@ class TestRunOidcServer:
             coro.close()
 
         with (
-            patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", return_value=mock_auth),
+            patch(_OIDC_PROXY_PATCH_TARGET, return_value=mock_auth),
             patch(
                 "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
             ),
@@ -493,7 +589,7 @@ class TestRunOidcServer:
         mock_server.mcp = mock_mcp
 
         with (
-            patch("fastmcp.server.auth.oidc_proxy.OIDCProxy", return_value=MagicMock()),
+            patch(_OIDC_PROXY_PATCH_TARGET, return_value=MagicMock()),
             patch(
                 "ha_mcp.server.HomeAssistantSmartMCPServer", return_value=mock_server
             ),
@@ -536,9 +632,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -549,9 +643,7 @@ class TestRunOidcServer:
                 "ha_mcp.transport_security.ensure_host_origin_guard_default_off"
             ) as mock_guard,
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(
@@ -586,9 +678,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -603,9 +693,7 @@ class TestRunOidcServer:
                 clear=False,
             ),
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(
@@ -643,9 +731,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -659,9 +745,7 @@ class TestRunOidcServer:
         with (
             patch.dict(os.environ, env_without_var, clear=True),
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(
@@ -696,9 +780,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -707,9 +789,7 @@ class TestRunOidcServer:
         with (
             patch.dict(os.environ, {"OIDC_VERIFY_ID_TOKEN": "true"}, clear=False),
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(
@@ -744,9 +824,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -758,9 +836,7 @@ class TestRunOidcServer:
         with (
             patch.dict(os.environ, env_without_var, clear=True),
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(
@@ -799,9 +875,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -810,9 +884,7 @@ class TestRunOidcServer:
         with (
             patch.dict(os.environ, {"OIDC_JWT_SIGNING_KEY": ""}, clear=False),
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(
@@ -847,9 +919,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -858,9 +928,7 @@ class TestRunOidcServer:
         with (
             patch.dict(os.environ, {"OIDC_VERIFY_ID_TOKEN": "false"}, clear=False),
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(
@@ -895,9 +963,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -910,9 +976,7 @@ class TestRunOidcServer:
                 clear=False,
             ),
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(
@@ -948,9 +1012,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -964,9 +1026,7 @@ class TestRunOidcServer:
         with (
             patch.dict(os.environ, env_without_var, clear=True),
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(
@@ -1007,9 +1067,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -1022,9 +1080,7 @@ class TestRunOidcServer:
                 clear=False,
             ),
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(
@@ -1063,9 +1119,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -1078,9 +1132,7 @@ class TestRunOidcServer:
                 clear=False,
             ),
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(
@@ -1119,9 +1171,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -1134,9 +1184,7 @@ class TestRunOidcServer:
                 clear=False,
             ),
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(
@@ -1171,9 +1219,7 @@ class TestRunOidcServer:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server.mcp = mock_mcp
 
         async def noop_shutdown(coro):
@@ -1183,9 +1229,7 @@ class TestRunOidcServer:
         with (
             patch.dict(os.environ, env_without_var, clear=True),
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(
@@ -1229,6 +1273,7 @@ class TestOIDCProxySignatureSubset:
             "client_secret",
             "base_url",
             "require_authorization_consent",
+            "required_scopes",
             "jwt_signing_key",
             "allowed_client_redirect_uris",
             "verify_id_token",
@@ -1267,9 +1312,7 @@ class TestRunOidcServerSettingsUI:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server = MagicMock()
         mock_server.mcp = mock_mcp
 
@@ -1278,9 +1321,7 @@ class TestRunOidcServerSettingsUI:
 
         with (
             patch(
-                "ha_mcp.__main__.OIDCProxy"
-                if hasattr(main_module, "OIDCProxy")
-                else "fastmcp.server.auth.oidc_proxy.OIDCProxy",
+                _OIDC_PROXY_PATCH_TARGET,
                 MockOIDCProxy,
             ),
             patch(

@@ -1,0 +1,168 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA-MCP Propra Komponanto",
+        "description": "Elektu kion aldoni. **HA-MCP Server** rulas la plenan ha-mcp servilon ene de Home Assistant kaj elmetas ĝin per Home Assistant rethoko (webhook) — ĉi tio estas la instalado, kiun la plej multaj homoj volas. Ĝi estas memstara servilo kaj kompleta anstataŭaĵo por ĉiu alia instala metodo: Apo (aldonaĵo), Docker, uvx/PyPI, stdio; se vi rulas ĝin, ne rulu ankaŭ unu el tiuj. **HA-MCP File & YAML Tools** aldonas la privilegiajn dosierajn kaj YAML-konfigurajn servojn, bezonatajn nur se vi ŝaltas la laŭvolajn dosierajn/YAML-ilojn de ha-mcp. Se via ha-mcp servilo jam rulas aliloke — Apo (aldonaĵo), Docker, uvx — vi ne bezonas la servilan eniron — aldonu nur ĉi tiun Dosieran & YAML eniron, kaj nur se vi uzas tiujn ilojn. Ĝi funkcias kun ĉiu servila tipo kaj povas esti aldonita poste iam ajn.",
+        "menu_options": {
+          "server": "HA-MCP Servilo (rekomendita)",
+          "tools": "HA-MCP Dosieraj & YAML Iloj (laŭvola)"
+        }
+      },
+      "tools": {
+        "title": "HA-MCP Dosieraj & YAML Iloj",
+        "description": "Agordas la privilegiajn dosierajn kaj YAML-konfigurajn servojn. Nur necesa se vi ebligas la laŭvolajn dosierajn/YAML-redaktajn ilojn de ha-mcp (funkciaj flagoj, malŝaltitaj defaŭlte) — ĉi tio aplikiĝas al ĉiu servila tipo, inkluzive de la enproceza HA-MCP Servilo. Vi povas aldoni aŭ forigi ĉi tiun eniron iam ajn."
+      },
+      "server": {
+        "title": "HA-MCP Servilo",
+        "description": "Ĉi tio rulas la plenan ha-mcp servilon ene de Home Assistant kaj elmetas ĝin malproksime per Home Assistant rethoko (webhook) (atingebla per Nabu Casa aŭ iu ajn inversa prokurilo). Ĝi estas memstara servilo kaj kompleta anstataŭaĵo por la apo (aldonaĵo), Docker, uvx/PyPI, kaj stdio instalaj metodoj — ne rulu ĝin kune kun alia ha-mcp servilo. Elektu **Submit** por starti ĝin; vi povas ŝalti la pordon, ligadon, kaj aŭtentigon poste en la integriĝaj opcioj."
+      }
+    },
+    "abort": {
+      "already_configured": "Ĉi tiu eniro jam estas agordita.",
+      "unsupported_home_assistant": "La enproceza HA-MCP Server postulas Home Assistant {required} aŭ pli novan, sed ĉi tiu instanco rulas {installed}. Vi ankoraŭ povas uzi la eniron HA-MCP File & YAML Tools de ĉi tiu kompenento kun ekstera ha-mcp servilo rulanta kiel apo (aldonaĵo) aŭ Docker-ujo."
+    }
+  },
+  "options": {
+    "step": {
+      "tools_info": {
+        "title": "HA-MCP Dosieraj & YAML Iloj",
+        "description": "Agordu la privilegiajn dosierajn kaj YAML-redaktajn servojn uzatajn de la laŭvolaj dosieraj/YAML-iloj de ha-mcp. Ĉi tiuj agordoj ankaŭ aperas en la propra agorda UI de la ha-mcp servilo kaj aplikiĝas tuj, sen rekomenco. Ne-superregebla malpermesa limo ankoraŭ blokas sentemajn vojojn (ekz. .storage) kaj fid-limajn ŝlosilojn (homeassistant, http, frontend, lovelace).",
+        "data": {
+          "allowed_dirs": "Ekstraj dosierujoj",
+          "extra_yaml_keys": "Ekstraj YAML-skribaj ŝlosiloj"
+        },
+        "data_description": {
+          "allowed_dirs": "Dosierujoj rilataj al la agorda dosierujo, ĉiu kun legado kaj skribado permesita (ekz. pyscript). Trairo kaj ekster-agordaj eniroj estas forĵetitaj.",
+          "extra_yaml_keys": "Ĉefnivelaj ŝlosiloj, kiujn ha_config_set_yaml povas skribi krom la enkonstruitaj, por YAML-unuaj integriĝoj en ĉi tiu instalaĵo (ekz. alert2). Fid-limaj ŝlosiloj estas forĵetitaj."
+        }
+      },
+      "init": {
+        "title": "HA-MCP Servilo",
+        "description": "Agordu la HA-MCP servilon. {panel_hint}Ŝanĝoj ĉi tie aplikiĝas post konservado.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
+        "data": {
+          "channel": "Eldona kanalo",
+          "auto_update": "Aŭtomataj servilaj ĝisdatigoj",
+          "server_port": "Aŭskulta pordo de MCP servilo",
+          "bind_host": "Reta aliro",
+          "webhook_auth": "Aŭtentiga reĝimo",
+          "oauth_client_id_override": "Hereda OAuth: propra Klienta ID (laŭvola)",
+          "oauth_client_secret_override": "Hereda OAuth: propra Klienta Sekreto (laŭvola)",
+          "oauth_regenerate": "Hereda OAuth: regeneru Klientan ID/Sekreton nun",
+          "pip_spec": "Programisto: ha-mcp pakaĵa superrego",
+          "server_url": "Home Assistant URL (altnivela)",
+          "external_url": "Ekstera URL (laŭvola)",
+          "webhook_id_override": "Propra retkroĉa sekreto (laŭvola)",
+          "secret_path_override": "Propra rekta-alira vojo (laŭvola)",
+          "regenerate_secrets": "Regeneru konektajn sekretojn nun",
+          "enable_webhook": "Malproksima aliro per retkroĉo",
+          "enable_llm_api": "Konversacia-agenta LLM API",
+          "llm_api_exposure": "Konversacia-agenta ilo-ekspono",
+          "enable_startup_notification": "Komenca sciigo",
+          "enable_sidebar_panel": "Flankbreta agorda panelo"
+        },
+        "data_description": {
+          "channel": "Stabila instalas la plej novan stabilan eldonon; Disvolva instalas la plej novan disvolvan konstruaĵon. Kiam aŭtomataj ĝisdatigoj estas ŝaltitaj, reŝargo aŭ rekomenco, plus perioda kontrolo, instalas la plej novan konstruaĵon de la elektita kanalo. Programista pakaĵa superrego sube havas prioritaton kaj malŝaltas aŭtomatajn ĝisdatigojn.",
+          "auto_update": "Kiam ŝaltita, la plej nova eldono de la elektita kanalo estas instalita aŭtomate — dum reŝargo aŭ rekomenco, kaj per perioda kontrolo. Kiam malŝaltita, la servilo restas ĉe la nuntempe instalita versio ĝis vi reŝaltas ĉi tion. Ĉi tio regas nur la ha-mcp servilan pakaĵon; ĝisdatigoj al la HA-MCP Propra Komponanto mem ankoraŭ venas per HACS.",
+          "server_port": "La pordo, kiun ĉi tiu servilo aŭskultas. La ha-mcp apo (aldonaĵo) uzas 9583, do ĉi tio defaŭltas al 9584 por lasi ambaŭ ruli flank-al-flanke — se vi ne rulas la apon (aldonaĵon), iu ajn libera pordo funkcias.",
+          "bind_host": "Kiu povas konekti al la MCP-servila pordo rekte. La defaŭlto kongruas kun la apo (aldonaĵo): atingebla en via loka retumo, kun la sekreta vojo kiel la akreditaĵo. Elektu enbuklon (loopback) por permesi nur konektojn de la Home Assistant-maŝino mem — la rethoka URL kaj la flanka panelo funkcias ambaŭkaze.",
+          "webhook_auth": "Kiel MCP-klientoj pruvas sin ĉe la retkroĉa URL. Kun la sekreta URL, la ligilo mem estas la sola akreditaĵo — OAuth ankoraŭ funkcias por klientoj, kiuj uzas ĝin, sed ĉiu ensaluto estas aŭtomate aprobita: neniu ensaluto kaj neniu Klienta ID aŭ Sekreto necesas. Kun Home Assistant-ensaluto, klientoj kiel claude.ai ensalutas per Home Assistant-administranta konto (OAuth). Kun hereda OAuth, ĉi tiu integriĝo funkciigas sian propran ensalutan servon kaj eldonas Klientan ID-on kaj Sekreton por alglui en klientojn, kiuj postulas tian — rekomenco de Home Assistant eble necesos por plene ŝalti aŭ malŝalti ĝin.",
+          "oauth_client_id_override": "Anstataŭigas la aŭtomate generitan heredan OAuth Klientan ID. Lasu malplena por konservi la nunan. Nur uzata kiam Aŭtentiga reĝimo estas agordita al hereda OAuth.",
+          "oauth_client_secret_override": "Anstataŭigas la aŭtomate generitan heredan OAuth Klientan Sekreton. Lasu malplena por konservi la nunan. Nur uzata kiam Aŭtentiga reĝimo estas agordita al hereda OAuth.",
+          "oauth_regenerate": "Unufoja ago: kreas novan Klientan ID kaj Sekreton por hereda OAuth-reĝimo. Ĝi ekvalidas nur post la rekomenco de Home Assistant, kiun la ripara peto petas — ĝis vi rekomencos, la antaŭaj Klienta ID kaj Sekreto daŭre funkcias kaj la novaj ne. Ankaŭ malplenigas la du superregajn kampojn supre.",
+          "pip_spec": "Lasu malplena. Nur por testi specifan ha-mcp konstruaĵon (ekzemple antaŭ-eldona fiksado); superregas la eldonan kanalon kaj malŝaltas aŭtomatajn ĝisdatigojn ĝis malplenigite.",
+          "server_url": "La URL, kiun la servilo funkcianta en la sama procezo uzas por atingi vian Home Assistant (kutime ĉi tiu instanco mem). Lasu ĝin malplena por derivi la valoron el la pordo kaj la SSL-agordoj de ĉi tiu instanco; agordu valoron nur kiam la servilo bezonas alian vojon.",
+          "external_url": "Montrata kiel la ĉefa konekta URL — uzu ĉi tion kiam Home Assistant sidas malantaŭ via propra domajno aŭ inversa prokurilo. Enigu la plenan bazan adreson inkluzive de la skemo. Ĝi devas montri rekte al Home Assistant — malfermante ĝin en retumilo devus atingi vian HA ensalutan paĝon — kaj ne devas enhavi pordon kiel :8123 (aŭ iu ajn alia pordo), alie malproksimaj MCP klientoj ne povos atingi ĝin. Lasu malplena por uzi Nabu Casa / la lokan adreson aŭtomate.",
+          "webhook_id_override": "Anstataŭigas la hazardan retkroĉan sekreton en la konekta URL (/api/webhook/...). La URL estas la akreditaĵo — uzu longan, malfacile diveneblan valoron. Lasu malplena por konservi la nunan.",
+          "secret_path_override": "Anstataŭigas la hazardan vojon uzatan por rekta aliro ĉe la servila pordo. Sama regulo: la vojo estas la akreditaĵo. Lasu malplena por konservi la nunan.",
+          "regenerate_secrets": "Unufoja ago: kreas novan hazardan retkroĉan sekreton kaj rektaliran vojon, tuj malvalidigante la malnovajn konektajn URL-ojn. Ankaŭ malplenigas la du superajn anstataŭigajn kampojn.",
+          "enable_webhook": "Malŝaltu por nur-loka reĝimo: la retkroĉo de Home Assistant tute ne estas registrita, do nenio — inkluzive de Nabu Casa — povas atingi la servilon per Home Assistant. La rekta servila pordo kaj la flanka panelo daŭre funkcias.",
+          "enable_llm_api": "Proponu la plenan ilaron al konversaciaj agentoj de Home Assistant (OpenAI, Google, Ollama, ...): dum ebligite, agentoj povas elekti 'HA-MCP Server' sub Kontroli Home Assistant kaj uzi la ilojn el Asista babilejo kaj voĉo. Ebligo nur igas ĝin elektebla — nenio estas elmontrita ĝis vi elektas ĝin ĉe agento. Gvidilo pri uzado: {llm_api_docs_url}",
+          "llm_api_exposure": "Formo de la ilaro proponita al konversaciaj agentoj. Ilo-serĉo (defaŭlta) tenas la kuntekston de la agento malgranda: kompakta API kun fiksitaj iloj plus serĉaj/ekzekutaj meta-iloj. Plena katalogo listigas ĉiun elmontritan ilon rekte — pli bone por grand-kuntekstaj modeloj. Ambaŭ registras la du flank-al-flanke, do ĉiu agento elektas sian propran sub Kontroli Home Assistant. Elmontro laŭ ilo estas administrata en la agorda panelo de HA-MCP; detaloj: {llm_api_docs_url}",
+          "enable_startup_notification": "Montru sciigon ĉiufoje kiam la servilo startas, montrante al la nur-administraj agordaj surfacoj. Malŝaltu por starti silente — la konektaj URL-oj ankoraŭ aperas en la protokolo de Home Assistant.",
+          "enable_sidebar_panel": "Montru la agordan panelon de HA-MCP en la flanka kolumno (nur por administrantoj). Malŝaltu por forigi la flankan eniron — servilaj opcioj restas disponeblaj sur ĉi tiu ekrano."
+        }
+      }
+    }
+  },
+  "issues": {
+    "server_start_failed": {
+      "title": "La en-proceza servilo de HA-MCP ne sukcesis starti",
+      "description": "La en-proceza servilo de HA-MCP ne povis esti startigita ene de Home Assistant:\n\n{detail}\n\nKontrolu la protokolojn de Home Assistant, poste reŝarĝu la integradon (aŭ riparu la suban problemon kaj reŝarĝu) por reprovi."
+    },
+    "server_package_install_failed": {
+      "title": "La pakaĵo de la en-proceza servilo de HA-MCP ne povis esti instalita",
+      "description": "Instalado de la pakaĵo ha-mcp por la en-proceza servilo malsukcesis:\n\n{detail}\n\nSolvu la kongruecan aŭ instalan problemon priskribitan supre, poste reŝarĝu la integradon por reprovi."
+    },
+    "component_outdated": {
+      "title": "Ĝisdatigu la Personan Komponanton de HA-MCP per HACS",
+      "description": "La instalita servilo ha-mcp postulas Personan Komponanton de HA-MCP {required} aŭ pli novan, sed vi havas {installed}. Ĝisdatigu la komponanton per HACS (malfermu la eniron de la Persona Komponanto de HA-MCP kaj uzu 'Ĝisdatigi informojn' se neniu ĝisdatigo ankoraŭ montriĝas) kaj rekomencu Home Assistant. La servilo daŭre funkcias dume, sed iuj pli novaj funkcioj eble ne funkcios ĝis la komponanto estos ĝisdatigita."
+    },
+    "server_update_held": {
+      "title": "Ĝisdatigo de servilo HA-MCP atendas ĝisdatigon de komponanto",
+      "description": "Servilo ha-mcp {latest} estas disponebla, sed tiu eldono ankaŭ ĝisdatigis la Personan Komponanton de HA-MCP (al {shipped}; vi uzas {running}). Por eviti startigi servilan version, kun kiu la nuna komponanto neniam estis testita, la aŭtomata servila ĝisdatigo estas prokrastita ĝis la komponanto estos ĝisdatigita.\n\nĜisdatigu la komponanton per HACS (malfermu la eniron de la Persona Komponanto de HA-MCP kaj uzu 'Ĝisdatigi informojn' se neniu ĝisdatigo ankoraŭ montriĝas), poste rekomencu Home Assistant — la servila ĝisdatigo instaliĝos aŭtomate poste. Por instali la servilan ĝisdatigon ĉiukaze, premu Instali ĉe la ĝisdatiga ento de la servilo HA-MCP."
+    },
+    "legacy_hacs_source": {
+      "title": "Komponanto instalita el la hereda deponejo",
+      "description": "HACS spuras la ĉefan deponejon de la ha-mcp-servilo por ĉi tiu komponanto, do HACS montras la versinumerojn kaj eldondetalojn de la servilo ĉi tie anstataŭ tiujn de la komponanto mem (2.x). Ĝisdatigoj daŭre funkcias, sed restas misetikeditaj tiel. Por ripari: forigu ĉi tiun deponejon el HACS (viaj integriĝaj agordoj kaj agordaj enskriboj estas konservitaj), aldonu homeassistant-ai/ha-mcp-integration kiel propran deponejon, reinstalu la komponanton el ĝi, kaj rekomencu Home Assistant."
+    },
+    "legacy_oauth_restart": {
+      "title": "Rekomencu Home Assistant por apliki la heredajn OAuth-agordojn",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Rekomencu Home Assistant?",
+            "description": "Sendi ĉi tiun formularon rekomencos Home Assistant kaj aplikos la heredajn OAuth-agordojn.\n\nAlklaku **Sendi** por rekomenci nun."
+          }
+        }
+      }
+    }
+  },
+  "selector": {
+    "server_channel": {
+      "options": {
+        "stable": "Stabila (rekomendita)",
+        "dev": "Disvolva (plej nova konstruo)"
+      }
+    },
+    "server_webhook_auth": {
+      "options": {
+        "none": "Sekreta retkroĉa URL (defaŭlta)",
+        "ha_auth": "Ensaluti per Home Assistant (OAuth)",
+        "legacy": "Hereda OAuth (ĉi tiu integriĝo eldonas Klientan ID-on/Sekreton por alglui)"
+      }
+    },
+    "llm_api_exposure": {
+      "options": {
+        "tool_search": "Ilo-serĉo (kompakta, defaŭlta)",
+        "full": "Plena katalogo",
+        "both": "Ambaŭ (elektu laŭ agento)"
+      }
+    }
+  },
+  "entity": {
+    "update": {
+      "server_update": {
+        "name": "Ĝisdatigo"
+      }
+    }
+  },
+  "common": {
+    "connect_direct_access": "Rekta aliro el la maŝino de Home Assistant: {url}",
+    "connect_local_lan": "Loka/LAN (kiam Reto-aliro estas \"Local network\"): {url}",
+    "connect_remote_url": "Fora konekta URL: {url}",
+    "connect_urls_label": "Konektaj URL(j):",
+    "connect_urls_pending": "La konektaj URL-oj aperos ĉi tie (kaj en la protokolo de Home Assistant) post kiam la servilo startos.",
+    "connect_webhook_disabled": "Fora aliro per retkroĉo estas malŝaltita (nur-loka reĝimo).",
+    "oauth_creds_pending": "La Klienta ID kaj Klienta Sekreto aperos ĉi tie post kiam la servilo startos.",
+    "oauth_not_serving": "Legacy OAuth ankoraŭ ne liveras ilin — rekomencu Home Assistant, kiam ĝi petas vin pri tio, por aktivigi ilin.",
+    "oauth_select_legacy_mode": "Agordu Aŭtentigan reĝimon al hereda OAuth supre kaj konservu por generi Klientan ID kaj Klientan Sekreton.",
+    "panel_hint": "Malfermu la [agordan panelon de HA-MCP](/ha-mcp) por ilo-administrado kaj servilaj agordoj.",
+    "tools_module_installed": "Beta/altnivela modulo de dosieraj & YAML-iloj (laŭvola): Instalita",
+    "tools_module_not_installed": "Beta/altnivela modulo de dosieraj & YAML-iloj (laŭvola): Ne instalita — premu \"Aldoni eniron\" sur la paĝo de ĉi tiu integriĝo kaj elektu \"HA-MCP File & YAML Tools\" por aldoni ĝin",
+    "tools_module_not_loaded": "Beta/altnivela modulo de dosieraj & YAML-iloj (laŭvola): Instalita sed ne ŝargita — ebligu aŭ reŝarĝu la eniron \"HA-MCP File & YAML Tools\" sur la paĝo de ĉi tiu integriĝo",
+    "version_line": "Komponanto {component_version} - Servilo ha-mcp {server_version} ({channel} kanalo)",
+    "version_not_installed": "ankoraŭ ne instalita",
+    "version_unknown": "nekonata"
+  }
+}

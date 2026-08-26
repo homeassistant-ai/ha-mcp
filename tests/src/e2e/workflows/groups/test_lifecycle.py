@@ -80,7 +80,36 @@ class TestGroupLifecycle:
             cleanup_tracker.track("group", object_id)
             logger.info(f"Created group: group.{object_id}")
 
-            # 2. LIST: Verify group appears in list
+            # 2. SEARCH: Verify the public search contract against a real HA group.
+            search_data = await mcp.call_tool_success(
+                "ha_search",
+                {
+                    "query": f"group.{object_id}",
+                    "domain_filter": "group",
+                    "exact_match": True,
+                    "result_fields": [
+                        "entity_id",
+                        "is_group",
+                        "member_entity_ids",
+                    ],
+                },
+            )
+            search_record = next(
+                (
+                    entity
+                    for entity in search_data["entities"]
+                    if entity["entity_id"] == f"group.{object_id}"
+                ),
+                None,
+            )
+            assert search_record is not None, search_data
+            assert search_record["is_group"] is True
+            assert search_record["member_entity_ids"] == [
+                "light.bed_light",
+                "light.ceiling_lights",
+            ]
+
+            # 3. LIST: Verify group appears in list
             list_data = await mcp.call_tool_success("ha_config_list_groups", {})
 
             group_found = False
@@ -104,7 +133,7 @@ class TestGroupLifecycle:
             assert group_found, f"Group {object_id} not found in list"
             logger.info("Group verified in list")
 
-            # 3. UPDATE: Modify group name
+            # 4. UPDATE: Modify group name
             update_data = await mcp.call_tool_success(
                 "ha_config_set_group",
                 {
@@ -132,7 +161,7 @@ class TestGroupLifecycle:
                     break
             logger.info("Group update verified")
 
-            # 5. DELETE: Remove group
+            # 6. DELETE: Remove group
             await mcp.call_tool_success(
                 "ha_config_remove_group",
                 {"object_id": object_id},

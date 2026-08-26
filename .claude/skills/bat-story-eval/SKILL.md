@@ -33,7 +33,7 @@ If `$ARGUMENTS` is `--help` or missing `--baseline`, show usage and stop:
 ### 0a. Compute Diff
 
 ```bash
-cd /home/julien/github/ha-mcp/worktree/uat-stories
+cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/worktree/uat-stories"
 git diff <baseline>..HEAD -- src/ha_mcp/ --stat
 git diff <baseline>..HEAD -- src/ha_mcp/ --name-only
 ```
@@ -93,7 +93,7 @@ verify:
 
 expected:
   tools_should_use:
-    - ha_search_entities
+    - ha_search
   description: >
     [What a correct agent should do]
 ```
@@ -112,7 +112,7 @@ For EACH agent, run all stories against the **baseline** version. One container 
 ### 1a. Start container with first story
 
 ```bash
-cd /home/julien/github/ha-mcp/worktree/uat-stories
+cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/worktree/uat-stories"
 uv run python tests/uat/stories/run_story.py \
   catalog/<first_story>.yaml \
   --agents <agent> --keep-container \
@@ -131,7 +131,11 @@ uv run python tests/uat/stories/scripts/ha_query.py \
   --agent <agent> \
   "Does an automation with alias 'Sunset Porch Light' exist?"
 ```
-Record each answer as **confirmed** / **denied** / **unclear**.
+Record each answer as **confirmed** / **denied** / **unclear**. A non-zero exit
+from `ha_query.py` means the query itself failed (the output carries an
+`[exit N]` marker; `[exit 124]` is a timeout) — that is not one of the three
+outcomes; re-run it, and if it keeps failing record the story as `unverified`
+(Step 5) rather than scoring it. See `references/evaluation-protocol.md`.
 
 Run remaining pre-built stories on the same container:
 ```bash
@@ -256,9 +260,11 @@ For each story+agent:
 
 Append eval results as NEW lines (never modify existing):
 ```python
-record["eval_score"] = "pass"  # or "partial" or "fail"
+record["eval_score"] = "pass"  # or "partial", "fail", or "unverified"
 record["eval_notes"] = "Entity created, triggers verified"
 record["eval_trend"] = "stable"  # or "new", "improved", "decreased"
+# "unverified" is for a story whose verification query itself failed — it is
+# not a result, so it carries no trend and is not compared to the baseline.
 ```
 
 ## Step 6: Report
@@ -305,7 +311,7 @@ For EACH custom story, output a full section:
 | Question | Baseline | Target |
 |----------|----------|--------|
 | Found the entity? | confirmed | confirmed |
-| Used ha_search_entities? | confirmed | confirmed |
+| Used ha_search? | confirmed | confirmed |
 
 **Score**: baseline=pass, target=pass, trend=stable
 **Tokens**: baseline=28,500, target=27,200 (-5%)
@@ -353,6 +359,8 @@ Flag >5% total size increase (directly impacts token cost per turn).
 | `tests/uat/stories/scripts/ha_query.py` | Query live HA via agent+MCP for verification |
 | `tests/uat/stories/catalog/s*.yaml` | Pre-built story definitions |
 | `local/uat-results.jsonl` | Historical results (gitignored) |
+| `references/evaluation-protocol.md` | Scoring rules, verification questions, cross-agent checks |
+| `references/regression-protocol.md` | Regression classification and flaky handling |
 
 ## Important Notes
 
@@ -362,4 +370,4 @@ Flag >5% total size increase (directly impacts token cost per turn).
 - Reuse containers: first story starts it (`--keep-container`), rest use `--ha-url`
 - Custom story YAMLs go to `/tmp/` (ephemeral); full details reported in Step 6
 - See "Metrics" section in Step 4 for primary vs secondary metric classification
-- The working directory MUST be `/home/julien/github/ha-mcp/worktree/uat-stories` for `uv run`
+- The working directory MUST be the `worktree/uat-stories` worktree root (where `pyproject.toml` lives) for `uv run`

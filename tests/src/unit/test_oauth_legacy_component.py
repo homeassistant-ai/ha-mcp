@@ -11,7 +11,7 @@ Home Assistant / aiohttp are stubbed via ``_embedded_stubs`` (same convention
 as ``test_embedded_setup.py`` / ``test_embedded_entry.py``). ``yarl`` (an
 aiohttp dependency, also not installed in this unit-test environment) is
 stubbed here with the tiny ``URL.update_query`` surface
-``AuthorizeView._redirect_with`` actually uses.
+``_redirect_with_params`` actually uses.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ install()
 
 class _FakeURL:
     """Stand-in for ``yarl.URL`` covering only ``update_query`` + ``str()`` --
-    the surface ``AuthorizeView._redirect_with`` uses to append ``code``/
+    the surface ``_redirect_with_params`` uses to append ``code``/
     ``state``/``error`` query params onto the client's redirect_uri."""
 
     def __init__(self, url: str) -> None:
@@ -43,6 +43,10 @@ class _FakeURL:
         sep = "&" if "?" in self._url else "?"
         query = "&".join(f"{k}={v}" for k, v in params.items())
         return _FakeURL(f"{self._url}{sep}{query}" if query else self._url)
+
+    def with_query(self, params) -> _FakeURL:
+        query = "&".join(f"{k}={v}" for k, v in params.items())
+        return _FakeURL(f"{self._url}?{query}" if query else self._url)
 
     def __str__(self) -> str:
         return self._url
@@ -54,7 +58,7 @@ if "yarl" not in sys.modules:
     sys.modules["yarl"] = _yarl
 
 import custom_components.ha_mcp_tools.embedded_entry as eentry  # noqa: E402
-import custom_components.ha_mcp_tools.oauth_legacy as oauth_legacy  # noqa: E402
+from custom_components.ha_mcp_tools import oauth_legacy  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_OAUTH_CLIENT_ID,
     DATA_OAUTH_CLIENT_SECRET,
@@ -116,6 +120,7 @@ def _authorize_query(**overrides: str) -> dict[str, str]:
 def _make_get_request(query: dict[str, str]) -> MagicMock:
     request = MagicMock(name="Request")
     request.query = query
+    request.path = oauth_legacy.AUTHORIZE_PATH
     return request
 
 
@@ -328,6 +333,12 @@ class TestPKCECodes:
         code = provider.issue_code(REDIRECT_URI, _challenge_for(verifier))
         assert provider.consume_code(code, REDIRECT_URI, verifier) is False
 
+    def test_verifier_with_trailing_newline_rejected(self):
+        provider = _make_provider()
+        verifier = "a" * 43 + "\n"
+        code = provider.issue_code(REDIRECT_URI, _challenge_for(verifier))
+        assert provider.consume_code(code, REDIRECT_URI, verifier) is False
+
     def test_verifier_over_max_length_rejected(self):
         # RFC 7636 §4.1 caps the verifier at 128 chars; one over must be
         # rejected on length before any hashing.
@@ -387,45 +398,42 @@ class TestAuthenticateClient:
 
 
 class TestExtractClientCreds:
-    """``TokenView._extract_client_creds`` -- Basic-auth header vs form body."""
+    """``_extract_client_creds`` -- Basic-auth header vs form body."""
 
     def test_extracts_from_basic_auth_header(self):
         encoded = base64.b64encode(b"cid:secret").decode()
         request = MagicMock()
         request.headers = {"Authorization": f"Basic {encoded}"}
-        cid, secret = oauth_legacy.TokenView._extract_client_creds(request, {})
-        assert (cid, secret) == ("cid", "secret")
+        assert oauth_legacy._extract_client_creds(request, {}) == [("cid", "secret")]
 
     def test_extracts_from_form_body_when_no_basic_header(self):
         request = MagicMock()
         request.headers = {}
-        cid, secret = oauth_legacy.TokenView._extract_client_creds(
-            request, {"client_id": "cid", "client_secret": "secret"}
-        )
-        assert (cid, secret) == ("cid", "secret")
+        assert oauth_legacy._extract_client_creds(
+            request,
+            {"client_id": "cid", "client_secret": "secret"},
+        ) == [("cid", "secret")]
 
-    def test_malformed_basic_header_returns_none(self):
+    def test_malformed_basic_header_returns_no_candidates(self):
         request = MagicMock()
         request.headers = {"Authorization": "Basic not-valid-base64!!!"}
-        cid, secret = oauth_legacy.TokenView._extract_client_creds(request, {})
-        assert (cid, secret) == (None, None)
+        assert oauth_legacy._extract_client_creds(request, {}) == []
 
-    def test_basic_header_without_colon_returns_none(self):
+    def test_basic_header_without_colon_returns_no_candidates(self):
         encoded = base64.b64encode(b"no-colon-here").decode()
         request = MagicMock()
         request.headers = {"Authorization": f"Basic {encoded}"}
-        cid, secret = oauth_legacy.TokenView._extract_client_creds(request, {})
-        assert (cid, secret) == (None, None)
+        assert oauth_legacy._extract_client_creds(request, {}) == []
 
     def test_percent_encoded_basic_creds_are_decoded(self):
-        # RFC 6749 §2.3.1: client_secret_basic values are percent-encoded before
-        # base64, so a custom credential with reserved characters must decode
+        # RFC 6749 §2.3.1: client_secret_basic values are form-urlencoded
+        # before base64, so a custom credential with reserved characters decodes
         # back (a no-op for the URL-safe generated credentials).
         encoded = base64.b64encode(b"c%40id:p%40ss%2Fword").decode()
         request = MagicMock()
         request.headers = {"Authorization": f"Basic {encoded}"}
-        cid, secret = oauth_legacy.TokenView._extract_client_creds(request, {})
-        assert (cid, secret) == ("c@id", "p@ss/word")
+        candidates = oauth_legacy._extract_client_creds(request, {})
+        assert candidates[0] == ("c@id", "p@ss/word")
 
     def test_basic_creds_form_decode_plus_as_space_not_literal(self):
         # RFC 6749 §2.3.1 form-urlencodes Basic creds, so "+" is a SPACE and a
@@ -435,8 +443,31 @@ class TestExtractClientCreds:
         encoded = base64.b64encode(b"c+id:p%2Bss word").decode()
         request = MagicMock()
         request.headers = {"Authorization": f"Basic {encoded}"}
-        cid, secret = oauth_legacy.TokenView._extract_client_creds(request, {})
-        assert (cid, secret) == ("c id", "p+ss word")
+        candidates = oauth_legacy._extract_client_creds(request, {})
+        assert candidates[0] == ("c id", "p+ss word")
+
+    def test_raw_split_is_offered_for_non_encoding_clients(self):
+        # #2218 review (mirrored from the proxy): a custom credential override
+        # may contain a literal "+" or "%XX", and a client that skips RFC 6749
+        # form-encoding sends it raw — the decoded candidate alone would
+        # mangle it, so the raw split must be offered too.
+        encoded = base64.b64encode(b"client+id:se%41cret+x").decode()
+        request = MagicMock()
+        request.headers = {"Authorization": f"Basic {encoded}"}
+        assert oauth_legacy._extract_client_creds(request, {}) == [
+            ("client id", "seAcret x"),
+            ("client+id", "se%41cret+x"),
+        ]
+
+    def test_url_safe_creds_yield_a_single_candidate(self):
+        # Decoding is a no-op for the generated URL-safe credentials, so no
+        # duplicate candidate is offered.
+        encoded = base64.b64encode(b"cid-123:secret-456").decode()
+        request = MagicMock()
+        request.headers = {"Authorization": f"Basic {encoded}"}
+        assert oauth_legacy._extract_client_creds(request, {}) == [
+            ("cid-123", "secret-456")
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +586,13 @@ class TestAuthorizeViewGet:
         response = await view.get(request)
         assert response.status == 400
         assert "code_challenge" in response.text
+
+    async def test_rejects_code_challenge_with_trailing_newline(self):
+        provider = _make_provider()
+        view = oauth_legacy.AuthorizeView(provider)
+        request = _make_get_request(_authorize_query(code_challenge="a" * 43 + "\n"))
+        response = await view.get(request)
+        assert response.status == 400
 
     async def test_consent_page_shows_redirect_domain_and_escapes_it(self):
         provider = _make_provider()
@@ -676,6 +714,70 @@ class TestTokenViewPost:
         response = await view.post(request)
         assert response.status == 404
         assert response.json_body == {"error": "not_found"}
+
+    async def test_basic_auth_authenticates_a_raw_unencoded_secret(self):
+        """#2219 review round 3: the behavior this PR exists for, driven
+        end-to-end. A configured secret containing a literal '+' / '%XX',
+        sent raw by a client that skips RFC 6749 §2.3.1 form-encoding, must
+        authenticate — the decoded candidate alone mangles it."""
+        secret = "se%41cret+x"
+        provider = _make_provider(client_secret=secret)
+        view = oauth_legacy.TokenView(provider)
+        token = base64.b64encode(f"{CLIENT_ID}:{secret}".encode()).decode()
+        request = MagicMock()
+        request.headers = {"Authorization": f"Basic {token}"}
+        request.post = AsyncMock(return_value={"grant_type": "unsupported_probe"})
+
+        response = await view.post(request)
+
+        # Past the client gate: the probe grant fails, not the credentials.
+        assert response.status == 400
+        assert response.json_body["error"] == "unsupported_grant_type"
+
+    async def test_consent_post_undecodable_body_returns_400_not_500(self):
+        """The consent POST is the fourth guarded call site — reverting its
+        guard must fail here rather than 500 an anonymous view."""
+        provider = _make_provider()
+        view = oauth_legacy.AuthorizeView(provider)
+        request = MagicMock()
+        request.headers = {}
+        request.post = AsyncMock(side_effect=LookupError("unknown encoding: nope"))
+
+        response = await view.post(request)
+
+        assert response.status == 400
+
+    async def test_undecodable_form_body_returns_400_not_500(self):
+        """#2219 review round 3: aiohttp raises LookupError (not ValueError)
+        when Content-Type names an unknown charset, so an anonymous caller
+        could turn one header into a 500 + traceback."""
+        provider = _make_provider()
+        view = oauth_legacy.TokenView(provider)
+        request = MagicMock()
+        request.headers = {}
+        request.post = AsyncMock(side_effect=LookupError("unknown encoding: nope"))
+
+        response = await view.post(request)
+
+        assert response.status == 400
+        assert response.json_body["error"] == "invalid_request"
+
+    async def test_non_string_form_credentials_return_401_not_500(self):
+        """#2219 review round 3: request.post() yields str | bytes |
+        FileField; the non-str shapes are truthy, so an unwrapped value would
+        slip past the emptiness guard and raise AttributeError on .encode()."""
+        provider = _make_provider()
+        view = oauth_legacy.TokenView(provider)
+        request = MagicMock()
+        request.headers = {}
+        request.post = AsyncMock(
+            return_value={"client_id": b"bytes-id", "client_secret": b"bytes-secret"}
+        )
+
+        response = await view.post(request)
+
+        assert response.status == 401
+        assert response.json_body["error"] == "invalid_client"
 
     async def test_invalid_client_credentials_returns_401(self):
         provider = _make_provider()
@@ -1016,6 +1118,61 @@ class TestLegacyCredentialsActive:
                 hass, CLIENT_ID, CLIENT_SECRET, key.hex()
             )
             is True
+        )
+
+    def test_foreign_owner_uses_scoped_provider_fingerprint(self):
+        """Accept only scoped-provider credentials when a foreign owner holds root."""
+        hass = _make_hass()
+        hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "mcp_proxy_dev"
+        key = secrets.token_bytes(32)
+        oauth_legacy.build_unbound_legacy_provider(
+            hass,
+            CLIENT_ID,
+            CLIENT_SECRET,
+            key,
+        )
+
+        assert (
+            oauth_legacy.legacy_credentials_active(
+                hass,
+                CLIENT_ID,
+                CLIENT_SECRET,
+                key,
+            )
+            is True
+        )
+        assert (
+            oauth_legacy.legacy_credentials_active(
+                hass,
+                CLIENT_ID,
+                "different-secret",
+                key,
+            )
+            is False
+        )
+
+    def test_clear_scoped_credentials_removes_stale_identity(self):
+        """An unloaded scoped provider must no longer expose its credentials."""
+        hass = _make_hass()
+        hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "mcp_proxy_dev"
+        key = secrets.token_bytes(32)
+        oauth_legacy.build_unbound_legacy_provider(
+            hass,
+            CLIENT_ID,
+            CLIENT_SECRET,
+            key,
+        )
+
+        oauth_legacy.clear_scoped_legacy_credentials(hass)
+
+        assert (
+            oauth_legacy.legacy_credentials_active(
+                hass,
+                CLIENT_ID,
+                CLIENT_SECRET,
+                key,
+            )
+            is False
         )
 
 

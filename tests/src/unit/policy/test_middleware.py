@@ -13,7 +13,7 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.policy.approval_queue import ApprovalQueue, compute_args_hash
 from ha_mcp.policy.middleware import PROXY_META_TOOLS, PolicyMiddleware
-from ha_mcp.policy.model import Policy, Rule
+from ha_mcp.policy.model import Policy, Predicate, Rule
 
 
 def make_context(name: str, arguments: dict | None = None):
@@ -62,6 +62,26 @@ async def test_no_matching_rule_passes_through(queue):
 
 
 @pytest.mark.anyio
+async def test_a_rule_gates_a_call_on_the_tools_retired_name(queue):
+    """The gate is keyed on the current name; ``evaluate`` fails OPEN.
+
+    The alias middleware normally rewrites the name before this gate sees it,
+    so this pins the defence rather than the ordering: reading the raw name
+    here means no rule matches, and an unmatched call is allowed.
+    """
+    pol = Policy(rules=[Rule(tool_name="ha_manage_app")])
+    mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)
+    call_next = AsyncMock()
+
+    with pytest.raises(ToolError) as ei:
+        await mw.on_call_tool(make_context("ha_manage_addon", {"slug": "x"}), call_next)
+
+    body = json.loads(ei.value.args[0])
+    assert body["error"]["code"] == "USER_APPROVAL_REQUIRED"
+    call_next.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_remembered_approval_passes_through(queue):
     pol = Policy(rules=[Rule(tool_name="ha_call_service")])
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)
@@ -70,6 +90,229 @@ async def test_remembered_approval_passes_through(queue):
     call_next = AsyncMock(return_value="ok")
     result = await mw.on_call_tool(make_context("ha_call_service", args), call_next)
     assert result == "ok"
+
+
+@pytest.mark.anyio
+async def test_remembered_approval_never_bypasses_dynamic_bulk_selector(queue):
+    """Selector membership changes require a fresh approval for every call."""
+    args = {
+        "selector": {"domain": "lock", "area_ids": ["entry"]},
+        "action": "lock",
+    }
+    policy = Policy(rules=[Rule(tool_name="ha_bulk_control", remember_minutes=5)])
+    queue.remember("ha_bulk_control", compute_args_hash(args), minutes=5)
+    middleware = PolicyMiddleware(
+        policy_provider=lambda: policy,
+        queue=queue,
+        wait_seconds=0,
+    )
+    call_next = AsyncMock()
+
+    with pytest.raises(ToolError):
+        await middleware.on_call_tool(make_context("ha_bulk_control", args), call_next)
+
+    call_next.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_dynamic_bulk_selector_never_consumes_a_foreign_approval(queue):
+    """A dynamic selector call must not pick up an approval it didn't wait on.
+
+    Regression for a real gap: the pre-existing "existing = find(); consume if
+    approved" fast path was not gated by ``dynamic_targets``, so ANY later
+    identical selector call within ``approval_ttl_minutes`` could claim an
+    approval created (and possibly already orphaned) by a prior call and
+    dispatch against topology re-resolved at that later moment -- exactly
+    the reuse-across-a-time-gap ``remember_minutes`` is disabled to prevent,
+    just via the queue instead of the remember-cache. A dynamic call must
+    always mint and wait on its own entry instead.
+    """
+    args = {
+        "selector": {"domain": "lock", "area_ids": ["entry"]},
+        "action": "lock",
+    }
+    args_hash = compute_args_hash(args)
+    policy = Policy(rules=[Rule(tool_name="ha_bulk_control", remember_minutes=5)])
+    # Simulate an orphaned approval: some earlier call created this entry
+    # and (per the fix) is the only one entitled to consume it -- but that
+    # earlier call is not the one running below.
+    entry = queue.create("ha_bulk_control", args_hash, args, ttl_minutes=5)
+    queue.approve(entry.token)
+    middleware = PolicyMiddleware(
+        policy_provider=lambda: policy,
+        queue=queue,
+        wait_seconds=0,
+    )
+    call_next = AsyncMock(return_value="ok")
+
+    with pytest.raises(ToolError):
+        await middleware.on_call_tool(make_context("ha_bulk_control", args), call_next)
+
+    call_next.assert_not_awaited()
+    # The foreign approval is untouched -- this call minted its own
+    # independent entry rather than consuming it (proven by call_next
+    # never firing despite the foreign entry being pre-approved). With
+    # wait_seconds=0 this call times out immediately, and per
+    # _finalize_timed_out_pending a timed-out DYNAMIC entry is removed
+    # before it raises (an unconsumable entry left behind is a ghost row
+    # the settings UI would still offer), so only the foreign entry
+    # remains -- and it is untouched.
+    assert queue.get(entry.token) is not None
+    assert queue.get(entry.token).decision == "approved"
+    assert queue.list_pending() == []
+
+
+@pytest.mark.anyio
+async def test_dynamic_selector_race_never_double_dispatches(queue):
+    """Two concurrent calls, one approval: only the approved one dispatches.
+
+    Regression for the exact race in the PR review: call A creates entry E
+    and blocks; the user approves E; if call B's on_call_tool reaches the
+    (now-removed-for-dynamic) "find an already-approved entry" fast path
+    before A's own wait wakes, both A and B would see "approved" and both
+    would call_next. With per-invocation entries, A and B never share one
+    entry, so approving A's does not affect B's independent one.
+    """
+    args = {
+        "selector": {"domain": "lock", "area_ids": ["entry"]},
+        "action": "lock",
+    }
+    policy = Policy(rules=[Rule(tool_name="ha_bulk_control")])
+    middleware = PolicyMiddleware(
+        policy_provider=lambda: policy,
+        queue=queue,
+        wait_seconds=5,
+    )
+    call_next = AsyncMock(return_value="ok")
+    outcomes: list[str] = []
+
+    async def call():
+        try:
+            result = await middleware.on_call_tool(
+                make_context("ha_bulk_control", dict(args)), call_next
+            )
+            outcomes.append(result)
+        except ToolError:
+            outcomes.append("denied_or_pending")
+
+    async def approve_one_when_both_pending():
+        for _ in range(50):
+            pending = queue.list_pending()
+            if len(pending) >= 2:
+                break
+            await anyio.sleep(0.02)
+        assert len(pending) == 2
+        queue.approve(pending[0].token)
+        queue.deny(pending[1].token)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(call)
+        tg.start_soon(call)
+        tg.start_soon(approve_one_when_both_pending)
+
+    assert sorted(outcomes) == ["denied_or_pending", "ok"]
+    call_next.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_concurrent_dynamic_selector_calls_get_independent_approvals(
+    queue, monkeypatch: pytest.MonkeyPatch
+):
+    """Two concurrent identical selector calls must not share one pending entry.
+
+    Sharing (via ``find_or_create``'s dedup) would let a single approval
+    click release both waiters, so one click could dispatch the selector
+    twice — or against two different resolutions if topology changed
+    between them. Each invocation must mint its own pending approval.
+
+    Captures the minted tokens via a wrapped ``queue.create`` rather than
+    inspecting ``queue.list_pending()`` after the calls return: with
+    ``wait_seconds=0`` both calls time out immediately, and a timed-out
+    DYNAMIC entry is now removed before its call raises (see
+    ``_finalize_timed_out_pending`` -- an unconsumable entry left behind
+    is a ghost row the settings UI would still offer), so the queue is
+    correctly empty by the time either call has returned.
+    """
+    args = {
+        "selector": {"domain": "lock", "area_ids": ["entry"]},
+        "action": "lock",
+    }
+    policy = Policy(rules=[Rule(tool_name="ha_bulk_control")])
+    middleware = PolicyMiddleware(
+        policy_provider=lambda: policy,
+        queue=queue,
+        wait_seconds=0,
+    )
+    call_next = AsyncMock()
+
+    real_create = queue.create
+    created_tokens: list[str] = []
+
+    def _create_and_capture(*args_: object, **kwargs: object):
+        entry = real_create(*args_, **kwargs)
+        created_tokens.append(entry.token)
+        return entry
+
+    monkeypatch.setattr(queue, "create", _create_and_capture)
+
+    async def call():
+        with pytest.raises(ToolError):
+            await middleware.on_call_tool(
+                make_context("ha_bulk_control", dict(args)), call_next
+            )
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(call)
+        tg.start_soon(call)
+
+    assert len(created_tokens) == 2
+    assert created_tokens[0] != created_tokens[1]
+    assert queue.list_pending() == []
+    call_next.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_stringified_selector_argument_still_gates_correctly(queue):
+    """A JSON-stringified `selector` (Claude Desktop stdio-style) must still
+    be gated by a rule targeting a nested selector field.
+
+    Regression for a real gap found in review: PolicyMiddleware reads
+    ``context.message.arguments`` before the tool's own Pydantic
+    ``JSON_STRING_COERCION`` runs (that happens later, inside call_next), so
+    without normalizing here, a rule scoped to ``args.selector.domain ==
+    "lock"`` would silently never match a lock-domain selector sent as a
+    string, allowing it straight through.
+    """
+    policy = Policy(
+        rules=[
+            Rule(
+                tool_name="ha_bulk_control",
+                when=[Predicate(path="args.selector.domain", op="eq", value="lock")],
+            )
+        ]
+    )
+    middleware = PolicyMiddleware(
+        policy_provider=lambda: policy,
+        queue=queue,
+        wait_seconds=0,
+    )
+    call_next = AsyncMock()
+    # Simulates a client that stringifies the nested `selector` parameter
+    # instead of sending a real JSON object, exactly as
+    # tools/util_helpers.py's JSON_STRING_COERCION comment describes.
+    stringified_args = {
+        "selector": '{"domain": "lock", "area_ids": ["entry"]}',
+        "action": "lock",
+    }
+
+    with pytest.raises(ToolError) as ei:
+        await middleware.on_call_tool(
+            make_context("ha_bulk_control", stringified_args), call_next
+        )
+
+    body = json.loads(ei.value.args[0])
+    assert body["error"]["code"] == "USER_APPROVAL_REQUIRED"
+    call_next.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -145,6 +388,14 @@ async def test_block_then_deny_raises_denied(queue):
 
 @pytest.mark.anyio
 async def test_timeout_raises_pending_error_and_keeps_entry(queue):
+    """A non-dynamic (static) timeout must keep the recover-by-re-calling
+    promise: the entry survives (a later re-call's find() can still pick
+    it up), and the message says so. Asserting the exact sentence, not
+    just its absence on the dynamic side (see
+    test_dynamic_selector_pending_error_does_not_promise_a_working_recall),
+    is what would catch the dynamic wording leaking into this branch too
+    and silently breaking approve-then-retry for every gated static tool.
+    """
     pol = Policy(rules=[Rule(tool_name="ha_call_service")])
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)
     call_next = AsyncMock()
@@ -158,9 +409,14 @@ async def test_timeout_raises_pending_error_and_keeps_entry(queue):
     # create_error_response splays context fields at top level, alongside `error`.
     assert body["token"]
     assert "Tool Security Policies" in body["error"]["message"]
+    full_text = body["error"]["message"] + " ".join(body["error"]["suggestions"])
+    assert "Re-call this tool with the same arguments after the user approves" in (
+        full_text
+    )
     call_next.assert_not_called()
     # entry survives for re-call
     assert queue.list_pending()
+    assert queue.get(body["token"]) is not None
 
 
 @pytest.mark.anyio
@@ -272,6 +528,41 @@ async def test_corrupt_policy_fails_closed_with_structured_error(queue):
         )
     body = json.loads(ei.value.args[0])
     assert body["error"]["code"] == "POLICY_LOAD_FAILED"
+    call_next.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_deeply_nested_args_fail_closed_not_silently_allowed(queue):
+    """A RecursionError while normalizing args must fail the call closed,
+    not silently evaluate (and hash) the unnormalized args and ALLOW.
+
+    Before this fix, normalize_stringified_containers swallowed its own
+    RecursionError and returned the args unrepaired -- a rule scoped to a
+    nested selector-inspectable field (e.g. args.selector.domain) would
+    then never match against the deeply-nested-but-otherwise-real value,
+    landing on ALLOW instead of the REQUIRE_APPROVAL a shallower version
+    of the identical call would have gotten. Mirrors
+    test_corrupt_policy_fails_closed_with_structured_error's pattern: a
+    security gate that cannot safely evaluate must degrade loudly, not
+    silently pass calls through.
+    """
+    import sys
+
+    pol = Policy(rules=[Rule(tool_name="ha_call_service")])
+    mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue)
+    call_next = AsyncMock(return_value="should_not_run")
+
+    nested: object = "leaf"
+    for _ in range(sys.getrecursionlimit() + 100):
+        nested = {"nested": nested}
+
+    with pytest.raises(ToolError) as ei:
+        await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock", "data": nested}),
+            call_next,
+        )
+    body = json.loads(ei.value.args[0])
+    assert body["error"]["code"] == "POLICY_ARGS_TOO_DEEPLY_NESTED"
     call_next.assert_not_called()
 
 
@@ -417,6 +708,115 @@ async def test_swept_pending_during_wait_is_reissued_with_fresh_token(queue):
         "reissue branch must create a fresh, queryable entry"
     )
     assert queue.get(original_token) is None
+
+
+@pytest.mark.anyio
+async def test_dynamic_selector_pending_error_does_not_promise_a_working_recall(queue):
+    """A dynamic selector's timeout error must not tell the agent to
+    re-call after approval -- that instruction is false for a dynamic
+    entry (creator-only binding means a re-call can never consume it) and
+    following it produces an approve-and-be-asked-again loop: the user
+    approves the row they can see, the re-call ignores it and mints a new
+    one instead.
+
+    Also pins the fix for the OTHER half of that same bug: the entry
+    itself must actually be gone from the queue by the time this message
+    is seen, not just described as gone -- an entry left behind is a row
+    the settings UI still offers and ``ApprovalQueue.approve(token)``
+    would still accept, doing nothing because nothing is left holding
+    this call's ``pending`` reference to act on the decision. This is the
+    NORMAL timeout path (this call's own wait window elapsing), not the
+    sweeper-eviction path ``test_dynamic_selector_evicted_during_wait_is_not_reissued``
+    covers.
+    """
+    args = {
+        "selector": {"domain": "lock", "area_ids": ["entry"]},
+        "action": "lock",
+    }
+    policy = Policy(rules=[Rule(tool_name="ha_bulk_control")])
+    middleware = PolicyMiddleware(
+        policy_provider=lambda: policy,
+        queue=queue,
+        wait_seconds=0,
+    )
+    call_next = AsyncMock()
+
+    with pytest.raises(ToolError) as ei:
+        await middleware.on_call_tool(make_context("ha_bulk_control", args), call_next)
+
+    body = json.loads(ei.value.args[0])
+    assert body["error"]["code"] == "USER_APPROVAL_REQUIRED"
+    full_text = body["error"]["message"] + " ".join(body["error"]["suggestions"])
+    assert "Re-call this tool with the same arguments after the user approves" not in (
+        full_text
+    )
+    # Nor does it describe a still-open window: the wait already closed by
+    # the time this message is built (the only call site is reached after
+    # _wait_for_decision returns with no decision).
+    assert "before this call's wait window closes" not in full_text
+    assert queue.get(body["token"]) is None
+    assert queue.list_pending() == []
+    assert "single-use" in full_text or "bound to this specific call" in full_text
+    # The static path's own remaining-TTL context key must not leak in
+    # here: nothing is left with a live countdown for a removed, single-use
+    # entry, and create_error_response splays context fields (including
+    # this one) to the top level, outside the message/suggestions text the
+    # assertions above already check -- a refactor hoisting `remaining`
+    # back into the shared context would restore a misleading countdown
+    # here while every text-based assertion above kept passing.
+    assert "expires_in_seconds" not in body
+
+
+@pytest.mark.anyio
+async def test_dynamic_selector_evicted_during_wait_is_not_reissued(
+    queue, monkeypatch: pytest.MonkeyPatch
+):
+    """Unlike a static tool's pending entry, a swept dynamic entry must NOT
+    be reissued -- no future re-call can ever discover a dynamic entry by
+    lookup (creator-only binding), so a reissued row would be just as
+    unreachable as the one it replaced, silently burning a queue slot.
+
+    Forces the eviction by wrapping the queue's own create() to immediately
+    expire whatever it just created -- the middleware has no seam to
+    pre-create its own dynamic entry the way the static-path sibling test
+    (test_swept_pending_during_wait_is_reissued_with_fresh_token) does.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    args = {
+        "selector": {"domain": "lock", "area_ids": ["entry"]},
+        "action": "lock",
+    }
+    policy = Policy(rules=[Rule(tool_name="ha_bulk_control")])
+    middleware = PolicyMiddleware(
+        policy_provider=lambda: policy,
+        queue=queue,
+        wait_seconds=0,
+    )
+    call_next = AsyncMock()
+
+    real_create = queue.create
+    created_tokens: list[str] = []
+
+    def _create_then_expire(*args_: object, **kwargs: object):
+        entry = real_create(*args_, **kwargs)
+        entry.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        created_tokens.append(entry.token)
+        return entry
+
+    monkeypatch.setattr(queue, "create", _create_then_expire)
+
+    with pytest.raises(ToolError) as ei:
+        await middleware.on_call_tool(make_context("ha_bulk_control", args), call_next)
+
+    body = json.loads(ei.value.args[0])
+    assert body["error"]["code"] == "USER_APPROVAL_REQUIRED"
+    # Exactly one entry was ever created for this call -- the reissue
+    # branch, if it fired, would have called create() a second time.
+    assert len(created_tokens) == 1
+    assert body["token"] == created_tokens[0]
+    assert queue.get(created_tokens[0]) is None
+    call_next.assert_not_awaited()
 
 
 class TestApprovalManagementExemption:

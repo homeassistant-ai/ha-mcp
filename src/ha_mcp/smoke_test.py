@@ -27,10 +27,11 @@ def _test_critical_imports(errors: list[str]) -> int:
     print("\n[1/4] Testing critical library imports...")
     critical_imports = [
         ("fastmcp", "FastMCP framework"),
+        ("griffe", "FastMCP API introspection"),
         ("httpx", "HTTP client"),
         ("pydantic", "Data validation"),
         ("click", "CLI framework"),
-        ("websockets", "WebSocket support"),
+        ("ha_mcp._vendor.websockets", "WebSocket support (vendored)"),
     ]
     for module_name, description in critical_imports:
         try:

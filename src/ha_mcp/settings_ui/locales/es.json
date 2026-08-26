@@ -12,7 +12,14 @@
     "theme.auto_os": "Automático (SO)",
     "theme.light": "Claro",
     "theme.dark": "Oscuro",
-    "status.loading": "Cargando...",
+    "status.loading": "Cargando…",
+    "footer.installation": "instalación: {method}",
+    "footer.deployment.addon": "aplicación/complemento",
+    "footer.deployment.docker": "contenedor/docker",
+    "footer.deployment.pyinstaller": "binario independiente",
+    "footer.deployment.git": "clon de código fuente",
+    "footer.deployment.pypi": "paquete de python",
+    "footer.deployment.unknown": "desconocido",
     "nav.skip": "Saltar al contenido",
     "tabs.aria": "Secciones de ajustes",
     "tabs.tools": "Herramientas",
@@ -21,10 +28,10 @@
     "tabs.policies": "Políticas de seguridad de herramientas",
     "tabs.visibility": "Visibilidad de entidades",
     "tabs.accessibility": "Accesibilidad",
-    "notice.restart_required": "⚠ Cambios guardados. Reinicia HA-MCP para que surtan efecto. En el siguiente arranque, HA-MCP retira por completo las herramientas desactivadas de la lista de herramientas MCP. Después, vuelve a conectar o actualiza el servidor MCP en tu cliente de IA (p. ej. actualiza la lista de herramientas en claude.ai, vuelve a añadir o actualiza el conector en ChatGPT, o cierra y vuelve a abrir Claude Desktop) para que recargue la lista. Reiniciar la app (complemento) o Home Assistant NO actualiza la lista de herramientas almacenada en caché por tu cliente. A veces ChatGPT sigue sirviendo su lista en caché incluso después de quitar y volver a añadir el conector: si siguen faltando herramientas, elimina el conector y crea uno nuevo con otro nombre.",
-    "notice.shared_settings": "Las funciones de todo el servidor (búsqueda de herramientas, edición de la configuración YAML, herramientas de sistema de archivos, etc.) aparecen tanto en la pestaña <strong>Ajustes del servidor</strong> como en la página de configuración de la app (complemento); son los mismos ajustes en ambos sitios. Cada superficie se sincroniza con la otra tras reiniciar la app (complemento). Los cambios requieren reiniciar HA-MCP.",
-    "notice.env_pins": "Las herramientas indicadas en las variables de entorno <code>DISABLED_TOOLS</code> o <code>PINNED_TOOLS</code> quedan bloqueadas en solo lectura; quita la variable de entorno para poder editarlas aquí. Las opciones de fijado solo surten efecto con la búsqueda de herramientas activada (pestaña Ajustes del servidor o página de configuración de la app/complemento).",
-    "actions.restart_addon": "Reiniciar la app (complemento)",
+    "notice.restart_required": "⚠ Cambios guardados. Reinicia HA-MCP para que surtan efecto. En el próximo inicio, HA-MCP eliminará por completo las herramientas deshabilitadas de la lista de herramientas MCP. A continuación, reconecta o actualiza el servidor MCP en tu cliente de IA (por ejemplo, actualiza la lista de herramientas en claude.ai, vuelve a añadir o actualizar el conector en ChatGPT, o cierra y vuelve a abrir Claude Desktop) para que recargue la lista de herramientas. Reiniciar la app (add-on) o Home Assistant NO actualiza la lista de herramientas en caché de tu cliente. ChatGPT a veces sigue sirviendo su lista de herramientas en caché incluso después de eliminar y volver a añadir el conector; si todavía faltan herramientas, elimina el conector y crea uno nuevo con un nombre diferente.",
+    "notice.shared_settings": "Las funciones de todo el servidor (búsqueda de herramientas, edición de configuración YAML, herramientas del sistema de archivos, etc.) aparecen tanto en la pestaña <strong>Server Settings</strong> como en la página de Configuración de la app (add-on); son exactamente los mismos ajustes en ambos casos. Ambas interfaces se mantendrán sincronizadas después de reiniciar la app (add-on). Los cambios requieren reiniciar HA-MCP.",
+    "notice.env_pins": "Las herramientas listadas en las variables de entorno <code>DISABLED_TOOLS</code> o <code>PINNED_TOOLS</code> están bloqueadas como de solo lectura; desconfigura la variable de entorno para editarlas aquí. Los conmutadores de anclaje solo surten efecto cuando la búsqueda de herramientas está habilitada (en la pestaña Server Settings o en la página de Configuración de la app (add-on)).",
+    "actions.restart_addon": "Reiniciar app (add-on)",
     "actions.save": "Guardar",
     "actions.save_settings": "Guardar los ajustes",
     "actions.refresh": "Actualizar",
@@ -33,7 +40,7 @@
     "tools.read_only.help": "Desactiva todas las herramientas de escritura e impide que cualquier herramienta haga llamadas de escritura o destructivas. Las herramientas mixtas de lectura/escritura (copias de seguridad, apps [complementos], preferencias de energía, canalizaciones de voz y el modo de código cuando está activado) siguen disponibles, pero con sus operaciones de escritura bloqueadas.",
     "tools.read_only.unknown": "No se han podido leer los ajustes del servidor. Se desconoce el estado del modo de solo lectura; puede que esta vista no refleje lo que aplica el servidor.",
     "tools.search": "Buscar herramientas...",
-    "server.auto_save_notice": "Los ajustes de esta pestaña se guardan automáticamente. Los cambios solo surten efecto después de que reinicies la app (complemento) —que los aplica en el servidor— y vuelvas a conectar o actualices el servidor MCP en tu cliente de IA (que recarga la lista de herramientas); p. ej. actualiza la lista de herramientas en claude.ai, vuelve a añadir o actualiza el conector en ChatGPT, o cierra y vuelve a abrir Claude Desktop. A veces ChatGPT sigue sirviendo su lista en caché incluso después de quitar y volver a añadir el conector: si siguen faltando herramientas, elimina el conector y crea uno nuevo con otro nombre.",
+    "server.auto_save_notice": "La configuración en esta pestaña se guarda automáticamente. Los cambios surten efecto solo después de reiniciar HA-MCP (los aplica en el servidor) y reconectar o actualizar el servidor MCP en tu cliente de IA (recarga la lista de herramientas), por ejemplo: actualiza la lista de herramientas en claude.ai, vuelve a añadir o actualizar el conector en ChatGPT, o cierra y vuelve a abrir Claude Desktop. ChatGPT a veces sigue sirviendo su lista de herramientas en caché incluso después de eliminar y volver a añadir el conector; si todavía faltan herramientas, elimina el conector y crea uno nuevo con un nombre diferente.",
     "server.sections.search": "Búsqueda y coincidencias",
     "server.sections.operations": "Operaciones",
     "server.sections.tool_surface": "Superficie de herramientas",
@@ -52,8 +59,12 @@
     "policies.title": "Políticas de seguridad de herramientas",
     "policies.intro": "Control de aprobación por herramienta para llamadas de alto riesgo. Usa la pestaña <strong>Herramientas</strong> para activar el control de una herramienta y afina aquí las condiciones de coincidencia y la duración de la aprobación. Operadores de condición: es igual a, es uno de, regex, contiene, está presente, mayor que, menor que.",
     "policies.global.title": "Ajustes globales",
+    "policies.global.unknown": "No se pudieron leer los ajustes del servidor. Los dos interruptores de abajo se muestran como desconocidos y no se pueden cambiar hasta que la página se recargue correctamente; esta vista puede no reflejar lo que el servidor aplica.",
     "policies.global.enabled.label": "Activar las políticas de seguridad de herramientas",
-    "policies.global.enabled.help": "Interruptor principal. Refleja la opción de Ajustes del servidor. Desactivado de forma predeterminada. Actívalo y reinicia la app (complemento) para activar el middleware de control. Mientras esté desactivado, las reglas de abajo se conservan pero no se aplican.",
+    "policies.global.enabled.help": "Interruptor principal. Refleja el conmutador en Server Settings. Desactivado por defecto. Actívalo y reinicia HA-MCP para activar el middleware de control de acceso. Mientras esté desactivado, las reglas a continuación persistirán pero no se aplicarán.",
+    "policies.global.manage_tool.label": "Permitir que los agentes de IA editen estas políticas (ha_manage_security_policy)",
+    "policies.global.manage_tool.help": "Registra la herramienta ha_manage_security_policy, que lee y reemplaza el documento de política que edita esta pestaña. Desactivado por defecto. Independiente del interruptor maestro de arriba: esto controla quién puede editar las reglas, no si se aplican. La herramienta no expone operaciones de cola de aprobación pendientes, pero una acción de conjunto protegida por política aún puede requerir aprobación.",
+    "policies.global.manage_tool.warning": "Habilitar esto permite que los agentes de IA conectados reescriban las políticas de seguridad en esta pestaña, incluida la eliminación de los controles de aprobación. Para mantener a un humano en el bucle, protege la herramienta ANTES de habilitarla: en la pestaña Tools, activa \"security gated\" para Manage Security Policy. Esa regla se puede crear mientras la herramienta aún está desactivada, y se aplicará una vez que el interruptor principal de arriba esté activado y el servidor se haya reiniciado. Reinicia la app (add-on) después de cambiar cualquiera de los interruptores.",
     "policies.global.wait.label": "Segundos de espera (5-600)",
     "policies.global.wait.help": "Cuánto espera el middleware una aprobación antes de agotar el tiempo.",
     "policies.global.ttl.label": "TTL de la aprobación en minutos (1-60)",
@@ -63,7 +74,7 @@
     "policies.pending.empty": "No hay aprobaciones pendientes.",
     "policies.rules.title": "Herramientas controladas",
     "policies.rules.empty": "Ahora mismo no hay ninguna herramienta bajo control de seguridad. Activa el control por herramienta desde la pestaña <a href=\"#\" data-panel-link=\"tools\">Herramientas</a>.",
-    "accessibility.intro": "Estos ajustes se aplican de inmediato y se guardan en este navegador y en el servidor, así que sobreviven a los reinicios en todos los modos (incluido stdio, donde la página de ajustes cambia de puerto en cada sesión). El sitio de documentación ofrece los mismos controles en su barra de navegación; no tiene servidor y guarda por navegador.",
+    "accessibility.intro": "Estas configuraciones se aplican inmediatamente y se guardan en este navegador y en el servidor, por lo que sobreviven a los reinicios en todos los modos (incluido stdio, donde la página de configuración puede ocasionalmente moverse a un nuevo puerto). El sitio de documentación ofrece los mismos controles en su barra de navegación; no tiene servidor y guarda por navegador.",
     "accessibility.storage_blocked": "Tu navegador está bloqueando el almacenamiento del sitio; las opciones se aplican solo a esta sesión.",
     "accessibility.theme.title": "Tema",
     "accessibility.theme.help": "Combinaciones de color de un clic. Automático, el valor predeterminado, sigue la preferencia de tu sistema operativo y cambia en caliente cuando esta cambia.",
@@ -85,8 +96,10 @@
     "visibility.boundary": "Sin el modo de aplicación estricta (abajo), esto reduce ruido, no controla el acceso: una entidad oculta se sigue devolviendo en una lectura directa de su entity_id y sigue apareciendo en el contenido de automatizaciones, paneles y plantillas. No confíes en el filtro por sí solo como frontera de seguridad.",
     "visibility.enabled": "Activar el filtro de visibilidad de entidades",
     "visibility.enforce.title": "Modo de aplicación estricta",
-    "visibility.enforce.help": "Extiende el filtro de limpiar la búsqueda y el resumen a todas las lecturas de herramientas. Una lectura directa de una entidad oculta devuelve «no encontrada», y una lectura de contenido (panel, plantilla, automatización, traza, registro o archivo) que fuese a mostrar una entidad oculta se rechaza. Es ocultación en la medida de lo posible frente a exposiciones accidentales, no una frontera de seguridad reforzada.",
-    "visibility.enforce.only_enforced": "Hacer que las entidades ocultas no se puedan leer desde ninguna herramienta (no solo en la búsqueda)",
+    "visibility.enforce.help": "Amplía el filtro de búsqueda y resumen para ocultar elementos en todas las lecturas de herramientas, excepto ha_report_issue de forma predeterminada. Una lectura directa de una entidad oculta devuelve \"no encontrado\", y se rechaza una lectura de contenido que muestre alguna. La excepción de la herramienta de informes se controla a continuación. Ocultación de mejor esfuerzo contra la exposición incidental, no es un límite de seguridad reforzado.",
+    "visibility.enforce.only_enforced": "Hacer que las entidades ocultas no se puedan leer en las lecturas de herramientas (excepto en los informes de problemas de forma predeterminada)",
+    "visibility.enforce.report_issue_help": "Mientras esto esté desactivado, ha_report_issue y toda su salida de diagnóstico (incluidos los registros) quedan fuera del modo de aplicación en cada llamada, incluso cuando los datos de visibilidad son correctos o no están disponibles. Actívalo para escanear y rechazar esa herramienta como las demás lecturas.",
+    "visibility.enforce.restrict_report_issue": "Aplicar el modo de aplicación a ha_report_issue",
     "visibility.categories.title": "Ocultar por categoría",
     "visibility.categories.help": "Home Assistant etiqueta las entidades generadas automáticamente como de diagnóstico o de configuración.",
     "visibility.categories.legend": "Categorías de entidad que ocultar",
@@ -110,19 +123,21 @@
     "visibility.assist.help": "Oculta las entidades no expuestas al asistente de voz Assist («conversation») de Home Assistant, replicando la lista de Ajustes > Asistentes de voz > Exponer. Añade dos lecturas por websocket en cada búsqueda mientras está activado.",
     "visibility.assist.only_exposed": "Mostrar solo las entidades expuestas a Assist",
     "features.enable_tool_search.label": "Activar la búsqueda de herramientas",
-    "features.enable_tool_search.help": "Sustituye el catálogo completo de herramientas por un descubrimiento basado en búsqueda. Reduce el contexto en reposo de unos 46K a unos 5K tokens. ⚠️ NO actives esto si usas Claude en modo Sonnet u Opus: esos modelos tienen su propia búsqueda de herramientas / herramientas diferidas integrada, que entra en conflicto con la nuestra. Para usar la búsqueda de herramientas de ha-mcp con Claude, desactiva primero la búsqueda integrada de Claude; si no, deja esto desactivado. Úsalo solo con LLM que carezcan de herramientas diferidas nativas (p. ej. Claude Haiku, modelos locales compatibles con OpenAI) o con ventanas de contexto más pequeñas. Las herramientas se localizan mediante ha_search_tools y se ejecutan a través de proxies por categoría (lectura/escritura/borrado). Requiere reiniciar para que surta efecto.",
+    "features.enable_tool_search.help": "Sustituye el catálogo completo de herramientas por un descubrimiento basado en búsqueda. Reduce el contexto en reposo en torno a un 90 %, hasta unos 5K tokens. ⚠️ NO actives esto en clientes con su propia búsqueda de herramientas / herramientas diferidas integrada (claude.ai, Claude Desktop, Claude Code): las dos capas de búsqueda entran en conflicto y la búsqueda integrada del cliente es allí la mejor opción; deja esto desactivado. Que las herramientas se difieran depende de la combinación de cliente y modelo: usa esto cuando tu configuración carga el catálogo completo de entrada — modelos sin herramientas diferidas nativas (p. ej. Gemini, modelos locales compatibles con OpenAI, Claude Haiku), clientes que insertan todos los esquemas de herramientas sea cual sea el modelo (p. ej. GitHub Copilot CLI) o ventanas de contexto más pequeñas. Algunos modelos Codex y ChatGPT también incluyen herramientas diferidas: comprueba directamente con tu cliente/modelo qué características tiene para no dejar esto activado innecesariamente. Las herramientas se localizan mediante ha_search_tools y se ejecutan a través de proxies por categoría (lectura/escritura/borrado). Requiere reiniciar para que surta efecto.",
     "features.tool_search_max_results.label": "Máximo de resultados de la búsqueda de herramientas",
     "features.tool_search_max_results.help": "Número máximo de herramientas que devuelve ha_search_tools cuando la búsqueda de herramientas está activada. Los valores bajos (2-3) ahorran tokens de contexto pero pueden dejar fuera herramientas relevantes. Rango: 2-10. Requiere reiniciar.",
     "features.enable_tool_security_policies.label": "Activar las políticas de seguridad de herramientas (avanzado)",
     "features.enable_tool_security_policies.help": "Somete a aprobación del usuario las llamadas a herramientas de alto riesgo (control de cerraduras y alarmas, escritura de automatizaciones, etc.). Cuando se llama a una herramienta protegida, el agente indica al usuario que abra la pestaña Políticas de seguridad de herramientas en la interfaz web y pulse Aprobar antes de que la llamada continúe. Las reglas por herramienta, con condiciones opcionales sobre los argumentos, se configuran en esa misma pestaña. Desactivado de forma predeterminada. Requiere reiniciar para que surta efecto.",
     "features.read_only_mode.label": "Modo de solo lectura",
-    "features.read_only_mode.help": "Desactiva todas las herramientas de escritura y les retira la capacidad de hacer llamadas de escritura o destructivas. Las herramientas mixtas de lectura/escritura (copias de seguridad, complementos, preferencias de energía, canalizaciones de voz y el modo de código cuando está activado) siguen disponibles, pero con sus operaciones de escritura bloqueadas. Es la misma opción que la de la pestaña Herramientas de la interfaz web. Desactivado de forma predeterminada. Requiere reiniciar para que surta efecto.",
+    "features.read_only_mode.help": "Desactiva todas las herramientas de escritura y elimina la capacidad de las herramientas para realizar llamadas de escritura o destructivas. Las herramientas mixtas de lectura/escritura (copias de seguridad, Apps (add-ons), preferencias de energía, canales de voz y el modo de código cuando está habilitado) siguen estando disponibles con sus operaciones de escritura bloqueadas. Es el mismo conmutador que en la pestaña Tools de la interfaz web. Desactivado por defecto. Requiere reiniciar para que surta efecto.",
+    "features.redact_secrets.label": "Redactar secretos",
+    "features.redact_secrets.help": "Elimina información confidencial de las respuestas de las herramientas antes de que lleguen al asistente de IA. Las opciones de la app (add-on) y los campos de integración marcados como contraseñas se reemplazan por un marcador de establecido/vacío (para que \"¿está esta credencial configurada?\" siga teniendo respuesta), y las respuestas de otras herramientas se depuran de valores secretos que el servidor ya ha visto (se omiten los valores de menos de 6 caracteres, ya que reemplazar fragmentos diminutos corrompería resultados no relacionados). Los campos no marcados como contraseñas por su esquema no se pueden detectar. Desactivado por defecto.",
     "features.enable_mandatory_bps.label": "Adjuntar skills de buenas prácticas en las escrituras",
     "features.enable_mandatory_bps.help": "Interruptor principal de la entrega de contenido de skills en las herramientas de escritura (issue #1182). Cuando está activado (predeterminado), las seis herramientas de escritura de configuración (automatizaciones, scripts, escenas, auxiliares, paneles, YAML en bruto) adjuntan los archivos de referencia canónicos de buenas prácticas de Home Assistant en `skill_content` tras cada escritura correcta, y además incrustan automáticamente las secciones de referencia citadas por los avisos de buenas prácticas. Cada herramienta expone también un parámetro `MandatoryBPS` por llamada que el agente puede poner a false en llamadas posteriores una vez que tiene el contenido. Con este interruptor principal desactivado NO se envía ningún skill_content, independientemente del parámetro por llamada o de los avisos de buenas prácticas. Se recomienda dejarlo activado; desactívalo solo para modelos con ventanas de contexto muy pequeñas. Desactivarlo puede degradar la precisión de las escrituras. Requiere reiniciar para que surta efecto.",
     "features.enable_strict_mandatory_bps.label": "Modo estricto de buenas prácticas",
     "features.enable_strict_mandatory_bps.help": "Modo estricto: impide que el cliente use la herramienta hasta que pueda demostrar que ha leído las buenas prácticas. Mientras está activo, las seis herramientas de escritura sujetas a buenas prácticas (automatizaciones, scripts, escenas, auxiliares, paneles, YAML en bruto) quedan bloqueadas y devuelven un error que indica al cliente que lea la skill de buenas prácticas mediante ha_get_skill_guide y devuelva la clave de confirmación que obtiene allí. Mientras está activo, la herramienta ha_get_skill_guide queda forzada como activada: es la única que publica esa clave de confirmación. Depende de la opción \"Adjuntar skills de buenas prácticas en las escrituras\" de arriba y es inerte mientras esa opción principal esté desactivada. Requiere reiniciar para que surta efecto.",
     "features.enable_beta_features.label": "Activar las funciones beta (principal)",
-    "features.enable_beta_features.help": "⚠ PELIGRO: estas herramientas pueden DAÑAR DE FORMA PERMANENTE tu instalación de Home Assistant. Escriben en tu configuración YAML y en tu sistema de archivos, instalan componentes personalizados, ejecutan código Python arbitrario en un entorno aislado y editan las descripciones de herramientas que ve la IA. No hay garantía ni compromiso de soporte: las activas BAJO TU PROPIA RESPONSABILIDAD. Haz una copia de seguridad de Home Assistant antes de activar esto y no lo actives nunca en producción sin ella. Es el interruptor principal de los 5 subindicadores experimentales de abajo; mientras esté desactivado, los subindicadores se ignoran en tiempo de ejecución aunque estén puestos explícitamente a true. La misma opción aparece también en la interfaz web de ajustes bajo \"Funciones beta (peligrosas)\": cada una refleja la otra tras reiniciar.",
+    "features.enable_beta_features.help": "⚠ PELIGRO — estas herramientas pueden DAÑAR PERMANENTEMENTE tu instalación de Home Assistant. Escriben en tu configuración YAML, tu sistema de archivos, instalan componentes personalizados, ejecutan Python arbitrario en un entorno aislado y editan las docstrings de las herramientas que ve la IA. No hay garantía ni soporte — las habilitas BAJO TU PROPIO RIESGO. Haz una copia de seguridad de Home Assistant antes de activarlas, y nunca las habilites en producción sin una. Puerta maestra para las sub-banderas experimentales a continuación; las sub-banderas se ignoran en tiempo de ejecución mientras esta maestra está desactivada, incluso cuando se establecen explícitamente en verdadero. El mismo interruptor también aparece en la interfaz de usuario de configuración web bajo \"Funciones beta (peligrosas)\" — cualquiera de las dos superficies refleja la otra al reiniciar.",
     "features.enable_yaml_config_editing.label": "Activar la edición de la configuración YAML (beta)",
     "features.enable_yaml_config_editing.help": "Función beta. Permite que los asistentes de IA añadan, sustituyan o eliminen claves de primer nivel en configuration.yaml y packages/*.yaml. Solo se permiten las claves de la lista blanca (p. ej. template, sensor, command_line, mqtt, knx); las claves centrales como homeassistant, http y recorder están bloqueadas. Cada edición valida la sintaxis YAML, ejecuta una comprobación de la configuración y crea una copia de seguridad automática. Los cambios en la mayoría de las claves requieren reiniciar HA por completo para surtir efecto. Consulta docs/beta.md para conocer las limitaciones. Cuando estén disponibles, es preferible usar las herramientas específicas (automatizaciones, scripts, escenas, auxiliares, sensores de plantilla). REQUIERE que la opción principal \"Activar las funciones beta\" de arriba (y en la interfaz web) esté activada; de lo contrario, este subindicador se ignora en tiempo de ejecución sea cual sea su valor aquí.",
     "features.enable_yaml_edit_confirm.label": "Exigir confirmación en las ediciones YAML (vista previa del diff)",
@@ -136,11 +151,11 @@
     "features.enable_filesystem_tools.label": "Activar las herramientas de sistema de archivos (beta)",
     "features.enable_filesystem_tools.help": "Establece HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Habilita el acceso directo de lectura y escritura al sistema de archivos de tu Home Assistant. ADVERTENCIA: esto da al servidor MCP acceso directo a archivos sensibles de tu sistema. Actívalo solo si confías en que el asistente de IA haga operaciones con archivos. Requiere reiniciar para que surta efecto. REQUIERE que la opción principal \"Activar las funciones beta\" de arriba (y en la interfaz web) esté activada; de lo contrario, este subindicador se ignora en tiempo de ejecución sea cual sea su valor aquí.",
     "features.enable_code_mode.label": "Activar el entorno aislado de herramientas personalizadas (beta)",
-    "features.enable_code_mode.help": "Función beta. Activa la herramienta ha_manage_custom_tool, que permite a los asistentes de IA crear, ejecutar, guardar y eliminar código Python personalizado en un entorno aislado seguro cuando ninguna herramienta integrada puede atender la petición. El código se ejecuta en un intérprete aislado sin acceso al sistema de archivos ni a la red de forma arbitraria. El código del entorno aislado puede usar la API REST de HA (api_get/api_post), enviar comandos WebSocket (ws_send), llamar a herramientas MCP existentes (call_tool) o eliminar una herramienta guardada (delete_saved_tool). Las herramientas guardadas se conservan de forma predeterminada en /data/saved_tools.json, así que sobreviven a los reinicios del complemento, y son visibles para cualquier cliente que pueda conectarse. Consulta docs/beta.md para conocer las limitaciones. Requiere reiniciar para que surta efecto. REQUIERE que la opción principal \"Activar las funciones beta\" de arriba (y en la interfaz web) esté activada; de lo contrario, este subindicador se ignora en tiempo de ejecución sea cual sea su valor aquí.",
+    "features.enable_code_mode.help": "Función beta. Habilita la herramienta ha_manage_custom_tool, que permite a los asistentes de IA crear, ejecutar, guardar y eliminar código Python personalizado en un espacio aislado seguro cuando ninguna herramienta integrada puede manejar la solicitud. El código se ejecuta en un intérprete aislado sin acceso al sistema de archivos ni red arbitraria. El código del espacio aislado puede acceder a la API REST de HA (api_get/api_post), enviar comandos WebSocket (ws_send), llamar a herramientas MCP existentes (call_tool) o eliminar una herramienta guardada (delete_saved_tool). Las herramientas guardadas persisten en /data/saved_tools.json por defecto para sobrevivir a los reinicios de la app (add-on), y son visibles para cualquier cliente que pueda conectarse. Consulta docs/beta.md para conocer las limitaciones conocidas. Requiere reiniciar para que surta efecto. REQUIERE que el interruptor principal \"Enable beta features\" de arriba (y en la interfaz web) esté activado; de lo contrario, este subindicador se ignorará en tiempo de ejecución independientemente de su valor aquí.",
     "features.enable_lite_docstrings.label": "Activar descripciones de herramientas reducidas (beta)",
     "features.enable_lite_docstrings.help": "Función beta. Sustituye las descripciones de unas pocas herramientas pesadas de ha-mcp (automatizaciones, scripts, escenas, auxiliares, paneles, ha_call_service, ha_config_set_yaml) por variantes más cortas que delegan el detalle de esquemas y ejemplos en la herramienta ha_get_skill_guide (o en su recurso skill://). ADVERTENCIA: esto reduce el uso de tokens en reposo, pero puede degradar el rendimiento del LLM: las descripciones recortadas dependen de que el LLM llame realmente a la herramienta de skills o lea el recurso para obtener el detalle, y eso no está garantizado (algunos modelos se saltan la llamada adicional y acaban con menos orientación que antes). Va mejor con un cliente compatible con recursos MCP o junto con enable_tool_search. Requiere reiniciar para que surta efecto. REQUIERE que la opción principal \"Activar las funciones beta\" de arriba (y en la interfaz web) esté activada; de lo contrario, este subindicador se ignora en tiempo de ejecución sea cual sea su valor aquí.",
     "features.enable_dashboard_screenshot.label": "Activar el modo de captura de pantalla de paneles (beta)",
-    "features.enable_dashboard_screenshot.help": "Función beta, desactivada de forma predeterminada. Añade la herramienta ha_get_dashboard_screenshot y las opciones include_screenshot / return_screenshot en las herramientas de lectura y escritura de paneles, de modo que los asistentes de IA puedan inspeccionar una o varias imágenes responsivas de Lovelace (p. ej. para comprobar un panel que acaban de crear). Admite vistas con nombre estable, lotes para móvil/tableta/escritorio y salida PNG/JPEG/WebP/BMP. El renderizado se ejecuta en un motor aparte y opcional — el complemento \"Puppet\" de balloob (Chromium sin interfaz) —, que instalas una sola vez (añade el repositorio de complementos de balloob y luego instala \"Puppet\") y al que das un token de acceso de larga duración; en despliegues Docker/Container ese motor se ejecuta como sidecar y se configura HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. No se instala nada pesado salvo que actives esto y además instales el motor. Requiere reiniciar para que surta efecto. REQUIERE que la opción principal \"Activar las funciones beta\" de arriba (y en la interfaz web) esté activada; de lo contrario, este subindicador se ignora en tiempo de ejecución sea cual sea su valor aquí.",
+    "features.enable_dashboard_screenshot.help": "Función beta: deshabilitada por defecto. Añade la herramienta ha_get_dashboard_screenshot además de las opciones include_screenshot / return_screenshot en las herramientas de obtención/configuración de paneles, para que los asistentes de IA puedan inspeccionar una o más imágenes adaptables de Lovelace (por ejemplo, para verificar un panel que acaban de crear). Soporta vistas con nombre estables, lotes para móvil/tablet/escritorio y salida PNG/JPEG/WebP/BMP. El renderizado se ejecuta en un motor opcional independiente (la App (add-on) \"Puppet\" de balloob, Chromium sin interfaz gráfica), que instalas una vez (añadiendo el repositorio de balloob a la tienda de aplicaciones e instalando \"Puppet\") y le proporcionas un token de acceso de larga duración; en implementaciones de Docker/Container, ejecutas ese motor como un sidecar y configuras HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. No se instala nada pesado a menos que habilites esto e instales el motor. Requiere reiniciar para que surta efecto. REQUIERE que el interruptor principal \"Enable beta features\" de arriba (y en la interfaz web) esté activado; de lo contrario, este subindicador se ignorará en tiempo de ejecución independientemente de su valor aquí.",
     "actions.restart_server": "Reiniciar el servidor HA-MCP",
     "actions.restart_confirm": "¿Reiniciar HA-MCP ahora? La página se recargará automáticamente en cuanto vuelva a estar en línea.",
     "actions.view": "Ver",
@@ -155,7 +170,7 @@
     "actions.dismiss": "Descartar",
     "status.loaded": "Cargado",
     "status.loading_ellipsis": "Cargando…",
-    "status.loading_parentheses": "(cargando...)",
+    "status.loading_parentheses": "(cargando…)",
     "status.unsaved": "Cambios sin guardar...",
     "status.saving": "Guardando…",
     "status.saving_server_setting": "Guardando el ajuste del servidor...",
@@ -168,7 +183,7 @@
     "status.stopped_offline": "Detenido. Esta página quedará fuera de línea",
     "status.stopped_connection": "Detenido (se perdió la conexión)",
     "status.restarting": "Reiniciando…",
-    "status.waiting_addon": "Esperando a que la app (complemento) vuelva a estar en línea…",
+    "status.waiting_addon": "Esperando a que la app (add-on) vuelva a estar en línea…",
     "errors.javascript": "Error de JS: {message} @ {where}",
     "errors.async": "Error asíncrono: {message}",
     "errors.network": "Error de red: {message}",
@@ -184,7 +199,7 @@
     "errors.stop_failed": "Fallo al detener",
     "errors.restart_failed": "Fallo al reiniciar",
     "errors.failed_detail": "Fallo: {detail}",
-    "errors.addon_not_back": "La app (complemento) no ha vuelto a estar en línea. Recarga manualmente",
+    "errors.addon_not_back": "La aplicación (complemento) no volvió a conectarse. Recarga la página manualmente.",
     "errors.unparseable_suffix": " (no se ha podido interpretar el cuerpo de la respuesta)",
     "common.operation_failed": "{operation} ha fallado: {detail}",
     "common.enabled": "activado",
@@ -193,7 +208,7 @@
     "common.minutes_short": "{count} min",
     "common.bytes": "{count} bytes",
     "common.none": "(ninguno)",
-    "notice.restart.addon": "⚠ Cambios guardados. Pulsa \"Reiniciar la app (complemento)\" para que surtan efecto. Las herramientas desactivadas se retirarán de la lista de herramientas MCP en el siguiente arranque. Después, actualiza la lista de herramientas en tu cliente de IA; reiniciar solo la app no actualiza la lista en caché del cliente.",
+    "notice.restart.addon": "⚠ Cambios guardados. Haz clic en \"Restart app (add-on)\" para que surtan efecto. Las herramientas deshabilitadas se eliminarán de la lista de herramientas MCP en el próximo inicio. A continuación, actualiza la lista de herramientas en tu cliente de IA; reiniciar la App por sí sola no actualiza la lista en caché del cliente.",
     "notice.restart.embedded": "⚠ Cambios guardados. Pulsa \"Reiniciar el servidor HA-MCP\" para recargar la integración en el proceso. Después, actualiza la lista de herramientas MCP en tu cliente de IA.",
     "notice.restart.sidecar": "⚠ Cambios guardados. Cierra por completo y vuelve a abrir tu cliente MCP para que surtan efecto. Las herramientas desactivadas se retirarán de la lista de herramientas MCP en el siguiente arranque.",
     "notice.restart.standalone": "⚠ Cambios guardados. Reinicia el proceso ha-mcp y actualiza después la lista de herramientas MCP en tu cliente de IA.",
@@ -205,7 +220,8 @@
     "tools.badges.read_only": "solo lectura",
     "tools.badges.writes": "escribe",
     "tools.badges.deletes": "elimina",
-    "tools.notes.beta_disabled": "Beta. Configura {setting} en la configuración de la app (complemento) de desarrollo o la variable de entorno equivalente (consulta docs/beta.md).",
+    "tools.notes.gated_disabled": "Deshabilitada. Activa {setting} (el conmutador de la herramienta de edición de políticas está en la pestaña Tool Security Policies) y luego reinicia la app (add-on).",
+    "tools.notes.beta_disabled": "Beta. Configura {setting} en la configuración de la app (add-on) de desarrollo o en la variable de entorno correspondiente (consulta docs/beta.md).",
     "tools.notes.env_pinned": "Fijada por {variable}. Quita la variable de entorno para editarla aquí.",
     "tools.notes.bps_locked": "Bloqueada mientras el modo estricto de buenas prácticas esté activado. Desactiva antes ese ajuste para poder desactivar esta herramienta.",
     "tools.notes.read_only_off": "Desactivada. El modo de solo lectura está activo; las herramientas de escritura están desactivadas.",
@@ -219,7 +235,7 @@
     "tools.states.enabled": "activada",
     "tools.states.pinned": "fijada",
     "tools.states.security_gated": "bajo control de seguridad",
-    "tools.security.enable_first": "Activa antes las políticas de seguridad de herramientas en la configuración de la app (complemento).",
+    "tools.security.enable_first": "Habilita primero las políticas de seguridad de herramientas en la configuración del servidor.",
     "tools.summary.total": "{count} en total",
     "tools.summary.enabled": "{count} activadas",
     "tools.summary.pinned": "{count} fijadas",
@@ -269,18 +285,18 @@
     "backup.bulk.confirm": "¿Eliminar todas las copias de seguridad que coinciden con: {filters}?",
     "backup.bulk.deleted": "Se han eliminado {count} copia(s) de seguridad",
     "filesystem.custom.title": "Directorios de sistema de archivos personalizados (avanzado)",
-    "filesystem.custom.help": "Directorios adicionales (uno por línea) en los que las herramientas de archivos pueden <strong>leer y escribir</strong>. Se admiten rutas relativas a la configuración y los volúmenes hermanos de HAOS permitidos. Se aplica de inmediato.",
+    "filesystem.custom.help": "Rutas adicionales (una por línea) que las herramientas de archivos pueden <strong>leer y escribir</strong>. Se admiten rutas de configuración relativas y volúmenes paralelos permitidos de HAOS. Cada entrada permite esa ruta y todo lo que esté por debajo; los nombres de archivo relativos a la configuración, como <code>sensor.yaml</code>, se pueden introducir directamente. Se aplica de inmediato.",
     "filesystem.custom.blocked": "Siempre bloqueados: {paths}, el recorrido de rutas (<code>..</code>) y las rutas absolutas fuera de los volúmenes de HAOS permitidos.",
     "filesystem.custom.enable_first": "Activa arriba las funciones beta y las herramientas de sistema de archivos para poder editar.",
     "filesystem.custom.unavailable": "Los directorios personalizados no están disponibles ahora mismo.",
     "filesystem.custom.save": "Guardar los directorios",
     "filesystem.custom.saved_rejected": "Guardado. Rechazados (bloqueados o no válidos): {paths}",
     "origins.env_locked": "Definido mediante una variable de entorno; quítala para poder editarlo aquí.",
-    "origins.addon_synced": "Sincronizado con la pestaña de configuración de la app (complemento). Hay que reiniciar después de guardar.",
+    "origins.addon_synced": "Sincronizado con la pestaña de configuración de la app (add-on). Se requiere reiniciar después de guardar.",
     "origins.env_var_unset": "Definido mediante la variable de entorno {variable}; quítala para poder editarlo aquí.",
-    "origins.beta_legacy_bridge": "Activado automáticamente en el modo heredado de la app (complemento). Define <code>enable_beta_features</code> de forma explícita en la configuración para tomar el control. (entorno: {variable})",
-    "origins.addon_runtime": "Definido por el entorno de ejecución de la app (complemento) que gestiona el Supervisor; no se puede cambiar aquí. (entorno: {variable})",
-    "origins.display_only": "Solo informativo. Modifícalo mediante una variable de entorno o los ajustes de la app (complemento).",
+    "origins.beta_legacy_bridge": "Activado automáticamente en el modo heredado de la app (add-on). Configura <code>enable_beta_features</code> explícitamente en la Configuración para tomar el control. (env: {variable})",
+    "origins.addon_runtime": "Configurado por el entorno de ejecución de la app (add-on) gestionado por Supervisor; no se puede cambiar aquí. (env: {variable})",
+    "origins.display_only": "Solo visualización. Modifícalo a través de la variable de entorno o de la configuración de la app (add-on).",
     "features.errors.network": "Los indicadores de función no están disponibles (error de red al contactar con /api/settings/features).",
     "features.errors.http": "Los indicadores de función no están disponibles (HTTP {status}).",
     "features.errors.json": "La respuesta de los indicadores de función no era JSON válido.",
@@ -289,16 +305,18 @@
     "advanced.errors.json": "La respuesta de los ajustes avanzados no era JSON válido.",
     "advanced.sidecar.stdio_only": "Solo disponible en modo stdio. Este servidor HTTP no tiene sidecar de interfaz de ajustes que fijar.",
     "advanced.enable_dev_mode.confirm": "⚠ ¿Activar el modo de desarrollo?\n\nTras reiniciar, las herramientas ocultas de desarrollo quedarán expuestas a los agentes de IA conectados. Actívalo solo para desarrollo y pruebas.",
-    "advanced.code_mode_saved_tools_path.addon_locked": "Fijado a <code>/data/saved_tools.json</code> en modo app (complemento) para que las herramientas guardadas sobrevivan a las actualizaciones.",
+    "advanced.dev_tools_security_policy_access.confirm": "⚠ ¿Permitir que las herramientas de desarrollo cambien las políticas de seguridad?\n\nMientras el modo de desarrollador esté activado, los agentes de IA conectados podrán reescribir las políticas de seguridad de las herramientas, añadir o eliminar puertas de aprobación por herramienta y aprobar o denegar aprobaciones pendientes, incluidas sus propias llamadas restringidas. Habilítalo solo mientras pruebes las políticas.",
+    "advanced.code_mode_saved_tools_path.addon_locked": "Predeterminado en <code>/data/saved_tools.json</code> en el modo app (add-on) para que las herramientas guardadas sobrevivan a las actualizaciones.",
     "advanced.code_mode_saved_tools_path.blank_warning": "Si se deja vacío, las herramientas personalizadas se guardan solo en memoria y se pierden al reiniciar.",
     "policies.errors.conflict": "{operation} ha fallado: la política se modificó en otra pestaña o sesión. Recarga y vuelve a aplicar tus cambios.",
     "policies.errors.load": "No se ha podido cargar la política: {status}",
     "policies.errors.reach_server": "No se ha podido contactar con el servidor: {message}",
-    "policies.errors.corrupt_suffix": " (tool_policy.json parece dañado; edítalo o elimínalo en el volumen /data de la app [complemento])",
+    "policies.errors.corrupt_suffix": " (tool_policy.json parece estar corrupto; edítalo o bórralo en el directorio de datos del servidor)",
     "policies.errors.load_detail": "Fallo al cargar la política: {detail}",
     "policies.errors.update_tool": "Fallo al actualizar la política de seguridad de la herramienta: {message}",
     "policies.errors.remove_rule": "Fallo al quitar la regla: {message}",
     "policies.errors.master_save": "El cambio de las políticas de seguridad de herramientas no se ha guardado. El servidor mantiene el valor anterior.",
+    "policies.errors.manage_tool_save": "El cambio de la herramienta de edición de políticas no se guardó. El servidor aún tiene el valor anterior.",
     "policies.operations.sync_gated": "Sincronizar la opción de control",
     "policies.operations.save_rule": "Guardar la regla",
     "policies.operations.save_global": "Guardar los ajustes globales",
@@ -349,18 +367,20 @@
     "policies.editor.validation.empty_list": "lista vacía para op={operator}",
     "policies.editor.validation.argument_required": "hace falta un argumento",
     "policies.pending.offline": "Se ha perdido el contacto con el servidor ({message}). Reintentando.",
-    "policies.pending.disabled": "Las políticas de seguridad de herramientas están desactivadas. Actívalas y reinicia la app (complemento) para habilitar el control.",
-    "policies.pending.unavailable": "Las aprobaciones en vivo no están disponibles. Revisa el registro de la app (complemento).",
+    "policies.pending.disabled": "Las políticas de seguridad de herramientas están desactivadas. Actívalas y reinicia HA-MCP para habilitar el control de acceso.",
+    "policies.pending.unavailable": "Aprobaciones en vivo no disponibles. Revisa el registro de HA-MCP.",
     "policies.pending.expires": "Caduca: {time}",
     "policies.pending.already_decided": "Esta aprobación ya estaba {decision}, posiblemente desde otra pestaña o sesión.",
+    "policies.pending.decision.approved": "aprobada",
+    "policies.pending.decision.denied": "denegada",
     "policies.pending.invalid_token": "Este token de aprobación ya no es válido (ya se ha consumido o ha caducado).",
     "policies.pending.action_failed": "Ha fallado la acción de aprobación: {detail}",
     "visibility.errors.reach_server": "No se ha podido contactar con el servidor: {message}",
-    "visibility.errors.corrupt_suffix": " (entity_visibility.json parece dañado; edítalo o elimínalo en el volumen /data de la app [complemento])",
+    "visibility.errors.corrupt_suffix": " (entity_visibility.json parece estar corrupto; edítalo o bórralo en el directorio de datos del servidor)",
     "visibility.errors.load_detail": "Fallo al cargar la configuración de visibilidad: {detail}",
     "visibility.errors.conflict": "La configuración se cambió en otra pestaña o sesión. Recarga la página y vuelve a aplicar tus cambios.",
     "advanced.homeassistant_url.label": "URL de Home Assistant",
-    "advanced.homeassistant_url.help": "Solo informativo. Se define mediante HOMEASSISTANT_URL o lo gestiona la app (complemento).",
+    "advanced.homeassistant_url.help": "Solo visualización. Establécelo mediante HOMEASSISTANT_URL o gestiónalo desde la app (add-on).",
     "advanced.homeassistant_token.label": "Token de Home Assistant",
     "advanced.homeassistant_token.help": "Solo informativo. Se define mediante HOMEASSISTANT_TOKEN. Aquí se muestra enmascarado por seguridad.",
     "advanced.timeout.label": "Tiempo de espera de las peticiones a HA (s)",
@@ -371,8 +391,6 @@
     "advanced.verify_ssl.help": "Desactiva la verificación TLS solo en redes de confianza. Hay que reiniciar.",
     "advanced.fuzzy_threshold.label": "Umbral de la búsqueda difusa",
     "advanced.fuzzy_threshold.help": "Los valores más bajos permiten una coincidencia de entidades más laxa. Rango 0–100.",
-    "advanced.entity_search_limit.label": "Límite de resultados de la búsqueda de entidades",
-    "advanced.entity_search_limit.help": "Número máximo de entidades que devuelve ha_search_entities. Rango 1–1000.",
     "advanced.automation_config_time_budget.label": "Presupuesto de tiempo para la configuración de automatizaciones (s)",
     "advanced.automation_config_time_budget.help": "Tiempo máximo que la búsqueda profunda dedica a obtener configuraciones de automatizaciones. Rango 1–600. Hay que reiniciar.",
     "advanced.script_config_time_budget.label": "Presupuesto de tiempo para la configuración de scripts (s)",
@@ -420,12 +438,37 @@
     "advanced.extra_yaml_write_keys.label": "Claves YAML de escritura adicionales",
     "advanced.extra_yaml_write_keys.help": "Claves de primer nivel separadas por comas que ha_config_set_yaml puede escribir además de las integradas, para integraciones basadas en YAML de esta instalación (p. ej. alert2). Las claves que redefinen la propia frontera de confianza de Home Assistant no se pueden añadir nunca y se ignoran. Requiere el componente personalizado 1.2.4 o posterior.",
     "advanced.sidecar_pin_port.label": "Puerto del sidecar de la interfaz de ajustes",
-    "advanced.sidecar_pin_port.help": "0 elige un puerto libre en cada reinicio; 1024–65535 fija un puerto preferido. Hay que reiniciar.",
+    "advanced.sidecar_pin_port.help": "0 elige un puerto libre en el primer inicio y lo mantiene para reinicios posteriores; 1024–65535 fija un puerto preferido (recurre a uno libre si está ocupado). Se requiere reiniciar.",
     "advanced.enable_dev_mode.label": "Modo de desarrollo",
-    "advanced.enable_dev_mode.help": "⚠ Registra herramientas ocultas que pueden cambiar los ajustes y sustituir el servidor en ejecución. Solo para desarrollo y pruebas. Hay que reiniciar."
+    "advanced.enable_dev_mode.help": "⚠ Registra herramientas ocultas que pueden cambiar los ajustes y sustituir el servidor en ejecución. Solo para desarrollo y pruebas. Hay que reiniciar.",
+    "advanced.dev_tools_security_policy_access.label": "Acceso de las herramientas de desarrollo a las políticas de seguridad",
+    "advanced.dev_tools_security_policy_access.help": "⚠ Mientras el modo de desarrollador esté activado, permite que las herramientas de desarrollo reescriban las políticas de seguridad de las herramientas, añadan o eliminen puertas de aprobación por herramienta y aprueben o denieguen aprobaciones pendientes en tu nombre; un agente de IA puede aceptar sus propias llamadas restringidas. Solo para pruebas de políticas. Se aplica sin reiniciar.",
+    "addon.backup_hint.name": "Nivel de sugerencia de instantánea completa de HA (para el LLM)",
+    "addon.backup_hint.description": "Ajusta la redacción de la indicación que el LLM ve en la descripción de la\nherramienta `ha_manage_backup(scope='snapshot')` sobre cuándo sugerir una\ncopia de seguridad completa de Home Assistant antes de operaciones\narriesgadas (p. ej. borrados masivos de dispositivos). Afecta ÚNICAMENTE a\nesa frase dirigida al LLM.\n\nPara instantáneas automáticas por edición de automatizaciones / scripts /\nauxiliares / etc., usa la opción independiente **Activar copia de\nseguridad automática de las ediciones** que aparece más abajo.",
+    "addon.secret_path.name": "Ruta secreta personalizada",
+    "addon.secret_path.description": "Ruta HTTP personalizada opcional para el servidor MCP. Déjala vacía para usar la ruta segura generada automáticamente.\n",
+    "addon.enable_security_policy_tool.name": "Permitir que los agentes de IA editen las políticas de seguridad de la herramienta",
+    "addon.enable_security_policy_tool.description": "Registra la herramienta ha_manage_security_policy, que permite a los agentes de IA conectados leer y reescribir las políticas de seguridad de la herramienta — incluyendo la eliminación de las puertas de aprobación. Desactivado por defecto. Independiente de la opción Políticas de seguridad de la herramienta de arriba: esto controla quién puede editar las reglas, no si se aplican. La herramienta no puede ver ni decidir aprobaciones pendientes. Para mantener a un humano en el bucle, protege la herramienta antes de habilitarla: activa \"security gated\" para Manage Security Policy en la pestaña Herramientas de la interfaz de usuario web. Requiere un reinicio para que surta efecto.",
+    "addon.enable_auto_backup.name": "Activar copia de seguridad automática de las ediciones",
+    "addon.enable_auto_backup.description": "Captura una instantánea por entidad antes de cada llamada envuelta de herramienta MCP de escritura/destructiva (automatización, script, escena, asistente, panel, recurso de panel, etiqueta, categoría, grupo, zona, área, calendario, tarea, entidad, dispositivo, integración y herramientas de eliminación/borrado de elementos relacionados). El límite de frecuencia de la copia de seguridad automática establece la frecuencia con la que esto ocurre: 0 (predeterminado) captura en cada llamada de este tipo, N>0 como máximo una instantánea cada N minutos por entidad. Las instantáneas se guardan como archivos YAML en /data/ha_mcp_backups/ (anular mediante HAMCP_BACKUP_DIR) y se listan, restauran o eliminan a través de la pestaña \"Copias de seguridad\" en la interfaz de usuario de configuración web o mediante ha_manage_backup(scope='edits', ...). Para esos dominios, la captura es de \"mejor esfuerzo\" — un fallo registra una ADVERTENCIA y la escritura procede. Las herramientas de archivo y YAML sin procesar son la excepción: ha_write_file, ha_delete_file y ha_config_set_yaml tratan la instantánea como una condición previa, por lo que una escritura a través de ellas se rechaza mientras esto está desactivado, y una captura fallida la bloquea. Activado por defecto; desmarcar desactiva las capturas de \"mejor esfuerzo\" y deja fuera de servicio las herramientas de archivo y YAML sin procesar con ellas. Requiere un reinicio para que surta efecto.",
+    "addon.auto_backup_throttle_minutes.name": "Limitación de la copia automática (minutos)",
+    "addon.auto_backup_throttle_minutes.description": "Ventana de limitación por entidad. 0 (predeterminado) captura una instantánea en cada escritura cubierta. N>0 captura como mucho una instantánea cada N minutos por entidad. Rango 0–1440.",
+    "addon.auto_backup_retain_per_entity.name": "Retención de copias automáticas (por entidad)",
+    "addon.auto_backup_retain_per_entity.description": "Número máximo de instantáneas conservadas por entidad. Las instantáneas más antiguas que superen este límite se rotan en cada captura correcta. Predeterminado 100, rango 1–10000.",
+    "addon.enable_snapshot_delete.name": "Permitir la eliminación de instantáneas",
+    "addon.enable_snapshot_delete.description": "Permite que ha_manage_backup elimine archivos tarball de instantáneas completas de HA (scope='snapshot', action='delete'). Desactivado de forma predeterminada: una instantánea puede ser el último punto de recuperación tras un cambio equivocado, así que una persona debe autorizarlo aquí expresamente. Incluso estando activado, las copias de seguridad programadas, la instantánea más reciente que quede y todo lo más nuevo que el mínimo de antigüedad de abajo siguen protegidos.",
+    "addon.snapshot_delete_min_age_days.name": "Antigüedad mínima de la instantánea para eliminarla (días)",
+    "addon.snapshot_delete_min_age_days.description": "Una instantánea debe tener al menos esta antigüedad para poder eliminarse. Rango 0–365; 0 desactiva el mínimo (las protecciones de la instantánea más reciente y de las copias programadas siguen aplicándose). Predeterminado 7.",
+    "addon.disabled_tools.name": "Herramientas desactivadas (separadas por comas)",
+    "addon.disabled_tools.description": "Las herramientas indicadas aquí quedan forzadas a desactivadas y bloqueadas en la interfaz web de ajustes (pestaña Herramientas): no se pueden volver a activar allí sin quitar antes esta opción. Un pequeño conjunto de herramientas obligatorias (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) no se puede desactivar y sigue funcionando aunque se indique aquí. ha_get_skill_guide solo se puede desactivar mientras el modo estricto de buenas prácticas (enable_strict_mandatory_bps) esté desactivado. Nombres de herramientas separados por comas (p. ej. ha_call_event,ha_eval_template).",
+    "addon.pinned_tools.name": "Herramientas fijadas (separadas por comas)",
+    "addon.pinned_tools.description": "Las herramientas indicadas aquí quedan fijadas de forma bloqueada: aparecen en la parte superior de la pestaña Herramientas y no se pueden desfijar desde la interfaz web de ajustes sin quitar antes esta opción. Resulta útil en combinación con la búsqueda de herramientas. Nombres de herramientas separados por comas.",
+    "addon.verify_ssl.name": "Verificar el certificado TLS",
+    "addon.verify_ssl.description": "Verifica el certificado TLS del servidor de Home Assistant. La app (add-on) se conecta a través del proxy del Supervisor, por lo que normalmente esto no tiene efecto y debe permanecer habilitado. Desactívalo solo si has reconfigurado la app (add-on) para comunicarse con HA a través de un nombre de host HTTPS público con un certificado autofirmado o un error de coincidencia en el nombre de host. Desactivarlo debilita la seguridad del transporte; déjalo activado a menos que sepas que lo necesitas. Requiere reiniciar para aplicar los cambios.",
+    "addon_stable.enable_tool_search.description": "Reemplaza el catálogo completo de herramientas por un descubrimiento basado en búsquedas. Reduce el contexto inactivo en aproximadamente un 90 %, a unos 5K tokens. ⚠️ NO habilites esto en clientes que tengan su propia búsqueda de herramientas integrada / herramientas diferidas (claude.ai, Claude Desktop, Claude Code); ambas capas de búsqueda entran en conflicto y la búsqueda de herramientas integrada del cliente es la mejor opción en ese caso; déjalo desactivado. El hecho de que las herramientas se diferieran depende de tu combinación de cliente y modelo: úsalo cuando tu configuración cargue el catálogo completo de entrada (modelos sin herramientas diferidas nativas, por ejemplo, Gemini, modelos locales compatibles con OpenAI, Claude Haiku), clientes que insertan todos los esquemas de herramientas sin importar el modelo (por ejemplo, GitHub Copilot CLI), o ventanas de contexto más pequeñas. Algunos modelos de Codex y ChatGPT también incluyen herramientas diferidas; comprueba directamente tu cliente/modelo para confirmar sus características y no dejar esto habilitado innecesariamente. Las herramientas se encuentran mediante ha_search_tools y se ejecutan a través de proxies categorizados (lectura/escritura/eliminación). Requiere reiniciar la app (add-on) para que surta efecto; a continuación, reconecta o actualiza el servidor MCP en tu cliente de IA para que recargue la lista de herramientas. Reiniciar solo la app (add-on) NO actualiza la lista de herramientas almacenada en caché del cliente; esto se aplica después de cambiar cualquier configuración aquí."
   },
   "tool_groups": {
-    "Add-ons": "Complementos",
+    "Apps (add-ons)": "Apps (add-ons)",
     "Areas & Floors": "Áreas y plantas",
     "Assist": "Assist",
     "Automations": "Automatizaciones",
@@ -456,273 +499,9 @@
     "Zones": "Zonas"
   },
   "tools": {
-    "ha_get_addon": {
-      "title": "Obtener complementos",
-      "description": "Muestra los complementos instalados y disponibles, o los detalles de uno concreto."
-    },
-    "ha_manage_addon": {
-      "title": "Gestionar complemento",
-      "description": "Gestiona un complemento de Home Assistant: su configuración y su API interna."
-    },
-    "ha_list_floors_areas": {
-      "title": "Listar plantas y áreas",
-      "description": "Muestra las plantas con sus áreas anidadas, incluidas las áreas sin planta."
-    },
-    "ha_remove_area_or_floor": {
-      "title": "Eliminar área o planta",
-      "description": "Elimina un área o una planta de Home Assistant."
-    },
-    "ha_set_area_or_floor": {
-      "title": "Crear o actualizar área o planta",
-      "description": "Crea o actualiza un área o una planta de Home Assistant."
-    },
-    "ha_manage_pipeline": {
-      "title": "Gestionar canalización de Assist",
-      "description": "Gestiona las canalizaciones de Assist de Home Assistant."
-    },
-    "ha_config_get_automation": {
-      "title": "Obtener configuración de automatización",
-      "description": "Consulta la configuración de una automatización de Home Assistant."
-    },
-    "ha_config_remove_automation": {
-      "title": "Eliminar automatización",
-      "description": "Elimina una automatización de Home Assistant."
-    },
-    "ha_config_set_automation": {
-      "title": "Crear o actualizar automatización",
-      "description": "Crea o actualiza una automatización de Home Assistant."
-    },
-    "ha_get_blueprint": {
-      "title": "Obtener plano",
-      "description": "Muestra todos los planos o los detalles de uno concreto."
-    },
-    "ha_import_blueprint": {
-      "title": "Importar plano",
-      "description": "Importa un plano desde una URL."
-    },
-    "ha_config_get_calendar_events": {
-      "title": "Obtener eventos de calendario",
-      "description": "Consulta los eventos de una entidad de calendario."
-    },
-    "ha_config_remove_calendar_event": {
-      "title": "Eliminar evento de calendario",
-      "description": "Elimina un evento de un calendario."
-    },
-    "ha_config_set_calendar_event": {
-      "title": "Crear o actualizar evento de calendario",
-      "description": "Crea un evento nuevo en un calendario."
-    },
-    "ha_get_camera_image": {
-      "title": "Obtener imagen de cámara",
-      "description": "Captura una imagen de una entidad de cámara de Home Assistant."
-    },
-    "ha_get_dashboard_screenshot": {
-      "title": "Obtener captura de panel",
-      "description": "Obtiene imágenes renderizadas de una vista de panel Lovelace de Home Assistant."
-    },
-    "ha_config_delete_dashboard": {
-      "title": "Eliminar panel",
-      "description": "Elimina por completo un panel en modo almacenamiento."
-    },
-    "ha_config_delete_dashboard_resource": {
-      "title": "Eliminar recurso de panel",
-      "description": "Elimina un recurso de panel."
-    },
-    "ha_config_get_dashboard": {
-      "title": "Obtener panel",
-      "description": "Lista los paneles, obtiene su configuración o busca tarjetas dentro de ellos."
-    },
-    "ha_config_list_dashboard_resources": {
-      "title": "Listar recursos de panel",
-      "description": "Lista los recursos de los paneles Lovelace (tarjetas personalizadas, temas, CSS/JS)."
-    },
-    "ha_config_set_dashboard": {
-      "title": "Crear o actualizar panel",
-      "description": "Crea o actualiza un panel de Home Assistant."
-    },
-    "ha_config_set_dashboard_resource": {
-      "title": "Definir recurso de panel",
-      "description": "Crea o actualiza un recurso de panel (código insertado o URL externa)."
-    },
-    "ha_dev_manage_server": {
-      "title": "Gestionar servidor MCP (dev)",
-      "description": "Gestiona el propio servidor ha-mcp en ejecución (modo de desarrollo)."
-    },
-    "ha_dev_manage_settings": {
-      "title": "Gestionar ajustes del servidor (dev)",
-      "description": "Gestiona los ajustes del servidor ha-mcp y las superficies de Herramientas, Políticas y Copias de seguridad (modo de desarrollo)."
-    },
-    "ha_get_device": {
-      "title": "Obtener dispositivo (incl. Zigbee/ZHA/Z2M, Z-Wave y Matter)",
-      "description": "Consulta información de dispositivos con paginación, incluidos los dispositivos Zigbee (ZHA/Z2M) y Z-Wave JS."
-    },
-    "ha_remove_device": {
-      "title": "Eliminar dispositivo",
-      "description": "Elimina un dispositivo huérfano del registro de dispositivos de Home Assistant."
-    },
-    "ha_set_device": {
-      "title": "Modificar dispositivo",
-      "description": "Actualiza propiedades del dispositivo como el nombre, el área, el estado de desactivación o las etiquetas."
-    },
-    "ha_manage_energy_prefs": {
-      "title": "Gestionar preferencias del panel de energía",
-      "description": "Gestiona las preferencias del panel de energía de Home Assistant."
-    },
-    "ha_get_entity": {
-      "title": "Obtener entidad",
-      "description": "Consulta la información del registro de entidades de una o varias entidades."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Obtener exposición de entidades",
-      "description": "Muestra los ajustes de exposición de todas las entidades o de una concreta."
-    },
-    "ha_remove_entity": {
-      "title": "Eliminar entidad",
-      "description": "Elimina una o varias entidades del registro de entidades de Home Assistant."
-    },
-    "ha_set_entity": {
-      "title": "Modificar entidad",
-      "description": "Actualiza propiedades de una entidad en el registro de entidades."
-    },
-    "ha_delete_file": {
-      "title": "Eliminar archivo",
-      "description": "Elimina un archivo de los directorios permitidos de la configuración de Home Assistant."
-    },
-    "ha_list_files": {
-      "title": "Listar archivos",
-      "description": "Lista los archivos de un directorio dentro del directorio de configuración de Home Assistant."
-    },
-    "ha_read_file": {
-      "title": "Leer archivo",
-      "description": "Lee un archivo del directorio de configuración de Home Assistant."
-    },
-    "ha_write_file": {
-      "title": "Escribir archivo",
-      "description": "Escribe un archivo en los directorios permitidos de la configuración de Home Assistant."
-    },
-    "ha_config_list_groups": {
-      "title": "Listar grupos",
-      "description": "Lista los grupos de entidades de Home Assistant con sus entidades miembro."
-    },
-    "ha_config_remove_group": {
-      "title": "Eliminar grupo",
-      "description": "Elimina un grupo de entidades basado en servicio mediante el servicio group.remove."
-    },
-    "ha_config_set_group": {
-      "title": "Crear o actualizar grupo",
-      "description": "Crea o actualiza un grupo de entidades basado en servicio mediante el servicio group.set."
-    },
-    "ha_get_hacs_info": {
-      "title": "Obtener información de HACS",
-      "description": "Consulta datos de HACS: busca en la tienda u obtiene los detalles de un repositorio."
-    },
-    "ha_manage_hacs": {
-      "title": "Gestionar HACS",
-      "description": "Gestiona HACS: instala o actualiza elementos y añade repositorios personalizados."
-    },
-    "ha_config_list_helpers": {
-      "title": "Listar auxiliares",
-      "description": "Lista los auxiliares de Home Assistant de un tipo concreto con su configuración."
-    },
-    "ha_config_set_helper": {
-      "title": "Crear o actualizar auxiliar",
-      "description": "Crea o actualiza entidades auxiliares de Home Assistant y subentradas de configuración."
-    },
-    "ha_remove_helpers_integrations": {
-      "title": "Eliminar auxiliar o integración",
-      "description": "Elimina la entrada de configuración de un auxiliar o una integración de Home Assistant."
-    },
-    "ha_get_automation_traces": {
-      "title": "Obtener trazas de automatización",
-      "description": "Consulta las trazas de ejecución de automatizaciones y scripts para depurar problemas."
-    },
-    "ha_get_history": {
-      "title": "Obtener historial o estadísticas de entidades",
-      "description": "Consulta datos históricos del registrador de Home Assistant."
-    },
-    "ha_get_logs": {
-      "title": "Obtener registros",
-      "description": "Consulta los registros de Home Assistant desde distintas fuentes."
-    },
-    "ha_get_integration": {
-      "title": "Obtener integración",
-      "description": "Consulta información de integraciones (entradas de configuración) con paginación."
-    },
-    "ha_get_system_health": {
-      "title": "Obtener estado del sistema (incl. diagnósticos de ZHA/Z-Wave/integraciones)",
-      "description": "Consulta el estado del sistema de Home Assistant, incluidos los diagnósticos de Zigbee (ZHA), Z-Wave JS y de cada integración."
-    },
-    "ha_set_integration": {
-      "title": "Modificar integración",
-      "description": "Gestiona una integración (entrada de configuración): activarla o desactivarla, añadirla o actualizar sus opciones."
-    },
-    "ha_config_get_category": {
-      "title": "Obtener categoría",
-      "description": "Lista todas las categorías de un ámbito u obtiene una concreta por su ID."
-    },
-    "ha_config_get_label": {
-      "title": "Obtener etiqueta",
-      "description": "Lista todas las etiquetas u obtiene una concreta por su ID."
-    },
-    "ha_config_remove_category": {
-      "title": "Eliminar categoría",
-      "description": "Elimina una categoría de Home Assistant."
-    },
-    "ha_config_remove_label": {
-      "title": "Eliminar etiqueta",
-      "description": "Elimina una etiqueta de Home Assistant."
-    },
-    "ha_config_set_category": {
-      "title": "Crear o actualizar categoría",
-      "description": "Crea o actualiza una categoría de Home Assistant."
-    },
-    "ha_config_set_label": {
-      "title": "Crear o actualizar etiqueta",
-      "description": "Crea o actualiza una etiqueta de Home Assistant."
-    },
-    "ha_manage_radio": {
-      "title": "Gestionar radios (Z-Wave / Zigbee / Matter / Thread)",
-      "description": "Gestiona las radios de Home Assistant: Z-Wave, Zigbee, Matter y Thread."
-    },
-    "ha_config_get_scene": {
-      "title": "Obtener configuración de escena",
-      "description": "Consulta la configuración de una escena de Home Assistant."
-    },
-    "ha_config_remove_scene": {
-      "title": "Eliminar escena",
-      "description": "Elimina una escena de Home Assistant."
-    },
-    "ha_config_set_scene": {
-      "title": "Crear o actualizar escena",
-      "description": "Crea o actualiza una escena de Home Assistant."
-    },
-    "ha_config_get_script": {
-      "title": "Obtener configuración de script",
-      "description": "Consulta la configuración de un script de Home Assistant."
-    },
-    "ha_config_remove_script": {
-      "title": "Eliminar script",
-      "description": "Elimina un script de Home Assistant."
-    },
-    "ha_config_set_script": {
-      "title": "Crear o actualizar script",
-      "description": "Crea o actualiza un script de Home Assistant."
-    },
-    "ha_get_overview": {
-      "title": "Obtener resumen del sistema",
-      "description": "Ofrece un resumen del sistema pensado para IA, con categorización inteligente."
-    },
-    "ha_get_state": {
-      "title": "Obtener estado de entidad",
-      "description": "Consulta el estado actual y los atributos de una o varias entidades (luces, interruptores, sensores, climatización, persianas, cerraduras, ventiladores, etc.)."
-    },
-    "ha_search": {
-      "title": "Buscar",
-      "description": "Busca entidades (luces, sensores, interruptores, climatización, etc.) por nombre, dominio o área, y también dentro de configuraciones de automatizaciones, scripts, escenas, auxiliares y paneles, en una sola llamada."
-    },
     "ha_bulk_control": {
       "title": "Control en bloque",
-      "description": "Controla varios dispositivos a la vez con seguimiento por WebSocket."
+      "description": "Gestiona operaciones explícitas o una acción masiva estructural determinista."
     },
     "ha_call_event": {
       "title": "Lanzar evento",
@@ -732,21 +511,237 @@
       "title": "Llamar a un servicio",
       "description": "Ejecuta servicios de Home Assistant para controlar entidades y disparar automatizaciones."
     },
-    "ha_get_operation_status": {
-      "title": "Obtener estado de la operación",
-      "description": "Comprueba el estado de una o varias operaciones de dispositivo con verificación por WebSocket en tiempo real."
+    "ha_config_delete_dashboard": {
+      "title": "Eliminar panel",
+      "description": "Elimina por completo un panel en modo almacenamiento."
     },
-    "ha_list_services": {
-      "title": "Listar servicios disponibles",
-      "description": "Lista los servicios disponibles de Home Assistant, con paginación y nivel de detalle opcionales."
+    "ha_config_delete_dashboard_resource": {
+      "title": "Eliminar recurso de panel",
+      "description": "Elimina un recurso de panel."
+    },
+    "ha_config_get_automation": {
+      "title": "Obtener configuración de automatización",
+      "description": "Consulta la configuración de una automatización de Home Assistant."
+    },
+    "ha_config_get_calendar_events": {
+      "title": "Obtener eventos de calendario",
+      "description": "Consulta los eventos de una entidad de calendario."
+    },
+    "ha_config_get_category": {
+      "title": "Obtener categoría",
+      "description": "Lista todas las categorías de un ámbito u obtiene una concreta por su ID."
+    },
+    "ha_config_get_dashboard": {
+      "title": "Obtener panel",
+      "description": "Lista los paneles, obtiene su configuración o busca tarjetas dentro de ellos."
+    },
+    "ha_config_get_label": {
+      "title": "Obtener etiqueta",
+      "description": "Lista todas las etiquetas u obtiene una concreta por su ID."
+    },
+    "ha_config_get_scene": {
+      "title": "Obtener configuración de escena",
+      "description": "Consulta la configuración de una escena de Home Assistant."
+    },
+    "ha_config_get_script": {
+      "title": "Obtener configuración de script",
+      "description": "Consulta la configuración de un script de Home Assistant."
     },
     "ha_config_get_yaml": {
       "title": "Leer fragmento de configuración YAML",
       "description": "Obtiene el fragmento YAML actual bajo una clave, de un archivo de configuración o de varios mediante un patrón."
     },
+    "ha_config_list_dashboard_resources": {
+      "title": "Listar recursos de panel",
+      "description": "Lista los recursos de los paneles Lovelace (tarjetas personalizadas, temas, CSS/JS)."
+    },
+    "ha_config_list_groups": {
+      "title": "Listar grupos",
+      "description": "Lista los grupos de entidades de Home Assistant con sus entidades miembro."
+    },
+    "ha_config_list_helpers": {
+      "title": "Listar auxiliares",
+      "description": "Lista los auxiliares de Home Assistant de un tipo concreto con su configuración."
+    },
+    "ha_config_remove_automation": {
+      "title": "Eliminar automatización",
+      "description": "Elimina una automatización de Home Assistant."
+    },
+    "ha_config_remove_calendar_event": {
+      "title": "Eliminar evento de calendario",
+      "description": "Elimina un evento de un calendario."
+    },
+    "ha_config_remove_category": {
+      "title": "Eliminar categoría",
+      "description": "Elimina una categoría de Home Assistant."
+    },
+    "ha_config_remove_group": {
+      "title": "Eliminar grupo",
+      "description": "Elimina un grupo de entidades basado en servicio mediante el servicio group.remove."
+    },
+    "ha_config_remove_label": {
+      "title": "Eliminar etiqueta",
+      "description": "Elimina una etiqueta de Home Assistant."
+    },
+    "ha_config_remove_scene": {
+      "title": "Eliminar escena",
+      "description": "Elimina una escena de Home Assistant."
+    },
+    "ha_config_remove_script": {
+      "title": "Eliminar script",
+      "description": "Elimina un script de Home Assistant."
+    },
+    "ha_config_set_automation": {
+      "title": "Crear o actualizar automatización",
+      "description": "Crea o actualiza una automatización de Home Assistant."
+    },
+    "ha_config_set_calendar_event": {
+      "title": "Crear o actualizar evento de calendario",
+      "description": "Crea un evento nuevo en un calendario."
+    },
+    "ha_config_set_category": {
+      "title": "Crear o actualizar categoría",
+      "description": "Crea o actualiza una categoría de Home Assistant."
+    },
+    "ha_config_set_dashboard": {
+      "title": "Crear o actualizar panel",
+      "description": "Crea o actualiza un panel de Home Assistant."
+    },
+    "ha_config_set_dashboard_resource": {
+      "title": "Definir recurso de panel",
+      "description": "Crea o actualiza un recurso de panel (código insertado o URL externa)."
+    },
+    "ha_config_set_group": {
+      "title": "Crear o actualizar grupo",
+      "description": "Crea o actualiza un grupo de entidades basado en servicio mediante el servicio group.set."
+    },
+    "ha_config_set_helper": {
+      "title": "Crear o actualizar auxiliar",
+      "description": "Crea o actualiza entidades auxiliares de Home Assistant y subentradas de configuración."
+    },
+    "ha_config_set_label": {
+      "title": "Crear o actualizar etiqueta",
+      "description": "Crea o actualiza una etiqueta de Home Assistant."
+    },
+    "ha_config_set_scene": {
+      "title": "Crear o actualizar escena",
+      "description": "Crea o actualiza una escena de Home Assistant."
+    },
+    "ha_config_set_script": {
+      "title": "Crear o actualizar script",
+      "description": "Crea o actualiza un script de Home Assistant."
+    },
     "ha_config_set_yaml": {
       "title": "Edición directa de configuración YAML",
-      "description": "Actualiza la configuración YAML en bruto de configuration.yaml, packages/*.yaml o themes/*.yaml (ÚLTIMO RECURSO)."
+      "description": "Añadir, reemplazar o eliminar claves de nivel superior en configuration.yaml o archivos de paquete."
+    },
+    "ha_delete_file": {
+      "title": "Eliminar archivo",
+      "description": "Elimina un archivo de los directorios permitidos de la configuración de Home Assistant."
+    },
+    "ha_dev_manage_server": {
+      "title": "Gestionar servidor MCP (dev)",
+      "description": "Gestiona el propio servidor ha-mcp en ejecución (modo de desarrollo)."
+    },
+    "ha_dev_manage_settings": {
+      "title": "Gestionar ajustes del servidor (dev)",
+      "description": "Gestiona los ajustes del servidor ha-mcp y las superficies de Herramientas, Políticas y Copias de seguridad (modo de desarrollo)."
+    },
+    "ha_eval_template": {
+      "title": "Evaluar plantilla",
+      "description": "Evalúa plantillas Jinja2 con el motor de plantillas de Home Assistant."
+    },
+    "ha_get_app": {
+      "title": "Obtener Apps (add-ons)",
+      "description": "Obtener Apps de Home Assistant (anteriormente conocidas como add-ons, y esta herramienta como ha_get_addon): lista las instaladas, disponibles u obtiene d"
+    },
+    "ha_get_automation_traces": {
+      "title": "Obtener trazas de automatización",
+      "description": "Consulta las trazas de ejecución de automatizaciones y scripts para depurar problemas."
+    },
+    "ha_get_blueprint": {
+      "title": "Obtener plano",
+      "description": "Muestra todos los planos o los detalles de uno concreto."
+    },
+    "ha_get_camera_image": {
+      "title": "Obtener imagen de cámara",
+      "description": "Captura una imagen de una entidad de cámara de Home Assistant."
+    },
+    "ha_get_dashboard_screenshot": {
+      "title": "Obtener captura de panel",
+      "description": "Obtiene imágenes renderizadas de una vista de panel Lovelace de Home Assistant."
+    },
+    "ha_get_device": {
+      "title": "Obtener dispositivo (incl. Zigbee/ZHA/Z2M, Z-Wave y Matter)",
+      "description": "Consulta información de dispositivos con paginación, incluidos los dispositivos Zigbee (ZHA/Z2M) y Z-Wave JS."
+    },
+    "ha_get_entity": {
+      "title": "Obtener entidad",
+      "description": "Consulta la información del registro de entidades de una o varias entidades."
+    },
+    "ha_get_entity_exposure": {
+      "title": "Obtener exposición de entidades",
+      "description": "Muestra los ajustes de exposición de todas las entidades o de una concreta."
+    },
+    "ha_get_hacs_info": {
+      "title": "Obtener información de HACS",
+      "description": "Consulta datos de HACS: busca en la tienda u obtiene los detalles de un repositorio."
+    },
+    "ha_get_history": {
+      "title": "Obtener historial o estadísticas de entidades",
+      "description": "Consulta datos históricos del registrador de Home Assistant."
+    },
+    "ha_get_integration": {
+      "title": "Obtener integración",
+      "description": "Consulta información de integraciones (entradas de configuración) con paginación."
+    },
+    "ha_get_logs": {
+      "title": "Obtener registros",
+      "description": "Consulta los registros de Home Assistant desde distintas fuentes."
+    },
+    "ha_get_operation_status": {
+      "title": "Obtener estado de la operación",
+      "description": "Comprueba el estado de una o varias operaciones de dispositivo con verificación por WebSocket en tiempo real."
+    },
+    "ha_get_overview": {
+      "title": "Obtener resumen del sistema",
+      "description": "Ofrece un resumen del sistema pensado para IA, con categorización inteligente."
+    },
+    "ha_get_state": {
+      "title": "Obtener estado de entidad",
+      "description": "Consulta el estado actual y los atributos de una o varias entidades (luces, interruptores, sensores, climatización, persianas, cerraduras, ventiladores, etc.)."
+    },
+    "ha_get_system_health": {
+      "title": "Obtener estado del sistema (incl. diagnósticos de ZHA/Z-Wave/integraciones)",
+      "description": "Consulta el estado del sistema de Home Assistant, incluidos los diagnósticos de Zigbee (ZHA), Z-Wave JS y de cada integración."
+    },
+    "ha_get_todo": {
+      "title": "Obtener tareas",
+      "description": "Lista todas las listas de tareas u obtiene los elementos de una lista concreta."
+    },
+    "ha_get_zone": {
+      "title": "Obtener zona",
+      "description": "Lista todas las zonas u obtiene los detalles de una concreta."
+    },
+    "ha_import_blueprint": {
+      "title": "Importar plano",
+      "description": "Importa un plano desde una URL."
+    },
+    "ha_list_files": {
+      "title": "Listar archivos",
+      "description": "Lista los archivos de un directorio dentro del directorio de configuración de Home Assistant."
+    },
+    "ha_list_floors_areas": {
+      "title": "Listar plantas y áreas",
+      "description": "Muestra las plantas con sus áreas anidadas, incluidas las áreas sin planta."
+    },
+    "ha_list_services": {
+      "title": "Listar servicios disponibles",
+      "description": "Lista los servicios disponibles de Home Assistant, con paginación y nivel de detalle opcionales."
+    },
+    "ha_manage_app": {
+      "title": "Administrar App (add-on)",
+      "description": "Administrar una App de Home Assistant (anteriormente conocida como add-on, y esta herramienta como ha_manage_addon): actualiza su configuración o"
     },
     "ha_manage_backup": {
       "title": "Gestionar copias de seguridad",
@@ -756,6 +751,26 @@
       "title": "Herramienta personalizada",
       "description": "Crea y ejecuta una herramienta personalizada en un entorno aislado, o gestiona las guardadas."
     },
+    "ha_manage_energy_prefs": {
+      "title": "Gestionar preferencias del panel de energía",
+      "description": "Gestiona las preferencias del panel de energía de Home Assistant."
+    },
+    "ha_manage_hacs": {
+      "title": "Gestionar HACS",
+      "description": "Gestionar HACS (Home Assistant Community Store) — instalar/actualizar, eliminar, añadir repositorios personalizados o actualizar repositorio en"
+    },
+    "ha_manage_pipeline": {
+      "title": "Gestionar canalización de Assist",
+      "description": "Gestiona las canalizaciones de Assist de Home Assistant."
+    },
+    "ha_manage_radio": {
+      "title": "Gestionar radios (Z-Wave / Zigbee / Matter / Thread)",
+      "description": "Gestiona las radios de Home Assistant: Z-Wave, Zigbee, Matter y Thread."
+    },
+    "ha_manage_security_policy": {
+      "title": "Gestionar política de seguridad",
+      "description": "Leer y reescribir la política de seguridad de la herramienta que protege las llamadas a herramientas de alto riesgo detrás de la aprobación del usuario."
+    },
     "ha_manage_theme": {
       "title": "Gestionar temas de la interfaz",
       "description": "Gestiona los temas de la interfaz de Home Assistant."
@@ -764,45 +779,77 @@
       "title": "Gestionar actualizaciones",
       "description": "Gestiona las actualizaciones de Home Assistant: listarlas, ver detalles, instalarlas en bloque, omitirlas o dejar de omitirlas."
     },
+    "ha_read_file": {
+      "title": "Leer archivo",
+      "description": "Lee un archivo del directorio de configuración de Home Assistant."
+    },
     "ha_reload_core": {
       "title": "Recargar componentes del núcleo",
       "description": "Recarga la configuración de Home Assistant sin reiniciar por completo."
     },
-    "ha_restart": {
-      "title": "Reiniciar Home Assistant",
-      "description": "Reinicia Home Assistant."
+    "ha_remove_area_or_floor": {
+      "title": "Eliminar área o planta",
+      "description": "Elimina un área o una planta de Home Assistant."
     },
-    "ha_get_todo": {
-      "title": "Obtener tareas",
-      "description": "Lista todas las listas de tareas u obtiene los elementos de una lista concreta."
+    "ha_remove_device": {
+      "title": "Eliminar dispositivo",
+      "description": "Elimina un dispositivo huérfano del registro de dispositivos de Home Assistant."
+    },
+    "ha_remove_entity": {
+      "title": "Eliminar entidad",
+      "description": "Elimina una o varias entidades del registro de entidades de Home Assistant."
+    },
+    "ha_remove_helpers_integrations": {
+      "title": "Eliminar auxiliar o integración",
+      "description": "Elimina la entrada de configuración de un auxiliar o una integración de Home Assistant."
     },
     "ha_remove_todo_item": {
       "title": "Eliminar tarea",
       "description": "Elimina un elemento de una lista de tareas de Home Assistant."
     },
-    "ha_set_todo_item": {
-      "title": "Definir tarea",
-      "description": "Crea o actualiza un elemento de una lista de tareas de Home Assistant."
-    },
-    "ha_eval_template": {
-      "title": "Evaluar plantilla",
-      "description": "Evalúa plantillas Jinja2 con el motor de plantillas de Home Assistant."
+    "ha_remove_zone": {
+      "title": "Eliminar zona",
+      "description": "Elimina una zona de Home Assistant."
     },
     "ha_report_issue": {
       "title": "Informar de un problema o enviar comentarios",
       "description": "Reúne información de diagnóstico y plantillas para abrir informes de problemas o enviar comentarios."
     },
-    "ha_get_zone": {
-      "title": "Obtener zona",
-      "description": "Lista todas las zonas u obtiene los detalles de una concreta."
+    "ha_restart": {
+      "title": "Reiniciar Home Assistant",
+      "description": "Reinicia Home Assistant."
     },
-    "ha_remove_zone": {
-      "title": "Eliminar zona",
-      "description": "Elimina una zona de Home Assistant."
+    "ha_search": {
+      "title": "Buscar",
+      "description": "Busca entidades (luces, sensores, interruptores, climatización, etc.) por nombre, dominio o área, y también dentro de configuraciones de automatizaciones, scripts, escenas, auxiliares y paneles, en una sola llamada."
+    },
+    "ha_set_area_or_floor": {
+      "title": "Crear o actualizar área o planta",
+      "description": "Crea o actualiza un área o una planta de Home Assistant."
+    },
+    "ha_set_device": {
+      "title": "Modificar dispositivo",
+      "description": "Actualiza propiedades del dispositivo como el nombre, el área, el estado de desactivación o las etiquetas."
+    },
+    "ha_set_entity": {
+      "title": "Modificar entidad",
+      "description": "Actualiza propiedades de una entidad en el registro de entidades."
+    },
+    "ha_set_integration": {
+      "title": "Modificar integración",
+      "description": "Gestiona una integración (entrada de configuración): activarla o desactivarla, añadirla o actualizar sus opciones."
+    },
+    "ha_set_todo_item": {
+      "title": "Definir tarea",
+      "description": "Crea o actualiza un elemento de una lista de tareas de Home Assistant."
     },
     "ha_set_zone": {
       "title": "Crear o actualizar zona",
       "description": "Crea o actualiza una zona de Home Assistant."
+    },
+    "ha_write_file": {
+      "title": "Escribir archivo",
+      "description": "Escribe un archivo en los directorios permitidos de la configuración de Home Assistant."
     }
   }
 }

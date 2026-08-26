@@ -9,6 +9,7 @@ def test_defaults_are_disabled_and_noop():
     assert cfg.exclude_categories == ["diagnostic", "config"]
     assert cfg.deny_entity_ids == []
     assert cfg.enforce is False
+    assert cfg.restrict_report_issue is False
 
 
 def test_roundtrips_through_json():
@@ -28,6 +29,10 @@ def test_enforce_is_not_a_wire_dimension():
     """enforce changes how strongly hiding applies, not which entities hide, so it
     is deliberately absent from the component wire format."""
     assert "enforce" not in VisibilityConfig(enforce=True).to_wire()
+    assert (
+        "restrict_report_issue"
+        not in VisibilityConfig(restrict_report_issue=True).to_wire()
+    )
 
 
 def test_enforce_is_not_an_active_hide_dimension():

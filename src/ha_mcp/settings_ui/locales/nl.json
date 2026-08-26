@@ -1,0 +1,855 @@
+{
+  "meta": {
+    "native_name": "Nederlands",
+    "dir": "ltr"
+  },
+  "messages": {
+    "app.document_title": "HA-MCP Toolinstellingen",
+    "app.title": "HA-MCP Instellingen",
+    "language.label": "Taal",
+    "language.auto": "Automatisch",
+    "theme.label": "Thema",
+    "theme.auto_os": "Automatisch (OS)",
+    "theme.light": "Licht",
+    "theme.dark": "Donker",
+    "status.loading": "Laden…",
+    "footer.installation": "installatie: {method}",
+    "footer.deployment.addon": "app/add-on",
+    "footer.deployment.docker": "container/docker",
+    "footer.deployment.pyinstaller": "standalone binary",
+    "footer.deployment.git": "source checkout",
+    "footer.deployment.pypi": "python package",
+    "footer.deployment.unknown": "onbekend",
+    "nav.skip": "Naar inhoud springen",
+    "tabs.aria": "Instellingensecties",
+    "tabs.tools": "Tools",
+    "tabs.server": "Serverinstellingen",
+    "tabs.backups": "Back-ups",
+    "tabs.policies": "Toolbeveiligingsbeleid",
+    "tabs.visibility": "Entiteitszichtbaarheid",
+    "tabs.accessibility": "Toegankelijkheid",
+    "notice.restart_required": "⚠ Wijzigingen opgeslagen. Herstart HA-MCP zodat ze van kracht worden. Bij de volgende opstart verwijdert HA-MCP uitgeschakelde tools volledig van de MCP-toollijst. Maak vervolgens opnieuw verbinding of vernieuw de MCP-server in je AI-client (bijv. vernieuw de toollijst op claude.ai, voeg de connector in ChatGPT opnieuw toe of vernieuw deze, of sluit en heropen Claude Desktop) zodat deze de toollijst opnieuw laadt. Het herstarten van de app (add-on) of Home Assistant vernieuwt de gecachette toollijst van je client NIET. ChatGPT blijft soms zijn gecachette toollijst serveren, zelfs nadat de connector is verwijderd en opnieuw toegevoegd — als er nog steeds tools ontbreken, verwijder dan de connector en maak een nieuwe aan onder een andere naam.",
+    "notice.shared_settings": "Serverbrede functies (Tool Zoeken, YAML-configuratie bewerken, bestandsysteemtools, etc.) verschijnen in zowel het tabblad <strong>Serverinstellingen</strong> als op de configuratiepagina van de app (add-on); het zijn in beide gevallen dezelfde instellingen. Beide locaties blijven met elkaar gesynchroniseerd nadat de app (add-on) is herstart. Voor wijzigingen moet HA-MCP worden herstart.",
+    "notice.env_pins": "Tools die vermeld staan in de omgevingsvariabelen <code>DISABLED_TOOLS</code> of <code>PINNED_TOOLS</code> zijn vergrendeld als alleen-lezen; hef de omgevingsvariabele op om ze hier te bewerken. Vastzetschakelaars hebben alleen effect wanneer Tool Zoeken is ingeschakeld (tabblad Serverinstellingen of configuratiepagina van de app (add-on)).",
+    "actions.restart_addon": "App (add-on) herstarten",
+    "actions.save": "Opslaan",
+    "actions.save_settings": "Instellingen opslaan",
+    "actions.refresh": "Vernieuwen",
+    "actions.close": "Sluiten",
+    "tools.read_only.label": "Alleen-lezen modus",
+    "tools.read_only.help": "Schakelt alle schrijftools uit en blokkeert elke tool om schrijf- of destructieve oproepen te doen. Gemengde lees-/schrijftools (back-ups, Apps (add-ons), energievoorkeuren, spraakpijplijnen en codemodus indien ingeschakeld) blijven beschikbaar, maar hun schrijfbewerkingen zijn geblokkeerd.",
+    "tools.read_only.unknown": "Kon serverinstellingen niet lezen. Status Alleen-lezen modus onbekend; deze weergave geeft mogelijk niet weer wat de server afdwingt.",
+    "tools.search": "Zoek tools...",
+    "server.auto_save_notice": "Instellingen op dit tabblad worden automatisch opgeslagen. Wijzigingen worden pas van kracht nadat je HA-MCP herstart (past ze toe aan de serverkant) en de MCP-server in je AI-client opnieuw verbindt of vernieuwt (laadt de toollijst opnieuw), bijv. vernieuw de toollijst op claude.ai, voeg de connector in ChatGPT opnieuw toe of vernieuw deze, of sluit en heropen Claude Desktop. ChatGPT blijft soms zijn gecachette toollijst serveren, zelfs nadat de connector is verwijderd en opnieuw toegevoegd — als er nog steeds tools ontbreken, verwijder dan de connector en maak een nieuwe aan onder een andere naam.",
+    "server.sections.search": "Zoeken & matchen",
+    "server.sections.operations": "Bewerkingen",
+    "server.sections.tool_surface": "Tool-interface",
+    "server.sections.diagnostics": "Diagnostiek",
+    "server.sections.sidecar": "Instellingen UI sidecar",
+    "server.sections.beta": "Bètafuncties (gevaarlijk)",
+    "server.sections.developer": "Ontwikkelaar",
+    "server.sidecar.disable": "Instellingenserver permanent uitschakelen",
+    "server.sidecar.disable_title": "Schakelt de instellingen-UI permanent uit: stopt deze server EN schrijft ~/.ha-mcp/settings_ui_disabled zodat deze niet opnieuw wordt gestart bij toekomstige ha-mcp lanceringen. Verwijder dat bestand om opnieuw in te schakelen.",
+    "backups.loading": "Back-upstatus laden…",
+    "backups.filter.domain": "Domein (bijv. automatisering)",
+    "backups.filter.domain_aria": "Filter back-ups op domein",
+    "backups.filter.entity": "Entiteits-ID",
+    "backups.filter.entity_aria": "Filter back-ups op entiteits-ID",
+    "backups.bulk_delete": "Bulkverwijdering van overeenkomende…",
+    "policies.title": "Toolbeveiligingsbeleid",
+    "policies.intro": "Per-tool goedkeuringspoort voor risicovolle oproepen. Gebruik het tabblad <strong>Tools</strong> om poorttoegang voor een tool in te schakelen, en verfijn hier de overeenkomende voorwaarden en de levensduur van de goedkeuring. Voorwaarde-operatoren: is gelijk aan, is één van, regex, bevat, is aanwezig, groter dan, kleiner dan.",
+    "policies.global.title": "Globale instellingen",
+    "policies.global.unknown": "Kon serverinstellingen niet lezen. De twee onderstaande schakelaars worden als onbekend weergegeven en kunnen pas worden gewijzigd nadat de pagina succesvol is herladen; deze weergave geeft mogelijk niet weer wat de server afdwingt.",
+    "policies.global.enabled.label": "Toolbeveiligingsbeleid inschakelen",
+    "policies.global.enabled.help": "Hoofdschakelaar. Weerspiegelt de schakelaar in Serverinstellingen. Standaard uit. Schakel in en herstart HA-MCP om de beveiligingsmiddleware te activeren. Terwijl deze uit staat, blijven de onderstaande regels behouden maar worden ze niet afgedwongen.",
+    "policies.global.manage_tool.label": "Laat AI-agenten dit beleid bewerken (ha_manage_security_policy)",
+    "policies.global.manage_tool.help": "Registreert de ha_manage_security_policy tool, die het beleidsdocument leest en vervangt dat dit tabblad bewerkt. Standaard uitgeschakeld. Onafhankelijk van de hoofdschakelaar hierboven: dit bepaalt wie de regels kan bewerken, niet of ze worden afgedwongen. De tool toont geen wachtende-goedkeuringswachtrijbewerkingen, maar een beleidsgestuurde set-actie kan nog steeds goedkeuring vereisen.",
+    "policies.global.manage_tool.warning": "Als je dit inschakelt, kunnen verbonden AI-agents de beveiligingsbeleidsregels op dit tabblad herschrijven, inclusief het verwijderen van goedkeuringsvereisten. Om een mens in de loop te houden, beveilig je de tool VOORDAT je deze inschakelt: schakel op het tabblad Tools \"beveiligd\" in voor Beveiligingsbeleid beheren. Die regel kan worden opgesteld terwijl de tool nog uit staat, en wordt afgedwongen zodra de hoofdschakelaar hierboven aan staat en de server is herstart. Herstart de app (add-on) na het omzetten van een van beide schakelaars.",
+    "policies.global.wait.label": "Wacht seconden (5-600)",
+    "policies.global.wait.help": "Hoe lang de middleware wacht op een goedkeuring voordat de time-out optreedt.",
+    "policies.global.ttl.label": "Goedkeuring TTL minuten (1-60)",
+    "policies.global.ttl.help": "Hoe lang een wachtende goedkeuring in de wachtrij blijft voordat deze verloopt.",
+    "policies.global.save": "Globale instellingen opslaan",
+    "policies.pending.title": "Wachtende goedkeuringen",
+    "policies.pending.empty": "Geen wachtende goedkeuringen.",
+    "policies.rules.title": "Beveiligde tools",
+    "policies.rules.empty": "Momenteel geen tools beveiligd. Schakel per-tool poorttoegang in via het tabblad <a href=\"#\" data-panel-link=\"tools\">Tools</a>.",
+    "accessibility.intro": "Deze instellingen worden onmiddellijk toegepast en worden opgeslagen in deze browser en op de server, zodat ze herstarts overleven in elke modus (inclusief stdio, waar de instellingenpagina af en toe naar een nieuwe poort kan verhuizen). De documentatiesite biedt dezelfde bedieningselementen in de navigatiebalk; deze heeft geen server en slaat per browser op.",
+    "accessibility.storage_blocked": "Je browser blokkeert opslag voor deze site; keuzes gelden alleen voor deze sessie.",
+    "accessibility.theme.title": "Thema",
+    "accessibility.theme.help": "Kleurenschema's met één klik. Automatisch, de standaardinstelling, volgt je OS-voorkeur en schakelt direct om wanneer deze verandert.",
+    "accessibility.theme.preset": "Thema-voorinstelling",
+    "accessibility.theme.paper": "Papier",
+    "accessibility.theme.gray": "Grijs",
+    "accessibility.theme.contrast": "Hoog contrast",
+    "accessibility.text_size.title": "Tekstgrootte",
+    "accessibility.text_size.help": "Schaalt de basislettergrootte. Browserzoom (Ctrl/Cmd +) werkt hier nog steeds bovenop.",
+    "accessibility.colors.title": "Aangepaste kleuren",
+    "accessibility.colors.help": "Kies je eigen kleuren bovenop het geselecteerde thema. Elk staal opent de visuele kleurenkiezer van je systeem.",
+    "accessibility.colors.background": "Achtergrond",
+    "accessibility.colors.text": "Tekst",
+    "accessibility.colors.accent": "Accent",
+    "accessibility.colors.low_contrast": "De gekozen achtergrond- en tekstkleuren vallen onder een contrastverhouding van 4.5:1 en kunnen moeilijk samen te lezen zijn.",
+    "accessibility.colors.clear": "Aangepaste kleuren wissen",
+    "accessibility.reset": "Terugzetten naar standaard",
+    "visibility.intro": "Verberg entiteiten met lage waarde (automatisch gegenereerde diagnostische of helper-entiteiten, of een expliciete lijst) voor de verzameling leestools <code>ha_search</code> en <code>ha_get_overview</code>, zodat zoek- en overzichtsresultaten minder rommelig zijn. Standaard uitgeschakeld; wijzigingen worden toegepast bij de volgende tool-aanroep.",
+    "visibility.boundary": "Zonder afdwingmodus (hieronder) is dit ruisonderdrukking, geen toegangscontrole: een verborgen entiteit wordt nog steeds geretourneerd door een directe uitlezing van zijn entity_id en verschijnt nog steeds in automatisering, dashboard en sjablooninhoud. Vertrouw niet alleen op het filter als een beveiligingsgrens.",
+    "visibility.enabled": "Schakel filter voor entiteitszichtbaarheid in",
+    "visibility.enforce.title": "Afdwingmodus",
+    "visibility.enforce.help": "Breidt het filter van opschoning van zoekopdrachten en overzichten standaard uit naar elke tool-gelezen data behalve ha_report_issue. Een directe lezing van een verborgen entiteit retourneert \"niet gevonden\", en een inhoudsgelezen data die er een zou tonen, wordt geweigerd. De uitzondering voor het rapportageregelingsmiddel wordt hieronder beheerd. Dit is een inspanningsverplichting ter verberging tegen incidentele blootstelling, geen harde beveiligingsgrens.",
+    "visibility.enforce.only_enforced": "Maak verborgen entiteiten onleesbaar bij alle tool-lezingen (standaard uitgezonderd foutmeldingen)",
+    "visibility.enforce.report_issue_help": "Terwijl dit is uitgeschakeld, blijven ha_report_issue en al zijn diagnostische uitvoer — inclusief logboeken — bij elke aanroep buiten de afdwingmodus, zelfs wanneer zichtbaarheidsgegevens gezond of niet beschikbaar zijn. Schakel dit in om dat hulpprogramma te scannen en te weigeren net als andere lezingen.",
+    "visibility.enforce.restrict_report_issue": "Pas afdwingmodus toe op ha_report_issue",
+    "visibility.categories.title": "Verbergen per categorie",
+    "visibility.categories.help": "Home Assistant tagt automatisch gegenereerde entiteiten als diagnostisch of configuratie.",
+    "visibility.categories.legend": "Entiteitscategorieën om te verbergen",
+    "visibility.categories.diagnostic": "Diagnostisch",
+    "visibility.categories.config": "Configuratie",
+    "visibility.categories.hidden": "Ook entiteiten die al verborgen zijn in Home Assistant",
+    "visibility.area_label.title": "Verbergen per gebied of label",
+    "visibility.area_label.help": "Door komma's gescheiden gebieds-ID's of label-ID's; entiteiten in een van de vermelde gebieden of labels worden verborgen.",
+    "visibility.areas": "Gebieden",
+    "visibility.labels": "Labels",
+    "visibility.entities.title": "Specifieke entiteiten verbergen",
+    "visibility.entities.help": "Eén entity_id per regel. Deze blijven verborgen, zelfs zonder een entiteitsregistervermelding.",
+    "visibility.entities.denied": "Geweigerde entiteits-ID's",
+    "visibility.allowlist.title": "Beperken tot een toelatingslijst",
+    "visibility.allowlist.help": "Geavanceerd: wanneer een van de velden van de toelatingslijst is ingesteld, keert het filter om – alleen entiteiten die overeenkomen met een toelatingslijst blijven zichtbaar, al het andere is verborgen (inclusief later toegevoegde entiteiten). Laat alle drie leeg om uit te schakelen.",
+    "visibility.allowlist.areas": "Toegestane gebieden",
+    "visibility.allowlist.labels": "Toegestane labels",
+    "visibility.allowlist.entities_help": "Toegestane entiteits-ID's, één per regel.",
+    "visibility.allowlist.entities": "Toegestane entiteits-ID's",
+    "visibility.assist.title": "Respecteer Assist-blootstelling",
+    "visibility.assist.help": "Verberg entiteiten die niet zijn blootgesteld aan de Assist (“gesprek”) spraakassistent van Home Assistant, en weerspiegelt de lijst Instellingen > Spraakassistenten > Blootstellen. Voegt twee websocket-leesacties per zoekopdracht toe wanneer ingeschakeld.",
+    "visibility.assist.only_exposed": "Toon alleen entiteiten die zijn blootgesteld aan Assist",
+    "features.enable_tool_search.label": "Schakel tool-zoekfunctie in",
+    "features.enable_tool_search.help": "Vervang de volledige toolcatalogus door zoekgebaseerde ontdekking. Vermindert de inactieve context met ongeveer 90%, tot ongeveer 5K tokens. ⚠️ Schakel dit NIET in bij clients met hun eigen ingebouwde tool-zoekfunctie / uitgestelde tools (claude.ai, Claude Desktop, Claude Code) — de twee zoeklagen conflicteren, en de ingebouwde tool-zoekfunctie van de client is daar de betere keuze; laat dit uitgeschakeld. Of tools worden uitgesteld, hangt af van je client- en modelcombinatie: gebruik dit wanneer je setup de volledige catalogus vooraf laadt — modellen zonder native uitgestelde tools (bijv. Gemini, OpenAI-compatibele lokale modellen, Claude Haiku), clients die alle tool-schema's inline zetten ongeacht het model (bijv. GitHub Copilot CLI), of kleinere contextvensters. Sommige Codex-modellen en ChatGPT bevatten ook uitgestelde tools — controleer je client/model direct om de functies ervan te bevestigen, zodat je dit niet onnodig ingeschakeld laat. Tools worden gevonden via ha_search_tools en uitgevoerd via gecategoriseerde proxies (lezen/schrijven/verwijderen). Vereist een herstart om van kracht te worden.",
+    "features.tool_search_max_results.label": "Max. resultaten tool-zoekfunctie",
+    "features.tool_search_max_results.help": "Maximaal aantal tools geretourneerd door ha_search_tools wanneer de tool-zoekfunctie is ingeschakeld. Lagere waarden (2-3) besparen context-tokens, maar kunnen relevante tools missen. Bereik: 2-10. Vereist een herstart.",
+    "features.enable_tool_security_policies.label": "Schakel Tool Beveiligingsbeleid in (geavanceerd)",
+    "features.enable_tool_security_policies.help": "Beveilig risicovolle tool-aanroepen (vergrendelings-/alarmbediening, automatiseringsschrijvingen, enz.) achter gebruikersgoedkeuring. Wanneer een beveiligde tool wordt aangeroepen, instrueert de agent de gebruiker om het tabblad 'Tool Security Policies' in de web-UI te openen en op 'Goedkeuren' te klikken voordat de aanroep doorgaat. Per-tool regels met optionele argumentcondities worden geconfigureerd in het tabblad 'Tool Security Policies'. Standaard uitgeschakeld. Vereist een herstart om van kracht te worden.",
+    "features.read_only_mode.label": "Alleen-lezen modus",
+    "features.read_only_mode.help": "Schakelt alle schrijftools uit en verwijdert de mogelijkheid voor tools om schrijf- of destructieve aanroepen te doen. Gemengde lees-/schrijftools — back-ups, apps (add-ons), energievoorkeuren, spraakpijplijnen en codemodus wanneer ingeschakeld — blijven beschikbaar waarbij hun schrijfoperaties worden geblokkeerd. Dezelfde schakelaar als het web-ui-tabblad Tools. Standaard uit. Vereist herstart om van kracht te worden.",
+    "features.redact_secrets.label": "Geheimen redigeren",
+    "features.redact_secrets.help": "Verbergt geheimen uit toolresponsen voordat ze de AI-assistent bereiken. App (add-on)-opties en integratievelden die zijn gemarkeerd als wachtwoorden worden vervangen door een marker voor ingesteld/leeg (zodat \"is deze inloggegeven geconfigureerd?\" beantwoordbaar blijft), en andere toolresponsen worden opgeschoond van geheime waarden die de server al heeft gezien (waarden korter dan 6 tekens worden overgeslagen, aangezien het vervangen van kleine fragmenten gerelateerde uitvoer zou beschadigen). Velden die niet door hun schema als wachtwoord zijn gemarkeerd, kunnen niet worden gedetecteerd. Standaard uit.",
+    "features.enable_mandatory_bps.label": "Koppel best-practice vaardigheden aan schrijfbewerkingen",
+    "features.enable_mandatory_bps.help": "Hoofdschakelaar voor de functie voor het leveren van vaardigheidsinhoud voor schrijftools (issue #1182). Wanneer ingeschakeld (standaard), koppelen de zes configuratie-schrijftools (automatiseringen, scripts, scènes, helpers, dashboards, ruwe YAML) de canonieke Home Assistant best-practice referentiebestanden onder `skill_content` bij elke succesvolle schrijfbewerking, plus automatisch ingebedde referentiesecties die worden genoemd in best-practice waarschuwingen. Elke tool exposeert ook een per-aanroep `MandatoryBPS`-parameter die de agent op 'false' kan zetten bij volgende aanroepen zodra deze de inhoud heeft. Wanneer deze hoofdschakelaar uit staat, wordt GEEN `skill_content` verzonden, ongeacht de per-aanroep parameter of BP-waarschuwingen. Aanbevolen AAN als eerste keuze; alleen uitschakelen voor modellen met zeer kleine contextvensters. Het uitschakelen hiervan kan de schijfnauwkeurigheid verminderen. Vereist een herstart om van kracht te worden.",
+    "features.enable_strict_mandatory_bps.label": "Strikte best-practices modus",
+    "features.enable_strict_mandatory_bps.help": "Strikte modus: voorkomt dat de client de tool gebruikt totdat deze kan bewijzen dat het de best practices heeft gelezen. Wanneer ingeschakeld, worden de zes best-practice schrijftools (automatiseringen, scripts, scènes, helpers, dashboards, ruwe YAML) geblokkeerd en retourneren ze een fout die de client instrueert om de best-practice vaardigheid te lezen via ha_get_skill_guide en de daar verkregen bevestigingssleutel terug te sturen. Wanneer ingeschakeld, is de ha_get_skill_guide tool vergrendeld ingeschakeld — het is de enige uitgever van de bevestigingssleutel. Onderdeel van de optie \"Koppel best-practice vaardigheden aan schrijfbewerkingen\" hierboven en inactief zolang die ouder uitgeschakeld is. Vereist een herstart om van kracht te worden.",
+    "features.enable_beta_features.label": "Schakel bètafuncties in (hoofd)",
+    "features.enable_beta_features.help": "⚠ GEVAAR — deze tools kunnen je Home Assistant installatie PERMANENT BESCHADIGEN. Ze schrijven naar je YAML-configuratie, je bestandssysteem, installeren aangepaste componenten, voeren willekeurige gesandboxte Python uit en bewerken tool-docstrings die de AI ziet. Er is geen garantie en geen ondersteuningsgarantie — je schakelt ze in op EIGEN RISICO. Maak een Home Assistant-back-up voordat je dit inschakelt, en schakel het nooit in productie in zonder een back-up. Hoofdschakelaar voor de experimentele sub-vlaggen hieronder; sub-vlaggen worden tijdens runtime genegeerd wanneer deze hoofdschakelaar uit staat, zelfs als ze expliciet op 'true' zijn ingesteld. Dezelfde schakelaar verschijnt ook in de webinstellingen-UI onder \"Bètafuncties (gevaarlijk)\" — beide weergaven weerspiegelen elkaar na een herstart.",
+    "features.enable_yaml_config_editing.label": "YAML-configuratie bewerken inschakelen (bèta)",
+    "features.enable_yaml_config_editing.help": "Bètafunctie. Stelt AI-assistenten in staat om top-level sleutels toe te voegen, te vervangen of te verwijderen in configuration.yaml en packages/*.yaml. Alleen toegestane sleutels zijn toegestaan (bijv. template, sensor, command_line, mqtt, knx); kernsleutels zoals homeassistant, http en recorder zijn geblokkeerd. Elke bewerking valideert de YAML-syntaxis, voert een configuratiecontrole uit en maakt een automatische back-up. Wijzigingen aan de meeste sleutels vereisen een volledige HA-herstart om van kracht te worden. Zie docs/beta.md voor bekende beperkingen. Specifieke tools (automations, scripts, scenes, helpers, template sensors) moeten de voorkeur krijgen indien beschikbaar. VEREIST dat de hoofdschakelaar \"Bètafuncties inschakelen\" hierboven (en in de web-UI) is ingeschakeld — anders wordt deze sub-vlag tijdens runtime genegeerd, ongeacht de waarde hier.",
+    "features.enable_yaml_edit_confirm.label": "Bevestiging vereisen voor YAML-bewerkingen (diff-voorbeeld)",
+    "features.enable_yaml_edit_confirm.help": "Sub-schakelaar van YAML-configuratiebewerking, standaard AAN (aanbevolen). De eerste ha_config_set_yaml aanroep retourneert een uniforme diff van precies wat er op schijf zou veranderen, plus een bevestigingstoken, en schrijft niets; de bewerking wordt pas uitgevoerd wanneer de aanroep wordt herhaald met dat token. Bestaat zodat onbedoelde wijzigingen buiten de gevraagde bewerking worden opgevangen voordat ze de schijf bereiken (issue #1720). Schakel alleen uit om één round-trip per bewerking te besparen.",
+    "features.enable_yaml_packages_automation.label": "Automatisering toestaan in packages/*.yaml",
+    "features.enable_yaml_packages_automation.help": "Sub-schakelaar van YAML-configuratiebewerking. Wanneer ingeschakeld, accepteert ha_config_set_yaml yaml_path='automation' binnen packages/*.yaml. Wanneer uitgeschakeld, wordt de aanroep zowel client-side als server-side geweigerd. De storage-mode tool (ha_config_set_automation) wordt niet beïnvloed. Standaard UIT; wordt alleen van kracht wanneer \"YAML-configuratie bewerken inschakelen\" hierboven ook is ingeschakeld.",
+    "features.enable_yaml_packages_script.label": "Script toestaan in packages/*.yaml",
+    "features.enable_yaml_packages_script.help": "Sub-schakelaar van YAML-configuratiebewerking. Wanneer ingeschakeld, accepteert ha_config_set_yaml yaml_path='script' binnen packages/*.yaml. Wanneer uitgeschakeld, wordt de aanroep zowel client-side als server-side geweigerd. De storage-mode tool (ha_config_set_script) wordt niet beïnvloed. Standaard UIT; wordt alleen van kracht wanneer \"YAML-configuratie bewerken inschakelen\" hierboven ook is ingeschakeld.",
+    "features.enable_yaml_packages_scene.label": "Scène toestaan in packages/*.yaml",
+    "features.enable_yaml_packages_scene.help": "Sub-schakelaar van YAML-configuratiebewerking. Wanneer ingeschakeld, accepteert ha_config_set_yaml yaml_path='scene' binnen packages/*.yaml. Wanneer uitgeschakeld, wordt de aanroep zowel client-side als server-side geweigerd. De storage-mode tool (ha_config_set_scene) wordt niet beïnvloed. Standaard UIT; wordt alleen van kracht wanneer \"YAML-configuratie bewerken inschakelen\" hierboven ook is ingeschakeld.",
+    "features.enable_filesystem_tools.label": "Bestandssysteemtools inschakelen (bèta)",
+    "features.enable_filesystem_tools.help": "Stelt HAMCP_ENABLE_FILESYSTEM_TOOLS=true in. Schakelt directe lees-/schrijftoegang tot je Home Assistant-bestandssysteem in. WAARSCHUWING: Dit geeft de MCP-server gevoelige directe bestandstoegang tot je systeem. Schakel alleen in als je de AI-assistent vertrouwt met bestandsbewerkingen. Vereist een herstart om van kracht te worden. VEREIST dat de hoofdschakelaar \"Bètafuncties inschakelen\" hierboven (en in de web-UI) is ingeschakeld — anders wordt deze sub-vlag tijdens runtime genegeerd, ongeacht de waarde hier.",
+    "features.enable_code_mode.label": "Aangepaste tool-sandbox inschakelen (bèta)",
+    "features.enable_code_mode.help": "Bètafunctie. Schakelt de tool ha_manage_custom_tool in, waarmee AI-assistenten aangepaste Python-code kunnen maken, uitvoeren, opslaan en verwijderen in een veilige sandbox wanneer geen enkele ingebouwde tool het verzoek kan afhandelen. Code wordt uitgevoerd in een geïsoleerde interpreter zonder bestandsysteem of willekeurige netwerktoegang. Sandbox-code kan de HA REST API aanroepen (api_get/api_post), WebSocket-commando's verzenden (ws_send), bestaande MCP-tools aanroepen (call_tool) of een opgeslagen tool verwijderen (delete_saved_tool). Opgeslagen tools worden standaard opgeslagen in /data/saved_tools.json zodat ze herstarten van de app (add-on) overleven, en zijn zichtbaar voor elke client die verbinding kan maken. Zie docs/beta.md voor bekende beperkingen. Vereist herstart om van kracht te worden. VEREIST dat de hoofdschakelaar \"Bètafuncties inschakelen\" hierboven (en in de web-ui) aan staat — anders wordt deze sub-vlag tijdens runtime genegeerd, ongeacht de waarde hiervan.",
+    "features.enable_lite_docstrings.label": "Lite tool-docstrings inschakelen (bèta)",
+    "features.enable_lite_docstrings.help": "Bètafunctie. Vervangt de docstrings van een handvol zware ha-mcp tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) door kortere varianten die schema- en voorbeeldgegevens uitstellen naar de ha_get_skill_guide tool (of de skill:// resource ervan). WAARSCHUWING: dit vermindert het tokengebruik in rust, maar kan de LLM-prestaties verslechteren — de ingekorte beschrijvingen zijn afhankelijk van het feit dat de LLM daadwerkelijk de skill tool aanroept of de skill resource leest voor details, wat niet gegarandeerd is (sommige modellen zullen de extra tool-aanroep overslaan en uiteindelijk minder begeleiding hebben dan voorheen). Het beste te combineren met een client die MCP-resources ondersteunt of met enable_tool_search. Vereist een herstart om van kracht te worden. VEREIST dat de hoofdschakelaar \"Bètafuncties inschakelen\" hierboven (en in de web-UI) is ingeschakeld — anders wordt deze sub-vlag tijdens runtime genegeerd, ongeacht de waarde hier.",
+    "features.enable_dashboard_screenshot.label": "Dashboard-screenshotmodus inschakelen (bèta)",
+    "features.enable_dashboard_screenshot.help": "Bètafunctie — standaard uitgeschakeld. Voegt de tool ha_get_dashboard_screenshot toe plus include_screenshot / return_screenshot-opties op de dashboard get/set-tools, zodat AI-assistenten een of meer responsieve Lovelace-afbeeldingen kunnen inspecteren (bijv. om een dashboard te verifiëren dat ze zojuist hebben gemaakt). Ondersteunt stabiele benoemde weergaven, mobiele/tablet/desktop-batches en PNG/JPEG/WebP/BMP-uitvoer. Rendering wordt uitgevoerd in een afzonderlijke, optionele engine — balloob's \"Puppet\" App (add-on), headless Chromium — die je eenmalig installeert (voeg balloob's repository toe aan de App Store, installeer vervolgens \"Puppet\") en waaraan je een langlevend toegangstoken geeft; op Docker/Container-implementaties voer je die engine uit als een sidecar en stel je HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL in. Er wordt niets zwaars geïnstalleerd tenzij je dit inschakelt én de engine installeert. Vereist herstart om van kracht te worden. VEREIST dat de hoofdschakelaar \"Bètafuncties inschakelen\" hierboven (en in de web-ui) aan staat — anders wordt deze sub-vlag tijdens runtime genegeerd, ongeacht de waarde hiervan.",
+    "actions.restart_server": "Herstart HA-MCP Server",
+    "actions.restart_confirm": "HA-MCP nu herstarten? De pagina wordt automatisch opnieuw geladen zodra deze weer online is.",
+    "actions.view": "Bekijken",
+    "actions.diff": "Verschil",
+    "actions.restore": "Herstellen",
+    "actions.delete": "Verwijderen",
+    "actions.edit": "bewerken",
+    "actions.remove": "Verwijderen",
+    "actions.cancel": "Annuleren",
+    "actions.approve": "Goedkeuren",
+    "actions.deny": "Weigeren",
+    "actions.dismiss": "Sluiten",
+    "status.loaded": "Geladen",
+    "status.loading_ellipsis": "Laden…",
+    "status.loading_parentheses": "(laden…)",
+    "status.unsaved": "Niet-opgeslagen wijzigingen...",
+    "status.saving": "Opslaan…",
+    "status.saving_server_setting": "Serverinstelling opslaan...",
+    "status.saved": "Opgeslagen.",
+    "status.saved_restart": "Opgeslagen. Herstart vereist.",
+    "status.saved_llm_api": "Opgeslagen. LLM API-blootstelling wordt toegepast bij het volgende agentbericht.",
+    "status.saved_reload_failed": "Opgeslagen (herladen mislukt; vernieuw om te verifiëren).",
+    "status.nothing_editable": "Niets bewerkbaar.",
+    "status.stopping": "Stoppen...",
+    "status.stopped_offline": "Gestopt. Deze pagina gaat offline",
+    "status.stopped_connection": "Gestopt (verbinding verbroken)",
+    "status.restarting": "Herstarten…",
+    "status.waiting_addon": "Wachten tot de app (add-on) weer online is…",
+    "errors.javascript": "JS-fout: {message} @ {where}",
+    "errors.async": "Asynchrone fout: {message}",
+    "errors.network": "Netwerkfout: {message}",
+    "errors.network_endpoint": "Netwerkfout bij het bereiken van {endpoint}: {message}",
+    "errors.http_endpoint": "{endpoint} retourneerde HTTP {status} {detail}",
+    "errors.json_endpoint": "Kan {endpoint} antwoord niet parsen als JSON: {message}",
+    "errors.render": "Renderen mislukt: {message} (open browser devtools voor de stack)",
+    "errors.save_failed": "Opslaan mislukt",
+    "errors.save_failed_detail": "Opslaan mislukt: {message}",
+    "errors.save_failed_http": "Opslaan mislukt (HTTP {status})",
+    "errors.save_failed_non_json": "Opslaan mislukt (HTTP {status}, niet-JSON body)",
+    "errors.load_failed": "Laden mislukt: {status}",
+    "errors.stop_failed": "Stoppen mislukt",
+    "errors.restart_failed": "Herstarten mislukt",
+    "errors.failed_detail": "Mislukt: {detail}",
+    "errors.addon_not_back": "App (add-on) is niet meer online gekomen. Laad de pagina handmatig opnieuw.",
+    "errors.unparseable_suffix": " (antwoordbody onleesbaar)",
+    "common.operation_failed": "{operation} mislukt: {detail}",
+    "common.enabled": "ingeschakeld",
+    "common.disabled": "uitgeschakeld",
+    "common.env_locked": "omgevingsvergrendeld",
+    "common.minutes_short": "{count} min",
+    "common.bytes": "{count} bytes",
+    "common.none": "(geen)",
+    "notice.restart.addon": "⚠ Wijzigingen opgeslagen. Klik op \"App (add-on) herstarten\" om ze van kracht te laten worden. Uitgeschakelde tools worden bij de volgende opstart verwijderd van de MCP-toollijst. Vernieuw daarna de toollijst in je AI-client; het alleen herstarten van de app vernieuwt de gecachette lijst van de client niet.",
+    "notice.restart.embedded": "⚠ Wijzigingen opgeslagen. Klik op \"Herstart HA-MCP Server\" om de in-process integratie opnieuw te laden. Vernieuw vervolgens de MCP-toollijst in je AI-client.",
+    "notice.restart.sidecar": "⚠ Wijzigingen opgeslagen. Sluit je MCP-client volledig af en heropen deze om de wijzigingen van kracht te laten worden. Uitgeschakelde tools worden bij de volgende opstart uit de MCP-toollijst verwijderd.",
+    "notice.restart.standalone": "⚠ Wijzigingen opgeslagen. Herstart het ha-mcp proces en vernieuw vervolgens de MCP-toollijst in je AI-client.",
+    "server.sidecar.confirm_disable": "⚠ De instellingenserver PERMANENT uitschakelen?\n\nDit stopt de server en schrijft een marker die voorkomt dat deze opnieuw start. Om de toegang te herstellen, verwijder je ~/.ha-mcp/settings_ui_disabled en maak je HA_MCP_DISABLE_SETTINGS_UI ongedaan. Doorgaan?",
+    "tools.empty": "Geen tools gevonden. De sidecar leest ~/.ha-mcp/tool_metadata.json. Als deze ontbreekt of leeg is, herstart dan je MCP-client. Zie ~/.ha-mcp/sidecar.log voor details.",
+    "tools.group_count": "{enabled}/{total} ingeschakeld",
+    "tools.group_toggle_title": "Alle tools in deze groep in-/uitschakelen",
+    "tools.badges.mandatory": "verplicht",
+    "tools.badges.read_only": "alleen-lezen",
+    "tools.badges.writes": "schrijft",
+    "tools.badges.deletes": "verwijdert",
+    "tools.notes.gated_disabled": "Uitgeschakeld. Schakel {setting} in — de schakelaar van de tool voor het bewerken van beleid staat op het tabblad Toolbeveiligingsbeleid — en herstart vervolgens de app (add-on).",
+    "tools.notes.beta_disabled": "Bèta. Stel {setting} in in de configuratie van de dev-app (add-on) of de overeenkomstige omgevingsvariabele (zie docs/beta.md).",
+    "tools.notes.env_pinned": "Vastgezet door {variable}. Maak de omgevingsvariabele ongedaan om hier te bewerken.",
+    "tools.notes.bps_locked": "Vergrendeld zolang de strikte best-practices modus is ingeschakeld. Schakel die instelling eerst uit om deze tool uit te schakelen.",
+    "tools.notes.read_only_off": "Uit. Alleen-lezen modus is ingeschakeld; schrijftools zijn uitgeschakeld.",
+    "tools.notes.read_only_partial": "Alleen-lezen modus: schrijfbewerkingen van deze tool zijn geblokkeerd; leesbewerkingen blijven beschikbaar.",
+    "tools.llm_api.label": "LLM API",
+    "tools.llm_api.help": "Bied deze tool aan Home Assistant conversatie-agenten aan via de LLM API. Wordt toegepast bij het volgende agentbericht; geen herstart vereist.",
+    "tools.aria.llm_api": "{title} blootgesteld aan de conversatie-agent LLM API",
+    "tools.aria.enabled": "{title} ingeschakeld",
+    "tools.aria.pinned": "{title} vastgezet",
+    "tools.aria.security_gated": "{title} beveiligd",
+    "tools.states.enabled": "ingeschakeld",
+    "tools.states.pinned": "vastgezet",
+    "tools.states.security_gated": "beveiligd",
+    "tools.security.enable_first": "Schakel eerst Toolbeveiligingsbeleid in bij de serverinstellingen.",
+    "tools.summary.total": "{count} totaal",
+    "tools.summary.enabled": "{count} ingeschakeld",
+    "tools.summary.pinned": "{count} vastgezet",
+    "tools.summary.disabled": "{count} uitgeschakeld",
+    "tools.read_only.save_failed": "Wijziging van alleen-lezen modus is niet opgeslagen. De server heeft nog steeds de vorige waarde.",
+    "backup.fields.enable_auto_backup.label": "Auto-backup bewerkingen",
+    "backup.fields.enable_auto_backup.help": "Maak een momentopname vóór elke ingepakte schrijf- of destructieve tooloproep.",
+    "backup.fields.auto_backup_throttle_minutes.label": "Beperking (minuten)",
+    "backup.fields.auto_backup_throttle_minutes.help": "Beperking per entiteit. 0 = elke schrijfbewerking; N > 0 = maximaal één backup per N minuten. Bereik 0–1440.",
+    "backup.fields.auto_backup_retain_per_entity.label": "Behouden per entiteit",
+    "backup.fields.auto_backup_retain_per_entity.help": "Maximaal aantal momentopnamen per entiteit (1–10000). Oudere worden verwijderd.",
+    "backup.fields.auto_backup_dir.label": "Backupmap overschrijven",
+    "backup.fields.auto_backup_dir.help": "Laat leeg om de standaardmap te gebruiken; anders voer een absoluut pad in.",
+    "backup.fields.auto_backup_calendar_lookahead_days.label": "Agenda vooruitblik (dagen)",
+    "backup.fields.auto_backup_calendar_lookahead_days.help": "Hoe ver vooruit agenda-evenementen moeten worden opgevraagd voor momentopnamen vóór bewerking. Bereik 1–365.",
+    "backup.fields.enable_snapshot_delete.label": "Momentopname verwijdering toestaan",
+    "backup.fields.enable_snapshot_delete.help": "Sta ha_manage_backup toe om volledige HA-momentopnamen te verwijderen, terwijl geplande, nieuwste en te jonge momentopnamen beschermd blijven.",
+    "backup.fields.snapshot_delete_min_age_days.label": "Minimale leeftijd momentopname om te verwijderen (dagen)",
+    "backup.fields.snapshot_delete_min_age_days.help": "Een momentopname moet minstens zo oud zijn voordat deze wordt verwijderd. Bereik 0–365.",
+    "backup.origins.addon": "Gesynchroniseerd met Supervisor. Herstart vereist na opslaan.",
+    "backup.origins.file": "Lokaal opgeslagen; wordt onmiddellijk van kracht.",
+    "backup.origins.default": "Standaard gebruiken; eerste opslag creëert een lokaal overschrijvingsbestand.",
+    "backup.errors.load_settings": "Kon backupinstellingen niet laden.",
+    "backup.errors.unavailable": "Backupinstellingen niet beschikbaar.",
+    "backup.errors.load_list": "Fout bij laden backups",
+    "backup.errors.load_one": "Kon backup \"{name}\" niet laden: {message}",
+    "backup.errors.diff": "Kon backup \"{name}\" niet vergelijken: {message}",
+    "backup.errors.restore": "Herstel van \"{name}\" mislukt: {message}",
+    "backup.errors.restore_detail": "Herstel mislukt: {detail}",
+    "backup.errors.delete": "Verwijderen van \"{name}\" mislukt: {message}",
+    "backup.errors.delete_detail": "Verwijderen mislukt: {detail}",
+    "backup.errors.bulk_delete": "Bulkverwijdering mislukt: {detail}",
+    "backup.state.status": "Status",
+    "backup.state.throttle": "Beperking",
+    "backup.state.retain": "Behouden per entiteit",
+    "backup.state.directory": "Map",
+    "backup.state.total": "Totaal",
+    "backup.empty": "Nog geen backups. Schakel auto-backup in en bewerk een entiteit om er een te maken.",
+    "backup.modal.view": "Bekijken: {name}",
+    "backup.modal.diff": "Verschil: {name}",
+    "backup.identical": "(identiek)",
+    "backup.confirm.restore": "Herstel {name}?\n\nDit overschrijft de huidige entiteitsstatus. Er wordt eerst een veiligheidsbackup gemaakt.",
+    "backup.confirm.delete": "Verwijder {name}? Dit kan niet ongedaan worden gemaakt.",
+    "backup.restored": "Hersteld. Veiligheidsbackup: {name}",
+    "backup.bulk.prompt_days": "Verwijder backups ouder dan N dagen (laat leeg om alleen huidige filters te gebruiken):",
+    "backup.bulk.filter_required": "Stel ten minste één filter in (Domein, Entiteit, of leeftijd in dagen).",
+    "backup.bulk.confirm": "Alle backups verwijderen die overeenkomen met: {filters}?",
+    "backup.bulk.deleted": "{count} backup(s) verwijderd",
+    "filesystem.custom.title": "Aangepaste bestandssysteemmappen (geavanceerd)",
+    "filesystem.custom.help": "Extra paden (één per regel) die bestandstools mogen <strong>lezen en schrijven</strong>. Relatieve configuratiepaden en toegestane HAOS-sibling-volumes worden ondersteund. Elke invoer geeft toegang tot dat pad en alles daaronder; configuratie-gerelateerde bestandsnamen, zoals <code>sensor.yaml</code>, kunnen direct worden ingevoerd. Is direct van kracht.",
+    "filesystem.custom.blocked": "Altijd geblokkeerd: {paths}, padtraversal (<code>..</code>), en absolute paden buiten toegestane HAOS-volumes.",
+    "filesystem.custom.enable_first": "Schakel bètafuncties en bestandssysteemtools hierboven in om te bewerken.",
+    "filesystem.custom.unavailable": "Aangepaste mappen zijn momenteel niet beschikbaar.",
+    "filesystem.custom.save": "Mappen opslaan",
+    "filesystem.custom.saved_rejected": "Opgeslagen. Geweigerd (geblokkeerd of ongeldig): {paths}",
+    "origins.env_locked": "Ingesteld via omgevingsvariabele; maak deze ongedaan om hier te bewerken.",
+    "origins.addon_synced": "Gesynchroniseerd met het tabblad Configuratie van de app (add-on). Herstart vereist na opslaan.",
+    "origins.env_var_unset": "Ingesteld via omgevingsvariabele {variable}; maak deze ongedaan om hier te bewerken.",
+    "origins.beta_legacy_bridge": "Automatisch ingeschakeld in de verouderde modus van de app (add-on). Stel <code>enable_beta_features</code> expliciet in in Configuratie om de controle over te nemen. (env: {variable})",
+    "origins.addon_runtime": "Ingesteld door de runtime-omgeving van de app (add-on) beheerd door Supervisor; kan hier niet worden gewijzigd. (env: {variable})",
+    "origins.display_only": "Alleen-lezen. Aanpassen via omgevingsvariabele of app-instellingen (add-on).",
+    "features.errors.network": "Functievlaggen niet beschikbaar (netwerkfout bij het bereiken van /api/settings/features).",
+    "features.errors.http": "Functievlaggen niet beschikbaar (HTTP {status}).",
+    "features.errors.json": "Antwoord van functievlaggen was geen geldige JSON.",
+    "advanced.errors.network": "Geavanceerde instellingen niet beschikbaar (netwerkfout bij het bereiken van /api/settings/advanced).",
+    "advanced.errors.http": "Geavanceerde instellingen niet beschikbaar (HTTP {status}).",
+    "advanced.errors.json": "Antwoord van geavanceerde instellingen was geen geldige JSON.",
+    "advanced.sidecar.stdio_only": "Alleen beschikbaar in stdio-modus. Deze HTTP-server heeft geen instellingen-UI sidecar om vast te pinnen.",
+    "advanced.enable_dev_mode.confirm": "⚠ Ontwikkelaarsmodus inschakelen?\n\nNa herstart worden verborgen ontwikkelaarstools blootgesteld aan verbonden AI-agenten. Alleen inschakelen voor ontwikkeling en testen.",
+    "advanced.dev_tools_security_policy_access.confirm": "⚠ Ontwikkelaarstools beveiligingsbeleid laten wijzigen?\n\nTerwijl de ontwikkelaarsmodus is ingeschakeld, kunnen verbonden AI-agenten het beveiligingsbeleid van tools herschrijven, goedkeuringspoorten per tool toevoegen of verwijderen, en lopende goedkeuringen goedkeuren of weigeren — inclusief hun eigen afgeschermde oproepen. Alleen inschakelen tijdens het testen van beleid.",
+    "advanced.code_mode_saved_tools_path.addon_locked": "Vastgezet op <code>/data/saved_tools.json</code> in de app-modus (add-on) zodat opgeslagen tools updates overleven.",
+    "advanced.code_mode_saved_tools_path.blank_warning": "Indien leeg, worden aangepaste tools alleen in het geheugen bewaard en gaan ze verloren bij herstart.",
+    "policies.errors.conflict": "{operation} mislukt: beleid is gewijzigd in een ander tabblad of sessie. Herlaad en pas uw wijzigingen opnieuw toe.",
+    "policies.errors.load": "Kon beleid niet laden: {status}",
+    "policies.errors.reach_server": "Kon de server niet bereiken: {message}",
+    "policies.errors.corrupt_suffix": " (tool_policy.json lijkt beschadigd; bewerk of verwijder deze in de datamap van de server)",
+    "policies.errors.load_detail": "Laden van beleid mislukt: {detail}",
+    "policies.errors.update_tool": "Bijwerken van toolbeveiligingsbeleid mislukt: {message}",
+    "policies.errors.remove_rule": "Verwijderen van regel mislukt: {message}",
+    "policies.errors.master_save": "Wijziging van toolbeveiligingsbeleid is niet opgeslagen. De server heeft nog steeds de vorige waarde.",
+    "policies.errors.manage_tool_save": "Wijziging van beleidsbewerkingshulpmiddel is niet opgeslagen. De server heeft nog steeds de vorige waarde.",
+    "policies.operations.sync_gated": "Schakelaar voor afgeschermde toegang synchroniseren",
+    "policies.operations.save_rule": "Regel opslaan",
+    "policies.operations.save_global": "Globale instellingen opslaan",
+    "policies.predicate.invalid": "(ongeldig)",
+    "policies.operators.exists": "bestaat",
+    "policies.operators.exists_long": "is aanwezig (elke waarde)",
+    "policies.operators.eq": "is gelijk aan",
+    "policies.operators.neq": "is NIET gelijk aan",
+    "policies.operators.in": "is een van",
+    "policies.operators.not_in": "is NIET een van",
+    "policies.operators.contains": "bevat",
+    "policies.operators.regex": "komt overeen met regex",
+    "policies.operators.gt": "is groter dan",
+    "policies.operators.lt": "is kleiner dan",
+    "policies.card.no_conditions": "(geen voorwaarden, regel komt overeen met elke aanroep naar deze tool)",
+    "policies.card.always_row": "(altijd — schermt elke aanroep naar deze tool af)",
+    "policies.card.and_join": " EN ",
+    "policies.card.remove_title": "Verwijderen uit beleid",
+    "policies.card.conditions_intro": "Goedkeuring vereisen wanneer ENIGE voorwaarde overeenkomt (geen voorwaarden = altijd goedkeuring vereisen):",
+    "policies.card.add_condition": "+ Voorwaarde toevoegen",
+    "policies.card.argument": "Argument:",
+    "policies.card.argument_placeholder": "bijv. args.color_temp",
+    "policies.card.match_when": "Overeenkomen wanneer:",
+    "policies.card.value": "Waarde:",
+    "policies.card.save_condition": "Voorwaarde opslaan",
+    "policies.card.remember_for": "Goedkeuring onthouden voor:",
+    "policies.card.minutes_single": "minuten (0 = eenmalig)",
+    "policies.card.confirm_remove": "Verwijder \"{tool}\" uit het beveiligingsbeleid?",
+    "policies.editor.any_argument_title": "Match elk aanroepargument met deze voorwaarde.",
+    "policies.editor.any_argument": "(elk argument)",
+    "policies.editor.other_path": "(anders, typ een pad)",
+    "policies.editor.value_source_http": "Ophalen van waardebron mislukt (HTTP {status}); terugvallen op vrije tekst",
+    "policies.editor.value_source_error": "Ophalen van waardebron mislukt ({message}); terugvallen op vrije tekst",
+    "policies.editor.schema_http": "Ophalen van tool-schema mislukt (HTTP {status}); terugvallen op vrije tekst",
+    "policies.editor.schema_error": "Ophalen van tool-schema mislukt ({message}); terugvallen op vrije tekst",
+    "policies.editor.hint.exists": "Laat leeg om af te schermen op de aanwezigheid van het argument, ongeacht de waarde.",
+    "policies.editor.hint.list": "Kies één of meer waarden, of typ een JSON-lijst. Laat leeg om af te schermen op elke waarde.",
+    "policies.editor.hint.regex": "Een reguliere expressie om het argument mee te matchen.",
+    "policies.editor.hint.contains": "Een substring of lijstitem. Laat leeg om af te schermen op elke waarde.",
+    "policies.editor.hint.number": "Een getal om mee te vergelijken.",
+    "policies.editor.hint.equals": "De waarde waaraan het argument gelijk moet zijn. Laat leeg om af te schermen op elke waarde.",
+    "policies.editor.loading_choices": "Keuzes laden…",
+    "policies.editor.pick_value": "(kies een waarde)",
+    "policies.editor.placeholder.blank": "meestal leeg gelaten",
+    "policies.editor.validation.pick_one_or_more": "kies ten minste één waarde",
+    "policies.editor.validation.pick_value": "kies een waarde",
+    "policies.editor.validation.value_required": "waarde is vereist voor op={operator}",
+    "policies.editor.validation.empty_list": "lege lijst voor op={operator}",
+    "policies.editor.validation.argument_required": "argument is vereist",
+    "policies.pending.offline": "Contact met server verloren ({message}). Opnieuw proberen.",
+    "policies.pending.disabled": "Toolbeveiligingsbeleid is uitgeschakeld. Schakel dit in en herstart HA-MCP om filtering in te schakelen.",
+    "policies.pending.unavailable": "Live goedkeuringen niet beschikbaar. Controleer het HA-MCP-logboek.",
+    "policies.pending.expires": "Verloopt: {time}",
+    "policies.pending.already_decided": "Deze goedkeuring was al {decision}, mogelijk door een ander tabblad of een andere sessie.",
+    "policies.pending.decision.approved": "goedgekeurd",
+    "policies.pending.decision.denied": "geweigerd",
+    "policies.pending.invalid_token": "Dit goedkeuringstoken is niet langer geldig (reeds verbruikt of verlopen).",
+    "policies.pending.action_failed": "Goedkeuringsactie mislukt: {detail}",
+    "visibility.errors.reach_server": "Kon de server niet bereiken: {message}",
+    "visibility.errors.corrupt_suffix": " (entity_visibility.json lijkt beschadigd; bewerk of verwijder deze in de datamap van de server)",
+    "visibility.errors.load_detail": "Laden van zichtbaarheidsconfiguratie mislukt: {detail}",
+    "visibility.errors.conflict": "Configuratie is gewijzigd in een ander tabblad of sessie. Herlaad de pagina en pas uw wijzigingen opnieuw toe.",
+    "advanced.homeassistant_url.label": "Home Assistant URL",
+    "advanced.homeassistant_url.help": "Alleen-lezen. Instellen via HOMEASSISTANT_URL of beheerd door de app (add-on).",
+    "advanced.homeassistant_token.label": "Home Assistant token",
+    "advanced.homeassistant_token.help": "Alleen weergeven. Ingesteld via HOMEASSISTANT_TOKEN. Hier gemaskeerd voor de veiligheid.",
+    "advanced.timeout.label": "HA aanvraag time-out (s)",
+    "advanced.timeout.help": "HTTP-time-out per aanvraag. Bereik 1–600. Herstart vereist.",
+    "advanced.max_retries.label": "HA aanvraag max. nieuwe pogingen",
+    "advanced.max_retries.help": "Budget voor nieuwe pogingen per mislukte REST-aanroep. Bereik 0–20. Herstart vereist.",
+    "advanced.verify_ssl.label": "SSL-certificaten verifiëren",
+    "advanced.verify_ssl.help": "Schakel TLS-verificatie alleen uit op vertrouwde netwerken. Herstart vereist.",
+    "advanced.fuzzy_threshold.label": "Fuzzy-zoekdrempel",
+    "advanced.fuzzy_threshold.help": "Lagere waarden maken lossere entiteitsmatching mogelijk. Bereik 0–100.",
+    "advanced.automation_config_time_budget.label": "Tijdsbudget voor automatiseringsconfiguratie (s)",
+    "advanced.automation_config_time_budget.help": "Maximale tijd die diepe zoekopdracht besteedt aan het ophalen van automatiseringsconfiguraties. Bereik 1–600. Herstart vereist.",
+    "advanced.script_config_time_budget.label": "Tijdsbudget voor scriptconfiguratie (s)",
+    "advanced.script_config_time_budget.help": "Maximale tijd die diepe zoekopdracht besteedt aan het ophalen van scriptconfiguraties. Bereik 1–600. Herstart vereist.",
+    "advanced.scene_config_time_budget.label": "Tijdsbudget voor scèneconfiguratie (s)",
+    "advanced.scene_config_time_budget.help": "Maximale tijd die diepe zoekopdracht besteedt aan het ophalen van scèneconfiguraties. Bereik 1–600. Herstart vereist.",
+    "advanced.individual_config_timeout.label": "Time-out voor configuratie-ophalen per aanvraag (s)",
+    "advanced.individual_config_timeout.help": "Time-out voor elke automatisering/script/scène configuratie-ophalen. Bereik 1–600. Herstart vereist.",
+    "advanced.individual_fetch_batch_size.label": "Batchgrootte voor configuratie-ophalen",
+    "advanced.individual_fetch_batch_size.help": "Gelijktijdige configuratie-ophalingen per ID. Verlaag naar 1 op seriële HA-servers. Bereik 1–100. Herstart vereist.",
+    "advanced.backup_hint.label": "Back-up hintniveau",
+    "advanced.backup_hint.help": "Bepaalt hoe sterk de LLM wordt aangemoedigd om een volledige HA-snapshot te maken vóór risicovolle schrijfbewerkingen.",
+    "advanced.backup_hint.choices.strong": "Sterk",
+    "advanced.backup_hint.choices.normal": "Normaal",
+    "advanced.backup_hint.choices.weak": "Zwak",
+    "advanced.backup_hint.choices.auto": "Automatisch",
+    "advanced.dashboard_screenshot_engine_url.label": "Dashboard screenshot engine URL",
+    "advanced.dashboard_screenshot_engine_url.help": "Basis-URL van de screenshot engine. Laat leeg voor Supervisor auto-ontdekking. Wordt onmiddellijk toegepast.",
+    "advanced.enable_websocket.label": "WebSocket inschakelen",
+    "advanced.enable_websocket.help": "WebSocket statusbewaking. Uitschakelen valt terug op polling en degradeert veel tools. Herstart vereist.",
+    "advanced.enabled_tool_modules.label": "Ingeschakelde toolmodules",
+    "advanced.enabled_tool_modules.help": "Door komma's gescheiden modulenamen, of 'all'. Herstart vereist.",
+    "advanced.enable_dashboard_partial_tools.label": "Dashboard tools voor gedeeltelijke updates",
+    "advanced.enable_dashboard_partial_tools.help": "Token-efficiënte gedeeltelijke dashboardtools. Uitschakelen voor clients met programmatisch toolgebruik.",
+    "advanced.mcp_server_name.label": "MCP servernaam",
+    "advanced.mcp_server_name.help": "Gerapporteerd in de MCP-handshake. Herstart vereist.",
+    "advanced.mcp_server_version.label": "MCP serverversie",
+    "advanced.mcp_server_version.help": "Standaard de pakketversie. Overschrijven kan clients in verwarring brengen. Herstart vereist.",
+    "advanced.environment.label": "Omgeving",
+    "advanced.environment.help": "ontwikkeling of productie. Beïnvloedt de uitgebreidheid van logboekregistratie. Herstart vereist.",
+    "advanced.log_level.label": "Logniveau",
+    "advanced.log_level.help": "DEBUG/INFO/WARNING/ERROR/CRITICAL. Herstart vereist.",
+    "advanced.debug.label": "Foutopsporingsmodus",
+    "advanced.debug.help": "Uitgebreide logboekregistratie van verzoeken. Kan gevoelige gegevens blootleggen. Herstart vereist.",
+    "advanced.code_mode_max_duration.label": "Code-modus max. duur (s)",
+    "advanced.code_mode_max_duration.help": "Real-time budget per sandbox-uitvoering. Bereik 1–300. Herstart vereist.",
+    "advanced.code_mode_max_memory.label": "Code-modus max. geheugen (bytes)",
+    "advanced.code_mode_max_memory.help": "Geheugenlimiet per sandbox-uitvoering. Bereik 1–256 MB. Herstart vereist.",
+    "advanced.code_mode_max_recursion.label": "Code-modus max. recursie",
+    "advanced.code_mode_max_recursion.help": "Limiet voor recursiediepte per sandbox-uitvoering. Herstart vereist.",
+    "advanced.code_mode_max_invocations.label": "Code-modus max. aanroepen",
+    "advanced.code_mode_max_invocations.help": "API/tool-aanroeplimiet per sandbox-uitvoering. Herstart vereist.",
+    "advanced.code_mode_saved_tools_path.label": "Pad voor opgeslagen tools",
+    "advanced.code_mode_saved_tools_path.help": "JSON-bestand gebruikt om aangepaste tools te behouden na herstarts. Herstart vereist.",
+    "advanced.extra_yaml_write_keys.label": "Extra YAML-schrijfsleutels",
+    "advanced.extra_yaml_write_keys.help": "Door komma's gescheiden top-level sleutels die ha_config_set_yaml kan schrijven naast de ingebouwde, voor YAML-first integraties op deze installatie (bijv. alert2). Sleutels die de eigen vertrouwensgrens van Home Assistant herdefiniëren, kunnen nooit worden toegevoegd en worden genegeerd. Vereist aangepaste component 1.2.4 of nieuwer.",
+    "advanced.sidecar_pin_port.label": "Instellingen UI sidecar-poort",
+    "advanced.sidecar_pin_port.help": "0 kiest een vrije poort bij de eerste start en behoudt deze voor latere herstarts; 1024–65535 pint een voorkeurspoort (valt terug op een vrije als deze bezet is). Herstart vereist.",
+    "advanced.enable_dev_mode.label": "Ontwikkelaarsmodus",
+    "advanced.enable_dev_mode.help": "⚠ Registreert verborgen tools die instellingen kunnen wijzigen en de draaiende server kunnen vervangen. Alleen voor ontwikkeling en testen. Herstart vereist.",
+    "advanced.dev_tools_security_policy_access.label": "Toegang tot beveiligingsbeleid ontwikkelaarstools",
+    "advanced.dev_tools_security_policy_access.help": "⚠ Terwijl de ontwikkelaarsmodus is ingeschakeld, laten de ontwikkelaarstools het beveiligingsbeleid van tools herschrijven, per-tool goedkeuringspoorten toevoegen of verwijderen, en openstaande goedkeuringen namens jou goedkeuren of weigeren — een AI-agent kan zijn eigen afgeschermde oproepen accepteren. Alleen voor beleidstesten. Wordt van kracht zonder herstart.",
+    "addon.backup_hint.name": "Suggestieniveau voor volledige HA-snapshot (LLM-gericht)",
+    "addon.backup_hint.description": "Stem de formulering af van de hint die de LLM ziet in de\nbeschrijving van de tool `ha_manage_backup(scope='snapshot')` voor wanneer een\nvolledige Home Assistant tarball-backup moet worden voorgesteld vóór risicovolle bewerkingen\n(bijv. massale apparaatverwijderingen). Beïnvloedt ALLEEN deze ene LLM-gerichte prompts\nzin.\n\nVoor automatische snapshots per bewerking van automatiseringen / scripts / helpers /\nenz., gebruik de afzonderlijke schakelaar **Automatische back-up van bewerkingen inschakelen** hieronder.",
+    "addon.secret_path.name": "Overschrijving van geheim pad",
+    "addon.secret_path.description": "Optioneel aangepast HTTP-pad voor de MCP-server. Laat leeg om het automatisch gegenereerde veilige pad te gebruiken.\n",
+    "addon.enable_security_policy_tool.name": "Laat AI-agenten het beveiligingsbeleid van tools bewerken",
+    "addon.enable_security_policy_tool.description": "Registreert de ha_manage_security_policy tool, waarmee verbonden AI-agenten het beveiligingsbeleid van tools kunnen lezen en herschrijven — inclusief het verwijderen van goedkeuringspoorten. Standaard uitgeschakeld. Onafhankelijk van de optie 'Tool Security Policies' hierboven: dit bepaalt wie de regels kan bewerken, niet of ze worden afgedwongen. De tool kan openstaande goedkeuringen niet zien of beslissen. Om een mens in de lus te houden, sluit de tool af voordat je deze inschakelt: schakel \"security gated\" in voor 'Manage Security Policy' op het tabblad 'Tools' van de web-UI. Vereist herstart om van kracht te worden.",
+    "addon.enable_auto_backup.name": "Automatische back-up van bewerkingen inschakelen",
+    "addon.enable_auto_backup.description": "Maakt een per-entiteit momentopname vóór elke omwikkelde schrijf-/destructieve MCP-toolaanroep (automatisering, script, scène, helper, dashboard, dashboardbron, label, categorie, groep, zone, gebied, kalender, todo, entiteit, apparaat, integratie en gerelateerde verwijder-/wis-tools). De auto-back-up beperking bepaalt hoe vaak dat gebeurt: 0 (standaard) maakt een momentopname bij elke dergelijke aanroep, N>0 maximaal één momentopname per N minuten per entiteit. Momentopnamen worden opgeslagen als YAML-bestanden onder /data/ha_mcp_backups/ (overschrijven via HAMCP_BACKUP_DIR) en kunnen worden weergegeven, hersteld of verwijderd via het tabblad Back-ups in de webinstellingen-UI of via ha_manage_backup(scope='edits', ...). Voor die domeinen is de momentopname 'best-effort' — een mislukking logt een WAARSCHUWING en de schrijfbewerking gaat door. De bestand- en ruwe-YAML-tools zijn de uitzondering: ha_write_file, ha_delete_file en ha_config_set_yaml behandelen de momentopname als een voorwaarde, dus een schrijfbewerking via deze tools wordt geweigerd wanneer dit uit staat, en een mislukte momentopname blokkeert deze. Standaard ingeschakeld; uitschakelen annuleert de 'best-effort' momentopnamen en schakelt de bestand- en ruwe-YAML-tools hiermee uit. Vereist een herstart om van kracht te worden.",
+    "addon.auto_backup_throttle_minutes.name": "Automatische back-up vertraging (minuten)",
+    "addon.auto_backup_throttle_minutes.description": "Vertragingsvenster per entiteit. 0 (standaard) maakt een snapshot bij elke omwikkelde schrijfbewerking. N>0 maakt maximaal één snapshot per N minuten per entiteit. Bereik 0–1440.",
+    "addon.auto_backup_retain_per_entity.name": "Automatische back-up retentie (per entiteit)",
+    "addon.auto_backup_retain_per_entity.description": "Maximaal aantal snapshots per entiteit. Oudere snapshots die deze limiet overschrijden, worden verwijderd bij elke succesvolle opname. Standaard 100, bereik 1–10000.",
+    "addon.enable_snapshot_delete.name": "Snapshotverwijdering toestaan",
+    "addon.enable_snapshot_delete.description": "Laat ha_manage_backup volledige HA snapshot tarballs verwijderen (scope='snapshot', action='delete'). Standaard uitgeschakeld — een snapshot kan het laatste herstelpunt zijn na een foutieve wijziging, dus een mens moet hier expliciet toestemming geven. Zelfs wanneer ingeschakeld, blijven geplande back-ups, de nieuwste resterende snapshot en alles wat jonger is dan de onderstaande leeftijdsgrens beschermd.",
+    "addon.snapshot_delete_min_age_days.name": "Minimale snapshotleeftijd om te verwijderen (dagen)",
+    "addon.snapshot_delete_min_age_days.description": "Een snapshot moet minstens zo oud zijn voordat het kan worden verwijderd. Bereik 0–365; 0 schakelt de ondergrens uit (de nieuwste-snapshot en geplande-back-up beschermingen blijven van toepassing). Standaard 7.",
+    "addon.disabled_tools.name": "Uitgeschakelde tools (komma-gescheiden)",
+    "addon.disabled_tools.description": "Tools die hier worden vermeld, zijn geforceerd uitgeschakeld en vergrendeld in de webinstellingen-UI (tabblad 'Tools') — ze kunnen daar niet opnieuw worden ingeschakeld zonder eerst deze optie ongedaan te maken. Een kleine set verplichte tools (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) kan niet worden uitgeschakeld en blijft actief, zelfs als ze hier worden vermeld. ha_get_skill_guide kan alleen worden uitgeschakeld als de strikte best-practices-modus (enable_strict_mandatory_bps) is uitgeschakeld. Door komma's gescheiden toolnamen (bijv. ha_call_event,ha_eval_template).",
+    "addon.pinned_tools.name": "Vastgezette tools (komma-gescheiden)",
+    "addon.pinned_tools.description": "Tools die hier worden vermeld, zijn vastgezet — ze verschijnen bovenaan het tabblad 'Tools' en kunnen niet worden losgemaakt vanuit de webinstellingen-UI zonder eerst deze optie ongedaan te maken. Handig in combinatie met Tool Search. Door komma's gescheiden toolnamen.",
+    "addon.verify_ssl.name": "TLS-certificaat verifiëren",
+    "addon.verify_ssl.description": "Verifieer het TLS-certificaat van de Home Assistant-server. De app (add-on) maakt verbinding via de Supervisor-proxy, dus dit heeft normaal gesproken geen effect en moet ingeschakeld blijven. Schakel dit alleen uit als je de app (add-on) zo hebt geconfigureerd dat deze via een openbare HTTPS-hostnaam met een zelfondertekend certificaat of een niet-overeenkomende hostnaam met HA communiceert. Uitschakelen verzwakt de transportbeveiliging — laat ingeschakeld tenzij je zeker weet dat je het nodig hebt. Vereist een herstart om van kracht te worden.",
+    "addon_stable.enable_tool_search.description": "Vervang de volledige toolcatalogus door zoekgebaseerde ontdekking. Vermindert inactieve context met ongeveer 90%, tot ongeveer 5K tokens. ⚠️ Schakel dit NIET in bij clients met een ingebouwde toolzoekfunctie / uitgestelde tools (claude.ai, Claude Desktop, Claude Code) — de twee zoeklagen conflicteren en de ingebouwde toolzoekfunctie van de client heeft daar de voorkeur; laat dit uitgeschakeld. Of tools worden uitgesteld hangt af van je client- en modelcombinatie: gebruik dit wanneer je opstelling de volledige catalogus vooraf laadt — modellen zonder native uitgestelde tools (bijv. Gemini, OpenAI-compatibele lokale modellen, Claude Haiku), clients die alle toolschema's inline opnemen ongeacht het model (bijv. GitHub Copilot CLI), of kleinere contextvensters. Sommige Codex-modellen en ChatGPT bevatten ook uitgestelde tools — controleer je client/model direct om de functies te bevestigen zodat je dit niet onnodig ingeschakeld laat. Tools worden gevonden via ha_search_tools en uitgevoerd via gecategoriseerde proxy's (lezen/schrijven/verwijderen). Vereist een herstart van de app (add-on) om van kracht te worden — maak daarna opnieuw verbinding of vernieuw de MCP-server in je AI-client zodat deze de toollijst opnieuw laadt. Alleen de app (add-on) herstarten vernieuwt de gecached toollijst van een client NIET; dit is van toepassing na het wijzigen van een instelling hier."
+  },
+  "tools": {
+    "ha_bulk_control": {
+      "title": "Bulkbediening",
+      "description": "Beheer expliciete bewerkingen of één deterministische structurele bulkactie."
+    },
+    "ha_call_event": {
+      "title": "Roep Gebeurtenis aan",
+      "description": "Voer een aangepaste gebeurtenis uit op de Home Assistant-gebeurtenisbus."
+    },
+    "ha_call_service": {
+      "title": "Roep Service aan",
+      "description": "Voer Home Assistant-services uit om entiteiten te bedienen en automatiseringen te activeren."
+    },
+    "ha_config_delete_dashboard": {
+      "title": "Verwijder Dashboard",
+      "description": "Verwijder een dashboard in opslagmodus volledig."
+    },
+    "ha_config_delete_dashboard_resource": {
+      "title": "Verwijder Dashboardbron",
+      "description": "Verwijder een dashboardbron."
+    },
+    "ha_config_get_automation": {
+      "title": "Haal Automatisering Config op",
+      "description": "Haal de Home Assistant-automatiseringsconfiguratie op."
+    },
+    "ha_config_get_calendar_events": {
+      "title": "Haal Kalendergebeurtenissen op",
+      "description": "Haal kalendergebeurtenissen op van een kalenderentiteit."
+    },
+    "ha_config_get_category": {
+      "title": "Haal Categorie op",
+      "description": "Haal categorie-informatie op - lijst alle categorieën voor een bereik of haal een specifieke op via ID."
+    },
+    "ha_config_get_dashboard": {
+      "title": "Haal Dashboard op",
+      "description": "Haal dashboardinformatie op - lijst alle dashboards, haal configuratie op, of zoek naar kaarten."
+    },
+    "ha_config_get_label": {
+      "title": "Haal Label op",
+      "description": "Haal labelinformatie op - lijst alle labels of haal een specifieke op via ID."
+    },
+    "ha_config_get_scene": {
+      "title": "Haal Scène Config op",
+      "description": "Haal de Home Assistant-scèneconfiguratie op."
+    },
+    "ha_config_get_script": {
+      "title": "Haal Script Config op",
+      "description": "Haal de Home Assistant-scriptconfiguratie op."
+    },
+    "ha_config_get_yaml": {
+      "title": "Lees YAML Config Fragment",
+      "description": "Lees het YAML-fragment onder een sleutel in een configuratiebestand, of vind welk bestand het definieert."
+    },
+    "ha_config_list_dashboard_resources": {
+      "title": "Lijst Dashboardbronnen",
+      "description": "Lijst Lovelace-dashboardbronnen (aangepaste kaarten, thema's, CSS/JS)."
+    },
+    "ha_config_list_groups": {
+      "title": "Lijst Groepen",
+      "description": "Lijst Home Assistant-entiteitsgroepen met hun lid-entiteiten."
+    },
+    "ha_config_list_helpers": {
+      "title": "Lijst Helpers",
+      "description": "Lijst Home Assistant-helpers van een specifiek type met hun configuraties."
+    },
+    "ha_config_remove_automation": {
+      "title": "Verwijder Automatisering",
+      "description": "Verwijder een Home Assistant-automatisering."
+    },
+    "ha_config_remove_calendar_event": {
+      "title": "Verwijder Kalendergebeurtenis",
+      "description": "Verwijder een gebeurtenis uit een kalender."
+    },
+    "ha_config_remove_category": {
+      "title": "Verwijder Categorie",
+      "description": "Verwijder een Home Assistant-categorie."
+    },
+    "ha_config_remove_group": {
+      "title": "Verwijder Groep",
+      "description": "Verwijder een service-gebaseerde Home Assistant-entiteitsgroep via de group.remove-service."
+    },
+    "ha_config_remove_label": {
+      "title": "Verwijder Label",
+      "description": "Verwijder een Home Assistant-label."
+    },
+    "ha_config_remove_scene": {
+      "title": "Verwijder Scène",
+      "description": "Verwijder een Home Assistant-scène."
+    },
+    "ha_config_remove_script": {
+      "title": "Verwijder Script",
+      "description": "Verwijder een Home Assistant-script."
+    },
+    "ha_config_set_automation": {
+      "title": "Maak of Werk Automatisering bij",
+      "description": "Maak of werk een Home Assistant-automatisering bij."
+    },
+    "ha_config_set_calendar_event": {
+      "title": "Maak of Werk Kalendergebeurtenis bij",
+      "description": "Maak een nieuwe gebeurtenis in een kalender."
+    },
+    "ha_config_set_category": {
+      "title": "Maak of Werk Categorie bij",
+      "description": "Maak of werk een Home Assistant-categorie bij."
+    },
+    "ha_config_set_dashboard": {
+      "title": "Maak of Werk Dashboard bij",
+      "description": "Maak of werk een Home Assistant-dashboard bij."
+    },
+    "ha_config_set_dashboard_resource": {
+      "title": "Stel Dashboardbron in",
+      "description": "Maak of werk een dashboardbron bij (inline code of externe URL)."
+    },
+    "ha_config_set_group": {
+      "title": "Maak of Werk Groep bij",
+      "description": "Maak of werk een service-gebaseerde Home Assistant-entiteitsgroep bij via de group.set-service."
+    },
+    "ha_config_set_helper": {
+      "title": "Maak of Werk Helper bij",
+      "description": "Maak of werk Home Assistant-helperentiteiten en configuratiesubitems bij"
+    },
+    "ha_config_set_label": {
+      "title": "Maak of Werk Label bij",
+      "description": "Maak of werk een Home Assistant-label bij."
+    },
+    "ha_config_set_scene": {
+      "title": "Maak of Werk Scène bij",
+      "description": "Maak of werk een Home Assistant-scène bij."
+    },
+    "ha_config_set_script": {
+      "title": "Maak of Werk Script bij",
+      "description": "Maak of werk een Home Assistant-script bij."
+    },
+    "ha_config_set_yaml": {
+      "title": "Stel YAML Config in",
+      "description": "Voeg top-level sleutels toe, vervang ze of verwijder ze in configuration.yaml of pakketbestanden."
+    },
+    "ha_delete_file": {
+      "title": "Verwijder Bestand",
+      "description": "Verwijder een bestand uit toegestane mappen."
+    },
+    "ha_dev_manage_server": {
+      "title": "Beheer MCP Server (dev)",
+      "description": "Beheer de draaiende ha-mcp server zelf (ontwikkelaarsmodus)."
+    },
+    "ha_dev_manage_settings": {
+      "title": "Beheer Serverinstellingen (dev)",
+      "description": "Beheer ha-mcp serverinstellingen en de Tools/Policies/Backups-oppervlakken (ontwikkelaarsmodus)."
+    },
+    "ha_eval_template": {
+      "title": "Evalueer Sjabloon",
+      "description": "Evalueer Jinja2-sjablonen met behulp van de sjabloonengine van Home Assistant."
+    },
+    "ha_get_app": {
+      "title": "Apps ophalen (add-ons)",
+      "description": "Haal Home Assistant-apps op (voorheen bekend als add-ons, en deze tool als ha_get_addon) - vermeld geïnstalleerde, beschikbare of krijg d"
+    },
+    "ha_get_automation_traces": {
+      "title": "Haal Automatiseringstraceringen op",
+      "description": "Haal uitvoeringstraceringen op voor automatiseringen en scripts om problemen op te sporen."
+    },
+    "ha_get_blueprint": {
+      "title": "Haal Blueprint op",
+      "description": "Haal blueprintinformatie op - lijst alle blueprints of haal details op voor een specifieke."
+    },
+    "ha_get_camera_image": {
+      "title": "Haal Camerabeeld op",
+      "description": "Haal een momentopname van een afbeelding op van een Home Assistant-camera-entiteit."
+    },
+    "ha_get_dashboard_screenshot": {
+      "title": "Haal Dashboard Screenshot op",
+      "description": "Haal gerenderde afbeeldingen op van een Home Assistant Lovelace-dashboardweergave."
+    },
+    "ha_get_device": {
+      "title": "Haal Apparaat op (incl. Zigbee/ZHA/Z2M, Z-Wave en Matter)",
+      "description": "Haal apparaatinformatie op met paginering, inclusief Zigbee (ZHA/Z2M) en Z-Wave JS-apparaten."
+    },
+    "ha_get_entity": {
+      "title": "Haal Entiteit op",
+      "description": "Haal entiteitsregisterinformatie op voor één of meer entiteiten."
+    },
+    "ha_get_entity_exposure": {
+      "title": "Haal Entiteitsblootstelling op",
+      "description": "Haal entiteitsblootstellingsinstellingen op - lijst alle of haal instellingen op voor een specifieke entiteit."
+    },
+    "ha_get_hacs_info": {
+      "title": "Haal HACS Info op",
+      "description": "Haal HACS (Home Assistant Community Store) gegevens op — zoek in de winkel of haal repositorydetails op."
+    },
+    "ha_get_history": {
+      "title": "Haal Entiteitsgeschiedenis of Statistieken op",
+      "description": "Haal historische gegevens op van de recorder van Home Assistant."
+    },
+    "ha_get_integration": {
+      "title": "Haal Integratie op",
+      "description": "Haal integratie-informatie (configuratie-item) op met paginering."
+    },
+    "ha_get_logs": {
+      "title": "Haal Logs op",
+      "description": "Haal Home Assistant-logs op uit verschillende bronnen."
+    },
+    "ha_get_operation_status": {
+      "title": "Haal Operatiestatus op",
+      "description": "Haal de status op van één of meer apparaatbewerkingen met real-time WebSocket-verificatie."
+    },
+    "ha_get_overview": {
+      "title": "Haal Systeemoverzicht op",
+      "description": "Haal AI-vriendelijk systeemoverzicht op met intelligente categorisatie."
+    },
+    "ha_get_state": {
+      "title": "Haal Entiteitsstatus op",
+      "description": "Haal de huidige status, toestand en attributen op van één of meer entiteiten (lampen, schakelaars, sensoren, klimaat, covers, sloten, fa"
+    },
+    "ha_get_system_health": {
+      "title": "Haal Systeemgezondheid op (incl. ZHA/Z-Wave/integratiediagnostiek)",
+      "description": "Haal Home Assistant-systeemgezondheid op, inclusief Zigbee (ZHA), Z-Wave JS en diagnostische dumps per integratie."
+    },
+    "ha_get_todo": {
+      "title": "Haal Taken op",
+      "description": "Haal takenlijsten of items op - lijst alle takenlijsten of haal items op uit een specifieke lijst."
+    },
+    "ha_get_zone": {
+      "title": "Haal Zone op",
+      "description": "Haal zone-informatie op - lijst alle zones of haal details op voor een specifieke."
+    },
+    "ha_import_blueprint": {
+      "title": "Importeer Blueprint",
+      "description": "Importeer een blueprint van een URL."
+    },
+    "ha_list_files": {
+      "title": "Lijst Bestanden",
+      "description": "Lijst bestanden in een map binnen de Home Assistant-configuratie."
+    },
+    "ha_list_floors_areas": {
+      "title": "Lijst Verdiepingen en Gebieden",
+      "description": "Lijst verdiepingen gesorteerd op niveau oplopend, elk met hun toegewezen geneste gebieden, plus gebieden zonder verdieping."
+    },
+    "ha_list_services": {
+      "title": "Lijst Beschikbare Services",
+      "description": "Lijst beschikbare Home Assistant-services met optionele paginering en detailcontrole."
+    },
+    "ha_manage_app": {
+      "title": "App beheren (add-on)",
+      "description": "Beheer een Home Assistant-app (voorheen bekend als een add-on, en deze tool als ha_manage_addon) — werk de configuratie o"
+    },
+    "ha_manage_backup": {
+      "title": "Back-ups Beheren",
+      "description": "Polymorfe back-uptool. Zie de toolbeschrijving voor de routeringsmatrix."
+    },
+    "ha_manage_custom_tool": {
+      "title": "Aangepaste Tool",
+      "description": "Maak en voer een aangepaste tool uit in een sandbox, of beheer opgeslagen aangepaste tools (codemodus)."
+    },
+    "ha_manage_energy_prefs": {
+      "title": "Voorkeuren Energie Dashboard Beheren",
+      "description": "Beheer de voorkeuren van het Home Assistant Energie Dashboard."
+    },
+    "ha_manage_hacs": {
+      "title": "HACS Beheren",
+      "description": "Beheer HACS (Home Assistant Community Store) — installeer/update, verwijder, voeg aangepaste repositories toe, of vernieuw repository in"
+    },
+    "ha_manage_pipeline": {
+      "title": "Assist Pijplijn Beheren",
+      "description": "Beheer Home Assistant Assist pijplijnen."
+    },
+    "ha_manage_radio": {
+      "title": "Radio's Beheren (Z-Wave / Zigbee / Matter / Thread)",
+      "description": "Beheer Home Assistant radio's — Z-Wave, Zigbee, Matter en Thread."
+    },
+    "ha_manage_security_policy": {
+      "title": "Beveiligingsbeleid Beheren",
+      "description": "Lees en herschrijf het beveiligingsbeleid van de tool dat risicovolle toolaanroepen achter gebruikersgoedkeuring plaatst."
+    },
+    "ha_manage_theme": {
+      "title": "Frontend Thema's Beheren",
+      "description": "Beheer Home Assistant frontend thema's."
+    },
+    "ha_manage_updates": {
+      "title": "Updates Beheren",
+      "description": "Beheer Home Assistant updates — lijst, lees details, installeer in batch, sla over, of herstel overgeslagen."
+    },
+    "ha_read_file": {
+      "title": "Bestand Lezen",
+      "description": "Lees een bestand uit de Home Assistant configuratiemap."
+    },
+    "ha_reload_core": {
+      "title": "Kerncomponenten Herladen",
+      "description": "Herlaad de Home Assistant configuratie zonder volledige herstart."
+    },
+    "ha_remove_area_or_floor": {
+      "title": "Gebied of Verdieping Verwijderen",
+      "description": "Verwijder een Home Assistant gebied of verdieping."
+    },
+    "ha_remove_device": {
+      "title": "Apparaat Verwijderen",
+      "description": "Verwijder een verweesd apparaat uit het Home Assistant apparaatregister."
+    },
+    "ha_remove_entity": {
+      "title": "Entiteit Verwijderen",
+      "description": "Verwijder één of meer entiteiten uit het Home Assistant entiteitregister."
+    },
+    "ha_remove_helpers_integrations": {
+      "title": "Hulp of Integratie Verwijderen",
+      "description": "Verwijder een Home Assistant hulp of integratie configuratie-item."
+    },
+    "ha_remove_todo_item": {
+      "title": "To-do Item Verwijderen",
+      "description": "Verwijder een item uit een Home Assistant to-do lijst."
+    },
+    "ha_remove_zone": {
+      "title": "Zone Verwijderen",
+      "description": "Verwijder een Home Assistant zone."
+    },
+    "ha_report_issue": {
+      "title": "Probleem of Feedback Rapporteren",
+      "description": "Krijg diagnostische informatie en sjablonen voor het indienen van probleemrapporten of feedback."
+    },
+    "ha_restart": {
+      "title": "Home Assistant Herstarten",
+      "description": "Herstart Home Assistant."
+    },
+    "ha_search": {
+      "title": "Zoeken",
+      "description": "Zoek naar entiteiten (lampen, sensoren, schakelaars, klimaat, etc.) op naam, domein of gebied — EN binnen automatisering/script/s"
+    },
+    "ha_set_area_or_floor": {
+      "title": "Gebied of Verdieping Aanmaken of Bijwerken",
+      "description": "Maak een Home Assistant gebied of verdieping aan of werk deze bij."
+    },
+    "ha_set_device": {
+      "title": "Apparaat Instellen",
+      "description": "Werk apparaateigenschappen bij, zoals naam, gebied, uitgeschakelde status of labels."
+    },
+    "ha_set_entity": {
+      "title": "Entiteit Instellen",
+      "description": "Werk entiteitseigenschappen bij in het entiteitregister."
+    },
+    "ha_set_integration": {
+      "title": "Integratie Instellen",
+      "description": "Beheer een integratie (configuratie-item): inschakelen/uitschakelen, toevoegen of opties bijwerken."
+    },
+    "ha_set_todo_item": {
+      "title": "To-do Item Instellen",
+      "description": "Maak een to-do item aan of werk deze bij in Home Assistant."
+    },
+    "ha_set_zone": {
+      "title": "Zone Instellen",
+      "description": "Maak een Home Assistant zone aan of werk deze bij."
+    },
+    "ha_write_file": {
+      "title": "Bestand Schrijven",
+      "description": "Schrijf een bestand naar toegestane mappen in de Home Assistant configuratie."
+    }
+  },
+  "tool_groups": {
+    "Apps (add-ons)": "Apps (add-ons)",
+    "Areas & Floors": "Gebieden & Verdiepingen",
+    "Assist": "Assist",
+    "Automations": "Automatiseringen",
+    "Blueprints": "Blueprints",
+    "Calendar": "Agenda",
+    "Camera": "Camera",
+    "Dashboard": "Dashboard",
+    "Dashboards": "Dashboards",
+    "Developer": "Ontwikkelaar",
+    "Device Registry": "Apparaatregister",
+    "Energy": "Energie",
+    "Entity Registry": "Entiteitregister",
+    "Files": "Bestanden",
+    "Groups": "Groepen",
+    "HACS": "HACS",
+    "Helper Entities": "Hulpentiteiten",
+    "History & Statistics": "Geschiedenis & Statistieken",
+    "Integrations": "Integraties",
+    "Labels & Categories": "Labels & Categorieën",
+    "Matter": "Matter",
+    "Scenes": "Scènes",
+    "Scripts": "Scripts",
+    "Search & Discovery": "Zoeken & Ontdekken",
+    "Service & Device Control": "Service & Apparaatbeheer",
+    "System": "Systeem",
+    "Todo Lists": "To-do Lijsten",
+    "Utilities": "Hulpprogramma's",
+    "Zones": "Zones"
+  }
+}

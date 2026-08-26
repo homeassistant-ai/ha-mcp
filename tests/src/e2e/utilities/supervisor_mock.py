@@ -1,31 +1,34 @@
 """Mock Supervisor REST sidecar for E2E tests.
 
-Stands in for ``http://supervisor`` so the three direct-Supervisor httpx call
-sites — ``rest_client._supervisor_logs_get``, ``tools_bug_report._fetch_addon_logs``,
-``settings_ui._restart_addon`` — can be exercised end-to-end. Production runs
-against a real Supervisor; this mock makes the contract testable in CI without
-needing HAOS / Supervised infrastructure.
+Stands in for ``http://supervisor`` so the log and self-restart subset of
+direct-Supervisor httpx calls can be exercised end-to-end. Production runs
+against a real Supervisor; this mock makes that subset testable in CI without
+HAOS / Supervised infrastructure. App (add-on) management calls from ``tools_addons``
+use additional ``/addons`` and ``/store`` endpoints covered by unit tests
+and the real HAOS lanes.
 
 Implementation: stdlib ``http.server.ThreadingHTTPServer`` on a daemon thread,
 bound to ``127.0.0.1:0``. The fixture sets two env vars the production code
 already keys off of:
 
-- ``SUPERVISOR_TOKEN`` — flips ``is_running_in_addon()`` on
-- ``SUPERVISOR_BASE_URL`` — points the three call sites at the mock
+- ``SUPERVISOR_TOKEN`` — satisfies the token half of
+  ``is_running_in_addon()``; this external-only fixture is not embedded
+- ``SUPERVISOR_BASE_URL`` — points the covered call sites at the mock
 
 Stdlib instead of aiohttp/starlette so no new dev dep is needed for what is
 ultimately a tiny canned-response server. Runs in a thread so it doesn't share
 the test event loop and can't deadlock against in-process MCP server work.
 
-Endpoints implemented (only what the code actually calls):
+Endpoints implemented for this fixture:
 
 - ``GET /{service}/logs`` for service ∈ {supervisor, host, core, dns, audio,
   cli, multicast, observer} — the eight Supervisor-managed system services
-- ``GET /addons/{slug}/logs`` and ``GET /addons/self/logs`` — addon container logs
-- ``POST /addons/self/restart`` — addon self-restart (Supervisor envelope reply)
+- ``GET /addons/{slug}/logs`` and ``GET /addons/self/logs`` — app container logs
+- ``POST /addons/self/restart`` — app self-restart (Supervisor envelope reply)
 
-All endpoints require ``Authorization: Bearer <SUPERVISOR_TOKEN>`` and 401 on
-mismatch, matching real Supervisor behavior.
+This fixture returns 401 for an unrecognized bearer and 403 for the explicit
+low-role sentinel. It intentionally does not reproduce Supervisor's exact
+missing-token versus invalid-token status distinction.
 """
 
 from __future__ import annotations
@@ -43,9 +46,9 @@ import pytest
 logger = logging.getLogger(__name__)
 
 MOCK_SUPERVISOR_TOKEN = "test-supervisor-token"
-# Special token that the mock treats as "valid auth, but addon hassio_role too
-# low" — surfaces as a 403 from any authenticated endpoint. Used by tests that
-# need to exercise the role-mismatch branch added alongside #1116.
+# Special token that the mock treats as valid auth with insufficient
+# ``hassio_role``. It surfaces as a 403 so tests can exercise the
+# role-mismatch branch.
 MOCK_INSUFFICIENT_ROLE_TOKEN = "test-supervisor-token-low-role"
 
 # The eight Supervisor-managed system services exposed at /<service>/logs.
@@ -59,7 +62,7 @@ _ADDON_LOGS_RE = re.compile(r"^/addons/([^/]+)/logs$")
 
 
 class _SupervisorMockHandler(BaseHTTPRequestHandler):
-    """Routes the small set of Supervisor REST endpoints the codebase calls."""
+    """Route the Supervisor REST subset implemented by this fixture."""
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         # Silence the default per-request stderr line; pytest captures it as noise.
@@ -70,9 +73,8 @@ class _SupervisorMockHandler(BaseHTTPRequestHandler):
         if auth == f"Bearer {MOCK_SUPERVISOR_TOKEN}":
             return True
         if auth == f"Bearer {MOCK_INSUFFICIENT_ROLE_TOKEN}":
-            # Valid token, role too low — what real Supervisor returns when
-            # the addon's hassio_role is below `manager` for the requested
-            # endpoint (the #1116 cause).
+            # Valid token, role too low — the real Supervisor also returns 403
+            # when the app's role cannot access the requested endpoint.
             self._send_json(
                 403,
                 {
@@ -101,8 +103,8 @@ class _SupervisorMockHandler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def do_GET(self) -> None:
-        # Auth runs FIRST — real Supervisor returns 401 regardless of path
-        # when the bearer token is wrong. Routing/404 happens only after.
+        # Auth runs before routing in this fixture, so a rejected bearer gets
+        # the fixture's simplified auth status regardless of the request path.
         if not self._check_auth():
             return
         # Route on the bare path — real Supervisor's aiohttp router matches

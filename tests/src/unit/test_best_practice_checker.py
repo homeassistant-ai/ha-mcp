@@ -2428,3 +2428,656 @@ class TestRenamedPurposeSpecificKeys:
             "actions": [],
         }
         assert check_automation_config(config) == []
+
+
+# ---------------------------------------------------------------------------
+# Variables-block key ordering (issue #2072)
+# ---------------------------------------------------------------------------
+
+
+class TestVariablesForwardReference:
+    """A variables key reading a LATER sibling renders undefined, silently."""
+
+    def test_action_variables_forward_reference_flagged(self):
+        # The reporter's shape: `meldung` sorted to the front of the block, so
+        # it renders against siblings that do not exist yet.
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "binary_sensor.door"}],
+            "actions": [
+                {
+                    "variables": {
+                        "meldung": "{% if offene_tueren %}open{% endif %}",
+                        "offene_tueren": "{{ expand('binary_sensor.doors') | count }}",
+                    }
+                }
+            ],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "`meldung`", "`offene_tueren`")
+
+    def test_names_every_forward_sibling(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {
+                    "variables": {
+                        "summary": "{{ a }}{{ b }}",
+                        "a": "1",
+                        "b": "2",
+                    }
+                }
+            ],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "`summary`", "`a`", "`b`")
+
+    def test_backward_reference_clean(self):
+        # Correct order — each key reads only what precedes it.
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {
+                    "variables": {
+                        "offene_tueren": "{{ expand('binary_sensor.doors') | count }}",
+                        # Backward read, and deliberately not the last key — a
+                        # trailing sibling exists for it to wrongly match on.
+                        "meldung": "{% if offene_tueren %}open{% endif %}",
+                        "tail": "1",
+                    }
+                }
+            ],
+        }
+        assert check_automation_config(config) == []
+
+    def test_nested_in_choose_sequence_flagged(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {
+                    "choose": [
+                        {
+                            "conditions": [],
+                            "sequence": [
+                                {"variables": {"first": "{{ second }}", "second": "2"}}
+                            ],
+                        }
+                    ]
+                }
+            ],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+    def test_nested_in_canonical_parallel_branch_flagged(self):
+        # HA normalises a shorthand `parallel:` branch list into
+        # `{"sequence": [...]}`, so the canonical branch shape has to be walked.
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {
+                    "parallel": [
+                        {
+                            "sequence": [
+                                {"variables": {"first": "{{ second }}", "second": "2"}}
+                            ]
+                        }
+                    ]
+                }
+            ],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+    def test_nested_in_bare_sequence_action_flagged(self):
+        config = {
+            "sequence": [
+                {"sequence": [{"variables": {"first": "{{ second }}", "second": "2"}}]}
+            ]
+        }
+        warnings = check_script_config(config)
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+    def test_nested_value_structure_scanned(self):
+        # render_complex recurses into lists and mappings, so a template buried
+        # in one still renders in that key's slot.
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {
+                    "variables": {
+                        "payload": {"items": ["{{ threshold }}"]},
+                        "threshold": "5",
+                    }
+                }
+            ],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "`payload`", "`threshold`")
+
+
+class TestVariablesForwardReferenceNegatives:
+    """Shapes that look like a forward reference but are legal."""
+
+    def test_earlier_response_variable_clean(self):
+        # `wetter` comes from a preceding action, not from the block.
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {"action": "weather.get_forecasts", "response_variable": "wetter"},
+                {
+                    "variables": {
+                        "stunden": "{{ wetter['weather.home'].forecast[:3] }}",
+                        "regen": "{{ 'ja' if stunden else '' }}",
+                    }
+                },
+            ],
+        }
+        assert check_automation_config(config) == []
+
+    def test_longer_name_is_not_a_reference(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {
+                    "variables": {
+                        "first": "{{ offene_tueren_extra }}",
+                        "offene_tueren": "2",
+                    }
+                }
+            ],
+        }
+        assert check_automation_config(config) == []
+
+    def test_string_literal_is_not_a_reference(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {
+                    "variables": {
+                        "first": "{{ payload['threshold'] }}",
+                        "threshold": "5",
+                    }
+                }
+            ],
+        }
+        assert check_automation_config(config) == []
+
+    def test_attribute_access_is_not_a_reference(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {"variables": {"first": "{{ wetter.forecast }}", "forecast": "5"}}
+            ],
+        }
+        assert check_automation_config(config) == []
+
+    def test_numeric_literal_tail_is_not_a_reference(self):
+        # `e3` inside the float literal `2.5e3` starts a would-be identifier
+        # match; the digit in front of it is what rejects it.
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [{"variables": {"first": "{{ 2.5e3 }}", "e3": "5"}}],
+        }
+        assert check_automation_config(config) == []
+
+    def test_filter_name_is_not_a_reference(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [{"variables": {"first": "{{ [3, 1] | max }}", "max": "5"}}],
+        }
+        assert check_automation_config(config) == []
+
+    def test_jinja_set_local_is_not_a_reference(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [
+                {
+                    "variables": {
+                        "first": "{% set total = 1 %}{{ total }}",
+                        "total": "5",
+                    }
+                }
+            ],
+        }
+        assert check_automation_config(config) == []
+
+    def test_plain_string_value_is_not_a_reference(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [{"variables": {"first": "threshold", "threshold": "5"}}],
+        }
+        assert check_automation_config(config) == []
+
+    def test_single_key_block_clean(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [{"variables": {"only": "{{ only }}"}}],
+        }
+        assert check_automation_config(config) == []
+
+
+class TestVariablesForwardReferenceTokenising:
+    """Shapes where the token scan has to be positional or Unicode-aware."""
+
+    @staticmethod
+    def _auto(variables):
+        return check_automation_config(
+            {
+                "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+                "actions": [{"variables": variables}],
+            }
+        )
+
+    def test_read_before_local_set_still_flagged(self):
+        # The read happens before the binding, so the `{% set %}` must not
+        # retroactively shadow it.
+        warnings = self._auto({"first": "{{ later }}{% set later = 1 %}", "later": "1"})
+        assert _has_warning_containing(warnings, "`first`", "`later`")
+
+    def test_set_right_hand_side_still_flagged(self):
+        # Self-referential on purpose: the RHS `later` is read before the
+        # binding exists, so it is the sibling, not the local.
+        warnings = self._auto(
+            {"first": "{% set later = later %}{{ later }}", "later": "1"}
+        )
+        assert _has_warning_containing(warnings, "`first`", "`later`")
+
+    def test_set_target_is_not_itself_a_read(self):
+        # The target name is on the left of the `=`; only the RHS is scanned,
+        # so a `{% set %}` naming a later sibling is not a reference to it.
+        assert self._auto({"first": "{% set later = 1 %}ok", "later": "1"}) == []
+
+    def test_literal_spanning_an_escaped_newline_stays_closed(self):
+        # The sibling name sits *inside* the literal; if the escaped newline
+        # ends the literal early the name is scanned as code.
+        config = {"first": "{{ 'trail\\\nthreshold' ~ other }}", "threshold": "1"}
+        assert self._auto(config) == []
+
+    def test_escaped_quote_keeps_literal_closed(self):
+        # A backslash escape has to be consumed with the literal, otherwise its
+        # tail is scanned as code and `threshold` reads as a reference.
+        config = {"first": r"{{ 'don\'t use threshold' }}", "threshold": "1"}
+        assert self._auto(config) == []
+
+    def test_non_ascii_identifier_flagged(self):
+        warnings = self._auto({"first": "{{ über }}", "über": "1"})
+        assert _has_warning_containing(warnings, "`first`", "`über`")
+
+    def test_non_latin_identifier_flagged(self):
+        warnings = self._auto({"first": "{{ 变量 }}", "变量": "1"})
+        assert _has_warning_containing(warnings, "`first`", "`变量`")
+
+
+class TestSingletonActionMappings:
+    """`SCRIPT_SCHEMA` is `ensure_list`, so a lone action mapping is valid."""
+
+    @staticmethod
+    def _step():
+        return {"variables": {"first": "{{ second }}", "second": "2"}}
+
+    def test_nested_sequence_mapping(self):
+        warnings = check_script_config({"sequence": [{"sequence": self._step()}]})
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+    def test_then_mapping(self):
+        warnings = check_script_config({"sequence": [{"if": [], "then": self._step()}]})
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+    def test_else_mapping(self):
+        warnings = check_script_config(
+            {"sequence": [{"if": [], "then": [], "else": self._step()}]}
+        )
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+    def test_default_mapping(self):
+        warnings = check_script_config(
+            {"sequence": [{"choose": [], "default": self._step()}]}
+        )
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+    def test_parallel_mapping(self):
+        warnings = check_script_config(
+            {"sequence": [{"parallel": {"sequence": [self._step()]}}]}
+        )
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+
+class TestVariablesForwardReferenceWiring:
+    """Every block that renders one key at a time is covered."""
+
+    def test_automation_top_level_variables(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "variables": {"first": "{{ second }}", "second": "2"},
+            "actions": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "`variables` key `first`", "`second`")
+
+    def test_automation_trigger_variables(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "trigger_variables": {"first": "{{ second }}", "second": "2"},
+            "actions": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(
+            warnings, "`trigger_variables` key `first`", "`second`"
+        )
+
+    def test_script_top_level_variables(self):
+        config = {
+            "variables": {"first": "{{ second }}", "second": "2"},
+            "sequence": [],
+        }
+        warnings = check_script_config(config)
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+    def test_script_sequence_variables_step(self):
+        config = {"sequence": [{"variables": {"first": "{{ second }}", "second": "2"}}]}
+        warnings = check_script_config(config)
+        assert _has_warning_containing(warnings, "`first`", "`second`")
+
+
+_FORWARD_REF_CONFIG = {
+    "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+    "actions": [{"variables": {"first": "{{ second }}", "second": "2"}}],
+}
+
+
+class TestVariablesForwardReferenceMessage:
+    """Warning payload: rule and fix, skill route, referenced file."""
+
+    def test_names_the_rule_and_the_fix(self):
+        # Replaces the outer-scope caveat test: that caveat moved to the
+        # reference file, but the message must still carry why the read fails
+        # and what to do about it, not just the offending key names.
+        warnings = check_automation_config(_FORWARD_REF_CONFIG)
+        assert _has_warning_containing(
+            warnings, "one key at a time", "Move the keys it reads above it"
+        )
+
+    def test_skill_route_and_referenced_file(self):
+        warnings = check_automation_config(_FORWARD_REF_CONFIG)
+        assert _has_warning_containing(
+            warnings, f"{SKILL_PREFIX}/automation-patterns.md#variables"
+        )
+        assert (
+            "references/automation-patterns.md#variables" in warnings.referenced_files
+        )
+
+    def test_skill_prefix_none_suppresses_suffix(self):
+        warnings = check_automation_config(_FORWARD_REF_CONFIG, skill_prefix=None)
+        assert len(warnings) == 1
+        assert " See " not in warnings[0]
+
+
+# ---------------------------------------------------------------------------
+# Variables-block ordering: span walking, scoping, binding forms
+# ---------------------------------------------------------------------------
+
+
+def _variables_warnings(variables):
+    """Run the checker over one action-level variables block."""
+    return check_automation_config(
+        {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.x"}],
+            "actions": [{"variables": variables}],
+        }
+    )
+
+
+class TestVariablesForwardReferenceSpanWalking:
+    """The span is closed by walking past string literals, not by a lazy `.*?`.
+
+    A delimiter inside a literal used to end the span early, which hid a real
+    forward read in one direction and invented one in the other.
+    """
+
+    def test_closing_delimiter_inside_a_literal_does_not_end_the_span(self):
+        warnings = _variables_warnings({"first": '{{ "}}" ~ later }}', "later": "1"})
+        assert _has_warning_containing(warnings, "`first`", "`later`")
+
+    def test_sibling_name_inside_a_literal_is_not_a_read(self):
+        assert _variables_warnings({"first": "{{ 'later }}' }}", "later": "1"}) == []
+
+    def test_statement_delimiter_inside_a_literal(self):
+        warnings = _variables_warnings(
+            {"first": "{% if '%}' ~ later %}x{% endif %}", "later": "1"}
+        )
+        assert _has_warning_containing(warnings, "`first`", "`later`")
+
+    def test_unterminated_span_is_not_guessed_at(self):
+        assert _variables_warnings({"first": "{{ later", "later": "1"}) == []
+
+
+class TestVariablesForwardReferenceNonCode:
+    """Text that only looks like code: comments and raw blocks."""
+
+    def test_commented_out_template_is_not_a_read(self):
+        assert _variables_warnings({"first": "{# {{ later }} #}", "later": "1"}) == []
+
+    def test_raw_body_is_not_a_read(self):
+        config = {"first": "{% raw %}{{ later }}{% endraw %}", "later": "1"}
+        assert _variables_warnings(config) == []
+
+    def test_read_after_endraw_is_still_flagged(self):
+        config = {"first": "{% raw %}x{% endraw %}{{ later }}", "later": "1"}
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
+
+
+class TestVariablesForwardReferenceScoping:
+    """A binding dies with the block that made it."""
+
+    def test_loop_local_set_does_not_suppress_a_read_after_endfor(self):
+        # The assignment does not survive `{% endfor %}`, so the trailing read
+        # is a genuine forward reference.
+        config = {
+            "first": "{% for x in [1] %}{% set later = 1 %}{% endfor %}{{ later }}",
+            "later": "1",
+        }
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
+
+    def test_read_inside_the_loop_is_still_shadowed(self):
+        config = {
+            "first": "{% for x in [1] %}{% set later = 1 %}{{ later }}{% endfor %}",
+            "later": "1",
+        }
+        assert _variables_warnings(config) == []
+
+    def test_loop_target_is_a_binding_not_a_read(self):
+        config = {
+            "first": "{% for later in [1] %}{{ later }}{% endfor %}",
+            "later": "1",
+        }
+        assert _variables_warnings(config) == []
+
+    def test_iterable_is_read_in_the_enclosing_scope(self):
+        # `later` on the right of `in` is evaluated before the target binds.
+        config = {"first": "{% for later in later %}x{% endfor %}", "later": "1"}
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
+
+    def test_with_block_binding_ends_at_endwith(self):
+        config = {"first": "{% with later = 1 %}{% endwith %}{{ later }}", "later": "1"}
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
+
+    def test_with_block_binding_holds_inside(self):
+        config = {"first": "{% with later = 1 %}{{ later }}{% endwith %}", "later": "1"}
+        assert _variables_warnings(config) == []
+
+    def test_macro_parameter_is_a_binding(self):
+        config = {
+            "first": "{% macro m(later) %}{{ later }}{% endmacro %}",
+            "later": "1",
+        }
+        assert _variables_warnings(config) == []
+
+    def test_macro_parameter_default_is_read_outside(self):
+        config = {"first": "{% macro m(x=later) %}{% endmacro %}", "later": "1"}
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
+
+    def test_set_outside_a_loop_still_shadows_afterwards(self):
+        config = {"first": "{% set later = 1 %}{{ later }}", "later": "1"}
+        assert _variables_warnings(config) == []
+
+
+class TestVariablesForwardReferenceBindingForms:
+    """Every spelling of a binding Jinja accepts."""
+
+    def test_whitespace_control_minus(self):
+        assert (
+            _variables_warnings(
+                {"first": "{%- set later = 1 %}{{ later }}", "later": "1"}
+            )
+            == []
+        )
+
+    def test_whitespace_control_plus(self):
+        assert (
+            _variables_warnings(
+                {"first": "{%+ set later = 1 %}{{ later }}", "later": "1"}
+            )
+            == []
+        )
+
+    def test_with_is_a_binding_tag_too(self):
+        config = {"first": "{% with later = 3 %}{{ later }}{% endwith %}", "later": "1"}
+        assert _variables_warnings(config) == []
+
+    def test_tuple_target_binds_every_name(self):
+        config = {
+            "first": "{% set (later, other) = (1, 2) %}{{ later }}{{ other }}",
+            "later": "1",
+            "other": "2",
+        }
+        assert _variables_warnings(config) == []
+
+    def test_multi_target_set_binds_every_name(self):
+        config = {
+            "first": "{% set later, other = 1, 2 %}{{ later }}{{ other }}",
+            "later": "1",
+            "other": "2",
+        }
+        assert _variables_warnings(config) == []
+
+    def test_multi_target_right_hand_side_is_still_read(self):
+        config = {"first": "{% set a1, b1 = later, 2 %}", "later": "1"}
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
+
+    def test_block_form_set_binds(self):
+        config = {"first": "{% set later %}x{% endset %}{{ later }}", "later": "1"}
+        assert _variables_warnings(config) == []
+
+    def test_attribute_target_reads_the_base_name(self):
+        # `{% set later.x = 1 %}` assigns into `later`, so it reads it.
+        config = {"first": "{% set later.x = 1 %}", "later": "1"}
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
+
+
+class TestVariablesForwardReferenceTokenPositions:
+    """Identifier tokens that are not variable reads."""
+
+    def test_spaced_attribute_access(self):
+        # Jinja parses `wetter . later` as attribute access, verified against a
+        # live render, so the name after the dot is not a read.
+        assert (
+            _variables_warnings({"first": "{{ wetter . later }}", "later": "1"}) == []
+        )
+
+    def test_call_keyword_argument(self):
+        assert _variables_warnings({"first": "{{ dict(later=1) }}", "later": "1"}) == []
+
+    def test_test_name_after_is(self):
+        assert _variables_warnings({"first": "{{ 1 is later }}", "later": "1"}) == []
+
+    def test_negated_test_name(self):
+        assert (
+            _variables_warnings({"first": "{{ 1 is not later }}", "later": "1"}) == []
+        )
+
+    def test_jinja_keyword_sharing_a_sibling_name(self):
+        assert _variables_warnings({"first": "{% if x %}y{% endif %}", "if": "1"}) == []
+
+    def test_filter_name_is_not_a_read(self):
+        assert _variables_warnings({"first": "{{ x | later }}", "later": "1"}) == []
+
+    def test_equality_comparison_is_still_a_read(self):
+        # The keyword-argument strip must not swallow `later ==`.
+        warnings = _variables_warnings({"first": "{{ later == 1 }}", "later": "1"})
+        assert _has_warning_containing(warnings, "`first`", "`later`")
+
+    def test_inequality_comparison_is_still_a_read(self):
+        warnings = _variables_warnings({"first": "{{ later != 1 }}", "later": "1"})
+        assert _has_warning_containing(warnings, "`first`", "`later`")
+
+
+class TestVariablesForwardReferenceNesting:
+    """`_iter_strings` walks the whole value, keys included."""
+
+    def test_template_in_a_dict_key(self):
+        config = {"first": {"{{ later }}": "v"}, "later": "1"}
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
+
+    def test_template_in_a_nested_list(self):
+        config = {"first": [{"deep": ["{{ later }}"]}], "later": "1"}
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
+
+    def test_bindings_do_not_leak_between_values(self):
+        # Each string is scanned on its own, so a `{% set %}` in one value
+        # cannot shadow a read in the next.
+        config = {"first": ["{% set later = 1 %}", "{{ later }}"], "later": "1"}
+        assert _has_warning_containing(
+            _variables_warnings(config), "`first`", "`later`"
+        )
+
+
+class TestVariablesForwardReferenceNormalizationSeam:
+    """The premise the check rests on: normalization leaves the block alone.
+
+    The reported bug arrived as an already-reordered block, so the check has
+    to fire on the order it is handed. That only holds if the write path does
+    not reorder or rename anything inside a variables block on the way in.
+    """
+
+    def test_normalization_preserves_key_order_and_names(self):
+        from ha_mcp.tools.tools_config_automations import _normalize_automation_config
+
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "binary_sensor.door"}],
+            "actions": [
+                {
+                    "variables": {
+                        "meldung": "{% if offene_tueren %}open{% endif %}",
+                        "offene_tueren": "{{ 1 }}",
+                    }
+                }
+            ],
+        }
+
+        normalized = _normalize_automation_config(config)
+
+        assert list(normalized["actions"][0]["variables"]) == [
+            "meldung",
+            "offene_tueren",
+        ]
+        assert _has_warning_containing(
+            check_automation_config(normalized), "`meldung`", "`offene_tueren`"
+        )

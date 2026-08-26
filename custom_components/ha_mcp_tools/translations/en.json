@@ -3,7 +3,7 @@
         "step": {
             "user": {
                 "title": "HA-MCP Custom Component",
-                "description": "Choose what to add. **HA-MCP Server** runs the full ha-mcp server inside Home Assistant and exposes it through a Home Assistant webhook - this is the install most people want. It is a standalone server and a complete replacement for every other install method (add-on, Docker, uvx/PyPI, stdio); if you run it, do not also run one of those. **HA-MCP File & YAML Tools** adds the privileged file and YAML editing services, needed only if you turn on ha-mcp's opt-in file/YAML tools. If your ha-mcp server already runs elsewhere (add-on, Docker, uvx), you do not need the server entry - add only this File & YAML entry, and only if you use those tools. It works with every server type and can be added later at any time.",
+                "description": "Choose what to add. **HA-MCP Server** runs the full ha-mcp server inside Home Assistant and exposes it through a Home Assistant webhook - this is the install most people want. It is a standalone server and a complete replacement for every other install method: App (add-on), Docker, uvx/PyPI, stdio; if you run it, do not also run one of those. **HA-MCP File & YAML Tools** adds the privileged file and YAML editing services, needed only if you turn on ha-mcp's opt-in file/YAML tools. If your ha-mcp server already runs elsewhere - App (add-on), Docker, uvx - you do not need the server entry - add only this File & YAML entry, and only if you use those tools. It works with every server type and can be added later at any time.",
                 "menu_options": {
                     "server": "HA-MCP Server (recommended)",
                     "tools": "HA-MCP File & YAML Tools (optional)"
@@ -15,12 +15,12 @@
             },
             "server": {
                 "title": "HA-MCP Server",
-                "description": "This runs the full ha-mcp server inside Home Assistant and exposes it remotely through a Home Assistant webhook (reachable via Nabu Casa or any reverse proxy). It is a standalone server and a complete replacement for the add-on, Docker, uvx/PyPI, and stdio install methods - do not run it alongside another ha-mcp server. Select **Submit** to start it; you can change the port, binding, and authentication afterward in the integration options."
+                "description": "This runs the full ha-mcp server inside Home Assistant and exposes it remotely through a Home Assistant webhook (reachable via Nabu Casa or any reverse proxy). It is a standalone server and a complete replacement for the app (add-on), Docker, uvx/PyPI, and stdio install methods - do not run it alongside another ha-mcp server. Select **Submit** to start it; you can change the port, binding, and authentication afterward in the integration options."
             }
         },
         "abort": {
             "already_configured": "This entry is already set up.",
-            "unsupported_home_assistant": "The in-process HA-MCP Server requires Home Assistant {required} or newer, but this instance is running {installed}. You can still use this component's HA-MCP File & YAML Tools entry with an external ha-mcp server running as an add-on or Docker container."
+            "unsupported_home_assistant": "The in-process HA-MCP Server requires Home Assistant {required} or newer, but this instance is running {installed}. You can still use this component's HA-MCP File & YAML Tools entry with an external ha-mcp server running as an app (add-on) or Docker container."
         }
     },
     "options": {
@@ -64,9 +64,9 @@
                 "data_description": {
                     "channel": "Stable installs the latest stable release; Development installs the newest development build. When automatic updates are on, a reload or restart, plus a periodic check, install the newest build of the selected channel. A developer package override below takes precedence and disables automatic updates.",
                     "auto_update": "When on, the newest release of the selected channel is installed automatically - on a reload or restart, and via a periodic check. When off, the server stays on the version currently installed until you turn this back on. This controls the ha-mcp server package only; updates to the HA-MCP Custom Component itself still come through HACS.",
-                    "server_port": "The port this server listens on. The ha-mcp add-on uses 9583, so this defaults to 9584 to let both run side by side - if you don't run the add-on, any free port works.",
-                    "bind_host": "Who can connect to the MCP server port directly. The default matches the add-on: reachable on your local network, with the secret path as the credential. Choose loopback to allow only connections from the Home Assistant machine itself - the webhook URL and the sidebar panel work either way.",
-                    "webhook_auth": "How MCP clients prove themselves at the webhook URL. With the secret URL, the link itself is the credential. With Home Assistant sign-in, clients such as claude.ai log in with a Home Assistant administrator account (OAuth). With legacy OAuth, this integration issues its own Client ID and Secret to paste into clients that require one, such as Google Gemini Spark - it needs a Home Assistant restart to turn on or off.",
+                    "server_port": "The port this server listens on. The ha-mcp app (add-on) uses 9583, so this defaults to 9584 to let both run side by side - if you don't run the app (add-on), any free port works.",
+                    "bind_host": "Who can connect to the MCP server port directly. The default matches the app (add-on): reachable on your local network, with the secret path as the credential. Choose loopback to allow only connections from the Home Assistant machine itself - the webhook URL and the sidebar panel work either way.",
+                    "webhook_auth": "How MCP clients prove themselves at the webhook URL. With the secret URL, the link itself is the only credential - OAuth still runs for clients that use it, but every sign-in is approved automatically: no login and no Client ID or Secret needed. With Home Assistant sign-in, clients such as claude.ai log in with a Home Assistant administrator account (OAuth). With legacy OAuth, this integration runs its own sign-in service and issues a Client ID and Secret to paste into clients that require one - a Home Assistant restart may be needed to fully turn it on or off.",
                     "oauth_client_id_override": "Replaces the auto-generated legacy OAuth Client ID. Leave empty to keep the current one. Only used while Authentication mode is set to legacy OAuth.",
                     "oauth_client_secret_override": "Replaces the auto-generated legacy OAuth Client Secret. Leave empty to keep the current one. Only used while Authentication mode is set to legacy OAuth.",
                     "oauth_regenerate": "One-time action: mints a fresh Client ID and Secret for legacy OAuth mode. It takes effect only after the Home Assistant restart the repair prompt asks for - until you restart, the previous Client ID and Secret keep working and the new ones do not. Also clears the two override fields above.",
@@ -104,11 +104,18 @@
         },
         "legacy_hacs_source": {
             "title": "Component installed from the legacy repository",
-            "description": "HACS is tracking the main ha-mcp server repository for this component, so HACS shows the server's version numbers (7.x) and the server's release notes here instead of the component's own (1.x). Updates keep working, but stay mislabeled this way. To fix: remove this repository from HACS (your integration settings and config entries are kept), add homeassistant-ai/ha-mcp-integration as a custom repository, reinstall the component from it, and restart Home Assistant."
+            "description": "HACS is tracking the main ha-mcp server repository for this component, so HACS shows the server's version numbers and release notes here instead of the component's own (2.x). Updates keep working, but stay mislabeled this way. To fix: remove this repository from HACS (your integration settings and config entries are kept), add homeassistant-ai/ha-mcp-integration as a custom repository, reinstall the component from it, and restart Home Assistant."
         },
         "legacy_oauth_restart": {
-            "title": "Restart Home Assistant to apply the legacy OAuth change",
-            "description": "The legacy OAuth authentication mode registers its own /authorize and /token web endpoints, which Home Assistant can only bind or release when it fully restarts - whether you just turned this mode on, turned it off, or changed its Client ID/Secret. Restart Home Assistant (Settings - System - Restart) to apply the change; until then the previous behavior stays in effect."
+            "title": "Restart Home Assistant to apply the legacy OAuth settings",
+            "fix_flow": {
+                "step": {
+                    "confirm": {
+                        "title": "Restart Home Assistant?",
+                        "description": "Submitting this form will restart Home Assistant and apply the legacy OAuth settings.\n\nClick **Submit** to restart now."
+                    }
+                }
+            }
         }
     },
     "selector": {
@@ -122,7 +129,7 @@
             "options": {
                 "none": "Secret webhook URL (default)",
                 "ha_auth": "Sign in with Home Assistant (OAuth)",
-                "legacy": "Legacy OAuth (Client ID/Secret, for Google Gemini Spark)"
+                "legacy": "Legacy OAuth (this integration issues a Client ID/Secret to paste)"
             }
         },
         "llm_api_exposure": {

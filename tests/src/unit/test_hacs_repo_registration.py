@@ -1,4 +1,4 @@
-"""Unit tests for the HACS repo-registration wait helper in tools_hacs.
+"""Unit tests for the HACS repo-registration wait helper in hacs_registration.
 
 ``wait_for_repo_registration`` backs ``ha_manage_hacs``'s add_repository
 and download flows. These tests drive the real function against a mocked
@@ -64,7 +64,7 @@ class TestWaitForRepoRegistration:
     @pytest.mark.asyncio
     async def test_post_subscribe_sample_finds_repo_already_listed(self):
         """Repo already in the post-subscribe list — return without waiting."""
-        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+        from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 
         queue: asyncio.Queue = asyncio.Queue()
         ws_client = _build_ws_client(
@@ -82,7 +82,7 @@ class TestWaitForRepoRegistration:
     @pytest.mark.asyncio
     async def test_event_triggers_targeted_list_lookup(self):
         """Matching dispatch event → fresh list lookup to get the full entry."""
-        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+        from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 
         queue: asyncio.Queue = asyncio.Queue()
         await queue.put(
@@ -121,7 +121,7 @@ class TestWaitForRepoRegistration:
         defeat the whole point of using the dispatcher as the signal.
         The list re-check belongs on the backstop-poll path only.
         """
-        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+        from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 
         queue: asyncio.Queue = asyncio.Queue()
         await queue.put(
@@ -164,7 +164,7 @@ class TestWaitForRepoRegistration:
     async def test_subscribe_failure_falls_back_to_single_list_lookup(self):
         """If ``hacs/subscribe`` fails with a transport error, fall back."""
         from ha_mcp.client.rest_client import HomeAssistantCommandError
-        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+        from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 
         ws_client = _build_ws_client(
             list_responses=[_list_response_with_repo(repo_id=42)],
@@ -180,7 +180,7 @@ class TestWaitForRepoRegistration:
     @pytest.mark.asyncio
     async def test_timeout_returns_none_after_budget(self):
         """Wall-clock backstop fires when neither event nor list shows the repo."""
-        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+        from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 
         queue: asyncio.Queue = asyncio.Queue()
         ws_client = MagicMock()
@@ -210,7 +210,7 @@ class TestWaitForRepoRegistration:
         + 3 backstop ticks. A 5th call would indicate the budget-
         exhaust branch was incorrectly treated as a backstop tick.
         """
-        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+        from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 
         queue: asyncio.Queue = asyncio.Queue()  # no events ever
         ws_client = MagicMock()
@@ -245,7 +245,7 @@ class TestWaitForRepoRegistration:
         Then shutdown(immediate=True) causes the next ``queue.get()``
         to raise ``QueueShutDown``, triggering the last-chance lookup.
         """
-        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+        from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 
         queue: asyncio.Queue = asyncio.Queue()
         await queue.put(
@@ -281,7 +281,7 @@ class TestWaitForRepoRegistration:
     async def test_last_chance_lookup_swallows_transport_error(self):
         """QueueShutDown + dead WS: list call fails → return None, no propagation."""
         from ha_mcp.client.rest_client import HomeAssistantConnectionError
-        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+        from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 
         queue: asyncio.Queue = asyncio.Queue()
         queue.shutdown(immediate=True)
@@ -308,7 +308,7 @@ class TestWaitForRepoRegistration:
     @pytest.mark.asyncio
     async def test_subscribe_propagates_programming_error(self):
         """Bug-class exceptions from subscribe must NOT degrade to fallback."""
-        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+        from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 
         ws_client = MagicMock()
         # AttributeError simulates a programming bug — e.g. ws_client
@@ -327,7 +327,7 @@ class TestWaitForRepoRegistration:
     @pytest.mark.asyncio
     async def test_malformed_event_payload_does_not_recheck_list(self):
         """Non-dict / empty event payloads must NOT trigger list lookups."""
-        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+        from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 
         queue: asyncio.Queue = asyncio.Queue()
         await queue.put({"id": 7, "type": "event", "event": None})
@@ -357,7 +357,7 @@ class TestWaitForRepoRegistration:
         delays the REPOSITORY event for any reason, the backstop
         timer still picks up registration via a list lookup.
         """
-        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+        from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 
         queue: asyncio.Queue = asyncio.Queue()  # never populated
         ws_client = MagicMock()
@@ -389,7 +389,7 @@ class TestWaitForRepoRegistration:
         should fall through to the queue wait so a later dispatch
         catches the actual registration.
         """
-        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+        from ha_mcp.tools.hacs_registration import wait_for_repo_registration
 
         queue: asyncio.Queue = asyncio.Queue()
         # First dispatch: matches but the list lookup will race.

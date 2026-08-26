@@ -10,9 +10,9 @@ Common questions and solutions for ha-mcp setup.
 
 You can also use ha-mcp with other AI clients. See the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) for 15+ supported clients.
 
-### Do I need the Home Assistant Add-on?
+### Do I need the Home Assistant app (add-on)?
 
-**No.** The HA add-on is just one installation method. Most users run ha-mcp directly on their computer using `uvx` (recommended for Claude Desktop). The add-on is only needed if you want to run ha-mcp inside your Home Assistant OS environment.
+**No.** The HA app is just one installation method. Most users run ha-mcp directly on their computer using `uvx` (recommended for Claude Desktop). The app is only needed if you want to run ha-mcp inside your Home Assistant OS environment.
 
 ### What's the difference between ha-mcp and Home Assistant's built-in MCP?
 
@@ -73,6 +73,8 @@ This is a known Claude.ai behavior that affects all MCP servers, not just ha-mcp
 **If it genuinely won't connect** (not just the transient handshake error above): Claude.ai connects from Anthropic's servers, so the MCP URL must be reachable from the public internet — not just your LAN. A URL that works in Claude Code or a local browser can still be unreachable for Claude.ai web. Open the URL on your **phone with Wi-Fi off** (cellular): if it doesn't load there, it isn't publicly reachable (DNS / port-forward / TLS / reverse-proxy) and Claude.ai can't reach it either. Also make sure you clicked **Connect** on the connector (and, with OAuth enabled, **Allow** on the consent page) — adding the connector alone does not complete the connection.
 
 **Check for a port in the URL.** Your connector URL is built on your Home Assistant's own public address, which must **not** contain a port such as `:8123` (or any other port). To check, open just that base address (e.g. `https://ha.example.com`, without the `/api/webhook/...` secret path) in a browser — it should bring up your HA login page. Remote clients cannot reach a URL that carries a port, even though it loads fine in your own browser. Home Assistant can still listen on 8123 internally, as long as a reverse proxy, tunnel, or 443 port-forward serves that hostname — just don't put the port in the URL you paste.
+
+**Tailscale Funnel: use port `443`.** Funnel can also serve on the alternate HTTPS ports it offers (`8443`, `10000`), but Claude.ai's connector backend does not reliably reach non-standard ports: the connection fails identically in every auth mode, and no request from Anthropic's range (`160.79.104.0/21`) ever reaches the server — nothing appears in any log. Use standard port `443` instead, where the same setup connects on the first try. The official Tailscale app's built-in **"Share Home Assistant with Serve or Funnel"** option already exposes Home Assistant on `443`, so use that hostname in the connector URL (same webhook path). See [#2080](https://github.com/homeassistant-ai/ha-mcp/issues/2080).
 
 ### "Terminating session: None" in server logs
 
@@ -192,6 +194,7 @@ If you see `Failed to install: pywin32` or `os error 32` ("file is used by anoth
       "command": "docker",
       "args": [
         "run", "--rm", "-i",
+        "-v", "ha-mcp-data:/home/mcpuser/.ha-mcp",
         "-e", "HOMEASSISTANT_URL=http://host.docker.internal:8123",
         "-e", "HOMEASSISTANT_TOKEN=your_token",
         "ghcr.io/homeassistant-ai/ha-mcp:latest"
@@ -259,15 +262,15 @@ source ~/.zshrc
 
 None of the shipped example configs use parentheses in the key, so a default setup never hits this – it is specifically a hand-authored key like `Home Assistant (ha-mcp)` that trips it. This is a Claude Desktop client behavior, not a ha-mcp problem: ha-mcp's own tool names are all valid `snake_case`. See [#1743](https://github.com/homeassistant-ai/ha-mcp/issues/1743).
 
-### Can't connect remotely? Try the Webhook Proxy add-on {#webhook-proxy}
+### Can't connect remotely? Try the Webhook Proxy app {#webhook-proxy}
 
-If you're having trouble setting up remote access — TLS errors, Cloudflare configuration issues, or port forwarding problems — the **Webhook Proxy add-on** may be a simpler alternative.
+If you're having trouble setting up remote access — TLS errors, Cloudflare configuration issues, or port forwarding problems — the **Webhook Proxy app** may be a simpler alternative.
 
 Instead of requiring a dedicated tunnel to port 9583, the Webhook Proxy routes MCP traffic through Home Assistant's main port (8123) via a webhook. If you already have **Nabu Casa** or any reverse proxy pointing at your HA instance, this can be the easiest remote setup.
 
-1. Install the **MCP Server add-on** and the **Webhook Proxy add-on** from the add-on store
+1. Install the **MCP Server app** and the **Webhook Proxy app** from **Settings > Apps > Install app**
 2. Start the webhook proxy and restart Home Assistant when prompted
-3. Copy the webhook URL from the add-on logs
+3. Copy the webhook URL from the app logs
 4. Use that URL in your MCP client configuration
 
 See [#784](https://github.com/homeassistant-ai/ha-mcp/issues/784) for an example where this resolved a TLS connection issue.
@@ -349,7 +352,8 @@ still appears in automation, dashboard, and template content, so do not rely on
 the default filter as a security boundary. The opt-in **[Enforce mode](#enforce-mode)**
 below turns it into a genuine read barrier: with `"enforce": true`, direct reads
 of a hidden entity are concealed and content reads that would surface one are
-refused across every tool.
+refused across tool reads, except for the deliberately unrestricted-by-default
+`ha_report_issue` diagnostic path described below.
 
 **Default form: reads only – it does not gate control tools.** Without enforce
 mode the filter only scopes what the *collection read* tools return. It does
@@ -368,7 +372,7 @@ denylist). It reads and writes the same file described below, so either surface
 works.
 
 The filter is off until `entity_visibility.json` exists in the ha-mcp data
-directory (the same directory as `tool_policy.json`; `/data` in the add-on) with
+directory (the same directory as `tool_policy.json`; `/data` in the app) with
 `"enabled": true`:
 
 ```json
@@ -384,7 +388,8 @@ directory (the same directory as `tool_policy.json`; `/data` in the add-on) with
   "allow_areas": [],
   "allow_labels": [],
   "respect_assist_exposure": false,
-  "enforce": false
+  "enforce": false,
+  "restrict_report_issue": false
 }
 ```
 
@@ -428,8 +433,9 @@ it passes every active one.
 #### Enforce mode
 
 Set `"enforce": true` (or the **Enforce mode** toggle in the Entity Visibility
-tab) to turn the same hidden set into a genuine read barrier applied across
-**every** tool, not just `ha_search` / `ha_get_overview`. `enforce` is not a hide
+tab) to turn the same hidden set into a genuine read barrier applied across tool
+reads, not just `ha_search` / `ha_get_overview`. The default exception is
+`ha_report_issue`, described below. `enforce` is not a hide
 dimension — it does not change *which* entities are hidden, only how strongly the
 hiding is applied — so it is inert unless the filter is also `enabled` with at
 least one active hide dimension. What it covers:
@@ -448,10 +454,10 @@ least one active hide dimension. What it covers:
   automation, script, scene, helper, or dashboard record that references a
   hidden entity is omitted from the config results (in the default soft mode
   such records still appear — that is the documented soft-filter behavior).
-- **Content reads are refused on contact.** A dashboard config, template result,
-  automation/script body, trace, log, or file read whose output would surface a
-  hidden entity_id is refused with a generic `ENTITY_VISIBILITY_ENFORCED` error
-  that never names the matched id.
+- **Content reads are refused on contact.** An ordinary dashboard config,
+  template result, automation/script body, trace, log, or file read whose output
+  would surface a hidden entity_id is refused with a generic
+  `ENTITY_VISIBILITY_ENFORCED` error that never names the matched id.
 - **Writes naming a hidden entity are concealed too.** The inbound argument scan
   applies to *every* tool, including service calls: a `ha_call_service` targeting
   a hidden entity_id is concealed as not-found, so an agent cannot confirm the
@@ -471,10 +477,21 @@ camera whose view happens to include a display showing a hidden entity's state;
 if a camera can see something sensitive, hide the camera too (denylist or its
 area).
 
-Enforce mode **fails closed**: if the entity registry (or the config file
-itself) cannot be loaded, the server falls back to the last good read from this
-session — and with none available, tool calls are refused rather than risk
-leaking a restricted entity. The hidden set is cached for ~30s, so an area/label
+A second surface is deliberately **exempt by default**: `ha_report_issue`.
+While `"restrict_report_issue": false`, it bypasses both visibility scans on
+every call — not only during a registry failure — and can return diagnostic
+fields such as core, app/add-on, recent, and startup logs that contain hidden
+entity_ids. This keeps the troubleshooting path available when visibility
+configuration or Home Assistant registry inputs are the problem. Set
+`"restrict_report_issue": true` to scan and refuse it like other tool reads.
+
+Except for that default diagnostic escape hatch, enforce mode **fails closed**:
+if the entity registry (or the config file itself) cannot be loaded, the server
+falls back to the last good read from this session — and with none available,
+tool calls are refused rather than risk leaking a restricted entity. If no
+config can be read, `ha_report_issue` follows its safe unrestricted default;
+if a last-good config opted it in, it fails closed too. The hidden set is cached
+for ~30s, so an area/label
 membership change in Home Assistant can take up to that long to take effect for
 the area/label dimensions (a config edit in the settings UI applies on the next
 call).

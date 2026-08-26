@@ -35,6 +35,10 @@ logger = logging.getLogger(__name__)
 
 def enhanced_parse_mcp_result(result) -> dict[str, Any]:
     """Enhanced MCP result parser with better error handling."""
+    # Same passthrough contract as the shared utilities.assertions helper:
+    # an already-parsed dict comes back unchanged.
+    if isinstance(result, dict):
+        return result
     try:
         if hasattr(result, "content") and result.content:
             response_text = str(result.content[0].text)

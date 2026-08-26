@@ -39,8 +39,9 @@ jobs:
             platform: linux/arm64
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
+        persist-credentials: false
         submodules: true
         # Check out the release tag so uv sync installs the bumped pyproject.toml.
         # Without this, GITHUB_SHA points to the pre-semantic-release merge commit
@@ -49,10 +50,10 @@ jobs:
         ref: ${{ inputs.version && format('v{0}', inputs.version) || github.sha }}
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
     - name: Log in to GitHub Container Registry
-      uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
       with:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}

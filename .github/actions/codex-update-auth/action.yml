@@ -47,11 +47,10 @@ runs:
         fi
 
         echo "::notice::Codex auth.json changed; refreshing CODEX_AUTH secret via GitHub REST API."
-        python -m pip install --quiet pynacl
         read_key_output="$(gh api repos/${GITHUB_REPOSITORY}/actions/secrets/public-key --jq '[.key_id, .key] | @tsv')"
         IFS=$'\t' read -r key_id public_key <<<"$read_key_output"
 
-        encrypted_value=$(PUBLIC_KEY="$public_key" AUTH_PATH="$CODEX_AUTH_PATH" python - <<'PY'
+        encrypted_value=$(PUBLIC_KEY="$public_key" AUTH_PATH="$CODEX_AUTH_PATH" uv run --frozen python - <<'PY'
 import base64
 import os
 from pathlib import Path

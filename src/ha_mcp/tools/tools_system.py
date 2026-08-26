@@ -1271,7 +1271,9 @@ class SystemTools:
             return None
         try:
             ws = await get_websocket_client(
-                url=self._client.base_url, token=self._client.token
+                url=self._client.base_url,
+                token=self._client.token,
+                verify_ssl=getattr(self._client, "verify_ssl", None),
             )
             raw = await ws.send_command(
                 WS_SYSTEM_SNAPSHOT,

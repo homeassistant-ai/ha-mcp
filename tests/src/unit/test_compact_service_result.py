@@ -120,7 +120,7 @@ class TestCompactServiceResult:
         assert compact_service_result([], "light.kitchen") == []
 
     def test_non_list_passthrough(self):
-        """``return_response=True`` services return dicts — leave them alone."""
+        """Non-list input is left alone (defensive — no caller passes a dict now)."""
         as_dict = {"service_response": {"foo": "bar"}}
         assert compact_service_result(as_dict, "light.kitchen") is as_dict
         assert compact_service_result(None, "light.kitchen") is None
@@ -210,7 +210,11 @@ class TestProjectServiceResult:
         assert "nonexistent_attr" in warnings[0]
 
     def test_non_list_result_passthrough(self):
-        """Dict result (return_response services) passes through every mode."""
+        """A dict result passes through every mode.
+
+        Defensive only: ha_call_service splits the return_response envelope before
+        projection, so both its paths hand this helper a changed-state list.
+        """
         result = {"service_response": {"forecast": []}}
         projected, warnings = ServiceTools._project_service_result(
             result,

@@ -157,6 +157,7 @@ def preflight_check_docker(timeout: float = 5.0) -> str | None:
             capture_output=True,
             text=True,
             timeout=timeout,
+            check=False,
         )
     except FileNotFoundError:
         return "'docker' CLI not found on PATH (install Docker or pass --ha-url)"

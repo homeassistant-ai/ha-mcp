@@ -28,6 +28,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tools_config_helpers import validate_registry_ids
 from .util_helpers import (
     JSON_STRING_COERCION,
     build_pagination_metadata,
@@ -50,7 +51,11 @@ def _process_device_domain(
         return value, is_z2m, zwave_node_id
     # Z2M: identifier is ["mqtt", "zigbee2mqtt_0xIEEE"] or "zigbee2mqtt_bridge_0xIEEE"
     if domain == "mqtt" and "zigbee2mqtt" in value.lower():
-        extracted = "0x" + value.split("_0x")[-1] if "_0x" in value else ieee_address
+        extracted = (
+            "0x" + value.rsplit("_0x", maxsplit=1)[-1]
+            if "_0x" in value
+            else ieee_address
+        )
         return extracted, True, zwave_node_id
     # Z-Wave JS: identifier is ["zwave_js", "{home_id}-{node_id}"]
     if domain == "zwave_js" and "-" in value:
@@ -783,6 +788,13 @@ class RegistryTools:
                         context={"device_id": device_id},
                     )
                 )
+
+            # Issue #2159: HA stores an unknown area_id or label_id on the
+            # device verbatim. Device labels replace the existing set, so the
+            # supplied list is the full set to check; an empty list clears.
+            await validate_registry_ids(
+                self._client, area_id, labels, None, fail_closed=True
+            )
 
             logger.info(f"Updating device {device_id}: {', '.join(updates_made)}")
             result = await self._client.send_websocket_message(message)

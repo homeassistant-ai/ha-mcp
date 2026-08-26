@@ -10,7 +10,7 @@ from typing import Any
 # Domain-specific handler configurations
 DOMAIN_HANDLERS = {
     "light": {
-        "valid_actions": ["on", "off", "toggle", "set", "adjust"],
+        "valid_actions": ["on", "off", "toggle", "set"],
         "parameters": [
             "brightness",
             "color_temp_kelvin",
@@ -30,7 +30,16 @@ DOMAIN_HANDLERS = {
         "supports_color": True,
     },
     "climate": {
-        "valid_actions": ["on", "off", "set", "heat", "cool", "auto", "heat_cool"],
+        "valid_actions": [
+            "on",
+            "off",
+            "toggle",
+            "set",
+            "heat",
+            "cool",
+            "auto",
+            "heat_cool",
+        ],
         "parameters": [
             "temperature",
             "target_temp_high",
@@ -60,7 +69,17 @@ DOMAIN_HANDLERS = {
         "supports_color": False,
     },
     "media_player": {
-        "valid_actions": ["play", "pause", "stop", "toggle", "set", "next", "previous"],
+        "valid_actions": [
+            "on",
+            "off",
+            "play",
+            "pause",
+            "stop",
+            "toggle",
+            "set",
+            "next",
+            "previous",
+        ],
         "parameters": [
             "volume_level",
             "media_content_id",
@@ -73,7 +92,7 @@ DOMAIN_HANDLERS = {
         "supports_media": True,
     },
     "fan": {
-        "valid_actions": ["on", "off", "toggle", "set"],
+        "valid_actions": ["on", "off", "toggle"],
         # HA removed the legacy `speed` param / `fan.set_speed` service in the
         # 2021-2022 percentage migration (absent in 2026.6). Use percentage
         # (fan.set_percentage) and preset_mode (fan.set_preset_mode).
@@ -116,7 +135,7 @@ DOMAIN_HANDLERS = {
         "supports_modes": True,
     },
     "humidifier": {
-        "valid_actions": ["on", "off", "toggle", "set"],
+        "valid_actions": ["on", "off", "toggle"],
         "parameters": ["humidity", "mode"],
         "quick_actions": ["toggle", "humidity_up", "humidity_down"],
         "state_attributes": ["current_humidity", "target_humidity"],
@@ -124,7 +143,7 @@ DOMAIN_HANDLERS = {
         "supports_modes": True,
     },
     "camera": {
-        "valid_actions": ["snapshot", "record", "stream"],
+        "valid_actions": ["on", "off", "snapshot", "record"],
         "parameters": ["filename", "duration"],
         "quick_actions": ["take_snapshot"],
         "state_attributes": ["entity_picture", "access_token"],
@@ -132,7 +151,7 @@ DOMAIN_HANDLERS = {
         "supports_recording": True,
     },
     "scene": {
-        "valid_actions": ["turn_on", "activate"],
+        "valid_actions": ["on", "turn_on"],
         "parameters": [],
         "quick_actions": ["activate"],
         "state_attributes": ["state"],
@@ -140,7 +159,7 @@ DOMAIN_HANDLERS = {
         "action_only": True,
     },
     "script": {
-        "valid_actions": ["turn_on", "turn_off", "toggle"],
+        "valid_actions": ["on", "off", "toggle", "turn_on", "turn_off"],
         "parameters": [],
         "quick_actions": ["run", "stop"],
         "state_attributes": ["state"],
@@ -148,7 +167,7 @@ DOMAIN_HANDLERS = {
         "can_be_stopped": True,
     },
     "automation": {
-        "valid_actions": ["turn_on", "turn_off", "toggle", "trigger"],
+        "valid_actions": ["on", "off", "toggle", "turn_on", "turn_off", "trigger"],
         "parameters": [],
         "quick_actions": ["enable", "disable", "trigger"],
         "state_attributes": ["state", "last_triggered"],
@@ -192,20 +211,20 @@ DOMAIN_HANDLERS = {
 }
 
 
-def get_domain_handler(entity_id: str) -> dict[str, Any]:
-    """Get domain-specific configuration for an entity.
+def get_domain_handler(entity_or_domain: str) -> dict[str, Any]:
+    """Get domain-specific configuration for an entity ID or bare domain.
 
     Args:
-        entity_id: Full entity ID (e.g., 'light.living_room')
+        entity_or_domain: Full entity ID ('light.living_room') or bare
+            domain ('light'). Both call sites in device_control pass the
+            bare domain — the old dot-guard sent those to the default
+            handler, making every per-domain valid_actions table
+            unreachable (e.g. climate's 'heat' was rejected upfront).
 
     Returns:
         Domain handler configuration dictionary
     """
-    if "." not in entity_id:
-        # Fallback for invalid entity ID format
-        return get_default_handler()
-
-    domain = entity_id.split(".")[0]
+    domain = entity_or_domain.split(".", maxsplit=1)[0] if entity_or_domain else ""
     return DOMAIN_HANDLERS.get(domain, get_default_handler())
 
 
@@ -223,175 +242,3 @@ def get_default_handler() -> dict[str, Any]:
         "supports_basic_control": True,
         "unknown_domain": True,
     }
-
-
-def get_domain_capabilities(domain: str) -> dict[str, Any]:
-    """Get capabilities for a specific domain.
-
-    Args:
-        domain: Domain name (e.g., 'light', 'climate')
-
-    Returns:
-        Dictionary of domain capabilities
-    """
-    handler = DOMAIN_HANDLERS.get(domain, get_default_handler())
-
-    capabilities = {
-        "domain": domain,
-        "controllable": len(handler.get("valid_actions", [])) > 0,
-        "read_only": handler.get("read_only", False),
-        "security_sensitive": handler.get("security_sensitive", False),
-        "requires_parameters": len(handler.get("parameters", [])) > 0,
-        "has_quick_actions": len(handler.get("quick_actions", [])) > 0,
-    }
-
-    # Add specific capability flags
-    for capability in [
-        "supports_dimming",
-        "supports_color",
-        "supports_temperature",
-        "supports_position",
-        "supports_volume",
-        "supports_speed",
-    ]:
-        if capability in handler:
-            capabilities[capability] = handler[capability]
-
-    return capabilities
-
-
-def get_all_controllable_domains() -> list[str]:
-    """Get list of all controllable domains.
-
-    Returns:
-        List of domain names that support control actions
-    """
-    controllable = []
-    for domain, handler in DOMAIN_HANDLERS.items():
-        if handler.get("valid_actions") and not handler.get("read_only", False):
-            controllable.append(domain)
-
-    return sorted(controllable)
-
-
-def get_all_sensor_domains() -> list[str]:
-    """Get list of all sensor/read-only domains.
-
-    Returns:
-        List of domain names that provide data but don't support control
-    """
-    sensors = []
-    for domain, handler in DOMAIN_HANDLERS.items():
-        if handler.get("read_only", False) or handler.get("provides_data", False):
-            sensors.append(domain)
-
-    return sorted(sensors)
-
-
-def validate_action_for_domain(domain: str, action: str) -> tuple[bool, str]:
-    """Validate if an action is supported for a domain.
-
-    Args:
-        domain: Domain name
-        action: Action to validate
-
-    Returns:
-        Tuple of (is_valid, error_message_if_invalid)
-    """
-    handler = DOMAIN_HANDLERS.get(domain, get_default_handler())
-    valid_actions = handler.get("valid_actions", [])
-
-    if not valid_actions:
-        return False, f"Domain '{domain}' does not support any control actions"
-
-    if action not in valid_actions:
-        return (
-            False,
-            f"Action '{action}' not supported for domain '{domain}'. Valid actions: {', '.join(valid_actions)}",
-        )
-
-    return True, ""
-
-
-def get_suggested_parameters(domain: str, action: str) -> list[str]:
-    """Get suggested parameters for a domain/action combination.
-
-    Args:
-        domain: Domain name
-        action: Action being performed
-
-    Returns:
-        List of suggested parameter names
-    """
-    handler = DOMAIN_HANDLERS.get(domain, get_default_handler())
-    all_params = handler.get("parameters", [])
-
-    # Action-specific parameter suggestions
-    action_params = {
-        "light": {
-            "set": ["brightness", "color_temp_kelvin", "rgb_color"],
-            "on": ["brightness", "color_temp_kelvin"],
-            "adjust": ["brightness"],
-        },
-        "climate": {
-            "set": ["temperature"],
-            "heat": ["temperature"],
-            "cool": ["temperature"],
-        },
-        "cover": {"set": ["position"], "open": [], "close": []},
-        "media_player": {
-            "set": ["volume_level"],
-            "play": ["media_content_id", "media_content_type"],
-        },
-    }
-
-    if domain in action_params and action in action_params[domain]:
-        return action_params[domain][action]
-
-    return list(all_params)
-
-
-def is_security_sensitive_domain(domain: str) -> bool:
-    """Check if a domain is security sensitive.
-
-    Args:
-        domain: Domain name to check
-
-    Returns:
-        True if domain requires extra security considerations
-    """
-    handler = DOMAIN_HANDLERS.get(domain, {})
-    return bool(handler.get("security_sensitive", False))
-
-
-def get_domain_description(domain: str) -> str:
-    """Get human-readable description of a domain.
-
-    Args:
-        domain: Domain name
-
-    Returns:
-        Human-readable description
-    """
-    descriptions = {
-        "light": "Lighting devices (bulbs, strips, switches)",
-        "climate": "Climate control (thermostats, HVAC systems)",
-        "cover": "Window coverings (blinds, curtains, garage doors)",
-        "switch": "Simple on/off switches and outlets",
-        "media_player": "Audio/video players and streaming devices",
-        "fan": "Fans and ventilation devices",
-        "vacuum": "Robotic vacuums and cleaning devices",
-        "lock": "Smart locks and door controls",
-        "alarm_control_panel": "Security system panels and alarms",
-        "water_heater": "Water heating systems",
-        "humidifier": "Humidity control devices",
-        "camera": "Security cameras and video devices",
-        "scene": "Predefined device state combinations",
-        "script": "Custom automation scripts",
-        "automation": "Automated rules and triggers",
-        "sensor": "Environmental and status sensors",
-        "binary_sensor": "On/off status sensors",
-        "device_tracker": "Location tracking devices",
-    }
-
-    return descriptions.get(domain, f"Unknown domain: {domain}")

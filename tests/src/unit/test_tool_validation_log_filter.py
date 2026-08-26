@@ -6,7 +6,7 @@ import pytest
 from fastmcp.exceptions import FastMCPError, ToolError
 from pydantic import BaseModel, ValidationError
 
-from ha_mcp.__main__ import ToolValidationLogFilter
+from ha_mcp.log_filters import ToolValidationLogFilter
 
 
 def _pydantic_validation_error() -> ValidationError:

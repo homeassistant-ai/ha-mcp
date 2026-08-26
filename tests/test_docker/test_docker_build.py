@@ -2,6 +2,8 @@
 
 import subprocess
 
+DATA_DIR = "/home/mcpuser/.ha-mcp"
+
 
 class TestDockerBuild:
     """Test standalone Docker deployment."""
@@ -12,6 +14,7 @@ class TestDockerBuild:
             ["docker", "build", "-t", "ha-mcp-test", "."],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode == 0, f"Build failed: {result.stderr}"
 
@@ -21,8 +24,17 @@ class TestDockerBuild:
             ["docker", "run", "--rm", "ha-mcp-test", "which", "uv"],
             capture_output=True,
             text=True,
+            check=False,
         )
-        assert result.returncode != 0, "uv should not be in the runtime image"
+        # Exactly 1 — that is ``which`` reporting "not found". Any other
+        # non-zero code means the check never happened: 125/126 for docker
+        # failing to start the container, 127 usually for ``which`` itself
+        # being absent from the image. Those would otherwise pass as if the
+        # image were clean.
+        assert result.returncode == 1, (
+            f"expected `which uv` to exit 1 (not found), got {result.returncode}: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
 
     def test_ha_mcp_command_exists(self):
         """Verify ha-mcp command is installed."""
@@ -30,6 +42,7 @@ class TestDockerBuild:
             ["docker", "run", "--rm", "ha-mcp-test", "which", "ha-mcp"],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.returncode == 0
 
@@ -39,6 +52,7 @@ class TestDockerBuild:
             ["docker", "run", "--rm", "ha-mcp-test", "whoami"],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.stdout.strip() == "mcpuser"
 
@@ -48,6 +62,7 @@ class TestDockerBuild:
             ["docker", "run", "--rm", "ha-mcp-test", "python", "--version"],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert "Python 3.1" in result.stdout
 
@@ -64,6 +79,7 @@ class TestDockerBuild:
             ["docker", "run", "--rm", "ha-mcp-test", "sh", "-c", "echo $HOME"],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.stdout.strip() == "/home/mcpuser"
 
@@ -88,5 +104,127 @@ class TestDockerBuild:
             ],
             capture_output=True,
             text=True,
+            check=False,
         )
         assert result.stdout.strip() == "755"
+
+    def test_mcpuser_ids_are_pinned(self):
+        """Verify the built image really hands ``mcpuser`` UID/GID 999.
+
+        A volume records numeric ownership, not names, so the IDs have to stay
+        put: an existing ha-mcp-data volume owned by the old UID would become
+        unwritable after an image update, resurrecting the tmpdir fallback of
+        issue #2078.
+
+        What this guards is the *value*, not the presence of the ``-u``/``-g``
+        flags. ``useradd -r`` searches downward for a free system ID and lands
+        on 999 on this base image anyway — that is why pinning was backward
+        compatible — so dropping the flags would leave this assertion green.
+        The regression it does catch is a future base image occupying 999 and
+        shifting the account out from under the pin, which would strand every
+        existing volume. Changing the pinned value is a deliberate act that
+        breaks those volumes; see the Dockerfile.
+        """
+        result = subprocess.run(
+            ["docker", "run", "--rm", "ha-mcp-test", "id", "-u", "mcpuser"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.stdout.strip() == "999", f"unexpected UID: {result.stdout!r}"
+
+        result = subprocess.run(
+            ["docker", "run", "--rm", "ha-mcp-test", "id", "-g", "mcpuser"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.stdout.strip() == "999", f"unexpected GID: {result.stdout!r}"
+
+    def test_data_dir_exists_and_is_owned_by_mcpuser(self):
+        """Verify ``~/.ha-mcp`` ships in the image owned by ``mcpuser``.
+
+        This is the mount point the docs tell Docker users to bind a volume
+        to. It has to exist in the image: Docker seeds a fresh named volume
+        from the image directory at the mount point (ownership included), but
+        creates the directory root-owned when the image has nothing there.
+        Root-owned means ``mcpuser`` can't write, so ``get_data_dir()`` warns
+        and falls back to a tmpdir, and settings vanish on restart —
+        issue #2078.
+        """
+        result = subprocess.run(
+            ["docker", "run", "--rm", "ha-mcp-test", "stat", "-c", "%U", DATA_DIR],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, f"{DATA_DIR} missing from image: {result.stderr}"
+        assert result.stdout.strip() == "mcpuser"
+
+    def test_settings_survive_container_re_creation(self):
+        """Verify data on a named volume outlives the container that wrote it.
+
+        This is issue #2078 verbatim: write settings, throw the container
+        away, start a new one, and the settings should still be there. Both
+        containers use ``--rm``, so the second one only sees the file if the
+        volume — not the discarded writable layer — is holding it. Uses a
+        throwaway volume name so it never collides with a real deployment.
+        """
+        volume = "ha-mcp-test-persistence"
+        marker = f"{DATA_DIR}/tool_config.json"
+        # Start clean: a volume left over from an earlier run would keep its
+        # old ownership and mask a regression in the image's mount point.
+        subprocess.run(
+            ["docker", "volume", "rm", "-f", volume],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        try:
+            write = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "-v",
+                    f"{volume}:{DATA_DIR}",
+                    "ha-mcp-test",
+                    "sh",
+                    "-c",
+                    f'echo persisted > "{marker}"',
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert write.returncode == 0, (
+                f"mcpuser cannot write to a named volume at {DATA_DIR}: {write.stderr}"
+            )
+
+            # Fresh container, same volume — the first one no longer exists.
+            read = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "-v",
+                    f"{volume}:{DATA_DIR}",
+                    "ha-mcp-test",
+                    "cat",
+                    marker,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert read.returncode == 0, (
+                f"{marker} did not survive container re-creation: {read.stderr}"
+            )
+            assert read.stdout.strip() == "persisted"
+        finally:
+            subprocess.run(
+                ["docker", "volume", "rm", "-f", volume],
+                capture_output=True,
+                text=True,
+                check=False,
+            )

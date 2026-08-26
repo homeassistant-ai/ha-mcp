@@ -1,0 +1,168 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA-MCP 사용자 지정 구성요소",
+        "description": "무엇을 추가할지 선택하세요. **HA-MCP 서버**는 Home Assistant 안에서 전체 ha-mcp 서버를 실행하고 Home Assistant 웹훅을 통해 노출합니다. 대부분의 사용자에게 알맞은 설치 방식입니다. 이는 독립 실행 서버로서 다른 모든 설치 방식(앱(애드온), 도커, uvx/PyPI, stdio)을 완전히 대체하므로, 이것을 실행한다면 다른 방식은 함께 실행하지 마세요. **HA-MCP 파일 및 YAML 도구**는 권한이 필요한 파일·YAML 편집 서비스를 추가하며, ha-mcp의 선택형 파일/YAML 도구를 켤 때만 필요합니다. ha-mcp 서버를 이미 다른 곳(앱(애드온), 도커, uvx)에서 실행 중이라면 서버 항목은 필요하지 않습니다. 해당 도구를 쓰는 경우에만 이 파일 및 YAML 항목만 추가하세요. 모든 서버 유형과 함께 동작하며 언제든지 나중에 추가할 수 있습니다.",
+        "menu_options": {
+          "server": "HA-MCP 서버(권장)",
+          "tools": "HA-MCP 파일 및 YAML 도구(선택)"
+        }
+      },
+      "tools": {
+        "title": "HA-MCP 파일 및 YAML 도구",
+        "description": "권한이 필요한 파일 및 YAML 설정 서비스를 구성합니다. ha-mcp의 선택형 파일/YAML 편집 도구(기능 플래그, 기본값 꺼짐)를 켤 때만 필요하며, 프로세스 내 HA-MCP 서버를 포함한 모든 서버 유형에 해당합니다. 이 항목은 언제든지 추가하거나 제거할 수 있습니다."
+      },
+      "server": {
+        "title": "HA-MCP 서버",
+        "description": "Home Assistant 안에서 전체 ha-mcp 서버를 실행하고 Home Assistant 웹훅을 통해 원격으로 노출합니다(Nabu Casa나 임의의 리버스 프록시로 접근 가능). 이는 독립 실행 서버로서 앱(애드온), 도커, uvx/PyPI, stdio 설치 방식을 완전히 대체하므로 다른 ha-mcp 서버와 함께 실행하지 마세요. **제출**을 선택하면 시작됩니다. 포트, 바인딩, 인증은 나중에 통합 구성요소 옵션에서 변경할 수 있습니다."
+      }
+    },
+    "abort": {
+      "already_configured": "이 항목은 이미 설정되어 있습니다.",
+      "unsupported_home_assistant": "프로세스 내 HA-MCP 서버는 Home Assistant {required} 이상이 필요하지만 이 인스턴스는 {installed}을(를) 실행 중입니다. 앱(애드온)이나 도커 컨테이너로 실행 중인 외부 ha-mcp 서버와 함께라면 이 구성요소의 HA-MCP 파일 및 YAML 도구 항목은 계속 사용할 수 있습니다."
+    }
+  },
+  "options": {
+    "step": {
+      "tools_info": {
+        "title": "HA-MCP 파일 및 YAML 도구",
+        "description": "ha-mcp의 선택형 파일/YAML 도구가 사용하는, 권한이 필요한 파일 및 YAML 편집 서비스를 구성합니다. 이 설정은 ha-mcp 서버 자체의 설정 UI에도 나타나며 다시 시작하지 않아도 즉시 적용됩니다. 재정의할 수 없는 기본 차단 규칙은 민감한 경로(예: .storage)와 신뢰 경계 키(homeassistant, http, frontend, lovelace)를 계속 차단합니다.",
+        "data": {
+          "allowed_dirs": "추가 파일 디렉터리",
+          "extra_yaml_keys": "추가 YAML 쓰기 허용 키"
+        },
+        "data_description": {
+          "allowed_dirs": "설정 디렉터리 기준 상대 디렉터리이며 각각 읽기와 쓰기가 허용됩니다(예: pyscript). 경로 탈출과 설정 디렉터리 밖의 항목은 무시됩니다.",
+          "extra_yaml_keys": "이 설치본에서 YAML 우선으로 동작하는 통합 구성요소(예: alert2)를 위해, ha_config_set_yaml이 기본 허용 키 외에 추가로 쓸 수 있는 최상위 키입니다. 신뢰 경계 키는 무시됩니다."
+        }
+      },
+      "init": {
+        "title": "HA-MCP 서버",
+        "description": "HA-MCP 서버를 구성합니다. {panel_hint}여기서 변경한 내용은 저장할 때 적용됩니다.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
+        "data": {
+          "channel": "릴리스 채널",
+          "auto_update": "서버 자동 업데이트",
+          "server_port": "MCP 서버 수신 포트",
+          "bind_host": "네트워크 접근 범위",
+          "webhook_auth": "인증 방식",
+          "oauth_client_id_override": "레거시 OAuth: 사용자 지정 클라이언트 ID(선택)",
+          "oauth_client_secret_override": "레거시 OAuth: 사용자 지정 클라이언트 시크릿(선택)",
+          "oauth_regenerate": "레거시 OAuth: 지금 클라이언트 ID/시크릿 재생성",
+          "pip_spec": "개발자용: ha-mcp 패키지 재정의",
+          "server_url": "Home Assistant URL(고급)",
+          "external_url": "외부 URL(선택)",
+          "webhook_id_override": "사용자 지정 웹훅 시크릿(선택)",
+          "secret_path_override": "사용자 지정 직접 접속 경로(선택)",
+          "regenerate_secrets": "지금 접속 시크릿 재생성",
+          "enable_webhook": "웹훅을 통한 원격 접속",
+          "enable_llm_api": "대화 에이전트 LLM API",
+          "llm_api_exposure": "대화 에이전트 도구 노출 방식",
+          "enable_startup_notification": "시작 알림",
+          "enable_sidebar_panel": "사이드바 설정 패널"
+        },
+        "data_description": {
+          "channel": "안정 채널은 최신 정식 릴리스를, 개발 채널은 최신 개발 빌드를 설치합니다. 자동 업데이트가 켜져 있으면 다시 불러오기나 재시작 때, 그리고 주기적인 확인을 통해 선택한 채널의 최신 빌드가 설치됩니다. 아래의 개발자용 패키지 재정의가 우선하며, 그 경우 자동 업데이트는 꺼집니다.",
+          "auto_update": "켜면 선택한 채널의 최신 릴리스가 자동으로 설치됩니다. 다시 불러오기나 재시작 때, 그리고 주기적인 확인을 통해 설치됩니다. 끄면 다시 켤 때까지 현재 설치된 버전이 유지됩니다. 이 설정은 ha-mcp 서버 패키지에만 적용되며, HA-MCP 사용자 지정 구성요소 자체의 업데이트는 계속 HACS를 통해 이루어집니다.",
+          "server_port": "이 서버가 수신할 포트입니다. ha-mcp 앱(애드온)이 9583을 사용하므로 둘을 함께 실행할 수 있도록 기본값은 9584입니다. 앱(애드온)을 실행하지 않는다면 비어 있는 아무 포트나 사용할 수 있습니다.",
+          "bind_host": "MCP 서버 포트에 직접 접속할 수 있는 대상을 정합니다. 기본값은 앱(애드온)과 동일하게 로컬 네트워크에서 접근할 수 있으며, 비밀 경로가 자격 증명 역할을 합니다. 루프백을 고르면 Home Assistant가 실행 중인 머신에서만 접속할 수 있습니다. 웹훅 URL과 사이드바 패널은 어느 쪽이든 동작합니다.",
+          "webhook_auth": "MCP 클라이언트가 웹훅 URL에서 자신을 증명하는 방식입니다. 비밀 URL 방식에서는 링크 자체가 유일한 자격 증명입니다. OAuth를 사용하는 클라이언트에서는 OAuth가 동작하지만 모든 로그인이 자동으로 승인되므로, 로그인도 클라이언트 ID나 시크릿도 필요 없습니다. Home Assistant 로그인 방식에서는 claude.ai 같은 클라이언트가 Home Assistant 관리자 계정으로 로그인합니다(OAuth). 레거시 OAuth 방식에서는 이 통합 구성요소가 자체 로그인 서비스를 실행하고, 클라이언트에 붙여 넣을 클라이언트 ID와 시크릿을 발급합니다. 이 방식을 완전히 켜거나 끄려면 Home Assistant를 다시 시작해야 할 수 있습니다.",
+          "oauth_client_id_override": "자동 생성된 레거시 OAuth 클라이언트 ID를 대체합니다. 현재 값을 유지하려면 비워 두세요. 인증 방식이 레거시 OAuth일 때만 사용됩니다.",
+          "oauth_client_secret_override": "자동 생성된 레거시 OAuth 클라이언트 시크릿을 대체합니다. 현재 값을 유지하려면 비워 두세요. 인증 방식이 레거시 OAuth일 때만 사용됩니다.",
+          "oauth_regenerate": "일회성 작업입니다. 레거시 OAuth 모드용 클라이언트 ID와 시크릿을 새로 발급합니다. 복구 안내가 요청하는 Home Assistant 재시작을 마쳐야 적용되며, 재시작 전까지는 이전 클라이언트 ID와 시크릿이 계속 동작하고 새 값은 동작하지 않습니다. 위의 재정의 항목 두 개도 함께 비워집니다.",
+          "pip_spec": "비워 두세요. 특정 ha-mcp 빌드를 테스트할 때(예: 사전 릴리스 고정)만 사용합니다. 릴리스 채널보다 우선하며, 값을 지울 때까지 자동 업데이트가 꺼집니다.",
+          "server_url": "프로세스 내 서버가 Home Assistant(보통 이 인스턴스 자신)에 접속할 때 사용하는 URL입니다. 이 인스턴스의 포트와 SSL 설정에서 자동으로 유추하게 하려면 비워 두고, 서버가 다른 경로로 접속해야 할 때만 값을 지정하세요.",
+          "external_url": "기본 접속 URL로 표시됩니다. Home Assistant가 사용자 소유 도메인이나 리버스 프록시 뒤에 있을 때 사용하세요. 스킴을 포함한 전체 기본 주소를 입력합니다. 반드시 Home Assistant를 직접 가리켜야 하며(브라우저에서 열었을 때 HA 로그인 페이지가 나와야 합니다), :8123 같은 포트(그 밖의 어떤 포트도)를 포함하면 안 됩니다. 그렇지 않으면 원격 MCP 클라이언트가 접속하지 못합니다. Nabu Casa나 로컬 주소를 자동으로 사용하려면 비워 두세요.",
+          "webhook_id_override": "접속 URL(/api/webhook/...)에 들어가는 무작위 웹훅 시크릿을 대체합니다. URL 자체가 자격 증명이므로 길고 추측하기 어려운 값을 사용하세요. 현재 값을 유지하려면 비워 두세요.",
+          "secret_path_override": "서버 포트로 직접 접속할 때 사용하는 무작위 경로를 대체합니다. 마찬가지로 경로 자체가 자격 증명입니다. 현재 값을 유지하려면 비워 두세요.",
+          "regenerate_secrets": "일회성 작업입니다. 무작위 웹훅 시크릿과 직접 접속 경로를 새로 만들어 기존 접속 URL을 즉시 무효화합니다. 위의 재정의 항목 두 개도 함께 비워집니다.",
+          "enable_webhook": "로컬 전용 모드로 쓰려면 끄세요. Home Assistant 웹훅이 아예 등록되지 않으므로 Nabu Casa를 포함해 무엇도 Home Assistant를 통해 서버에 접속할 수 없습니다. 서버 포트 직접 접속과 사이드바 패널은 계속 동작합니다.",
+          "enable_llm_api": "Home Assistant 대화 에이전트(OpenAI, Google, Ollama 등)에 전체 도구 모음을 제공합니다. 켜면 에이전트의 'Home Assistant 제어' 항목에서 'HA-MCP Server'를 선택해 Assist 채팅과 음성에서 도구를 사용할 수 있습니다. 켜는 것만으로는 선택 가능해질 뿐이며, 에이전트에서 실제로 선택하기 전에는 아무것도 노출되지 않습니다. 사용 안내: {llm_api_docs_url}",
+          "llm_api_exposure": "대화 에이전트에 제공할 도구 모음의 형태입니다. 도구 검색(기본값)은 고정 도구와 검색·실행 메타 도구로 이루어진 간결한 API를 제공해 에이전트의 컨텍스트를 작게 유지합니다. 전체 카탈로그는 노출된 모든 도구를 그대로 나열하며, 컨텍스트가 큰 모델에 더 적합합니다. 둘 다를 고르면 두 가지를 나란히 등록해 각 에이전트가 'Home Assistant 제어'에서 원하는 쪽을 선택할 수 있습니다. 도구별 노출 여부는 HA-MCP 설정 패널에서 관리합니다. 자세한 내용: {llm_api_docs_url}",
+          "enable_startup_notification": "서버가 시작될 때마다 관리자 전용 설정 화면을 안내하는 알림을 표시합니다. 조용히 시작하려면 끄세요. 접속 URL은 Home Assistant 로그에 계속 표시됩니다.",
+          "enable_sidebar_panel": "사이드바에 HA-MCP 설정 패널을 표시합니다(관리자 전용). 사이드바 항목을 없애려면 끄세요. 서버 옵션은 이 화면에서 계속 사용할 수 있습니다."
+        }
+      }
+    }
+  },
+  "issues": {
+    "server_start_failed": {
+      "title": "HA-MCP 프로세스 내 서버를 시작하지 못했습니다",
+      "description": "Home Assistant 안에서 HA-MCP 프로세스 내 서버를 시작하지 못했습니다:\n\n{detail}\n\nHome Assistant 로그를 확인한 뒤 통합 구성요소를 다시 불러와(또는 근본 원인을 해결한 뒤 다시 불러와) 재시도하세요."
+    },
+    "server_package_install_failed": {
+      "title": "HA-MCP 프로세스 내 서버 패키지를 설치하지 못했습니다",
+      "description": "프로세스 내 서버용 ha-mcp 패키지 설치에 실패했습니다:\n\n{detail}\n\n위에 설명된 호환성 또는 설치 문제를 해결한 뒤 통합 구성요소를 다시 불러와 재시도하세요."
+    },
+    "component_outdated": {
+      "title": "HACS에서 HA-MCP 사용자 지정 구성요소를 업데이트하세요",
+      "description": "설치된 ha-mcp 서버는 HA-MCP 사용자 지정 구성요소 {required} 이상을 요구하지만 현재 {installed}을(를) 사용 중입니다. HACS에서 구성요소를 업데이트한 뒤(HA-MCP 사용자 지정 구성요소 항목을 열고 업데이트가 아직 보이지 않으면 '정보 업데이트'를 사용하세요) Home Assistant를 다시 시작하세요. 그동안에도 서버는 계속 동작하지만, 구성요소를 업데이트하기 전까지 일부 최신 기능이 동작하지 않을 수 있습니다."
+    },
+    "server_update_held": {
+      "title": "HA-MCP 서버 업데이트가 구성요소 업데이트를 기다리는 중입니다",
+      "description": "ha-mcp 서버 {latest}을(를) 사용할 수 있지만, 해당 릴리스는 HA-MCP 사용자 지정 구성요소도 함께 업데이트했습니다(구성요소 {shipped} 기준, 현재 {running} 사용 중). 현재 구성요소로 한 번도 검증되지 않은 서버 버전이 시작되는 것을 막기 위해, 구성요소가 업데이트될 때까지 서버 자동 업데이트를 보류합니다.\n\nHACS에서 구성요소를 업데이트한 뒤(HA-MCP 사용자 지정 구성요소 항목을 열고 업데이트가 아직 보이지 않으면 '정보 업데이트'를 사용하세요) Home Assistant를 다시 시작하면 서버 업데이트가 자동으로 설치됩니다. 그래도 서버 업데이트를 지금 설치하려면 HA-MCP 서버 업데이트 엔티티에서 설치를 누르세요."
+    },
+    "legacy_hacs_source": {
+      "title": "구성요소가 이전 저장소에서 설치되었습니다",
+      "description": "HACS가 이 구성요소에 대해 ha-mcp 서버 본체 저장소를 추적하고 있어, 구성요소 자체의 버전(2.x)이 아니라 서버의 버전 번호와 릴리스 노트가 표시됩니다. 업데이트는 계속 동작하지만 표기는 계속 어긋납니다. 해결하려면 HACS에서 이 저장소를 제거하고(통합 구성요소 설정과 설정 항목은 유지됩니다), homeassistant-ai/ha-mcp-integration을 사용자 지정 저장소로 추가한 뒤 거기에서 구성요소를 다시 설치하고 Home Assistant를 다시 시작하세요."
+    },
+    "legacy_oauth_restart": {
+      "title": "레거시 OAuth 설정을 적용하려면 Home Assistant를 다시 시작하세요",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Home Assistant를 다시 시작할까요?",
+            "description": "이 양식을 제출하면 Home Assistant가 다시 시작되고 레거시 OAuth 설정이 적용됩니다.\n\n지금 다시 시작하려면 **제출**을 누르세요."
+          }
+        }
+      }
+    }
+  },
+  "selector": {
+    "server_channel": {
+      "options": {
+        "stable": "안정(권장)",
+        "dev": "개발(최신 빌드)"
+      }
+    },
+    "server_webhook_auth": {
+      "options": {
+        "none": "비밀 웹훅 URL(기본값)",
+        "ha_auth": "Home Assistant로 로그인(OAuth)",
+        "legacy": "레거시 OAuth(이 통합 구성요소가 붙여 넣을 클라이언트 ID/시크릿을 발급)"
+      }
+    },
+    "llm_api_exposure": {
+      "options": {
+        "tool_search": "도구 검색(간결, 기본값)",
+        "full": "전체 카탈로그",
+        "both": "둘 다(에이전트별로 선택)"
+      }
+    }
+  },
+  "entity": {
+    "update": {
+      "server_update": {
+        "name": "업데이트"
+      }
+    }
+  },
+  "common": {
+    "connect_direct_access": "Home Assistant 머신에서 직접 접속: {url}",
+    "connect_local_lan": "로컬/LAN(네트워크 접근 범위가 \"Local network\"일 때): {url}",
+    "connect_remote_url": "원격 접속 URL: {url}",
+    "connect_urls_label": "접속 URL:",
+    "connect_urls_pending": "서버가 시작되면 접속 URL이 여기(그리고 Home Assistant 로그)에 표시됩니다.",
+    "connect_webhook_disabled": "웹훅을 통한 원격 접속이 꺼져 있습니다(로컬 전용 모드).",
+    "oauth_creds_pending": "서버가 시작되면 클라이언트 ID와 클라이언트 시크릿이 여기에 표시됩니다.",
+    "oauth_not_serving": "레거시 OAuth가 아직 이 값들을 제공하지 않습니다 — 안내가 나오면 Home Assistant를 다시 시작해 활성화하세요.",
+    "oauth_select_legacy_mode": "위에서 인증 방식을 레거시 OAuth로 설정하고 저장하면 클라이언트 ID와 클라이언트 시크릿이 생성됩니다.",
+    "panel_hint": "도구 관리와 서버 설정은 [HA-MCP 설정 패널](/ha-mcp)에서 할 수 있습니다.",
+    "tools_module_installed": "베타/고급 파일 및 YAML 도구 모듈(선택): 설치됨",
+    "tools_module_not_installed": "베타/고급 파일 및 YAML 도구 모듈(선택): 설치되지 않음 — 이 통합 구성요소 페이지에서 \"항목 추가\"를 누르고 \"HA-MCP 파일 및 YAML 도구(HA-MCP File & YAML Tools)\"를 선택해 추가하세요",
+    "tools_module_not_loaded": "베타/고급 파일 및 YAML 도구 모듈(선택): 설치되었지만 불러오지 않음 — 이 통합 구성요소 페이지에서 \"HA-MCP 파일 및 YAML 도구(HA-MCP File & YAML Tools)\" 항목을 활성화하거나 다시 불러오세요",
+    "version_line": "구성요소 {component_version} - 서버 ha-mcp {server_version}({channel} 채널)",
+    "version_not_installed": "아직 설치되지 않음",
+    "version_unknown": "알 수 없음"
+  }
+}

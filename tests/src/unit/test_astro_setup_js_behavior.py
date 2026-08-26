@@ -1,7 +1,7 @@
 """Behavioural tests for ``site/src/pages/setup.astro``'s wizard script.
 
 The setup wizard's correctness is a multidimensional grid (5 server
-methods x 19 clients x 2 scopes x 4 platforms x 4 remote paths). The
+methods x 21 clients x 2 scopes x 4 platforms x 4 remote paths). The
 script is one giant state machine driving per-client instruction
 templates; a typo or condition inversion silently breaks setup for one
 or more branches and the only signal today is a user complaint.
@@ -13,12 +13,15 @@ Tests in this module:
   config, including the branches where scope is skipped (stdio-local),
   where config is gated behind a remote-path choice (remote scope), and
   where an HTTP method plus a stdio-only client forces the platform step
-  for the mcp-proxy bridge.
+  for the stdio bridge.
 * Loop over every real client id and drive the happy path to config
   generation, asserting both that the per-client branch emitted into
   ``config-output`` AND that the emitted content is non-empty (so a typo
   that drops the JSON / CLI / instruction block is caught — not just "no
   JS error", which fires the moment any badge renders).
+* Pin the schema each YAML client gets, which the loop above cannot see:
+  both Continue and Hermes emit valid YAML, so a client falling through to
+  the other one's branch still counts as "emitted something".
 
 The harness rebuilds Astro's ``<script define:vars={...}>`` injection
 by reading the real arrays out of the page frontmatter, so changes to
@@ -359,7 +362,7 @@ class TestWizardStateMachine:
         self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
     ) -> None:
         """An HTTP server method plus a stdio-only client forces the
-        platform step for the mcp-proxy bridge.
+        platform step for the stdio bridge.
 
         ha-addon -> claude-desktop (stdio-only) -> local leaves config
         hidden until a platform is chosen, because ``needsPlatform()``
@@ -393,10 +396,51 @@ class TestWizardStateMachine:
         _assert_clean_init(result)
         assert 'data-before-platform="true"' in result.dom, (
             "config section should still be hidden before the platform "
-            "(mcp-proxy OS) is chosen"
+            "(stdio bridge OS) is chosen"
         )
         assert 'data-after-platform="false"' in result.dom, (
             "config section should be visible after the platform is chosen"
+        )
+
+    @pytest.mark.parametrize("client_id", ["jetbrains", "zed"])
+    def test_http_method_native_http_client_skips_platform(
+        self,
+        client_id: str,
+        setup_script: str,
+        prelude: str,
+        wizard_vars: dict[str, Any],
+    ) -> None:
+        """An HTTP server method plus a native-HTTP client needs no platform
+        step at all: config should already be visible after scope alone.
+
+        Regression test for the bug this class's stdio-only counterpart
+        above pins the positive case for: jetbrains/zed used to be
+        classified stdio-only (forcing a pointless OS choice for clients
+        with no bridge, no uv install, nothing OS-specific to configure)
+        even though their config is identical regardless of platform.
+        """
+        assert client_id not in wizard_vars["stdioOnlyClients"], (
+            f"test premise: {client_id!r} must not be a stdio-only client"
+        )
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "ha-addon")
+                + _click("client", client_id)
+                + _click("scope", "local")
+                + """
+              document.body.dataset.afterScope = String(
+                document.getElementById('section-config').classList.contains('hidden')
+              );
+            """
+            ),
+        )
+        _assert_clean_init(result)
+        assert 'data-after-scope="false"' in result.dom, (
+            f"{client_id}: config section should already be visible after "
+            f"scope alone, no platform step should be needed"
         )
 
 
@@ -414,6 +458,22 @@ def _load_client_ids() -> list[str]:
 
 
 CLIENT_IDS = _load_client_ids()
+
+
+def _load_bridge_client_ids() -> list[str]:
+    """Every client left in ``stdioOnlyClients`` genuinely runs the bridge.
+
+    Read at collection time so a client added to that list picks up
+    bridge-config coverage automatically, instead of silently getting none
+    until someone remembers to update a hardcoded parametrize list here.
+    JetBrains and Zed are not in the source list at all (both have native
+    Streamable HTTP support), so no filtering is needed here.
+    """
+    vars_ = extract_astro_frontmatter_vars(SETUP_ASTRO, ["stdioOnlyClients"])
+    return list(vars_["stdioOnlyClients"])
+
+
+BRIDGE_CLIENT_IDS = _load_bridge_client_ids()
 
 
 def _flow_for_client(
@@ -528,6 +588,280 @@ class TestPerClientInstructionTemplate:
             f"empty after wizard flow — generateConfig's per-client branch "
             f"probably bailed; "
             f"config_code={code_body!r}, instructions_len={instructions_len}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# YAML dialects
+# ---------------------------------------------------------------------------
+
+
+# client id -> (marker its own config must carry, marker that belongs to the
+# other YAML client and must therefore not appear).
+YAML_DIALECTS = {
+    "continue": ("mcpServers:", "mcp_servers:"),
+    "hermes": ("mcp_servers:", "mcpServers:"),
+}
+
+
+class TestYamlDialects:
+    """``configFormat: "yaml"`` covers two incompatible schemas.
+
+    Continue takes a ``mcpServers:`` list of ``{name, type, url}`` entries;
+    Hermes takes a ``mcp_servers:`` mapping keyed by server name in
+    ``~/.hermes/config.yaml``. Both are well-formed YAML, so a client that
+    falls through to the other one's branch still emits *a* config and
+    ``TestPerClientInstructionTemplate`` — which only asserts that the branch
+    emitted something — stays green while the user copies a config their
+    client ignores. These assertions pin the dialect itself.
+    """
+
+    @pytest.mark.parametrize("stdio", [True, False], ids=["stdio", "http"])
+    @pytest.mark.parametrize(
+        "client_id", sorted(YAML_DIALECTS), ids=sorted(YAML_DIALECTS)
+    )
+    def test_yaml_client_gets_its_own_schema(
+        self,
+        client_id: str,
+        stdio: bool,
+        setup_script: str,
+        prelude: str,
+        wizard_vars: dict[str, Any],
+    ) -> None:
+        clients = {c["id"]: c for c in wizard_vars["clientsData"]}
+        assert clients[client_id]["configFormat"] == "yaml", (
+            f"test premise: {client_id!r} must be a YAML-config client"
+        )
+        own_marker, foreign_marker = YAML_DIALECTS[client_id]
+
+        # stdio-local always asks for the platform; an HTTP method serving a
+        # client with native HTTP support reaches config after scope alone.
+        flow = (
+            _click("server-method", "stdio-local")
+            + _click("client", client_id)
+            + _click("platform", "macos")
+            if stdio
+            else _click("server-method", "ha-addon")
+            + _click("client", client_id)
+            + _click("scope", "local")
+        )
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                flow + "document.body.dataset.configCode = "
+                "document.querySelector('#config-output code').textContent || '';\n"
+            ),
+        )
+        _assert_clean_init(result)
+        match = re.search(r'data-config-code="([^"]*)"', result.dom)
+        assert match is not None, "config-output was not captured"
+        config = match.group(1)
+
+        assert own_marker in config, (
+            f"{client_id} ({'stdio' if stdio else 'http'}): emitted config is "
+            f"missing its own root key {own_marker!r}; config={config!r}"
+        )
+        assert foreign_marker not in config, (
+            f"{client_id} ({'stdio' if stdio else 'http'}): emitted config "
+            f"carries {foreign_marker!r}, which belongs to the other YAML "
+            f"client — the branch fell through to the wrong schema; "
+            f"config={config!r}"
+        )
+
+    def test_hermes_http_instructions_do_not_offer_sse(
+        self,
+        setup_script: str,
+        prelude: str,
+        wizard_vars: dict[str, Any],
+    ) -> None:
+        """Hermes can speak SSE; the ha-mcp endpoint cannot.
+
+        ``mcp.run(transport="http")`` serves Streamable HTTP only, and a GET
+        against the MCP path — which is what an SSE-style pre-flight sends —
+        is answered with 405 (see ``ProbeAccessLogFilter`` in
+        ``src/ha_mcp/__main__.py``). Telling a Hermes user they may add
+        ``transport: sse`` therefore points them at a transport this server
+        does not serve, so the instructions must not offer it.
+        """
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "ha-addon")
+                + _click("client", "hermes")
+                + _click("scope", "local")
+                + """
+                const instructionsEl = document.getElementById('setup-instructions');
+                document.body.dataset.instructionsHtml = String(
+                  (instructionsEl && instructionsEl.innerHTML) || ''
+                );
+                """
+            ),
+        )
+        _assert_clean_init(result)
+        match = re.search(r'data-instructions-html="([^"]*)"', result.dom)
+        assert match is not None, "setup-instructions was not captured"
+        html = match.group(1)
+
+        # Plausibility floor: an empty capture must not pass the absence
+        # assertion below by saying nothing at all.
+        assert "Streamable HTTP" in html, (
+            "hermes: HTTP instructions never rendered — the absence check "
+            f"below would pass vacuously; html={html[:300]!r}"
+        )
+        assert "transport: sse" not in html, (
+            "hermes: the instructions offer `transport: sse`, but the ha-mcp "
+            "endpoint is Streamable HTTP only and answers an SSE-style "
+            "pre-flight with 405"
+        )
+
+
+class TestStdioBridgeChoice:
+    """The generated stdio-bridge config must use a bridge with a bounded SDK.
+
+    mcp-proxy imports ``request_ctx`` from ``mcp.server.lowlevel.server``
+    but declares an unbounded ``mcp>=`` dependency, so an unconstrained
+    ``uvx mcp-proxy`` resolves mcp 2.x and dies on an ImportError before
+    it ever connects (#2073). The wizard therefore emits ``fastmcp-remote``,
+    which pins ``fastmcp-slim[client,server]==<its own version>``, and that
+    package in turn bounds ``mcp`` itself, so it cannot drift onto an
+    incompatible SDK.
+
+    The regression this guards is emitting *any* bridge whose SDK dependency
+    resolves unbounded, so reverting to a bare ``mcp-proxy`` invocation must
+    fail here even though `uv` would still install it without error. The
+    break only surfaces later, on import, not at install time.
+
+    Every stdio-only client that goes through the bridge is covered, derived
+    from the real ``stdioOnlyClients`` list minus Zed (which takes the URL
+    directly) rather than hardcoded here.
+    """
+
+    @pytest.mark.parametrize("client_id", BRIDGE_CLIENT_IDS, ids=BRIDGE_CLIENT_IDS)
+    def test_generated_config_uses_bounded_stdio_bridge(
+        self,
+        client_id: str,
+        setup_script: str,
+        prelude: str,
+        wizard_vars: dict[str, Any],
+    ) -> None:
+        assert client_id in wizard_vars["stdioOnlyClients"], (
+            f"test premise: {client_id!r} must be a stdio-only client"
+        )
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "ha-addon")
+                + _click("client", client_id)
+                + _click("scope", "local")
+                + _click("platform", "macos")
+                + "document.body.dataset.configCode = "
+                "document.querySelector('#config-output code').textContent || '';\n"
+            ),
+        )
+        _assert_clean_init(result)
+        match = re.search(r'data-config-code="([^"]*)"', result.dom)
+        assert match is not None, "config-output was not captured"
+        # The capture round-trips through an HTML attribute, so `"` in the
+        # emitted JSON comes back as `&quot;`. Parse the args out of the
+        # unescaped text rather than substring-matching quoted fragments.
+        config = json.loads(match.group(1).replace("&quot;", '"'))
+        args = config["mcpServers"]["home-assistant"]["args"]
+
+        assert "fastmcp-remote" in args, (
+            f"{client_id}: expected a fastmcp-remote bridge config; args={args}"
+        )
+        assert "mcp-proxy" not in args, (
+            f"{client_id}: mcp-proxy declares an unbounded mcp>= dependency and "
+            f"breaks on every SDK major (#2073). Use fastmcp-remote, whose SDK "
+            f"dependency is bounded; args={args}"
+        )
+        # fastmcp-remote needs no SDK pin, so a stray `--with` here means the
+        # mcp-proxy workaround was carried over onto a bridge that never
+        # needed it.
+        assert "--with" not in args, (
+            f"{client_id}: fastmcp-remote's own SDK dependency is already "
+            f"bounded; a --with constraint is leftover mcp-proxy scaffolding; "
+            f"args={args}"
+        )
+        # The bridge takes exactly [package, url]: the package name must come
+        # first (reversed, uvx would treat the URL as the package), and no
+        # stray flag should sneak in between. The URL itself is whatever the
+        # wizard resolved (a real connect URL in the browser, a `{{...}}`
+        # placeholder in this harness), so this doesn't assert its contents.
+        assert len(args) == 2 and args[0] == "fastmcp-remote", (
+            f"{client_id}: expected exactly [package, url]; args={args}"
+        )
+
+    @pytest.mark.parametrize(
+        ("client_id", "expects_panel"),
+        [("claude-desktop", True), ("jetbrains", False), ("zed", False)],
+    )
+    def test_bridge_panel_matches_emitted_config(
+        self,
+        client_id: str,
+        expects_panel: bool,
+        setup_script: str,
+        prelude: str,
+        wizard_vars: dict[str, Any],
+    ) -> None:
+        """The bridge instructions must not contradict the config below them.
+
+        Claude Desktop is the only client left that genuinely runs the
+        bridge. JetBrains and Zed both have native Streamable HTTP support
+        (JetBrains via a bare-url mcpServers entry, Zed via its own
+        ``context_servers`` entry) and so must show neither the "install
+        fastmcp-remote" panel nor a bridge command in the emitted config.
+        Showing one without the other is the regression this pins.
+        """
+        assert (client_id in wizard_vars["stdioOnlyClients"]) is expects_panel, (
+            f"test premise drifted: {client_id!r} in stdioOnlyClients "
+            f"({client_id in wizard_vars['stdioOnlyClients']}) no longer "
+            f"matches expects_panel={expects_panel}"
+        )
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "ha-addon")
+                + _click("client", client_id)
+                + _click("scope", "local")
+                + _click("platform", "macos")
+                + """
+                const instructionsEl = document.getElementById('setup-instructions');
+                document.body.dataset.instructionsHtml = String(
+                  (instructionsEl && instructionsEl.innerHTML) || ''
+                );
+                document.body.dataset.configCode = (
+                  document.querySelector('#config-output code').textContent || ''
+                );
+                """
+            ),
+        )
+        _assert_clean_init(result)
+        instructions_match = re.search(r'data-instructions-html="([^"]*)"', result.dom)
+        assert instructions_match is not None, "instructions were not captured"
+        instructions = instructions_match.group(1)
+        config_match = re.search(r'data-config-code="([^"]*)"', result.dom)
+        assert config_match is not None, "config-output was not captured"
+        config_text = config_match.group(1).replace("&quot;", '"')
+
+        mentions_bridge = "fastmcp-remote" in instructions
+        assert mentions_bridge is expects_panel, (
+            f"{client_id}: bridge instructions present={mentions_bridge}, "
+            f"expected={expects_panel}; instructions={instructions[:400]!r}"
+        )
+        # The panel and the config have to tell the same story: a client told to
+        # install the bridge must get a config that runs it, and vice versa.
+        assert ("fastmcp-remote" in config_text) is expects_panel, (
+            f"{client_id}: config and bridge instructions disagree; "
+            f"config={config_text[:400]!r}"
         )
 
 
@@ -694,7 +1028,7 @@ class TestUvxPlatformGating:
     ) -> None:
         # uvx -> cursor -> local leaves config hidden (needsPlatform() fires on
         # the uvx method) until an OS is chosen, then it unhides. Mirrors the
-        # mcp-proxy gating test: records visibility before AND after the click.
+        # stdio-bridge gating test: records visibility before AND after the click.
         result = run_script(
             setup_script,
             prelude=prelude,

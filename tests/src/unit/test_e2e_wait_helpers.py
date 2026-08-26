@@ -39,12 +39,15 @@ from tests.src.e2e.utilities.wait_helpers import (
 
 def _mcp_result(text: str) -> MagicMock:
     """Build an MCP ``call_tool`` result that ``parse_mcp_result`` will
-    decode as ``json.loads(text)``. ``isError`` must be ``False``
-    explicitly — a bare ``MagicMock()`` would return a truthy MagicMock
-    from attribute access and route the parser down the error path."""
+    decode as ``json.loads(text)``. BOTH error-flag spellings must be
+    ``False`` explicitly — the parser accepts fastmcp's ``is_error`` and the
+    raw MCP ``isError``, and a bare ``MagicMock()`` returns a truthy
+    MagicMock from either attribute access, routing the parser down the
+    error path."""
     text_part = MagicMock()
     text_part.text = text
     result = MagicMock()
+    result.is_error = False
     result.isError = False
     result.content = [text_part]
     return result

@@ -23,7 +23,6 @@ class OperationStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     TIMEOUT = "timeout"
-    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -42,7 +41,7 @@ class DeviceOperation:
     expected_state: dict[str, Any] | None = None
     result_state: dict[str, Any] | None = None
     error_message: str | None = None
-    timeout_ms: int = 10000  # 10 second default timeout
+    timeout_ms: float = 10000  # 10 second default timeout
 
     @property
     def elapsed_ms(self) -> float:
@@ -85,7 +84,7 @@ class OperationManager:
         service_name: str,
         service_data: dict[str, Any],
         expected_state: dict[str, Any] | None = None,
-        timeout_ms: int = 10000,
+        timeout_ms: float = 10000,
     ) -> str:
         """Create a new device operation.
 
@@ -273,56 +272,6 @@ class OperationManager:
 
         return True
 
-    def cancel_operation(self, operation_id: str) -> bool:
-        """Cancel a pending operation.
-
-        Args:
-            operation_id: Operation ID to cancel
-
-        Returns:
-            True if operation was found and cancelled
-        """
-        return self.update_operation_status(
-            operation_id,
-            OperationStatus.CANCELLED,
-            error_message="Operation cancelled by user",
-        )
-
-    def get_operations_summary(self) -> dict[str, Any]:
-        """Get summary of all operations.
-
-        Returns:
-            Dictionary with operation statistics
-        """
-        total = len(self.operations)
-        by_status = {}
-
-        for status in OperationStatus:
-            by_status[status.value] = len(
-                [op for op in self.operations.values() if op.status == status]
-            )
-
-        # Count expired pending operations
-        expired_pending = len(
-            [
-                op
-                for op in self.operations.values()
-                if op.status == OperationStatus.PENDING and op.is_expired
-            ]
-        )
-
-        return {
-            "total_operations": total,
-            "by_status": by_status,
-            "expired_pending": expired_pending,
-            "memory_usage_mb": self._estimate_memory_usage(),
-        }
-
-    def _estimate_memory_usage(self) -> float:
-        """Estimate memory usage in MB (rough approximation)."""
-        # Very rough estimate: ~1KB per operation
-        return len(self.operations) * 1024 / (1024 * 1024)
-
     def cleanup_expired_operations(self, force: bool = False) -> None:
         """Clean up expired and completed operations.
 
@@ -336,42 +285,51 @@ class OperationManager:
 
         initial_count = len(self.operations)
 
-        # Remove completed operations older than 5 minutes
-        # Remove failed/cancelled operations older than 1 minute
+        # Remove completed operations 5 minutes after completion
+        # Remove failed/timed-out operations 1 minute after completion
+        # (TIMEOUT can be set outside this pass: get_operation() marks an
+        # expired PENDING op in place on the read path — anchoring the TTL
+        # on completion_time keeps such an op queryable for its full
+        # terminal minute even when it timed out long after start_time)
         # Remove expired pending operations
         to_remove = []
 
         for op_id, operation in self.operations.items():
-            age_seconds = (current_time * 1000 - operation.start_time) / 1000
+            terminal_anchor = operation.completion_time or operation.start_time
+            age_seconds = (current_time * 1000 - terminal_anchor) / 1000
 
             if (
                 operation.status == OperationStatus.COMPLETED and age_seconds > 300
             ) or (
-                operation.status in [OperationStatus.FAILED, OperationStatus.CANCELLED]
+                operation.status in (OperationStatus.FAILED, OperationStatus.TIMEOUT)
                 and age_seconds > 60
             ):
                 to_remove.append(op_id)
             elif operation.status == OperationStatus.PENDING and operation.is_expired:
-                # Mark as timeout first
+                # Mark as timeout and KEEP it for the terminal minute — same
+                # treatment as a read-path timeout, so a poll shortly after
+                # expiry reports "timeout" rather than not_found regardless
+                # of which path noticed first. The TTL branch above reclaims
+                # it once completion_time is a minute old.
                 operation.status = OperationStatus.TIMEOUT
                 operation.completion_time = current_time * 1000
-                to_remove.append(op_id)
 
         # Remove operations
         for op_id in to_remove:
             del self.operations[op_id]
 
-        # If still over limit, remove oldest completed operations
+        # If still over limit, remove oldest terminal operations (never
+        # in-flight PENDING ones — those expire on their own timeout).
         if len(self.operations) > self.max_operations:
-            completed_ops = [
+            terminal_ops = [
                 (op_id, op)
                 for op_id, op in self.operations.items()
-                if op.status == OperationStatus.COMPLETED
+                if op.status != OperationStatus.PENDING
             ]
-            completed_ops.sort(key=lambda x: x[1].completion_time or 0)
+            terminal_ops.sort(key=lambda x: x[1].completion_time or 0)
 
             excess = len(self.operations) - self.max_operations
-            for op_id, _ in completed_ops[:excess]:
+            for op_id, _ in terminal_ops[:excess]:
                 del self.operations[op_id]
 
         removed_count = initial_count - len(self.operations)
@@ -406,7 +364,7 @@ def store_pending_operation(
     service_name: str,
     service_data: dict[str, Any],
     expected_state: dict[str, Any] | None = None,
-    timeout_ms: int = 10000,
+    timeout_ms: float = 10000,
 ) -> str:
     """Store a new pending operation."""
     manager = get_operation_manager()
@@ -458,13 +416,3 @@ def update_pending_operations(entity_id: str, new_state: dict[str, Any]) -> list
     """Update pending operations based on state change."""
     manager = get_operation_manager()
     return manager.process_state_change(entity_id, new_state)
-
-
-def get_pending_operations() -> dict[str, DeviceOperation]:
-    """Get all pending operations."""
-    manager = get_operation_manager()
-    return {
-        op_id: op
-        for op_id, op in manager.operations.items()
-        if op.status == OperationStatus.PENDING and not op.is_expired
-    }

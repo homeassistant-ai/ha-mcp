@@ -281,10 +281,8 @@ class TestSetup:
         fake_collaborators.panel.async_register_ui_panel.assert_not_awaited()
 
 
-class TestPrebindLegacyOAuthViews:
-    """`_prebind_legacy_oauth_views` binds the root /authorize + /token views
-    synchronously at setup — before the background bring-up's slow install — so
-    they are live at boot instead of racing HA reaching RUNNING."""
+class TestPrebindOAuthViews:
+    """Prebind every applicable OAuth route before slow background bring-up."""
 
     def _legacy_entry(self) -> MagicMock:
         entry = _make_entry()
@@ -307,21 +305,30 @@ class TestPrebindLegacyOAuthViews:
         hass.is_running = False
         hass.http = MagicMock()
 
-        eentry._prebind_legacy_oauth_views(hass, self._legacy_entry())
+        eentry._prebind_oauth_views(hass, self._legacy_entry())
 
-        # 7 RFC 8414/9728 discovery views + the 2 root /authorize + /token views.
-        assert hass.http.register_view.call_count == 9
+        # 7 discovery + 3 scoped authorize/token/revoke + 2 root legacy aliases.
+        assert hass.http.register_view.call_count == 12
         assert hass.data.get(oauth_legacy.OAUTH_ROUTE_OWNER_KEY) == oauth_legacy._DOMAIN
 
-    def test_non_legacy_mode_binds_nothing(self):
+    @pytest.mark.parametrize(
+        "auth_mode",
+        [const.WEBHOOK_AUTH_NONE, const.WEBHOOK_AUTH_HA],
+    )
+    def test_none_and_ha_auth_modes_prebind_full_scoped_surface(self, auth_mode):
         hass = _make_hass()
         hass.http = MagicMock()
         entry = _make_entry()
-        entry.options = {const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_NONE}
+        entry.options = {
+            const.OPT_WEBHOOK_AUTH: auth_mode,
+            const.OPT_ENABLE_WEBHOOK: True,
+        }
 
-        eentry._prebind_legacy_oauth_views(hass, entry)
+        eentry._prebind_oauth_views(hass, entry)
 
-        hass.http.register_view.assert_not_called()
+        # 7 discovery + 3 scoped authorize/token/revoke + 1 DCR registration
+        # route.
+        assert hass.http.register_view.call_count == 11
 
     def test_webhook_disabled_binds_nothing(self):
         hass = _make_hass()
@@ -329,11 +336,11 @@ class TestPrebindLegacyOAuthViews:
         entry = self._legacy_entry()
         entry.options = {**entry.options, const.OPT_ENABLE_WEBHOOK: False}
 
-        eentry._prebind_legacy_oauth_views(hass, entry)
+        eentry._prebind_oauth_views(hass, entry)
 
         hass.http.register_view.assert_not_called()
 
-    def test_partial_credentials_bind_nothing(self):
+    def test_partial_legacy_credentials_still_prebind_scoped_routes(self):
         # _ensure_secrets mints all three whenever legacy is configured; a gap
         # means a partial config, deferred to the bring-up path to surface.
         hass = _make_hass()
@@ -343,9 +350,12 @@ class TestPrebindLegacyOAuthViews:
             k: v for k, v in entry.data.items() if k != const.DATA_OAUTH_CLIENT_SECRET
         }
 
-        eentry._prebind_legacy_oauth_views(hass, entry)
+        eentry._prebind_oauth_views(hass, entry)
 
-        hass.http.register_view.assert_not_called()
+        # Root aliases wait for credentials, but advertised scoped routes must
+        # still beat Home Assistant's HTTP freeze: 7 discovery + 3 scoped
+        # authorize/token/revoke.
+        assert hass.http.register_view.call_count == 10
 
     def test_route_conflict_is_swallowed_at_setup(self):
         # The webhook-proxy add-on owning the root routes makes
@@ -358,9 +368,12 @@ class TestPrebindLegacyOAuthViews:
         hass.http = MagicMock()
         hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] = "webhook_proxy_addon"
 
-        eentry._prebind_legacy_oauth_views(hass, self._legacy_entry())
+        eentry._prebind_oauth_views(hass, self._legacy_entry())
 
         assert hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] == "webhook_proxy_addon"
+        # The foreign owner blocks only the root aliases; scoped routes remain
+        # (7 discovery + 3 scoped authorize/token/revoke).
+        assert hass.http.register_view.call_count == 10
 
 
 class TestEnsureSecretsLegacyWiring:

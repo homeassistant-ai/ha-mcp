@@ -1,18 +1,152 @@
 # Settings UI translations
 
-The settings page discovers every `*.json` catalog in this directory. To add a
-language, copy `en.json`, rename it to the language code (for example
-`it.json`), translate the values, and keep the keys and `{placeholders}`
-unchanged. No Python or JavaScript registration is required.
+The settings page discovers every `*.json` catalog in this directory. No Python
+or JavaScript registration is required, and no packaging file needs editing —
+the wheel, sdist and binary declarations all match this directory by pattern.
 
-Catalog sections:
+**This directory is the canonical translation store.** Besides the settings
+UI's own strings, each catalog carries the add-on option strings under
+`addon.<key>.*` (with `features.<key>.*` for options the settings UI also
+shows, and `addon_stable.<key>.*` for flavor-specific wording). Both add-on
+flavors' `translations/*.yaml` and the `FEATURE_META` block in `settings.js`
+are generated from these catalogs by `scripts/generate_locales.py` — never
+edit those by hand. Wherever one English string reaches the reader from more
+than one surface, the translation is stored once here and projected, so
+cross-surface wording cannot drift.
 
-- `meta.native_name`: language name shown in the selector.
-- `meta.dir`: `ltr` or `rtl`.
-- `messages`: interface labels, help text, notices, and runtime messages.
-- `tool_groups`: optional translations keyed by the English MCP tool tag.
-- `tools`: optional per-tool `title` and `description` overrides keyed by the
-  stable MCP tool name. Missing values fall back to the server-provided English.
+## Adding a language
 
-English is always the fallback, so an incomplete catalog remains usable while
-it is being expanded.
+A language ships on **all four** translated surfaces or not at all, and one
+Home Assistant language code names every file:
+
+- `src/ha_mcp/settings_ui/locales/<code>.json` (this directory; authored)
+- `custom_components/ha_mcp_tools/translations/<code>.json` (authored)
+- `homeassistant-addon/translations/<code>.yaml` (generated)
+- `homeassistant-addon-dev/translations/<code>.yaml` (generated)
+
+Add the two authored catalogs, then run `python scripts/generate_locales.py`
+and merge: the post-merge `locale-sync.yml` workflow machine-fills every string
+over its next daily runs. The component catalog may start as an empty object;
+this one needs `meta` (`native_name`, `dir`) plus the handful of `messages`
+keys the ungated checks below demand — a `meta`-only catalog is red in PR CI.
+Two things that list will not lead you to: `policies.operators.exists_long` is
+the condition editor's own dropdown label rather than a `PredicateOp` member,
+so no check asks for it and a catalog without it reads English there until the
+sync fills it; and because each surface samples its own catalog for the address
+register the engine imitates, a component catalog left at a key or two rests
+entirely on whichever of them addresses the reader —
+`test_every_shipped_component_catalog_gets_reader_addressing_samples` pins that
+one. Leaving that catalog empty is fine, but the moment you author anything in
+it, at least two keys must be ones whose English addresses the reader in the
+second person, and each must carry a non-empty translation — a key left blank is
+skipped like a missing one rather than sampled empty. Most component strings do
+not address the reader, so starting at the top of the file leaves the catalog
+anchorless and that check red until you add ones that do. Two rather than one
+because the run likeliest to need the register is the one that rewords such a
+key: that queues it, and a queued key is dropped from the candidates, so a
+surface resting on a single anchor loses its register in exactly that run —
+`test_component_samples_survive_their_own_anchor_being_queued` pins the
+survival. To fill them in your own PR instead, run
+`scripts/translate_locales.py` yourself and review its output like any
+other diff. Also add the new code to the locale list in the repository-root
+`AGENTS.md`
+§ Translations — that list is pinned by
+`test_agents_md_lists_every_shipped_locale`. The engine reads the target
+language from `meta.native_name`, so any language an LLM can write — natural
+or constructed — needs no pipeline change.
+
+## Catalog sections
+
+- `meta.native_name`: language name shown in the selector. It must be
+  non-empty, must not repeat English's own name, and must differ from every
+  other catalog's — a copied catalog that keeps the name it was copied from
+  fails `test_native_names_name_their_own_language`, because the picker would
+  then offer one label twice.
+- `meta.dir`: `ltr` or `rtl`. Omitting it means `ltr`; any other value is
+  rejected when the catalog loads.
+- `messages`: interface labels, help text, notices, and runtime messages. Keys
+  may be omitted — English is the per-key fallback at runtime — but see the
+  share limit below before leaving a catalog half-finished. Omitting is the
+  only way to say "not translated yet": a key that is present but blank is
+  rejected when the catalog loads, because the runtime resolves by key
+  presence, so an empty value would win over English and render as nothing.
+- `tool_groups`: one entry per renderable MCP tool tag, keyed by the English
+  tag. Not optional, and exact: no key more and none fewer. Blank is rejected
+  here too, but dropping the key is not the escape hatch it is for `messages` —
+  the exact key set forbids that. A heading you have not translated yet keeps
+  the English tag as its value.
+- `tools`: `title` and `description` per tool, keyed by the stable MCP tool
+  name. The key set is not optional and exact in the same way; either field on
+  its own may be left out, but a missing one counts as untranslated against the
+  share limit below. Blank is rejected here too, for the same reason.
+
+Keep the keys and `{placeholders}` unchanged in every section.
+
+`messages` values carry two further rules, both enforced when the catalog
+loads rather than by a named test — breaking one raises a `ValueError` at
+import, so the failure names the file but arrives as a broken test module:
+
+- The only inline markup the page can restore is `<code>`, `<strong>`, `</a>`
+  and `<a href="#" data-panel-link="...">`, spelled exactly that way. Any other
+  tag — `<b>`, `<CODE>`, `<code >` — is rejected.
+- A `data-panel-link` target must be a tab the settings page declares, and a
+  translated message must link to the same tabs as its English source, with
+  the same multiplicity. The order may differ, so a translation is free to
+  reorder two links to suit its grammar.
+
+## What CI checks
+
+In PR CI (ungated — `tests/src/unit/test_locale_parity.py` unless another file
+is named):
+
+- Every surface carries the same set of language codes.
+- Every decided `Decision` outcome (all but `pending`) and every
+  `PredicateOp` operator has a word in every catalog, non-blank — and in every
+  catalog but `en.json` not still spelled the way the backend does
+  (`test_every_decided_outcome_has_a_catalog_word`,
+  `test_every_predicate_operator_has_a_catalog_word` in
+  `tests/src/unit/test_settings_ui_i18n.py`). These words render inside
+  otherwise translated sentences, and the page payload merges English
+  underneath, so a missing key shows English's own word rather than reading as
+  a gap — and the bare enum literal where English lacks the key too. That is
+  why they are owed at once rather than left to the sync.
+- `policies.pending.already_decided`, the sentence one of those `Decision`
+  words is interpolated into. `TestAlreadyDecidedCopy` in
+  `tests/src/unit/test_settings_ui_js_behavior.py` drives the real 409 handler
+  under every non-English catalog and compares the whole rendered alert, so
+  carrying the word without its host sentence fails on the missing key. Whole
+  sentence rather than containment is deliberate: a host that falls back to
+  English still reads as an English clause around a translated word.
+  **These JS behaviour tests skip unless `tests/js/` has its npm dependencies
+  installed** (`npm install` there) — locally they are silent, in CI they are
+  not.
+- At least one translated key whose English addresses the reader in the
+  second person, so `scripts/translate_locales.py` can show the engine
+  how this catalog addresses its reader
+  (`test_every_shipped_catalog_gets_reader_addressing_samples` in
+  `tests/src/unit/test_translate_locales.py`). Without one the pipeline
+  translates the rest of the catalog with no register to imitate.
+- The generated files (both add-on YAMLs, `FEATURE_META`) are byte-exact
+  generator output (`test_derived_catalogs_match_the_canonical_store`); run
+  `python scripts/generate_locales.py` after touching any `addon.*`,
+  `addon_stable.*` or `features.*` key.
+- Component-catalog `{placeholder}` parity, for keys whose English still
+  matches the baseline — a hand edit that drops a placeholder fails the PR
+  that makes it; a translation awaiting a machine rewrite is excluded.
+
+In the post-merge `locale-sync.yml` workflow only (the same files, gated behind
+`LOCALE_COMPLETENESS_CHECKS=1` — a PR that changes English merges without
+these, and the daily sync owes them afterwards):
+
+- `tool_groups` and `tools` name exactly the renderable groups and tools.
+- At most 5% of this catalog's `messages`, and 5% of its `tools` texts, may be
+  byte-identical to English or missing outright; the component catalogs allow
+  15%, because they carry product names as keys of their own. A single tool
+  whose `title` *and* `description` are both still English fails by name
+  however small the share.
+- The English each translation was written against is hashed in
+  `tests/src/unit/locale_source_baseline.json`, so a later edit to an English
+  string reads as stale rather than silently keeping the old meaning —
+  `scripts/translate_locales.py` retranslates exactly those keys and repins
+  the baseline. Adding a language does not change any English source, so no
+  baseline regeneration is needed for it.

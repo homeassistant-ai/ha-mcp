@@ -138,6 +138,7 @@ asyncio.run(run())
             capture_output=True,
             text=True,
             timeout=120,
+            check=False,
         )
         if result.returncode != 0:
             print(f"Branch measurement failed: {result.stderr}", file=sys.stderr)

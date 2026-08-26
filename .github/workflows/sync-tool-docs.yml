@@ -15,8 +15,8 @@ on:
 permissions:
   contents: read
 
-# Shared group for every workflow that pushes to master (hotfix-release,
-# semver-release, addon-publish-dev): a doc-sync push landing while
+# Shared group for every workflow that pushes to master (semver-release,
+# addon-publish-dev, locale-sync): a doc-sync push landing while
 # semantic-release is mid-run aborts the release un-retryably ("Upstream
 # branch ... has changed"), so master writers must not overlap. This also
 # keeps sync runs from overlapping each other. cancel-in-progress must be
@@ -40,19 +40,20 @@ jobs:
     steps:
     - name: Generate GitHub App token
       id: app-token
-      uses: actions/create-github-app-token@v3
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
       with:
         app-id: ${{ secrets.RELEASE_APP_ID }}
         private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        permission-contents: write
       continue-on-error: true
 
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         # Use app token to bypass branch protection ruleset
         token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
     - name: Set up Python
-      uses: actions/setup-python@v7
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
         python-version: '3.13'
 

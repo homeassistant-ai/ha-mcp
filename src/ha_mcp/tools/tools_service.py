@@ -5,15 +5,16 @@ This module provides service execution and WebSocket-enabled operation monitorin
 """
 
 import logging
-from typing import Annotated, Any, NoReturn, cast
+from typing import Annotated, Any, NamedTuple, NoReturn, NotRequired, TypedDict, cast
 
 import httpx
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
-from pydantic import Field
+from pydantic import ConfigDict, Field, SkipValidation, TypeAdapter, ValidationError
 
 from ..client.rest_client import (
+    HomeAssistantClient,
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
     HomeAssistantConnectionError,
@@ -21,8 +22,19 @@ from ..client.rest_client import (
 from ..client.websocket_client import get_websocket_client
 from ..errors import (
     ErrorCode,
+    create_connection_error,
     create_error_response,
     create_validation_error,
+)
+from ..utils.entity_membership import normalize_member_entity_ids
+from .bulk_selector import (
+    _NON_AGGREGATE_ROOT_DOMAINS,
+    BulkControlSelector,
+    BulkSelectorInfrastructureError,
+    BulkSelectorResolution,
+    BulkSelectorValidationError,
+    InfrastructureErrorCause,
+    resolve_bulk_selector,
 )
 from .component_api import (
     component_supports,
@@ -54,6 +66,512 @@ from .util_helpers import (
 # REST POST + hardcoded ``_SERVICE_TO_STATE`` guess + WS-subscribe verification.
 # Named once so the routing helper and its tests agree on the wire string.
 WS_CALL_SERVICE = "ha_mcp_tools/call_service"
+
+
+class BulkControlOperation(TypedDict):
+    """One entity action in a ha_bulk_control request."""
+
+    entity_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            description="Exact Home Assistant entity ID, e.g. 'light.kitchen'.",
+        ),
+    ]
+    action: Annotated[
+        str,
+        Field(
+            min_length=1,
+            description=(
+                "Device action such as 'on', 'off', or 'toggle'. For lights, use "
+                "'off' instead of the ha_call_service form 'turn_off'."
+            ),
+        ),
+    ]
+    parameters: NotRequired[
+        Annotated[
+            dict[str, Any],
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Optional action parameters, e.g. {'brightness_pct': 30} "
+                    "when action='on'. Each domain has a fixed allowlist of "
+                    "supported keys; keys outside it are ignored rather than "
+                    "rejected. Use ha_call_service for parameters this tool "
+                    "does not carry."
+                )
+            ),
+        ]
+    ]
+    timeout_seconds: NotRequired[
+        Annotated[
+            float,
+            Field(
+                ge=0,
+                allow_inf_nan=False,
+                # ``strict`` for the same reason validate_first carries it:
+                # lax mode coerces ``true`` to 1.0, so a bool would land
+                # downstream as a silent one-second timeout.
+                strict=True,
+                description=(
+                    "Optional confirmation timeout. On the component path, all "
+                    "operations share the maximum requested wait (default 10s, "
+                    "capped at 60s); 0 disables confirmation waiting."
+                ),
+            ),
+        ]
+    ]
+    validate_first: NotRequired[
+        Annotated[
+            bool,
+            Field(
+                strict=True,
+                description=(
+                    "Report an ENTITY_NOT_FOUND failure when the target entity "
+                    "does not exist; default true. On the component batch path "
+                    "this is detected from the captured pre-state rather than by "
+                    "preventing dispatch. The action is always validated."
+                ),
+            ),
+        ]
+    ]
+
+
+# Pydantic reads this runtime config when generating the TypedDict schema. Keep it
+# outside the class body because mypy permits only field declarations there.
+BulkControlOperation.__pydantic_config__ = ConfigDict(extra="forbid")  # type: ignore[attr-defined]
+_BULK_CONTROL_OPERATION_ADAPTER = TypeAdapter(BulkControlOperation)
+
+
+def _parse_bulk_operations(operations: Any) -> list[Any]:
+    """Parse explicit bulk rows while preserving per-row runtime failures."""
+    try:
+        parsed_operations = parse_json_param(operations, "operations")
+    except ValueError as exc:
+        raise_tool_error(
+            create_validation_error(
+                f"Invalid operations parameter: {exc}",
+                parameter="operations",
+                invalid_json=True,
+            )
+        )
+    if not isinstance(parsed_operations, list):
+        raise_tool_error(
+            create_validation_error(
+                "Operations parameter must be a list",
+                parameter="operations",
+                details=f"Received type: {type(parsed_operations).__name__}",
+            )
+        )
+    operations_list: list[Any] = []
+    for index, operation in enumerate(parsed_operations):
+        try:
+            operations_list.append(
+                _BULK_CONTROL_OPERATION_ADAPTER.validate_python(operation)
+            )
+        except ValidationError as exc:
+            # include_input=False: a malformed row can carry a lock or alarm
+            # code in its `parameters`, and str(exc) would otherwise write
+            # that value to persistent logs.
+            logger.warning(
+                "ha_bulk_control operation %d failed schema validation: %s",
+                index,
+                exc.errors(include_url=False, include_input=False),
+            )
+            # The malformed row is deliberately preserved (not dropped) so
+            # the runtime batch validator downstream still reports it as a
+            # per-operation failure with its own diagnostics, instead of it
+            # silently vanishing from the batch.
+            operations_list.append(operation)
+    return operations_list
+
+
+def _expand_membership_transitively(
+    entity_id: str, states_by_id: dict[str, Any], *, visited: set[str] | None = None
+) -> set[str]:
+    """Return every entity reachable from ``entity_id`` via nested
+    group/aggregate membership -- direct members and, recursively, THEIR
+    members too (an outer Zone containing an inner Room group, say).
+
+    ``visited`` guards against a membership cycle; an entity already seen
+    on this walk is treated as having no further members instead of
+    recursing forever. Keyword-only and defaulted to ``None`` (allocated
+    internally on first call) rather than a plain mutable positional
+    parameter: today every top-level caller happens to pass a fresh
+    ``set()``, but a positional mutable default is the kind of thing a
+    later "optimization" hoists out of a loop -- which would silently
+    start returning empty member sets (everything already "visited") and
+    lose conflicts instead of erroring. Best-effort, not authoritative: an
+    unknown or stateless entity simply contributes no members, mirroring
+    ``_find_group_member_conflicts``'s own tolerance for a batch that
+    references something ``states`` doesn't have -- this is a safety-net
+    scan over the small set of entities in one batch, not the selector
+    resolver's own graph-integrity validation (``bulk_selector._expand_entity``),
+    which is right to raise on exactly those cases when it is actually
+    resolving a dispatch set.
+    """
+    if visited is None:
+        visited = set()
+    if entity_id in visited:
+        return set()
+    visited.add(entity_id)
+    state = states_by_id.get(entity_id)
+    if state is None:
+        return set()
+    members = normalize_member_entity_ids(state.get("attributes"))
+    if not members:
+        return set()
+    expanded = set(members)
+    for member_id in members:
+        expanded.update(
+            _expand_membership_transitively(member_id, states_by_id, visited=visited)
+        )
+    return expanded
+
+
+class _GroupConflict(NamedTuple):
+    """One group/aggregate entity's conflict with an operations batch.
+
+    ``unlisted_members``: this group's members that were NOT separately
+    listed in the batch -- the entities the group's own cascade will
+    change WITHOUT the caller having asked for them. This is the
+    actionable half of the report: the caller needs to know which
+    entities their attempt to exclude something actually failed to
+    protect. Preferred over ``redundant_members`` whenever non-empty.
+    ``redundant_members``: this group's members that WERE also listed
+    separately -- harmless (each ends up in the requested state either
+    way via the group's own fan-out), but still flagged as a conflict
+    since a differing per-row action or parameters races that fan-out
+    rather than safely overriding it. Reported only when
+    ``unlisted_members`` is empty (every member is already accounted
+    for), since naming the harmless rows instead of the harmed ones is
+    the wrong report even when both are non-empty.
+    """
+
+    unlisted_members: list[str]
+    redundant_members: list[str]
+
+
+# Every listed member beyond this many is summarized as "+N more" rather
+# than enumerated: `unlisted_members` is bounded by instance topology size
+# (a group's total member count), not batch size, so a large group produces
+# an unbounded error message otherwise. This is a fail-closed path -- the
+# remedy sentence at the end is the entire value of the error -- and
+# visibility/enforcement.py scans tool-error text for hidden entity IDs,
+# refusing the whole call if one appears; enumerating every member makes
+# that materially more likely for no benefit once the caller already has
+# the point.
+_MAX_LISTED_GROUP_MEMBERS = 10
+
+
+def _format_member_list(members: list[str]) -> str:
+    """Render a member list for an error message, capped at
+    ``_MAX_LISTED_GROUP_MEMBERS`` (see its docstring)."""
+    shown = ", ".join(members[:_MAX_LISTED_GROUP_MEMBERS])
+    overflow = len(members) - _MAX_LISTED_GROUP_MEMBERS
+    return f"{shown} (+{overflow} more)" if overflow > 0 else shown
+
+
+def _find_group_member_conflicts(
+    entity_ids: set[str], states: list[Any]
+) -> dict[str, _GroupConflict]:
+    """Return ``{group_entity_id: _GroupConflict}`` for every group/
+    aggregate entity this batch targets alongside one or more of its own
+    members -- direct or nested (a batch targeting an outer group and a
+    leaf reachable only through an inner group it contains is exactly as
+    unsafe as targeting the inner group and that leaf directly).
+
+    Scenes ARE checked here, unlike ``bulk_selector``'s aggregate-root
+    admission (``_NON_AGGREGATE_ROOT_DOMAINS``): the two ask different
+    questions. Selector mode asks "may I expand this entity's ``entity_id``
+    attribute to decide what to INCLUDE" -- no for a scene, since its
+    configured targets can live anywhere in the house and would wrongly
+    drag them into an area-scoped dispatch. This function asks "will
+    dispatching this row also change something else named in this same
+    batch" -- yes for a scene: ``scene.turn_on`` applies the scene's stored
+    states to every entity it configures, exactly the same batch-internal
+    race a real group's cascade creates. Skipping scenes here would leave
+    that race open for the one entity type whose whole purpose is fanning
+    a single action out to many others.
+    """
+    states_by_id = {
+        state["entity_id"]: state
+        for state in states
+        if isinstance(state, dict) and isinstance(state.get("entity_id"), str)
+    }
+    conflicts: dict[str, _GroupConflict] = {}
+    for entity_id in sorted(entity_ids):
+        transitive_members = _expand_membership_transitively(entity_id, states_by_id)
+        if not transitive_members:
+            continue
+        redundant_members = sorted((entity_ids & transitive_members) - {entity_id})
+        if not redundant_members:
+            continue
+        unlisted_members = sorted(transitive_members - entity_ids)
+        conflicts[entity_id] = _GroupConflict(unlisted_members, redundant_members)
+    return conflicts
+
+
+async def _reject_operations_group_member_conflicts(
+    client: HomeAssistantClient, operations: list[Any]
+) -> None:
+    """Fail closed when an operations-mode batch targets a group/aggregate
+    entity together with one or more of its own members.
+
+    Confirmed live (2026-08-23): Home Assistant (Hue Room/Zone groups in
+    particular) fans a service call on the GROUP entity out to every member
+    regardless of what else is in the same batch -- an operations batch
+    that turned off a Hue Room group plus 4 of its 5 members (deliberately
+    omitting the 5th, to exclude it) still turned the 5th member off too,
+    purely from the group row's own cascade. Listing a member row
+    separately does not shield it, so this fails the WHOLE batch closed
+    (nothing dispatched) rather than silently letting the group row's
+    cascade override an exclusion operations mode has no way to express.
+
+    Fails closed on its own states-fetch failure too: an unverifiable batch
+    is not a verified-safe one, and this is the same infrastructure-failure
+    stance ``bulk_selector.py`` takes for the analogous selector-mode read.
+    ``client.get_states()`` itself now raises ``HomeAssistantConnectionError``
+    rather than swallowing a malformed response to ``[]`` (see its
+    docstring in ``rest_client.py``) -- that used to be the actual fail-OPEN
+    hole here: an HA hiccup silently produced an empty states list, which
+    read as "verified, no conflicts" instead of "could not verify".
+
+    A single-entity (or empty/all-malformed) batch cannot contain a
+    group/member conflict by construction, so the states fetch is skipped
+    entirely for it. Every batch with 2+ distinct entities still pays one
+    uncached, full ``GET /states`` here regardless of whether any of them
+    turn out to be a group -- this trades that fixed per-call cost for
+    simplicity over fetching only the batch's own (and transitively
+    reachable) entities, which would need N concurrent per-entity reads
+    instead of one bulk one and is bounded by batch size rather than
+    instance size. Revisit if that cost becomes a real bottleneck.
+    """
+    entity_ids = {
+        op["entity_id"]
+        for op in operations
+        if isinstance(op, dict) and isinstance(op.get("entity_id"), str)
+    }
+    if len(entity_ids) < 2:
+        return
+    try:
+        states = await client.get_states()
+    except ToolError:
+        raise
+    except Exception as exc:
+        exception_to_structured_error(
+            exc,
+            context={"operation": "bulk operations group-safety check"},
+            suggestions=[
+                "Could not verify this operations batch against group/"
+                + "aggregate membership, so nothing was dispatched.",
+                "Retry the request; this may be a transient Home Assistant "
+                + "connectivity issue.",
+            ],
+        )
+        raise  # unreachable: exception_to_structured_error always raises
+    conflicts = _find_group_member_conflicts(entity_ids, states)
+    if not conflicts:
+        return
+    # Prefer naming the members that will be silently AFFECTED (not in the
+    # batch, so nothing else in the call protects them) over the ones
+    # merely redundant with the group's own row -- the redundant rows are
+    # harmless and not what the caller needs to fix. Falls back to naming
+    # the redundant ones only when every member is already accounted for
+    # (no unlisted ones exist to report).
+    detail = "; ".join(
+        (
+            f"'{group}' will also affect {_format_member_list(conflict.unlisted_members)}, "
+            "which this batch did not list"
+            if conflict.unlisted_members
+            else f"'{group}' is redundant with its own already-listed "
+            f"member(s) {_format_member_list(conflict.redundant_members)}"
+        )
+        for group, conflict in sorted(conflicts.items())
+    )
+    # A scene conflict is still real (see _find_group_member_conflicts'
+    # docstring), but selector mode cannot express "act on most of a scene
+    # while excluding some" -- scene is never an aggregate root there. That
+    # remedy sentence is only worth offering when at least one conflict is
+    # a real, selector-expressible aggregate.
+    non_scene_conflict = any(
+        not any(group.startswith(f"{d}.") for d in _NON_AGGREGATE_ROOT_DOMAINS)
+        for group in conflicts
+    )
+    selector_remedy = (
+        " To act on most of a group while excluding specific members, use "
+        "selector mode instead: exclude_entity_ids goes INSIDE selector, not "
+        "as a top-level argument, e.g. "
+        '{"selector": {"domain": "light", "area_ids": ["<area_id>"], '
+        '"exclude_entity_ids": ["<entity_to_skip>"]}, "action": "off"}. '
+        "area_ids/floor_ids must be exact registry IDs (call "
+        "ha_list_floors_areas to look them up), not display names."
+        if non_scene_conflict
+        else ""
+    )
+    raise_tool_error(
+        create_validation_error(
+            "This operations batch targets a group/aggregate entity "
+            f"together with one or more of its own individual members: {detail}. "
+            "Home Assistant applies the action to every member when the "
+            "group entity is targeted, regardless of what else is listed "
+            "separately -- a member row does not protect or exempt it from "
+            "the group's own action, and one absent from the batch entirely "
+            "is not excluded by that absence either. Target ONLY the group, "
+            "or ONLY the specific member(s) you want affected, never both "
+            f"in the same call.{selector_remedy}",
+            parameter="operations",
+        )
+    )
+
+
+def _selector_only_parameter_offender(
+    *,
+    action: str | None,
+    parameters: dict[str, Any] | None,
+    timeout_seconds: float | None,
+    validate_first: bool,
+    dry_run: bool,
+) -> str | None:
+    """Name the one selector-only parameter set on an operations-mode call.
+
+    Five distinct mistakes (action, parameters, timeout_seconds,
+    validate_first, dry_run) used to share one message that always blamed
+    "selector" — the one parameter that was demonstrably absent, since this
+    is only reached when ``selector is None``. Naming the actual offender
+    lets the caller fix the real mistake on the first try.
+    """
+    for name, value in (
+        ("action", action),
+        ("parameters", parameters),
+        ("timeout_seconds", timeout_seconds),
+    ):
+        if value is not None:
+            return name
+    if validate_first is not True:
+        return "validate_first"
+    if dry_run:
+        return "dry_run"
+    return None
+
+
+# action, parameters, timeout_seconds and validate_first are all declared
+# fields on BulkControlOperation (see its class docstring) -- in operations
+# mode they belong on each row, not as a top-level tool argument, so the
+# caller's actual fix is to move the value, not delete it. Only dry_run has
+# no per-row equivalent (there is no such thing as "dry-run this one row"),
+# so it alone gets the remove-or-switch-modes remedy.
+_PER_ROW_SELECTOR_ONLY_PARAMETERS = frozenset(
+    {"action", "parameters", "timeout_seconds", "validate_first"}
+)
+
+# One representative, correctly-typed sample value per per-row parameter,
+# for the worked example below. A bare "..." placeholder rendered inside a
+# Python dict literal is always a quoted STRING regardless of the field's
+# real type -- for timeout_seconds (a float) that example teaches the
+# model the wrong shape for the exact value it is being told to copy.
+_PER_ROW_PARAMETER_EXAMPLE_VALUES: dict[str, Any] = {
+    "action": "on",
+    "parameters": {"brightness_pct": 30},
+    "timeout_seconds": 5,
+    "validate_first": True,
+}
+
+
+def _selector_only_parameter_message(offending_parameter: str) -> str:
+    """Build the remedy for one selector-only parameter used in operations mode.
+
+    Telling the caller to remove the parameter (or abandon operations mode
+    entirely) discards their intent for the four fields that DO have a
+    per-row home: ``operations=[...], parameters={...}`` almost certainly
+    meant "apply these parameters to my operations", and the fix is to
+    move the value into each row, not delete it.
+    """
+    if offending_parameter in _PER_ROW_SELECTOR_ONLY_PARAMETERS:
+        # Built from a dict, not a hardcoded literal: 'action' is itself one
+        # of the four per-row parameters this branch handles, and a fixed
+        # "..., 'action': 'on', 'action': ...}" literal would render a
+        # duplicate-key example -- shown to a model that is being told to
+        # copy it -- whenever action is the actual offender.
+        example_row: dict[str, Any] = {"entity_id": "light.kitchen"}
+        if offending_parameter != "action":
+            example_row["action"] = "on"
+        example_row[offending_parameter] = _PER_ROW_PARAMETER_EXAMPLE_VALUES[
+            offending_parameter
+        ]
+        return (
+            f"'{offending_parameter}' is a per-operation field in operations "
+            f"mode (see BulkControlOperation), not a top-level tool argument "
+            f"-- move it onto each row instead, e.g. {example_row}, "
+            f"and remove the top-level '{offending_parameter}' argument."
+        )
+    return (
+        f"'{offending_parameter}' is a selector-only parameter and cannot be "
+        "used with operations. Either remove "
+        f"'{offending_parameter}' from this call, or switch to selector mode "
+        "by replacing 'operations' with 'selector' (+ 'action')."
+    )
+
+
+# Per-cause (message, suggestions) for BulkSelectorInfrastructureError (see
+# its docstring in bulk_selector.py). Not every infrastructure failure is a
+# network problem -- CONNECTION_FAILED's own DEFAULT_SUGGESTIONS
+# (check HA is running / verify HOMEASSISTANT_URL / check network) are
+# actively unhelpful for a malformed local registry row or a corrupt local
+# visibility config file, so those causes get their own actionable text
+# instead of inheriting the connectivity defaults.
+_INFRASTRUCTURE_ERROR_SUGGESTIONS: dict[
+    InfrastructureErrorCause, tuple[str, list[str]]
+] = {
+    InfrastructureErrorCause.CONNECTIVITY: (
+        "Could not resolve the selector because Home Assistant data was unavailable",
+        [
+            "Check if Home Assistant is running and accessible",
+            "Retry the request; this may be a transient registry read failure",
+        ],
+    ),
+    InfrastructureErrorCause.MALFORMED_DEVICE_REGISTRY: (
+        "Could not resolve the selector because Home Assistant's device "
+        "registry returned a malformed entry",
+        [
+            "This indicates malformed data in Home Assistant's own device "
+            + "registry, not a problem with the selector",
+            "Check Home Assistant's logs for device-registry errors, or "
+            + "restart Home Assistant if the issue persists",
+        ],
+    ),
+    InfrastructureErrorCause.VISIBILITY_CONFIG: (
+        "Could not resolve the selector because the entity visibility "
+        "filter could not be evaluated safely",
+        [
+            "Check the Entity Visibility tab in the ha-mcp settings UI -- "
+            + "entity_visibility.json may be corrupt or invalid",
+            "If the config looks fine, this may be a temporary Home "
+            + "Assistant registry issue -- check Home Assistant is running "
+            + "and retry",
+        ],
+    ),
+}
+
+
+def _attach_resolution_to_response(
+    response: dict[str, Any], resolution: BulkSelectorResolution
+) -> None:
+    """Attach ``resolution.summary()`` to a response, surfacing its warnings
+    at the top level.
+
+    Per AGENTS.md "Return Values", ``warnings`` is always a top-level
+    ``list[str]``, never nested inside another field.
+    ``resolution.summary()`` nests its own warnings (e.g. "N entities were
+    hidden") under ``resolution`` for internal cohesion, so this pops them
+    back out. ``response`` may already carry dispatch-time warnings (e.g.
+    from ``bulk_device_control``) -- those are extended, not overwritten.
+    """
+    summary = resolution.summary()
+    resolution_warnings = summary.pop("warnings", [])
+    response["resolution"] = summary
+    if resolution_warnings:
+        response.setdefault("warnings", []).extend(resolution_warnings)
 
 
 class _AmbiguousDispatch:
@@ -151,6 +669,32 @@ _NON_STATE_CHANGING_DOMAINS = {
     "system_log",
 }
 
+#: Emitted when a ``return_response=true`` reply is not HA's
+#: ``{"changed_states": [...], "service_response": ...}`` envelope. Without it an
+#: empty ``result`` reads as an affirmative "no entity states changed" rather than
+#: "the records could not be separated out". Module-level so the tests that
+#: pin the behaviour assert against this exact string instead of a prose fragment
+#: that goes tautologically green when the wording is edited.
+_NON_ENVELOPE_WARNING = (
+    "Home Assistant's return_response reply did not match the expected "
+    "{changed_states, service_response} envelope, so no changed-state records "
+    "could be separated from the response data. An empty 'result' here does NOT "
+    "mean nothing changed — the whole reply is reported under 'service_response'."
+)
+
+#: Emitted when the component served a ``return_response`` call but returned no
+#: ``service_response`` key. The component only sets that key for a non-null
+#: response, so an absent key is ambiguous server-side: the service may genuinely
+#: have returned nothing, or the component may have discarded the response on its
+#: dispatched-but-unconfirmed path. Only raised alongside ``partial`` — the case
+#: where the discard is actually possible — so a plain null response stays quiet.
+_COMPONENT_RESPONSE_UNCONFIRMED_WARNING = (
+    "The service was dispatched but its confirmation did not arrive, and no "
+    "response data came back with it. A null 'service_response' here does NOT "
+    "prove the service returned nothing — the response may have been produced "
+    "and lost with the confirmation. Re-read state to confirm the outcome."
+)
+
 # ``_SERVICE_TO_STATE`` (the service -> expected primary-state map) is the single
 # source of truth in ``util_helpers`` — imported above and shared with the bulk
 # consumer (``device_control``) so both write paths hand the component the same
@@ -217,7 +761,7 @@ def _build_service_suggestions(
 class ServiceTools:
     """Service call and device operation tools for Home Assistant."""
 
-    def __init__(self, client: Any, device_tools: Any) -> None:
+    def __init__(self, client: HomeAssistantClient, device_tools: Any) -> None:
         self._client = client
         self._device_tools = device_tools
 
@@ -343,9 +887,18 @@ class ServiceTools:
         service: str,
         entity_id: str | None,
         data: str | dict[str, Any] | None,
+        *,
+        return_response: bool = False,
     ) -> dict[str, Any]:
-        """Build a partial-success response for service call timeouts."""
-        return {
+        """Build a partial-success response for service call timeouts.
+
+        When ``return_response`` was requested the key is emitted here too, so a
+        caller never has to branch on whether the key exists: every successful
+        reply carries it. It is necessarily null — the reply never arrived — and
+        that null proves nothing about what the service returned, so it comes
+        with the same ambiguity warning the component's unconfirmed path uses.
+        """
+        response: dict[str, Any] = {
             "success": True,
             "partial": True,
             "domain": domain,
@@ -366,9 +919,26 @@ class ServiceTools:
                 "The service was dispatched and may still be executing."
             ],
         }
+        if return_response:
+            response["service_response"] = None
+            response["warnings"].append(_COMPONENT_RESPONSE_UNCONFIRMED_WARNING)
+        return response
 
     async def _capture_initial_state(self, entity_id: str | None) -> str | None:
-        """Capture the current state of an entity before a service call."""
+        """Capture the current state of an entity before a service call.
+
+        ``entity_id`` stays optional in the signature to match the caller's
+        own ``str | None`` (a service call may target zero entities); the
+        one current call site only reaches this when ``should_wait`` (which
+        embeds an ``entity_id is not None`` check among several AND-ed
+        conditions) is true, so ``entity_id`` is always real there in
+        practice -- but that invariant lives in a boolean a few lines away,
+        not in a form the type checker can see through. Narrowing here
+        instead of trusting the caller keeps ``get_entity_state`` (which
+        genuinely requires a ``str``) honestly typed.
+        """
+        if entity_id is None:
+            return None
         try:
             state_data = await self._client.get_entity_state(entity_id)
             return state_data.get("state") if state_data else None
@@ -407,6 +977,54 @@ class ServiceTools:
             )
 
     @staticmethod
+    def _split_return_response_envelope(
+        result: Any, *, return_response: bool
+    ) -> tuple[Any, Any, bool, list[str]]:
+        """Split HA's reply into (changed states, response, present, warnings).
+
+        HA answers ``return_response=true`` with an envelope
+        ``{"changed_states": [...], "service_response": ...}``. The response data
+        belongs at the top level of ha_call_service's reply exactly ONCE — the
+        placement the component path (``_build_component_call_response``) already
+        uses — so it is peeled off here, BEFORE projection, leaving only the
+        changed states to project into ``result``. Returning it in both places
+        shipped it twice, byte-identical, doubling its token cost (issue #2085).
+
+        A legitimately null ``service_response`` is still reported as present
+        (``True``) so the caller emits the key.
+
+        With ``return_response`` false there is no envelope to split: HA returns a
+        plain changed-states list, so it passes through untouched and no
+        ``service_response`` key is emitted (``present`` False). That is the
+        overwhelming majority of calls.
+
+        Anything else — a non-dict reply, a missing key, or a ``changed_states``
+        that is not a list — means a non-conforming responder (HA core always
+        sends both keys, with a list). Every such shape takes ONE path: the whole
+        reply becomes the response data, ``result`` stays empty, and a warning
+        says so. Uniformity is the point — peeling a recognised key out of an
+        unrecognised envelope would silently discard whatever else it carried,
+        and an empty ``result`` would otherwise read as an affirmative "no entity
+        states changed". A caller that asked for response data must never get back
+        neither the data nor an explanation.
+        """
+        if not return_response:
+            return result, None, False, []
+        if (
+            isinstance(result, dict)
+            and "service_response" in result
+            and isinstance(result.get("changed_states"), list)
+        ):
+            return result["changed_states"], result["service_response"], True, []
+        # Any other shape is non-conforming. Hand the WHOLE reply back as the
+        # response data rather than guessing which part is which: splitting one
+        # recognised key out of an unrecognised envelope discards the rest (a
+        # non-list ``changed_states`` would vanish entirely) and would make the
+        # warning's "the whole reply is reported under 'service_response'" a lie.
+        # Projecting nothing into ``result`` keeps the records from shipping twice.
+        return [], result, True, [_NON_ENVELOPE_WARNING]
+
+    @staticmethod
     def _project_service_result(
         result: Any,
         *,
@@ -420,6 +1038,10 @@ class ServiceTools:
         Issue #1446. Precedence:
 
         - ``verbose=True``: bypass every transformation; return ``result`` as-is.
+          (``result`` here is always changed-state records, never an envelope:
+          the legacy path splits the envelope off before calling this — see
+          ``_split_return_response_envelope`` — and the component path passes
+          transition ``new_state``s, which are never enveloped to begin with.)
         - Explicit ``fields`` or ``attribute_keys``: apply per-record projection
           via ``project_entity_record`` to every record. No compaction; this is
           the power-user path.
@@ -470,6 +1092,7 @@ class ServiceTools:
         service: str,
         entity_id: str | None,
         data: str | dict[str, Any] | None,
+        return_response: bool = False,
     ) -> dict[str, Any]:
         """Handle a HomeAssistantConnectionError raised while calling a service.
 
@@ -481,7 +1104,9 @@ class ServiceTools:
         # mean the service was dispatched but HA didn't respond in time.
         # The operation is likely still running (e.g., update.install, long automations).
         if isinstance(error.__cause__, httpx.TimeoutException):
-            return self._build_timeout_response(domain, service, entity_id, data)
+            return self._build_timeout_response(
+                domain, service, entity_id, data, return_response=return_response
+            )
         # Non-timeout connection errors are real failures
         exception_to_structured_error(
             error,
@@ -736,7 +1361,9 @@ class ServiceTools:
         # misclassified as pre-send → a safe legacy first fire.
         try:
             ws = await get_websocket_client(
-                url=self._client.base_url, token=self._client.token
+                url=self._client.base_url,
+                token=self._client.token,
+                verify_ssl=getattr(self._client, "verify_ssl", None),
             )
         except Exception as exc:
             logger.warning(
@@ -892,8 +1519,23 @@ class ServiceTools:
         }
         if projection_warnings:
             response.setdefault("warnings", []).extend(projection_warnings)
-        if return_response and component_result.get("service_response") is not None:
-            response["service_response"] = component_result["service_response"]
+        if return_response:
+            # Emit the key whenever it was requested, even for a null response —
+            # the legacy path does the same (``_split_return_response_envelope``),
+            # and gating on ``is not None`` made the two paths answer the same
+            # call with different shapes. The component only sets the key for a
+            # non-null response, so a null one arrives as an absent key here.
+            response["service_response"] = component_result.get("service_response")
+            # ...which makes an absent key ambiguous: genuinely-null response, or
+            # one the component produced and dropped with the confirmation on its
+            # dispatched-unconfirmed path. Only the latter is possible when
+            # ``partial``, so warn there rather than on every null.
+            if "service_response" not in component_result and component_result.get(
+                "partial"
+            ):
+                response.setdefault("warnings", []).append(
+                    _COMPONENT_RESPONSE_UNCONFIRMED_WARNING
+                )
         if should_wait:
             if component_result.get("partial"):
                 # Dispatched, but the confirming state_changed did not arrive within
@@ -965,7 +1607,9 @@ class ServiceTools:
             return_response=return_response,
         )
         if isinstance(component_result, _AmbiguousDispatch):
-            return self._build_timeout_response(domain, service, entity_id, data)
+            return self._build_timeout_response(
+                domain, service, entity_id, data, return_response=return_response
+            )
         if component_result is None:
             return None
         return self._build_component_call_response(
@@ -1003,9 +1647,12 @@ class ServiceTools:
             bool,
             Field(
                 description=(
-                    "Return HA's raw service response unchanged (default: False). "
-                    "Use as an escape hatch when you need the full propagation "
-                    "chain or raw attribute payload (debug / inspection). "
+                    "Return HA's raw changed-state records unchanged (default: "
+                    "False). Use as an escape hatch when you need the full "
+                    "propagation chain or raw attribute payload (debug / "
+                    "inspection). With return_response=True the response data "
+                    "still surfaces once as the top-level service_response key, "
+                    "never nested in result. "
                     "WARNING: brings back token-bloat for nested-group targets — "
                     "prefer result_fields / result_attribute_keys for targeted control."
                 ),
@@ -1083,8 +1730,12 @@ class ServiceTools:
           to the targeted entity's record (drops parent-group propagation) and
           stripped of ``context`` / ``last_*`` metadata and heavy attribute
           lists (``effect_list``, ``hue_scenes``). Escape hatches: ``verbose=True``
-          for the raw HA response, or ``result_fields`` / ``result_attribute_keys``
-          for explicit per-record projection (mirrors ``ha_get_state``).
+          for the raw changed-state records, or ``result_fields`` /
+          ``result_attribute_keys`` for explicit per-record projection (mirrors
+          ``ha_get_state``).
+        - **return_response** (default False): the service's response data is
+          returned once, as the top-level ``service_response`` key — never nested
+          inside ``result``, which carries the changed entity states.
 
         **For detailed service documentation, use ha_get_skill_guide.**
 
@@ -1177,6 +1828,15 @@ class ServiceTools:
                 domain, service, service_data, return_response=return_response_bool
             )
 
+            # Peel the return_response envelope apart BEFORE projection so the
+            # response data is emitted once, top-level, and only the changed
+            # states reach ``result`` (issue #2085).
+            result, service_response, has_response_envelope, envelope_warnings = (
+                self._split_return_response_envelope(
+                    result, return_response=return_response_bool
+                )
+            )
+
             projected_result, projection_warnings = self._project_service_result(
                 result,
                 entity_id=entity_id,
@@ -1194,12 +1854,12 @@ class ServiceTools:
                 "result": projected_result,
                 "message": f"Successfully executed {domain}.{service}",
             }
-            if projection_warnings:
-                response.setdefault("warnings", []).extend(projection_warnings)
+            call_warnings = [*projection_warnings, *envelope_warnings]
+            if call_warnings:
+                response.setdefault("warnings", []).extend(call_warnings)
 
-            # If return_response was requested, include the service_response key prominently
-            if return_response_bool and isinstance(result, dict):
-                response["service_response"] = result.get("service_response", result)
+            if has_response_envelope:
+                response["service_response"] = service_response
 
             # Wait for entity state to change
             if should_wait and entity_id is not None:
@@ -1218,6 +1878,10 @@ class ServiceTools:
                 service=service,
                 entity_id=entity_id,
                 data=data,
+                # The parameter, not ``return_response_bool`` — that local is
+                # bound inside the try and would be unbound if the error fired
+                # before it.
+                return_response=return_response,
             )
         except ToolError:
             raise
@@ -1251,16 +1915,18 @@ class ServiceTools:
                 ),
             ),
         ],
-        timeout_seconds: int = 10,
+        timeout_seconds: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 10,
     ) -> dict[str, Any]:
         """
-        Check status of one or more device operations with real-time WebSocket verification.
+        Get the status of one or more device operations with real-time WebSocket verification.
 
         Pass a single operation_id string to check one operation, or a list of IDs
         to check multiple operations at once (bulk status).
 
-        The timeout_seconds parameter applies to single-operation checks only.
-        Bulk checks poll each operation individually with a short internal timeout.
+        The timeout_seconds wait window bounds both modes. Bulk checks poll
+        all operations concurrently under one shared window and report
+        per-item failures inside detailed_results instead of aborting the
+        batch.
 
         Use this to track operations initiated by ha_bulk_control or ha_call_service.
         For current entity states, use ha_get_state instead.
@@ -1270,7 +1936,7 @@ class ServiceTools:
             # before the body runs, so operation_id is already the final shape.
             if isinstance(operation_id, list):
                 result = await self._device_tools.get_bulk_operation_status(
-                    operation_ids=operation_id
+                    operation_ids=operation_id, timeout_seconds=timeout_seconds
                 )
                 return cast(dict[str, Any], result)
             result = await self._device_tools.get_device_operation_status(
@@ -1303,40 +1969,246 @@ class ServiceTools:
     @log_tool_usage
     async def ha_bulk_control(
         self,
-        operations: Annotated[list[dict[str, Any]], JSON_STRING_COERCION],
+        operations: Annotated[
+            list[SkipValidation[BulkControlOperation]],
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Explicit entity operations. Use this or selector, never both. "
+                    "Each item requires exact entity_id and action. Use "
+                    "action='off', not service='turn_off'."
+                )
+            ),
+            # Declared type stays `list[...]` (not `| None`) so the generated
+            # tool schema shows `operations` as always a list; `cast(Any, None)`
+            # supplies the runtime default without a `| None` mypy would then
+            # require type-narrowing for at every use below `selector is None`.
+        ] = cast(Any, None),
         parallel: bool = True,
         ctx: Context | None = None,
+        selector: Annotated[
+            SkipValidation[BulkControlSelector] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Optional exact structural scope using domain plus area_ids "
+                    "and/or floor_ids, with optional exclude_entity_ids."
+                )
+            ),
+        ] = None,
+        action: Annotated[
+            str | None,
+            Field(description="One device action applied to every resolved leaf."),
+        ] = None,
+        parameters: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(description="Optional action parameters for selector mode."),
+        ] = None,
+        timeout_seconds: Annotated[
+            float | None,
+            Field(ge=0, le=60, allow_inf_nan=False, strict=True),
+        ] = None,
+        validate_first: Annotated[bool, Field(strict=True)] = True,
+        dry_run: Annotated[bool, Field(strict=True)] = False,
     ) -> dict[str, Any]:
-        """Control multiple devices with bulk operation support and WebSocket tracking."""
-        parallel_bool = parallel
+        """Manage explicit operations or one deterministic structural bulk action.
 
-        # FastMCP validates operations as list[dict] before this runs.
-        # parse_json_param is kept as a defensive passthrough for the list case.
-        try:
-            parsed_operations = parse_json_param(operations, "operations")
-        except ValueError as e:
+        When NOT to use: use ``ha_call_service`` for service-specific payloads or
+        backend-native group targeting, and ``ha_search`` for fuzzy name discovery.
+
+        **Operations mode** (``operations``, no ``selector``): put every target in
+        this one call. Parallel execution is the default, and invalid items are
+        reported without aborting valid operations in the same batch — but a batch
+        in which every item fails validation dispatches nothing and fails the call.
+        A batch that targets a group/aggregate entity together with one or more of
+        its own individual members also fails closed (nothing dispatched): Home
+        Assistant applies the action to every member when the group is targeted
+        regardless of what else is listed, so a member row cannot exclude that
+        member from the group's own action. Use selector mode with
+        ``exclude_entity_ids`` when a group action must exclude specific members.
+
+        **Selector mode** (``selector`` + ``action``): use exact area or floor IDs
+        when exclusions must be applied after recursively expanding generic
+        aggregate membership. Resolves a frozen visible leaf set before dispatch;
+        it is not transactional, so Home Assistant may still report per-leaf
+        failures. A selector resolving to more than 100 entities
+        (``MAX_SELECTOR_ENTITIES``) fails closed instead of dispatching a
+        partial/oversized batch — narrow it (a more specific area/floor, or add
+        ``exclude_entity_ids``) and retry. Set ``dry_run`` to preview the resolved
+        set without changing state.
+        """
+        if operations is None and selector is None:
             raise_tool_error(
                 create_validation_error(
-                    f"Invalid operations parameter: {e}",
+                    "Provide exactly one of operations or selector; neither was given",
                     parameter="operations",
-                    invalid_json=True,
+                )
+            )
+        if operations is not None and selector is not None:
+            raise_tool_error(
+                create_validation_error(
+                    "Provide exactly one of operations or selector; both were given",
+                    parameter="selector",
                 )
             )
 
-        if not isinstance(parsed_operations, list):
+        if selector is not None:
+            return await self._run_bulk_selector(
+                cast(dict[str, Any], selector),
+                action=action,
+                parameters=parameters,
+                timeout_seconds=timeout_seconds,
+                validate_first=validate_first,
+                dry_run=dry_run,
+                parallel=parallel,
+                ctx=ctx,
+            )
+
+        offending_parameter = _selector_only_parameter_offender(
+            action=action,
+            parameters=parameters,
+            timeout_seconds=timeout_seconds,
+            validate_first=validate_first,
+            dry_run=dry_run,
+        )
+        if offending_parameter is not None:
             raise_tool_error(
                 create_validation_error(
-                    "Operations parameter must be a list",
-                    parameter="operations",
-                    details=f"Received type: {type(parsed_operations).__name__}",
+                    _selector_only_parameter_message(offending_parameter),
+                    parameter=offending_parameter,
                 )
             )
 
-        operations_list = cast(list[dict[str, Any]], parsed_operations)
+        operations_list = _parse_bulk_operations(operations)
+        await _reject_operations_group_member_conflicts(self._client, operations_list)
+
         result = await self._device_tools.bulk_device_control(
-            operations=operations_list, parallel=parallel_bool, ctx=ctx
+            operations=operations_list, parallel=parallel, ctx=ctx
         )
         return cast(dict[str, Any], result)
+
+    async def _run_bulk_selector(
+        self,
+        selector: dict[str, Any],
+        *,
+        action: str | None,
+        parameters: dict[str, Any] | None,
+        timeout_seconds: float | None,
+        validate_first: bool,
+        dry_run: bool,
+        parallel: bool,
+        ctx: Context | None,
+    ) -> dict[str, Any]:
+        """Resolve one structural selector and, unless ``dry_run``, dispatch it.
+
+        Split out of ``ha_bulk_control`` to keep that tool's own McCabe
+        complexity under the repo's C901 threshold (AGENTS.md — no per-file
+        exemptions).
+        """
+        if action is None:
+            raise_tool_error(
+                create_validation_error(
+                    "Selector mode requires action", parameter="action"
+                )
+            )
+        try:
+            parsed_selector = parse_json_param(selector, "selector")
+            if not isinstance(parsed_selector, dict):
+                raise BulkSelectorValidationError("selector must be a JSON object")
+        except ValueError as exc:
+            # BulkSelectorValidationError subclasses ValueError; catching it
+            # separately alongside ValueError was redundant.
+            parameter = getattr(exc, "parameter", "selector")
+            raise_tool_error(create_validation_error(str(exc), parameter=parameter))
+        try:
+            resolution = await resolve_bulk_selector(
+                self._client,
+                parsed_selector,
+                action=action,
+                parameters=parameters,
+                timeout_seconds=timeout_seconds,
+                validate_first=validate_first,
+            )
+        except BulkSelectorValidationError as exc:
+            # Caller-fixable: the selector itself is wrong. Unlike the
+            # `except ValueError` above (which also catches plain ValueErrors
+            # with no `.parameter`), every BulkSelectorValidationError sets
+            # one (default "selector") -- no getattr fallback needed.
+            raise_tool_error(create_validation_error(str(exc), parameter=exc.parameter))
+        except BulkSelectorInfrastructureError as exc:
+            # NOT caller-fixable by editing the selector. Routed through
+            # create_connection_error (not create_validation_error) so an
+            # agent doesn't try to rewrite a selector that was never the
+            # problem -- but the specific next step depends on exc.cause,
+            # since not every cause is actually a connectivity problem.
+            logger.warning(
+                "ha_bulk_control: selector resolution infrastructure failure (%s): %s",
+                exc.cause,
+                exc,
+            )
+            message, suggestions = _INFRASTRUCTURE_ERROR_SUGGESTIONS.get(
+                exc.cause,
+                _INFRASTRUCTURE_ERROR_SUGGESTIONS[
+                    InfrastructureErrorCause.CONNECTIVITY
+                ],
+            )
+            raise_tool_error(
+                create_connection_error(
+                    message, details=str(exc), suggestions=suggestions
+                )
+            )
+        except Exception as exc:
+            exception_to_structured_error(
+                exc,
+                context={"operation": "resolve bulk selector"},
+            )
+            raise  # unreachable: exception_to_structured_error always raises
+
+        if dry_run:
+            response: dict[str, Any] = {
+                "success": True,
+                "dry_run": True,
+                "dispatched": False,
+            }
+            _attach_resolution_to_response(response, resolution)
+            return response
+        try:
+            result = await self._device_tools.bulk_device_control(
+                operations=resolution.operations,
+                parallel=parallel,
+                ctx=ctx,
+            )
+        except ToolError:
+            # bulk_device_control already raises a fully structured ToolError
+            # (e.g. "every operation failed validation" -- see its own
+            # raise_tool_error call sites) -- re-raise it untouched. Without
+            # this guard, the except Exception below would catch it too and
+            # re-classify it via exception_to_structured_error, discarding
+            # its real code/message/suggestions for a generic one.
+            raise
+        except Exception as exc:
+            # Attach the frozen resolution to the error context: a
+            # non-transactional, partially-executed bulk write must leave a
+            # record of which entities were resolved and attempted, in the
+            # response the agent sees, not just in whatever
+            # bulk_device_control itself logged.
+            logger.warning(
+                "ha_bulk_control: dispatch failed after resolving %d entities: %s",
+                len(resolution.resolved_entity_ids),
+                exc,
+            )
+            exception_to_structured_error(
+                exc,
+                context={
+                    "operation": "bulk device control",
+                    "resolution": resolution.summary(),
+                },
+            )
+            raise  # unreachable: exception_to_structured_error always raises
+        response = cast(dict[str, Any], result)
+        _attach_resolution_to_response(response, resolution)
+        return response
 
     @tool(
         name="ha_call_event",
@@ -1427,7 +2299,9 @@ class ServiceTools:
         }
 
 
-def register_service_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+def register_service_tools(
+    mcp: Any, client: HomeAssistantClient, **kwargs: Any
+) -> None:
     """Register service call and operation monitoring tools with the MCP server."""
     device_tools = kwargs.get("device_tools")
     if not device_tools:

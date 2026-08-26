@@ -46,7 +46,7 @@ CATALOG = [
     make_tool("ha_restart", False),
     make_tool("ha_unannotated", None),
     make_tool("ha_manage_backup", False),
-    make_tool("ha_manage_addon", False),
+    make_tool("ha_manage_app", False),
     # #1991: ha_config_get_dashboard is now annotated readOnlyHint=True — it is
     # honestly read-only (the theme-guard bracket is disabled), so it is a plain
     # read tool, no longer a mixed read/write exemption.
@@ -148,7 +148,7 @@ class TestExemptionRules:
         ],
     )
     def test_manage_addon(self, args, allowed):
-        rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_addon"].blocked_write
+        rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_app"].blocked_write
         assert (rule(args) is None) is allowed
 
     @pytest.mark.parametrize(
@@ -186,11 +186,26 @@ class TestExemptionRules:
             ({"action": "create", "name": "x"}, False),
             ({"action": "update", "pipeline_id": "p1"}, False),
             ({"action": "set_preferred", "pipeline_id": "p1"}, False),
+            ({"action": "process", "sentence": "turn on the light"}, False),
             ({}, False),
         ],
     )
     def test_manage_pipeline(self, args, allowed):
         rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_pipeline"].blocked_write
+        assert (rule(args) is None) is allowed
+
+    @pytest.mark.parametrize(
+        ("args", "allowed"),
+        [
+            ({"action": "get"}, True),
+            ({"action": "set", "policy": {"rules": []}}, False),
+            # ``action`` has no schema default, so an absent key is a
+            # malformed call and must fail closed, not read.
+            ({}, False),
+        ],
+    )
+    def test_manage_security_policy(self, args, allowed):
+        rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_security_policy"].blocked_write
         assert (rule(args) is None) is allowed
 
     @pytest.mark.parametrize(
@@ -257,6 +272,25 @@ class TestExemptionRules:
         rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_radio"].blocked_write
         assert (rule(args) is None) is allowed
 
+    @pytest.mark.parametrize(
+        "args,allowed",
+        [
+            ({"action": "list"}, True),
+            # No pure-read duplicate exists, and Read Only Mode still surfaces
+            # the capture warning naming this value -- so it stays inspectable.
+            ({"action": "get_engine_theme"}, True),
+            # Both writes stay blocked: the backend default and the
+            # engine-account restore.
+            ({"action": "set", "theme_name": "nord"}, False),
+            ({"action": "set_engine_theme", "value": {"theme": ""}}, False),
+            # A missing action fails closed -- never a silent read.
+            ({}, False),
+        ],
+    )
+    def test_manage_theme(self, args, allowed):
+        rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_theme"].blocked_write
+        assert (rule(args) is None) is allowed
+
 
 @pytest.mark.anyio
 class TestMiddleware:
@@ -319,6 +353,23 @@ class TestMiddleware:
         for name in PROXY_META_TOOLS:
             result = await mw.on_call_tool(make_context(name, {}), call_next)
             assert result == "proxied"
+
+    async def test_search_tool_extra_name_is_not_treated_as_dispatch(
+        self, read_only_on
+    ):
+        """ha_search_tools never dispatches, even when a caller adds name fields."""
+        mw = make_middleware()
+        call_next = AsyncMock(return_value="search-results")
+
+        result = await mw.on_call_tool(
+            make_context(
+                "ha_search_tools",
+                {"query": "automation", "name": "ha_config_set_automation"},
+            ),
+            call_next,
+        )
+
+        assert result == "search-results"
 
     async def test_proxied_write_tool_blocked_with_inner_name(self, read_only_on):
         """ha_call_write_tool(name=<hidden write tool>) must produce the
@@ -383,6 +434,60 @@ class TestMiddleware:
             call_next,
         )
         assert result == "proxied-backups"
+
+    async def test_direct_call_on_a_retired_name_is_still_read_only_checked(
+        self, read_only_on
+    ):
+        """The gate does not depend on the alias middleware running first.
+
+        It normally does — it is registered ahead of this one — but a
+        middleware inserted before it would leave the exemption lookup on a
+        name it is not keyed on, and that miss passes the call rather than
+        blocking it.
+        """
+        mw = make_middleware()
+        call_next = AsyncMock()
+
+        with pytest.raises(ToolError) as excinfo:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_manage_addon", {"slug": "core_ssh", "action": "uninstall"}
+                ),
+                call_next,
+            )
+
+        body = expect_read_only_error(excinfo)
+        assert body["tool_name"] == "ha_manage_app"
+        call_next.assert_not_called()
+
+    async def test_proxied_call_on_a_retired_name_is_still_read_only_checked(
+        self, read_only_on
+    ):
+        """A stale envelope name must not walk past the exemption.
+
+        The exemptions are keyed on the tool's current name, and a miss does
+        not fail closed here: classification calls the retired name unknown,
+        unknown is not "write", and the call would pass through to the proxy,
+        which resolves the rename and dispatches the write after all.
+        """
+        mw = make_middleware()
+        call_next = AsyncMock()
+
+        with pytest.raises(ToolError) as excinfo:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_call_write_tool",
+                    {
+                        "name": "ha_manage_addon",
+                        "arguments": {"slug": "core_ssh", "action": "uninstall"},
+                    },
+                ),
+                call_next,
+            )
+
+        body = expect_read_only_error(excinfo)
+        assert body["tool_name"] == "ha_manage_app"
+        call_next.assert_not_called()
 
     async def test_double_wrapped_proxy_envelope_unwrapped(self, read_only_on):
         """Mirror the proxy's own double-wrap recovery: a proxy call
@@ -491,7 +596,7 @@ class TestMiddleware:
         mw = ReadOnlyMiddleware(list_tools=list_tools)
         call_next = AsyncMock(return_value="flows")
         result = await mw.on_call_tool(
-            make_context("ha_manage_addon", {"slug": "x", "path": "/flows"}),
+            make_context("ha_manage_app", {"slug": "x", "path": "/flows"}),
             call_next,
         )
         assert result == "flows"
@@ -512,7 +617,7 @@ class TestTransform:
             "ha_get_state",
             "ha_search",
             "ha_manage_backup",
-            "ha_manage_addon",
+            "ha_manage_app",
             "ha_config_get_dashboard",
         }
 
@@ -546,12 +651,14 @@ class TestExemptTableContract:
         in read-only mode')."""
         assert set(READ_ONLY_EXEMPT_TOOLS) == {
             "ha_manage_backup",
-            "ha_manage_addon",
+            "ha_manage_app",
             "ha_manage_energy_prefs",
             "ha_manage_pipeline",
             "ha_manage_custom_tool",
             "ha_manage_radio",
             "ha_manage_updates",
+            "ha_manage_security_policy",
+            "ha_manage_theme",
         }
 
     def test_every_exemption_describes_whats_allowed(self):
@@ -568,12 +675,14 @@ _SRC_TOOLS_DIR = Path(__file__).resolve().parents[3] / "src" / "ha_mcp" / "tools
 # Module that defines each exempt tool's ``@tool`` / ``@mcp.tool`` method.
 _EXEMPT_TOOL_MODULES = {
     "ha_manage_backup": "backup.py",
-    "ha_manage_addon": "tools_addons.py",
+    "ha_manage_app": "tools_addons.py",
     "ha_manage_energy_prefs": "tools_energy.py",
-    "ha_manage_pipeline": "tools_voice_assistant.py",
+    "ha_manage_pipeline": "tools_assist_pipeline.py",
     "ha_manage_custom_tool": "tools_code.py",
     "ha_manage_radio": "tools_radio.py",
     "ha_manage_updates": "tools_updates.py",
+    "ha_manage_security_policy": "tools_security_policy.py",
+    "ha_manage_theme": "tools_themes.py",
 }
 
 # INDEPENDENT, hardcoded manifests of the argument names each exempt
@@ -585,8 +694,9 @@ _EXEMPT_TOOL_MODULES = {
 # tool likewise fails this test, telling the maintainer to re-review the
 # read-only predicate.
 _EXEMPT_INSPECTED_ARGS = {
+    "ha_manage_theme": {"action"},
     "ha_manage_backup": {"scope", "action"},
-    "ha_manage_addon": {
+    "ha_manage_app": {
         "action",
         "options",
         "network",
@@ -602,6 +712,7 @@ _EXEMPT_INSPECTED_ARGS = {
     "ha_manage_custom_tool": {"list_saved", "code", "run_saved"},
     "ha_manage_radio": {"action"},
     "ha_manage_updates": {"action"},
+    "ha_manage_security_policy": {"action"},
 }
 
 # The subset of the addon manifest that ``_addon_write`` iterates as
@@ -626,6 +737,20 @@ _ADDON_CONFIG_WRITE_PARAMS_MANIFEST = (
 # dispatch fields the predicate inspects) would silently classify as a
 # read in Read Only Mode.
 _EXEMPT_GATED_OR_READ_ARGS = {
+    "ha_manage_theme": {
+        # Consumed only under the action dispatch the predicate inspects:
+        # the backend-default write payload ('set')...
+        "theme_name",
+        "mode",
+        # ...and the engine-account restore payload plus its compare guard
+        # ('set_engine_theme'). Both actions are blocked outright, so these
+        # carry no mutation capability of their own in read-only mode.
+        "value",
+        "expected_current",
+        # Unconditional-overwrite escape hatch on set_engine_theme, itself a
+        # blocked action in read-only mode.
+        "force",
+    },
     "ha_manage_backup": {
         # Consumed only under the (scope, action) dispatch the predicate
         # inspects: snapshot create/restore payloads...
@@ -646,7 +771,7 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "older_than_days",
         "limit",
     },
-    "ha_manage_addon": {
+    "ha_manage_app": {
         # Read-path selectors/modifiers of the allowed GET proxy.
         "slug",
         "path",
@@ -699,6 +824,12 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         # Extra set_preferred write, but it only fires on create/update,
         # which the action check blocks.
         "make_preferred",
+        # action='process' runs a sentence through Assist, where a matched
+        # intent executes; the action check blocks it, and these three only
+        # shape that already-blocked call.
+        "sentence",
+        "conversation_id",
+        "agent_id",
     },
     "ha_manage_custom_tool": {
         # (The FastMCP-injected ``ctx`` Context is excluded by
@@ -727,6 +858,12 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         # Read-path modifiers of the allowed list/get actions.
         "include_skipped",
         "include_release_notes",
+    },
+    "ha_manage_security_policy": {
+        # Both carry the write payload for action='set', which the
+        # inspected ``action`` dispatch blocks before either is read.
+        "policy",
+        "expected_version",
     },
 }
 
@@ -807,12 +944,12 @@ class TestExemptPredicateSchemaDrift:
         )
 
     def test_addon_config_write_params_are_real_tool_args(self):
-        module_path = _SRC_TOOLS_DIR / _EXEMPT_TOOL_MODULES["ha_manage_addon"]
-        real_params = _decorated_tool_param_names(module_path, "ha_manage_addon")
+        module_path = _SRC_TOOLS_DIR / _EXEMPT_TOOL_MODULES["ha_manage_app"]
+        real_params = _decorated_tool_param_names(module_path, "ha_manage_app")
         for arg in _ADDON_CONFIG_WRITE_PARAMS:
             assert arg in real_params, (
                 f"_ADDON_CONFIG_WRITE_PARAMS lists {arg!r}, absent from "
-                f"ha_manage_addon's signature ({module_path.name})"
+                f"ha_manage_app's signature ({module_path.name})"
             )
 
     @pytest.mark.parametrize("tool_name", sorted(_EXEMPT_INSPECTED_ARGS))
@@ -925,14 +1062,14 @@ class TestStringEnvelopeProxy:
                 make_context(
                     "ha_call_write_tool",
                     {
-                        "name": "ha_manage_addon",
+                        "name": "ha_manage_app",
                         "arguments": '{"slug": "x", "action": "install"}',
                     },
                 ),
                 call_next,
             )
         body = expect_read_only_error(excinfo)
-        assert body["tool_name"] == "ha_manage_addon"
+        assert body["tool_name"] == "ha_manage_app"
         call_next.assert_not_called()
 
     async def test_string_envelope_exempt_read_passes(self, read_only_on):
@@ -956,7 +1093,7 @@ class TestStringEnvelopeProxy:
         result = await mw.on_call_tool(
             make_context(
                 "ha_call_write_tool",
-                {"name": "ha_manage_addon", "arguments": "not json"},
+                {"name": "ha_manage_app", "arguments": "not json"},
             ),
             call_next,
         )
@@ -970,7 +1107,7 @@ class TestStringEnvelopeProxy:
         result = await mw.on_call_tool(
             make_context(
                 "ha_call_write_tool",
-                {"name": "ha_manage_addon", "arguments": "[1, 2]"},
+                {"name": "ha_manage_app", "arguments": "[1, 2]"},
             ),
             call_next,
         )

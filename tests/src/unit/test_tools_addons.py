@@ -1,13 +1,21 @@
 """Unit tests for add-on tools (AddOnTools, manage_addon, _validate_addon_access, _call_addon_api, _call_addon_ws, list_addons)."""
 
 import json
+import ssl
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-import websockets.exceptions
 from fastmcp.exceptions import ToolError
 
+# The vendored classes — the same ones tools_addons raises/catches; the
+# shared site-packages websockets is a DIFFERENT set of classes that
+# except/isinstance would silently not match.
+from ha_mcp._vendor.websockets.exceptions import (
+    ConnectionClosed,
+    InvalidHandshake,
+    InvalidStatus,
+)
 from ha_mcp.tools.tools_addons import (
     _apply_response_transform,
     _call_addon_api,
@@ -36,12 +44,30 @@ _RUNNING_ADDON_INFO = {
 
 _INGRESS_SESSION_TOKEN = "test-ingress-session"
 
+_FRONT_DOOR_SCHEMA = [
+    {"name": "leave_front_door_open", "type": "boolean", "optional": True}
+]
+
+
+def _front_door_fixture(front_door) -> tuple[dict, list]:
+    """Return (options, schema) for one leave_front_door_open state.
+
+    False/True: option saved with that value. "absent": exposed in the schema
+    but never saved (stock install). "unexposed": app without the option.
+    """
+    if front_door == "unexposed":
+        return {}, []
+    if front_door == "absent":
+        return {}, list(_FRONT_DOOR_SCHEMA)
+    return {"leave_front_door_open": front_door}, list(_FRONT_DOOR_SCHEMA)
+
 
 def _make_mock_client() -> MagicMock:
     """Create a mock HomeAssistantClient."""
     client = MagicMock()
     client.base_url = "http://localhost:8123"
     client.token = "test-token"
+    client.verify_ssl = True
     return client
 
 
@@ -793,6 +819,190 @@ class TestCallAddonApiErrors:
         assert "addon_config" not in result, result
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [401, 403])
+    @pytest.mark.parametrize("front_door", [False, True, "absent", "unexposed"])
+    async def test_http_direct_port_auth_hints_at_app_option(self, status, front_door):
+        """Direct auth errors suggest the option only when it is off.
+
+        "absent" mirrors a stock install: the option lives in the schema but
+        was never saved, so Supervisor omits it from options — the app treats
+        that as disabled. "unexposed" is an app without the option at all.
+        """
+        options, schema = _front_door_fixture(front_door)
+        client = _make_mock_client()
+        addon_info = {
+            "success": True,
+            "addon": {
+                **_RUNNING_ADDON_INFO["addon"],
+                "options": options,
+                "schema": schema,
+                "ports": {"1880/tcp": 1880},
+            },
+        }
+
+        async def fake_request(*, method, url, headers, content):
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = status
+            response.json.return_value = {}
+            response.text = "{}"
+            return response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=addon_info,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = fake_request
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "test_addon", "/flows", port=1880)
+
+        assert result["status_code"] == status
+        suggestion = result["suggestion"]
+        if front_door in (True, "unexposed"):
+            assert "options={'leave_front_door_open': True}" not in suggestion
+            assert "app's own authentication" in suggestion
+            assert "access-control" in suggestion
+            assert "ingress session" not in suggestion.lower()
+            assert "HA token" not in suggestion
+        else:
+            assert result["addon_config"]["options"] == options
+            assert "leave_front_door_open" in suggestion
+            assert "ha_manage_app" in suggestion
+            assert "restart" in suggestion.lower()
+            assert "action='restart'" in suggestion
+            assert "security" in suggestion.lower()
+
+    @pytest.mark.asyncio
+    async def test_http_proxy_propagates_tls_verification(self, mock_ingress_session):
+        """The add-on proxy must honor the HA client's TLS verification setting."""
+        client = _make_mock_client()
+        client.base_url = "https://ha.local:8123"
+        client.verify_ssl = False
+
+        response = MagicMock()
+        response.headers = {"content-type": "application/json"}
+        response.status_code = 200
+        response.json.return_value = {}
+        response.text = "{}"
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.return_value = response
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "test_addon", "/flows")
+
+        assert result["success"] is True
+        assert mock_httpx.call_args.kwargs["verify"] is False
+
+    @pytest.mark.asyncio
+    async def test_http_proxy_keeps_tls_verification_by_default(
+        self, mock_ingress_session
+    ):
+        """verify_ssl=True must reach httpx unchanged — the secure default."""
+        client = _make_mock_client()
+        client.base_url = "https://ha.local:8123"
+        client.verify_ssl = True
+
+        response = MagicMock()
+        response.headers = {"content-type": "application/json"}
+        response.status_code = 200
+        response.json.return_value = {}
+        response.text = "{}"
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.return_value = response
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "test_addon", "/flows")
+
+        assert result["success"] is True
+        assert mock_httpx.call_args.kwargs["verify"] is True
+
+    @pytest.mark.asyncio
+    async def test_http_proxy_classifies_tls_verification_failure(
+        self, mock_ingress_session
+    ):
+        """A cert failure with verification on names the TLS remedy."""
+        client = _make_mock_client()
+        client.base_url = "https://ha.local:8123"
+        client.verify_ssl = True
+
+        connect_error = httpx.ConnectError("All connection attempts failed")
+        connect_error.__cause__ = ssl.SSLCertVerificationError(
+            "certificate verify failed: IP address mismatch"
+        )
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = connect_error
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_api(client, "test_addon", "/flows")
+
+        result = _parse_tool_error(exc_info)
+        assert "TLS verification failed" in result["error"]["message"]
+        # A single suggestion lands under the singular key.
+        joined = " ".join(
+            [
+                result["error"].get("suggestion", ""),
+                *result["error"].get("suggestions", []),
+            ]
+        )
+        assert "HA_VERIFY_SSL" in joined
+        # The generic network suggestions would misdirect here.
+        assert "network connectivity" not in joined.lower()
+
+    @pytest.mark.asyncio
     async def test_http_403_response_hints_at_ip_restriction(
         self, mock_ingress_session
     ):
@@ -1056,7 +1266,7 @@ class TestCreateIngressSession:
 
     @pytest.mark.asyncio
     async def test_supervisor_error_response_propagates(self):
-        """When _supervisor_api_call returns success=False, the error is raised."""
+        """An error raised by _supervisor_api_call propagates unchanged."""
         from ha_mcp.tools.tools_addons import _create_ingress_session
 
         client = _make_mock_client()
@@ -1072,7 +1282,7 @@ class TestCreateIngressSession:
             patch(
                 "ha_mcp.tools.tools_addons._supervisor_api_call",
                 new_callable=AsyncMock,
-                return_value=error_response,
+                side_effect=ToolError(json.dumps(error_response)),
             ),
             pytest.raises(ToolError) as exc_info,
         ):
@@ -1257,9 +1467,7 @@ class TestCallAddonWsErrors:
         ):
             # Simulate a quick connection that closes immediately
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -1268,6 +1476,141 @@ class TestCallAddonWsErrors:
         # Should have passed the Ingress check (port override bypasses it)
         assert result["success"] is True
         assert result["closed_by"] == "server_closed"
+
+    @pytest.mark.asyncio
+    async def test_ws_proxy_propagates_disabled_tls_verification(
+        self, mock_ingress_session
+    ):
+        """WSS proxy calls honor HA_VERIFY_SSL=false via an SSL context."""
+        client = _make_mock_client()
+        client.base_url = "https://ha.local:8123"
+        client.verify_ssl = False
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(client, "test_addon", "/ws")
+
+        assert result["success"] is True
+        ssl_context = mock_ws_connect.call_args.kwargs["ssl"]
+        assert isinstance(ssl_context, ssl.SSLContext)
+        assert ssl_context.check_hostname is False
+        assert ssl_context.verify_mode == ssl.CERT_NONE
+
+    @pytest.mark.asyncio
+    async def test_ws_proxy_keeps_tls_verification_by_default(
+        self, mock_ingress_session
+    ):
+        """verify_ssl=True keeps the default secure WSS context."""
+        client = _make_mock_client()
+        client.base_url = "https://ha.local:8123"
+        client.verify_ssl = True
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(client, "test_addon", "/ws")
+
+        assert result["success"] is True
+        ssl_context = mock_ws_connect.call_args.kwargs["ssl"]
+        assert isinstance(ssl_context, ssl.SSLContext)
+        assert ssl_context.check_hostname is True
+        assert ssl_context.verify_mode == ssl.CERT_REQUIRED
+
+    @pytest.mark.asyncio
+    async def test_ws_direct_port_uses_no_ssl_context(self):
+        """A plaintext ws:// direct-port route must pass ssl=None.
+
+        websockets.connect rejects any SSL context on a ws:// URI, so always
+        building one would break every direct-port call.
+        """
+        client = _make_mock_client()
+        client.base_url = "https://ha.local:8123"
+        client.verify_ssl = True
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO_WS,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_ws(client, "test_addon", "/ws", port=1880)
+
+        assert result["success"] is True
+        assert mock_ws_connect.call_args.kwargs["ssl"] is None
+
+    @pytest.mark.asyncio
+    async def test_ws_proxy_classifies_tls_verification_failure(
+        self, mock_ingress_session
+    ):
+        """A WSS cert failure with verification on names the TLS remedy."""
+        client = _make_mock_client()
+        client.base_url = "https://ha.local:8123"
+        client.verify_ssl = True
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=_RUNNING_ADDON_INFO,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(
+                side_effect=ssl.SSLCertVerificationError(
+                    "certificate verify failed: IP address mismatch"
+                )
+            )
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_ws(client, "test_addon", "/ws")
+
+        result = _parse_tool_error(exc_info)
+        assert "TLS verification failed" in result["error"]["message"]
+        joined = " ".join(
+            [
+                result["error"].get("suggestion", ""),
+                *result["error"].get("suggestions", []),
+            ]
+        )
+        assert "HA_VERIFY_SSL" in joined
+        assert "network connectivity" not in joined.lower()
 
     @pytest.mark.asyncio
     async def test_ws_addon_not_running(self):
@@ -1309,8 +1652,8 @@ class TestCallAddonWsErrors:
         self, mock_ingress_session, status, must_mention
     ):
         """401/403 from the WS handshake should suggest token/scope, not path."""
-        from websockets.datastructures import Headers
-        from websockets.http11 import Response
+        from ha_mcp._vendor.websockets.datastructures import Headers
+        from ha_mcp._vendor.websockets.http11 import Response
 
         client = _make_mock_client()
 
@@ -1326,7 +1669,7 @@ class TestCallAddonWsErrors:
         ):
             response = Response(status, "Unauthorized", Headers())
             mock_ws_connect.return_value.__aenter__ = AsyncMock(
-                side_effect=websockets.exceptions.InvalidStatus(response),
+                side_effect=InvalidStatus(response),
             )
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -1343,10 +1686,70 @@ class TestCallAddonWsErrors:
         )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [401, 403])
+    @pytest.mark.parametrize("front_door", [False, True, "absent", "unexposed"])
+    async def test_ws_direct_port_auth_hints_at_app_option(self, status, front_door):
+        """Direct WS errors suggest the option only when it is off.
+
+        Same four option states as the HTTP variant: saved False/True,
+        exposed-but-unsaved ("absent", the stock install), and an app without
+        the option ("unexposed").
+        """
+        from ha_mcp._vendor.websockets.datastructures import Headers
+        from ha_mcp._vendor.websockets.http11 import Response
+
+        options, schema = _front_door_fixture(front_door)
+        client = _make_mock_client()
+        addon_info = {
+            "success": True,
+            "addon": {
+                **_RUNNING_ADDON_INFO_WS["addon"],
+                "options": options,
+                "schema": schema,
+                "ports": {"1880/tcp": 1880},
+            },
+        }
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.get_addon_info",
+                new_callable=AsyncMock,
+                return_value=addon_info,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.websockets.connect",
+            ) as mock_ws_connect,
+        ):
+            response = Response(status, "Unauthorized", Headers())
+            mock_ws_connect.return_value.__aenter__ = AsyncMock(
+                side_effect=InvalidStatus(response),
+            )
+            mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(ToolError) as exc_info:
+                await _call_addon_ws(client, "test_addon", "/compile", port=1880)
+
+        result = _parse_tool_error(exc_info)
+        suggestions = result["error"].get("suggestions", [])
+        joined = " ".join(suggestions).lower()
+        if front_door in (True, "unexposed"):
+            assert "options={'leave_front_door_open': true}" not in joined
+            assert "app's own authentication" in joined
+            assert "access-control" in joined
+            assert "ingress session" not in joined
+            assert "ha token" not in joined
+        else:
+            assert "leave_front_door_open" in joined, suggestions
+            assert "ha_manage_app" in joined, suggestions
+            assert "restart" in joined, suggestions
+            assert "action='restart'" in joined, suggestions
+            assert "security" in joined, suggestions
+
+    @pytest.mark.asyncio
     async def test_ws_handshake_404_keeps_path_hint(self, mock_ingress_session):
         """404 from the WS handshake should still surface the path-shape hint."""
-        from websockets.datastructures import Headers
-        from websockets.http11 import Response
+        from ha_mcp._vendor.websockets.datastructures import Headers
+        from ha_mcp._vendor.websockets.http11 import Response
 
         client = _make_mock_client()
 
@@ -1362,7 +1765,7 @@ class TestCallAddonWsErrors:
         ):
             response = Response(404, "Not Found", Headers())
             mock_ws_connect.return_value.__aenter__ = AsyncMock(
-                side_effect=websockets.exceptions.InvalidStatus(response),
+                side_effect=InvalidStatus(response),
             )
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -1391,7 +1794,7 @@ class TestCallAddonWsErrors:
             ) as mock_ws_connect,
         ):
             mock_ws_connect.return_value.__aenter__ = AsyncMock(
-                side_effect=websockets.exceptions.InvalidHandshake("403 Forbidden"),
+                side_effect=InvalidHandshake("403 Forbidden"),
             )
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -1414,9 +1817,7 @@ class TestCallAddonWsErrors:
             captured["kwargs"] = kwargs
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -1454,9 +1855,7 @@ class TestCallAddonWsErrors:
             captured["headers"] = dict(kwargs.get("additional_headers", {}))
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -1493,9 +1892,7 @@ class TestCallAddonWsErrors:
             captured["url"] = url
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -1530,9 +1927,7 @@ class TestCallAddonWsErrors:
             captured["url"] = url
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -1691,9 +2086,7 @@ class TestCallAddonWsErrors:
             ) as mock_ws_connect,
         ):
             mock_ws = AsyncMock()
-            mock_ws.send.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.send.side_effect = ConnectionClosed(None, None)
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -1760,7 +2153,7 @@ class TestCallAddonWsErrors:
                 '{"event": "line", "data": "Compiling..."}',
                 '{"event": "line", "data": "Done."}',
                 '{"event": "exit", "code": 0}',
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -1792,7 +2185,7 @@ class TestCallAddonWsErrors:
             mock_ws = AsyncMock()
             mock_ws.recv.side_effect = [
                 "\x1b[32mSUCCESS\x1b[0m Build complete",
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -1821,7 +2214,7 @@ class TestCallAddonWsErrors:
             mock_ws.recv.side_effect = [
                 b"\x00\x01\x02",  # binary frame, should be skipped
                 "text message",
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -1914,9 +2307,7 @@ class TestCallAddonWsErrors:
             captured["headers"] = dict(kwargs.get("additional_headers", {}))
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -1961,9 +2352,7 @@ class TestCallAddonWsErrors:
             captured["url"] = url
             cm = MagicMock()
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = websockets.exceptions.ConnectionClosed(
-                None, None
-            )
+            mock_ws.recv.side_effect = ConnectionClosed(None, None)
             cm.__aenter__ = AsyncMock(return_value=mock_ws)
             cm.__aexit__ = AsyncMock(return_value=False)
             return cm
@@ -2276,9 +2665,7 @@ class TestCallAddonWsNewParams:
             ) as mock_ws_connect,
         ):
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = messages_to_send + [
-                websockets.exceptions.ConnectionClosed(None, None)
-            ]
+            mock_ws.recv.side_effect = messages_to_send + [ConnectionClosed(None, None)]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -2320,9 +2707,7 @@ class TestCallAddonWsNewParams:
             ) as mock_ws_connect,
         ):
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = messages_to_send + [
-                websockets.exceptions.ConnectionClosed(None, None)
-            ]
+            mock_ws.recv.side_effect = messages_to_send + [ConnectionClosed(None, None)]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -2358,7 +2743,7 @@ class TestCallAddonWsNewParams:
                 "msg 1",
                 "msg 2",
                 "msg 3",
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -2399,7 +2784,7 @@ class TestCallAddonWsNewParams:
                 + yaml_lines
                 + [
                     "INFO Configuration is valid!",
-                    websockets.exceptions.ConnectionClosed(None, None),
+                    ConnectionClosed(None, None),
                 ]
             )
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
@@ -2434,9 +2819,7 @@ class TestCallAddonWsNewParams:
             ) as mock_ws_connect,
         ):
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = yaml_lines + [
-                websockets.exceptions.ConnectionClosed(None, None)
-            ]
+            mock_ws.recv.side_effect = yaml_lines + [ConnectionClosed(None, None)]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -2468,7 +2851,7 @@ class TestCallAddonWsNewParams:
                 '{"level": "INFO", "msg": "start"}',
                 '{"level": "ERROR", "msg": "boom"}',
                 '{"level": "INFO", "msg": "done"}',
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -2507,7 +2890,7 @@ class TestCallAddonWsNewParams:
             mock_ws = AsyncMock()
             mock_ws.recv.side_effect = [
                 "msg",
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -2546,9 +2929,7 @@ class TestCallAddonWsNewParams:
             ) as mock_ws_connect,
         ):
             mock_ws = AsyncMock()
-            mock_ws.recv.side_effect = [big_msg] * 10 + [
-                websockets.exceptions.ConnectionClosed(None, None)
-            ]
+            mock_ws.recv.side_effect = [big_msg] * 10 + [ConnectionClosed(None, None)]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -2652,7 +3033,7 @@ class TestCallAddonWsNewParams:
             mock_ws = AsyncMock()
             mock_ws.recv.side_effect = [
                 "some message",
-                websockets.exceptions.ConnectionClosed(None, None),
+                ConnectionClosed(None, None),
             ]
             mock_ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws_connect.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -2937,7 +3318,7 @@ class TestListAddonsStats:
             if endpoint == "/addons":
                 return _ADDONS_LIST_RESPONSE
             if endpoint == "/addons/core_matter_server/stats":
-                raise Exception("Connection reset")
+                raise ToolError("Connection reset")
             if endpoint == "/addons/music_assistant/stats":
                 return _MUSIC_STATS_RESPONSE
             return {"success": False}
@@ -2958,6 +3339,52 @@ class TestListAddonsStats:
         music_stats = addons["music_assistant"]["stats"]
         assert music_stats is not None
         assert music_stats["memory_percent"] == 10.8
+        assert result["warnings"] == [
+            "Statistics unavailable for app 'core_matter_server': Connection reset"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_unexpected_stats_error_propagates(self):
+        """Programmer errors in a stats response are not degraded to null."""
+        client = _make_mock_client()
+
+        async def mock_supervisor_api(client, endpoint, **kwargs):
+            if endpoint == "/addons":
+                return _ADDONS_LIST_RESPONSE
+            if endpoint == "/addons/core_matter_server/stats":
+                raise TypeError("malformed stats payload")
+            return _MUSIC_STATS_RESPONSE
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                side_effect=mock_supervisor_api,
+            ),
+            pytest.raises(TypeError, match="malformed stats payload"),
+        ):
+            await list_addons(client, include_stats=True)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("invalid_slug", [None, "../supervisor", ".", ".."])
+    async def test_running_addon_requires_a_valid_slug_for_stats(self, invalid_slug):
+        """Malformed Supervisor data cannot become an /addons/None request."""
+        import copy
+
+        client = _make_mock_client()
+        response = copy.deepcopy(_ADDONS_LIST_RESPONSE)
+        response["result"]["addons"][0]["slug"] = invalid_slug
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value=response,
+            ) as mock_call,
+            pytest.raises(TypeError, match="running app without a valid slug"),
+        ):
+            await list_addons(client, include_stats=True)
+
+        mock_call.assert_awaited_once_with(client, "/addons")
 
     @pytest.mark.asyncio
     async def test_no_stats_key_without_include_stats(self):
@@ -2976,7 +3403,7 @@ class TestListAddonsStats:
 
 
 class TestManageAddon:
-    """Tests for ha_manage_addon tool (config mode and proxy mode)."""
+    """Tests for ha_manage_app tool (config mode and proxy mode)."""
 
     @pytest.fixture
     def mock_mcp(self):
@@ -3001,11 +3428,11 @@ class TestManageAddon:
 
     @pytest.fixture
     def manage_addon_tool(self, mock_mcp, mock_client):
-        """Register tools and return the ha_manage_addon function."""
+        """Register tools and return the ha_manage_app function."""
         from ha_mcp.tools.tools_addons import register_addon_tools
 
         register_addon_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_manage_addon"]
+        return self.registered_tools["ha_manage_app"]
 
     # --- Config mode ---
 
@@ -3152,7 +3579,7 @@ class TestManageAddon:
         assert isinstance(warnings, list) and warnings, (
             f"Expected non-empty warnings list, got: {result}"
         )
-        assert any("not in add-on schema were ignored" in w for w in warnings), (
+        assert any("not in app (add-on) schema were ignored" in w for w in warnings), (
             f"Expected ignored-field warning content; got: {warnings!r}"
         )
 
@@ -3577,6 +4004,18 @@ class TestExtractAddonLogLevel:
         assert _extract_addon_log_level(addon) is None
 
 
+_INVALID_SUPERVISOR_SLUGS = (
+    ".",
+    "..",
+    "../../host/reboot?",
+    "core_ssh/../../host/reboot",
+    "core_ssh?x=1",
+    "core_ssh#fragment",
+    "core%2Fssh",
+    "core ssh",
+)
+
+
 class TestGetAddonInfoLogLevel:
     """Tests for get_addon_info — verifies top-level log_level enrichment."""
 
@@ -3622,31 +4061,978 @@ class TestGetAddonInfoLogLevel:
         assert "log_level" not in result
 
     @pytest.mark.asyncio
-    async def test_passes_through_supervisor_error(self):
-        """Error responses shouldn't gain a synthetic log_level field."""
+    @pytest.mark.parametrize("slug", _INVALID_SUPERVISOR_SLUGS)
+    async def test_rejects_invalid_supervisor_slug_before_request(self, slug):
+        """A user-controlled slug cannot alter the Supervisor request path."""
         client = _make_mock_client()
-        error_response = {
-            "success": False,
-            "error": {"code": "RESOURCE_NOT_FOUND", "message": "no supervisor"},
-        }
-        with patch(
-            "ha_mcp.tools.tools_addons._supervisor_api_call",
-            new_callable=AsyncMock,
-            return_value=error_response,
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+            ) as mock_call,
+            pytest.raises(ToolError) as exc_info,
         ):
-            result = await get_addon_info(client, "whatever")
+            await get_addon_info(client, slug)
 
-        assert result == error_response
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        mock_call.assert_not_awaited()
 
 
 class TestSupervisorApiCall:
-    """Tests for Supervisor schema error classification via _classify_by_message.
+    """Test Supervisor routing, retries, and structured error classification.
 
-    The generic classifier in helpers.py routes Supervisor vol.Invalid
-    errors to VALIDATION_FAILED regardless of endpoint (issue #993).
-    These tests pin that behaviour so the greedy "auth" substring bug
-    stays fixed at the source — not patched at a single call site.
+    This includes schema-message handling from issue #993 and the direct REST
+    fallback adopted after Supervisor 2026.08 began blocking app-originated
+    ``supervisor/api`` frames.
     """
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_uses_direct_supervisor_rest(self, monkeypatch):
+        """App installs must not tunnel Supervisor calls through HA Core WS.
+
+        Supervisor's app-to-Core proxy blocks app-originated ``supervisor/api``
+        commands because Core would execute them with Core's broader token. The
+        app's manager-role token remains authorized for ``/addons`` and ``/store``
+        over direct Supervisor REST; this boundary was introduced in 2026.08.
+        """
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.verify_ssl = False
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {"wrong": "transport"}}
+        )
+
+        response = httpx.Response(
+            200,
+            json={"result": "ok", "data": {"addons": [{"slug": "core_mqtt"}]}},
+        )
+        direct_client = AsyncMock()
+        direct_client.request.return_value = response
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+            return_value=context,
+            create=True,
+        ) as factory:
+            result = await _supervisor_api_call(client, "/addons")
+
+        assert result == {
+            "success": True,
+            "result": {"addons": [{"slug": "core_mqtt"}]},
+        }
+        supervisor_timeout = factory.call_args.kwargs["timeout"]
+        assert isinstance(supervisor_timeout, httpx.Timeout)
+        assert supervisor_timeout.connect == 10.0
+        assert supervisor_timeout.read == 30.0
+        assert supervisor_timeout.write == 30.0
+        assert supervisor_timeout.pool == 10.0
+        assert factory.call_args.kwargs["verify"] is False
+        direct_client.request.assert_awaited_once_with("GET", "/addons")
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_posts_json_and_classifies_supervisor_error(
+        self, monkeypatch
+    ):
+        """Direct REST sends JSON and classifies Supervisor validation failures."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": {}}
+        )
+        response = httpx.Response(
+            400,
+            json={
+                "result": "error",
+                "message": "Missing option 'authorized_keys' in ssh",
+            },
+        )
+        direct_client = AsyncMock()
+        direct_client.request.return_value = response
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+        submitted = {"options": {"ssh": {"sftp": True}}}
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(
+                client,
+                "/addons/core_ssh/options",
+                method="POST",
+                data=submitted,
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        direct_client.request.assert_awaited_once_with(
+            "POST", "/addons/core_ssh/options", json=submitted
+        )
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "/store/addons/example/install",
+            "/store/addons/example/update",
+            "/addons/example/rebuild",
+            "/addons/example/uninstall",
+        ],
+    )
+    async def test_addon_mode_posts_empty_json_for_schema_actions(
+        self, monkeypatch, endpoint
+    ):
+        """Body-validating Supervisor actions receive an empty JSON object."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            200,
+            json={"result": "ok", "data": {}},
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+            return_value=context,
+            create=True,
+        ):
+            await _supervisor_api_call(client, endpoint, method="POST")
+
+        direct_client.request.assert_awaited_once_with("POST", endpoint, json={})
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("status_code", "message", "expected_code"),
+        [
+            (401, "Unauthorized", "AUTH_INVALID_TOKEN"),
+            (400, "App is not running", "SERVICE_CALL_FAILED"),
+            (403, "Forbidden", "AUTH_INSUFFICIENT_PERMISSIONS"),
+            (404, "Add-on not found", "RESOURCE_NOT_FOUND"),
+            (500, "Supervisor unavailable", "SERVICE_CALL_FAILED"),
+        ],
+    )
+    async def test_addon_mode_preserves_direct_http_status_classification(
+        self,
+        monkeypatch,
+        status_code,
+        message,
+        expected_code,
+    ):
+        """Direct Supervisor HTTP status codes keep structured error semantics."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        response = httpx.Response(
+            status_code,
+            json={"result": "error", "message": message},
+        )
+        direct_client = AsyncMock()
+        direct_client.request.return_value = response
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(client, "/addons/missing/info")
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == expected_code
+        if status_code == 401:
+            suggestions = " ".join(payload["error"]["suggestions"]).lower()
+            assert "restart the ha-mcp app" in suggestions
+            assert "supervisor logs" in suggestions
+            assert "core restart" not in suggestions
+            assert "home-assistant.log" not in suggestions
+            assert "home_assistant_token" not in suggestions
+        if status_code == 403:
+            assert payload["status_code"] == 403
+            assert (
+                "token rejection or insufficient API role"
+                in payload["error"]["message"]
+            )
+            suggestions = " ".join(payload["error"]["suggestions"])
+            assert "refresh" in suggestions
+            assert "hassio_api" in suggestions
+            assert "hassio_role" in suggestions
+        if status_code == 404:
+            assert (
+                payload["error"]["suggestion"]
+                == "Check Home Assistant connection and Supervisor availability"
+            )
+
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_websocket_not_found_preserves_supervisor_suggestion(
+        self, monkeypatch
+    ):
+        """Core-routed not-found errors retain Supervisor recovery guidance."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: Add-on not found",
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await _supervisor_api_call(client, "/addons/missing/info")
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert (
+            payload["error"]["suggestion"]
+            == "Check Home Assistant connection and Supervisor availability"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("transport_error", "expected_code"),
+        [
+            (httpx.ConnectError("connection refused"), "CONNECTION_FAILED"),
+            (httpx.ReadTimeout("read timed out"), "CONNECTION_TIMEOUT"),
+        ],
+    )
+    async def test_addon_mode_classifies_direct_transport_failure(
+        self, monkeypatch, transport_error, expected_code
+    ):
+        """Direct Supervisor transport failures keep structured semantics."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.side_effect = transport_error
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(client, "/addons")
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == expected_code
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("transport_error", "expected_code"),
+        [
+            pytest.param(
+                httpx.ConnectError("connection refused"),
+                "CONNECTION_FAILED",
+                id="connect-error",
+            ),
+            pytest.param(
+                httpx.ConnectTimeout("connect timed out"),
+                "CONNECTION_TIMEOUT",
+                id="connect-timeout",
+            ),
+            pytest.param(
+                httpx.PoolTimeout("pool timed out"),
+                "CONNECTION_TIMEOUT",
+                id="pool-timeout",
+            ),
+        ],
+    )
+    async def test_addon_mode_pre_send_write_failure_is_not_ambiguous(
+        self, monkeypatch, transport_error, expected_code
+    ):
+        """A write that never left httpx remains safe for an explicit retry."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.side_effect = transport_error
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == expected_code
+        if isinstance(transport_error, (httpx.ConnectTimeout, httpx.PoolTimeout)):
+            assert "10.0s connection-acquisition timeout" in payload["error"]["message"]
+        assert "outcome" not in payload
+        direct_client.request.assert_awaited_once()
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_write_timeout_reports_unknown_outcome(self, monkeypatch):
+        """A timed-out write tells callers to verify state before retrying."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.side_effect = httpx.ReadTimeout("read timed out")
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "TIMEOUT_OPERATION"
+        assert payload["method"] == "POST"
+        assert payload["outcome"] == "unknown"
+        suggestions = " ".join(payload["error"]["suggestions"]).lower()
+        assert "may have been accepted" in suggestions
+        assert "do not replay" in suggestions
+        assert "ha_get_app" not in suggestions
+        assert "jobs and logs" in suggestions
+        direct_client.request.assert_awaited_once_with(
+            "POST", "/addons/core_mosquitto/restart", json={}
+        )
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_write_transport_error_reports_unknown_outcome(
+        self, monkeypatch
+    ):
+        """A write transport error tells callers to verify state before retrying."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.side_effect = httpx.RemoteProtocolError(
+            "server disconnected"
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "CONNECTION_FAILED"
+        assert payload["method"] == "POST"
+        assert payload["outcome"] == "unknown"
+        suggestions = " ".join(payload["error"]["suggestions"]).lower()
+        assert "may have been accepted" in suggestions
+        assert "do not replay" in suggestions
+        assert "ha_get_app" not in suggestions
+        assert "jobs and logs" in suggestions
+        direct_client.request.assert_awaited_once_with(
+            "POST", "/addons/core_mosquitto/restart", json={}
+        )
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "response",
+        [
+            pytest.param(
+                httpx.Response(
+                    500,
+                    json={"result": "error", "message": "internal server error"},
+                ),
+                id="json",
+            ),
+            pytest.param(httpx.Response(503, text="service unavailable"), id="text"),
+        ],
+    )
+    async def test_addon_mode_write_server_error_reports_unknown_outcome(
+        self, monkeypatch, response
+    ):
+        """A 5xx cannot prove whether Supervisor applied the received write."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = response
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert payload["method"] == "POST"
+        assert payload["outcome"] == "unknown"
+        assert payload["status_code"] == response.status_code
+        assert payload["response_body"] == response.text
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_write_server_error_caps_response_body(self, monkeypatch):
+        """An unknown-outcome error never returns an unbounded response body."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            503,
+            text="x" * (50 * 1024 + 1),
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        suffix = "\n[Supervisor response truncated to 50 KiB]"
+        assert payload["response_body"] == ("x" * (50 * 1024 - len(suffix)) + suffix)
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_invalid_json_error_caps_response_body(self, monkeypatch):
+        """A non-JSON Supervisor error cannot produce an unbounded tool error."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            502,
+            text="x" * (50 * 1024 + 1),
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(client, "/addons")
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        prefix = "Command failed: "
+        message = payload["error"]["message"]
+        assert message.startswith(prefix)
+        suffix = "\n[Supervisor response truncated to 50 KiB]"
+        assert message.removeprefix(prefix) == (
+            "x" * (50 * 1024 - len(suffix)) + suffix
+        )
+
+    @pytest.mark.asyncio
+    async def test_job_collision_giveup_message_is_capped(self, monkeypatch):
+        """An exhausted job-collision retry cannot report an unbounded error."""
+        from ha_mcp.tools import tools_addons
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setattr(tools_addons, "_JOB_COLLISION_RETRY_WINDOW", 0.0)
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": (
+                    "Command failed: another job is running for job group "
+                    + "v" * (50 * 1024 + 1)
+                ),
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await _supervisor_api_call(client, "/addons/x/restart", method="POST")
+
+        payload = _parse_tool_error(exc_info)
+        suffix = "\n[Supervisor response truncated to 50 KiB]"
+        message = payload["error"]["message"]
+        assert message.endswith(suffix)
+        assert len(message) == 50 * 1024
+
+    @pytest.mark.asyncio
+    async def test_core_routed_failure_message_is_capped(self, monkeypatch):
+        """A Core-relayed Supervisor failure cannot produce an unbounded error."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: " + "w" * (50 * 1024 + 1),
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await _supervisor_api_call(client, "/addons")
+
+        payload = _parse_tool_error(exc_info)
+        suffix = "\n[Supervisor response truncated to 50 KiB]"
+        message = payload["error"]["message"]
+        assert message.startswith("Command failed: w")
+        assert message.endswith(suffix)
+        assert len(message) == 50 * 1024
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_non_object_json_caps_error_message(self, monkeypatch):
+        """A valid-JSON non-object body cannot produce an unbounded tool error."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            200,
+            json=["x" * 1000] * 200,
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(client, "/addons")
+
+        payload = _parse_tool_error(exc_info)
+        message = payload["error"]["message"]
+        prefix = "Command failed: Supervisor returned an invalid response: "
+        suffix = "\n[Supervisor response truncated to 50 KiB]"
+        assert message.startswith(prefix)
+        assert message.endswith(suffix)
+        assert len(message) == 50 * 1024
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_error_payload_message_is_capped(self, monkeypatch):
+        """An oversized Supervisor error message is bounded before it is raised."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            502,
+            json={"result": "error", "message": "y" * (50 * 1024 + 1)},
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(client, "/addons")
+
+        payload = _parse_tool_error(exc_info)
+        suffix = "\n[Supervisor response truncated to 50 KiB]"
+        message = payload["error"]["message"]
+        # The status-code path prefixes the bounded Supervisor text, so the
+        # constant framing sits outside the bound.
+        prefix = "Command failed: "
+        assert message.startswith(prefix + "y")
+        assert message.endswith(suffix)
+        assert len(message.removeprefix(prefix)) == 50 * 1024
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_non_mapping_result_payload_is_capped(self, monkeypatch):
+        """An oversized non-mapping result payload is bounded before it is raised."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            200,
+            json={"result": "ok", "data": "z" * (50 * 1024 + 1)},
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(client, "/addons")
+
+        payload = _parse_tool_error(exc_info)
+        message = payload["error"]["message"]
+        prefix = "Supervisor API GET /addons returned an invalid result payload: "
+        suffix = "\n[Supervisor response truncated to 50 KiB]"
+        assert message.startswith(prefix)
+        assert message.endswith(suffix)
+        assert len(message) == 50 * 1024
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_write_redirect_reports_unknown_outcome(self, monkeypatch):
+        """A redirect cannot prove whether Supervisor applied the received write."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            307,
+            headers={"location": "/addons/core_mosquitto/restart"},
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert payload["method"] == "POST"
+        assert payload["outcome"] == "unknown"
+        assert payload["status_code"] == 307
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "response",
+        [
+            pytest.param(httpx.Response(200, content=b"not-json"), id="invalid-json"),
+            pytest.param(httpx.Response(200, json=[]), id="non-object-json"),
+            pytest.param(httpx.Response(200, json={}), id="missing-result"),
+            pytest.param(
+                httpx.Response(200, json={"result": "unexpected"}), id="bad-result"
+            ),
+            pytest.param(
+                httpx.Response(200, json={"result": "ok", "data": []}), id="bad-data"
+            ),
+        ],
+    )
+    async def test_addon_mode_malformed_write_success_reports_unknown_outcome(
+        self, monkeypatch, response
+    ):
+        """A malformed 2xx write response never implies that replay is safe."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = response
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert payload["method"] == "POST"
+        assert payload["outcome"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_rejects_non_mapping_read_result(self, monkeypatch):
+        """A malformed successful read never becomes an empty successful app."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            200,
+            json={"result": "ok", "data": []},
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(client, "/addons/core_mosquitto/info")
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "invalid result payload" in payload["error"]["message"]
+        assert "outcome" not in payload
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("transport_error", "expected_code"),
+        [
+            pytest.param("timeout", "TIMEOUT_OPERATION", id="timeout"),
+            pytest.param("connection", "CONNECTION_FAILED", id="connection-drop"),
+        ],
+    )
+    async def test_offhost_write_no_answer_reports_unknown_outcome(
+        self, monkeypatch, transport_error, expected_code
+    ):
+        """A sent Core WebSocket write with no answer is not safe to replay."""
+        from ha_mcp.client.rest_client import (
+            HomeAssistantCommandTimeout,
+            HomeAssistantConnectionError,
+        )
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        client = _make_mock_client()
+        error = (
+            HomeAssistantCommandTimeout("response timed out")
+            if transport_error == "timeout"
+            else HomeAssistantConnectionError("connection dropped")
+        )
+        client.send_websocket_message = AsyncMock(side_effect=error)
+
+        with pytest.raises(ToolError) as exc_info:
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == expected_code
+        assert payload["method"] == "POST"
+        assert payload["outcome"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_offhost_blank_unknown_error_write_reports_unknown_outcome(
+        self, monkeypatch
+    ):
+        """Core's blank Supervisor bridge error leaves a write inconclusive."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: ",
+                "error_code": "unknown_error",
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert payload["method"] == "POST"
+        assert payload["outcome"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_offhost_write_not_sent_is_not_reported_as_unknown(self, monkeypatch):
+        """The WebSocket readiness guard proves the write never left the process."""
+        from ha_mcp.client.rest_client import HomeAssistantCommandNotSent
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock(
+            side_effect=HomeAssistantCommandNotSent("not authenticated")
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/restart",
+                method="POST",
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "CONNECTION_FAILED"
+        assert "outcome" not in payload
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_retries_direct_job_group_collision(self, monkeypatch):
+        """Direct REST retains the common job-group collision backoff path."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.side_effect = [
+            httpx.Response(
+                409,
+                json={
+                    "result": "error",
+                    "message": (
+                        "Another job is running for job group addon_core_mosquitto"
+                    ),
+                },
+            ),
+            httpx.Response(200, json={"result": "ok", "data": {"state": "started"}}),
+        ]
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+        sleep = AsyncMock()
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ) as factory,
+            patch("ha_mcp.tools.tools_addons.asyncio.sleep", new=sleep),
+        ):
+            result = await _supervisor_api_call(
+                client, "/addons/core_mosquitto/restart", method="POST"
+            )
+
+        assert result == {"success": True, "result": {"state": "started"}}
+        assert direct_client.request.await_count == 2
+        assert factory.call_count == 2
+        sleep.assert_awaited_once_with(1.0)
+        client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_schema_error_on_options_endpoint_classified_as_validation_failed(
@@ -3711,13 +5097,53 @@ class TestSupervisorApiCall:
 
 
 class TestSupervisorApiCallTimeout:
-    """The client's local await must outlast the Supervisor-side timeout.
+    """Long operations need an extended local transport wait.
 
-    ``send_command`` defaults to a 30s local wait. A long Supervisor
-    operation (add-on install/update/rebuild gets ``timeout=1800``) needs
-    the local await raised in lockstep, or the client abandons a
-    still-running install after 30s even though the server keeps working.
+    The WebSocket route forwards the operation timeout and waits 15 seconds
+    longer. Direct REST applies the same margin to its httpx timeout. Both
+    routes default locally to 30 seconds when no override is supplied.
     """
+
+    @pytest.mark.asyncio
+    async def test_addon_long_timeout_extends_direct_rest_wait(self, monkeypatch):
+        """The app transport gives a long Supervisor operation the same margin."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            200,
+            json={"result": "ok", "data": {}},
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+            return_value=context,
+            create=True,
+        ) as factory:
+            await _supervisor_api_call(
+                client,
+                "/addons/core_mosquitto/update",
+                method="POST",
+                timeout=1800,
+            )
+
+        supervisor_timeout = factory.call_args.kwargs["timeout"]
+        assert isinstance(supervisor_timeout, httpx.Timeout)
+        assert supervisor_timeout.connect == 10.0
+        assert supervisor_timeout.read == 1815.0
+        assert supervisor_timeout.write == 1815.0
+        assert supervisor_timeout.pool == 10.0
+        assert factory.call_args.kwargs["verify"] is client.verify_ssl
+        direct_client.request.assert_awaited_once_with(
+            "POST", "/addons/core_mosquitto/update", json={}
+        )
+        client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_long_timeout_extends_local_wait(self):
@@ -3994,6 +5420,92 @@ class TestManageAddonActionMode:
         assert mock_call.call_args.args[1] == "/addons/core_ssh/start"
 
     @pytest.mark.asyncio
+    async def test_self_update_in_addon_returns_manual_guidance(self, monkeypatch):
+        """Self-update fails locally before the unsupported request is sent."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        tools = self._tools()
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value={
+                    "success": True,
+                    "result": {"slug": "local_ha_mcp"},
+                },
+            ) as supervisor_call,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools._execute_action_mode("local_ha_mcp", "update")
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert payload["self_slug"] == "local_ha_mcp"
+        assert any(
+            "Apps UI" in suggestion for suggestion in payload["error"]["suggestions"]
+        )
+        supervisor_call.assert_awaited_once_with(tools._client, "/addons/self/info")
+
+    @pytest.mark.asyncio
+    async def test_other_addon_update_in_addon_uses_direct_rest(self, monkeypatch):
+        """An in-app update for a different app remains on direct Supervisor REST."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=[
+                {"success": True, "result": {"slug": "local_ha_mcp"}},
+                {"success": True, "result": {}},
+            ],
+        ) as supervisor_call:
+            result = await tools._execute_action_mode("core_ssh", "update")
+
+        assert result["success"] is True
+        assert supervisor_call.await_count == 2
+        first, second = supervisor_call.await_args_list
+        assert first.args == (tools._client, "/addons/self/info")
+        assert second.args == (tools._client, "/store/addons/core_ssh/update")
+        assert second.kwargs == {"method": "POST", "timeout": 1800}
+
+    @pytest.mark.asyncio
+    async def test_update_offhost_uses_supervisor_api(self):
+        """Non-app installs retain the Supervisor API WebSocket route."""
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": {}},
+        ) as supervisor_call:
+            await tools._execute_action_mode("core_ssh", "update")
+
+        supervisor_call.assert_awaited_once_with(
+            tools._client,
+            "/store/addons/core_ssh/update",
+            method="POST",
+            timeout=1800,
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_in_addon_requires_self_identity(self, monkeypatch):
+        """A missing self slug fails closed before a possibly self-targeted update."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        tools = self._tools()
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value={"success": True, "result": {}},
+            ) as supervisor_call,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools._execute_action_mode("core_ssh", "update")
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert payload["endpoint"] == "/addons/self/info"
+        supervisor_call.assert_awaited_once_with(tools._client, "/addons/self/info")
+
+    @pytest.mark.asyncio
     async def test_invalid_action_rejected(self):
         tools = self._tools()
         with pytest.raises(ToolError) as exc_info:
@@ -4002,16 +5514,40 @@ class TestManageAddonActionMode:
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("slug", _INVALID_SUPERVISOR_SLUGS)
+    async def test_lifecycle_rejects_invalid_slug_before_request(self, slug):
+        tools = self._tools()
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+            ) as mock_call,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.manage_addon(**_manage_addon_kwargs(slug=slug, action="start"))
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        mock_call.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_supervisor_failure_propagates(self):
         tools = self._tools()
         with (
             patch(
                 "ha_mcp.tools.tools_addons._supervisor_api_call",
                 new_callable=AsyncMock,
-                return_value={
-                    "success": False,
-                    "error": {"code": "SERVICE_CALL_FAILED", "message": "boom"},
-                },
+                side_effect=ToolError(
+                    json.dumps(
+                        {
+                            "success": False,
+                            "error": {
+                                "code": "SERVICE_CALL_FAILED",
+                                "message": "boom",
+                            },
+                        }
+                    )
+                ),
             ),
             pytest.raises(ToolError) as exc_info,
         ):
@@ -4075,9 +5611,48 @@ class TestManageAddonActionMode:
         payload = _parse_tool_error(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("parameter", "value"),
+        [
+            pytest.param("method", "POST", id="method"),
+            pytest.param("body", {"probe": True}, id="body"),
+            pytest.param("debug", True, id="debug"),
+            pytest.param("port", 8123, id="port"),
+            pytest.param("offset", 1, id="offset"),
+            pytest.param("limit", 1, id="limit"),
+            pytest.param("websocket", True, id="websocket"),
+            pytest.param("wait_for_close", False, id="wait-for-close"),
+            pytest.param("message_limit", 1, id="message-limit"),
+            pytest.param("message_offset", 1, id="message-offset"),
+            pytest.param("summarize", False, id="summarize"),
+            pytest.param("python_transform", "response = response", id="transform"),
+            pytest.param("request_headers", {"X-Test": "value"}, id="headers"),
+        ],
+    )
+    async def test_action_rejects_proxy_parameter(self, parameter, value):
+        """Lifecycle actions reject every non-default proxy-mode argument."""
+        tools = self._tools()
+        kwargs = _manage_addon_kwargs(slug="core_ssh", action="start")
+        kwargs[parameter] = value
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+            ) as mock_call,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.manage_addon(**kwargs)
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        assert parameter in str(exc_info.value)
+        mock_call.assert_not_awaited()
+
 
 def _manage_addon_kwargs(**overrides):
-    """Build the full ha_manage_addon kwargs with defaults, applying overrides.
+    """Build the full ha_manage_app kwargs with defaults, applying overrides.
 
     manage_addon takes every operating-mode param positionally-by-keyword; a
     helper keeps the store-repository tests focused on the few params that
@@ -4141,6 +5716,72 @@ class TestManageAddonRepositoryAction:
         assert mock_call.call_args.kwargs["data"] == {"repository": url}
 
     @pytest.mark.asyncio
+    async def test_offhost_repository_write_preserves_blank_bridge_outcome(
+        self, monkeypatch
+    ):
+        """Repository guidance cannot erase Core's unknown write outcome."""
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        tools = self._tools()
+        tools._client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: ",
+                "error_code": "unknown_error",
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository",
+                    repository="https://example.com/repository",
+                )
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["outcome"] == "unknown"
+        assert payload["method"] == "POST"
+        assert payload["endpoint"] == "/store/repositories"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failure", ["transport", "malformed-success"])
+    async def test_in_app_repository_write_preserves_direct_unknown_outcome(
+        self, monkeypatch, failure
+    ):
+        """Direct REST uncertainty survives repository-specific remapping."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        tools = self._tools()
+        direct_client = AsyncMock()
+        if failure == "transport":
+            direct_client.request.side_effect = httpx.RemoteProtocolError(
+                "server disconnected"
+            )
+        else:
+            direct_client.request.return_value = httpx.Response(200, json={})
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository",
+                    repository="https://example.com/repository",
+                )
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["outcome"] == "unknown"
+        assert payload["method"] == "POST"
+        assert payload["endpoint"] == "/store/repositories"
+
+    @pytest.mark.asyncio
     async def test_add_repository_idempotent_when_already_present(self):
         """Re-adding a repo Supervisor already has returns success, not a
         confusing error — the desired end state (repo registered) already holds,
@@ -4199,6 +5840,43 @@ class TestManageAddonRepositoryAction:
         assert result["action"] == "remove_repository"
 
     @pytest.mark.asyncio
+    async def test_addon_mode_remove_missing_repository_is_idempotent(
+        self, monkeypatch
+    ):
+        """A direct Supervisor REST 404 still represents the desired end state."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        tools = self._tools()
+        response = httpx.Response(
+            404,
+            json={
+                "result": "error",
+                "message": "Repository deadbeef does not exist in the store",
+            },
+        )
+        direct_client = AsyncMock()
+        direct_client.request.return_value = response
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+            return_value=context,
+        ):
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="remove_repository", repository="deadbeef"
+                )
+            )
+
+        assert result["success"] is True
+        assert result["action"] == "remove_repository"
+        assert result["repository"] == "deadbeef"
+        direct_client.request.assert_awaited_once_with(
+            "DELETE", "/store/repositories/deadbeef"
+        )
+
+    @pytest.mark.asyncio
     async def test_remove_repository_unrelated_not_found_still_raises(self):
         """A failure that merely mentions 'not found' for a non-repository
         reason (e.g. a dependent add-on) must NOT be reclassified as a
@@ -4227,6 +5905,42 @@ class TestManageAddonRepositoryAction:
             await tools.manage_addon(
                 **_manage_addon_kwargs(action="remove_repository", repository="x")
             )
+
+    @pytest.mark.asyncio
+    async def test_repository_action_preserves_auth_error_category(self):
+        """Repository guidance must not replace Supervisor authorization errors."""
+        tools = self._tools()
+        err = ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "AUTH_INSUFFICIENT_PERMISSIONS",
+                        "message": (
+                            "Supervisor denied this app role even though the "
+                            "repository is already in the store"
+                        ),
+                    },
+                }
+            )
+        )
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                side_effect=err,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository", repository="https://example.com/repo"
+                )
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "AUTH_INSUFFICIENT_PERMISSIONS"
 
     @pytest.mark.asyncio
     async def test_add_repository_other_error_gives_repo_specific_suggestion(self):
@@ -4266,7 +5980,7 @@ class TestManageAddonRepositoryAction:
         suggestions = " ".join(
             [err_obj.get("suggestion", "")] + err_obj.get("suggestions", [])
         )
-        assert "add-on repository URL" in suggestions
+        assert "app (add-on) repository URL" in suggestions
         assert "connection" not in suggestions.lower()
 
     async def test_remove_repository_in_use_suggests_uninstall(self):
@@ -4380,6 +6094,29 @@ class TestManageAddonRepositoryAction:
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("repository", _INVALID_SUPERVISOR_SLUGS)
+    async def test_remove_repository_rejects_invalid_slug_before_request(
+        self, repository
+    ):
+        tools = self._tools()
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+            ) as mock_call,
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="remove_repository", repository=repository
+                )
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        mock_call.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_repository_action_rejects_slug(self):
         """A slug alongside a repo action is an ambiguous-mode error."""
         tools = self._tools()
@@ -4409,6 +6146,62 @@ class TestManageAddonRepositoryAction:
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("parameter", "value"),
+        [
+            pytest.param("method", "POST", id="method"),
+            pytest.param("body", {"probe": True}, id="body"),
+            pytest.param("debug", True, id="debug"),
+            pytest.param("port", 8123, id="port"),
+            pytest.param("offset", 1, id="offset"),
+            pytest.param("limit", 1, id="limit"),
+            pytest.param("websocket", True, id="websocket"),
+            pytest.param("wait_for_close", False, id="wait-for-close"),
+            pytest.param("message_limit", 1, id="message-limit"),
+            pytest.param("message_offset", 1, id="message-offset"),
+            pytest.param("summarize", False, id="summarize"),
+            pytest.param("python_transform", "response = response", id="transform"),
+            pytest.param("array_patch", {"operations": []}, id="array-patch"),
+            pytest.param("request_headers", {"X-Test": "value"}, id="headers"),
+        ],
+    )
+    async def test_repository_action_rejects_other_mode_parameter(
+        self, parameter, value
+    ):
+        """Repository actions reject every non-default foreign-mode argument."""
+        tools = self._tools()
+        kwargs = _manage_addon_kwargs(
+            action="add_repository",
+            repository="https://example.com/repo",
+        )
+        kwargs[parameter] = value
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(**kwargs)
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        assert parameter in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("action", [None, "start"])
+    async def test_repository_parameter_requires_repository_action(self, action):
+        """The repository selector is never ignored by another operating mode."""
+        tools = self._tools()
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    slug="core_ssh",
+                    action=action,
+                    repository="https://example.com/repo",
+                )
+            )
+
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        assert payload["parameter"] == "repository"
+
     async def test_add_repository_strips_whitespace(self):
         tools = self._tools()
         with patch(
@@ -4434,10 +6227,17 @@ class TestManageAddonRepositoryAction:
             patch(
                 "ha_mcp.tools.tools_addons._supervisor_api_call",
                 new_callable=AsyncMock,
-                return_value={
-                    "success": False,
-                    "error": {"code": "SERVICE_CALL_FAILED", "message": "boom"},
-                },
+                side_effect=ToolError(
+                    json.dumps(
+                        {
+                            "success": False,
+                            "error": {
+                                "code": "SERVICE_CALL_FAILED",
+                                "message": "boom",
+                            },
+                        }
+                    )
+                ),
             ),
             pytest.raises(ToolError) as exc_info,
         ):
@@ -4448,3 +6248,329 @@ class TestManageAddonRepositoryAction:
             )
         payload = _parse_tool_error(exc_info)
         assert payload["success"] is False
+
+
+# ---------------------------------------------------------------------------
+# redact_secrets (issue 2157)
+# ---------------------------------------------------------------------------
+
+_REDACTION_ADDON_PAYLOAD = {
+    "success": True,
+    "result": {
+        "name": "Secretful",
+        "slug": "secretful",
+        "options": {
+            "github_pat": "github_pat_LIVESECRETVALUE",
+            "log_level": "info",
+            "empty_pw": "",
+            "unlisted": "no schema entry",
+        },
+        "schema": [
+            {
+                "name": "github_pat",
+                "required": True,
+                "type": "string",
+                "format": "password",
+            },
+            {"name": "log_level", "type": "list", "options": ["info", "debug"]},
+            {"name": "empty_pw", "type": "string", "format": "password"},
+        ],
+    },
+}
+
+
+@pytest.fixture
+def _redaction_registry_clean():
+    from ha_mcp.redaction import _clear_known_secret_values
+
+    _clear_known_secret_values()
+    yield
+    _clear_known_secret_values()
+
+
+@pytest.fixture
+def redact_on(monkeypatch, _redaction_registry_clean):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "ha_mcp.redaction.get_global_settings",
+        lambda: SimpleNamespace(redact_secrets=True),
+    )
+
+
+@pytest.fixture
+def redact_off(monkeypatch, _redaction_registry_clean):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "ha_mcp.redaction.get_global_settings",
+        lambda: SimpleNamespace(redact_secrets=False),
+    )
+
+
+class TestGetAddonInfoRedaction:
+    """get_addon_info under the redact_secrets toggle (issue 2157)."""
+
+    async def _fetch(self):
+        import copy
+
+        client = _make_mock_client()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value=copy.deepcopy(_REDACTION_ADDON_PAYLOAD),
+        ):
+            return await get_addon_info(client, "secretful")
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_redacts_password_options(self, redact_on):
+        from ha_mcp.redaction import REDACTED_EMPTY, REDACTED_SET
+
+        result = await self._fetch()
+        options = result["addon"]["options"]
+        assert options["github_pat"] == REDACTED_SET
+        assert options["empty_pw"] == REDACTED_EMPTY
+        assert options["log_level"] == "info"
+        assert options["unlisted"] == "no schema entry"
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_leaves_schema_intact(self, redact_on):
+        result = await self._fetch()
+        assert result["addon"]["schema"] == _REDACTION_ADDON_PAYLOAD["result"]["schema"]
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_registers_known_secret_values(self, redact_on):
+        from ha_mcp.redaction import known_secret_values
+
+        await self._fetch()
+        assert "github_pat_LIVESECRETVALUE" in known_secret_values()
+
+    @pytest.mark.asyncio
+    async def test_toggle_off_is_byte_identical_legacy_output(self, redact_off):
+        result = await self._fetch()
+        assert result["addon"] == _REDACTION_ADDON_PAYLOAD["result"]
+
+
+class TestConfigModeSentinelRejection:
+    """ha_manage_app config mode must reject redaction sentinels (issue 2157)."""
+
+    def _tools(self):
+        from ha_mcp.tools.tools_addons import AddOnTools
+
+        return AddOnTools(_make_mock_client())
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_rejects_sentinel_value(self, redact_on):
+        from ha_mcp.redaction import REDACTED_SET
+
+        with pytest.raises(ToolError) as exc_info:
+            await self._tools()._execute_config_mode(
+                "secretful", {"options": {"github_pat": REDACTED_SET}}
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+        assert "github_pat" in payload["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_clean_write_proceeds_and_harvests(self, redact_on):
+        import copy
+
+        from ha_mcp.redaction import known_secret_values
+
+        responses = [
+            copy.deepcopy(_REDACTION_ADDON_PAYLOAD),
+            {"success": True, "result": {}},
+        ]
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=responses,
+        ) as mock_call:
+            result = await self._tools()._execute_config_mode(
+                "secretful", {"options": {"log_level": "debug"}}
+            )
+        assert result["status"] == "pending_restart"
+        # The write merged the REAL current password value, not a sentinel.
+        posted = mock_call.call_args.kwargs["data"]["options"]
+        assert posted["github_pat"] == "github_pat_LIVESECRETVALUE"
+        assert posted["log_level"] == "debug"
+        # Current live values were remembered for the known-value scrub.
+        assert "github_pat_LIVESECRETVALUE" in known_secret_values()
+
+    @pytest.mark.asyncio
+    async def test_newly_written_password_is_registered_for_the_scrub(self, redact_on):
+        # A password submitted through this path is live from the moment it
+        # is written; registering only the pre-write current options would
+        # leave it unscrubbed in logs and diagnostics until some later read
+        # happened to harvest it.
+        import copy
+
+        from ha_mcp.redaction import known_secret_values
+
+        responses = [
+            copy.deepcopy(_REDACTION_ADDON_PAYLOAD),
+            {"success": True, "result": {}},
+        ]
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=responses,
+        ):
+            await self._tools()._execute_config_mode(
+                "secretful", {"options": {"github_pat": "github_pat_BRANDNEWVALUE"}}
+            )
+        assert "github_pat_BRANDNEWVALUE" in known_secret_values()
+        # The replaced value stays registered too — it can still appear in
+        # already-captured logs.
+        assert "github_pat_LIVESECRETVALUE" in known_secret_values()
+
+    @pytest.mark.asyncio
+    async def test_toggle_off_still_rejects_sentinels(self, redact_off):
+        # Deliberately NOT gated on the toggle: a sentinel captured while
+        # redaction was on must not overwrite a credential after the
+        # operator turns it off.
+        from ha_mcp.redaction import REDACTED_SET
+
+        with pytest.raises(ToolError) as exc_info:
+            await self._tools()._execute_config_mode(
+                "secretful", {"options": {"github_pat": REDACTED_SET}}
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+
+class TestGetAddonInfoPasswordLogLevel:
+    """A schema that marks log_level as a password must not leak it (issue 2157)."""
+
+    @pytest.mark.asyncio
+    async def test_toggle_on_surfaces_sentinel_not_value(self, redact_on):
+        from ha_mcp.redaction import REDACTED_SET
+
+        client = _make_mock_client()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={
+                "success": True,
+                "result": {
+                    "name": "Odd",
+                    "slug": "odd",
+                    "options": {"log_level": "secret-log-pw"},
+                    "schema": [
+                        {"name": "log_level", "type": "string", "format": "password"}
+                    ],
+                },
+            },
+        ):
+            result = await get_addon_info(client, "odd")
+
+        assert result["log_level"] == REDACTED_SET
+        assert result["addon"]["options"]["log_level"] == REDACTED_SET
+
+
+class TestProxy403HintRedaction:
+    """The 403 addon_config hint must carry redacted options (issue 2157) —
+    exercised through the REAL get_addon_info, not a pre-baked addon dict."""
+
+    @pytest.mark.asyncio
+    async def test_403_addon_config_options_redacted(
+        self, mock_ingress_session, redact_on
+    ):
+        from ha_mcp.redaction import REDACTED_SET
+
+        client = _make_mock_client()
+        addon_payload = {
+            "success": True,
+            "result": {
+                "name": "Secretful",
+                "slug": "secretful",
+                "state": "started",
+                "ingress": True,
+                "ingress_entry": "/api/hassio_ingress/abc123",
+                "ip_address": "172.30.33.99",
+                "ingress_port": 5000,
+                "options": {"github_pat": "github_pat_LIVESECRETVALUE"},
+                "schema": [
+                    {
+                        "name": "github_pat",
+                        "type": "string",
+                        "format": "password",
+                    }
+                ],
+            },
+        }
+
+        async def fake_request(*, method, url, headers, content):
+            response = MagicMock()
+            response.headers = {"content-type": "application/json"}
+            response.status_code = 403
+            response.json.return_value = {}
+            response.text = "{}"
+            return response
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value=addon_payload,
+            ),
+            patch(
+                "ha_mcp.tools.tools_addons.httpx.AsyncClient",
+            ) as mock_httpx,
+        ):
+            mock_http_client = AsyncMock()
+            mock_http_client.request.side_effect = fake_request
+            mock_httpx.return_value.__aenter__ = AsyncMock(
+                return_value=mock_http_client
+            )
+            mock_httpx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await _call_addon_api(client, "secretful", "/api/test")
+
+        assert result["status_code"] == 403
+        assert result["addon_config"]["options"] == {"github_pat": REDACTED_SET}
+
+
+class TestGetAddonInfoUnreadableSchema:
+    """Missing/malformed/empty schemas fail closed on the read path (2157)."""
+
+    async def _fetch_with(self, result_payload, redacted=True):
+        import copy
+
+        client = _make_mock_client()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": copy.deepcopy(result_payload)},
+        ):
+            return await get_addon_info(client, "secretful")
+
+    @pytest.mark.asyncio
+    async def test_missing_schema_fails_closed(self, redact_on):
+        from ha_mcp.redaction import REDACTED_SET
+
+        result = await self._fetch_with(
+            {"slug": "s", "options": {"maybe_pw": "hunter2secret"}}
+        )
+        assert result["addon"]["options"] == {"maybe_pw": REDACTED_SET}
+        assert len(result["warnings"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_legacy_dict_schema_fails_closed(self, redact_on):
+        from ha_mcp.redaction import REDACTED_SET
+
+        result = await self._fetch_with(
+            {
+                "slug": "s",
+                "options": {"maybe_pw": "hunter2secret"},
+                "schema": {"maybe_pw": "password"},
+            }
+        )
+        assert result["addon"]["options"] == {"maybe_pw": REDACTED_SET}
+        assert len(result["warnings"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_options_untouched_without_schema(self, redact_on):
+        result = await self._fetch_with({"slug": "s", "options": {}})
+        assert result["addon"]["options"] == {}
+        assert "warnings" not in result

@@ -364,14 +364,43 @@ class TestIntegrationFiltering:
         # At least one entry with supports_options=True should have non-empty
         # options. The conftest seeds a HACS entry with real options. If every
         # supports_options=True entry returns {}, the regression has resurfaced.
-        entries_with_support = [e for e in data["entries"] if e.get("supports_options")]
-        if entries_with_support:
-            non_empty = [e for e in entries_with_support if e["options"]]
-            assert non_empty, (
-                "Expected at least one supports_options=True entry to expose "
-                "non-empty options via the OptionsFlow probe; all came back "
-                "empty (regression of #1245)."
+        #
+        # Only LOADED entries can answer an OptionsFlow probe. The seeded HACS
+        # entry calls GitHub during setup, and shared-runner IP pools get
+        # rate-limited — when that leaves it not_loaded, its empty options are
+        # container weather, not the #1245 regression, so an unverifiable run
+        # skips loudly instead of failing.
+        entries_with_support = [
+            e
+            for e in data["entries"]
+            if e.get("supports_options") and e.get("state") == "loaded"
+        ]
+        # Verifiability keys on the SEEDED HACS entry, not on "any loaded
+        # entry that supports options": other integrations advertise an
+        # OptionsFlow while having nothing stored, so a container where HACS
+        # failed to set up still offers such entries and their legitimately
+        # empty options read as the #1245 regression. (Seen in CI: every
+        # HACS test skipped with "Unknown command" — HACS never loaded —
+        # while this test failed on some other integration's empty options.)
+        hacs_ready = any(
+            e.get("domain") == "hacs"
+            and e.get("state") == "loaded"
+            and e.get("supports_options")
+            for e in data["entries"]
+        )
+        if not hacs_ready:
+            pytest.skip(
+                "the seeded HACS entry is not loaded in this container "
+                "(GitHub rate-limiting during its setup) — the only entry "
+                "with known-non-empty options is missing, so the OptionsFlow "
+                "probe is unverifiable here"
             )
+        non_empty = [e for e in entries_with_support if e["options"]]
+        assert non_empty, (
+            "Expected at least one loaded supports_options=True entry to "
+            "expose non-empty options via the OptionsFlow probe; all came "
+            "back empty (regression of #1245)."
+        )
 
         logger.info(
             f"include_options test passed: {data['total_count']} entries with options"

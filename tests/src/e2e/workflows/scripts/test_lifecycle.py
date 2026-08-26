@@ -1,5 +1,5 @@
 """
-End-to-End tests for Home Assistant Script Management (ha_manage_script tool).
+End-to-End tests for the Home Assistant script configuration tool family.
 
 This test suite validates the complete lifecycle of Home Assistant scripts including:
 - Script creation with various configurations
@@ -38,6 +38,10 @@ logger = logging.getLogger(__name__)
 
 def enhanced_parse_mcp_result(result) -> dict[str, Any]:
     """Enhanced MCP result parser with better error handling."""
+    # Same passthrough contract as the shared utilities.assertions helper:
+    # an already-parsed dict comes back unchanged.
+    if isinstance(result, dict):
+        return result
     try:
         if hasattr(result, "content") and result.content:
             response_text = str(result.content[0].text)
@@ -69,7 +73,7 @@ def enhanced_parse_mcp_result(result) -> dict[str, Any]:
 
 
 def extract_script_config(get_data: dict[str, Any]) -> dict[str, Any]:
-    """Extract script configuration from ha_manage_script get response."""
+    """Extract script configuration from a ha_config_get_script response."""
     # Handle nested config structure: get_data["config"]["config"]
     config_wrapper = get_data.get("config", {})
     if isinstance(config_wrapper, dict) and "config" in config_wrapper:

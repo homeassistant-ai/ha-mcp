@@ -2,9 +2,10 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. It registers twenty-two commands (twenty-two capabilities — the
-``search_visibility`` capability is a flag on the existing ``search`` command,
-and ``info`` itself carries no capability entry):
+capability gate. It registers twenty-three commands. It advertises twenty-five
+capabilities: twenty-two command capabilities plus three additive flags
+(dashboards_doc_search, search_visibility, and search_entity_membership);
+the info handshake carries no capability entry:
 
 * ``ha_mcp_tools/info`` — the handshake: ``schema_version`` + ``capabilities[]``
   + ``component_version`` + advisory ``limits`` + the instance ``timezone``
@@ -13,6 +14,7 @@ and ``info`` itself carries no capability entry):
   negotiation, NOT a version floor).
 * ``ha_mcp_tools/search`` — a unified in-process search over live registries and
   states, joined and scored, mirroring today's ``ha_search`` response envelope.
+  The search_entity_membership flag gates opt-in generic group metadata.
 * ``ha_mcp_tools/overview`` — the raw in-process reads the server's
   ``get_system_overview`` + ``ha_get_overview`` wrapper consume (states,
   services, entity/device/area registries, ``hass.config``, persistent
@@ -262,7 +264,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -336,12 +338,15 @@ WS_BULK_CALL_SERVICE = f"{WS_API_PREFIX}/bulk_call_service"
 # bump it (the server checks ``schema_version >= N`` before using a new shape).
 SCHEMA_VERSION = 1
 
-# Which commands exist. Grows one entry per shipped command; the server gates
+# Advertised command support and additive feature flags; the server gates
 # each consumer on ``capability in caps.capabilities``. Never remove an entry
 # without a major bump. (``info`` is always present in 1.1.0+, so it carries no
 # capability key of its own.)
 CAPABILITIES: list[str] = [
     "search",
+    # A flag on search: gates its additive result_fields request and generic
+    # is_group/member_entity_ids response fields.
+    "search_entity_membership",
     "overview",
     "helpers_list",
     "states",
@@ -650,6 +655,7 @@ def _visibility_param_schema() -> Any:
 
 
 def _search_schema() -> dict[Any, Any]:
+    """Build the schema for search WebSocket requests."""
     return {
         vol.Required("type"): WS_SEARCH,
         vol.Optional("query"): vol.Any(str, None),
@@ -657,6 +663,7 @@ def _search_schema() -> dict[Any, Any]:
         vol.Optional("domain_filter"): str,
         vol.Optional("area_filter"): str,
         vol.Optional("state_filter"): str,
+        vol.Optional("result_fields"): [vol.In(("is_group", "member_entity_ids"))],
         vol.Optional("exact", default=True): bool,
         vol.Optional("include_hidden", default=True): bool,
         vol.Optional("include_config", default=False): bool,
@@ -1011,6 +1018,7 @@ def _do_search(
     domain_filter = params.get("domain_filter")
     area_filter = params.get("area_filter")
     state_filter = params.get("state_filter")
+    membership_requested = bool(params.get("result_fields"))
     # Opt-in visibility filter (search_visibility capability). A non-empty dict of
     # the server's raw VisibilityConfig fields; applied as a hard entity exclude.
     visibility = params.get("visibility")
@@ -1023,6 +1031,7 @@ def _do_search(
     # filter is applied. Surfaced additively so the fast path isn't silent about
     # incomplete filtering (parity with the server's load_hidden_set warnings).
     visibility_warnings: list[str] = []
+    hidden: set[str] = set()
 
     # ``secret_values`` (loaded off-loop by _search_prep) scrubs resolved-!secret
     # plaintext from the config-body match corpus: a YAML-loaded automation/script/
@@ -1045,6 +1054,7 @@ def _do_search(
             domain_filter=domain_filter,
             area_filter=area_filter,
             state_filter=state_filter,
+            include_membership=membership_requested,
         )
         # Opt-in visibility filter: a hard exclude applied BEFORE counts/pagination,
         # exactly where the legacy path drops ``visibility_hidden`` entities at the
@@ -1078,8 +1088,17 @@ def _do_search(
         scored_entities.sort(key=lambda r: (-r["score"], r["entity_id"]))
         entity_total = len(scored_entities)
         page = scored_entities[offset : offset + limit]
+        _redact_hidden_members(
+            page,
+            hidden,
+            view=view,
+            include_hidden=include_hidden,
+            enabled=membership_requested,
+        )
         entity_has_more = offset + len(page) < entity_total
-        entities = [_project_entity(r) for r in page]
+        entities = [
+            _project_entity(r, include_membership=membership_requested) for r in page
+        ]
 
     # --- Config surfaces (automations + scripts + scenes + helpers) ----------
     # One combined pagination window, mirroring the server's config branch.
@@ -1277,6 +1296,7 @@ def _search_entities(
     domain_filter: str | None,
     area_filter: str | None,
     state_filter: str | None,
+    include_membership: bool = False,
 ) -> list[dict[str, Any]]:
     """Score every state against the query over the joined registry view."""
     results: list[dict[str, Any]] = []
@@ -1286,7 +1306,7 @@ def _search_entities(
     # matches state_filter="vacation").
     state_filter_lower = state_filter.lower() if state_filter is not None else None
     for state in _iter_states(hass):
-        rec = _entity_record(state, view)
+        rec = _entity_record(state, view, include_membership=include_membership)
         if domain_filter and rec["domain"] != domain_filter:
             continue
         if rec["_hidden"] and not include_hidden:
@@ -1448,12 +1468,15 @@ def _registry_enrichment(view: _RegistryView, entity_id: str) -> dict[str, Any]:
     }
 
 
-def _entity_record(state: Any, view: _RegistryView) -> dict[str, Any]:
+def _entity_record(
+    state: Any, view: _RegistryView, *, include_membership: bool = False
+) -> dict[str, Any]:
     """Join a state with the entity/device/area/floor/label registries."""
     entity_id = getattr(state, "entity_id", "") or ""
     domain = entity_id.split(".")[0] if "." in entity_id else ""
     attrs = getattr(state, "attributes", None) or {}
     friendly = attrs.get("friendly_name", entity_id)
+    members = _normalize_member_entity_ids(attrs) if include_membership else None
 
     join = _registry_enrichment(view, entity_id)
     area_name = join["area"]
@@ -1481,6 +1504,14 @@ def _entity_record(state: Any, view: _RegistryView) -> dict[str, Any]:
         "floor": floor_name,
         "labels": label_names,
         "aliases": aliases,
+        **(
+            {
+                "is_group": members is not None,
+                **({"member_entity_ids": members} if members is not None else {}),
+            }
+            if include_membership
+            else {}
+        ),
         "_hidden": join["_hidden"],
         "_area_id": join["_area_id"],
         "_match_texts": match_texts,
@@ -1495,7 +1526,9 @@ def _entity_matches_area(rec: dict[str, Any], area_filter_lower: str) -> bool:
     return bool(area_name and str(area_name).lower() == area_filter_lower)
 
 
-def _project_entity(rec: dict[str, Any]) -> dict[str, Any]:
+def _project_entity(
+    rec: dict[str, Any], *, include_membership: bool = False
+) -> dict[str, Any]:
     """Strip internal ``_``-prefixed keys for the wire response."""
     return {
         "entity_id": rec["entity_id"],
@@ -1508,7 +1541,78 @@ def _project_entity(rec: dict[str, Any]) -> dict[str, Any]:
         "aliases": rec["aliases"],
         "score": rec["score"],
         "match_type": rec["match_type"],
+        **(
+            {"is_group": rec["is_group"]}
+            if include_membership and "is_group" in rec
+            else {}
+        ),
+        **(
+            {"member_entity_ids": rec["member_entity_ids"]}
+            if include_membership and "member_entity_ids" in rec
+            else {}
+        ),
     }
+
+
+def _redact_hidden_members(
+    records: list[dict[str, Any]],
+    hidden: set[str],
+    *,
+    view: _RegistryView | None = None,
+    include_hidden: bool = True,
+    enabled: bool = True,
+) -> None:
+    """Withhold members excluded by visibility or include_hidden."""
+    if not enabled:
+        return
+    for record in records:
+        members = record.get("member_entity_ids")
+        denied = bool(members and hidden.intersection(members))
+        if members and not include_hidden and view is not None:
+            denied = denied or any(
+                getattr(_reg_entity(view, member), "hidden_by", None) is not None
+                for member in members
+            )
+        if denied:
+            record.pop("member_entity_ids", None)
+
+
+def _normalize_member_entity_ids(attributes: Any) -> list[str] | None:
+    """Normalize HA's modern or historical explicit group membership."""
+    if not isinstance(attributes, Mapping):
+        return None
+    for key in ("group_entities", "entity_id"):
+        raw = attributes.get(key)
+        if isinstance(raw, (str, bytes, bytearray, Mapping)):
+            continue
+        if not isinstance(raw, Collection):
+            continue
+        members: set[str] = set()
+        valid = True
+        for value in raw:
+            if not _is_entity_id(value):
+                valid = False
+                break
+            members.add(value)
+        if valid:
+            return sorted(members)
+    return None
+
+
+def _is_entity_id(value: Any) -> bool:
+    """Return whether a value has the Home Assistant entity ID shape."""
+    if not isinstance(value, str) or value.count(".") != 1:
+        return False
+    domain, object_id = value.split(".", 1)
+    return bool(
+        domain
+        and object_id
+        and value == value.lower()
+        and all(
+            char in "abcdefghijklmnopqrstuvwxyz0123456789_"
+            for char in domain + object_id
+        )
+    )
 
 
 # --- Config surfaces (automation/script/scene) -------------------------------
@@ -1977,8 +2081,7 @@ def _name_tier(query_lower: str, texts: Any, *, exact: bool) -> int | None:
             if query_norm and query_norm in _sep_normalized(text_lower):
                 return 100
             ratio = _calc_ratio(query_lower, text_lower)
-            if ratio > best_ratio:
-                best_ratio = ratio
+            best_ratio = max(best_ratio, ratio)
     if not exact and best_ratio >= FUZZY_THRESHOLD:
         return best_ratio
     return None
@@ -3206,7 +3309,7 @@ def _exposure_enrichment(
     rather than crashing the join).
     """
     join = _registry_enrichment(view, entity_id)
-    domain = entity_id.split(".")[0] if "." in entity_id else ""
+    domain = entity_id.split(".", maxsplit=1)[0] if "." in entity_id else ""
     info: dict[str, Any] = {
         "domain": domain,
         "area": join["area"],
@@ -3317,7 +3420,7 @@ def _do_config_entries(
 ) -> dict[str, Any]:
     """Return config entries in the ``config_entries/get`` WS shape.
 
-    ``{entries: [{created_at, modified_at, entry_id, domain, title, state, source,
+    ``{entries: [{created_at, modified_at, entry_id, domain, unique_id, title, state, source,
     supports_options, supports_remove_device, supports_unload, supports_reconfigure,
     supported_subentry_types, pref_disable_new_entities, pref_disable_polling,
     disabled_by, reason, error_reason_translation_key,
@@ -3325,7 +3428,9 @@ def _do_config_entries(
     The FULL ``as_json_fragment`` field set (``created_at`` / ``modified_at`` as
     ``.timestamp()`` floats, ``supported_subentry_types`` as core emits it), so the
     component row carries the same fields the legacy REST row does — no field is
-    dropped on the component path. Filtered by ``domain`` when
+    dropped on the component path — PLUS ``unique_id``, the one deliberate
+    superset field (core withholds it everywhere; the reconfigure identity
+    anchors need it). Filtered by ``domain`` when
     given, or the single entry by ``entry_id``
     (``hass.config_entries.async_get_entry`` — an id that matches nothing,
     including an empty string, yields an empty list). Only a WHOLLY ABSENT
@@ -3425,6 +3530,15 @@ def _config_entry_row(entry: Any, secret_values: frozenset[str]) -> dict[str, An
         "modified_at": _timestamp(getattr(entry, "modified_at", None)),
         "entry_id": getattr(entry, "entry_id", None),
         "domain": getattr(entry, "domain", None),
+        # The ONE field this row adds beyond core's as_json_fragment. Core
+        # deliberately withholds unique_id from every config-entry endpoint
+        # (REST list, config_entries/get and get_single all serialize that
+        # fragment), so a server needing it as an identity anchor has no other
+        # source. Additive within schema_version 1: a server reading an older
+        # component sees the KEY ABSENT, which is distinguishable from a
+        # present-but-None value, so this needs no version gate — the same
+        # discipline as device_get's opt-in entities join.
+        "unique_id": getattr(entry, "unique_id", None),
         "title": getattr(entry, "title", None),
         "state": _enum_value(getattr(entry, "state", None)),
         "source": getattr(entry, "source", None),
@@ -5196,7 +5310,7 @@ def _assist_default_exposed(hass: HomeAssistant, entity_id: str) -> bool:
         or getattr(entry, "hidden_by", None) is not None
     ):
         return False
-    domain = entity_id.split(".")[0] if "." in entity_id else entity_id
+    domain = entity_id.split(".", maxsplit=1)[0] if "." in entity_id else entity_id
     if domain in DEFAULT_EXPOSED_DOMAINS:
         return True
     from homeassistant.exceptions import HomeAssistantError
@@ -5380,8 +5494,14 @@ async def _server_entry_update_prep(
         # auto-updating. Persisting it verbatim would read as an intentional
         # override and disable auto-updates. This keeps the no-op check honest: a
         # frame that normalizes to the stored value is unchanged, not a schedule.
+        # 'clear' (case-insensitive) is the empty string's mangling-proof
+        # alias (see ha_dev_manage_server): recognize it here too so raw WS
+        # callers and older servers cannot persist the literal word as a pip
+        # requirement that fails at install time.
         pip_spec = msg["pip_spec"]
-        if str(pip_spec).strip() in ("", DEFAULT_PIP_SPEC):
+        if str(pip_spec).strip() in ("", DEFAULT_PIP_SPEC) or (
+            str(pip_spec).strip().lower() == "clear"
+        ):
             pip_spec = ""
         delta[OPT_PIP_SPEC] = pip_spec
         applying["pip_spec"] = pip_spec

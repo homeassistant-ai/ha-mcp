@@ -7,10 +7,8 @@ WebSocket events and updates operation status in real-time.
 
 import asyncio
 import logging
-from datetime import datetime
 from typing import Any
 
-from ..config import get_global_settings
 from ..utils.operation_manager import get_operation_manager, update_pending_operations
 from .websocket_client import HomeAssistantWebSocketClient, get_websocket_client
 
@@ -22,20 +20,12 @@ class WebSocketListenerService:
 
     def __init__(self) -> None:
         """Initialize the WebSocket listener service."""
-        self.settings = get_global_settings()
         self.operation_manager = get_operation_manager()
         self.websocket_client: HomeAssistantWebSocketClient | None = None
         self.listener_task: asyncio.Task | None = None
         self.cleanup_task: asyncio.Task | None = None
         self.running = False
         self._event_loop: asyncio.AbstractEventLoop | None = None
-        self.stats: dict[str, Any] = {
-            "events_processed": 0,
-            "operations_updated": 0,
-            "connection_errors": 0,
-            "last_event_time": None,
-            "start_time": None,
-        }
 
     async def start(self) -> bool:
         """Start the WebSocket listener service.
@@ -64,7 +54,6 @@ class WebSocketListenerService:
             self.cleanup_task = asyncio.create_task(self._periodic_cleanup())
 
             self.running = True
-            self.stats["start_time"] = datetime.now()
 
             logger.info("WebSocket listener service started successfully")
             return True
@@ -141,11 +130,6 @@ class WebSocketListenerService:
         entity_id: str | None = None
         new_state: dict[str, Any] | None = None
         try:
-            events_processed = self.stats["events_processed"]
-            if isinstance(events_processed, int):
-                self.stats["events_processed"] = events_processed + 1
-            self.stats["last_event_time"] = datetime.now()
-
             # Extract event data — fields are nested under ``event["data"]``.
             event_data = event.get("data") or {}
             entity_id = event_data.get("entity_id")
@@ -164,11 +148,6 @@ class WebSocketListenerService:
             # Update pending operations
             updated_ops = update_pending_operations(entity_id, new_state)
             if updated_ops:
-                operations_updated = self.stats["operations_updated"]
-                if isinstance(operations_updated, int):
-                    self.stats["operations_updated"] = operations_updated + len(
-                        updated_ops
-                    )
                 logger.info(f"Updated {len(updated_ops)} operations for {entity_id}")
 
         except (RuntimeError, ConnectionError, OSError) as e:
@@ -198,14 +177,8 @@ class WebSocketListenerService:
                     ping_success = await self.websocket_client.ping()
                     if not ping_success:
                         logger.warning("WebSocket ping failed")
-                        connection_errors = self.stats["connection_errors"]
-                        if isinstance(connection_errors, int):
-                            self.stats["connection_errors"] = connection_errors + 1
                 else:
                     logger.warning("WebSocket connection lost")
-                    connection_errors = self.stats["connection_errors"]
-                    if isinstance(connection_errors, int):
-                        self.stats["connection_errors"] = connection_errors + 1
 
                     # Try to reconnect
                     try:
@@ -240,67 +213,6 @@ class WebSocketListenerService:
             except Exception as e:
                 logger.error(f"Cleanup task error: {e}")
                 await asyncio.sleep(300)
-
-    def get_status(self) -> dict[str, Any]:
-        """Get service status and statistics.
-
-        Returns:
-            Dictionary with service status and statistics
-        """
-        uptime: float | None = None
-        start_time = self.stats["start_time"]
-        if isinstance(start_time, datetime):
-            uptime = (datetime.now() - start_time).total_seconds()
-
-        return {
-            "running": self.running,
-            "websocket_connected": (
-                self.websocket_client.is_connected if self.websocket_client else False
-            ),
-            "uptime_seconds": uptime,
-            "statistics": {
-                **self.stats,
-                "last_event_time": (
-                    self.stats["last_event_time"].isoformat()
-                    if isinstance(self.stats["last_event_time"], datetime)
-                    else None
-                ),
-                "start_time": (
-                    self.stats["start_time"].isoformat()
-                    if isinstance(self.stats["start_time"], datetime)
-                    else None
-                ),
-            },
-            "operation_summary": self.operation_manager.get_operations_summary(),
-        }
-
-    async def force_reconnect(self) -> bool:
-        """Force a WebSocket reconnection.
-
-        Returns:
-            True if reconnection successful
-        """
-        try:
-            if self.websocket_client:
-                self.websocket_client.remove_event_handler(
-                    "state_changed", self._handle_state_change
-                )
-
-            self.websocket_client = await get_websocket_client()
-            await self.websocket_client.subscribe_events("state_changed")
-            self.websocket_client.add_event_handler(
-                "state_changed", self._handle_state_change
-            )
-
-            logger.info("Forced WebSocket reconnection successful")
-            return True
-
-        except Exception as e:
-            logger.error(f"Forced reconnection failed: {e}")
-            connection_errors = self.stats["connection_errors"]
-            if isinstance(connection_errors, int):
-                self.stats["connection_errors"] = connection_errors + 1
-            return False
 
 
 # Global listener service instance
@@ -353,40 +265,3 @@ async def stop_websocket_listener() -> None:
     if _listener_service:
         await _listener_service.stop()
         _listener_service = None
-
-
-async def get_listener_status() -> dict[str, Any]:
-    """Get WebSocket listener service status."""
-    service = await get_listener_service()
-    return service.get_status()
-
-
-class WebSocketContextManager:
-    """Context manager for WebSocket listener lifecycle."""
-
-    def __init__(self) -> None:
-        self.service: WebSocketListenerService | None = None
-
-    async def __aenter__(self) -> WebSocketListenerService:
-        """Start WebSocket listener."""
-        service = await get_listener_service()
-        success = await service.start()
-        if not success:
-            raise Exception("Failed to start WebSocket listener")
-        self.service = service
-        return service
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        """Stop WebSocket listener."""
-        if self.service:
-            await self.service.stop()
-
-
-def websocket_listener_context() -> WebSocketContextManager:
-    """Create a WebSocket listener context manager."""
-    return WebSocketContextManager()

@@ -19,8 +19,12 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlparse
 
-import websockets
-
+# The vendored copy, NEVER the shared site-packages one: inside Home
+# Assistant that copy is unowned — ~20 integration libraries drag it in with
+# conflicting version demands and any of their installs can replace or tear
+# it in place (#2135/#2146). The private copy is immune, and CI tests
+# exactly the version production runs.
+from .._vendor import websockets
 from ..config import get_global_settings
 from .rest_client import (
     HomeAssistantAuthError,
@@ -41,6 +45,13 @@ logger = logging.getLogger(__name__)
 # (the HA WebSocket API has no pagination); a ~6.4k-entity instance
 # overflowed the previous 20MB cap (#1721).
 MAX_WS_MESSAGE_BYTES = 64 * 1024 * 1024
+
+# How long :meth:`HomeAssistantWebSocketClient.send_command` waits for a reply
+# when the caller names no ``_wait_timeout``. Named rather than inlined because
+# callers that schedule retries have to budget around it: a caller whose retry
+# delay assumes a fast failure will start its next attempt one whole timeout
+# later than it planned when the command hangs instead.
+DEFAULT_COMMAND_WAIT_TIMEOUT = 30.0
 
 
 def _extract_ws_error(error: Any) -> tuple[str, str | None]:
@@ -288,6 +299,12 @@ class HomeAssistantWebSocketClient:
         # or None. Surfaced by callers so the agent sees *why* a WebSocket
         # connection failed instead of an opaque "Failed to connect" string.
         self._last_connect_error: str | None = None
+        # The exception object itself, so the connection manager can
+        # re-raise an auth failure AS an auth failure instead of collapsing
+        # every connect miss into HomeAssistantConnectionError (issue #2159
+        # review: an expired token must classify as AUTH_*, and the reason
+        # otherwise survives only inside the message string).
+        self._last_connect_exception: Exception | None = None
 
         # Parse URL to get WebSocket endpoint
         parsed = urlparse(self.base_url)
@@ -313,6 +330,7 @@ class HomeAssistantWebSocketClient:
             logger.info(f"Connecting to Home Assistant WebSocket: {self.ws_url}")
             self._state.reset_connection()
             self._last_connect_error = None
+            self._last_connect_exception = None
 
             # Only configure an SSLContext for wss://; ws:// (Supervisor
             # proxy) doesn't use TLS and gets ssl=None.
@@ -379,6 +397,7 @@ class HomeAssistantWebSocketClient:
 
         except Exception as e:
             self._last_connect_error = f"{type(e).__name__}: {e}"
+            self._last_connect_exception = e
             if _is_ssl_error(e) and self.verify_ssl:
                 logger.error(
                     "WebSocket TLS verification failed for %s: %s. "
@@ -609,10 +628,11 @@ class HomeAssistantWebSocketClient:
         Args:
             command_type: Type of command to send
             _wait_timeout: Seconds to wait for the response (consumed from
-                ``kwargs``, not forwarded to Home Assistant). Defaults to 30s,
-                which suits fast commands; long-running ones (e.g. a
-                ``supervisor/api`` add-on install) must raise this so the
-                client doesn't give up before Home Assistant replies.
+                ``kwargs``, not forwarded to Home Assistant). Defaults to
+                ``DEFAULT_COMMAND_WAIT_TIMEOUT``, which suits fast commands;
+                long-running ones (e.g. a ``supervisor/api`` add-on install)
+                must raise this so the client doesn't give up before Home
+                Assistant replies.
             **kwargs: Command parameters (merged into the outgoing message)
 
         Returns:
@@ -632,7 +652,7 @@ class HomeAssistantWebSocketClient:
         # break that call shape under mypy. The leading underscore keeps it out
         # of the HA message namespace — HA WebSocket fields never start with
         # one — so it can never shadow a real command field when popped.
-        wait_timeout: float = kwargs.pop("_wait_timeout", 30.0)
+        wait_timeout: float = kwargs.pop("_wait_timeout", DEFAULT_COMMAND_WAIT_TIMEOUT)
 
         message_id = self.get_next_message_id()
         message = {"id": message_id, "type": command_type, **kwargs}
@@ -1033,6 +1053,16 @@ class HomeAssistantWebSocketClient:
         """
         return self._last_connect_error
 
+    @property
+    def last_connect_exception(self) -> Exception | None:
+        """The exception the most recent ``connect()`` attempt failed with.
+
+        Lets the connection manager preserve the failure class — an
+        ``HomeAssistantAuthError`` re-raises as an auth error rather than
+        being collapsed into ``HomeAssistantConnectionError``.
+        """
+        return self._last_connect_exception
+
 
 MAX_POOL_SIZE = 50
 
@@ -1251,10 +1281,31 @@ class WebSocketManager:
                 self._last_used[key] = time.monotonic()
                 return existing
 
-            # Remove stale client if present
+            # Remove stale client if present. Disconnect it too: a client
+            # whose connection dropped can still own a parked reader task and
+            # a half-open socket, and simply dropping the reference abandons
+            # both to garbage collection — the GC's asyncgen finalizer then
+            # acloses the reader's ``Connection.__aiter__`` mid-``__anext__``
+            # and logs ``aclose(): asynchronous generator is already
+            # running`` (issue #2127). Same-loop by construction: a loop
+            # change already detached the pool above, so ``existing`` was
+            # built on ``current_loop`` and can be awaited here.
             if existing:
                 self._clients.pop(key, None)
                 self._last_used.pop(key, None)
+                try:
+                    await existing.disconnect()
+                except asyncio.CancelledError:
+                    # The caller itself was cancelled mid-cleanup: propagate.
+                    # Swallowing here would let a cancelled operation keep
+                    # doing network I/O and leave a fresh connection retained
+                    # in the pool.
+                    raise
+                except (OSError, RuntimeError):
+                    logger.warning(
+                        "Error disconnecting stale WebSocket client",
+                        exc_info=True,
+                    )
 
             factory = self._client_factory or HomeAssistantWebSocketClient
             client = (
@@ -1270,6 +1321,13 @@ class WebSocketManager:
                 # keeps a non-str (e.g. a MagicMock in tests) from polluting
                 # the message with a repr.
                 detail = f": {reason}" if isinstance(reason, str) else ""
+                # An auth failure must classify as an auth failure — the
+                # collapsed connection error buries the cause in the message
+                # string and callers misreport it as connection guidance.
+                if isinstance(client.last_connect_exception, HomeAssistantAuthError):
+                    raise HomeAssistantAuthError(
+                        "WebSocket authentication failed" + detail
+                    )
                 raise HomeAssistantConnectionError(
                     "Failed to connect to Home Assistant WebSocket" + detail
                 )
@@ -1291,7 +1349,14 @@ class WebSocketManager:
         if stale:
             try:
                 await stale.disconnect()
-            except (OSError, RuntimeError, asyncio.CancelledError):
+            except asyncio.CancelledError:
+                # The caller itself was cancelled mid-eviction: propagate.
+                # Eviction runs after the fresh client was pooled, so a
+                # swallow here would hand a connected client back to a
+                # cancelled caller (mirror of the stale-replacement clause
+                # in get_client).
+                raise
+            except (OSError, RuntimeError):
                 logger.warning(
                     "Error disconnecting evicted WebSocket client",
                     exc_info=True,

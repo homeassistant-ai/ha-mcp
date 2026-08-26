@@ -1,0 +1,855 @@
+{
+  "meta": {
+    "native_name": "Esperanto",
+    "dir": "ltr"
+  },
+  "messages": {
+    "app.document_title": "Agordoj de Iloj de HA-MCP",
+    "app.title": "Agordoj de HA-MCP",
+    "language.label": "Lingvo",
+    "language.auto": "Aŭtomata",
+    "theme.label": "Temo",
+    "theme.auto_os": "Aŭtomata (OS)",
+    "theme.light": "Hela",
+    "theme.dark": "Malhela",
+    "status.loading": "Ŝarĝante…",
+    "footer.installation": "instalo: {method}",
+    "footer.deployment.addon": "aplikaĵo/aldonaĵo",
+    "footer.deployment.docker": "ujo/docker",
+    "footer.deployment.pyinstaller": "sendependa duumaĵo",
+    "footer.deployment.git": "fontkoda elŝuto",
+    "footer.deployment.pypi": "pitona pakaĵo",
+    "footer.deployment.unknown": "nekonata",
+    "nav.skip": "Salti al enhavo",
+    "tabs.aria": "Agordaj sekcioj",
+    "tabs.tools": "Iloj",
+    "tabs.server": "Servilaj Agordoj",
+    "tabs.backups": "Sekurkopioj",
+    "tabs.policies": "Sekurecaj Politikoj de Iloj",
+    "tabs.visibility": "Videbleco de Entoj",
+    "tabs.accessibility": "Alirebleco",
+    "notice.restart_required": "⚠ Ŝanĝoj konservitaj. Restartigu HA-MCP por ke ili ekvalidu. Ĉe la sekva pravalorizado, HA-MCP plene forigas malŝaltitajn ilojn el la listo de MCP-iloj. Poste reKonektu aŭ aktualigu la MCP-servilon en via AI-kliento (ekz. aktualigu la iloliston ĉe claude.ai, realdonu/aktualigu la konektilon en ChatGPT, aŭ fermu kaj remalfermu Claude Desktop) por ke ĝi reŝarĝu la iloliston. Restartigi la apon (aldonaĵon) aŭ Home Assistant NE aktualigas la kaŝmemoritan iloliston de via kliento. ChatGPT foje daŭre liveras sian kaŝmemoritan iloliston eĉ post kiam la konektilo estas forigita kaj realdonita — se iloj ankoraŭ mankas, forigu la konektilon kaj kreu novan sub alia nomo.",
+    "notice.shared_settings": "Tutservilaj funkcioj (Ilo-Serĉo, YAML-agorda redaktado, dosiersistemaj iloj, ktp.) aperas kaj en la langeto <strong>Servilaj Agordoj</strong> kaj en la agorda paĝo de la apo (aldonaĵo); ili estas la samaj agordoj ambaŭkaze. Ambaŭ interfacoj restas sinkronigitaj unu kun la alia post kiam la apo (aldonaĵo) restartas. Ŝanĝoj postulas restartigon de HA-MCP.",
+    "notice.env_pins": "Iloj listigitaj en la medivariabloj <code>DISABLED_TOOLS</code> aŭ <code>PINNED_TOOLS</code> estas ŝlositaj kiel nur-legeblaj; malagordu la medivariablon por redakti ilin ĉi tie. Alpinglajŝaltiloj ekvalidas nur kiam Ilo-Serĉo estas ebligita (langeto Servilaj Agordoj aŭ agorda paĝo de la apo (aldonaĵo)).",
+    "actions.restart_addon": "Restartigi apon (aldonaĵon)",
+    "actions.save": "Konservi",
+    "actions.save_settings": "Konservi agordojn",
+    "actions.refresh": "Aktualigi",
+    "actions.close": "Fermi",
+    "tools.read_only.label": "Nur-lega Reĝimo",
+    "tools.read_only.help": "Malŝaltas ĉiujn skribajn ilojn kaj blokas ĉiun ilon de farado de skribaj aŭ detruaj vokoj. Miksitaj legaj/skribaj iloj (sekurkopioj, Aplikoj (aldonaĵoj), energiaj preferoj, voĉaj duktoj, kaj koda reĝimo kiam ebligita) restas disponeblaj kun iliaj skribaj operacioj blokitaj.",
+    "tools.read_only.unknown": "Ne eblis legi servilajn agordojn. Stato de Nur-lega Reĝimo nekonata; ĉi tiu vido eble ne reflektas tion, kion la servilo trudas.",
+    "tools.search": "Serĉi ilojn...",
+    "server.auto_save_notice": "Agordoj sur ĉi tiu langeto konserviĝas aŭtomate. Ŝanĝoj ekvalidas nur post kiam vi restartigas HA-MCP (aplikas ilin je la servila flanko) kaj reKonektas aŭ aktualigu la MCP-servilon en via AI-kliento (reŝarĝas la iloliston), ekz. aktualigu la iloliston ĉe claude.ai, realdonu aŭ aktualigu la konektilon en ChatGPT, aŭ fermu kaj remalfermu Claude Desktop. ChatGPT foje daŭre liveras sian kaŝmemoritan iloliston eĉ post kiam la konektilo estas forigita kaj realdonita — se iloj ankoraŭ mankas, forigu la konektilon kaj kreu novan sub alia nomo.",
+    "server.sections.search": "Serĉo kaj kongruigo",
+    "server.sections.operations": "Operacioj",
+    "server.sections.tool_surface": "Ilo-surfaco",
+    "server.sections.diagnostics": "Diagnozoj",
+    "server.sections.sidecar": "Flankveturilo de Agorda UI",
+    "server.sections.beta": "Beta-funkcioj (danĝeraj)",
+    "server.sections.developer": "Programisto",
+    "server.sidecar.disable": "Konstante malŝalti agordan servilon",
+    "server.sidecar.disable_title": "Konstante malŝaltas la agordan UI: haltigas ĉi tiun servilon KAJ skribas ~/.ha-mcp/settings_ui_disabled por ke ĝi ne reaperu ĉe estontaj lanĉoj de ha-mcp. Forigu tiun dosieron por re-ebligi.",
+    "backups.loading": "Ŝarĝante sekurkopian staton…",
+    "backups.filter.domain": "Domajno (ekz. automation)",
+    "backups.filter.domain_aria": "Filtri sekurkopiojn laŭ domajno",
+    "backups.filter.entity": "Ento-ID",
+    "backups.filter.entity_aria": "Filtri sekurkopiojn laŭ ento-ID",
+    "backups.bulk_delete": "Amasforigi kongruajn…",
+    "policies.title": "Sekurecaj Politikoj de Iloj",
+    "policies.intro": "Per-ila aprobo-pordego por alt-riskaj vokoj. Uzu la langeton <strong>Iloj</strong> por ebligi pordegon por ilo, poste rafini la kongruajn kondiĉojn kaj aprobo-vivdaŭron ĉi tie. Kondiĉaj operatoroj: egalas, estas unu el, regex, enhavas, ĉeestas, pli granda ol, malpli granda ol.",
+    "policies.global.title": "Tutmondaj agordoj",
+    "policies.global.unknown": "Ne eblis legi servilajn agordojn. La du ŝaltiloj sube estas montritaj kiel nekonataj kaj ne povas esti ŝanĝitaj ĝis la paĝo sukcese reŝargas; ĉi tiu vido eble ne reflektas tion, kion la servilo trudas.",
+    "policies.global.enabled.label": "Ebligi Sekurecajn Politikojn de Iloj",
+    "policies.global.enabled.help": "Ĉefa ŝaltilo. Spegulas la ŝaltilon en Servilaj Agordoj. Malŝaltita defaŭlte. Ŝaltu kaj restartigu HA-MCP por aktivigi la filtran mezprogramaron. Dum malŝaltite, la reguloj sube persistas sed ne estas devigitaj.",
+    "policies.global.manage_tool.label": "Lasu AI-agentojn redakti ĉi tiujn politikojn (ha_manage_security_policy)",
+    "policies.global.manage_tool.help": "Registras la ilon ha_manage_security_policy, kiu legas kaj anstataŭigas la politikan dokumenton, kiun ĉi tiu langeto redaktas. Malŝaltita defaŭlte. Sendepende de la ĉefa ŝaltilo supre: ĉi tio kontrolas kiu povas redakti la regulojn, ne ĉu ili estas truditaj. La ilo ne eksponas operaciojn de atend-aproba vico, sed politike-pordegita aro-ago ankoraŭ povas postuli aprobon.",
+    "policies.global.manage_tool.warning": "Ebligi tion permesas al konektitaj AI-agentoj reverki la sekurecajn politikojn sur ĉi tiu langeto, inkluzive de forigo de aprobfiltroj. Por teni homon en la procezo, filtru la ilon ANTAŬ ol vi ebligas ĝin: sur la langeto Iloj, ŝaltu \"security gated\" por Manage Security Policy. Tiu regulo povas esti verkita dum la ilo ankoraŭ estas malŝaltita, kaj ĝi ekvalidas post kiam la ĉefa ŝaltilo supre estas ŝaltita kaj la servilo restartis. Restartigu la apon (aldonaĵon) post ŝaltado de ajna ŝaltilo.",
+    "policies.global.wait.label": "Atendu sekundojn (5-600)",
+    "policies.global.wait.help": "Kiom longe la mezvaro atendas aprobon antaŭ ol eltempiĝi.",
+    "policies.global.ttl.label": "Aprobo TTL minutoj (1-60)",
+    "policies.global.ttl.help": "Kiom longe atendanta aprobo restas en la vico antaŭ ol eksvalidiĝi.",
+    "policies.global.save": "Konservi tutmondajn agordojn",
+    "policies.pending.title": "Atendantaj aproboj",
+    "policies.pending.empty": "Neniuj atendantaj aproboj.",
+    "policies.rules.title": "Pordegitaj iloj",
+    "policies.rules.empty": "Neniuj iloj nuntempe sekurece-pordegitaj. Ebligu per-ilan pordegadon el la langeto <a href=\"#\" data-panel-link=\"tools\">Iloj</a>.",
+    "accessibility.intro": "Ĉi tiuj agordoj aplikiĝas tuj kaj estas konservitaj en ĉi tiu retumilo kaj sur la servilo, do ili postvivas restartojn en ĉiu reĝimo (inkluzive stdio, kie la agorda paĝo povas foje moviĝi al nova pordo). La dokumenta retejo ofertas la samajn kontrolojn en sia navigacia stango; ĝi ne havas servilon kaj konservas laŭ retumilo.",
+    "accessibility.storage_blocked": "Via retumilo blokas la konservadon de retejaj datumoj; viaj elektoj validas nur por ĉi tiu seanco.",
+    "accessibility.theme.title": "Temo",
+    "accessibility.theme.help": "Unu-klakaj kolorskemoj. Aŭtomata, la defaŭlta, sekvas vian OS-preferon kaj ŝanĝiĝas vive kiam ĝi modifiĝas.",
+    "accessibility.theme.preset": "Temo-antaŭagordo",
+    "accessibility.theme.paper": "Papero",
+    "accessibility.theme.gray": "Griza",
+    "accessibility.theme.contrast": "Alta Kontrasto",
+    "accessibility.text_size.title": "Teksto-grandeco",
+    "accessibility.text_size.help": "Skalas la radikan tipargrandecon. Retumila zomo (Ctrl/Cmd +) ankoraŭ funkcias super ĉi tio.",
+    "accessibility.colors.title": "Propraj koloroj",
+    "accessibility.colors.help": "Elektu viajn proprajn kolorojn super la elektita temo. Ĉiu koloreto malfermas la vidan kolorelektilon de via sistemo.",
+    "accessibility.colors.background": "Fono",
+    "accessibility.colors.text": "Teksto",
+    "accessibility.colors.accent": "Akcento",
+    "accessibility.colors.low_contrast": "La elektitaj fonaj kaj tekstaj koloroj falas sub kontrastoproporcio de 4.5:1 kaj eble malfacilas legi kune.",
+    "accessibility.colors.clear": "Forigi proprajn kolorojn",
+    "accessibility.reset": "Restarigi al defaŭltoj",
+    "visibility.intro": "Kaŝi malalt-valorajn entojn (aŭtomate generitajn diagnozajn aŭ helpajn entojn, aŭ eksplicitan liston) de la kolekto-legaj iloj <code>ha_search</code> kaj <code>ha_get_overview</code>, por ke serĉaj kaj superrigardaj rezultoj estu malpli plenplenaj. Malŝaltita defaŭlte; ŝanĝoj aplikiĝas ĉe la sekva ilo-voko.",
+    "visibility.boundary": "Sen deviga reĝimo (malsupre), ĉi tio estas bruo-redukto, ne alirkontrolo: kaŝita ento estas ankoraŭ redonita per rekta legado de ĝia entity_id kaj ankoraŭ aperas en aŭtomatigo, panelo kaj ŝablona enhavo. Ne fidu nur je la filtrilo kiel sekureca limo.",
+    "visibility.enabled": "Ebligi filtrilon de enta videbleco",
+    "visibility.enforce.title": "Deviga reĝimo",
+    "visibility.enforce.help": "Etendas la filtrilon de ordigado de serĉado kaj superrigardo al ĉiu illegado krom ha_report_issue defaŭlte. Rekta legado de kaŝita ento redonas “ne trovita”, kaj enhava legado kiu elmontrus tian enton estas rifuzita. La escepto de la raport-ilo estas regata sube. Plejforta kaŝado kontraŭ hazarda elmontro, ne fortika sekureca limo.",
+    "visibility.enforce.only_enforced": "Maliberi legadon de kaŝitaj entoj tra ĉiuj illegadoj (krom problemnotoj defaŭlte)",
+    "visibility.enforce.report_issue_help": "Dum ĉi tio estas malŝaltita, ha_report_issue kaj ĉiuj ĝiaj diagnozaj eliraĵoj—inkluzive de protokoloj—restas ekster la deviga reĝimo je ĉiu voko, eĉ kiam videblecaj datumoj estas sanaj aŭ nehaveblaj. Ŝaltu ĝin por skani kaj rifuzi tiun ilon kiel aliajn legadojn.",
+    "visibility.enforce.restrict_report_issue": "Apliki devigan reĝimon al ha_report_issue",
+    "visibility.categories.title": "Kaŝi laŭ kategorio",
+    "visibility.categories.help": "Home Assistant etikedas aŭtomate generitajn entojn kiel diagnozajn aŭ agordajn.",
+    "visibility.categories.legend": "Entaj kategorioj por kaŝi",
+    "visibility.categories.diagnostic": "Diagnoza",
+    "visibility.categories.config": "Agordo",
+    "visibility.categories.hidden": "Ankaŭ entoj jam kaŝitaj en Home Assistant",
+    "visibility.area_label.title": "Kaŝi laŭ areo aŭ etikedo",
+    "visibility.area_label.help": "Areaj ID-oj aŭ etikedaj ID-oj apartigitaj per komoj; entoj en iu ajn listigita areo aŭ etikedo estas kaŝitaj.",
+    "visibility.areas": "Areoj",
+    "visibility.labels": "Etikedoj",
+    "visibility.entities.title": "Kaŝi specifajn entojn",
+    "visibility.entities.help": "Unu entity_id per linio. Ĉi tiuj restas kaŝitaj eĉ sen ento-registra eniro.",
+    "visibility.entities.denied": "Malpermesitaj entaj ID-oj",
+    "visibility.allowlist.title": "Limigi al permeslisto",
+    "visibility.allowlist.help": "Altnivela: kiam iu ajn permeslista kampo estas agordita, la filtrilo inversiĝas – nur entoj kongruantaj kun permeslisto restas videblaj, ĉio alia estas kaŝita (inkluzive de entoj aldonitaj poste). Lasu ĉiujn tri malplenaj por malŝalti.",
+    "visibility.allowlist.areas": "Permesitaj areoj",
+    "visibility.allowlist.labels": "Permesitaj etikedoj",
+    "visibility.allowlist.entities_help": "Permesitaj entaj ID-oj, unu per linio.",
+    "visibility.allowlist.entities": "Permesitaj entaj ID-oj",
+    "visibility.assist.title": "Respekti Assist-eksponon",
+    "visibility.assist.help": "Kaŝi entojn ne eksponitajn al la voĉasistanto Assist („konversacio”) de Home Assistant, spegulante la liston Agordoj > Voĉasistantoj > Eksponi. Aldonas du retfanto-legojn per serĉo dum ebligita.",
+    "visibility.assist.only_exposed": "Montri nur entojn eksponitajn al Assist",
+    "features.enable_tool_search.label": "Ebligi ilo-serĉon",
+    "features.enable_tool_search.help": "Anstataŭigi la plenan ilo-katalogon per serĉ-bazita malkovro. Reduktas neaktivan kuntekston je proksimume 90%, al ĉirkaŭ 5K ĵetonoj. ⚠️ NE ebligu ĉi tion en klientoj kun sia propra enkonstruita ilo-serĉo / prokrastitaj iloj (claude.ai, Claude Desktop, Claude Code) — la du serĉtavoloj konfliktas, kaj la enkonstruita ilo-serĉo de la kliento estas la pli bona elekto tie; lasu ĉi tion malŝaltita. Ĉu iloj estas prokrastitaj dependas de via kliento kaj modelo-kombino: uzu ĉi tion kiam via agordo ŝarĝas la plenan katalogon antaŭe — modeloj sen denaskaj prokrastitaj iloj (ekz. Gemini, OpenAI-kongruaj lokaj modeloj, Claude Haiku), klientoj kiuj enlinigas ĉiujn ilo-skemojn sendepende de modelo (ekz. GitHub Copilot CLI), aŭ pli malgrandaj kuntekstaj fenestroj. Iuj Codex-modeloj kaj ChatGPT ankaŭ inkluzivas prokrastitajn ilojn — kontrolu vian klienton/modelon rekte por konfirmi ĝiajn funkciojn, por ke vi ne lasu ĉi tion ebligita senbezone. Iloj estas trovitaj per ha_search_tools kaj ekzekutitaj per kategoriigitaj prokuriloj (legi/skribi/forigi). Postulas restartigon por ekvalidi.",
+    "features.tool_search_max_results.label": "Maksimumaj rezultoj de ilo-serĉo",
+    "features.tool_search_max_results.help": "Maksimuma nombro de iloj redonitaj de ha_search_tools kiam ilo-serĉo estas ebligita. Pli malaltaj valoroj (2-3) ŝparas kuntekstajn ĵetonojn sed povas maltrafi gravajn ilojn. Gamo: 2-10. Postulas restartigon.",
+    "features.enable_tool_security_policies.label": "Ebligi Ilo-Sekurecajn Politikojn (altnivela)",
+    "features.enable_tool_security_policies.help": "Gardu alt-riskajn ilo-vokojn (seruro/alarmo-kontrolo, aŭtomatigo-skriboj, ktp.) malantaŭ uzant-aprobo. Kiam gardita ilo estas vokita, la agento diras al la uzanto malfermi la langeton Ilo-Sekurecaj Politikoj en la TTT-UI kaj klaki Aprobi antaŭ ol la voko daŭras. Reguloj por ĉiu ilo kun laŭvolaj argumentaj kondiĉoj estas agorditaj en la langeto Ilo-Sekurecaj Politikoj. Malŝaltita defaŭlte. Postulas restartigon por ekvalidi.",
+    "features.read_only_mode.label": "Nur-lega Reĝimo",
+    "features.read_only_mode.help": "Malŝaltas ĉiujn skribilojn, kaj forigas la kapablon por iloj fari skribajn aŭ detruajn vokojn. Miksitaj leg-skribaj iloj — savkopioj, Apoj (aldonaĵoj), energiaj preferoj, voĉaj duktoj, kaj koda reĝimo kiam ebligite — restas haveblaj kun siaj skribaj operacioj blokitaj. Sama ŝaltilo kiel la TTT-interfaca langeto Iloj. Malŝaltita defaŭlte. Postulas restartigon por ekvalidi.",
+    "features.redact_secrets.label": "Redakti Sekretojn",
+    "features.redact_secrets.help": "Redaktas sekretojn el ilaj respondon antaŭ ol ili atingas la AI-asistanton. Apaj (aldonaĵaj) opcioj kaj integriĝaj kampoj markitaj kiel pasvortoj estas anstataŭigitaj per aro/malplena markilo (do \"ĉu ĉi tiu akreditaĵo estas agordita?\" restas respondoebla), kaj aliaj ilaj respondoj estas purigitaj de sekretaj valoroj kiujn la servilo jam vidis (valoroj pli mallongaj ol 6 signoj estas preterlasitaj, ĉar anstataŭigi etajn fragmentojn koruptus senrilatan eligon). Kampoj ne markitaj kiel pasvortoj per sia skemo ne povas esti detektitaj. Malŝaltita defaŭlte.",
+    "features.enable_mandatory_bps.label": "Aligi plejbonajn praktikajn kapablojn ĉe skriboj",
+    "features.enable_mandatory_bps.help": "Majstra ŝaltilo por la funkcio de liverado de enhavo de skrib-ila kapablo (problemo #1182). Kiam ebligita (defaŭlte), la ses agordaj skrib-iloj (aŭtomatigoj, skriptoj, scenoj, helpiloj, paneloj, kruda YAML) aligas la kanonikajn Home Assistant plejbonajn praktikajn referencajn dosierojn sub `skill_content` ĉe ĉiu sukcesa skribo, plus aŭtomate enigas iujn ajn referencajn sekciojn cititajn de plejbonaj praktikaj avertoj. Ĉiu ilo ankaŭ eksponas por-vokan `MandatoryBPS` parametron, kiun la agento povas agordi al false ĉe postaj vokoj post kiam ĝi havas la enhavon. Kiam ĉi tiu majstra ŝaltilo estas malŝaltita, NENIU skill_content eliras sendepende de la por-voka parametro aŭ BP-avertoj. Rekomendita ŜALTITA kiel la unua elekto; malŝaltu nur por modeloj kun tre malgrandaj kuntekstaj fenestroj. Malŝalti ĉi tion povas malbonigi skriban precizecon. Postulas restartigon por ekvalidi.",
+    "features.enable_strict_mandatory_bps.label": "Strikta plejbonaj-praktikoj reĝimo",
+    "features.enable_strict_mandatory_bps.help": "Strikta reĝimo: malhelpas la klienton uzi la ilon ĝis ĝi povas pruvi, ke ĝi legis la plejbonajn praktikojn. Dum ŝaltita, la ses plejbonaj-praktikaj skrib-iloj (aŭtomatigoj, skriptoj, scenoj, helpiloj, paneloj, kruda YAML) estas blokitaj kaj redonas eraron direktante la klienton legi la plejbonajn-praktikajn kapablojn per ha_get_skill_guide kaj resendi la agnoskan ŝlosilon, kiun ĝi akiras tie. Dum ŝaltita, la ilo ha_get_skill_guide estas ŝlosita ebligita — ĝi estas la sola eldonanto de la agnoska ŝlosilo. Infano de la opcio „Aligi plejbonajn praktikajn kapablojn ĉe skriboj” supre kaj inerta dum tiu gepatro estas malŝaltita. Postulas restartigon por ekvalidi.",
+    "features.enable_beta_features.label": "Ebligi beta-funkciojn (majstra)",
+    "features.enable_beta_features.help": "⚠ DANĜERO — ĉi tiuj iloj povas PERMANENTE DAMAĜI vian Home Assistant-instalaĵon. Ili skribas al via YAML-agordo, via dosiersistemo, instalas kutimajn komponantojn, rulas arbitran sandbokseitan Python-kodon, kaj redaktas ilajn dokumentŝnurojn, kiujn la AI vidas. Ne ekzistas garantio kaj neniu subtena promeso — vi ebligas ilin je via PROPRIA RISKO. Faru sekurkopion de Home Assistant antaŭ ol ŝalti ĉi tion, kaj neniam ebligu en produktado sen unu. Ĉefa pordo por la eksperimentaj sub-flagoj sube; sub-flagoj estas ignoritaj dum rultempo dum ĉi tiu ĉefa estas malŝaltita, eĉ kiam eksplicite agordita al true. La sama ŝaltilo ankaŭ aperas en la retaj agordoj sub \"Beta features (dangerous)\" — ambaŭ surfacoj reflektas unu la alian post restartigo.",
+    "features.enable_yaml_config_editing.label": "Ebligi redaktadon de YAML-agordo (beta)",
+    "features.enable_yaml_config_editing.help": "Beta-funkcio. Permesas al AI-asistantoj aldoni, anstataŭigi, aŭ forigi ĉefnivelajn ŝlosilojn en configuration.yaml kaj packages/*.yaml. Nur blanklistigitaj ŝlosiloj estas permesitaj (ekz., template, sensor, command_line, mqtt, knx); kernaj ŝlosiloj kiel homeassistant, http, kaj recorder estas blokitaj. Ĉiu redakto validigas YAML-sintakson, rulas agordan kontrolon, kaj kreas aŭtomatan sekurkopion. Ŝanĝoj al plej multaj ŝlosiloj postulas plenan HA-restartigon por ekvalidi. Vidu docs/beta.md por konataj limigoj. Dedikataj iloj (automations, scripts, scenes, helpers, template sensors) estu preferataj kiam disponeblaj. POSTULAS ke la ĉefa ŝaltilo \"Enable beta features\" supre (kaj en la reta UI) estu ŝaltita — alie ĉi tiu sub-flago estas ignorita dum rultempo sendepende de ĝia valoro ĉi tie.",
+    "features.enable_yaml_edit_confirm.label": "Postuli konfirmon por YAML-redaktoj (diferenca antaŭvido)",
+    "features.enable_yaml_edit_confirm.help": "Sub-ŝaltilo de redaktado de YAML-agordo, defaŭlte ŜALTITA (rekomendita). La unua voko de ha_config_set_yaml redonas unuigitan diferencon de ĝuste kio ŝanĝiĝus sur disko plus konfirman ĵetonon kaj skribas nenion; la redakto nur realiĝas kiam la voko estas ripetita kun tiu ĵetono. Ekzistas por ke neintencitaj ŝanĝoj ekster la petita redakto estu kaptitaj antaŭ ol ili atingas diskon (issue #1720). Malŝaltu nur por ŝpari unu rondveturon per redakto.",
+    "features.enable_yaml_packages_automation.label": "Permesi aŭtomatigon en packages/*.yaml",
+    "features.enable_yaml_packages_automation.help": "Sub-ŝaltilo de redaktado de YAML-agordo. Kiam ŝaltita, ha_config_set_yaml akceptas yaml_path='automation' ene de packages/*.yaml. Kiam malŝaltita, la voko estas malakceptita kaj klient-flanke kaj servil-flanke. La ilo en stokada reĝimo (ha_config_set_automation) estas netuŝita. Defaŭlte MALŜALTITA; efikas nur kiam \"Ebligi redaktadon de YAML-agordo\" supre estas ankaŭ ŝaltita.",
+    "features.enable_yaml_packages_script.label": "Permesi skripton en packages/*.yaml",
+    "features.enable_yaml_packages_script.help": "Sub-ŝaltilo de redaktado de YAML-agordo. Kiam ŝaltita, ha_config_set_yaml akceptas yaml_path='script' ene de packages/*.yaml. Kiam malŝaltita, la voko estas malakceptita kaj klient-flanke kaj servil-flanke. La ilo en stokada reĝimo (ha_config_set_script) estas netuŝita. Defaŭlte MALŜALTITA; efikas nur kiam \"Ebligi redaktadon de YAML-agordo\" supre estas ankaŭ ŝaltita.",
+    "features.enable_yaml_packages_scene.label": "Permesi scenon en packages/*.yaml",
+    "features.enable_yaml_packages_scene.help": "Sub-ŝaltilo de redaktado de YAML-agordo. Kiam ŝaltita, ha_config_set_yaml akceptas yaml_path='scene' ene de packages/*.yaml. Kiam malŝaltita, la voko estas malakceptita kaj klient-flanke kaj servil-flanke. La ilo en stokada reĝimo (ha_config_set_scene) estas netuŝita. Defaŭlte MALŜALTITA; efikas nur kiam \"Ebligi redaktadon de YAML-agordo\" supre estas ankaŭ ŝaltita.",
+    "features.enable_filesystem_tools.label": "Ebligi dosiersistemajn ilojn (beta)",
+    "features.enable_filesystem_tools.help": "Agordas HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Ebligas rektan dosier-leg/skriban aliron al via Home Assistant-dosiersistemo. AVERTO: Ĉi tio donas al la MCP-servilo senteman rektan dosier-aliron al via sistemo. Ebligu nur se vi fidas la AI-asistanton kun dosieroperacioj. Postulas restartigon por ekvalidi. POSTULAS ke la ĉefa ŝaltilo \"Enable beta features\" supre (kaj en la reta UI) estu ŝaltita — alie ĉi tiu sub-flago estas ignorita dum rultempo sendepende de ĝia valoro ĉi tie.",
+    "features.enable_code_mode.label": "Ebligi kutiman ilon sandbokson (beta)",
+    "features.enable_code_mode.help": "Beta-funkcio. Ebligas la ilon ha_manage_custom_tool, kiu permesas al AI-asistantoj krei, ruli, konservi kaj forigi personigitajn Python-kodojn en sekura sablokesto kiam neniu enkonstruita ilo povas trakti la peton. Kodo ruliĝas en izolita interpretilo sen dosiersistemo aŭ propra reta aliro. Sablokesta kodo povas trafi la HA REST API (api_get/api_post), sendi WebSocket-komandojn (ws_send), voki ekzistantajn MCP-ilojn (call_tool), aŭ forigi konservitan ilon (delete_saved_tool). Konservitaj iloj persistas al /data/saved_tools.json defaŭlte por ke ili postvivu restartigojn de la apo (aldonaĵo), kaj estas videblaj al ajna kliento kiu povas konektiĝi. Vidu docs/beta.md por konataj limigoj. Postulas restartigon por ekvalidi. POSTULAS ke la ĉefa ŝaltilo \"Enable beta features\" supre (kaj en la TTT-interfaco) estu ŝaltita — alie ĉi tiu subflago estas ignorata dum rultempo sendepende de sia valoro ĉi tie.",
+    "features.enable_lite_docstrings.label": "Ebligi malpezajn ilajn dokumentŝnurojn (beta)",
+    "features.enable_lite_docstrings.help": "Beta-funkcio. Anstataŭigas la dokumentŝnurojn de kelkaj pezaj ha-mcp-iloj (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) per pli mallongaj variantoj, kiuj prokrastas skemon kaj ekzemplajn detalojn al la ilo ha_get_skill_guide (aŭ ĝia skill://-rimedo). AVERTO: ĉi tio reduktas neaktivan ĵeton-uzon, sed povas malbonigi LLM-rendimenton — la tonditaj priskriboj dependas de la LLM efektive vokanta la kapablan ilon aŭ leganta la kapablan rimedon por detaloj, kio ne estas garantiita (iuj modeloj preterlasos la ekstran ilvokon kaj finos kun malpli da gvidado ol ili havis antaŭe). Plej bone parigita kun kliento, kiu subtenas MCP-rimedojn aŭ kun enable_tool_search. Postulas restartigon por ekvalidi. POSTULAS ke la ĉefa ŝaltilo \"Enable beta features\" supre (kaj en la reta UI) estu ŝaltita — alie ĉi tiu sub-flago estas ignorita dum rultempo sendepende de ĝia valoro ĉi tie.",
+    "features.enable_dashboard_screenshot.label": "Ebligi panelan ekrankaptan reĝimon (beta)",
+    "features.enable_dashboard_screenshot.help": "Beta-funkcio — malŝaltita defaŭlte. Aldonas la ilon ha_get_dashboard_screenshot plus opciojn include_screenshot / return_screenshot ĉe la panelaj get/set-iloj, por ke AI-asistantoj povu inspekti unu aŭ pli respondemajn Lovelace-bildojn (ekz. por kontroli panelon kiun ili ĝuste kreis). Subtenas stabilajn nomitajn vidojn, poŝtelefonajn/tabulkomputilajn/tabulajn arojn, kaj PNG/JPEG/WebP/BMP-eligon. Teksturigo ruliĝas en aparta, libervola motoro — la \"Puppet\" App (aldonaĵo) de balloob, senkapa Chromium — kiun vi instalas unufoje (aldonu la deponejon de balloob al la Aldona Butiko, poste instalu \"Puppet\") kaj donas longdaŭran alirtokonon; ĉe Docker/Container-deplojoj vi ruli tiun motoron kiel flankan ujon kaj agordas HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Neniopeza estas instalita krom se vi kaj ebligas ĉi tion kaj instalas la motoron. Postulas restartigon por ekvalidi. POSTULAS ke la ĉefa ŝaltilo \"Enable beta features\" supre (kaj en la TTT-interfaco) estu ŝaltita — alie ĉi tiu subflago estas ignorata dum rultempo sendepende de sia valoro ĉi tie.",
+    "actions.restart_server": "Restartigi HA-MCP Servilon",
+    "actions.restart_confirm": "Restartigi HA-MCP nun? La paĝo reŝargiĝos aŭtomate post kiam ĝi estos denove enreta.",
+    "actions.view": "Vidi",
+    "actions.diff": "Diferenco",
+    "actions.restore": "Restarigi",
+    "actions.delete": "Forigi",
+    "actions.edit": "redakti",
+    "actions.remove": "Forigi",
+    "actions.cancel": "Nuligi",
+    "actions.approve": "Aprobi",
+    "actions.deny": "Rifuzi",
+    "actions.dismiss": "Malakcepti",
+    "status.loaded": "Ŝargita",
+    "status.loading_ellipsis": "Ŝargante…",
+    "status.loading_parentheses": "(ŝargante…)",
+    "status.unsaved": "Nekonservitaj ŝanĝoj...",
+    "status.saving": "Konservante…",
+    "status.saving_server_setting": "Konservante servilan agordon...",
+    "status.saved": "Konservita.",
+    "status.saved_restart": "Konservita. Restartigo necesas.",
+    "status.saved_llm_api": "Konservita. LLM API-ekspozicio aplikiĝas ĉe la sekva agenta mesaĝo.",
+    "status.saved_reload_failed": "Konservita (reŝargo malsukcesis; aktualigu por kontroli).",
+    "status.nothing_editable": "Nenio redaktebla.",
+    "status.stopping": "Haltigante...",
+    "status.stopped_offline": "Haltigita. Ĉi tiu paĝo malfunkcios",
+    "status.stopped_connection": "Haltigita (konekto falis)",
+    "status.restarting": "Restartigante…",
+    "status.waiting_addon": "Atendante ke la apo (aldonaĵo) revenu enrete…",
+    "errors.javascript": "JS-eraro: {message} @ {where}",
+    "errors.async": "Asinkrona eraro: {message}",
+    "errors.network": "Reta eraro: {message}",
+    "errors.network_endpoint": "Reta eraro atingante {endpoint}: {message}",
+    "errors.http_endpoint": "{endpoint} redonis HTTP {status} {detail}",
+    "errors.json_endpoint": "Malsukcesis analizi {endpoint} respondon kiel JSON: {message}",
+    "errors.render": "Bildigo malsukcesis: {message} (malfermu retumilajn disvolvajn ilojn por la stako)",
+    "errors.save_failed": "Konservado malsukcesis",
+    "errors.save_failed_detail": "Konservado malsukcesis: {message}",
+    "errors.save_failed_http": "Konservado malsukcesis (HTTP {status})",
+    "errors.save_failed_non_json": "Konservado malsukcesis (HTTP {status}, ne-JSON-korpo)",
+    "errors.load_failed": "Ŝargo malsukcesis: {status}",
+    "errors.stop_failed": "Haltigo malsukcesis",
+    "errors.restart_failed": "Restartigo malsukcesis",
+    "errors.failed_detail": "Malsukcesis: {detail}",
+    "errors.addon_not_back": "La Apo (aldonaĵo) ne revenis enreten. Reŝargu la paĝon permane.",
+    "errors.unparseable_suffix": " (responda korpo neanalizebla)",
+    "common.operation_failed": "{operation} malsukcesis: {detail}",
+    "common.enabled": "ebligita",
+    "common.disabled": "malŝaltita",
+    "common.env_locked": "env-ŝlosita",
+    "common.minutes_short": "{count} min",
+    "common.bytes": "{count} bajtoj",
+    "common.none": "(neniu)",
+    "notice.restart.addon": "⚠ Ŝanĝoj konservitaj. Alklaku \"Restart app (add-on)\" por ke ili ekvalidu. Malŝaltitaj iloj estos forigitaj el la listo de MCP-iloj ĉe la sekva pravalorizado. Poste aktualigu la iloliston en via AI-kliento; restartigi la Apon sole ne aktualigas la kaŝmemoritan liston de la kliento.",
+    "notice.restart.embedded": "⚠ Ŝanĝoj konservitaj. Alklaku \"Restartigi HA-MCP Servilon\" por reŝargi la enprocezan integriĝon. Poste aktualigu la MCP-iloliston en via AI-kliento.",
+    "notice.restart.sidecar": "⚠ Ŝanĝoj konservitaj. Plene ĉesu kaj remalfermu vian MCP-klienton por ke ili ekvalidu. Malŝaltitaj iloj estos forigitaj de la MCP-ilolisto ĉe la sekva ekfunkciigo.",
+    "notice.restart.standalone": "⚠ Ŝanĝoj konservitaj. Restartigu la procezon ha-mcp, poste aktualigu la liston de MCP-iloj en via AI-kliento.",
+    "server.sidecar.confirm_disable": "⚠ ĈU PERMANENTE malŝalti la agordan servilon?\n\nĈi tio haltigas la servilon kaj skribas markilon, kiu malhelpas ĝin rekomenci. Por restarigi aliron, forigu ~/.ha-mcp/settings_ui_disabled kaj malagordu HA_MCP_DISABLE_SETTINGS_UI. Ĉu daŭrigi?",
+    "tools.empty": "Neniuj iloj trovitaj. La flankveturilo legas ~/.ha-mcp/tool_metadata.json. Se ĝi mankas aŭ estas malplena, restartigu vian MCP-klienton. Vidu ~/.ha-mcp/sidecar.log por detaloj.",
+    "tools.group_count": "{enabled}/{total} ebligitaj",
+    "tools.group_toggle_title": "Ebligi/malŝalti ĉiujn ilojn en ĉi tiu grupo",
+    "tools.badges.mandatory": "deviga",
+    "tools.badges.read_only": "nurlegebla",
+    "tools.badges.writes": "skribas",
+    "tools.badges.deletes": "forigas",
+    "tools.notes.gated_disabled": "Malŝaltita. Ŝaltu {setting} — la ŝaltilo de la politik-redakta ilo estas sur la langeto Tool Security Policies — poste restartigu la apon (aldonaĵon).",
+    "tools.notes.beta_disabled": "Beta. Agordu {setting} en la disvolva apa (aldonaĵo) agordo aŭ kongrua medivariablo (vidu docs/beta.md).",
+    "tools.notes.env_pinned": "Fiksita de {variable}. Malagordu la medio-variablon por redakti ĉi tie.",
+    "tools.notes.bps_locked": "Ŝlosita dum la reĝimo de striktaj plej bonaj praktikoj estas ŝaltita. Malŝaltu tiun agordon unue por malŝalti ĉi tiun ilon.",
+    "tools.notes.read_only_off": "Malŝaltita. Nurlega Reĝimo estas ŝaltita; skribaj iloj estas malŝaltitaj.",
+    "tools.notes.read_only_partial": "Nurlega Reĝimo: skribaj operacioj de ĉi tiu ilo estas blokitaj; legaj operacioj restas disponeblaj.",
+    "tools.llm_api.label": "LLM API",
+    "tools.llm_api.help": "Proponu ĉi tiun ilon al Home Assistant konversaciaj agentoj per la LLM API. Aplikiĝas ĉe la sekva agenta mesaĝo; neniu restartigo necesas.",
+    "tools.aria.llm_api": "{title} eksponita al la konversaci-agenta LLM API",
+    "tools.aria.enabled": "{title} ebligita",
+    "tools.aria.pinned": "{title} fiksita",
+    "tools.aria.security_gated": "{title} sekurece barita",
+    "tools.states.enabled": "ebligita",
+    "tools.states.pinned": "fiksita",
+    "tools.states.security_gated": "sekurece barita",
+    "tools.security.enable_first": "Unue ebligu Tool Security Policies en la servilaj agordoj.",
+    "tools.summary.total": "{count} entute",
+    "tools.summary.enabled": "{count} ebligitaj",
+    "tools.summary.pinned": "{count} fiksitaj",
+    "tools.summary.disabled": "{count} malŝaltitaj",
+    "tools.read_only.save_failed": "Ŝanĝo de Nurlega Reĝimo ne konserviĝis. La servilo ankoraŭ havas la antaŭan valoron.",
+    "backup.fields.enable_auto_backup.label": "Aŭtomataj sekurkopioj de redaktoj",
+    "backup.fields.enable_auto_backup.help": "Kaptu momentfoton antaŭ ĉiu envolvita skribo aŭ detrua ilvoko.",
+    "backup.fields.auto_backup_throttle_minutes.label": "Limigo (minutoj)",
+    "backup.fields.auto_backup_throttle_minutes.help": "Limigo por ento. 0 = ĉiu skribo; N > 0 = maksimume unu sekurkopio po N minutoj. Intervalo 0–1440.",
+    "backup.fields.auto_backup_retain_per_entity.label": "Konservi po ento",
+    "backup.fields.auto_backup_retain_per_entity.help": "Maksimumaj momentfotoj konservitaj po ento (1–10000). Pli malnovaj elrotacias.",
+    "backup.fields.auto_backup_dir.label": "Anstataŭa sekurkopia dosierujo",
+    "backup.fields.auto_backup_dir.help": "Lasu malplena por uzi la defaŭltan dosierujon; alie enigu absolutan vojon.",
+    "backup.fields.auto_backup_calendar_lookahead_days.label": "Kalendara antaŭvido (tagoj)",
+    "backup.fields.auto_backup_calendar_lookahead_days.help": "Kiom antaŭen demandi kalendarajn eventojn por antaŭ-redaktaj momentfotoj. Intervalo 1–365.",
+    "backup.fields.enable_snapshot_delete.label": "Permesi forigon de momentfotoj",
+    "backup.fields.enable_snapshot_delete.help": "Permesi al ha_manage_backup forigi plenajn HA-momentfotojn, dum konservante planitajn, plej novajn, kaj tro-junajn momentfotojn protektitaj.",
+    "backup.fields.snapshot_delete_min_age_days.label": "Minimuma aĝo de momentfoto por forigi (tagoj)",
+    "backup.fields.snapshot_delete_min_age_days.help": "Momentfoto devas esti almenaŭ tiom aĝa antaŭ forigo. Intervalo 0–365.",
+    "backup.origins.addon": "Sinkronigita al Supervisor. Restartigo necesas post konservado.",
+    "backup.origins.file": "Konservita loke; ekvalidas tuj.",
+    "backup.origins.default": "Uzante defaŭlton; unua konservado kreas lokan anstataŭigan dosieron.",
+    "backup.errors.load_settings": "Ne eblis ŝargi sekurkopiajn agordojn.",
+    "backup.errors.unavailable": "Sekurkopiaj agordoj ne disponeblaj.",
+    "backup.errors.load_list": "Eraro ŝargante sekurkopiojn",
+    "backup.errors.load_one": "Ne eblis ŝargi sekurkopion \"{name}\": {message}",
+    "backup.errors.diff": "Ne eblis kompari sekurkopion \"{name}\": {message}",
+    "backup.errors.restore": "Restarigo de \"{name}\" malsukcesis: {message}",
+    "backup.errors.restore_detail": "Restarigo malsukcesis: {detail}",
+    "backup.errors.delete": "Forigo de \"{name}\" malsukcesis: {message}",
+    "backup.errors.delete_detail": "Forigo malsukcesis: {detail}",
+    "backup.errors.bulk_delete": "Amasa forigo malsukcesis: {detail}",
+    "backup.state.status": "Stato",
+    "backup.state.throttle": "Limigo",
+    "backup.state.retain": "Konservi po ento",
+    "backup.state.directory": "Dosierujo",
+    "backup.state.total": "Entute",
+    "backup.empty": "Ankoraŭ neniuj sekurkopioj. Ebligu aŭtomatan sekurkopion kaj redaktu enton por krei unu.",
+    "backup.modal.view": "Vidi: {name}",
+    "backup.modal.diff": "Diferenco: {name}",
+    "backup.identical": "(identa)",
+    "backup.confirm.restore": "Restarigi {name}?\n\nĈi tio anstataŭigas la nunan ento-staton. Sekureca sekurkopio estas farita unue.",
+    "backup.confirm.delete": "Forigi {name}? Ĉi tio ne estas malfarebla.",
+    "backup.restored": "Restarigita. Sekureca sekurkopio: {name}",
+    "backup.bulk.prompt_days": "Forigi sekurkopiojn pli aĝajn ol N tagoj (lasu malplena por uzi nur nunajn filtrojn):",
+    "backup.bulk.filter_required": "Agordu almenaŭ unu filtron (Domajno, Ento, aŭ aĝo en tagoj).",
+    "backup.bulk.confirm": "Forigi ĉiujn sekurkopiojn kongruantajn: {filters}?",
+    "backup.bulk.deleted": "Forigitaj {count} sekurkopio(j)n",
+    "filesystem.custom.title": "Propraj dosiersistemaj dosierujoj (altnivela)",
+    "filesystem.custom.help": "Ekstraj vojoj (po unu en ĉiu linio) al kiuj dosieraj iloj rajtas <strong>legi kaj skribi</strong>. Relativaj agordaj vojoj kaj permesitaj frataj volumoj de HAOS estas subtenataj. Ĉiu eniro permesas tiun vojon kaj ĉion sub ĝi; agord-relativaj dosiernomoj, kiel <code>sensor.yaml</code>, povas esti enmetitaj rekte. Aplikiĝas tuj.",
+    "filesystem.custom.blocked": "Ĉiam blokita: {paths}, trairo de vojo (<code>..</code>), kaj absolutaj vojoj ekster permesitaj HAOS-volumoj.",
+    "filesystem.custom.enable_first": "Ebligu beta-funkciojn kaj dosiersistemajn ilojn supre por redakti.",
+    "filesystem.custom.unavailable": "Propraj dosierujoj estas nuntempe neatingeblaj.",
+    "filesystem.custom.save": "Konservi dosierujojn",
+    "filesystem.custom.saved_rejected": "Konservita. Malakceptita (blokita aŭ nevalida): {paths}",
+    "origins.env_locked": "Agordita per medio-variablo; malagordu ĝin por redakti ĉi tie.",
+    "origins.addon_synced": "Sinkronigita al la agorda langeto de la apo (aldonaĵo). Restartigo postulata post konservo.",
+    "origins.env_var_unset": "Agordita per medio-variablo {variable}; malagordu ĝin por redakti ĉi tie.",
+    "origins.beta_legacy_bridge": "Aŭtomate ebligita en hereda reĝimo de la apo (aldonaĵo). Agordu <code>enable_beta_features</code> eksplicite en Agordoj por ekhavi kontrolon. (medivariablo: {variable})",
+    "origins.addon_runtime": "Agordita de la rultempa medio de la apo (aldonaĵo) mastrumata de Supervisor; ne povas esti ŝaltita ĉi tie. (medivariablo: {variable})",
+    "origins.display_only": "Nur vidigebla. Ŝanĝu per medivariablo aŭ agordoj de la programo (aldonaĵo).",
+    "features.errors.network": "Funkciaj flagoj neatingeblaj (reta eraro atingante /api/settings/features).",
+    "features.errors.http": "Funkciaj flagoj neatingeblaj (HTTP {status}).",
+    "features.errors.json": "Respondo de funkciaj flagoj ne estis valida JSON.",
+    "advanced.errors.network": "Altnivelaj agordoj neatingeblaj (reta eraro atingante /api/settings/advanced).",
+    "advanced.errors.http": "Altnivelaj agordoj neatingeblaj (HTTP {status}).",
+    "advanced.errors.json": "Respondo de altnivelaj agordoj ne estis valida JSON.",
+    "advanced.sidecar.stdio_only": "Disponebla nur en stdio-reĝimo. Ĉi tiu HTTP-servilo ne havas flankan agordan UI-komponenton por fiksi.",
+    "advanced.enable_dev_mode.confirm": "⚠ Ĉu ebligi programistan reĝimon?\n\nPost restartigo, kaŝitaj programistaj iloj estos elmontritaj al konektitaj AI-agentoj. Ebligu nur por disvolviĝo kaj testado.",
+    "advanced.dev_tools_security_policy_access.confirm": "⚠ Ĉu permesi al programistaj iloj ŝanĝi sekurecajn politikojn?\n\nDum programista reĝimo estas aktiva, konektitaj AI-agentoj povos reverki ilajn sekurecajn politikojn, aldoni aŭ forigi il-specifajn aprobo-pordojn, kaj aprobi aŭ nei atendajn aprobojn — inkluzive de siaj propraj pordigitaj vokoj. Ebligu nur dum testado de politikoj.",
+    "advanced.code_mode_saved_tools_path.addon_locked": "Fiksita al <code>/data/saved_tools.json</code> en la reĝimo de programo (aldonaĵo) por ke konservitaj iloj postvivu ĝisdatigojn.",
+    "advanced.code_mode_saved_tools_path.blank_warning": "Se malplena, propraj iloj estas konservitaj nur en memoro kaj perdiĝas post restartigo.",
+    "policies.errors.conflict": "{operation} malsukcesis: politiko estis modifita en alia langeto aŭ seanco. Reŝargu kaj reapliku viajn ŝanĝojn.",
+    "policies.errors.load": "Ne eblis ŝargi politikon: {status}",
+    "policies.errors.reach_server": "Ne eblis atingi la servilon: {message}",
+    "policies.errors.corrupt_suffix": " (tool_policy.json ŝajnas difektita; redaktu aŭ forigu ĝin en la datendosierujo de la servilo)",
+    "policies.errors.load_detail": "Malsukcesis ŝargi politikon: {detail}",
+    "policies.errors.update_tool": "Malsukcesis ĝisdatigi il-sekurecan politikon: {message}",
+    "policies.errors.remove_rule": "Malsukcesis forigi regulon: {message}",
+    "policies.errors.master_save": "Ŝanĝo de Il-Sekurecaj Politikoj ne konserviĝis. La servilo ankoraŭ havas la antaŭan valoron.",
+    "policies.errors.manage_tool_save": "Ŝanĝo de politik-redakta ilo ne konserviĝis. La servilo ankoraŭ havas la antaŭan valoron.",
+    "policies.operations.sync_gated": "Sinkronigi pordigitan ŝaltilon",
+    "policies.operations.save_rule": "Konservi regulon",
+    "policies.operations.save_global": "Konservi tutmondajn agordojn",
+    "policies.predicate.invalid": "(nevalida)",
+    "policies.operators.exists": "ekzistas",
+    "policies.operators.exists_long": "ekzistas (iu ajn valoro)",
+    "policies.operators.eq": "egalas",
+    "policies.operators.neq": "NE egalas",
+    "policies.operators.in": "estas unu el",
+    "policies.operators.not_in": "NE estas unu el",
+    "policies.operators.contains": "enhavas",
+    "policies.operators.regex": "kongruas kun regula esprimo",
+    "policies.operators.gt": "estas pli granda ol",
+    "policies.operators.lt": "estas pli malgranda ol",
+    "policies.card.no_conditions": "(sen kondiĉoj, regulo kongruas kun ĉiu voko al ĉi tiu ilo)",
+    "policies.card.always_row": "(ĉiam — pordigas ĉiun vokon al ĉi tiu ilo)",
+    "policies.card.and_join": " KAJ ",
+    "policies.card.remove_title": "Forigi el politiko",
+    "policies.card.conditions_intro": "Postulu aprobon kiam IUJ kondiĉo kongruas (sen kondiĉoj = ĉiam postulu aprobon):",
+    "policies.card.add_condition": "+ Aldoni kondiĉon",
+    "policies.card.argument": "Argumento:",
+    "policies.card.argument_placeholder": "ekz. args.color_temp",
+    "policies.card.match_when": "Kongrui kiam:",
+    "policies.card.value": "Valoro:",
+    "policies.card.save_condition": "Konservi kondiĉon",
+    "policies.card.remember_for": "Memori aprobon por:",
+    "policies.card.minutes_single": "minutoj (0 = unufoja)",
+    "policies.card.confirm_remove": "Ĉu forigi \"{tool}\" el la sekureca politiko?",
+    "policies.editor.any_argument_title": "Kongruigi ĉiun vokan argumenton kontraŭ ĉi tiu kondiĉo.",
+    "policies.editor.any_argument": "(ajna argumento)",
+    "policies.editor.other_path": "(alia, tajpu vojon)",
+    "policies.editor.value_source_http": "Akirado de valorfonto malsukcesis (HTTP {status}); reirante al libera teksto",
+    "policies.editor.value_source_error": "Akirado de valorfonto malsukcesis ({message}); reirante al libera teksto",
+    "policies.editor.schema_http": "Akirado de il-skemo malsukcesis (HTTP {status}); reirante al libera teksto",
+    "policies.editor.schema_error": "Akirado de il-skemo malsukcesis ({message}); reirante al libera teksto",
+    "policies.editor.hint.exists": "Lasu malplena por pordigi la argumenton se ĝi ĉeestas, sendepende de valoro.",
+    "policies.editor.hint.list": "Elektu unu aŭ plurajn valorojn, aŭ tajpu JSON-liston. Lasu malplena por pordigi ajnan valoron.",
+    "policies.editor.hint.regex": "Regula esprimo por kongruigi la argumenton.",
+    "policies.editor.hint.contains": "Subĉeno aŭ list-elemento. Lasu malplena por pordigi ajnan valoron.",
+    "policies.editor.hint.number": "Nombro por kompari.",
+    "policies.editor.hint.equals": "La valoro, al kiu la argumento devas egali. Lasu malplena por pordigi ajnan valoron.",
+    "policies.editor.loading_choices": "Ŝargante elektojn…",
+    "policies.editor.pick_value": "(elektu valoron)",
+    "policies.editor.placeholder.blank": "kutime lasita malplena",
+    "policies.editor.validation.pick_one_or_more": "elektu almenaŭ unu valoron",
+    "policies.editor.validation.pick_value": "elektu valoron",
+    "policies.editor.validation.value_required": "valoro estas postulata por op={operator}",
+    "policies.editor.validation.empty_list": "malplena listo por op={operator}",
+    "policies.editor.validation.argument_required": "argumento estas postulata",
+    "policies.pending.offline": "Perdis kontakton kun la servilo ({message}). Reprovante.",
+    "policies.pending.disabled": "La il-sekurecaj politikoj estas malŝaltitaj. Ŝaltu ilin kaj restartigu HA-MCP por ebligi filtradon.",
+    "policies.pending.unavailable": "Realtempaj aproboj ne disponeblas. Kontrolu la protokolon de HA-MCP.",
+    "policies.pending.expires": "Eksvalidiĝas: {time}",
+    "policies.pending.already_decided": "Ĉi tiu aprobo jam estis {decision}, eble de alia langeto aŭ seanco.",
+    "policies.pending.decision.approved": "aprobita",
+    "policies.pending.decision.denied": "rifuzita",
+    "policies.pending.invalid_token": "Ĉi tiu aprobo-ĵetono ne plu validas (jam konsumita aŭ eksvalidiĝinta).",
+    "policies.pending.action_failed": "Aprobo-ago malsukcesis: {detail}",
+    "visibility.errors.reach_server": "Ne eblis atingi la servilon: {message}",
+    "visibility.errors.corrupt_suffix": " (entity_visibility.json ŝajnas difektita; redaktu aŭ forigu ĝin en la datendosierujo de la servilo)",
+    "visibility.errors.load_detail": "Malsukcesis ŝargi videblecan agordon: {detail}",
+    "visibility.errors.conflict": "La agordo estis ŝanĝita en alia langeto aŭ seanco. Reŝargu la paĝon, poste reapliku viajn ŝanĝojn.",
+    "advanced.homeassistant_url.label": "URL de Home Assistant",
+    "advanced.homeassistant_url.help": "Nur vidigebla. Agordita per HOMEASSISTANT_URL aŭ administrata de la programo (aldonaĵo).",
+    "advanced.homeassistant_token.label": "Ĵetono de Home Assistant",
+    "advanced.homeassistant_token.help": "Nur montro. Agordita per HOMEASSISTANT_TOKEN. Maskita ĉi tie por sekureco.",
+    "advanced.timeout.label": "Limtempo de HA-peto (s)",
+    "advanced.timeout.help": "HTTP-limtempo por ĉiu peto. Gamo 1–600. Restartigo necesas.",
+    "advanced.max_retries.label": "Maksimumaj reprovoj de HA-peto",
+    "advanced.max_retries.help": "Reprova buĝeto por ĉiu malsukcesa REST-voko. Gamo 0–20. Restartigo necesas.",
+    "advanced.verify_ssl.label": "Kontroli SSL-atestilojn",
+    "advanced.verify_ssl.help": "Malebligu TLS-kontrolon nur en fidindaj retoj. Restartigo necesas.",
+    "advanced.fuzzy_threshold.label": "Sojlo de neklara serĉo",
+    "advanced.fuzzy_threshold.help": "Pli malaltaj valoroj permesas pli malstriktan ento-kongruigon. Gamo 0–100.",
+    "advanced.automation_config_time_budget.label": "Tempa buĝeto por aŭtomatiga agordo (s)",
+    "advanced.automation_config_time_budget.help": "Maksimuma tempo, kiun profunda serĉo pasigas akirante aŭtomatigajn agordojn. Gamo 1–600. Restartigo necesas.",
+    "advanced.script_config_time_budget.label": "Tempa buĝeto por skripta agordo (s)",
+    "advanced.script_config_time_budget.help": "Maksimuma tempo, kiun profunda serĉo pasigas akirante skriptajn agordojn. Gamo 1–600. Restartigo necesas.",
+    "advanced.scene_config_time_budget.label": "Tempa buĝeto por scena agordo (s)",
+    "advanced.scene_config_time_budget.help": "Maksimuma tempo, kiun profunda serĉo pasigas akirante scenajn agordojn. Gamo 1–600. Restartigo necesas.",
+    "advanced.individual_config_timeout.label": "Limtempo por akirado de agordo por ĉiu peto (s)",
+    "advanced.individual_config_timeout.help": "Limtempo por ĉiu akirado de aŭtomatiga/skripta/scena agordo. Gamo 1–600. Restartigo necesas.",
+    "advanced.individual_fetch_batch_size.label": "Grandeco de agorda akira aro",
+    "advanced.individual_fetch_batch_size.help": "Samtempaj agordaj akiroj por ĉiu ID. Malaltigu al 1 ĉe seriaj HA-serviloj. Gamo 1–100. Restartigo necesas.",
+    "advanced.backup_hint.label": "Nivelo de rezerva sugesto",
+    "advanced.backup_hint.help": "Regulas kiom forte la LLM estas instigita fari plenan HA-momentfoton antaŭ riskaj skriboj.",
+    "advanced.backup_hint.choices.strong": "Forta",
+    "advanced.backup_hint.choices.normal": "Normala",
+    "advanced.backup_hint.choices.weak": "Malforta",
+    "advanced.backup_hint.choices.auto": "Aŭtomata",
+    "advanced.dashboard_screenshot_engine_url.label": "URL de panelo-ekrankopiga motoro",
+    "advanced.dashboard_screenshot_engine_url.help": "Baza URL de la ekrankopiga motoro. Lasu malplena por aŭtomata malkovro de Supervisor. Aplikiĝas tuj.",
+    "advanced.enable_websocket.label": "Ebligi WebSocket",
+    "advanced.enable_websocket.help": "WebSocket-stata monitorado. Malebligo reiras al demandado kaj malbonigas multajn ilojn. Restartigo necesas.",
+    "advanced.enabled_tool_modules.label": "Ebligitaj il-moduloj",
+    "advanced.enabled_tool_modules.help": "Modulnomoj disigitaj per komoj, aŭ 'all'. Restartigo necesas.",
+    "advanced.enable_dashboard_partial_tools.label": "Iloj por parta ĝisdatigo de panelo",
+    "advanced.enable_dashboard_partial_tools.help": "Ĵeton-efikaj iloj por parta panelo. Malebligu por klientoj kun programa il-uzo.",
+    "advanced.mcp_server_name.label": "Nomo de MCP-servilo",
+    "advanced.mcp_server_name.help": "Raportita en la MCP-manpremo. Restartigo necesas.",
+    "advanced.mcp_server_version.label": "Versio de MCP-servilo",
+    "advanced.mcp_server_version.help": "Defaŭlte estas la pakaĵa versio. Anstataŭigo povas konfuzi klientojn. Restartigo necesas.",
+    "advanced.environment.label": "Medio",
+    "advanced.environment.help": "disvolviĝo aŭ produktado. Influas la detalecon de la registrado. Restartigo necesa.",
+    "advanced.log_level.label": "Nivelo de registrado",
+    "advanced.log_level.help": "DEBUG/INFO/WARNING/ERROR/CRITICAL. Restartigo necesa.",
+    "advanced.debug.label": "Sencimiga reĝimo",
+    "advanced.debug.help": "Detala registrado de petoj. Povas elmontri sentemajn datumojn. Restartigo necesa.",
+    "advanced.code_mode_max_duration.label": "Maksimuma daŭro de koda reĝimo (s)",
+    "advanced.code_mode_max_duration.help": "Reala tempa buĝeto por ĉiu sablokesta rulo. Gamo 1–300. Restartigo necesa.",
+    "advanced.code_mode_max_memory.label": "Maksimuma memoro de koda reĝimo (bajtoj)",
+    "advanced.code_mode_max_memory.help": "Memora limo por ĉiu sablokesta rulo. Gamo 1–256 MB. Restartigo necesa.",
+    "advanced.code_mode_max_recursion.label": "Maksimuma rekursio de koda reĝimo",
+    "advanced.code_mode_max_recursion.help": "Limo de rekursia profundo por ĉiu sablokesta rulo. Restartigo necesa.",
+    "advanced.code_mode_max_invocations.label": "Maksimumaj alvokoj de koda reĝimo",
+    "advanced.code_mode_max_invocations.help": "Limo de API/ilvokoj por ĉiu sablokesta rulo. Restartigo necesa.",
+    "advanced.code_mode_saved_tools_path.label": "Vojo de konservitaj iloj",
+    "advanced.code_mode_saved_tools_path.help": "JSON-dosiero uzata por konservi kutimajn ilojn trans restartigoj. Restartigo necesa.",
+    "advanced.extra_yaml_write_keys.label": "Ekstraj YAML-skribaj ŝlosiloj",
+    "advanced.extra_yaml_write_keys.help": "Supraj ŝlosiloj disigitaj per komoj, kiujn ha_config_set_yaml povas skribi krom la enkonstruitaj, por YAML-unuaj integriĝoj en ĉi tiu instalaĵo (ekz. alert2). Ŝlosiloj, kiuj redifinas la propran fidlimon de Home Assistant, neniam povas esti aldonitaj kaj estas ignoritaj. Postulas kutiman komponanton 1.2.4 aŭ pli novan.",
+    "advanced.sidecar_pin_port.label": "Flankveturila pordo de Agorda UI",
+    "advanced.sidecar_pin_port.help": "0 elektas liberan pordon ĉe la unua ekfunkciigo kaj konservas ĝin por postaj restartigoj; 1024–65535 fiksas preferatan pordon (revenas al libera se okupita). Restartigo necesa.",
+    "advanced.enable_dev_mode.label": "Disvolva reĝimo",
+    "advanced.enable_dev_mode.help": "⚠ Registras kaŝitajn ilojn, kiuj povas ŝanĝi agordojn kaj anstataŭigi la rulan servilon. Nur por disvolviĝo kaj testado. Restartigo necesa.",
+    "advanced.dev_tools_security_policy_access.label": "Aliro al sekureca politiko de disvolvaj iloj",
+    "advanced.dev_tools_security_policy_access.help": "⚠ Dum la disvolva reĝimo estas ŝaltita, permesas al la disvolvaj iloj reverki ilajn sekurecajn politikojn, aldoni aŭ forigi aprobo-pordojn por ĉiu ilo, kaj aprobi aŭ nei atendajn aprobojn je via nomo — AI-agento povas akcepti siajn proprajn porditajn vokojn. Nur por testado de politikoj. Efektiviĝas sen restartigo.",
+    "addon.backup_hint.name": "Nivelo de sugesto por plena HA-momentfoto (por LLM)",
+    "addon.backup_hint.description": "Agordas la vortumon de la sugesto, kiun la LLM vidas en la\n`ha_manage_backup(scope='snapshot')` ilpriskribo pri kiam\nsugesti plenan Home Assistant tarball-sekurkopion antaŭ riskaj operacioj\n(ekz. amasa forigo de aparatoj). Influas NUR ĉi tiun unu LLM-alfrontan promptan\nfrazon.\n\nPor aŭtomataj momentfotoj por ĉiu redakto de aŭtomatigoj / skriptoj / helpiloj /\nktp., uzu la apartan ŝaltilon **Ebligi aŭtomatan sekurkopion de redaktoj** sube.",
+    "addon.secret_path.name": "Anstataŭigo de sekreta vojo",
+    "addon.secret_path.description": "Laŭvola kutima HTTP-vojo por la MCP-servilo. Lasu malplena por uzi la aŭtomate generitan sekuran vojon.\n",
+    "addon.enable_security_policy_tool.name": "Permesi al AI-agentoj redakti ilajn sekurecajn politikojn",
+    "addon.enable_security_policy_tool.description": "Registras la ilon ha_manage_security_policy, kiu permesas al konektitaj AI-agentoj legi kaj reverki la ilajn sekurecajn politikojn — inkluzive de forigo de aprobo-pordoj. Malŝaltita defaŭlte. Sendepende de la opcio 'Iloj Sekurecaj Politikoj' supre: ĉi tio regas, kiu povas redakti la regulojn, ne ĉu ili estas plenumitaj. La ilo ne povas vidi aŭ decidi atendajn aprobojn. Por konservi homon en la procezo, pordigu la ilon antaŭ ol ebligi ĝin: ŝaltu \"sekurece pordigita\" por 'Administri Sekurecan Politikon' en la langeto 'Iloj' de la reta UI. Postulas restartigon por efektiviĝi.",
+    "addon.enable_auto_backup.name": "Ebligi aŭtomatan sekurkopion de redaktoj",
+    "addon.enable_auto_backup.description": "Kaptas momentfoton por ĉiu ento antaŭ ĉiu ĉirkaŭvolvita skriba/detrua MCP-ilvoko (aŭtomatigo, skripto, sceno, helpilo, panelo, panelresurso, etikedo, kategorio, grupo, zono, areo, kalendaro, farendaĵo, ento, aparato, integriĝo, kaj parencaj forigaj/detruaj iloj). La aŭtomata sekurkopia limigo difinas kiom ofte tio okazas: 0 (defaŭlte) kaptas ĉe ĉiu tia voko, N>0 maksimume unu momentfoton po N minutoj por ĉiu ento. Momentfotoj estas konservitaj kiel YAML-dosieroj sub /data/ha_mcp_backups/ (anstataŭigebla per HAMCP_BACKUP_DIR) kaj listigitaj, restarigitaj, aŭ forigitaj per la langeto 'Sekurkopioj' en la reta agorda UI aŭ per ha_manage_backup(scope='edits', ...). Por tiuj domajnoj la kapto estas plejbone klopoda — malsukceso registras AVERTON kaj la skribo daŭras. La dosieraj kaj krud-YAML-iloj estas la escepto: ha_write_file, ha_delete_file kaj ha_config_set_yaml traktas la momentfoton kiel antaŭkondiĉon, do skribo tra ili estas rifuzita dum ĉi tio estas malŝaltita, kaj malsukcesa kapto blokas ĝin. Defaŭlte ŝaltita; malmarkado malaktivigas la plejbone klopodajn kaptojn kaj malfunkciigas la dosierajn kaj krud-YAML-ilojn kun ili. Postulas restartigon por efektiviĝi.",
+    "addon.auto_backup_throttle_minutes.name": "Aŭtomata sekurkopia limigo (minutoj)",
+    "addon.auto_backup_throttle_minutes.description": "Limiga fenestro por ĉiu ento. 0 (defaŭlte) kaptas momentfoton ĉe ĉiu ĉirkaŭvolvita skribo. N>0 kaptas maksimume unu momentfoton po N minutoj por ĉiu ento. Gamo 0–1440.",
+    "addon.auto_backup_retain_per_entity.name": "Aŭtomata sekurkopia reteno (por ĉiu ento)",
+    "addon.auto_backup_retain_per_entity.description": "Maksimuma nombro de momentfotoj konservitaj por ĉiu ento. Pli malnovaj momentfotoj preter ĉi tiu limo estas forigitaj ĉe ĉiu sukcesa kapto. Defaŭlte 100, gamo 1–10000.",
+    "addon.enable_snapshot_delete.name": "Permesi forigon de momentfotoj",
+    "addon.enable_snapshot_delete.description": "Permesas al ha_manage_backup forigi plenajn HA-momentfotajn tarball-ojn (scope='snapshot', action='delete'). Malŝaltita defaŭlte — momentfoto povas esti la lasta reakira punkto post erara ŝanĝo, do homo devas elekti ĉi tie. Eĉ kiam ŝaltita, planitaj sekurkopioj, la plej nova restanta momentfoto, kaj io ajn pli juna ol la suba aĝlimo restas protektitaj.",
+    "addon.snapshot_delete_min_age_days.name": "Minimuma aĝo de momentfoto por forigo (tagoj)",
+    "addon.snapshot_delete_min_age_days.description": "Momentfoto devas esti almenaŭ tiom aĝa antaŭ ol ĝi povas esti forigita. Gamo 0–365; 0 malaktivigas la limon (la protektoj de la plej nova momentfoto kaj planitaj sekurkopioj ankoraŭ validas). Defaŭlte 7.",
+    "addon.disabled_tools.name": "Malaktivigitaj iloj (disigitaj per komoj)",
+    "addon.disabled_tools.description": "Iloj listigitaj ĉi tie estas devige malŝaltitaj kaj ŝlositaj en la reta Agorda UI (langeto 'Iloj') — ili ne povas esti re-ebligitaj tie sen unue malaktivigi ĉi tiun opcion. Malgranda aro de devigaj iloj (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) ne povas esti malaktivigitaj kaj daŭre funkcias eĉ se listigitaj ĉi tie. ha_get_skill_guide povas esti malaktivigita nur dum la strikta plejbonaj praktikoj reĝimo (enable_strict_mandatory_bps) estas malŝaltita. Ilnomoj disigitaj per komoj (ekz. ha_call_event,ha_eval_template).",
+    "addon.pinned_tools.name": "Fiksitaj iloj (disigitaj per komoj)",
+    "addon.pinned_tools.description": "Iloj listigitaj ĉi tie estas ŝlositaj fiksitaj — ili aperas ĉe la supro de la langeto 'Iloj' kaj ne povas esti malfiksitaj de la reta Agorda UI sen unue malaktivigi ĉi tiun opcion. Utila kombine kun 'Ilo-Serĉo'. Ilnomoj disigitaj per komoj.",
+    "addon.verify_ssl.name": "Kontroli TLS-atestilon",
+    "addon.verify_ssl.description": "Kontrolu la TLS-atestilon de la servilo Home Assistant. La programo (aldonaĵo) konektiĝas per la provkuratora prokurservilo (Supervisor proxy), do ĉi tio kutime havas neniun efikon kaj devas resti ebligita. Malŝaltu nur se vi reagordis la programon (aldonaĵo) por komuniki kun HA per publika HTTPS-gastnomo kun memsubskribita atestilo aŭ malkongruo de gastnomo. Malŝalto malfortigas transportan sekurecon — lasu ebligita krom se vi scias, ke vi bezonas tion. Postulas restartigon por ekvalidi.",
+    "addon_stable.enable_tool_search.description": "Anstataŭigu la plenan il-katalogon per serĉ-bazita malkovro. Reduktas senchovan kuntekston je ĉirkaŭ 90%, ĝis proksimume 5K tokenoj. ⚠️ NE ebligu ĉi tion en klientoj kun propra enkonstruita il-serĉo / prokrastitaj iloj (claude.ai, Claude Desktop, Claude Code) — la du serĉ-tavoloj konfliktas, kaj la enkonstruita il-serĉo de la kliento estas la pli bona elekto tie; lasu ĉi tion malŝaltita. Ĉu iloj estas prokrastitaj dependas de via kliento kaj modelo-kombinaĵo: uzu ĉi tion kiam via agordo ŝarĝas la plenan katalogon frue — modeloj sen denaskaj prokrastitaj iloj (ekz. Gemini, OpenAI-kongruaj lokaj modeloj, Claude Haiku), klientoj kiuj enlinias ĉiujn il-skemojn sendepende de modelo (ekz. GitHub Copilot CLI), aŭ pli malgrandaj kuntekstaj fenestroj. Kelkaj Codex-modeloj kaj ChatGPT ankaŭ inkluzivas prokrastitajn ilojn — kontrolu rekte vian klienton/modelon por konfirmi ties funkciojn, por ke vi ne lasu ĉi tion ebligita senbezone. Iloj estas trovitaj per ha_search_tools kaj ekzekutitaj per kategoriigitaj prokurserviloj (legado/skribado/forigo). Postulas restartigon de la programo (aldonaĵo) por ekvalidi — tiam reKonekti aŭ aktualigi la MCP-servilon en via AI-kliento por ke ĝi reŝarĝu la il-liston. Restartigi la programon (aldonaĵo) sole NE aktualigas la kaŝmemoritan il-liston de kliento; ĉi tio aplikiĝas post ŝanĝo de iu ajn agordo ĉi tie."
+  },
+  "tools": {
+    "ha_bulk_control": {
+      "title": "Amasa Kontrolo",
+      "description": "Administri eksplicitajn operaciojn aŭ unu determinisman strukturan amasagadon."
+    },
+    "ha_call_event": {
+      "title": "Voki Eventon",
+      "description": "Ekzekutu propran eventon sur la eventbuso de Home Assistant."
+    },
+    "ha_call_service": {
+      "title": "Voki Servon",
+      "description": "Ekzekutu servojn de Home Assistant por kontroli entojn kaj ekigi aŭtomatigojn."
+    },
+    "ha_config_delete_dashboard": {
+      "title": "Forigi Panelon",
+      "description": "Komplete forigu panelon en stokada reĝimo."
+    },
+    "ha_config_delete_dashboard_resource": {
+      "title": "Forigi Panelan Rimedon",
+      "description": "Forigu panelan rimedon."
+    },
+    "ha_config_get_automation": {
+      "title": "Akiri Aŭtomatigan Agordon",
+      "description": "Reakiru agordon de aŭtomatigo de Home Assistant."
+    },
+    "ha_config_get_calendar_events": {
+      "title": "Akiri Kalendarajn Eventojn",
+      "description": "Reakiru kalendarajn eventojn de kalendara ento."
+    },
+    "ha_config_get_category": {
+      "title": "Akiri Kategorion",
+      "description": "Akiru kategorian informon - listigu ĉiujn kategoriojn por amplekso aŭ akiru specifan per ID."
+    },
+    "ha_config_get_dashboard": {
+      "title": "Akiri Panelon",
+      "description": "Akiru panelan informon - listigu ĉiujn panelojn, akiru agordon, aŭ serĉu kartojn."
+    },
+    "ha_config_get_label": {
+      "title": "Akiri Etikedon",
+      "description": "Akiru etikedan informon - listigu ĉiujn etikedojn aŭ akiru specifan per ID."
+    },
+    "ha_config_get_scene": {
+      "title": "Akiri Scenan Agordon",
+      "description": "Reakiru agordon de sceno de Home Assistant."
+    },
+    "ha_config_get_script": {
+      "title": "Akiri Skriptan Agordon",
+      "description": "Reakiru agordon de skripto de Home Assistant."
+    },
+    "ha_config_get_yaml": {
+      "title": "Legi YAML-Agordan Fragmenton",
+      "description": "Legu la YAML-fragmenton sub ŝlosilo en agorda dosiero, aŭ trovu kiu dosiero difinas ĝin."
+    },
+    "ha_config_list_dashboard_resources": {
+      "title": "Listigi Panelajn Rimedojn",
+      "description": "Listigu Lovelace-panelajn rimedojn (propraj kartoj, temoj, CSS/JS)."
+    },
+    "ha_config_list_groups": {
+      "title": "Listigi Grupojn",
+      "description": "Listigu entajn grupojn de Home Assistant kun iliaj membro-entoj."
+    },
+    "ha_config_list_helpers": {
+      "title": "Listigi Helpantojn",
+      "description": "Listigu helpantojn de Home Assistant de specifa tipo kun iliaj agordoj."
+    },
+    "ha_config_remove_automation": {
+      "title": "Forigi Aŭtomatigon",
+      "description": "Forigu aŭtomatigon de Home Assistant."
+    },
+    "ha_config_remove_calendar_event": {
+      "title": "Forigi Kalendaran Eventon",
+      "description": "Forigu eventon el kalendaro."
+    },
+    "ha_config_remove_category": {
+      "title": "Forigi Kategorion",
+      "description": "Forigu kategorion de Home Assistant."
+    },
+    "ha_config_remove_group": {
+      "title": "Forigi Grupon",
+      "description": "Forigu serv-bazitan entan grupon de Home Assistant per la servo group.remove."
+    },
+    "ha_config_remove_label": {
+      "title": "Forigi Etikedon",
+      "description": "Forigu etikedon de Home Assistant."
+    },
+    "ha_config_remove_scene": {
+      "title": "Forigi Scenon",
+      "description": "Forigu scenon de Home Assistant."
+    },
+    "ha_config_remove_script": {
+      "title": "Forigi Skripton",
+      "description": "Forigu skripton de Home Assistant."
+    },
+    "ha_config_set_automation": {
+      "title": "Krei aŭ Ĝisdatigi Aŭtomatigon",
+      "description": "Kreu aŭ ĝisdatigu aŭtomatigon de Home Assistant."
+    },
+    "ha_config_set_calendar_event": {
+      "title": "Krei aŭ Ĝisdatigi Kalendaran Eventon",
+      "description": "Kreu novan eventon en kalendaro."
+    },
+    "ha_config_set_category": {
+      "title": "Krei aŭ Ĝisdatigi Kategorion",
+      "description": "Kreu aŭ ĝisdatigu kategorion de Home Assistant."
+    },
+    "ha_config_set_dashboard": {
+      "title": "Krei aŭ Ĝisdatigi Panelon",
+      "description": "Kreu aŭ ĝisdatigu panelon de Home Assistant."
+    },
+    "ha_config_set_dashboard_resource": {
+      "title": "Agordi Panelan Rimedon",
+      "description": "Kreu aŭ ĝisdatigu panelan rimedon (enlinia kodo aŭ ekstera URL)."
+    },
+    "ha_config_set_group": {
+      "title": "Krei aŭ Ĝisdatigi Grupon",
+      "description": "Kreu aŭ ĝisdatigu serv-bazitan entan grupon de Home Assistant per la servo group.set."
+    },
+    "ha_config_set_helper": {
+      "title": "Krei aŭ Ĝisdatigi Helpanton",
+      "description": "Kreu aŭ ĝisdatigu helpantajn entojn kaj agordajn sub-enirojn de Home Assistant."
+    },
+    "ha_config_set_label": {
+      "title": "Krei aŭ Ĝisdatigi Etikedon",
+      "description": "Kreu aŭ ĝisdatigu etikedon de Home Assistant."
+    },
+    "ha_config_set_scene": {
+      "title": "Krei aŭ Ĝisdatigi Scenon",
+      "description": "Kreu aŭ ĝisdatigu scenon de Home Assistant."
+    },
+    "ha_config_set_script": {
+      "title": "Krei aŭ Ĝisdatigi Skripton",
+      "description": "Kreu aŭ ĝisdatigu skripton de Home Assistant."
+    },
+    "ha_config_set_yaml": {
+      "title": "Agordi YAML-Agordon",
+      "description": "Aldonu, anstataŭigu, aŭ forigu ĉefnivelajn ŝlosilojn en configuration.yaml aŭ pakaj dosieroj."
+    },
+    "ha_delete_file": {
+      "title": "Forigi Dosieron",
+      "description": "Forigu dosieron el permesitaj dosierujoj."
+    },
+    "ha_dev_manage_server": {
+      "title": "Administri MCP-Servilon (dev)",
+      "description": "Administri la rulan ha-mcp servilon mem (programista reĝimo)."
+    },
+    "ha_dev_manage_settings": {
+      "title": "Administri Servilajn Agordojn (dev)",
+      "description": "Administri ha-mcp servilajn agordojn kaj la surfacojn Iloj/Politikoj/Rezervoj (programista reĝimo)."
+    },
+    "ha_eval_template": {
+      "title": "Taksi Ŝablonon",
+      "description": "Taksi Jinja2-ŝablonojn uzante la ŝablonan motoron de Home Assistant."
+    },
+    "ha_get_app": {
+      "title": "Akiri programojn (aldonaĵojn)",
+      "description": "Akiri Home Assistant programojn (antaŭe konataj kiel aldonaĵoj, kaj ĉi tiu ilo kiel ha_get_addon) - listigi instalitajn, disponeblajn, aŭ akiri d"
+    },
+    "ha_get_automation_traces": {
+      "title": "Akiri Aŭtomatigajn Spurojn",
+      "description": "Reakiru ekzekutajn spurojn por aŭtomatigoj kaj skriptoj por sencimigi problemojn."
+    },
+    "ha_get_blueprint": {
+      "title": "Akiri Skizon",
+      "description": "Akiru skizan informon - listigu ĉiujn skizojn aŭ akiru detalojn por specifa."
+    },
+    "ha_get_camera_image": {
+      "title": "Akiri Kameran Bildon",
+      "description": "Reakiru momentfoton de bildo de kameraa ento de Home Assistant."
+    },
+    "ha_get_dashboard_screenshot": {
+      "title": "Akiri Panelan Ekrankopion",
+      "description": "Akiru bildojn de panelo-vido de Home Assistant Lovelace."
+    },
+    "ha_get_device": {
+      "title": "Akiri Aparaton (inkl. Zigbee/ZHA/Z2M, Z-Wave kaj Matter)",
+      "description": "Akiru aparatan informon kun paĝigo, inkluzive de Zigbee (ZHA/Z2M) kaj Z-Wave JS aparatoj."
+    },
+    "ha_get_entity": {
+      "title": "Akiri Enton",
+      "description": "Akiru entan registran informon por unu aŭ pluraj entoj."
+    },
+    "ha_get_entity_exposure": {
+      "title": "Akiri Entan Eksponon",
+      "description": "Akiru agordojn de enta ekspono - listigu ĉiujn aŭ akiru agordojn por specifa ento."
+    },
+    "ha_get_hacs_info": {
+      "title": "Akiri HACS-Informon",
+      "description": "Akiru HACS (Home Assistant Community Store) datumojn — serĉu en la vendejo aŭ prenu deponejajn detalojn."
+    },
+    "ha_get_history": {
+      "title": "Akiri Entan Historion aŭ Statistikojn",
+      "description": "Reakiru historiajn datumojn de la registrilo de Home Assistant."
+    },
+    "ha_get_integration": {
+      "title": "Akiri Integriĝon",
+      "description": "Akiru integriĝan (agordan eniran) informon kun paĝigo."
+    },
+    "ha_get_logs": {
+      "title": "Akiri Protokolojn",
+      "description": "Akiru protokolojn de Home Assistant el diversaj fontoj."
+    },
+    "ha_get_operation_status": {
+      "title": "Akiri Operacian Statuson",
+      "description": "Akiru la statuson de unu aŭ pluraj aparataj operacioj kun realtempa WebSocket-konfirmo."
+    },
+    "ha_get_overview": {
+      "title": "Akiri Sisteman Superrigardon",
+      "description": "Akiru AI-amikan sisteman superrigardon kun inteligenta kategoriigo."
+    },
+    "ha_get_state": {
+      "title": "Akiri Entan Staton",
+      "description": "Akiru aktualan statuson, staton, kaj atributojn de unu aŭ pluraj entoj (lumoj, ŝaltiloj, sensiloj, klimato, kovriloj, seruroj, fa"
+    },
+    "ha_get_system_health": {
+      "title": "Akiri Sisteman Sanon (inkl. ZHA/Z-Wave/integriĝaj diagnozoj)",
+      "description": "Akiru sisteman sanon de Home Assistant, inkluzive de Zigbee (ZHA), Z-Wave JS, kaj diagnozaj elĵetaĵoj por integriĝoj."
+    },
+    "ha_get_todo": {
+      "title": "Akiri Farendaĵon",
+      "description": "Akiru farendaĵajn listojn aŭ erojn - listigu ĉiujn farendaĵajn listojn aŭ akiru erojn de specifa listo."
+    },
+    "ha_get_zone": {
+      "title": "Akiri Zonon",
+      "description": "Akiru zonan informon - listigu ĉiujn zonojn aŭ akiru detalojn por specifa."
+    },
+    "ha_import_blueprint": {
+      "title": "Importi Skizon",
+      "description": "Importu skizon el URL."
+    },
+    "ha_list_files": {
+      "title": "Listigi Dosierojn",
+      "description": "Listigu dosierojn en dosierujo ene de la agordo de Home Assistant."
+    },
+    "ha_list_floors_areas": {
+      "title": "Listigi Etaĝojn kaj Areojn",
+      "description": "Listigu etaĝojn ordigitajn laŭ nivelo kreskante, ĉiu kun siaj asignitaj areoj nestitaj, plus areoj sen etaĝo."
+    },
+    "ha_list_services": {
+      "title": "Listigi Disponeblajn Servojn",
+      "description": "Listu disponeblajn servojn de Home Assistant kun laŭvola paĝigo kaj detala kontrolo."
+    },
+    "ha_manage_app": {
+      "title": "Administri programon (aldonaĵon)",
+      "description": "Administri Home Assistant programon (antaŭe konatan kiel aldonaĵo, kaj ĉi tiu ilo kiel ha_manage_addon) — ĝisdatigi ties agordon o"
+    },
+    "ha_manage_backup": {
+      "title": "Administri Rezervojn",
+      "description": "Polimorfa rezerva ilo. Vidu la ilopriskribon por la vojiga matrico."
+    },
+    "ha_manage_custom_tool": {
+      "title": "Propra Ilo",
+      "description": "Krei kaj ruli propran ilon en sablokesto, aŭ administri konservitajn proprajn ilojn (koda reĝimo)."
+    },
+    "ha_manage_energy_prefs": {
+      "title": "Administri Preferojn de Energia Panelo",
+      "description": "Administri la preferojn de la Energia Panelo de Home Assistant."
+    },
+    "ha_manage_hacs": {
+      "title": "Administri HACS",
+      "description": "Administri HACS (Home Assistant Komunuma Butiko) — instali/ĝisdatigi, forigi, aldoni proprajn deponejojn, aŭ aktualigi deponejon en"
+    },
+    "ha_manage_pipeline": {
+      "title": "Administri Asistan Dukton",
+      "description": "Administri Asistajn duktojn de Home Assistant."
+    },
+    "ha_manage_radio": {
+      "title": "Administri Radiojn (Z-Wave / Zigbee / Matter / Thread)",
+      "description": "Administri radiojn de Home Assistant — Z-Wave, Zigbee, Matter, kaj Thread."
+    },
+    "ha_manage_security_policy": {
+      "title": "Administri Sekurecan Politikon",
+      "description": "Legi kaj reverki la sekurecan politikon de la ilo, kiu postulas uzantan aprobon por alt-riskaj ilvokoj."
+    },
+    "ha_manage_theme": {
+      "title": "Administri Fasajn Temojn",
+      "description": "Administri fasajn temojn de Home Assistant."
+    },
+    "ha_manage_updates": {
+      "title": "Administri Ĝisdatigojn",
+      "description": "Administri ĝisdatigojn de Home Assistant -- listigi, legi detalojn, amase instali, preterlasi, aŭ mal-preterlasi."
+    },
+    "ha_read_file": {
+      "title": "Legi Dosieron",
+      "description": "Legi dosieron el la agorda dosierujo de Home Assistant."
+    },
+    "ha_reload_core": {
+      "title": "Reŝargi Kernajn Komponantojn",
+      "description": "Reŝargi agordon de Home Assistant sen plena restartigo."
+    },
+    "ha_remove_area_or_floor": {
+      "title": "Forigi Areon aŭ Etaĝon",
+      "description": "Forigi areon aŭ etaĝon de Home Assistant."
+    },
+    "ha_remove_device": {
+      "title": "Forigi Aparaton",
+      "description": "Forigi orfan aparaton el la aparata registro de Home Assistant."
+    },
+    "ha_remove_entity": {
+      "title": "Forigi Enton",
+      "description": "Forigi unu aŭ plurajn entojn el la enta registro de Home Assistant."
+    },
+    "ha_remove_helpers_integrations": {
+      "title": "Forigi Helpon aŭ Integriĝon",
+      "description": "Forigi helpon aŭ integriĝan agordan eniron de Home Assistant."
+    },
+    "ha_remove_todo_item": {
+      "title": "Forigi Farendaĵon",
+      "description": "Forigi eron el farendaĵa listo de Home Assistant."
+    },
+    "ha_remove_zone": {
+      "title": "Forigi Zonon",
+      "description": "Forigi zonon de Home Assistant."
+    },
+    "ha_report_issue": {
+      "title": "Raporti Problemom aŭ Reagon",
+      "description": "Akiri diagnozajn informojn kaj ŝablonojn por sendi problemraportojn aŭ reagojn."
+    },
+    "ha_restart": {
+      "title": "Restartigi Home Assistant",
+      "description": "Restartigi Home Assistant."
+    },
+    "ha_search": {
+      "title": "Serĉi",
+      "description": "Serĉi entojn (lumoj, sensiloj, ŝaltiloj, klimato, ktp.) laŭ nomo, domajno, aŭ areo — KAJ ene de aŭtomatigo/skripto/j"
+    },
+    "ha_set_area_or_floor": {
+      "title": "Krei aŭ Ĝisdatigi Areon aŭ Etaĝon",
+      "description": "Krei aŭ ĝisdatigi areon aŭ etaĝon de Home Assistant."
+    },
+    "ha_set_device": {
+      "title": "Agordi Aparaton",
+      "description": "Ĝisdatigi aparatajn ecojn kiel nomon, areon, malŝaltitan staton, aŭ etikedojn."
+    },
+    "ha_set_entity": {
+      "title": "Agordi Enton",
+      "description": "Ĝisdatigi entajn ecojn en la enta registro."
+    },
+    "ha_set_integration": {
+      "title": "Agordi Integriĝon",
+      "description": "Administri integriĝon (agorda eniro): ebligi/malŝalti, aldoni, aŭ ĝisdatigi opciojn."
+    },
+    "ha_set_todo_item": {
+      "title": "Agordi Farendaĵon",
+      "description": "Krei aŭ ĝisdatigi farendaĵon en Home Assistant."
+    },
+    "ha_set_zone": {
+      "title": "Agordi Zonon",
+      "description": "Krei aŭ ĝisdatigi zonon de Home Assistant."
+    },
+    "ha_write_file": {
+      "title": "Skribi Dosieron",
+      "description": "Skribi dosieron al permesitaj dosierujoj en la agordo de Home Assistant."
+    }
+  },
+  "tool_groups": {
+    "Apps (add-ons)": "Programoj (aldonaĵoj)",
+    "Areas & Floors": "Areoj kaj Etaĝoj",
+    "Assist": "Asisto",
+    "Automations": "Aŭtomatigoj",
+    "Blueprints": "Bluaĵoj",
+    "Calendar": "Kalendaro",
+    "Camera": "Fotilo",
+    "Dashboard": "Panelo",
+    "Dashboards": "Paneloj",
+    "Developer": "Programisto",
+    "Device Registry": "Aparata Registro",
+    "Energy": "Energio",
+    "Entity Registry": "Enta Registro",
+    "Files": "Dosieroj",
+    "Groups": "Grupoj",
+    "HACS": "HACS",
+    "Helper Entities": "Helpaj Entoj",
+    "History & Statistics": "Historio kaj Statistikoj",
+    "Integrations": "Integroj",
+    "Labels & Categories": "Etikedoj kaj Kategorioj",
+    "Matter": "Matter",
+    "Scenes": "Scenoj",
+    "Scripts": "Skriptoj",
+    "Search & Discovery": "Serĉo kaj Malkovro",
+    "Service & Device Control": "Servo kaj Aparata Kontrolo",
+    "System": "Sistemo",
+    "Todo Lists": "Farendaĵaj Listoj",
+    "Utilities": "Utilaĵoj",
+    "Zones": "Zonoj"
+  }
+}

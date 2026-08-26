@@ -6,6 +6,8 @@ This test suite validates:
   appear only when HAMCP_ENABLE_DEV_MODE is on
 - ha_dev_manage_settings list / set / reset against a real server
 - ha_dev_manage_server info and its validation / deployment-mode errors
+- the security-policy access guard (issue #2141): set_policy is refused
+  through the real registered tool while dev mode alone is on
 
 Feature Flag: Set HAMCP_ENABLE_DEV_MODE=true to enable.
 
@@ -20,7 +22,11 @@ import os
 
 import pytest
 
-from ..utilities.assertions import extract_error_message, safe_call_tool
+from ..utilities.assertions import (
+    MCPAssertions,
+    extract_error_message,
+    safe_call_tool,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -52,6 +58,10 @@ def dev_mode_enabled(ha_container_with_fresh_config, tmp_path_factory):
     """
     old_flag = os.environ.get(FEATURE_FLAG)
     old_dir = os.environ.get("HA_MCP_CONFIG_DIR")
+    # Cleared so the policy-access guard tests below hold even when the
+    # suite runs in a shell that exported the toggle (e.g. while testing
+    # the feature itself).
+    old_access = os.environ.pop("HAMCP_DEV_SECURITY_POLICY_ACCESS", None)
     data_dir = tmp_path_factory.mktemp("dev-mode-data")
     os.environ[FEATURE_FLAG] = "true"
     os.environ["HA_MCP_CONFIG_DIR"] = str(data_dir)
@@ -66,6 +76,8 @@ def dev_mode_enabled(ha_container_with_fresh_config, tmp_path_factory):
         os.environ["HA_MCP_CONFIG_DIR"] = old_dir
     else:
         os.environ.pop("HA_MCP_CONFIG_DIR", None)
+    if old_access is not None:
+        os.environ["HAMCP_DEV_SECURITY_POLICY_ACCESS"] = old_access
     _reset_settings_state()
 
 
@@ -188,6 +200,47 @@ class TestDevManageSettings:
         assert result.get("success") is not True
         assert "locked by env" in extract_error_message(result).lower()
 
+    async def test_set_policy_refused_without_security_policy_access(
+        self, mcp_client_with_dev_mode
+    ):
+        """Dev mode alone must not let an agent rewrite the policies gating
+        it (issue #2141): the module fixture enables dev mode only, so
+        dev_tools_security_policy_access keeps its default (off)."""
+        result = await safe_call_tool(
+            mcp_client_with_dev_mode,
+            "ha_dev_manage_settings",
+            {"action": "set_policy", "policy": {"rules": []}},
+        )
+        assert result.get("success") is not True
+        assert (
+            "dev_tools_security_policy_access" in extract_error_message(result).lower()
+        )
+
+    async def test_set_policy_allowed_after_override_file_grant(
+        self, mcp_client_with_dev_mode, dev_mode_enabled
+    ):
+        """Allow path through the real registered tool: granting access by
+        writing the override file (what the web UI's POST does, possibly
+        from a sidecar process) takes effect on the next call — no
+        restart, no settings-singleton reload."""
+        flags_file = dev_mode_enabled / "feature_flags.json"
+        original_contents = flags_file.read_text() if flags_file.exists() else None
+        existing = json.loads(original_contents) if original_contents else {}
+        try:
+            flags_file.write_text(
+                json.dumps({**existing, "dev_tools_security_policy_access": True})
+            )
+            async with MCPAssertions(mcp_client_with_dev_mode) as mcp:
+                await mcp.call_tool_success(
+                    "ha_dev_manage_settings",
+                    {"action": "set_policy", "policy": {"rules": [], "version": 0}},
+                )
+        finally:
+            if original_contents is not None:
+                flags_file.write_text(original_contents)
+            else:
+                flags_file.unlink(missing_ok=True)
+
 
 class TestDevManageServer:
     async def test_info_reports_deployment(self, mcp_client_with_dev_mode):
@@ -223,3 +276,63 @@ class TestDevManageServer:
         )
         assert result.get("success") is not True
         assert "standalone" in extract_error_message(result).lower()
+
+
+class TestEngineThemeIdentityGuard:
+    """Deterministic engine-account coverage, only reachable with dev mode.
+
+    ha_dev_manage_settings can set dashboard_screenshot_engine_url at runtime
+    (it is resolved live per capture, so no restart is needed). Pointing it at
+    an explicit URL forces resolve_engine() to return no addon_credential,
+    which is exactly the case where ha-mcp's own credential must NOT be
+    treated as the engine account -- so the refusal is deterministic here in a
+    way it cannot be in the themes suite, where dev mode is off.
+    """
+
+    async def test_explicit_engine_url_refuses_engine_theme_actions(
+        self, mcp_client_with_dev_mode
+    ):
+        set_result = await safe_call_tool(
+            mcp_client_with_dev_mode,
+            "ha_dev_manage_settings",
+            {
+                "action": "set",
+                "setting": "dashboard_screenshot_engine_url",
+                "value": "http://sidecar.example:10000",
+            },
+        )
+        assert set_result.get("success") is True, f"Could not set URL: {set_result}"
+
+        try:
+            read = await safe_call_tool(
+                mcp_client_with_dev_mode,
+                "ha_manage_theme",
+                {"action": "get_engine_theme"},
+            )
+            assert read.get("success") is False, (
+                f"Reading an unidentifiable engine account must fail: {read}"
+            )
+            assert "identified" in extract_error_message(read).lower(), (
+                f"Error should name the identity problem: {read}"
+            )
+
+            # The write refuses for the same reason, so a restore can never
+            # land on ha-mcp's own profile.
+            write = await safe_call_tool(
+                mcp_client_with_dev_mode,
+                "ha_manage_theme",
+                {
+                    "action": "set_engine_theme",
+                    "value": {"theme": "", "dark": False},
+                    "expected_current": None,
+                },
+            )
+            assert write.get("success") is False, (
+                f"Writing an unidentifiable engine account must fail: {write}"
+            )
+        finally:
+            await safe_call_tool(
+                mcp_client_with_dev_mode,
+                "ha_dev_manage_settings",
+                {"action": "reset", "setting": "dashboard_screenshot_engine_url"},
+            )

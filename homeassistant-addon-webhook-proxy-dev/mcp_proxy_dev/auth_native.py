@@ -58,23 +58,26 @@ AUTH_V2 = True
 def authorization_server_document(base: str) -> dict:
     """Return the RFC 8414 authorization-server metadata for ha_auth mode.
 
-    Points MCP clients at Home Assistant core's own OAuth endpoints
-    (`/auth/authorize` + `/auth/token`) while keeping the issuer on the add-on's
-    host-agnostic `OAUTH_BASE`. `token_endpoint_auth_methods_supported` is
-    `["none"]` (a public client — HA ignores `client_secret`) and
-    `client_id_metadata_document_supported` is advertised so clients such as
-    claude.ai and ChatGPT present a URL-shaped `client_id` (CIMD). The flag is
-    advertisement-only: HA never fetches a CIMD document — a same-origin
-    URL-shaped `client_id` plus redirect is long-standing IndieAuth behavior
-    (home-assistant/core#153820 is field evidence of claude.ai and ChatGPT
-    working against it, not a dependency). No `registration_endpoint`:
-    dynamic client registration would hit Home Assistant, which offers none —
-    CIMD replaces it. The field contents were validated live against claude.ai.
+    HA core still authenticates the user, but every cacheable endpoint belongs
+    to this proxy. The scoped handlers dispatch per live mode, translate CIMD
+    or signed DCR identities for core, and remain valid across mode switches.
+    Public clients use PKCE without a client secret; the registration endpoint
+    provides the DCR fallback when a client does not use CIMD.
+
+    ``revocation_endpoint`` is proxy-owned for a second reason (#2248): the
+    refresh token the client holds is a signed envelope, and core's own
+    ``/auth/revoke`` answers 200 without revoking anything for a value it
+    cannot recognise. Only ha_auth mints those, so only this document
+    advertises it. The endpoint takes no client authentication, matching
+    ``token_endpoint_auth_methods_supported``.
     """
     return {
         "issuer": f"{base}{OAUTH_BASE}",
-        "authorization_endpoint": f"{base}/auth/authorize",
-        "token_endpoint": f"{base}/auth/token",
+        "authorization_endpoint": f"{base}{OAUTH_BASE}/authorize",
+        "token_endpoint": f"{base}{OAUTH_BASE}/token",
+        "registration_endpoint": f"{base}{OAUTH_BASE}/register",
+        "revocation_endpoint": f"{base}{OAUTH_BASE}/revoke",
+        "revocation_endpoint_auth_methods_supported": ["none"],
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],

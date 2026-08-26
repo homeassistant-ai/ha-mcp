@@ -1,0 +1,113 @@
+"""E2E coverage for ha_call_service's return_response placement (issue #2085).
+
+``calendar.get_events`` is a ``SupportsResponse.ONLY`` service, so calling it with
+``return_response=True`` against the test container exercises a real Home Assistant
+``return_response`` envelope (``{"changed_states": [...], "service_response": {...}}``).
+
+ha_call_service used to ship that response twice — once nested in ``result`` (the
+whole envelope passed through projection) and once as a top-level
+``service_response`` sibling — doubling its token cost.
+
+This exercises the legacy REST path, which is the only one that can serve the call:
+the component route requires ``should_wait``, i.e. a service in
+``_STATE_CHANGING_SERVICES``, and ``get_events`` is not one. The assertions
+themselves are written against the shared contract (the response surfaces exactly
+once, at the top level) rather than either path's internals, so they stay valid if
+routing ever changes; the component path's own coverage is in
+``tests/src/unit/test_ha_call_service_component_routing.py``.
+"""
+
+import json
+import logging
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from ...utilities.assertions import MCPAssertions
+
+logger = logging.getLogger(__name__)
+
+
+async def _find_calendar_entity(mcp_client) -> str:
+    """Find a calendar entity — its absence is a failure, not a skip.
+
+    Any calendar will do (the test only needs a service that returns a response),
+    so this takes the first match rather than preferring the seeded local_calendar.
+    """
+    async with MCPAssertions(mcp_client) as mcp:
+        data = await mcp.call_tool_success(
+            "ha_search",
+            {"query": "calendar", "domain_filter": "calendar", "limit": 10},
+        )
+    entities = data.get("entities", [])
+    assert entities, f"no calendar entity found via ha_search: {data!r}"
+    entity_id = entities[0].get("entity_id")
+    assert entity_id, f"calendar search record lacks an entity_id: {entities[0]!r}"
+    return entity_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.services
+class TestReturnResponsePlacement:
+    """The service response is returned once, at the top level."""
+
+    async def test_get_events_response_is_not_duplicated(self, mcp_client):
+        calendar_entity = await _find_calendar_entity(mcp_client)
+
+        start = datetime.now(UTC)
+        end = start + timedelta(days=7)
+
+        logger.info(
+            f"Calling calendar.get_events on {calendar_entity} with return_response"
+        )
+
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_call_service",
+                {
+                    "domain": "calendar",
+                    "service": "get_events",
+                    "entity_id": calendar_entity,
+                    "data": {
+                        "start_date_time": start.strftime("%Y-%m-%d %H:%M:%S"),
+                        "end_date_time": end.strftime("%Y-%m-%d %H:%M:%S"),
+                    },
+                    "return_response": True,
+                },
+            )
+
+        assert "service_response" in data, (
+            f"return_response=True must surface a top-level service_response: {data!r}"
+        )
+        service_response = data["service_response"]
+
+        # Assert the key EXISTS before asserting what it doesn't contain — a
+        # regression that dropped ``result`` entirely would satisfy the negative
+        # check vacuously.
+        assert isinstance(data.get("result"), list), (
+            f"result must be the projected changed-state list: {data!r}"
+        )
+        result = data["result"]
+        assert not any(
+            isinstance(record, dict) and "service_response" in record
+            for record in result
+        ), f"result must not carry a nested service_response copy: {result!r}"
+
+        # The response must carry the payload exactly once — the token cost the
+        # issue is about. Assert it structurally rather than by substring count:
+        # a small payload (``{}``, ``[]``) matches incidentally anywhere else in
+        # the response, so a length-gated substring check silently skipped the
+        # strongest assertion exactly when the payload was cheapest to duplicate.
+        serialized = json.dumps(data, sort_keys=True)
+        assert serialized.count('"service_response"') == 1, (
+            f"service_response key appears more than once: {data!r}"
+        )
+        records = result if isinstance(result, list) else [result]
+        assert all(record != service_response for record in records), (
+            f"result carries a copy of the service response: {result!r}"
+        )
+
+        logger.info(
+            f"calendar.get_events returned its response once: "
+            f"{list(service_response) if isinstance(service_response, dict) else service_response!r}"
+        )

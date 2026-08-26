@@ -53,7 +53,7 @@ const withBase = (path: string) => {
           <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener noreferrer" class="inline-block mb-3">
             <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add the ha-mcp app (add-on) repository to your Home Assistant" />
           </a>
-          <p class="text-slate-400 text-sm">Or paste the repository URL into <strong>Settings &rarr; Apps &rarr; App Store &rarr; &#8942; (top right) &rarr; Repositories</strong>: <code class="bg-slate-800 px-1 rounded">https://github.com/homeassistant-ai/ha-mcp</code></p>
+          <p class="text-slate-400 text-sm">Or paste the repository URL into <strong>Settings &rarr; Apps &rarr; Install app &rarr; &#8942; (top right) &rarr; Repositories</strong>: <code class="bg-slate-800 px-1 rounded">https://github.com/homeassistant-ai/ha-mcp</code></p>
         </div>
       </section>
 
@@ -64,8 +64,8 @@ const withBase = (path: string) => {
           <h2 class="text-xl font-semibold text-white">Install the app</h2>
         </div>
         <div class="step-content">
-          <p class="text-slate-300 mb-2">Open <strong>Settings &rarr; Apps &rarr; App Store</strong>, find <strong>Home Assistant MCP Server</strong>, and install it.</p>
-          <p class="text-slate-400 text-sm">Home Assistant 2026.2 renamed "Add-ons" to "Apps" &mdash; on older versions this is <strong>Settings &rarr; Add-ons &rarr; Add-on Store</strong>, and the app is the same "MCP Server".</p>
+          <p class="text-slate-300 mb-2">Open <strong>Settings &rarr; Apps &rarr; Install app</strong>, find <strong>Home Assistant MCP Server</strong>, and install it.</p>
+          <p class="text-slate-400 text-sm">Home Assistant 2026.2 renamed "Add-ons" to "Apps" &mdash; on older versions this is <strong>Settings &rarr; Add-ons &rarr; Add-on store</strong>, and the app is the same "MCP Server".</p>
         </div>
       </section>
 
@@ -90,7 +90,7 @@ const withBase = (path: string) => {
           <h2 class="text-xl font-semibold text-white">Connect Claude Desktop</h2>
         </div>
         <div class="step-content">
-          <p class="text-slate-300 mb-3">Claude Desktop talks to MCP servers over stdio, so it reaches the app through <strong>mcp-proxy</strong> (run automatically via <code class="bg-slate-800 px-1 rounded">uvx</code>). That needs <strong>uv</strong> on the computer running Claude Desktop:</p>
+          <p class="text-slate-300 mb-3">Claude Desktop talks to MCP servers over stdio, so it reaches the app through <strong>fastmcp-remote</strong> (run automatically via <code class="bg-slate-800 px-1 rounded">uvx</code>). That needs <strong>uv</strong> on the computer running Claude Desktop:</p>
           <pre class="code-block mb-4"><code># macOS / Linux
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
@@ -102,14 +102,13 @@ winget install --id=astral-sh.uv -e</code></pre>
     "home-assistant": {
       "command": "uvx",
       "args": [
-        "mcp-proxy",
-        "--transport",
-        "streamablehttp",
+        "fastmcp-remote",
         "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"
       ]
     }
   }
 }`}</code></pre>
+          <p class="text-slate-400 text-sm mt-3">Previously this guide used <code class="bg-slate-800 px-1 rounded">mcp-proxy</code>. If your config still runs it and the client shows "Server disconnected", replace it with the config above. mcp-proxy declares no upper bound on the MCP SDK, so it breaks on <code class="bg-slate-800 px-1 rounded">ImportError: cannot import name 'request_ctx'</code> once the SDK ships a major release; fastmcp-remote pins its SDK dependency to a bounded range and cannot break that way. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/2073" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#2073</a>.</p>
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 mt-4">
             <p class="text-amber-200/90 text-sm"><strong class="text-amber-300">No token goes here.</strong> The app already handles authentication behind the secret path in the URL. Do <strong>not</strong> add <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code>, <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code>, or an <code class="bg-slate-800 px-1 rounded">env</code> block &mdash; that is the local/stdio config, and pasting it alongside the app is a known cause of connection hangs.</p>
           </div>
@@ -117,7 +116,7 @@ winget install --id=astral-sh.uv -e</code></pre>
           <details class="mt-4">
             <summary class="text-slate-400 hover:text-white cursor-pointer font-medium">Using a different client (Claude.ai, ChatGPT, Cursor, &hellip;)?</summary>
             <div class="mt-3 pl-4 border-l-2 border-slate-700">
-              <p class="text-slate-300 text-sm">Clients that speak HTTP natively don't need mcp-proxy &mdash; they take the Step 3 URL directly. The <a href={withBase('/setup')} class="text-blue-400 hover:underline">Setup Wizard</a> generates the exact config for each client.</p>
+              <p class="text-slate-300 text-sm">Clients that speak HTTP natively don't need a stdio bridge &mdash; they take the Step 3 URL directly. The <a href={withBase('/setup')} class="text-blue-400 hover:underline">Setup Wizard</a> generates the exact config for each client.</p>
               <p class="text-slate-400 text-xs mt-2">The app serves <strong>Streamable HTTP</strong>, not SSE. A <code class="bg-slate-800 px-1 rounded">--transport sse</code> config pointed at it returns a <code class="bg-slate-800 px-1 rounded">405</code> and won't connect.</p>
             </div>
           </details>

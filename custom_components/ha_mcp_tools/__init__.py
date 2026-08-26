@@ -2766,9 +2766,11 @@ async def _shape_read_file_response(
     # Apply special handling for specific files
     normalized = os.path.normpath(rel_path)  # noqa: ASYNC240
 
-    # Mask secrets.yaml
+    # Mask secrets.yaml. Offloaded because the first make_yaml() call on a
+    # thread constructs a ruamel YAML instance, whose plugin discovery globs
+    # the site-packages tree — blocking work that must stay off the loop.
     if normalized == "secrets.yaml":
-        content = _mask_secrets_content(content)
+        content = await hass.async_add_executor_job(_mask_secrets_content, content)
 
     # Apply tail for log files
     if normalized == "home-assistant.log":

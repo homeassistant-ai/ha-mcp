@@ -58,6 +58,7 @@ from custom_components.ha_mcp_tools.coordinator import ServerVersionInfo  # noqa
 def _make_hass() -> MagicMock:
     hass = MagicMock(name="hass")
     hass.data = {}
+    hass.config.skip_pip = False
 
     def _update_entry(entry, *, data=None, **_kw):
         if data is not None:
@@ -172,6 +173,9 @@ class TestBringUp:
             if esetup.ISSUE_LEGACY_OAUTH_RESTART in c.args
         ]
         assert created, "legacy-OAuth restart repair was not filed"
+        assert created[0].kwargs["is_fixable"] is True
+        cleared = {c.args[2] for c in esetup.ir.async_delete_issue.call_args_list}
+        assert esetup.ISSUE_LEGACY_OAUTH_RESTART not in cleared
         # The same restart-needed verdict must thread into the connect-URL
         # surfacing so the log carries the first-enable "not live" caveat --
         # deleting that kwarg would silently drop the caveat.
@@ -746,6 +750,19 @@ class TestSurfaceConnectUrls:
         assert "[HA-MCP settings panel](/ha-mcp)" in self._message()
         dismiss.assert_not_called()
 
+    def test_startup_notification_ends_with_disable_instructions(self):
+        _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"})
+
+        esetup._surface_connect_urls(hass, entry, "none")
+
+        assert self._message().endswith(
+            "\n\n"
+            "To disable this notification, uncheck the startup notification box "
+            "on that same configuration screen.\n"
+        )
+
     def test_startup_notification_off_dismisses_and_skips_create(
         self, monkeypatch, caplog
     ):
@@ -1058,6 +1075,16 @@ class TestMaybeAutoUpdate:
         await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
 
         hass.config_entries.async_reload.assert_not_awaited()
+
+    async def test_skip_pip_does_not_reload_or_set_marker(self, monkeypatch):
+        hass = _make_async_hass()
+        hass.config.skip_pip = True
+        entry = _make_entry(options={OPT_AUTO_UPDATE: True})
+
+        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
+
+        hass.config_entries.async_reload.assert_not_awaited()
+        assert DATA_PENDING_UPDATE_NOTIFY not in hass.data.get(DOMAIN, {})
 
     async def test_override_does_not_reload(self, monkeypatch):
         hass = _make_async_hass()
@@ -1467,7 +1494,6 @@ class TestFinishUpdateCycle:
         async def _refresh():
             if refresh_side_effect is not None:
                 raise refresh_side_effect
-            return None
 
         coordinator.async_refresh = AsyncMock(side_effect=_refresh)
         return coordinator

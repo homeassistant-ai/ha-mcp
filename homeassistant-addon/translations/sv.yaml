@@ -1,0 +1,173 @@
+---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/sv.json (keys addon.*, features.*,
+# addon_stable.*); regenerate with: python scripts/generate_locales.py
+configuration:
+  backup_hint:
+    name: Förslagsläge för fullständig HA-ögonblicksbild (LLM-riktad)
+    description: 'Justerar formuleringen av tipset som LLM ser i verktygsbeskrivningen
+      för `ha_manage_backup(scope=''snapshot'')` för när en fullständig Home Assistant
+      tarball-säkerhetskopia ska föreslås före riskfyllda operationer (t.ex. massborttagning
+      av enheter). Påverkar ENDAST denna LLM-riktade uppmaningsmening.
+
+
+      För automatiska ögonblicksbilder per redigering av automationer / skript / hjälpare
+      / etc., använd den separata växlingsknappen **Aktivera automatisk säkerhetskopiering
+      av redigeringar** nedan.'
+  secret_path:
+    name: Åsidosättning av hemlig sökväg
+    description: 'Valfri anpassad HTTP-sökväg för MCP-servern. Lämna tom för att använda
+      den automatiskt genererade säkra sökvägen.
+
+      '
+  enable_tool_search:
+    name: Aktivera verktygssökning
+    description: 'Ersätt hela verktygskatalogen med sökbaserad upptäckt. Minskar inaktiv
+      kontext med ungefär 90 %, till cirka 5K tokens. ⚠️ Aktivera INTE detta i klienter
+      med inbyggd verktygssökning / uppskjutna verktyg (claude.ai, Claude Desktop,
+      Claude Code) – de två söklagren krockar, och klientens inbyggda verktygssökning
+      är det bättre valet där; lämna denna avstängd. Huruvida verktyg skjuts upp beror
+      på din klient- och modellkombination: använd detta när din konfiguration läser
+      in hela katalogen i förväg – modeller utan inbyggda uppskjutna verktyg (t.ex.
+      Gemini, OpenAI-kompatibla lokala modeller, Claude Haiku), klienter som infogar
+      alla verktygsscheman oavsett modell (t.ex. GitHub Copilot CLI), eller mindre
+      kontextfönster. Vissa Codex-modeller och ChatGPT inkluderar också uppskjutna
+      verktyg – kontrollera din klient/modell direkt för att bekräfta dess funktioner
+      så att du inte lämnar detta aktiverat i onödan. Verktyg hittas via ha_search_tools
+      och exekveras via kategoriserade proxyservrar (läs/skriv/ta bort). Kräver omstart
+      av appen (tillägget) för att träda i kraft – återanslut eller uppdatera sedan
+      MCP-servern i din AI-klient så att den läser om verktygslistan. Enbart omstart
+      av appen (tillägget) uppdaterar INTE en klients cachade verktygslista; detta
+      gäller efter att du har ändrat någon inställning här.'
+  tool_search_max_results:
+    name: Max antal resultat för verktygssökning
+    description: 'Maximalt antal verktyg som returneras av ha_search_tools när verktygssökning
+      är aktiverad. Lägre värden (2-3) sparar kontext-tokens men kan missa relevanta
+      verktyg. Omfång: 2-10. Kräver omstart.'
+  enable_tool_security_policies:
+    name: Aktivera verktygssäkerhetspolicyer (avancerat)
+    description: Spärra verktygsanrop med hög risk (lås-/larmkontroll, automatiseringsskrivningar,
+      etc.) bakom användargodkännande. När ett skyddat verktyg anropas, ber agenten
+      användaren att öppna fliken Verktygssäkerhetspolicyer i webbgränssnittet och
+      klicka på Godkänn innan anropet fortsätter. Regler per verktyg med valfria argumentvillkor
+      konfigureras i fliken Verktygssäkerhetspolicyer. Avstängt som standard. Kräver
+      omstart för att träda i kraft.
+  enable_security_policy_tool:
+    name: Låt AI-agenter redigera verktygens säkerhetspolicyer
+    description: 'Registrerar verktyget ha_manage_security_policy, vilket låter anslutna
+      AI-agenter läsa och skriva om verktygens säkerhetspolicyer – inklusive att ta
+      bort godkännandegrindar. Avstängt som standard. Oberoende av alternativet Verktygssäkerhetspolicyer
+      ovan: detta styr vem som kan redigera reglerna, inte om de verkställs. Verktyget
+      kan inte se eller besluta om väntande godkännanden. För att behålla en människa
+      i loopen, grinda verktyget innan du aktiverar det: slå på "säkerhetsgrindad"
+      för Hantera säkerhetspolicy under fliken Verktyg i webbgränssnittet. Kräver
+      omstart för att träda i kraft.'
+  read_only_mode:
+    name: Skrivskyddat läge
+    description: Stänger av alla skrivverktyg och tar bort möjligheten för verktyg
+      att göra några skrivningar eller destruktiva anrop. Blandade läs-/skrivverktyg
+      – säkerhetskopior, appar (tillägg), energipreferenser, röstpipeliner och kodläge
+      när det är aktiverat – förblir tillgängliga men med sina skrivåtgärder blockerade.
+      Samma reglage som på fliken Tools i webbgränssnittet. Av som standard. Kräver
+      omstart för att träda i kraft.
+  redact_secrets:
+    name: Redigera hemligheter
+    description: Döljer hemligheter från verktygssvar innan de når AI-assistenten.
+      Appalternativ (tilläggsalternativ) och integrationsfält markerade som lösenord
+      ersätts med en markering för satt/tomt (så att "är denna autentiseringsuppgift
+      konfigurerad?" fortfarande kan besvaras), och andra verktygssvar rensas från
+      hemliga värden som servern redan har sett (värden kortare än 6 tecken hoppas
+      över, eftersom utbyte av små fragment skulle korruptera orelaterad utdata).
+      Fält som inte är markerade som lösenord av sitt schema kan inte upptäckas. Av
+      som standard.
+  enable_mandatory_bps:
+    name: Bifoga bästa praxis-färdigheter vid skrivningar
+    description: 'Huvudbrytare för funktionen för leverans av skrivverktygsfärdighetsinnehåll
+      (ärende #1182). När aktiverat (standard), bifogar de sex konfigurationsskrivverktygen
+      (automatiseringar, skript, scener, hjälpare, instrumentpaneler, rå YAML) de
+      kanoniska Home Assistant bästa praxis-referensfilerna under `skill_content`
+      vid varje lyckad skrivning, plus att de automatiskt bäddar in alla referenssektioner
+      som citeras av bästa praxis-varningar. Varje verktyg exponerar också en per-anrop
+      `MandatoryBPS`-parameter som agenten kan sätta till false vid efterföljande
+      anrop när den har innehållet. När denna huvudbrytare är avstängd, skickas INGET
+      skill_content ut oavsett per-anrop-parametern eller BP-varningar. Rekommenderas
+      PÅ som första val; inaktivera endast för modeller med mycket små kontextfönster.
+      Att stänga av detta kan försämra skrivnoggrannheten. Kräver omstart för att
+      träda i kraft.'
+  enable_strict_mandatory_bps:
+    name: Strikt bästa praxis-läge
+    description: 'Strikt läge: förhindrar klienten från att använda verktyget tills
+      den kan bevisa att den har läst de bästa praxis. När aktiverat, blockeras de
+      sex bästa praxis-skrivverktygen (automatiseringar, skript, scener, hjälpare,
+      instrumentpaneler, rå YAML) och returnerar ett fel som instruerar klienten att
+      läsa bästa praxis-färdigheten via ha_get_skill_guide och skicka tillbaka den
+      bekräftelsenyckel den får där. När aktiverat, är verktyget ha_get_skill_guide
+      låst aktiverat — det är den enda utgivaren av bekräftelsenyckeln. Underordnad
+      alternativet ”Bifoga bästa praxis-färdigheter vid skrivningar” ovan och inaktivt
+      när det överordnade alternativet är avstängt. Kräver omstart för att träda i
+      kraft.'
+  disabled_tools:
+    name: Inaktiverade verktyg (kommaseparerade)
+    description: Verktyg som listas här är tvingade att vara avstängda och låsta i
+      webbinställningsgränssnittet (fliken Verktyg) – de kan inte återaktiveras där
+      utan att först avmarkera detta alternativ. En liten uppsättning obligatoriska
+      verktyg (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      kan inte inaktiveras och fortsätter att köras även om de listas här. ha_get_skill_guide
+      kan endast inaktiveras när strikt bästa praxis-läge (enable_strict_mandatory_bps)
+      är avstängt. Kommaseparerade verktygsnamn (t.ex. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Fästa verktyg (kommaseparerade)
+    description: Verktyg som listas här är låsta som fästa – de visas överst på fliken
+      Verktyg och kan inte lossas från webbinställningsgränssnittet utan att först
+      avmarkera detta alternativ. Användbart i kombination med Verktygssökning. Kommaseparerade
+      verktygsnamn.
+  enable_auto_backup:
+    name: Aktivera automatisk säkerhetskopiering av redigeringar
+    description: 'Fångar en ögonblicksbild per entitet före varje omslutet skriv-/destruktivt
+      MCP-verktygsanrop (automation, skript, scen, hjälpare, instrumentpanel, instrumentpanelsresurs,
+      etikett, kategori, grupp, zon, område, kalender, att göra, entitet, enhet, integration
+      och relaterade borttagnings-/raderingsverktyg). Begränsningen för automatisk
+      säkerhetskopiering styr hur ofta detta sker: 0 (standard) fångar vid varje sådant
+      anrop, N>0 högst en ögonblicksbild per N minuter per entitet. Ögonblicksbilder
+      sparas som YAML-filer under /data/ha_mcp_backups/ (åsidosätts via HAMCP_BACKUP_DIR)
+      och listas, återställs eller raderas via fliken Säkerhetskopior i webbinställningsgränssnittet
+      eller via ha_manage_backup(scope=''edits'', ...). För dessa domäner är fångsten
+      ''best-effort'' — ett misslyckande loggar en VARNING och skrivningen fortsätter.
+      Fil- och rå-YAML-verktygen är undantaget: ha_write_file, ha_delete_file och
+      ha_config_set_yaml behandlar ögonblicksbilden som ett förhandsvillkor, så en
+      skrivning genom dem nekas när detta är avstängt, och en misslyckad fångst blockerar
+      den. På som standard; avmarkering avaktiverar ''best-effort''-fångsterna och
+      tar fil- och rå-YAML-verktygen ur bruk med dem. Kräver omstart för att träda
+      i kraft.'
+  auto_backup_throttle_minutes:
+    name: Begränsning för automatisk säkerhetskopiering (minuter)
+    description: Begränsningsfönster per entitet. 0 (standard) tar en ögonblicksbild
+      vid varje omsluten skrivning. N>0 tar högst en ögonblicksbild per N minuter
+      per entitet. Intervall 0–1440.
+  auto_backup_retain_per_entity:
+    name: Bevarande av automatisk säkerhetskopiering (per entitet)
+    description: Maximalt antal ögonblicksbilder som behålls per entitet. Äldre ögonblicksbilder
+      utöver denna gräns roteras ut vid varje lyckad fångst. Standard 100, intervall
+      1–10000.
+  enable_snapshot_delete:
+    name: Tillåt radering av ögonblicksbilder
+    description: Låter ha_manage_backup radera fullständiga HA-ögonblicksbilds-tarballar
+      (scope='snapshot', action='delete'). Avstängt som standard – en ögonblicksbild
+      kan vara den sista återställningspunkten efter en felaktig ändring, så en människa
+      måste välja att aktivera detta här. Även när det är aktiverat förblir schemalagda
+      säkerhetskopior, den nyaste kvarvarande ögonblicksbilden och allt som är yngre
+      än åldersgränsen nedan skyddat.
+  snapshot_delete_min_age_days:
+    name: Minsta ålder för ögonblicksbild att radera (dagar)
+    description: En ögonblicksbild måste vara minst så här gammal innan den kan raderas.
+      Intervall 0–365; 0 inaktiverar gränsen (skydden för nyaste ögonblicksbild och
+      schemalagd säkerhetskopiering gäller fortfarande). Standard 7.
+  verify_ssl:
+    name: Verifiera TLS-certifikat
+    description: Verifiera Home Assistant-serverns TLS-certifikat. Appen (tillägget)
+      ansluter via Supervisor-proxyn, så detta har normalt ingen effekt och bör förbli
+      aktiverat. Inaktivera endast om du har konfigurerat om appen (tillägget) för
+      att kommunicera med HA över ett offentligt HTTPS-värdnamn med ett självsignerat
+      certifikat eller matchningsfel för värdnamn. Inaktivering försvagar transportsäkerheten
+      – lämna på om du inte vet att du behöver det. Kräver omstart för att träda i
+      kraft.

@@ -21,7 +21,7 @@ env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
   # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.7.2"
+  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.8.0"
   # Disable Testcontainers' Ryuk reaper: it has been reported to leave
   # zombie containers on GHA runners (see #366, Ilya0527 2026-05-18).
   # The E2E fixture in tests/src/e2e/conftest.py relies instead on the
@@ -38,17 +38,17 @@ jobs:
     timeout-minutes: 15
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         submodules: true
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
       with:
         cache-binary: true
 
     - name: Install uv
-      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         version: "latest"
 
@@ -60,7 +60,7 @@ jobs:
 
     - name: Cache HA Docker image
       id: cache-ha-image
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /tmp/ha-image.tar
         key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
@@ -129,17 +129,17 @@ jobs:
             pytest_workers: 3
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         submodules: true
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
       with:
         cache-binary: true
 
     - name: Install uv
-      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         version: "latest"
 
@@ -151,7 +151,7 @@ jobs:
 
     - name: Cache HA Docker image
       id: cache-ha-image
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /tmp/ha-image.tar
         key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
@@ -215,7 +215,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         submodules: true
         # fetch-depth 0: the update-path scenario checks the custom component
@@ -231,12 +231,12 @@ jobs:
         fi
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
       with:
         cache-binary: true
 
     - name: Install uv
-      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         version: "latest"
 
@@ -248,7 +248,7 @@ jobs:
 
     - name: Cache HA Docker image
       id: cache-ha-image
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: /tmp/ha-image.tar
         key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}

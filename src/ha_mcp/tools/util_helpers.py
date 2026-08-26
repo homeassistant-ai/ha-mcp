@@ -77,43 +77,14 @@ def summarize_theme_listing(raw_themes: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def strip_internal_fields(obj: Any, _seen: set[int] | None = None) -> Any:
-    """Remove leading-underscore keys from ``obj`` and any nested dicts
-    or lists in place.
+def public_fields(d: dict[str, Any]) -> dict[str, Any]:
+    """Return a shallow copy of ``d`` with leading-underscore keys removed.
 
     The ha-mcp tool layer enriches entity / area dicts with internal
     fields like ``_hidden_by`` and ``_aliases`` so downstream branches
     can rank without re-querying the entity registry. Those keys must
     not leak through public tool returns: this helper centralises the
     convention so individual call sites don't have to remember to strip.
-
-    Mutates in place and returns the same reference for chaining. Cycle
-    guard via ``_seen`` (id-tracked) keeps the recursion safe if a
-    future caller ever feeds it a non-tree structure — JSON payloads
-    don't, but the helper is now a generic utility (importable from
-    ``server.py``) so the protection is cheap insurance.
-    """
-    if _seen is None:
-        _seen = set()
-    obj_id = id(obj)
-    if obj_id in _seen:
-        return obj
-    if isinstance(obj, dict):
-        _seen.add(obj_id)
-        for key in [k for k in obj if isinstance(k, str) and k.startswith("_")]:
-            obj.pop(key, None)
-        for value in obj.values():
-            strip_internal_fields(value, _seen)
-    elif isinstance(obj, list):
-        _seen.add(obj_id)
-        for item in obj:
-            strip_internal_fields(item, _seen)
-    return obj
-
-
-def public_fields(d: dict[str, Any]) -> dict[str, Any]:
-    """Return a shallow copy of ``d`` with leading-underscore keys
-    removed. Non-mutating counterpart to :func:`strip_internal_fields`.
     Shallow only — list/dict values are shared with the source, so a
     later mutation of those values would propagate.
     """
@@ -160,13 +131,17 @@ def parse_json_param(
     )
 
 
-def _loads_if_json_container_str(value: Any) -> Any:
+def loads_if_json_container_str(value: Any) -> Any:
     """Parse a JSON-encoded object/array string into its container value.
 
     A string that starts like an object or array but contains malformed JSON
     raises with the decoder location so ValidationErrorMiddleware can return
     an actionable error. Jinja templates and other strings pass through
     unchanged, leaving Pydantic to select the expected parameter type.
+
+    Public (not module-private): also reused by ``policy/evaluator.py`` to
+    normalize stringified args before policy evaluation, outside the
+    Pydantic-validator role ``JSON_STRING_COERCION`` below wraps it in.
     """
     if isinstance(value, str):
         try:
@@ -194,7 +169,7 @@ def _loads_if_json_container_str(value: Any) -> Any:
 # MCP client stacks (Claude Desktop stdio among them) pass model-emitted
 # stringified objects through unrepaired, so the strict schema boundary alone
 # rejects previously-valid traffic.
-JSON_STRING_COERCION = BeforeValidator(_loads_if_json_container_str)
+JSON_STRING_COERCION = BeforeValidator(loads_if_json_container_str)
 
 
 def _parse_json_to_str_list(s: str, param_name: str) -> list[str]:
@@ -346,8 +321,9 @@ def compact_service_result(
     3. Drop known-heavy attribute keys (``effect_list``, ``hue_scenes``) from
        every record's ``attributes`` dict.
 
-    Returns ``result`` unchanged when not a list (e.g. dict from
-    ``return_response=True`` services), or when the list is empty.
+    Returns ``result`` unchanged when it is not a list (defensive — every
+    ha_call_service path now projects a changed-state list), or when the list
+    is empty.
     """
     if not isinstance(result, list) or not result:
         return result
@@ -496,6 +472,14 @@ def unwrap_service_response(result: dict[str, Any]) -> dict[str, Any]:
     HA's call_service with return_response wraps results in
     {"changed_states": [...], "service_response": {...}}.
     Returns service_response if present and is a dict, otherwise the original result.
+
+    Deliberately NOT the same rule as ``ServiceTools._split_return_response_envelope``,
+    which powers ha_call_service: that one returns the response whatever its type and
+    reports the whole reply only when the key is absent. The two disagree solely for a
+    NON-DICT ``service_response`` (this helper hands back the envelope, the split hands
+    back the value). Consumers here read component services that always answer with a
+    dict, so the divergence is unreachable — but do not "align" one to the other
+    without checking those ~20 call sites.
     """
     sr = result.get("service_response")
     return sr if isinstance(sr, dict) else result
@@ -517,6 +501,13 @@ BLOCKED_WS_WRITE_COMMANDS: frozenset[str] = frozenset(
         "lovelace/dashboards/create",
         "lovelace/dashboards/delete",
         "lovelace/dashboards/update",
+        # Resource writes carry the same wrapping-tool validation as the
+        # dashboard commands above -- auto-backup, the #1072 HA-config-YAML
+        # misroute rejection, the inline size cap, and the data:-URL routing
+        # guard all live in ha_config_set_dashboard_resource (#2060).
+        "lovelace/resources/create",
+        "lovelace/resources/delete",
+        "lovelace/resources/update",
         "config/area_registry/delete",
         "config/area_registry/disable",
         "config/area_registry/update",
@@ -934,7 +925,11 @@ async def _get_waiter_ws_client(client: Any) -> Any:
     if not (isinstance(base_url, str) and isinstance(token, str)):
         return None
     try:
-        ws_client = await get_websocket_client(url=base_url, token=token)
+        ws_client = await get_websocket_client(
+            url=base_url,
+            token=token,
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
     except HomeAssistantAuthError:
         # Auth failures must reach the caller — a bad token should surface
         # as a real error, not as a 10s "timed out" via REST fallback.
@@ -1620,6 +1615,32 @@ async def apply_entity_category(
         result_dict: Tool result dict to update with category status
         entity_type: Human-readable type for warning messages
     """
+    # Best-effort recheck immediately before the write (issue #2159): the
+    # caller validated the category at tool entry, but the config upsert and
+    # registration wait sit between that check and this write — a category
+    # deleted in that window would otherwise be stored dangling (HA does not
+    # validate it). A failed recheck lookup falls through to the write: entry
+    # validation already screened typos, and the config is saved either way.
+    try:
+        check = await client.send_websocket_message(
+            {"type": "config/category_registry/list", "scope": scope}
+        )
+        if isinstance(check, dict) and check.get("success"):
+            valid_ids = {
+                c.get("category_id")
+                for c in check.get("result") or []
+                if isinstance(c, dict)
+            }
+            if category not in valid_ids:
+                result_dict.setdefault("warnings", []).append(
+                    f"{entity_type.capitalize()} saved but category "
+                    f"{category!r} no longer exists in the {scope} registry — "
+                    "not applied."
+                )
+                return
+    except Exception as e:
+        logger.debug(f"Category recheck failed for {entity_id}: {e}")
+
     try:
         ws_result = await client.send_websocket_message(
             {

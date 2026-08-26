@@ -31,10 +31,12 @@ def extract_hacs_data(raw_result) -> dict:
     """Extract data from MCP result, handling nested response structure.
 
     MCP tool results can be:
-    - {"data": {"success": ..., ...}, "metadata": ...}
+    - {"success": ..., "data": {...}, "metadata": ...}  (current envelope)
+    - {"data": {"success": ..., ...}, "metadata": ...}  (legacy nesting)
     - {"success": ..., ...}
 
-    This helper extracts the actual data dict.
+    This helper extracts the actual data dict, carrying a top-level
+    ``success`` into the extracted dict so callers keep one shape.
     """
     parsed = parse_mcp_result(raw_result)
     if (
@@ -42,7 +44,10 @@ def extract_hacs_data(raw_result) -> dict:
         and "data" in parsed
         and isinstance(parsed["data"], dict)
     ):
-        return parsed["data"]
+        data = dict(parsed["data"])
+        if "success" in parsed and "success" not in data:
+            data["success"] = parsed["success"]
+        return data
     return parsed
 
 
@@ -552,6 +557,201 @@ class TestHacsWriteOperations:
         )
 
         logger.info("Download nonexistent repository test passed")
+
+    async def test_remove_nonexistent_repository(self, mcp_client):
+        """
+        Test: Remove non-existent repository
+
+        Should fail with the canonical RESOURCE_NOT_FOUND contract, same as
+        the download path — never a false "Successfully removed".
+        """
+        logger.info("Testing ha_manage_hacs remove with nonexistent repo...")
+
+        parsed = await safe_call_tool(
+            mcp_client,
+            "ha_manage_hacs",
+            {"action": "remove", "repository_id": "nonexistent/fake-repo-12345"},
+        )
+        data = (
+            parsed.get("data", parsed)
+            if isinstance(parsed.get("data"), dict)
+            else parsed
+        )
+
+        unavailable, reason = is_hacs_unavailable(data)
+        if unavailable:
+            pytest.skip(f"HACS not available: {reason}")
+
+        assert isinstance(data, dict), f"Expected dict, got {data!r}"
+        assert data.get("success") is not True, "Should fail for nonexistent repo"
+        error = data.get("error", {})
+        assert isinstance(error, dict), f"Expected structured error dict, got {error!r}"
+        assert error.get("code") == "RESOURCE_NOT_FOUND", (
+            f"Expected RESOURCE_NOT_FOUND, got code={error.get('code')!r}"
+        )
+
+        logger.info("Remove nonexistent repository test passed")
+
+    async def test_remove_store_only_repository(self, mcp_client):
+        """
+        Test: Remove a repository that exists in the store but was never
+        downloaded.
+
+        HACS's own remove command no-ops "successfully" on store-only
+        repositories; the tool must reject with RESOURCE_NOT_FOUND and a
+        "not downloaded" message instead (PR #2124 guard).
+        """
+        logger.info("Testing ha_manage_hacs remove of a store-only repo...")
+
+        search_data = await safe_hacs_call(
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "query": "mushroom", "max_results": 1},
+        )
+        if not search_data.get("success"):
+            unavailable, reason = is_hacs_unavailable(search_data)
+            if unavailable:
+                pytest.skip(f"HACS not available: {reason}")
+            pytest.fail(f"Store search failed: {search_data.get('error')}")
+        results = search_data.get("results") or []
+        target = next((r for r in results if not r.get("installed")), None)
+        if target is None:
+            pytest.skip("No store-only repository available to test against")
+
+        parsed = await safe_call_tool(
+            mcp_client,
+            "ha_manage_hacs",
+            {"action": "remove", "repository_id": str(target["id"])},
+        )
+        data = (
+            parsed.get("data", parsed)
+            if isinstance(parsed.get("data"), dict)
+            else parsed
+        )
+
+        unavailable, reason = is_hacs_unavailable(data)
+        if unavailable:
+            pytest.skip(f"HACS not available: {reason}")
+
+        assert data.get("success") is not True, "Store-only remove must fail"
+        error = data.get("error", {})
+        assert isinstance(error, dict), f"Expected structured error dict, got {error!r}"
+        assert error.get("code") == "RESOURCE_NOT_FOUND", (
+            f"Expected RESOURCE_NOT_FOUND, got code={error.get('code')!r}"
+        )
+        assert "not downloaded" in (error.get("message") or "").lower(), (
+            f"Expected 'not downloaded' in message, got {error.get('message')!r}"
+        )
+
+        logger.info("Remove store-only repository test passed")
+
+    async def test_download_then_remove_roundtrip(self, mcp_client):
+        """
+        Test: Download a disposable repository, then remove it.
+
+        Exercises the full remove path against real HACS state: after the
+        remove, the repository must no longer report installed. Skips (not
+        fails) when the environment cannot download — the store index or
+        GitHub content access is unavailable in some CI runs.
+        """
+        logger.info("Testing HACS download -> remove roundtrip...")
+
+        search_data = await safe_hacs_call(
+            mcp_client,
+            "ha_get_hacs_info",
+            {
+                "action": "search",
+                "category": "theme",
+                "max_results": 1,
+            },
+        )
+        if not search_data.get("success"):
+            unavailable, reason = is_hacs_unavailable(search_data)
+            if unavailable:
+                pytest.skip(f"HACS not available: {reason}")
+            pytest.fail(f"Store search failed: {search_data.get('error')}")
+        results = search_data.get("results") or []
+        target = next((r for r in results if not r.get("installed")), None)
+        if target is None:
+            pytest.skip("No downloadable theme repository available")
+        repo_id = str(target["id"])
+
+        download = await safe_hacs_call(
+            mcp_client,
+            "ha_manage_hacs",
+            {"action": "download", "repository_id": repo_id},
+        )
+        if not download.get("success"):
+            # Download needs GitHub content access; treat failure as an
+            # environment limitation, mirroring the suite's skip policy.
+            pytest.skip(
+                f"Download unavailable in this environment: {download.get('error')}"
+            )
+
+        remove = await safe_hacs_call(
+            mcp_client,
+            "ha_manage_hacs",
+            {"action": "remove", "repository_id": repo_id},
+        )
+        assert remove.get("success") is True, f"Remove failed: {remove.get('error')}"
+
+        info = await safe_hacs_call(
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "info", "repository_id": repo_id},
+        )
+        if info.get("success"):
+            assert not info.get("installed"), (
+                "Repository still reports installed after remove"
+            )
+
+        logger.info("Download -> remove roundtrip test passed")
+
+
+@pytest.mark.hacs
+async def test_hacs_update_information(mcp_client):
+    """ha_manage_hacs(action="update_information") refreshes a repository's
+    release data (the HACS UI "Update information" action)."""
+    logger.info("Testing ha_manage_hacs update_information...")
+
+    search_data = await safe_hacs_call(
+        mcp_client,
+        "ha_get_hacs_info",
+        {"action": "search", "max_results": 1},
+    )
+
+    unavailable, reason = is_hacs_unavailable(search_data)
+    if unavailable:
+        pytest.skip(f"HACS not available: {reason}")
+
+    results = search_data.get("results") or []
+    if not results:
+        pytest.skip("HACS returned no repositories to refresh")
+    repo_id = str(results[0]["id"])
+
+    logger.info(f"Refreshing repository information for: {repo_id}")
+
+    data = await safe_hacs_call(
+        mcp_client,
+        "ha_manage_hacs",
+        {"action": "update_information", "repository_id": repo_id},
+    )
+
+    if not data.get("success"):
+        # The refresh re-fetches from GitHub, so an unreachable / rate-limited
+        # GitHub is an environment limitation, not a tool failure. Only those
+        # reasons may skip: the broad is_hacs_unavailable matcher classifies
+        # EVERY INTERNAL_ERROR as unavailable, which would silently skip past
+        # an implementation defect (the search probe above already covered
+        # HACS availability itself).
+        unavailable, reason = is_hacs_unavailable(data)
+        if unavailable and reason in ("GitHub rate limit", "GitHub access issue"):
+            pytest.skip(f"GitHub not reachable from HACS: {reason}")
+
+    assert data.get("success") is True, f"Refresh failed: {data.get('error')}"
+    assert data.get("repository_id"), "Response should include repository_id"
+
+    logger.info("Update information test passed")
 
 
 @pytest.mark.hacs

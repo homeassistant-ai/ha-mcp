@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import yaml
@@ -371,6 +372,34 @@ class TestFetcherIdResolution:
         monkeypatch.setattr(dash, "_get_dashboard_config_internal", fake_get_internal)
         assert await bm._fetch_dashboard(_StubClient(), "x_dash") is None
 
+    async def test_fetch_dashboard_without_stored_config_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A metadata-only dashboard has nothing to snapshot before first save."""
+        import ha_mcp.tools.tools_config_dashboards as dash
+
+        async def fake_resolve(_client: Any, identifier: str) -> Any:
+            return {"url_path": identifier, "id": "no_config"}, None
+
+        async def no_component_config(_client: Any, _url_path: str) -> None:
+            return None
+
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: No config found.",
+                "error_code": "config_not_found",
+            }
+        )
+        monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
+        monkeypatch.setattr(dash, "_component_dashboard_config", no_component_config)
+
+        assert await bm._fetch_dashboard(client, "no-config") is None
+        client.send_websocket_message.assert_awaited_once_with(
+            {"type": "lovelace/config", "force": True, "url_path": "no-config"}
+        )
+
     async def test_fetch_dashboard_propagates_other_toolerror(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -488,9 +517,7 @@ class TestWithAutoBackupDecorator:
         class _Settings:
             enable_auto_backup = True
 
-        monkeypatch.setattr(
-            "ha_mcp.tools.auto_backup.get_global_settings", lambda: _Settings()
-        )
+        monkeypatch.setattr("ha_mcp.tools.auto_backup.get_global_settings", _Settings)
         monkeypatch.setattr(
             "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
         )
@@ -518,9 +545,7 @@ class TestWithAutoBackupDecorator:
         class _Settings:
             enable_auto_backup = True
 
-        monkeypatch.setattr(
-            "ha_mcp.tools.auto_backup.get_global_settings", lambda: _Settings()
-        )
+        monkeypatch.setattr("ha_mcp.tools.auto_backup.get_global_settings", _Settings)
         monkeypatch.setattr(
             "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
         )

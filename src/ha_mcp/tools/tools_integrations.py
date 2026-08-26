@@ -22,6 +22,14 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
+from ..redaction import (
+    harvest_secret_strings,
+    is_password_flow_field,
+    redact_flow_schema,
+    redact_options_by_flow_schema,
+    redaction_enabled,
+    sentinel_replacement,
+)
 from .auto_backup import with_auto_backup
 from .component_api import (
     component_supports,
@@ -33,15 +41,19 @@ from .component_registry_lookup import resolve_entities_via_component
 from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_config_entry,
-    iter_schema_fields,
     update_config_entry_options,
 )
+from .config_entry_flow_form import iter_schema_fields
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
     validate_identifier_not_empty,
+)
+from .integration_reconfigure import (
+    ReconfigureRunner,
+    reject_reconfigure_only_parameters,
 )
 from .tools_config_helpers import (
     SIMPLE_HELPER_TYPES,
@@ -96,7 +108,7 @@ HelperTypeLiteral = Literal[
     "tag",
     # config-entry subentries
     "config_subentry",
-    # 15 FLOW
+    # 17 FLOW
     "template",
     "group",
     "utility_meter",
@@ -112,6 +124,8 @@ HelperTypeLiteral = Literal[
     "generic_thermostat",
     "switch_as_x",
     "generic_hygrostat",
+    "history_stats",
+    "mold_indicator",
 ]
 assert set(get_args(HelperTypeLiteral)) == (
     SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES | {"config_subentry"}
@@ -145,6 +159,7 @@ def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
     data_schema = flow.get("data_schema")
     if not isinstance(data_schema, list):
         return out
+    redact = redaction_enabled()
     for field in iter_schema_fields(data_schema):
         name = field.get("name")
         if name is None:
@@ -156,7 +171,15 @@ def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
         if value is None:
             value = field.get("default", field.get("value"))
         if value is not None:
-            out[name] = value
+            if redact and is_password_flow_field(field):
+                # Password-marked field (issue #2157): remember the live
+                # value(s) for the global known-value scrub, then emit
+                # set/empty sentinel(s) instead of the value itself
+                # (multiple-value selectors keep their list shape).
+                harvest_secret_strings(value)
+                out[name] = sentinel_replacement(value)
+            else:
+                out[name] = value
     return out
 
 
@@ -280,7 +303,11 @@ async def _fetch_entries_via_component(
     if domain is not None:
         kwargs["domain"] = domain
     try:
-        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
         raw = await ws.send_command(WS_CONFIG_ENTRIES, **kwargs)
     except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
         if is_unknown_command(exc):
@@ -746,7 +773,7 @@ class IntegrationTools:
           when HA returned an int, ``None`` otherwise (no override set, or HA
           provided a level name as a string).
 
-        This is distinct from the add-on side, where ``ha_get_addon`` returns
+        This is distinct from the add-on side, where ``ha_get_app`` returns
         Supervisor's lowercase ``"default"`` literal — do not cross-compare.
         """
         try:
@@ -1135,6 +1162,19 @@ class IntegrationTools:
         if level_warnings:
             resp.setdefault("warnings", []).extend(level_warnings)
 
+        # Component options are raw persisted values — under redact_secrets
+        # they must be redacted on EVERY read, not only when a schema was
+        # requested (#2157). Runs even when the include_schema fetch below
+        # will probe again: that path only redacts when the flow opens with
+        # a form, so relying on it alone would fail OPEN on menu-first flows
+        # and probe failures. Redaction is idempotent, so the double
+        # application costs one extra probe and nothing else.
+        if redaction_enabled():
+            redact_warnings: list[str] = []
+            await self._redact_component_options(entry_id, entry, redact_warnings)
+            if redact_warnings:
+                resp.setdefault("warnings", []).extend(redact_warnings)
+
         # Options schema only exists in a live options flow — read it from the
         # legacy flow, but keep the component-provided options (populate_options
         # False) so the raw persisted values win over the flow-derived shape.
@@ -1288,7 +1328,14 @@ class IntegrationTools:
                 ),
             }
             if flow_type == "form":
-                schema["data_schema"] = flow_result.get("data_schema", [])
+                data_schema = flow_result.get("data_schema", [])
+                # Subentry schema echoes carry live suggested_values just
+                # like the options-flow echo — same redaction (#2157).
+                schema["data_schema"] = (
+                    redact_flow_schema(data_schema)
+                    if redaction_enabled()
+                    else data_schema
+                )
             elif flow_type == "menu":
                 schema["menu_options"] = flow_result.get("menu_options", [])
             else:
@@ -1313,6 +1360,66 @@ class IntegrationTools:
         """Class-method alias for :func:`options_from_form_flow`."""
         return options_from_form_flow(flow)
 
+    async def _redact_component_options(
+        self, entry_id: Any, entry: dict[str, Any], warnings: list[str]
+    ) -> None:
+        """Redact password-marked fields on component-served options (#2157).
+
+        The component row carries raw persisted options with no schema, so
+        the password markers must come from a live options-flow probe. When
+        the entry supports an options flow but no form schema could be read
+        (probe failed, or the flow opens with a menu), every option value is
+        replaced with a set/empty sentinel — without the schema the password
+        fields cannot be told apart, so this fails closed. Entries without
+        an options flow carry no password markers anywhere (the documented
+        metadata limit of the toggle); their options pass through and the
+        known-value scrub remains the only line for them.
+        """
+        options = entry.get("options")
+        if not isinstance(options, dict) or not options:
+            return
+        if not entry.get("supports_options"):
+            return
+        data_schema: Any = None
+        flow_id = None
+        try:
+            flow = await self._client.start_options_flow(entry_id)
+            flow_id = flow.get("flow_id")
+            if flow.get("type") == "form":
+                # An empty/missing schema on a form (e.g. a confirm-only
+                # step) classifies nothing — persisted options can outlive
+                # fields removed from the flow, so treat it as unreadable
+                # and take the fail-closed branch below instead of
+                # "redacting" zero fields.
+                candidate = flow.get("data_schema")
+                if isinstance(candidate, list) and candidate:
+                    data_schema = candidate
+        except Exception as exc:
+            logger.warning(
+                "redact_secrets: options-flow probe failed for %s: %r", entry_id, exc
+            )
+        finally:
+            if flow_id:
+                try:
+                    await self._client.abort_options_flow(flow_id)
+                except Exception as abort_err:
+                    logger.warning(
+                        "redact_secrets: failed to abort probe flow %s: %r",
+                        flow_id,
+                        abort_err,
+                    )
+        if isinstance(data_schema, list):
+            entry["options"] = redact_options_by_flow_schema(options, data_schema)
+        else:
+            entry["options"] = {
+                key: sentinel_replacement(value) for key, value in options.items()
+            }
+            warnings.append(
+                f"redact_secrets: no options schema readable for {entry_id} — "
+                "every option value was redacted conservatively (the password "
+                "fields cannot be told apart without the schema)"
+            )
+
     async def _fetch_options_schema(
         self, entry_id: str, resp: dict[str, Any], *, populate_options: bool = True
     ) -> None:
@@ -1332,13 +1439,32 @@ class IntegrationTools:
             flow_type = flow_result.get("type")
             entry = resp.get("entry") if isinstance(resp.get("entry"), dict) else None
             if flow_type == "form":
+                data_schema = flow_result.get("data_schema", [])
+                # The schema echo carries the live persisted value of every
+                # field in description.suggested_value — under redact_secrets
+                # password-marked fields get sentinels here too (#2157).
+                # redact_flow_schema deep-copies, so flow_result stays raw for
+                # the options extraction below (which redacts independently).
+                schema_out = (
+                    redact_flow_schema(data_schema)
+                    if redaction_enabled()
+                    else data_schema
+                )
                 resp["options_schema"] = {
                     "flow_type": "form",
                     "step_id": flow_result.get("step_id"),
-                    "data_schema": flow_result.get("data_schema", []),
+                    "data_schema": schema_out,
                 }
                 if entry is not None and populate_options:
                     entry["options"] = self._options_from_form_flow(flow_result)
+                elif entry is not None and redaction_enabled():
+                    # Component-served path: options carry raw persisted
+                    # values (the component only scrubs resolved !secret
+                    # references). Now that the flow schema is in hand,
+                    # redact the fields it marks as passwords.
+                    entry["options"] = redact_options_by_flow_schema(
+                        entry.get("options"), data_schema
+                    )
             elif flow_type == "menu":
                 resp["options_schema"] = {
                     "flow_type": "menu",
@@ -1468,12 +1594,15 @@ class IntegrationTools:
         """List config entries from a component ``config_entries`` read.
 
         The component already filtered by ``domain`` (server-side) and
-        materialized each entry's ``options`` on the row, so there is no
-        per-entry OptionsFlow probe and thus no probe-failure warnings.
-        ``options`` are raw persisted values (a field never set may be absent),
-        may contain ``"**redacted**"`` markers, and have nested option sections
-        additively flattened one level (raw nesting preserved) — see
+        materialized each entry's ``options`` on the row, so the read itself
+        needs no per-entry OptionsFlow probe. ``options`` are raw persisted
+        values (a field never set may be absent), may contain
+        ``"**redacted**"`` markers, and have nested option sections additively
+        flattened one level (raw nesting preserved) — see
         ``ha_get_integration``'s OPTIONS note and ``_flatten_option_sections``.
+        With ``redact_secrets`` on, the returned page IS probed per entry
+        after pagination (``_redact_component_options``) to learn each
+        entry's password markers — the one case where this path probes.
         """
         level_warnings: list[str] = []
         logger_levels = await get_logger_levels(self._client, level_warnings)
@@ -1490,7 +1619,7 @@ class IntegrationTools:
                 formatted["options"] = _flatten_option_sections(
                     formatted.get("options", {})
                 )
-        return self._finalize_entry_list(
+        result = self._finalize_entry_list(
             formatted_entries,
             domain,
             query,
@@ -1500,6 +1629,24 @@ class IntegrationTools:
             [],
             level_warnings,
         )
+        # Component options are raw persisted values — under redact_secrets
+        # every RETURNED row must be redacted (#2157). Runs on the paginated
+        # slice only: entries outside it are not in the response, and
+        # bounding the probe fan-out to the page keeps the component fast
+        # path from probing an entire installation per list call.
+        if include_opts and redaction_enabled():
+            redaction_warnings: list[str] = []
+            await asyncio.gather(
+                *(
+                    self._redact_component_options(
+                        formatted.get("entry_id"), formatted, redaction_warnings
+                    )
+                    for formatted in result["entries"]
+                )
+            )
+            if redaction_warnings:
+                result.setdefault("warnings", []).extend(redaction_warnings)
+        return result
 
     def _finalize_entry_list(
         self,
@@ -1572,6 +1719,7 @@ class IntegrationTools:
             "source": entry.get("source"),
             "supports_options": entry.get("supports_options", False),
             "supports_unload": entry.get("supports_unload", False),
+            "supports_reconfigure": entry.get("supports_reconfigure", False),
             "disabled_by": entry.get("disabled_by"),
         }
 
@@ -1641,10 +1789,18 @@ class IntegrationTools:
         annotations={
             "openWorldHint": False,
             "destructiveHint": True,
+            "readOnlyHint": False,
+            "idempotentHint": False,
             "title": "Set Integration",
         },
     )
-    @with_auto_backup(domain="integration", id_param="entry_id")
+    @with_auto_backup(
+        domain="integration",
+        id_param="entry_id",
+        # Every reconfigure request validates the entry and confirmation before
+        # the inner apply helper captures the normal edit snapshot.
+        skip_fn=lambda kwargs: bool(kwargs.get("reconfigure")),
+    )
     @log_tool_usage
     async def ha_set_integration(
         self,
@@ -1687,45 +1843,165 @@ class IntegrationTools:
                     "Flow form data. With 'domain': input for the new "
                     "integration's config flow. With 'entry_id' alone: input "
                     "for the entry's options flow (updates its options). "
-                    "Multi-step flows consume keys per step; menu steps take "
-                    "'next_step_id'. The step's data_schema is returned on "
+                    "Updating an existing entry — options or reconfigure — is "
+                    "a patch: a field you omit keeps its current value, and a "
+                    "field set to null is cleared where the integration's "
+                    "schema allows that field to be empty. "
+                    "Multi-step flows consume keys per step. A field two "
+                    "steps declare gets your one value both times; pass "
+                    "step_values={'<step_id>': {'<field>': <value>}} to give "
+                    "a step its own value, or to leave the field out of that "
+                    "step; a LIST of those objects supplies one per encounter "
+                    "when the flow presents a step more than once. Menu steps take "
+                    "'next_step_id' — a string, or a list of successive "
+                    "selections for flows that present more than one menu "
+                    "(e.g. a menu revisited after each branch, ending in a "
+                    "finish option). The step's data_schema is returned on "
                     "validation errors so field names can be corrected."
                 ),
                 default=None,
             ),
         ] = None,
+        reconfigure: Annotated[
+            bool,
+            Field(
+                default=False,
+                description=(
+                    "Use the existing config entry's official reconfigure flow "
+                    "(its connection settings) instead of its options flow. "
+                    "Without confirm_token this is a read-only preflight that "
+                    "returns one."
+                ),
+            ),
+        ] = False,
+        expected_device_id: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Requires reconfigure=True. Device registry ID the entry "
+                    "must still own, before and after the change."
+                ),
+            ),
+        ] = None,
+        expected_unique_id: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Requires reconfigure=True, AND the ha_mcp_tools custom "
+                    "component: Home Assistant does not expose a config "
+                    "entry's unique_id over its API. Without the component "
+                    "this is rejected — anchor on expected_device_id, "
+                    "expected_mac or expected_entity_ids instead."
+                ),
+            ),
+        ] = None,
+        expected_mac: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Requires reconfigure=True. MAC or IEEE the entry's device "
+                    "must still report."
+                ),
+            ),
+        ] = None,
+        expected_entity_ids: Annotated[
+            list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                default=None,
+                description=(
+                    "Requires reconfigure=True. Exact entity IDs that must "
+                    "remain associated with the entry."
+                ),
+            ),
+        ] = None,
+        confirm_token: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Requires reconfigure=True. A token from a reconfigure "
+                    "preflight; applies the change. Any token still matching "
+                    "the entry's current state and the same requested config "
+                    "is accepted, so a token stays valid while nothing moves."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """Manage an integration (config entry): enable/disable, add, or update options.
+        """Manage an integration (config entry): enable/disable, add, update options, or reconfigure.
 
         Modes (pick one):
         - Enable/disable: entry_id + enabled.
         - Add integration: domain (+ config) — drives the domain's config
           flow, including menus and multi-step forms.
         - Update options: entry_id + config — drives the entry's options
-          flow (what the "Configure" button does in the HA UI).
+          flow (what the "Configure" button does in the HA UI). Like that
+          dialog it is a patch: omitted fields keep their current values, and
+          a field set to null is cleared where the integration's schema
+          allows that field to be empty.
+        - Reconfigure: entry_id + reconfigure=True + config — drives the
+          existing entry's official reconfigure flow (host, port, credentials).
+          Call it without confirm_token for a read-only preflight; repeat with
+          the token it returns to apply.
 
         WHEN NOT TO USE:
         - Helpers (template, group, utility_meter, ...): use
-          ha_config_set_helper.
+          ha_config_set_helper. The exception is `otp`, which is a helper in
+          the HA UI but is created HERE via domain="otp" — its flow needs a
+          live TOTP code, so ha_config_set_helper deliberately omits it.
         - Config subentries: use
           ha_config_set_helper(helper_type='config_subentry').
         - Removing an entry: use ha_remove_helpers_integrations.
 
         Use ha_get_integration() to find entry IDs, and
         ha_get_integration(entry_id=..., include_schema=True) to inspect the
-        options fields before an update.
+        options fields before an update. Its supports_reconfigure field tells
+        you whether an entry qualifies for reconfigure=True; only integrations
+        implementing async_step_reconfigure do.
 
         Caveats: adding an integration runs its config flow exactly as the HA
         UI would (may pair devices, scan the network, create entities). Flows
         requiring a browser step (OAuth) or an asynchronous provider step
         error out at that step with a structured error instead of completing.
+        Reconfigure edits the settings a live integration connects with: a
+        wrong host or credential takes it offline, and there is no automatic
+        rollback — the returned rollback metadata describes repeating the
+        official flow by hand with the previous values, which this tool cannot
+        read back. The preflight does not validate config keys against the
+        integration's form; wrong field names surface on the confirm call.
 
         EXAMPLES:
         - Disable: ha_set_integration(entry_id="abc123", enabled=False)
         - Add: ha_set_integration(domain="workday", config={"name": "Workday"})
         - Update options: ha_set_integration(entry_id="abc123", config={"scan_interval": 30})
+        - Reconfigure preflight: ha_set_integration(entry_id="abc123", reconfigure=True, config={"host": "10.0.0.5"})
+        - Reconfigure apply: repeat that call adding confirm_token="sha256:..."
         """
         try:
+            if reconfigure:
+                return await ReconfigureRunner(self._client).handle_mode(
+                    entry_id=entry_id,
+                    domain=domain,
+                    enabled=enabled,
+                    config=config,
+                    expected_device_id=expected_device_id,
+                    expected_unique_id=expected_unique_id,
+                    expected_mac=expected_mac,
+                    expected_entity_ids=expected_entity_ids,
+                    confirm_token=confirm_token,
+                )
+
+            reject_reconfigure_only_parameters(
+                confirm_token=confirm_token,
+                expected_device_id=expected_device_id,
+                expected_unique_id=expected_unique_id,
+                expected_mac=expected_mac,
+                expected_entity_ids=expected_entity_ids,
+            )
+
             if domain is not None and entry_id is not None:
                 raise_tool_error(
                     create_error_response(
@@ -1970,10 +2246,10 @@ class IntegrationTools:
         - SIMPLE (12, websocket-delete): input_button, input_boolean,
           input_select, input_number, input_text, input_datetime, counter,
           timer, schedule, zone, person, tag.
-        - FLOW (15, config-entry-delete via entity lookup): template, group,
+        - FLOW (17, config-entry-delete via entity lookup): template, group,
           utility_meter, derivative, min_max, threshold, integration,
           statistics, trend, random, filter, tod, generic_thermostat,
-          switch_as_x, generic_hygrostat.
+          switch_as_x, generic_hygrostat, history_stats, mold_indicator.
 
         ROUTING:
         - SIMPLE helper_type + bare helper_id or entity_id → websocket delete.

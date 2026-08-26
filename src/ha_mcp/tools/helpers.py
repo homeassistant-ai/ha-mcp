@@ -350,8 +350,20 @@ def _classify_by_message(
                 ErrorCode.RESOURCE_NOT_FOUND, error_msg, context=context
             )
     elif "timeout" in error_str:
+        # Honor caller-supplied context like the type-based TimeoutError
+        # branch does — a hardcoded 30 here misreported calls that run on a
+        # longer budget (e.g. the 60 s HACS refresh/remove round-trips).
+        # WS callers name the call ``command`` rather than ``operation``, so
+        # fall back to it: without that the message reads "Operation
+        # 'operation' timed out" and never names what actually timed out.
+        operation = (
+            (context.get("operation") or context.get("command") or "operation")
+            if context
+            else "operation"
+        )
+        timeout_seconds = context.get("timeout_seconds", 30) if context else 30
         result = create_timeout_error(
-            "operation", 30, details=error_msg, context=context
+            operation, timeout_seconds, details=error_msg, context=context
         )
     elif "connection" in error_str or "connect" in error_str:
         result = create_connection_error(error_msg, context=context)

@@ -2,9 +2,13 @@
 Home Assistant MCP Server
 
 A Model Context Protocol server that provides complete control over Home Assistant
-through REST API and WebSocket integration with 20+ enhanced tools.
+through REST API and WebSocket integration.
 """
 
+# Must be imported before anything that reaches fastmcp (``.auth`` below does),
+# because fastmcp configures rich logging at import time and dies on a rich
+# older than 13.9.4. Importing this module applies the shim. See #2186.
+from . import _rich_compat as _rich_compat
 from ._version import get_version
 
 __version__ = get_version()

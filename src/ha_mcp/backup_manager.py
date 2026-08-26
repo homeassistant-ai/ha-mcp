@@ -1128,15 +1128,15 @@ def _diff_dict_node(
     max_ops: int,
 ) -> None:
     """Diff two dicts into JSON-Patch ops (add/remove/recurse per key)."""
-    for key in stored:
+    for key, stored_value in stored.items():
         seg = _pointer_segment(str(key))
         sub_path = f"{path}/{seg}"
         if key not in current:
-            out.append({"op": "add", "path": sub_path, "value": stored[key]})
+            out.append({"op": "add", "path": sub_path, "value": stored_value})
             if len(out) >= max_ops:
                 return
         else:
-            _diff_node(stored[key], current[key], sub_path, out, max_ops)
+            _diff_node(stored_value, current[key], sub_path, out, max_ops)
             if len(out) >= max_ops:
                 return
     for key in current:
@@ -1441,10 +1441,11 @@ async def _fetch_dashboard(client: Any, entity_id: str) -> Any:
     try:
         config, _config_hash = await _get_dashboard_config_internal(client, fetch_path)
     except ToolError as err:
-        # ToolError carries the structured failure payload; treat a
-        # missing/unknown dashboard as "nothing to back up" (also covers a
-        # brand-new dashboard on the create path). "Unknown config
-        # specified" is HA's message for an unresolved url_path.
+        # ToolError carries the structured failure payload, including HA's
+        # preserved ``config_not_found`` code; treat a missing/unknown
+        # dashboard as "nothing to back up" (also covers a brand-new dashboard
+        # on the create path). "Unknown config specified" is HA's message for
+        # an unresolved url_path.
         msg = str(err).lower()
         if "not_found" in msg or "config_not_found" in msg or "unknown config" in msg:
             return None

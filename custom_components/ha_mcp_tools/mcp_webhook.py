@@ -16,8 +16,8 @@ Three auth postures, chosen in the options flow:
 * ``ha_auth`` — Home Assistant core is the OAuth authorization server. This
   module serves the RFC 8414 / RFC 9728 discovery documents (so claude.ai /
   ChatGPT can sign in with the user's HA account) and validates inbound bearer
-  tokens via ``hass.auth``. There is no bespoke authorization-server code here —
-  every protocol step is HA core's own ``/auth/*``.
+  tokens via ``hass.auth``. The component-scoped authorize/token views redirect
+  and forward into core's own ``/auth/*`` endpoints; core remains the authority.
 * ``legacy`` — this module (via :mod:`oauth_legacy`) is its own OAuth 2.1
   authorization server with a static client_id/secret, for MCP clients (Google
   Gemini Spark) that need a credential to paste rather than an HA sign-in.
@@ -59,16 +59,18 @@ from .const import (
 )
 from .oauth_autoapprove import (
     CFG_AUTOAPPROVE_PROVIDER,
+    CFG_CIMD_SESSION,
     AutoApproveProvider,
     bind_autoapprove_views,
 )
+from .oauth_dcr import CFG_DCR_SIGNING_KEY, bind_dcr_view
 from .oauth_legacy import (
-    AUTHORIZE_PATH,
     OAUTH_ROUTE_OWNER_KEY,
-    TOKEN_PATH,
     LegacyOAuthProvider,
     LegacyOAuthRouteConflict,
     bind_legacy_views,
+    build_unbound_legacy_provider,
+    clear_scoped_legacy_credentials,
 )
 
 if TYPE_CHECKING:
@@ -110,6 +112,11 @@ _ALLOWED_CONTENT_TYPES = ("application/json", "text/event-stream", "text/plain")
 # long-lived streams fails a new request in 30 s instead of hanging it forever.
 _CLIENT_TIMEOUT = aiohttp.ClientTimeout(connect=30, sock_connect=10, sock_read=300)
 
+# Anonymous CIMD lookups get a separate, deliberately small connection pool.
+# The relay session may hold long-lived SSE connections; public metadata fetches
+# must never consume that authenticated forwarding capacity.
+_CIMD_CONNECTOR_LIMIT = 4
+
 # TOP-LEVEL hass.data flag recording that the ha_auth discovery views are bound
 # for this HA session. Deliberately NOT under DOMAIN so it survives
 # async_unload_entry's teardown — aiohttp cannot unregister an HTTP view until HA
@@ -140,19 +147,31 @@ def _build_base_url(request: web.Request) -> str:
 
 
 def _authorization_server_document(base: str) -> dict[str, Any]:
-    """RFC 8414 authorization-server metadata pointing at HA core's OAuth.
+    """RFC 8414 metadata for ha_auth mode — component-owned endpoints only.
 
-    Advertises HA core's own ``/auth/authorize`` + ``/auth/token`` as a public
-    client (``token_endpoint_auth_methods_supported: ["none"]``) and
-    ``client_id_metadata_document_supported`` so clients present a URL-shaped
-    ``client_id`` (CIMD) that HA core's long-standing IndieAuth handling accepts —
-    the user never pastes a credential. No ``registration_endpoint``: HA offers no
-    dynamic client registration; CIMD replaces it.
+    HA core is still the authorization server (the scoped /authorize 302s into
+    core's /auth/authorize and /token forwards server-side — see
+    oauth_autoapprove's ha_auth branches), but every URL a client can CACHE is
+    ours: a later auth-mode switch re-dispatches per request instead of
+    stranding the client on core paths we can never retract (#2188's
+    stickiness). ``registration_endpoint`` serves DCR-fallback brokers;
+    both CIMD-selection flags stay pinned (see
+    test_as_documents_pin_the_claude_cimd_selection_contract).
+
+    ``revocation_endpoint`` is ours for a second reason (#2248): the refresh
+    token the client holds is a signed envelope, and core's own
+    ``/auth/revoke`` answers 200 without revoking anything for a value it
+    cannot recognise. Only ha_auth mints those, so only this document
+    advertises it. The endpoint takes no client authentication, matching
+    ``token_endpoint_auth_methods_supported``.
     """
     return {
         "issuer": f"{base}{OAUTH_BASE}",
-        "authorization_endpoint": f"{base}/auth/authorize",
-        "token_endpoint": f"{base}/auth/token",
+        "authorization_endpoint": f"{base}{OAUTH_BASE}/authorize",
+        "token_endpoint": f"{base}{OAUTH_BASE}/token",
+        "registration_endpoint": f"{base}{OAUTH_BASE}/register",
+        "revocation_endpoint": f"{base}{OAUTH_BASE}/revoke",
+        "revocation_endpoint_auth_methods_supported": ["none"],
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
@@ -316,15 +335,18 @@ def issuer_for_request(request: web.Request) -> str:
 
 
 def _legacy_authorization_server_document(base: str) -> dict[str, Any]:
-    """RFC 8414 authorization-server metadata for legacy mode's own root
-    ``/authorize`` + ``/token`` views (see :mod:`oauth_legacy`)."""
+    """RFC 8414 metadata for legacy mode's component-scoped endpoints.
+
+    The root ``/authorize`` + ``/token`` views remain bound as aliases for
+    metadata-ignoring clients (see :mod:`oauth_legacy`).
+    """
     return {
         "issuer": oauth_issuer(base),
         # RFC 9207 §3: authorization responses carry ``iss`` (oauth_legacy's
         # redirects); omission reads as "not supported" to discovery clients.
         "authorization_response_iss_parameter_supported": True,
-        "authorization_endpoint": f"{base}{AUTHORIZE_PATH}",
-        "token_endpoint": f"{base}{TOKEN_PATH}",
+        "authorization_endpoint": f"{base}{OAUTH_BASE}/authorize",
+        "token_endpoint": f"{base}{OAUTH_BASE}/token",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
@@ -356,6 +378,7 @@ def _none_mode_authorization_server_document(base: str) -> dict[str, Any]:
         "authorization_response_iss_parameter_supported": True,
         "authorization_endpoint": f"{base}{OAUTH_BASE}/authorize",
         "token_endpoint": f"{base}{OAUTH_BASE}/token",
+        "registration_endpoint": f"{base}{OAUTH_BASE}/register",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
         "code_challenge_methods_supported": ["S256"],
@@ -400,8 +423,8 @@ class _ProtectedResourceMetadataView(HomeAssistantView):
 class _AuthorizationServerMetadataView(HomeAssistantView):
     """RFC 8414 Authorization Server Metadata.
 
-    Mode-aware: ha_auth points at HA core's own ``/auth/*``; legacy points at
-    this module's root ``/authorize``/``/token`` views.
+    Every mode advertises the component-scoped authorize/token pair; the bound
+    views dispatch each request according to the currently active mode.
     """
 
     requires_auth = False
@@ -668,6 +691,103 @@ async def _async_handle_webhook(
 # ---------------------------------------------------------------------------
 
 
+def _bind_ha_auth_surface(
+    hass: HomeAssistant,
+    cfg: dict[str, Any],
+    webhook_id: str,
+    dcr_signing_key: str | None,
+) -> None:
+    """Bind the ha_auth surface (fail-closed) and mark cfg's live providers."""
+    provider = ResourceServer(hass, webhook_id)
+    _register_metadata_views(hass)
+    bind_autoapprove_views(hass)
+    bind_dcr_view(hass)
+    cfg["resource_server"] = provider
+    if dcr_signing_key:
+        cfg[CFG_DCR_SIGNING_KEY] = bytes.fromhex(dcr_signing_key)
+
+
+def _bind_legacy_surface(
+    hass: HomeAssistant,
+    cfg: dict[str, Any],
+    oauth_client_id: str | None,
+    oauth_client_secret: str | None,
+    oauth_signing_key: str | None,
+) -> bool:
+    """Bind the legacy surface (fail-closed); return oauth_restart_needed.
+
+    A root-route conflict with the Webhook Proxy add-on is survivable since the
+    unified scoped endpoints carry legacy's advertised URLs — downgrade it to a
+    warning and serve scoped-only via an unbound provider.
+    """
+    if not (oauth_client_id and oauth_client_secret and oauth_signing_key):
+        raise ValueError(
+            "legacy webhook auth mode requires oauth_client_id, "
+            "oauth_client_secret, and oauth_signing_key"
+        )
+    _register_metadata_views(hass)
+    bind_autoapprove_views(hass)
+    oauth_restart_needed = False
+    try:
+        oauth_provider, oauth_restart_needed = bind_legacy_views(
+            hass, oauth_client_id, oauth_client_secret, oauth_signing_key
+        )
+    except LegacyOAuthRouteConflict:
+        # Log the owner read directly from hass.data, NOT the exception object:
+        # the exception flowed through code holding the client secret, and
+        # CodeQL's taint tracking flags logging it as clear-text sensitive-data
+        # (#2213 gate). The owner string is what the message needs anyway.
+        _LOGGER.warning(
+            "HA-MCP: the Webhook Proxy add-on ('%s') owns the root "
+            "/authorize and /token routes; legacy OAuth will serve "
+            "only on %s/authorize + %s/token (metadata-honoring "
+            "clients are unaffected; metadata-ignoring clients that "
+            "guess root paths reach the add-on instead).",
+            hass.data.get(OAUTH_ROUTE_OWNER_KEY),
+            OAUTH_BASE,
+            OAUTH_BASE,
+        )
+        oauth_provider = build_unbound_legacy_provider(
+            hass, oauth_client_id, oauth_client_secret, oauth_signing_key
+        )
+    cfg["oauth_provider"] = oauth_provider
+    return oauth_restart_needed
+
+
+def _bind_none_surface(
+    hass: HomeAssistant, cfg: dict[str, Any], dcr_signing_key: str | None
+) -> None:
+    """Bind the none-mode auto-approve surface — FAILS OPEN.
+
+    The secret webhook URL is the credential; this discovery surface is an
+    enhancement layered on a webhook that otherwise always forwards, so a
+    failure here must NOT tear down the unauthenticated endpoint (issue #1978)
+    — it only means claude.ai's rare OAuth-discovery fallback goes unassisted.
+    Both view bundles bind at most once per HA session; per-request resolvers
+    gate them on cfg, so a none<->ha_auth switch needs no restart (#1969).
+    The DCR key parses before the provider is assigned, so ANY failure —
+    including a corrupt key — leaves the whole surface inactive (plain proxy)
+    rather than half-enabled.
+    """
+    try:
+        _register_metadata_views(hass)
+        bind_autoapprove_views(hass)
+        bind_dcr_view(hass)
+        # Key BEFORE provider (#2213 review): a bad key raises here and leaves
+        # BOTH unset — plain proxy — instead of a half-enabled surface whose
+        # advertised /register 404s while /authorize auto-approves.
+        if dcr_signing_key:
+            cfg[CFG_DCR_SIGNING_KEY] = bytes.fromhex(dcr_signing_key)
+        cfg[CFG_AUTOAPPROVE_PROVIDER] = AutoApproveProvider()
+    except Exception:
+        _LOGGER.exception(
+            "MCP webhook: failed to set up none-mode auto-approve "
+            "discovery; continuing as a plain unauthenticated proxy "
+            "(the webhook still forwards — only claude.ai's rare "
+            "OAuth-discovery fallback is unassisted)."
+        )
+
+
 async def async_register_webhook(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -679,6 +799,7 @@ async def async_register_webhook(
     oauth_client_id: str | None = None,
     oauth_client_secret: str | None = None,
     oauth_signing_key: str | None = None,
+    dcr_signing_key: str | None = None,
 ) -> bool:
     """Register the ingress webhook (and, for ha_auth/legacy, the OAuth surface).
 
@@ -710,6 +831,10 @@ async def async_register_webhook(
         raise ValueError(f"Unknown webhook auth mode: {auth_mode!r}")
 
     webhook_id: str = entry.data[DATA_WEBHOOK_ID]
+    # The scoped-only provider is held in this registration's cfg and stops
+    # serving on every reload/unload. Its top-level credential fingerprint must
+    # follow that lifetime rather than surviving a switch away from legacy.
+    clear_scoped_legacy_credentials(hass)
     # Reload-safe and off-means-off: clear any leftover registration from a
     # crashed unload before (re)registering — or before storing a local-only
     # config (async_unregister is a no-op pop when nothing is registered).
@@ -717,15 +842,28 @@ async def async_register_webhook(
     async_unregister(hass, webhook_id)
     target_url = f"http://127.0.0.1:{port}{secret_path}"
     session = aiohttp.ClientSession(timeout=_CLIENT_TIMEOUT)
+    cimd_session: aiohttp.ClientSession | None = None
+    if register_endpoint and auth_mode == WEBHOOK_AUTH_HA:
+        try:
+            cimd_session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(limit=_CIMD_CONNECTOR_LIMIT)
+            )
+        except Exception:
+            # Creating the isolated pool is part of fail-closed ha_auth setup.
+            # Do not leak the already-open relay session if it fails.
+            await session.close()
+            raise
 
     cfg: dict[str, Any] = {
         "webhook_id": webhook_id,
         "target_url": target_url,
         "session": session,
+        CFG_CIMD_SESSION: cimd_session,
         "auth_mode": auth_mode,
         "resource_server": None,
         "oauth_provider": None,
         CFG_AUTOAPPROVE_PROVIDER: None,
+        CFG_DCR_SIGNING_KEY: None,
     }
 
     oauth_restart_needed = False
@@ -740,60 +878,15 @@ async def async_register_webhook(
                 allowed_methods=["POST", "GET"],
             )
             if auth_mode == WEBHOOK_AUTH_HA:
-                provider = ResourceServer(hass, webhook_id)
-                _register_metadata_views(hass)
-                cfg["resource_server"] = provider
+                _bind_ha_auth_surface(hass, cfg, webhook_id, dcr_signing_key)
             elif auth_mode == WEBHOOK_AUTH_LEGACY:
-                if not (oauth_client_id and oauth_client_secret and oauth_signing_key):
-                    raise ValueError(
-                        "legacy webhook auth mode requires oauth_client_id, "
-                        "oauth_client_secret, and oauth_signing_key"
-                    )
-                _register_metadata_views(hass)
-                try:
-                    oauth_provider, oauth_restart_needed = bind_legacy_views(
-                        hass, oauth_client_id, oauth_client_secret, oauth_signing_key
-                    )
-                except LegacyOAuthRouteConflict as err:
-                    raise ValueError(
-                        "The Webhook Proxy add-on (or its dev flavor) already "
-                        f"owns the root /authorize and /token routes ({err}). "
-                        "Stop that add-on and restart Home Assistant, then "
-                        "enable legacy mode again."
-                    ) from err
-                cfg["oauth_provider"] = oauth_provider
+                oauth_restart_needed = _bind_legacy_surface(
+                    hass, cfg, oauth_client_id, oauth_client_secret, oauth_signing_key
+                )
             else:
                 # WEBHOOK_AUTH_NONE (the only remaining mode — unknown modes
-                # already raised above). The secret webhook URL is the
-                # credential, but we still serve our own corrected discovery +
-                # an invisible auto-approve authorization server so claude.ai's
-                # intermittent OAuth discovery resolves against us instead of HA
-                # core's broken origin-root document, and completes with no HA
-                # login (issue #1969). Both view bundles bind at most once per
-                # HA session; the per-request resolvers gate them on this cfg,
-                # so a none<->ha_auth switch needs no restart.
-                #
-                # Fails OPEN, unlike ha_auth/legacy (issue #1978): none mode is
-                # intentionally unauthenticated, and this discovery is an
-                # enhancement layered on a webhook that (already registered
-                # above) otherwise always forwards. A failure here must NOT fall
-                # through to the outer teardown and take down a webhook the user
-                # configured to need no auth — it only means claude.ai's rare
-                # OAuth-discovery fallback goes unassisted. Mirrors the add-on's
-                # _setup_none_autoapprove. Provider is assigned last, so a
-                # partial bind leaves none-autoapprove inactive (plain proxy)
-                # rather than half-enabled.
-                try:
-                    _register_metadata_views(hass)
-                    bind_autoapprove_views(hass)
-                    cfg[CFG_AUTOAPPROVE_PROVIDER] = AutoApproveProvider()
-                except Exception:
-                    _LOGGER.exception(
-                        "MCP webhook: failed to set up none-mode auto-approve "
-                        "discovery; continuing as a plain unauthenticated proxy "
-                        "(the webhook still forwards — only claude.ai's rare "
-                        "OAuth-discovery fallback is unassisted)."
-                    )
+                # already raised above).
+                _bind_none_surface(hass, cfg, dcr_signing_key)
         except Exception:
             # Never leave a live endpoint (or a leaked session) behind a failed
             # auth-setup path. suppress: the ORIGINAL error must be what
@@ -802,6 +895,10 @@ async def async_register_webhook(
                 async_unregister(hass, webhook_id)
             with suppress(Exception):
                 await session.close()
+            if cimd_session is not None:
+                with suppress(Exception):
+                    await cimd_session.close()
+            clear_scoped_legacy_credentials(hass)
             raise
 
     # A PRIOR registration this HA session may still own the legacy root views
@@ -826,6 +923,7 @@ async def async_unregister_webhook(hass: HomeAssistant) -> None:
     restarts); they 404 while their mode is not live (see ``active_auth_mode``
     / ``LegacyOAuthProvider.is_active``).
     """
+    clear_scoped_legacy_credentials(hass)
     domain_data = hass.data.get(DOMAIN)
     if not isinstance(domain_data, dict):
         return
@@ -838,3 +936,6 @@ async def async_unregister_webhook(hass: HomeAssistant) -> None:
     session = cfg.get("session")
     if session is not None:
         await session.close()
+    cimd_session = cfg.get(CFG_CIMD_SESSION)
+    if cimd_session is not None:
+        await cimd_session.close()

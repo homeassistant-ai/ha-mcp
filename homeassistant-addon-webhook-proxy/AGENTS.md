@@ -26,7 +26,7 @@ leaks into the dev tree.
 **A PR never edits the stable tree directly in regular operation.** The
 `webhook-proxy-stable-guard` workflow blocks any PR touching
 `homeassistant-addon-webhook-proxy/` unless it comes from a `promote-webhook-proxy/*`
-branch or carries the `allow-stable-edit` label (stable-only hotfixes). Every change
+branch or carries the `allow-stable-edit` label for an exceptional direct repair. Every change
 (code *and* docs) lands on the dev flavor first — with the version bump
 `webhook-proxy-dev-version-guard` enforces — gets tested on the dev channel, and
 reaches stable through the promote workflow (see Promotion below).
@@ -42,7 +42,9 @@ promote PR.
 
 ## Mutual exclusion
 Both flavors install a webhook + OAuth views; the OAuth provider owns the root
-`/authorize` and `/token` routes, which two live integrations cannot share. So only one
+`/authorize` and `/token` routes, which two live integrations cannot share. (The scoped
+`/api/mcp_proxy{,_dev}/oauth/*` routes carry the domain, so those do not collide — the
+bare root pair is what forces the exclusion.) So only one
 flavor may run at a time. Each `start.py` checks the Supervisor `/addons` list on
 startup and refuses (logs + a self-clearing HA notification, then exits) if its sibling
 is `started`. `start.py:_sibling_is_running` matches the sibling by exact slug or
@@ -89,15 +91,21 @@ manual fallback):
    (next stable patch + `.dev1`, per the Versioning rule above — the transform's
    `rebase_dev_version` does this; only dev `config.yaml` + `manifest.json` change).
    Right after a promote the trees are code-identical, so no separate reset PR is
-   needed; `Reset Dev from Stable` remains a manual tool for the stable-hotfix
-   backport case.
+   needed; `Reset Dev from Stable` remains a manual tool after an exceptional
+   direct stable repair.
 
 ## Testing
 `tests/addon/test_webhook_proxy.py` is parametrized over BOTH flavors — an autouse
 `_webhook_proxy_variant` fixture rebinds `PROXY_ADDON_DIR`/`CURRENT`, so every test runs
 once as `[stable]` and once as `[dev]`. CI runs `tests/addon/`, so the dev code is
 exercised on every PR — that is what makes it safe to develop on the dev flavor before
-promoting. When you add a variant-specific value, add it to the `WEBHOOK_PROXY_VARIANTS`
-table rather than hard-coding it in a test. `tests/src/unit/test_webhook_proxy_dev_isolation.py`
+promoting. When you add a variant-specific VALUE — a path, slug, domain, or route base —
+add it to the `WEBHOOK_PROXY_VARIANTS` table rather than hard-coding it in a test. A
+variant-specific CAPABILITY is the opposite: feature-detect it from the flavor's own
+source, the way `_ha_auth_supported`, `_none_autoapprove_supported`, and
+`_rfc9207_iss_supported` already do. The promote transform copies code but never edits
+this test file, so a capability recorded as a table boolean stays `False` for stable
+after the code arrives, and the promote PR then asserts the old surface against the new
+one. `tests/src/unit/test_webhook_proxy_dev_isolation.py`
 separately guards the rename (no bare `mcp_proxy` token in the dev tree) and the dev-side
 mutual-exclusion constants.

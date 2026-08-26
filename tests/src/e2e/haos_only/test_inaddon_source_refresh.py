@@ -18,7 +18,7 @@ Without an explicit check, the chain has three silent-failure modes:
    image — happened pre-#1361, fixed with the explicit ``/start``
    after ``/update``).
 
-Querying ``ha_get_addon`` for the dev addon and asserting its version
+Querying ``ha_get_app`` for the dev addon and asserting its version
 contains the current commit's ``-pr-<sha>`` tag closes all three holes
 in one assertion — every inaddon CI run, every PR commit.
 """
@@ -48,10 +48,10 @@ async def test_dev_addon_version_reflects_pr_commit(mcp_client: Any) -> None:
     expected_sha = (os.environ.get("GITHUB_SHA", "") or "local")[:7] or "local"
     expected_suffix = f"-pr-{expected_sha}"
 
-    raw = await mcp_client.call_tool("ha_get_addon", {})
+    raw = await mcp_client.call_tool("ha_get_app", {})
     data = parse_mcp_result(raw)
 
-    # ha_get_addon returns ``{"addons": [{"name": str, "version": str, ...}], ...}``.
+    # ha_get_app returns ``{"addons": [{"name": str, "version": str, ...}], ...}``.
     # Match on display name from homeassistant-addon-dev/config.yaml.
     addons = data.get("addons") or []
     dev_addon = next(
@@ -60,7 +60,7 @@ async def test_dev_addon_version_reflects_pr_commit(mcp_client: Any) -> None:
     )
     assert dev_addon is not None, (
         f"Dev addon {DEV_ADDON_NAME!r} not in installed addons returned by "
-        f"ha_get_addon. Installed names: "
+        f"ha_get_app. Installed names: "
         f"{[a.get('name') for a in addons]}. Either the bake's "
         f"install_ha_mcp_dev_addon failed or the addon was uninstalled "
         f"mid-session."

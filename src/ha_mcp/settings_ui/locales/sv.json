@@ -1,0 +1,855 @@
+{
+  "meta": {
+    "native_name": "Svenska",
+    "dir": "ltr"
+  },
+  "messages": {
+    "app.document_title": "HA-MCP Verktygsinställningar",
+    "app.title": "HA-MCP Inställningar",
+    "language.label": "Språk",
+    "language.auto": "Automatisk",
+    "theme.label": "Tema",
+    "theme.auto_os": "Automatisk (OS)",
+    "theme.light": "Ljus",
+    "theme.dark": "Mörk",
+    "status.loading": "Laddar…",
+    "footer.installation": "installation: {method}",
+    "footer.deployment.addon": "app/tillägg",
+    "footer.deployment.docker": "behållare/docker",
+    "footer.deployment.pyinstaller": "fristående binärfil",
+    "footer.deployment.git": "källkodsutcheckning",
+    "footer.deployment.pypi": "python-paket",
+    "footer.deployment.unknown": "okänd",
+    "nav.skip": "Hoppa till innehåll",
+    "tabs.aria": "Inställningssektioner",
+    "tabs.tools": "Verktyg",
+    "tabs.server": "Serverinställningar",
+    "tabs.backups": "Säkerhetskopior",
+    "tabs.policies": "Verktygssäkerhetspolicyer",
+    "tabs.visibility": "Entitetsynlighet",
+    "tabs.accessibility": "Tillgänglighet",
+    "notice.restart_required": "⚠ Ändringar sparade. Starta om HA-MCP för att de ska träda i kraft. Vid nästa uppstart tar HA-MCP bort inaktiverade verktyg helt från MCP-verktygslistan. Återanslut sedan eller uppdatera MCP-servern i din AI-klient (t.ex. uppdatera verktygslistan på claude.ai, lägg till/uppdatera anslutningen igen i ChatGPT, eller stäng och öppna Claude Desktop igen) så att den läser in verktygslistan på nytt. Att starta om appen (tillägget) eller Home Assistant uppdaterar INTE klientens cachade verktygslista. ChatGPT fortsätter ibland att tillhandahålla sin cachade verktygslista även efter att anslutningen har tagits bort och lagts till igen – om verktyg fortfarande saknas tar du bort anslutningen och skapar en ny med ett annat namn.",
+    "notice.shared_settings": "Serveromfattande funktioner (verktygssökning, redigering av YAML-konfiguration, filsystemsektyg med mera) visas både på fliken <strong>Server Settings</strong> och på appens (tilläggets) konfigurationssida; det är samma inställningar oavsett var. Vardera gränssnitt hålls synkroniserat med det andra efter att appen (tillägget) har startats om. Ändringar kräver att HA-MCP startas om.",
+    "notice.env_pins": "Verktyg som finns med i miljövariablerna <code>DISABLED_TOOLS</code> eller <code>PINNED_TOOLS</code> är låsta som skrivskyddade; ta bort miljövariabeln för att redigera dem här. Växlingar för fästning träder bara i kraft när verktygssökning är aktiverat (på fliken Server Settings eller appens (tilläggets) konfigurationssida).",
+    "actions.restart_addon": "Starta om app (tillägg)",
+    "actions.save": "Spara",
+    "actions.save_settings": "Spara inställningar",
+    "actions.refresh": "Uppdatera",
+    "actions.close": "Stäng",
+    "tools.read_only.label": "Skrivskyddat läge",
+    "tools.read_only.help": "Stänger av alla skrivverktyg och blockerar varje verktyg från att göra skriv- eller destruktiva anrop. Blandade läs-/skrivverktyg (säkerhetskopior, Appar (tillägg), energipreferenser, röstpipelines och kodläge när aktiverat) förblir tillgängliga med sina skrivoperationer blockerade.",
+    "tools.read_only.unknown": "Kunde inte läsa serverinställningar. Status för skrivskyddat läge okänd; denna vy kanske inte återspeglar vad servern tillämpar.",
+    "tools.search": "Sök verktyg...",
+    "server.auto_save_notice": "Inställningarna på den här fliken sparas automatiskt. Ändringar träder bara i kraft när du har startat om HA-MCP (tillämpar dem på serversidan) och återanslutit eller uppdaterat MCP-servern i din AI-klient (läser in verktygslistan igen), t.ex. uppdaterat verktygslistan på claude.ai, lagt till eller uppdaterat anslutningen i ChatGPT, eller stängt och öppnat Claude Desktop igen. ChatGPT fortsätter ibland att tillhandahålla sin cachade verktygslista även efter att anslutningen har tagits bort och lagts till igen – om verktyg fortfarande saknas tar du bort anslutningen och skapar en ny med ett annat namn.",
+    "server.sections.search": "Sök & matchning",
+    "server.sections.operations": "Operationer",
+    "server.sections.tool_surface": "Verktygsyta",
+    "server.sections.diagnostics": "Diagnostik",
+    "server.sections.sidecar": "Inställnings-UI sidovagn",
+    "server.sections.beta": "Betafunktioner (farliga)",
+    "server.sections.developer": "Utvecklare",
+    "server.sidecar.disable": "Inaktivera inställningsservern permanent",
+    "server.sidecar.disable_title": "Inaktiverar inställnings-UI permanent: stoppar denna server OCH skriver ~/.ha-mcp/settings_ui_disabled så att den inte återuppstår vid framtida ha-mcp-starter. Ta bort den filen för att återaktivera.",
+    "backups.loading": "Laddar säkerhetskopieringsstatus…",
+    "backups.filter.domain": "Domän (t.ex. automation)",
+    "backups.filter.domain_aria": "Filtrera säkerhetskopior efter domän",
+    "backups.filter.entity": "Entitets-ID",
+    "backups.filter.entity_aria": "Filtrera säkerhetskopior efter entitets-ID",
+    "backups.bulk_delete": "Massradera matchande…",
+    "policies.title": "Verktygssäkerhetspolicyer",
+    "policies.intro": "Godkännandespärr per verktyg för högrisk-anrop. Använd fliken <strong>Verktyg</strong> för att aktivera spärr för ett verktyg, och förfina sedan matchningsvillkoren och godkännandelivslängden här. Villkorsoperatorer: är lika med, är en av, regex, innehåller, finns, större än, mindre än.",
+    "policies.global.title": "Globala inställningar",
+    "policies.global.unknown": "Kunde inte läsa serverinställningar. De två omkopplarna nedan visas som okända och kan inte ändras förrän sidan laddas om framgångsrikt; denna vy kanske inte återspeglar vad servern tillämpar.",
+    "policies.global.enabled.label": "Aktivera verktygssäkerhetspolicyer",
+    "policies.global.enabled.help": "Huvudströmbrytare. Speglar reglaget i Server Settings. Av som standard. Slå på och starta om HA-MCP för att aktivera skydds-middlewaren. När den är av finns reglerna nedan kvar men tillämpas inte.",
+    "policies.global.manage_tool.label": "Låt AI-agenter redigera dessa policyer (ha_manage_security_policy)",
+    "policies.global.manage_tool.help": "Registrerar verktyget ha_manage_security_policy, som läser och ersätter policydokumentet som denna flik redigerar. Avstängd som standard. Oberoende av huvudomkopplaren ovan: detta styr vem som kan redigera reglerna, inte om de tillämpas. Verktyget exponerar inte köoperationer för väntande godkännanden, men en policy-spärrad inställningsåtgärd kan fortfarande kräva godkännande.",
+    "policies.global.manage_tool.warning": "Om du aktiverar detta kan anslutna AI-agenter skriva om säkerhetsprinciperna på den här fliken, inklusive att ta bort godkännandespärrar. För att behålla en människa i loopen, spärra verktyget INNAN du aktiverar det: på fliken Tools, slå på \"security gated\" för Manage Security Policy. Den regeln kan skapas medan verktyget fortfarande är av, och den börjar gälla så snart huvudströmbrytaren ovan är på och servern har startats om. Starta om appen (tillägget) efter att du har växlat någon av strömbrytarna.",
+    "policies.global.wait.label": "Vänta sekunder (5-600)",
+    "policies.global.wait.help": "Hur länge mjukvaran väntar på ett godkännande innan den tidsinställs.",
+    "policies.global.ttl.label": "Godkännande TTL minuter (1-60)",
+    "policies.global.ttl.help": "Hur länge ett väntande godkännande stannar i kön innan det upphör att gälla.",
+    "policies.global.save": "Spara globala inställningar",
+    "policies.pending.title": "Väntande godkännanden",
+    "policies.pending.empty": "Inga väntande godkännanden.",
+    "policies.rules.title": "Spärrade verktyg",
+    "policies.rules.empty": "Inga verktyg är för närvarande säkerhetsspärrade. Aktivera spärr per verktyg från fliken <a href=\"#\" data-panel-link=\"tools\">Verktyg</a>.",
+    "accessibility.intro": "Dessa inställningar tillämpas omedelbart och sparas i denna webbläsare och på servern, så de överlever omstarter i alla lägen (inklusive stdio, där inställningssidan ibland kan flyttas till en ny port). Dokumentationswebbplatsen erbjuder samma kontroller i sin navigeringsfält; den har ingen server och sparar per webbläsare.",
+    "accessibility.storage_blocked": "Din webbläsare blockerar lagring för den här webbplatsen; dina val gäller bara den här sessionen.",
+    "accessibility.theme.title": "Tema",
+    "accessibility.theme.help": "Färgscheman med ett klick. Automatisk, standardinställningen, följer ditt OS-preferens och växlar live när det ändras.",
+    "accessibility.theme.preset": "Temaförinställning",
+    "accessibility.theme.paper": "Papper",
+    "accessibility.theme.gray": "Grå",
+    "accessibility.theme.contrast": "Hög kontrast",
+    "accessibility.text_size.title": "Textstorlek",
+    "accessibility.text_size.help": "Skalar rotteckenstorleken. Webbläsarzoom (Ctrl/Cmd +) fungerar fortfarande utöver detta.",
+    "accessibility.colors.title": "Anpassade färger",
+    "accessibility.colors.help": "Välj dina egna färger utöver det valda temat. Varje färgprov öppnar systemets visuella färgväljare.",
+    "accessibility.colors.background": "Bakgrund",
+    "accessibility.colors.text": "Text",
+    "accessibility.colors.accent": "Accent",
+    "accessibility.colors.low_contrast": "De valda bakgrunds- och textfärgerna har ett kontrastförhållande under 4.5:1 och kan vara svåra att läsa tillsammans.",
+    "accessibility.colors.clear": "Rensa anpassade färger",
+    "accessibility.reset": "Återställ till standard",
+    "visibility.intro": "Dölj entiteter med lågt värde (automatiskt genererade diagnostik- eller hjälpentiteter, eller en explicit lista) från samlingsläsverktygen <code>ha_search</code> och <code>ha_get_overview</code>, så att sök- och översiktsresultaten blir mindre röriga. Avstängd som standard; ändringar tillämpas vid nästa verktygsanrop.",
+    "visibility.boundary": "Utan tvingande läge (nedan) är detta brusreducering, inte åtkomstkontroll: en dold entitet returneras fortfarande vid en direkt läsning av dess entity_id och visas fortfarande i innehåll för automatisering, instrumentpaneler och mallar. Förlita dig inte enbart på filtret som en säkerhetsgräns.",
+    "visibility.enabled": "Aktivera entitets synlighetsfilter",
+    "visibility.enforce.title": "Tvingande läge",
+    "visibility.enforce.help": "Utökar filtret från att rensa sökningar och översikter till att som standard gälla alla verktygsläsningar förutom ha_report_issue. En direkt läsning av en dold entitet returnerar \"ej hittad\", och en innehållsläsning som skulle visa en sådan nekas. Undantaget för rapportverktyget styrs nedan. Bästa möjliga döljande mot oavsiktlig exponering, inte en härdad säkerhetsgräns.",
+    "visibility.enforce.only_enforced": "Gör dolda entiteter oläsbara vid alla verktygsläsandet (förutom felrapporter som standard)",
+    "visibility.enforce.report_issue_help": "Medan detta är avstängt förblir ha_report_issue och all dess diagnostiska utdata – inklusive loggar – utanför tvingande läge vid varje anrop, även när synlighetsdata är felfri eller otillgänglig. Slå på det för att skanna och neka det verktyget liksom andra läsningar.",
+    "visibility.enforce.restrict_report_issue": "Tillämpa tvingande läge på ha_report_issue",
+    "visibility.categories.title": "Dölj efter kategori",
+    "visibility.categories.help": "Home Assistant taggar automatiskt genererade entiteter som diagnostik eller konfiguration.",
+    "visibility.categories.legend": "Entitetskategorier att dölja",
+    "visibility.categories.diagnostic": "Diagnostik",
+    "visibility.categories.config": "Konfiguration",
+    "visibility.categories.hidden": "Även entiteter som redan är dolda i Home Assistant",
+    "visibility.area_label.title": "Dölj efter område eller etikett",
+    "visibility.area_label.help": "Kommaseparerade områdes-ID:n eller etikett-ID:n; entiteter i något listat område eller etikett döljs.",
+    "visibility.areas": "Områden",
+    "visibility.labels": "Etiketter",
+    "visibility.entities.title": "Dölj specifika entiteter",
+    "visibility.entities.help": "Ett entity_id per rad. Dessa förblir dolda även utan en entitetsregisterpost.",
+    "visibility.entities.denied": "Nekade entitets-ID:n",
+    "visibility.allowlist.title": "Begränsa till en tillåtelselista",
+    "visibility.allowlist.help": "Avancerat: när något fält i tillåtelselistan är inställt inverteras filtret – endast entiteter som matchar en tillåtelselista förblir synliga, allt annat döljs (inklusive entiteter som lagts till senare). Lämna alla tre tomma för att inaktivera.",
+    "visibility.allowlist.areas": "Tillåtna områden",
+    "visibility.allowlist.labels": "Tillåtna etiketter",
+    "visibility.allowlist.entities_help": "Tillåtna entitets-ID:n, ett per rad.",
+    "visibility.allowlist.entities": "Tillåtna entitets-ID:n",
+    "visibility.assist.title": "Respektera Assist-exponering",
+    "visibility.assist.help": "Dölj entiteter som inte exponeras för Home Assistants röstassistent Assist (”konversation”), vilket speglar listan Inställningar > Röstassistenter > Exponera. Lägger till två websocket-läsningar per sökning när aktiverat.",
+    "visibility.assist.only_exposed": "Visa endast entiteter exponerade för Assist",
+    "features.enable_tool_search.label": "Aktivera verktygssökning",
+    "features.enable_tool_search.help": "Ersätter hela verktygskatalogen med sökbaserad upptäckt. Minskar inaktiv kontext med ungefär 90%, till cirka 5K tokens. ⚠️ Aktivera INTE detta i klienter med egen inbyggd verktygssökning / fördröjda verktyg (claude.ai, Claude Desktop, Claude Code) — de två söklagren kolliderar, och klientens inbyggda verktygssökning är det bättre valet där; lämna detta avstängt. Om verktyg är fördröjda beror på din klient- och modellkombination: använd detta när din installation laddar hela katalogen direkt — modeller utan inbyggda fördröjda verktyg (t.ex. Gemini, OpenAI-kompatibla lokala modeller, Claude Haiku), klienter som infogar alla verktygsscheman oavsett modell (t.ex. GitHub Copilot CLI), eller mindre kontextfönster. Vissa Codex-modeller och ChatGPT inkluderar också fördröjda verktyg — kontrollera din klient/modell direkt för att bekräfta dess funktioner så att du inte lämnar detta aktiverat i onödan. Verktyg hittas via ha_search_tools och exekveras via kategoriserade proxys (läs/skriv/radera). Kräver omstart för att träda i kraft.",
+    "features.tool_search_max_results.label": "Max antal resultat för verktygssökning",
+    "features.tool_search_max_results.help": "Maximalt antal verktyg som returneras av ha_search_tools när verktygssökning är aktiverad. Lägre värden (2-3) sparar kontext-tokens men kan missa relevanta verktyg. Omfång: 2-10. Kräver omstart.",
+    "features.enable_tool_security_policies.label": "Aktivera verktygssäkerhetspolicyer (avancerat)",
+    "features.enable_tool_security_policies.help": "Spärra verktygsanrop med hög risk (lås-/larmkontroll, automatiseringsskrivningar, etc.) bakom användargodkännande. När ett skyddat verktyg anropas, ber agenten användaren att öppna fliken Verktygssäkerhetspolicyer i webbgränssnittet och klicka på Godkänn innan anropet fortsätter. Regler per verktyg med valfria argumentvillkor konfigureras i fliken Verktygssäkerhetspolicyer. Avstängt som standard. Kräver omstart för att träda i kraft.",
+    "features.read_only_mode.label": "Skrivskyddat läge",
+    "features.read_only_mode.help": "Stänger av alla skrivverktyg och tar bort möjligheten för verktyg att göra några skrivningar eller destruktiva anrop. Blandade läs-/skrivverktyg – säkerhetskopior, appar (tillägg), energipreferenser, röstpipeliner och kodläge när det är aktiverat – förblir tillgängliga men med sina skrivåtgärder blockerade. Samma reglage som på fliken Tools i webbgränssnittet. Av som standard. Kräver omstart för att träda i kraft.",
+    "features.redact_secrets.label": "Redigera hemligheter",
+    "features.redact_secrets.help": "Döljer hemligheter från verktygssvar innan de når AI-assistenten. Appalternativ (tilläggsalternativ) och integrationsfält markerade som lösenord ersätts med en markering för satt/tomt (så att \"är denna autentiseringsuppgift konfigurerad?\" fortfarande kan besvaras), och andra verktygssvar rensas från hemliga värden som servern redan har sett (värden kortare än 6 tecken hoppas över, eftersom utbyte av små fragment skulle korruptera orelaterad utdata). Fält som inte är markerade som lösenord av sitt schema kan inte upptäckas. Av som standard.",
+    "features.enable_mandatory_bps.label": "Bifoga bästa praxis-färdigheter vid skrivningar",
+    "features.enable_mandatory_bps.help": "Huvudbrytare för funktionen för leverans av skrivverktygsfärdighetsinnehåll (ärende #1182). När aktiverat (standard), bifogar de sex konfigurationsskrivverktygen (automatiseringar, skript, scener, hjälpare, instrumentpaneler, rå YAML) de kanoniska Home Assistant bästa praxis-referensfilerna under `skill_content` vid varje lyckad skrivning, plus att de automatiskt bäddar in alla referenssektioner som citeras av bästa praxis-varningar. Varje verktyg exponerar också en per-anrop `MandatoryBPS`-parameter som agenten kan sätta till false vid efterföljande anrop när den har innehållet. När denna huvudbrytare är avstängd, skickas INGET skill_content ut oavsett per-anrop-parametern eller BP-varningar. Rekommenderas PÅ som första val; inaktivera endast för modeller med mycket små kontextfönster. Att stänga av detta kan försämra skrivnoggrannheten. Kräver omstart för att träda i kraft.",
+    "features.enable_strict_mandatory_bps.label": "Strikt bästa praxis-läge",
+    "features.enable_strict_mandatory_bps.help": "Strikt läge: förhindrar klienten från att använda verktyget tills den kan bevisa att den har läst de bästa praxis. När aktiverat, blockeras de sex bästa praxis-skrivverktygen (automatiseringar, skript, scener, hjälpare, instrumentpaneler, rå YAML) och returnerar ett fel som instruerar klienten att läsa bästa praxis-färdigheten via ha_get_skill_guide och skicka tillbaka den bekräftelsenyckel den får där. När aktiverat, är verktyget ha_get_skill_guide låst aktiverat — det är den enda utgivaren av bekräftelsenyckeln. Underordnad alternativet ”Bifoga bästa praxis-färdigheter vid skrivningar” ovan och inaktivt när det överordnade alternativet är avstängt. Kräver omstart för att träda i kraft.",
+    "features.enable_beta_features.label": "Aktivera beta-funktioner (huvud)",
+    "features.enable_beta_features.help": "⚠ FARA — dessa verktyg kan PERMANENT SKADA din Home Assistant-installation. De skriver till din YAML-konfiguration, ditt filsystem, installerar anpassade komponenter, kör godtycklig sandlådad Python och redigerar verktygsdokumentsträngar som AI:n ser. Det finns ingen garanti och ingen supportgaranti — du aktiverar dem på EGEN RISK. Ta en Home Assistant-säkerhetskopia innan du aktiverar detta, och aktivera aldrig i produktion utan en. Huvudgrind för de experimentella underflaggorna nedan; underflaggor ignoreras vid körning när denna huvudgrind är avstängd, även när de uttryckligen är inställda på sant. Samma växling visas också i webbinställningsgränssnittet under \"Betafunktioner (farliga)\" — båda ytorna återspeglar den andra vid omstart.",
+    "features.enable_yaml_config_editing.label": "Aktivera redigering av YAML-konfiguration (beta)",
+    "features.enable_yaml_config_editing.help": "Betafunktion. Tillåter AI-assistenter att lägga till, ersätta eller ta bort toppnivånycklar i configuration.yaml och packages/*.yaml. Endast vitlistade nycklar är tillåtna (t.ex. template, sensor, command_line, mqtt, knx); kärnnycklar som homeassistant, http och recorder är blockerade. Varje redigering validerar YAML-syntax, kör en konfigurationskontroll och skapar en automatisk säkerhetskopia. Ändringar av de flesta nycklar kräver en fullständig HA-omstart för att träda i kraft. Se docs/beta.md för kända begränsningar. Dedikerade verktyg (automations, scripts, scenes, helpers, template sensors) bör föredras när de är tillgängliga. KRÄVER att huvudbrytaren \"Aktivera betafunktioner\" ovan (och i webbgränssnittet) är påslagen — annars ignoreras denna underflagga vid körning oavsett dess värde här.",
+    "features.enable_yaml_edit_confirm.label": "Kräv bekräftelse för YAML-redigeringar (diff-förhandsvisning)",
+    "features.enable_yaml_edit_confirm.help": "Underbrytare för YAML-konfigurationsredigering, PÅ som standard (rekommenderas). Det första anropet till ha_config_set_yaml returnerar en enhetlig diff av exakt vad som skulle ändras på disken plus en bekräftelsetoken och skriver ingenting; redigeringen sparas endast när anropet upprepas med den token. Finns för att oavsiktliga ändringar utanför den begärda redigeringen ska upptäckas innan de når disken (ärende #1720). Stäng endast av för att spara en tur och retur per redigering.",
+    "features.enable_yaml_packages_automation.label": "Tillåt automation i packages/*.yaml",
+    "features.enable_yaml_packages_automation.help": "Underbrytare för YAML-konfigurationsredigering. När den är på, accepterar ha_config_set_yaml yaml_path='automation' inuti packages/*.yaml. När den är av, avvisas anropet både klient- och serversidan. Lagringslägesverktyget (ha_config_set_automation) påverkas inte. Standard AV; träder endast i kraft när \"Aktivera redigering av YAML-konfiguration\" ovan också är påslagen.",
+    "features.enable_yaml_packages_script.label": "Tillåt script i packages/*.yaml",
+    "features.enable_yaml_packages_script.help": "Underbrytare för YAML-konfigurationsredigering. När den är på, accepterar ha_config_set_yaml yaml_path='script' inuti packages/*.yaml. När den är av, avvisas anropet både klient- och serversidan. Lagringslägesverktyget (ha_config_set_script) påverkas inte. Standard AV; träder endast i kraft när \"Aktivera redigering av YAML-konfiguration\" ovan också är påslagen.",
+    "features.enable_yaml_packages_scene.label": "Tillåt scene i packages/*.yaml",
+    "features.enable_yaml_packages_scene.help": "Underbrytare för YAML-konfigurationsredigering. När den är på, accepterar ha_config_set_yaml yaml_path='scene' inuti packages/*.yaml. När den är av, avvisas anropet både klient- och serversidan. Lagringslägesverktyget (ha_config_set_scene) påverkas inte. Standard AV; träder endast i kraft när \"Aktivera redigering av YAML-konfiguration\" ovan också är påslagen.",
+    "features.enable_filesystem_tools.label": "Aktivera filsystemverktyg (beta)",
+    "features.enable_filesystem_tools.help": "Sätter HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Aktiverar direkt läs-/skrivåtkomst till ditt Home Assistant-filsystem. VARNING: Detta ger MCP-servern känslig direkt filåtkomst till ditt system. Aktivera endast om du litar på AI-assistenten med filoperationer. Kräver omstart för att träda i kraft. KRÄVER att huvudbrytaren \"Aktivera betafunktioner\" ovan (och i webbgränssnittet) är påslagen — annars ignoreras denna underflagga vid körning oavsett dess värde här.",
+    "features.enable_code_mode.label": "Aktivera sandlåda för anpassade verktyg (beta)",
+    "features.enable_code_mode.help": "Betafunktion. Aktiverar verktyget ha_manage_custom_tool, som låter AI-assistenter skapa, köra, spara och ta bort anpassad Python-kod i en säker sandlåda när inget inbyggt verktyg kan hantera begäran. Koden körs i en isolerad tolkningsmiljö utan åtkomst till filsystem eller godtyckligt nätverk. Sandlådekod kan nå HA REST API (api_get/api_post), skicka WebSocket-kommandon (ws_send), anropa befintliga MCP-verktyg (call_tool) eller ta bort ett sparat verktyg (delete_saved_tool). Sparade verktyg sparas i /data/saved_tools.json som standard så att de överlever omstart av appen (tillägget), och är synliga för alla klienter som kan ansluta. Se docs/beta.md för kända begränsningar. Kräver omstart för att träda i kraft. KRÄVER att huvudreglaget \"Enable betafeatures\" ovan (och i webbgränssnittet) är på – annars ignoreras denna underflagga vid körning oavsett dess värde här.",
+    "features.enable_lite_docstrings.label": "Aktivera lätta verktygsdocstrings (beta)",
+    "features.enable_lite_docstrings.help": "Betafunktion. Ersätter docstrings på ett fåtal tunga ha-mcp-verktyg (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) med kortare varianter som skjuter upp schema- och exempeldetaljer till verktyget ha_get_skill_guide (eller dess skill://-resurs). VARNING: detta minskar oanvänd tokenanvändning, men kan försämra LLM-prestanda — de trimmade beskrivningarna förlitar sig på att LLM faktiskt anropar skill-verktyget eller läser skill-resursen för detaljer, vilket inte är garanterat (vissa modeller kommer att hoppa över det extra verktygsanropet och sluta med mindre vägledning än de hade tidigare). Passar bäst med en klient som stöder MCP-resurser eller med enable_tool_search. Kräver omstart för att träda i kraft. KRÄVER att huvudbrytaren \"Aktivera betafunktioner\" ovan (och i webbgränssnittet) är påslagen — annars ignoreras denna underflagga vid körning oavsett dess värde här.",
+    "features.enable_dashboard_screenshot.label": "Aktivera skärmbildsläge för instrumentpanel (beta)",
+    "features.enable_dashboard_screenshot.help": "Betafunktion – av som standard. Lägger till verktyget ha_get_dashboard_screenshot samt alternativen include_screenshot / return_screenshot på instrumentpanelens hämta-/sättverktyg, så att AI-assistenter kan granska en eller flera responsiva Lovelace-bilder (t.ex. för att verifiera en instrumentpanel de nyss skapade). Stöder stabila namngivna vyer, mobil-/surfplatta-/skrivbordsbatchar samt PNG/JPEG/WebP/BMP-utdata. Renderingen körs i en separat, frivillig motor – balloobs \"Puppet\"-app (tillägg), headless Chromium – som du installerar en gång (lägg till balloobs förråd i App Store och installera sedan \"Puppet\") och ger en långlivad åtkomsttoken; på Docker-/Container-distributioner kör du den motorn som en sidovagn (sidecar) och ställer in HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Inget tungt installeras om du inte både aktiverar detta och installerar motorn. Kräver omstart för att träda i kraft. KRÄVER att huvudreglaget \"Enable betafeatures\" ovan (och i webbgränssnittet) är på – annars ignoreras denna underflagga vid körning oavsett dess värde här.",
+    "actions.restart_server": "Starta om HA-MCP-servern",
+    "actions.restart_confirm": "Starta om HA-MCP nu? Sidan laddas om automatiskt när den är online igen.",
+    "actions.view": "Visa",
+    "actions.diff": "Jämför",
+    "actions.restore": "Återställ",
+    "actions.delete": "Ta bort",
+    "actions.edit": "redigera",
+    "actions.remove": "Ta bort",
+    "actions.cancel": "Avbryt",
+    "actions.approve": "Godkänn",
+    "actions.deny": "Neka",
+    "actions.dismiss": "Stäng",
+    "status.loaded": "Laddad",
+    "status.loading_ellipsis": "Laddar…",
+    "status.loading_parentheses": "(laddar…)",
+    "status.unsaved": "Osparade ändringar...",
+    "status.saving": "Sparar…",
+    "status.saving_server_setting": "Sparar serverinställning...",
+    "status.saved": "Sparat.",
+    "status.saved_restart": "Sparat. Omstart krävs.",
+    "status.saved_llm_api": "Sparat. LLM API-exponering tillämpas vid nästa agentmeddelande.",
+    "status.saved_reload_failed": "Sparat (omladdning misslyckades; uppdatera för att verifiera).",
+    "status.nothing_editable": "Inget redigerbart.",
+    "status.stopping": "Stoppar...",
+    "status.stopped_offline": "Stoppad. Denna sida kommer att gå offline",
+    "status.stopped_connection": "Stoppad (anslutningen bröts)",
+    "status.restarting": "Startar om…",
+    "status.waiting_addon": "Väntar på att appen (tillägget) ska komma online igen...",
+    "errors.javascript": "JS-fel: {message} @ {where}",
+    "errors.async": "Asynkront fel: {message}",
+    "errors.network": "Nätverksfel: {message}",
+    "errors.network_endpoint": "Nätverksfel vid anslutning till {endpoint}: {message}",
+    "errors.http_endpoint": "{endpoint} returnerade HTTP {status} {detail}",
+    "errors.json_endpoint": "Misslyckades med att tolka {endpoint}-svaret som JSON: {message}",
+    "errors.render": "Rendering misslyckades: {message} (öppna webbläsarens utvecklarverktyg för stacken)",
+    "errors.save_failed": "Spara misslyckades",
+    "errors.save_failed_detail": "Spara misslyckades: {message}",
+    "errors.save_failed_http": "Spara misslyckades (HTTP {status})",
+    "errors.save_failed_non_json": "Spara misslyckades (HTTP {status}, icke-JSON-kropp)",
+    "errors.load_failed": "Laddning misslyckades: {status}",
+    "errors.stop_failed": "Stopp misslyckades",
+    "errors.restart_failed": "Omstart misslyckades",
+    "errors.failed_detail": "Misslyckades: {detail}",
+    "errors.addon_not_back": "Appen (tillägget) kom inte online igen. Ladda om sidan manuellt.",
+    "errors.unparseable_suffix": " (svarskroppen kan inte tolkas)",
+    "common.operation_failed": "{operation} misslyckades: {detail}",
+    "common.enabled": "aktiverad",
+    "common.disabled": "inaktiverad",
+    "common.env_locked": "miljölåst",
+    "common.minutes_short": "{count} min",
+    "common.bytes": "{count} byte",
+    "common.none": "(ingen)",
+    "notice.restart.addon": "⚠ Ändringar sparade. Klicka på \"Starta om app (tillägg)\" för att de ska träda i kraft. Inaktiverade verktyg tas bort från MCP-verktygslistan vid nästa uppstart. Uppdatera sedan verktygslistan i din AI-klient; att enbart starta om appen uppdaterar inte klientens cachade lista.",
+    "notice.restart.embedded": "⚠ Ändringar sparade. Klicka på \"Starta om HA-MCP-servern\" för att ladda om den inbyggda integrationen. Uppdatera sedan MCP-verktygslistan i din AI-klient.",
+    "notice.restart.sidecar": "⚠ Ändringar sparade. Avsluta och öppna din MCP-klient helt för att de ska träda i kraft. Inaktiverade verktyg kommer att tas bort från MCP-verktygslistan vid nästa start.",
+    "notice.restart.standalone": "⚠ Ändringar sparade. Starta om ha-mcp-processen och uppdatera sedan MCP-verktygslistan i din AI-klient.",
+    "server.sidecar.confirm_disable": "⚠ PERMANENTT inaktivera inställningsservern?\n\nDetta stoppar servern och skriver en markör som förhindrar den från att starta igen. För att återställa åtkomst, ta bort ~/.ha-mcp/settings_ui_disabled och avmarkera HA_MCP_DISABLE_SETTINGS_UI. Fortsätt?",
+    "tools.empty": "Inga verktyg hittades. Sidovagnen läser ~/.ha-mcp/tool_metadata.json. Om den saknas eller är tom, starta om din MCP-klient. Se ~/.ha-mcp/sidecar.log för detaljer.",
+    "tools.group_count": "{enabled}/{total} aktiverade",
+    "tools.group_toggle_title": "Aktivera/inaktivera alla verktyg i denna grupp",
+    "tools.badges.mandatory": "obligatorisk",
+    "tools.badges.read_only": "skrivskyddad",
+    "tools.badges.writes": "skriver",
+    "tools.badges.deletes": "tar bort",
+    "tools.notes.gated_disabled": "Inaktiverat. Slå på {setting} – reglaget för policyredigeringsverktyget finns på fliken Tool Security Policies – och starta sedan om appen (tillägget).",
+    "tools.notes.beta_disabled": "Beta. Ställ in {setting} i konfigurationen för dev-appen (tillägget) eller motsvarande miljövariabel (se docs/beta.md).",
+    "tools.notes.env_pinned": "Fäst av {variable}. Avmarkera miljövariabeln för att redigera här.",
+    "tools.notes.bps_locked": "Låst när strikt bästa praxis-läge är på. Stäng av den inställningen först för att inaktivera detta verktyg.",
+    "tools.notes.read_only_off": "Av. Skrivskyddat läge är på; skrivverktyg är inaktiverade.",
+    "tools.notes.read_only_partial": "Skrivskyddat läge: skrivoperationer för detta verktyg är blockerade; läsoperationer förblir tillgängliga.",
+    "tools.llm_api.label": "LLM API",
+    "tools.llm_api.help": "Erbjud detta verktyg till Home Assistant konversationsagenter via LLM API. Tillämpas vid nästa agentmeddelande; ingen omstart krävs.",
+    "tools.aria.llm_api": "{title} exponerad för konversationsagentens LLM API",
+    "tools.aria.enabled": "{title} aktiverad",
+    "tools.aria.pinned": "{title} fäst",
+    "tools.aria.security_gated": "{title} säkerhetsspärrad",
+    "tools.states.enabled": "aktiverad",
+    "tools.states.pinned": "fäst",
+    "tools.states.security_gated": "säkerhetsspärrad",
+    "tools.security.enable_first": "Aktivera verktygssäkerhetsprinciper (Tool Security Policies) i serverinställningarna först.",
+    "tools.summary.total": "{count} totalt",
+    "tools.summary.enabled": "{count} aktiverade",
+    "tools.summary.pinned": "{count} fästa",
+    "tools.summary.disabled": "{count} inaktiverade",
+    "tools.read_only.save_failed": "Ändringen av skrivskyddat läge sparades inte. Servern har fortfarande det tidigare värdet.",
+    "backup.fields.enable_auto_backup.label": "Automatisk säkerhetskopiering av redigeringar",
+    "backup.fields.enable_auto_backup.help": "Ta en ögonblicksbild före varje omsluten skrivning eller destruktivt verktygsanrop.",
+    "backup.fields.auto_backup_throttle_minutes.label": "Begränsning (minuter)",
+    "backup.fields.auto_backup_throttle_minutes.help": "Begränsning per entitet. 0 = varje skrivning; N > 0 = högst en säkerhetskopia per N minuter. Område 0–1440.",
+    "backup.fields.auto_backup_retain_per_entity.label": "Behåll per entitet",
+    "backup.fields.auto_backup_retain_per_entity.help": "Maximalt antal ögonblicksbilder som behålls per entitet (1–10000). Äldre roteras ut.",
+    "backup.fields.auto_backup_dir.label": "Åsidosätt säkerhetskopieringskatalog",
+    "backup.fields.auto_backup_dir.help": "Lämna tom för att använda standardkatalogen; annars ange en absolut sökväg.",
+    "backup.fields.auto_backup_calendar_lookahead_days.label": "Kalenderframåtblick (dagar)",
+    "backup.fields.auto_backup_calendar_lookahead_days.help": "Hur långt framåt kalenderhändelser ska efterfrågas för ögonblicksbilder före redigering. Område 1–365.",
+    "backup.fields.enable_snapshot_delete.label": "Tillåt borttagning av ögonblicksbilder",
+    "backup.fields.enable_snapshot_delete.help": "Tillåt ha_manage_backup att ta bort fullständiga HA-ögonblicksbilder, samtidigt som schemalagda, nyaste och för unga ögonblicksbilder skyddas.",
+    "backup.fields.snapshot_delete_min_age_days.label": "Minsta ålder för ögonblicksbild att ta bort (dagar)",
+    "backup.fields.snapshot_delete_min_age_days.help": "En ögonblicksbild måste vara minst så här gammal innan den kan tas bort. Område 0–365.",
+    "backup.origins.addon": "Synkroniserad med Supervisor. Omstart krävs efter spara.",
+    "backup.origins.file": "Sparad lokalt; träder i kraft omedelbart.",
+    "backup.origins.default": "Använder standard; första spara skapar en lokal åsidosättningsfil.",
+    "backup.errors.load_settings": "Kunde inte ladda säkerhetskopieringsinställningar.",
+    "backup.errors.unavailable": "Säkerhetskopieringsinställningar otillgängliga.",
+    "backup.errors.load_list": "Fel vid laddning av säkerhetskopior",
+    "backup.errors.load_one": "Kunde inte ladda säkerhetskopia \"{name}\": {message}",
+    "backup.errors.diff": "Kunde inte jämföra säkerhetskopia \"{name}\": {message}",
+    "backup.errors.restore": "Återställning av \"{name}\" misslyckades: {message}",
+    "backup.errors.restore_detail": "Återställning misslyckades: {detail}",
+    "backup.errors.delete": "Borttagning av \"{name}\" misslyckades: {message}",
+    "backup.errors.delete_detail": "Borttagning misslyckades: {detail}",
+    "backup.errors.bulk_delete": "Massborttagning misslyckades: {detail}",
+    "backup.state.status": "Status",
+    "backup.state.throttle": "Begränsning",
+    "backup.state.retain": "Behåll per entitet",
+    "backup.state.directory": "Katalog",
+    "backup.state.total": "Totalt",
+    "backup.empty": "Inga säkerhetskopior ännu. Aktivera automatisk säkerhetskopiering och redigera en entitet för att skapa en.",
+    "backup.modal.view": "Visa: {name}",
+    "backup.modal.diff": "Jämför: {name}",
+    "backup.identical": "(identisk)",
+    "backup.confirm.restore": "Återställ {name}?\n\nDetta skriver över den aktuella entitetsstatusen. En säkerhetskopia tas först.",
+    "backup.confirm.delete": "Ta bort {name}? Detta kan inte ångras.",
+    "backup.restored": "Återställd. Säkerhetskopia: {name}",
+    "backup.bulk.prompt_days": "Ta bort säkerhetskopior äldre än N dagar (lämna tomt för att endast använda aktuella filter):",
+    "backup.bulk.filter_required": "Ange minst ett filter (Domän, Entitet eller ålder i dagar).",
+    "backup.bulk.confirm": "Ta bort alla säkerhetskopior som matchar: {filters}?",
+    "backup.bulk.deleted": "Tog bort {count} säkerhetskopia(or)",
+    "filesystem.custom.title": "Anpassade filsystemkataloger (avancerat)",
+    "filesystem.custom.help": "Extra sökvägar (en per rad) som filverktyg får <strong>läsa och skriva</strong> till. Relativa konfigurationssökvägar och tillåtna tillhörande HAOS-volymer stöds. Varje post tillåter den sökvägen och allt under den; konfigurationsrelativa filnamn, som <code>sensor.yaml</code>, kan anges direkt. Gäller omedelbart.",
+    "filesystem.custom.blocked": "Alltid blockerad: {paths}, sökvägsgenomgång (<code>..</code>), och absoluta sökvägar utanför tillåtna HAOS-volymer.",
+    "filesystem.custom.enable_first": "Aktivera beta-funktioner och filsystemverktyg ovan för att redigera.",
+    "filesystem.custom.unavailable": "Anpassade kataloger är för närvarande otillgängliga.",
+    "filesystem.custom.save": "Spara kataloger",
+    "filesystem.custom.saved_rejected": "Sparat. Avvisades (blockerade eller ogiltiga): {paths}",
+    "origins.env_locked": "Anges via miljövariabel; avmarkera den för att redigera här.",
+    "origins.addon_synced": "Synkroniserat till fliken Configuration för appen (tillägget). Omstart krävs efter sparande.",
+    "origins.env_var_unset": "Anges via miljövariabel {variable}; avmarkera den för att redigera här.",
+    "origins.beta_legacy_bridge": "Automatiskt aktiverat i appens (tilläggets) läge för bakåtkompatibilitet (legacy). Ställ in <code>enable_beta_features</code> explicit i Configuration för att ta kontroll. (miljövar: {variable})",
+    "origins.addon_runtime": "Sätt av appens (tilläggets) körtidsmiljö som hanteras av Supervisor; kan inte ändras här. (miljövar: {variable})",
+    "origins.display_only": "Endast visning. Ändra via miljövariabel eller inställningar för appen (tillägget).",
+    "features.errors.network": "Funktionsflaggor otillgängliga (nätverksfel vid åtkomst till /api/settings/features).",
+    "features.errors.http": "Funktionsflaggor otillgängliga (HTTP {status}).",
+    "features.errors.json": "Svar från funktionsflaggor var inte giltig JSON.",
+    "advanced.errors.network": "Avancerade inställningar otillgängliga (nätverksfel vid åtkomst till /api/settings/advanced).",
+    "advanced.errors.http": "Avancerade inställningar otillgängliga (HTTP {status}).",
+    "advanced.errors.json": "Svar från avancerade inställningar var inte giltig JSON.",
+    "advanced.sidecar.stdio_only": "Endast tillgänglig i stdio-läge. Denna HTTP-server har ingen inställnings-UI-sidovagn att fästa.",
+    "advanced.enable_dev_mode.confirm": "⚠ Aktivera utvecklarläge?\n\nEfter omstart kommer dolda utvecklarverktyg att exponeras för anslutna AI-agenter. Aktivera endast för utveckling och testning.",
+    "advanced.dev_tools_security_policy_access.confirm": "⚠ Låt utvecklarverktyg ändra säkerhetspolicyer?\n\nMedan utvecklarläget är aktiverat kommer anslutna AI-agenter att kunna skriva om verktygens säkerhetspolicyer, lägga till eller ta bort godkännandeportar per verktyg, och godkänna eller neka väntande godkännanden – inklusive deras egna portade anrop. Aktivera endast vid testning av policyer.",
+    "advanced.code_mode_saved_tools_path.addon_locked": "Hårdkodad till <code>/data/saved_tools.json</code> i app-läge (tilläggsläge) så att sparade verktyg överlever uppdateringar.",
+    "advanced.code_mode_saved_tools_path.blank_warning": "Om tom, sparas anpassade verktyg endast i minnet och förloras vid omstart.",
+    "policies.errors.conflict": "{operation} misslyckades: policyn ändrades i en annan flik eller session. Ladda om och tillämpa dina ändringar igen.",
+    "policies.errors.load": "Kunde inte ladda policy: {status}",
+    "policies.errors.reach_server": "Kunde inte nå servern: {message}",
+    "policies.errors.corrupt_suffix": " (tool_policy.json verkar vara skadad; redigera eller ta bort den i serverns datakatalog)",
+    "policies.errors.load_detail": "Misslyckades med att ladda policy: {detail}",
+    "policies.errors.update_tool": "Misslyckades med att uppdatera verktygets säkerhetspolicy: {message}",
+    "policies.errors.remove_rule": "Misslyckades med att ta bort regel: {message}",
+    "policies.errors.master_save": "Ändringen av verktygets säkerhetspolicyer sparades inte. Servern har fortfarande det tidigare värdet.",
+    "policies.errors.manage_tool_save": "Ändringen av policyredigeringsverktyget sparades inte. Servern har fortfarande det tidigare värdet.",
+    "policies.operations.sync_gated": "Synkronisera portad växling",
+    "policies.operations.save_rule": "Spara regel",
+    "policies.operations.save_global": "Spara globala inställningar",
+    "policies.predicate.invalid": "(ogiltig)",
+    "policies.operators.exists": "finns",
+    "policies.operators.exists_long": "finns (valfritt värde)",
+    "policies.operators.eq": "är lika med",
+    "policies.operators.neq": "är INTE lika med",
+    "policies.operators.in": "är en av",
+    "policies.operators.not_in": "är INTE en av",
+    "policies.operators.contains": "innehåller",
+    "policies.operators.regex": "matchar reguljärt uttryck",
+    "policies.operators.gt": "är större än",
+    "policies.operators.lt": "är mindre än",
+    "policies.card.no_conditions": "(inga villkor, regeln matchar varje anrop till detta verktyg)",
+    "policies.card.always_row": "(alltid — spärrar varje anrop till detta verktyg)",
+    "policies.card.and_join": " OCH ",
+    "policies.card.remove_title": "Ta bort från policy",
+    "policies.card.conditions_intro": "Kräv godkännande när NÅGOT villkor matchar (inga villkor = kräver alltid godkännande):",
+    "policies.card.add_condition": "+ Lägg till villkor",
+    "policies.card.argument": "Argument:",
+    "policies.card.argument_placeholder": "t.ex. args.color_temp",
+    "policies.card.match_when": "Matcha när:",
+    "policies.card.value": "Värde:",
+    "policies.card.save_condition": "Spara villkor",
+    "policies.card.remember_for": "Kom ihåg godkännande i:",
+    "policies.card.minutes_single": "minuter (0 = engångs)",
+    "policies.card.confirm_remove": "Ta bort \"{tool}\" från säkerhetspolicyn?",
+    "policies.editor.any_argument_title": "Matcha varje anropsargument mot detta villkor.",
+    "policies.editor.any_argument": "(valfritt argument)",
+    "policies.editor.other_path": "(annat, skriv en sökväg)",
+    "policies.editor.value_source_http": "hämtning av värdekälla misslyckades (HTTP {status}); återgår till fritext",
+    "policies.editor.value_source_error": "hämtning av värdekälla misslyckades ({message}); återgår till fritext",
+    "policies.editor.schema_http": "hämtning av verktygsschema misslyckades (HTTP {status}); återgår till fritext",
+    "policies.editor.schema_error": "hämtning av verktygsschema misslyckades ({message}); återgår till fritext",
+    "policies.editor.hint.exists": "Lämna tomt för att spärra om argumentet finns, oavsett värde.",
+    "policies.editor.hint.list": "Välj ett eller flera värden, eller skriv en JSON-lista. Lämna tomt för att spärra på valfritt värde.",
+    "policies.editor.hint.regex": "Ett reguljärt uttryck att matcha argumentet mot.",
+    "policies.editor.hint.contains": "En delsträng eller listobjekt. Lämna tomt för att spärra på valfritt värde.",
+    "policies.editor.hint.number": "Ett nummer att jämföra med.",
+    "policies.editor.hint.equals": "Värdet som argumentet måste vara lika med. Lämna tomt för att spärra på valfritt värde.",
+    "policies.editor.loading_choices": "Laddar val…",
+    "policies.editor.pick_value": "(välj ett värde)",
+    "policies.editor.placeholder.blank": "lämnas oftast tomt",
+    "policies.editor.validation.pick_one_or_more": "välj minst ett värde",
+    "policies.editor.validation.pick_value": "välj ett värde",
+    "policies.editor.validation.value_required": "värde krävs för op={operator}",
+    "policies.editor.validation.empty_list": "tom lista för op={operator}",
+    "policies.editor.validation.argument_required": "argument krävs",
+    "policies.pending.offline": "Förlorade kontakten med servern ({message}). Försöker igen.",
+    "policies.pending.disabled": "Verktygssäkerhetsprinciper är avstängda. Slå på dem och starta om HA-MCP för att aktivera styrning.",
+    "policies.pending.unavailable": "Direktgodkännanden inte tillgängliga. Kontrollera HA-MCP-loggen.",
+    "policies.pending.expires": "Förfaller: {time}",
+    "policies.pending.already_decided": "Det här godkännandet är redan {decision}, möjligen i en annan flik eller session.",
+    "policies.pending.decision.approved": "godkänt",
+    "policies.pending.decision.denied": "nekat",
+    "policies.pending.invalid_token": "Denna godkännandetoken är inte längre giltig (redan förbrukad eller utgången).",
+    "policies.pending.action_failed": "Godkännandeåtgärden misslyckades: {detail}",
+    "visibility.errors.reach_server": "Kunde inte nå servern: {message}",
+    "visibility.errors.corrupt_suffix": " (entity_visibility.json verkar vara skadad; redigera eller ta bort den i serverns datakatalog)",
+    "visibility.errors.load_detail": "Misslyckades med att ladda synlighetskonfiguration: {detail}",
+    "visibility.errors.conflict": "Konfigurationen ändrades i en annan flik eller session. Ladda om sidan och tillämpa sedan dina ändringar igen.",
+    "advanced.homeassistant_url.label": "Home Assistant URL",
+    "advanced.homeassistant_url.help": "Endast visning. Ställ in via HOMEASSISTANT_URL eller hanteras av appen (tillägget).",
+    "advanced.homeassistant_token.label": "Home Assistant token",
+    "advanced.homeassistant_token.help": "Endast visning. Anges via HOMEASSISTANT_TOKEN. Maskerad här av säkerhetsskäl.",
+    "advanced.timeout.label": "HA begäran timeout (s)",
+    "advanced.timeout.help": "HTTP-timeout per begäran. Område 1–600. Omstart krävs.",
+    "advanced.max_retries.label": "HA begäran max antal försök",
+    "advanced.max_retries.help": "Försöksbudget per misslyckat REST-anrop. Område 0–20. Omstart krävs.",
+    "advanced.verify_ssl.label": "Verifiera SSL-certifikat",
+    "advanced.verify_ssl.help": "Inaktivera TLS-verifiering endast på betrodda nätverk. Omstart krävs.",
+    "advanced.fuzzy_threshold.label": "Fuzzy-sökningströskel",
+    "advanced.fuzzy_threshold.help": "Lägre värden tillåter lösare entitetsmatchning. Område 0–100.",
+    "advanced.automation_config_time_budget.label": "Tidsbudget för automatiseringskonfiguration (s)",
+    "advanced.automation_config_time_budget.help": "Maximal tid som djupsökning lägger på att hämta automatiseringskonfigurationer. Område 1–600. Omstart krävs.",
+    "advanced.script_config_time_budget.label": "Tidsbudget för skriptkonfiguration (s)",
+    "advanced.script_config_time_budget.help": "Maximal tid som djupsökning lägger på att hämta skriptkonfigurationer. Område 1–600. Omstart krävs.",
+    "advanced.scene_config_time_budget.label": "Tidsbudget för scenkonfiguration (s)",
+    "advanced.scene_config_time_budget.help": "Maximal tid som djupsökning lägger på att hämta scenkonfigurationer. Område 1–600. Omstart krävs.",
+    "advanced.individual_config_timeout.label": "Timeout för konfigurationshämtning per begäran (s)",
+    "advanced.individual_config_timeout.help": "Timeout för varje hämtning av automatiserings-/skript-/scenkonfiguration. Område 1–600. Omstart krävs.",
+    "advanced.individual_fetch_batch_size.label": "Batchstorlek för konfigurationshämtning",
+    "advanced.individual_fetch_batch_size.help": "Samtidiga konfigurationshämtningar per ID. Sänk mot 1 på seriella HA-servrar. Område 1–100. Omstart krävs.",
+    "advanced.backup_hint.label": "Nivå för säkerhetskopieringshint",
+    "advanced.backup_hint.help": "Styr hur starkt LLM uppmanas att ta en fullständig HA-ögonblicksbild före riskfyllda skrivningar.",
+    "advanced.backup_hint.choices.strong": "Stark",
+    "advanced.backup_hint.choices.normal": "Normal",
+    "advanced.backup_hint.choices.weak": "Svag",
+    "advanced.backup_hint.choices.auto": "Automatisk",
+    "advanced.dashboard_screenshot_engine_url.label": "URL för skärmbildsmotor för instrumentpanel",
+    "advanced.dashboard_screenshot_engine_url.help": "Bas-URL för skärmbildsmotorn. Lämna tomt för automatisk upptäckt av Supervisor. Tillämpas omedelbart.",
+    "advanced.enable_websocket.label": "Aktivera WebSocket",
+    "advanced.enable_websocket.help": "WebSocket-tillståndsövervakning. Inaktivering återgår till polling och försämrar många verktyg. Omstart krävs.",
+    "advanced.enabled_tool_modules.label": "Aktiverade verktygsmoduler",
+    "advanced.enabled_tool_modules.help": "Kommaseparerade modulnamn, eller 'all'. Omstart krävs.",
+    "advanced.enable_dashboard_partial_tools.label": "Verktyg för partiell uppdatering av instrumentpanel",
+    "advanced.enable_dashboard_partial_tools.help": "Token-effektiva partiella instrumentpanelverktyg. Inaktivera för klienter med programmatisk verktygsanvändning.",
+    "advanced.mcp_server_name.label": "MCP-servernamn",
+    "advanced.mcp_server_name.help": "Rapporteras i MCP-handskakningen. Omstart krävs.",
+    "advanced.mcp_server_version.label": "MCP-serverversion",
+    "advanced.mcp_server_version.help": "Standard är paketversionen. Att åsidosätta kan förvirra klienter. Omstart krävs.",
+    "advanced.environment.label": "Miljö",
+    "advanced.environment.help": "utveckling eller produktion. Påverkar loggningsdetaljnivån. Omstart krävs.",
+    "advanced.log_level.label": "Loggnivå",
+    "advanced.log_level.help": "DEBUG/INFO/WARNING/ERROR/CRITICAL. Omstart krävs.",
+    "advanced.debug.label": "Felsökningsläge",
+    "advanced.debug.help": "Detaljerad loggning av förfrågningar. Kan exponera känslig data. Omstart krävs.",
+    "advanced.code_mode_max_duration.label": "Maximal varaktighet för kodläge (s)",
+    "advanced.code_mode_max_duration.help": "Väggklocksbudget per sandlådekörning. Intervall 1–300. Omstart krävs.",
+    "advanced.code_mode_max_memory.label": "Maximalt minne för kodläge (byte)",
+    "advanced.code_mode_max_memory.help": "Minnesgräns per sandlådekörning. Intervall 1–256 MB. Omstart krävs.",
+    "advanced.code_mode_max_recursion.label": "Maximal rekursion för kodläge",
+    "advanced.code_mode_max_recursion.help": "Rekursionsdjupsgräns per sandlådekörning. Omstart krävs.",
+    "advanced.code_mode_max_invocations.label": "Maximalt antal anrop för kodläge",
+    "advanced.code_mode_max_invocations.help": "API-/verktygsanropsgräns per sandlådekörning. Omstart krävs.",
+    "advanced.code_mode_saved_tools_path.label": "Sökväg för sparade verktyg",
+    "advanced.code_mode_saved_tools_path.help": "JSON-fil som används för att bevara anpassade verktyg över omstarter. Omstart krävs.",
+    "advanced.extra_yaml_write_keys.label": "Extra YAML-skrivnycklar",
+    "advanced.extra_yaml_write_keys.help": "Kommaseparerade nycklar på toppnivå som ha_config_set_yaml kan skriva utöver de inbyggda, för YAML-först-integrationer på denna installation (t.ex. alert2). Nycklar som omdefinierar Home Assistants egen förtroendegräns kan aldrig läggas till och ignoreras. Kräver anpassad komponent 1.2.4 eller nyare.",
+    "advanced.sidecar_pin_port.label": "Inställnings-UI sidovagnsport",
+    "advanced.sidecar_pin_port.help": "0 väljer en ledig port vid första start och behåller den för senare omstarter; 1024–65535 fäster en föredragen port (återgår till en ledig om den är upptagen). Omstart krävs.",
+    "advanced.enable_dev_mode.label": "Utvecklarläge",
+    "advanced.enable_dev_mode.help": "⚠ Registrerar dolda verktyg som kan ändra inställningar och ersätta den körande servern. Endast för utveckling och testning. Omstart krävs.",
+    "advanced.dev_tools_security_policy_access.label": "Åtkomst till säkerhetspolicy för utvecklarverktyg",
+    "advanced.dev_tools_security_policy_access.help": "⚠ När utvecklarläget är aktiverat låter det utvecklarverktygen skriva om verktygens säkerhetspolicyer, lägga till eller ta bort godkännandegrindar per verktyg, och godkänna eller neka väntande godkännanden å dina vägnar – en AI-agent kan acceptera sina egna grindade anrop. Endast för policytestning. Träder i kraft utan omstart.",
+    "addon.backup_hint.name": "Förslagsläge för fullständig HA-ögonblicksbild (LLM-riktad)",
+    "addon.backup_hint.description": "Justerar formuleringen av tipset som LLM ser i verktygsbeskrivningen för `ha_manage_backup(scope='snapshot')` för när en fullständig Home Assistant tarball-säkerhetskopia ska föreslås före riskfyllda operationer (t.ex. massborttagning av enheter). Påverkar ENDAST denna LLM-riktade uppmaningsmening.\n\nFör automatiska ögonblicksbilder per redigering av automationer / skript / hjälpare / etc., använd den separata växlingsknappen **Aktivera automatisk säkerhetskopiering av redigeringar** nedan.",
+    "addon.secret_path.name": "Åsidosättning av hemlig sökväg",
+    "addon.secret_path.description": "Valfri anpassad HTTP-sökväg för MCP-servern. Lämna tom för att använda den automatiskt genererade säkra sökvägen.\n",
+    "addon.enable_security_policy_tool.name": "Låt AI-agenter redigera verktygens säkerhetspolicyer",
+    "addon.enable_security_policy_tool.description": "Registrerar verktyget ha_manage_security_policy, vilket låter anslutna AI-agenter läsa och skriva om verktygens säkerhetspolicyer – inklusive att ta bort godkännandegrindar. Avstängt som standard. Oberoende av alternativet Verktygssäkerhetspolicyer ovan: detta styr vem som kan redigera reglerna, inte om de verkställs. Verktyget kan inte se eller besluta om väntande godkännanden. För att behålla en människa i loopen, grinda verktyget innan du aktiverar det: slå på \"säkerhetsgrindad\" för Hantera säkerhetspolicy under fliken Verktyg i webbgränssnittet. Kräver omstart för att träda i kraft.",
+    "addon.enable_auto_backup.name": "Aktivera automatisk säkerhetskopiering av redigeringar",
+    "addon.enable_auto_backup.description": "Fångar en ögonblicksbild per entitet före varje omslutet skriv-/destruktivt MCP-verktygsanrop (automation, skript, scen, hjälpare, instrumentpanel, instrumentpanelsresurs, etikett, kategori, grupp, zon, område, kalender, att göra, entitet, enhet, integration och relaterade borttagnings-/raderingsverktyg). Begränsningen för automatisk säkerhetskopiering styr hur ofta detta sker: 0 (standard) fångar vid varje sådant anrop, N>0 högst en ögonblicksbild per N minuter per entitet. Ögonblicksbilder sparas som YAML-filer under /data/ha_mcp_backups/ (åsidosätts via HAMCP_BACKUP_DIR) och listas, återställs eller raderas via fliken Säkerhetskopior i webbinställningsgränssnittet eller via ha_manage_backup(scope='edits', ...). För dessa domäner är fångsten 'best-effort' — ett misslyckande loggar en VARNING och skrivningen fortsätter. Fil- och rå-YAML-verktygen är undantaget: ha_write_file, ha_delete_file och ha_config_set_yaml behandlar ögonblicksbilden som ett förhandsvillkor, så en skrivning genom dem nekas när detta är avstängt, och en misslyckad fångst blockerar den. På som standard; avmarkering avaktiverar 'best-effort'-fångsterna och tar fil- och rå-YAML-verktygen ur bruk med dem. Kräver omstart för att träda i kraft.",
+    "addon.auto_backup_throttle_minutes.name": "Begränsning för automatisk säkerhetskopiering (minuter)",
+    "addon.auto_backup_throttle_minutes.description": "Begränsningsfönster per entitet. 0 (standard) tar en ögonblicksbild vid varje omsluten skrivning. N>0 tar högst en ögonblicksbild per N minuter per entitet. Intervall 0–1440.",
+    "addon.auto_backup_retain_per_entity.name": "Bevarande av automatisk säkerhetskopiering (per entitet)",
+    "addon.auto_backup_retain_per_entity.description": "Maximalt antal ögonblicksbilder som behålls per entitet. Äldre ögonblicksbilder utöver denna gräns roteras ut vid varje lyckad fångst. Standard 100, intervall 1–10000.",
+    "addon.enable_snapshot_delete.name": "Tillåt radering av ögonblicksbilder",
+    "addon.enable_snapshot_delete.description": "Låter ha_manage_backup radera fullständiga HA-ögonblicksbilds-tarballar (scope='snapshot', action='delete'). Avstängt som standard – en ögonblicksbild kan vara den sista återställningspunkten efter en felaktig ändring, så en människa måste välja att aktivera detta här. Även när det är aktiverat förblir schemalagda säkerhetskopior, den nyaste kvarvarande ögonblicksbilden och allt som är yngre än åldersgränsen nedan skyddat.",
+    "addon.snapshot_delete_min_age_days.name": "Minsta ålder för ögonblicksbild att radera (dagar)",
+    "addon.snapshot_delete_min_age_days.description": "En ögonblicksbild måste vara minst så här gammal innan den kan raderas. Intervall 0–365; 0 inaktiverar gränsen (skydden för nyaste ögonblicksbild och schemalagd säkerhetskopiering gäller fortfarande). Standard 7.",
+    "addon.disabled_tools.name": "Inaktiverade verktyg (kommaseparerade)",
+    "addon.disabled_tools.description": "Verktyg som listas här är tvingade att vara avstängda och låsta i webbinställningsgränssnittet (fliken Verktyg) – de kan inte återaktiveras där utan att först avmarkera detta alternativ. En liten uppsättning obligatoriska verktyg (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) kan inte inaktiveras och fortsätter att köras även om de listas här. ha_get_skill_guide kan endast inaktiveras när strikt bästa praxis-läge (enable_strict_mandatory_bps) är avstängt. Kommaseparerade verktygsnamn (t.ex. ha_call_event,ha_eval_template).",
+    "addon.pinned_tools.name": "Fästa verktyg (kommaseparerade)",
+    "addon.pinned_tools.description": "Verktyg som listas här är låsta som fästa – de visas överst på fliken Verktyg och kan inte lossas från webbinställningsgränssnittet utan att först avmarkera detta alternativ. Användbart i kombination med Verktygssökning. Kommaseparerade verktygsnamn.",
+    "addon.verify_ssl.name": "Verifiera TLS-certifikat",
+    "addon.verify_ssl.description": "Verifiera Home Assistant-serverns TLS-certifikat. Appen (tillägget) ansluter via Supervisor-proxyn, så detta har normalt ingen effekt och bör förbli aktiverat. Inaktivera endast om du har konfigurerat om appen (tillägget) för att kommunicera med HA över ett offentligt HTTPS-värdnamn med ett självsignerat certifikat eller matchningsfel för värdnamn. Inaktivering försvagar transportsäkerheten – lämna på om du inte vet att du behöver det. Kräver omstart för att träda i kraft.",
+    "addon_stable.enable_tool_search.description": "Ersätt hela verktygskatalogen med sökbaserad upptäckt. Minskar inaktiv kontext med ungefär 90 %, till cirka 5K tokens. ⚠️ Aktivera INTE detta i klienter med inbyggd verktygssökning / uppskjutna verktyg (claude.ai, Claude Desktop, Claude Code) – de två söklagren krockar, och klientens inbyggda verktygssökning är det bättre valet där; lämna denna avstängd. Huruvida verktyg skjuts upp beror på din klient- och modellkombination: använd detta när din konfiguration läser in hela katalogen i förväg – modeller utan inbyggda uppskjutna verktyg (t.ex. Gemini, OpenAI-kompatibla lokala modeller, Claude Haiku), klienter som infogar alla verktygsscheman oavsett modell (t.ex. GitHub Copilot CLI), eller mindre kontextfönster. Vissa Codex-modeller och ChatGPT inkluderar också uppskjutna verktyg – kontrollera din klient/modell direkt för att bekräfta dess funktioner så att du inte lämnar detta aktiverat i onödan. Verktyg hittas via ha_search_tools och exekveras via kategoriserade proxyservrar (läs/skriv/ta bort). Kräver omstart av appen (tillägget) för att träda i kraft – återanslut eller uppdatera sedan MCP-servern i din AI-klient så att den läser om verktygslistan. Enbart omstart av appen (tillägget) uppdaterar INTE en klients cachade verktygslista; detta gäller efter att du har ändrat någon inställning här."
+  },
+  "tools": {
+    "ha_bulk_control": {
+      "title": "Masskontroll",
+      "description": "Hantera explicita åtgärder eller en deterministisk strukturell massåtgärd."
+    },
+    "ha_call_event": {
+      "title": "Anropa Händelse",
+      "description": "Utför en anpassad händelse på Home Assistants händelsebuss."
+    },
+    "ha_call_service": {
+      "title": "Anropa Tjänst",
+      "description": "Utför Home Assistant-tjänster för att kontrollera entiteter och utlösa automatiseringar."
+    },
+    "ha_config_delete_dashboard": {
+      "title": "Ta bort Dashboard",
+      "description": "Ta bort en dashboard i lagringsläge helt."
+    },
+    "ha_config_delete_dashboard_resource": {
+      "title": "Ta bort Dashboard-resurs",
+      "description": "Ta bort en dashboard-resurs."
+    },
+    "ha_config_get_automation": {
+      "title": "Hämta Automatiseringskonfiguration",
+      "description": "Hämta Home Assistant-automatiseringskonfiguration."
+    },
+    "ha_config_get_calendar_events": {
+      "title": "Hämta Kalenderhändelser",
+      "description": "Hämta kalenderhändelser från en kalenderentitet."
+    },
+    "ha_config_get_category": {
+      "title": "Hämta Kategori",
+      "description": "Hämta kategoriinformation - lista alla kategorier för ett omfång eller hämta en specifik med ID."
+    },
+    "ha_config_get_dashboard": {
+      "title": "Hämta Dashboard",
+      "description": "Hämta dashboardinformation - lista alla dashboards, hämta konfiguration eller sök efter kort."
+    },
+    "ha_config_get_label": {
+      "title": "Hämta Etikett",
+      "description": "Hämta etikettinformation - lista alla etiketter eller hämta en specifik med ID."
+    },
+    "ha_config_get_scene": {
+      "title": "Hämta Scenkonfiguration",
+      "description": "Hämta Home Assistant-scenkonfiguration."
+    },
+    "ha_config_get_script": {
+      "title": "Hämta Skriptkonfiguration",
+      "description": "Hämta Home Assistant-skriptkonfiguration."
+    },
+    "ha_config_get_yaml": {
+      "title": "Läs YAML-konfigurationsfragment",
+      "description": "Läs YAML-fragmentet under en nyckel i en konfigurationsfil, eller hitta vilken fil som definierar det."
+    },
+    "ha_config_list_dashboard_resources": {
+      "title": "Lista Dashboard-resurser",
+      "description": "Lista Lovelace dashboard-resurser (anpassade kort, teman, CSS/JS)."
+    },
+    "ha_config_list_groups": {
+      "title": "Lista Grupper",
+      "description": "Lista Home Assistant-entitetsgrupper med deras medlemsentiteter."
+    },
+    "ha_config_list_helpers": {
+      "title": "Lista Hjälpare",
+      "description": "Lista Home Assistant-hjälpare av en specifik typ med deras konfigurationer."
+    },
+    "ha_config_remove_automation": {
+      "title": "Ta bort Automatisering",
+      "description": "Ta bort en Home Assistant-automatisering."
+    },
+    "ha_config_remove_calendar_event": {
+      "title": "Ta bort Kalenderhändelse",
+      "description": "Ta bort en händelse från en kalender."
+    },
+    "ha_config_remove_category": {
+      "title": "Ta bort Kategori",
+      "description": "Ta bort en Home Assistant-kategori."
+    },
+    "ha_config_remove_group": {
+      "title": "Ta bort Grupp",
+      "description": "Ta bort en tjänstebaserad Home Assistant-entitetsgrupp via tjänsten group.remove."
+    },
+    "ha_config_remove_label": {
+      "title": "Ta bort Etikett",
+      "description": "Ta bort en Home Assistant-etikett."
+    },
+    "ha_config_remove_scene": {
+      "title": "Ta bort Scen",
+      "description": "Ta bort en Home Assistant-scen."
+    },
+    "ha_config_remove_script": {
+      "title": "Ta bort Skript",
+      "description": "Ta bort ett Home Assistant-skript."
+    },
+    "ha_config_set_automation": {
+      "title": "Skapa eller Uppdatera Automatisering",
+      "description": "Skapa eller uppdatera en Home Assistant-automatisering."
+    },
+    "ha_config_set_calendar_event": {
+      "title": "Skapa eller Uppdatera Kalenderhändelse",
+      "description": "Skapa en ny händelse i en kalender."
+    },
+    "ha_config_set_category": {
+      "title": "Skapa eller Uppdatera Kategori",
+      "description": "Skapa eller uppdatera en Home Assistant-kategori."
+    },
+    "ha_config_set_dashboard": {
+      "title": "Skapa eller Uppdatera Dashboard",
+      "description": "Skapa eller uppdatera en Home Assistant-dashboard."
+    },
+    "ha_config_set_dashboard_resource": {
+      "title": "Ställ in Dashboard-resurs",
+      "description": "Skapa eller uppdatera en dashboard-resurs (inline-kod eller extern URL)."
+    },
+    "ha_config_set_group": {
+      "title": "Skapa eller Uppdatera Grupp",
+      "description": "Skapa eller uppdatera en tjänstebaserad Home Assistant-entitetsgrupp via tjänsten group.set."
+    },
+    "ha_config_set_helper": {
+      "title": "Skapa eller Uppdatera Hjälpare",
+      "description": "Skapa eller uppdatera Home Assistant-hjälpentiteter och konfigurationsunderposter"
+    },
+    "ha_config_set_label": {
+      "title": "Skapa eller Uppdatera Etikett",
+      "description": "Skapa eller uppdatera en Home Assistant-etikett."
+    },
+    "ha_config_set_scene": {
+      "title": "Skapa eller Uppdatera Scen",
+      "description": "Skapa eller uppdatera en Home Assistant-scen."
+    },
+    "ha_config_set_script": {
+      "title": "Skapa eller Uppdatera Skript",
+      "description": "Skapa eller uppdatera ett Home Assistant-skript."
+    },
+    "ha_config_set_yaml": {
+      "title": "Ställ in YAML-konfiguration",
+      "description": "Lägg till, ersätt eller ta bort toppnivånycklar i configuration.yaml eller paketfiler."
+    },
+    "ha_delete_file": {
+      "title": "Ta bort Fil",
+      "description": "Ta bort en fil från tillåtna kataloger."
+    },
+    "ha_dev_manage_server": {
+      "title": "Hantera MCP-server (dev)",
+      "description": "Hantera den körande ha-mcp-servern själv (utvecklarläge)."
+    },
+    "ha_dev_manage_settings": {
+      "title": "Hantera Serverinställningar (dev)",
+      "description": "Hantera ha-mcp-serverinställningar och ytorna Verktyg/Policyer/Säkerhetskopior (utvecklarläge)."
+    },
+    "ha_eval_template": {
+      "title": "Utvärdera Mall",
+      "description": "Utvärdera Jinja2-mallar med Home Assistants mallmotor."
+    },
+    "ha_get_app": {
+      "title": "Hämta appar (tillägg)",
+      "description": "Hämta Home Assistant-appar (tidigare kända som tillägg, och det här verktyget som ha_get_addon) – lista installerade, tillgängliga eller hämta d"
+    },
+    "ha_get_automation_traces": {
+      "title": "Hämta Automatiseringsspårningar",
+      "description": "Hämta exekveringsspårningar för automatiseringar och skript för att felsöka problem."
+    },
+    "ha_get_blueprint": {
+      "title": "Hämta Blueprint",
+      "description": "Hämta blueprint-information - lista alla blueprints eller hämta detaljer för en specifik."
+    },
+    "ha_get_camera_image": {
+      "title": "Hämta Kamerabild",
+      "description": "Hämta en ögonblicksbild från en Home Assistant-kameraentitet."
+    },
+    "ha_get_dashboard_screenshot": {
+      "title": "Hämta Skärmdump av Dashboard",
+      "description": "Hämta renderade bilder av en Home Assistant Lovelace dashboard-vy."
+    },
+    "ha_get_device": {
+      "title": "Hämta Enhet (inkl. Zigbee/ZHA/Z2M, Z-Wave och Matter)",
+      "description": "Hämta enhetsinformation med paginering, inklusive Zigbee (ZHA/Z2M) och Z-Wave JS-enheter."
+    },
+    "ha_get_entity": {
+      "title": "Hämta Entitet",
+      "description": "Hämta entitetsregisterinformation för en eller flera entiteter."
+    },
+    "ha_get_entity_exposure": {
+      "title": "Hämta Entitetsexponering",
+      "description": "Hämta inställningar för entitetsexponering - lista alla eller hämta inställningar för en specifik entitet."
+    },
+    "ha_get_hacs_info": {
+      "title": "Hämta HACS-info",
+      "description": "Hämta HACS (Home Assistant Community Store)-data — sök i butiken eller hämta förvaringsdetaljer."
+    },
+    "ha_get_history": {
+      "title": "Hämta Entitetshistorik eller Statistik",
+      "description": "Hämta historisk data från Home Assistants inspelare."
+    },
+    "ha_get_integration": {
+      "title": "Hämta Integration",
+      "description": "Hämta integrationsinformation (konfigurationspost) med paginering."
+    },
+    "ha_get_logs": {
+      "title": "Hämta Loggar",
+      "description": "Hämta Home Assistant-loggar från olika källor."
+    },
+    "ha_get_operation_status": {
+      "title": "Hämta Operationsstatus",
+      "description": "Hämta status för en eller flera enhetsoperationer med realtids WebSocket-verifiering."
+    },
+    "ha_get_overview": {
+      "title": "Hämta Systemöversikt",
+      "description": "Hämta AI-vänlig systemöversikt med intelligent kategorisering."
+    },
+    "ha_get_state": {
+      "title": "Hämta Entitetsstatus",
+      "description": "Hämta aktuell status, tillstånd och attribut för en eller flera entiteter (lampor, strömbrytare, sensorer, klimat, persienner, lås, fläktar"
+    },
+    "ha_get_system_health": {
+      "title": "Hämta Systemhälsa (inkl. ZHA/Z-Wave/integrationsdiagnostik)",
+      "description": "Hämta Home Assistant-systemhälsa, inklusive Zigbee (ZHA), Z-Wave JS och diagnostikdumpar per integration."
+    },
+    "ha_get_todo": {
+      "title": "Hämta Att göra",
+      "description": "Hämta att göra-listor eller objekt - lista alla att göra-listor eller hämta objekt från en specifik lista."
+    },
+    "ha_get_zone": {
+      "title": "Hämta Zon",
+      "description": "Hämta zoninformation - lista alla zoner eller hämta detaljer för en specifik."
+    },
+    "ha_import_blueprint": {
+      "title": "Importera Blueprint",
+      "description": "Importera en blueprint från en URL."
+    },
+    "ha_list_files": {
+      "title": "Lista Filer",
+      "description": "Lista filer i en katalog inom Home Assistant-konfigurationen."
+    },
+    "ha_list_floors_areas": {
+      "title": "Lista Våningar och Områden",
+      "description": "Lista våningar sorterade efter nivå stigande, var och en med sina tilldelade områden kapslade, plus områden utan våning."
+    },
+    "ha_list_services": {
+      "title": "Lista Tillgängliga Tjänster",
+      "description": "Lista tillgängliga Home Assistant-tjänster med valfri paginering och detaljkontroll."
+    },
+    "ha_manage_app": {
+      "title": "Hantera app (tillägg)",
+      "description": "Hantera en Home Assistant-app (tidigare känd som ett tillägg, och det här verktyget som ha_manage_addon) – uppdatera dess konfiguration o"
+    },
+    "ha_manage_backup": {
+      "title": "Hantera säkerhetskopior",
+      "description": "Polymorft säkerhetskopieringsverktyg. Se verktygsbeskrivningen för routingmatrisen."
+    },
+    "ha_manage_custom_tool": {
+      "title": "Anpassat verktyg",
+      "description": "Skapa och kör ett anpassat verktyg i en sandlåda, eller hantera sparade anpassade verktyg (kodläge)."
+    },
+    "ha_manage_energy_prefs": {
+      "title": "Hantera inställningar för energipanelen",
+      "description": "Hantera inställningarna för Home Assistant energipanel."
+    },
+    "ha_manage_hacs": {
+      "title": "Hantera HACS",
+      "description": "Hantera HACS (Home Assistant Community Store) — installera/uppdatera, ta bort, lägga till anpassade förråd, eller uppdatera förråd i"
+    },
+    "ha_manage_pipeline": {
+      "title": "Hantera Assist-pipeline",
+      "description": "Hantera Home Assistant Assist-pipelines."
+    },
+    "ha_manage_radio": {
+      "title": "Hantera radioenheter (Z-Wave / Zigbee / Matter / Thread)",
+      "description": "Hantera Home Assistant-radioenheter — Z-Wave, Zigbee, Matter och Thread."
+    },
+    "ha_manage_security_policy": {
+      "title": "Hantera säkerhetspolicy",
+      "description": "Läs och skriv om verktygets säkerhetspolicy som spärrar verktygsanrop med hög risk bakom användargodkännande."
+    },
+    "ha_manage_theme": {
+      "title": "Hantera frontend-teman",
+      "description": "Hantera Home Assistant frontend-teman."
+    },
+    "ha_manage_updates": {
+      "title": "Hantera uppdateringar",
+      "description": "Hantera Home Assistant-uppdateringar — lista, läsa detaljer, massinstallera, hoppa över eller ångra överhoppning."
+    },
+    "ha_read_file": {
+      "title": "Läs fil",
+      "description": "Läs en fil från Home Assistant-konfigurationskatalogen."
+    },
+    "ha_reload_core": {
+      "title": "Ladda om kärnkomponenter",
+      "description": "Ladda om Home Assistant-konfigurationen utan fullständig omstart."
+    },
+    "ha_remove_area_or_floor": {
+      "title": "Ta bort område eller våning",
+      "description": "Ta bort ett Home Assistant-område eller en våning."
+    },
+    "ha_remove_device": {
+      "title": "Ta bort enhet",
+      "description": "Ta bort en övergiven enhet från Home Assistant-enhetsregistret."
+    },
+    "ha_remove_entity": {
+      "title": "Ta bort entitet",
+      "description": "Ta bort en eller flera entiteter från Home Assistant-entitetsregistret."
+    },
+    "ha_remove_helpers_integrations": {
+      "title": "Ta bort hjälpare eller integration",
+      "description": "Ta bort en Home Assistant-hjälpare eller konfigurationspost för integration."
+    },
+    "ha_remove_todo_item": {
+      "title": "Ta bort att-göra-objekt",
+      "description": "Ta bort ett objekt från en Home Assistant-att-göra-lista."
+    },
+    "ha_remove_zone": {
+      "title": "Ta bort zon",
+      "description": "Ta bort en Home Assistant-zon."
+    },
+    "ha_report_issue": {
+      "title": "Rapportera problem eller feedback",
+      "description": "Få diagnostisk information och mallar för att lämna problemrapporter eller feedback."
+    },
+    "ha_restart": {
+      "title": "Starta om Home Assistant",
+      "description": "Starta om Home Assistant."
+    },
+    "ha_search": {
+      "title": "Sök",
+      "description": "Sök efter entiteter (lampor, sensorer, strömbrytare, klimat, etc.) efter namn, domän eller område — OCH inuti automatiseringar/skript"
+    },
+    "ha_set_area_or_floor": {
+      "title": "Skapa eller uppdatera område eller våning",
+      "description": "Skapa eller uppdatera ett Home Assistant-område eller en våning."
+    },
+    "ha_set_device": {
+      "title": "Ställ in enhet",
+      "description": "Uppdatera enhetsegenskaper som namn, område, inaktiverat tillstånd eller etiketter."
+    },
+    "ha_set_entity": {
+      "title": "Ställ in entitet",
+      "description": "Uppdatera entitetsegenskaper i entitetsregistret."
+    },
+    "ha_set_integration": {
+      "title": "Ställ in integration",
+      "description": "Hantera en integration (konfigurationspost): aktivera/inaktivera, lägga till eller uppdatera alternativ."
+    },
+    "ha_set_todo_item": {
+      "title": "Ställ in att-göra-objekt",
+      "description": "Skapa eller uppdatera ett att-göra-objekt i Home Assistant."
+    },
+    "ha_set_zone": {
+      "title": "Ställ in zon",
+      "description": "Skapa eller uppdatera en Home Assistant-zon."
+    },
+    "ha_write_file": {
+      "title": "Skriv fil",
+      "description": "Skriv en fil till tillåtna kataloger i Home Assistant-konfigurationen."
+    }
+  },
+  "tool_groups": {
+    "Apps (add-ons)": "Appar (tillägg)",
+    "Areas & Floors": "Områden & Våningar",
+    "Assist": "Assist",
+    "Automations": "Automatiseringar",
+    "Blueprints": "Ritningar",
+    "Calendar": "Kalender",
+    "Camera": "Kamera",
+    "Dashboard": "Panel",
+    "Dashboards": "Paneler",
+    "Developer": "Utvecklare",
+    "Device Registry": "Enhetsregister",
+    "Energy": "Energi",
+    "Entity Registry": "Entitetsregister",
+    "Files": "Filer",
+    "Groups": "Grupper",
+    "HACS": "HACS",
+    "Helper Entities": "Hjälpentiteter",
+    "History & Statistics": "Historik & Statistik",
+    "Integrations": "Integrationer",
+    "Labels & Categories": "Etiketter & Kategorier",
+    "Matter": "Matter",
+    "Scenes": "Scener",
+    "Scripts": "Skript",
+    "Search & Discovery": "Sök & Upptäckt",
+    "Service & Device Control": "Tjänst- & Enhetskontroll",
+    "System": "System",
+    "Todo Lists": "Att-göra-listor",
+    "Utilities": "Verktyg",
+    "Zones": "Zoner"
+  }
+}

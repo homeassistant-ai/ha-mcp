@@ -1,8 +1,9 @@
 """Dashboard screenshot tool (opt-in, beta).
 
 Gated behind ``enable_dashboard_screenshot``. Renders one or more Lovelace
-dashboard images via the separate screenshot engine add-on (or a docker-compose
-sidecar) and returns native MCP image blocks for visual verification.
+dashboard images via the separate screenshot engine app (add-on) or a
+docker-compose sidecar, and returns native MCP image blocks for visual
+verification.
 
 The companion ``include_screenshot`` / ``return_screenshot`` parameters on
 ``ha_config_get_dashboard`` / ``ha_config_set_dashboard`` share the same
@@ -195,16 +196,20 @@ class DashboardScreenshotTools:
             str | None,
             Field(
                 description="Installed Home Assistant frontend theme name, "
-                "applied to this render. The engine user's saved theme "
-                "preference is restored after the capture (best effort)."
+                "applied to this render. The engine persists this on the "
+                "engine account's profile; this tool reports the change in "
+                "warnings but does not undo it (see ha_manage_theme "
+                "action='set_engine_theme')."
             ),
         ] = None,
         dark_mode: Annotated[
             bool,
             Field(
                 description="Render the requested theme in dark mode, applied "
-                "to this render. The engine user's saved theme preference is "
-                "restored after the capture (best effort)."
+                "to this render. The engine persists this on the engine "
+                "account's profile; this tool reports the change in warnings "
+                "but does not undo it (see ha_manage_theme "
+                "action='set_engine_theme')."
             ),
         ] = False,
         language: Annotated[
@@ -235,8 +240,8 @@ class DashboardScreenshotTools:
         that the frontend accepted a requested theme or language; structured
         metadata therefore records the values sent to the engine.
 
-        To change the Puppet engine add-on itself (keep_browser_open, restart),
-        use ha_manage_addon.
+        To change the Puppet engine app (add-on) itself (keep_browser_open,
+        restart), use ha_manage_app.
         """
         target = await resolve_dashboard_render_target(
             self._client,

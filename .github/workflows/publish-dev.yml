@@ -44,8 +44,9 @@ jobs:
       dev_version: ${{ steps.version.outputs.dev_version }}
       short_sha: ${{ steps.version.outputs.short_sha }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           # Full history: the dev version number is the commit count.
           fetch-depth: 0
 
@@ -82,12 +83,13 @@ jobs:
     env:
       DEV_VERSION: ${{ needs.prepare.outputs.dev_version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           submodules: true
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
       - name: Temporarily set package name and version for dev build
         run: |
@@ -107,7 +109,7 @@ jobs:
         run: uv build
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           packages-dir: dist
           skip-existing: true
@@ -120,15 +122,16 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           submodules: true
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -161,7 +164,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Create pre-release
         env:
@@ -198,7 +203,7 @@ jobs:
 
           # Delete old pre-release with same tag if exists
           gh release delete "$TAG" --yes 2>/dev/null || true
-          git push origin --delete "$TAG" 2>/dev/null || true
+          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG" 2>/dev/null || true
 
           # Create new draft pre-release (binaries will be added by build-and-release workflow)
           gh release create "$TAG" \
@@ -240,6 +245,6 @@ jobs:
                 if [ -n "$tag" ]; then
                   echo "Deleting old dev release: $tag"
                   gh release delete "$tag" --yes --repo ${{ github.repository }} || true
-                  git push origin --delete "$tag" 2>/dev/null || true
+                  gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/$tag" 2>/dev/null || true
                 fi
               done

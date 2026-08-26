@@ -153,12 +153,12 @@ async def _screenshot(mcp_client: Any, path: str, **kw: Any) -> bytes:
 
 
 async def _get_addon_detail(mcp_client: Any, slug: str) -> dict[str, Any]:
-    raw = await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+    raw = await mcp_client.call_tool("ha_get_app", {"slug": slug})
     payload = parse_mcp_result(raw)
-    assert payload.get("success"), f"ha_get_addon({slug!r}) failed: {payload}"
+    assert payload.get("success"), f"ha_get_app({slug!r}) failed: {payload}"
     detail = payload.get("addon")
     assert isinstance(detail, dict), (
-        f"ha_get_addon({slug!r}) returned no addon dict: {payload}"
+        f"ha_get_app({slug!r}) returned no addon dict: {payload}"
     )
     return detail
 
@@ -201,11 +201,11 @@ async def _wait_for_state(
 
 async def _set_options(mcp_client: Any, slug: str, options: dict[str, Any]) -> None:
     raw = await mcp_client.call_tool(
-        "ha_manage_addon", {"slug": slug, "options": dict(options)}
+        "ha_manage_app", {"slug": slug, "options": dict(options)}
     )
     payload = parse_mcp_result(raw)
     ok = payload.get("success") is True or payload.get("status") == "pending_restart"
-    assert ok, f"ha_manage_addon options write failed: {payload}"
+    assert ok, f"ha_manage_app options write failed: {payload}"
 
 
 async def _engine_diagnostics(mcp_client: Any) -> str:

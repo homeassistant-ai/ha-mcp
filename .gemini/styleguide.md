@@ -70,7 +70,7 @@ Verify that safety annotations match actual tool behavior:
 - Tool with `readOnlyHint: True` must NOT modify state (no writes, no service calls)
 - Tool with `destructiveHint: True` must actually delete data
 - State-changing operations should have `idempotentHint: True` only if safe to retry
-- Tool with `openWorldHint: True` must reach an external, third-party-authored world (HACS store, add-on repositories, GitHub release feeds, arbitrary import URLs); a tool whose domain is the local Home Assistant instance should use `False`. It is open-world if its output carries externally-authored content back to the client, even when a local integration (HACS, Supervisor, HA Core) makes the actual network call on its behalf
+- Tool with `openWorldHint: True` must reach an external, third-party-authored world (HACS store, app (add-on) repositories, GitHub release feeds, arbitrary import URLs); a tool whose domain is the local Home Assistant instance should use `False`. It is open-world if its output carries externally-authored content back to the client, even when a local integration (HACS, Supervisor, HA Core) makes the actual network call on its behalf
 
 Flag HIGH severity if annotation contradicts actual behavior in the implementation.
 
@@ -126,11 +126,12 @@ These rules apply to new or modified tool docstrings in the PR diff only -- not 
 
 1. **Comments**: Only for non-obvious logic - too many comments is an anti-pattern (code should be self-documenting)
 2. **CHANGELOG.md**: Auto-generated via semantic-release (don't edit manually)
+3. **Apps, not add-ons**: Home Assistant 2026.2 renamed add-ons to apps. New user-facing text says **app (add-on)** on first mention and **app** after it; the retired term never stands alone. Identifiers are not automatically exempt — upstream renamed the container prefix to `app_`, while the REST API keeps serving the Apps API at `/addons/...` and puts `/v2/apps` behind the `supervisor_v2_api` feature flag (off by default) — so check each one instead of assuming. What does keep the old spelling: add-on slugs, the `addon` issue label, `homeassistant-addon*/` paths, and the literal pre-2026.2 menu labels inside a compatibility note. Flag MEDIUM severity when new documentation names the product with the old term by itself.
 
 ## Architecture Alignment
 
 1. **New tools**: Create `tools_<domain>.py` with `register_<domain>_tools()` function
-2. **Shared logic**: Use service layer (`smart_search.py`, `device_control.py`)
+2. **Shared logic**: Use service layer (`smart_search/`, `device_control.py`)
 3. **WebSocket operations**: Verify state changes in real-time
 4. **Tool completion**: Operations should wait for completion (not just API acknowledgment)
 
@@ -181,7 +182,7 @@ A change is BREAKING only if it removes functionality that users depend on.
 
 ## Accessibility (web UI)
 
-Both rendered surfaces — the Astro docs site (`site/`) and the add-on settings UI (`src/ha_mcp/settings_ui/__init__.py` + `settings.css` / `settings.js`) — follow the conventions from #1574/#1596, anchored in CI by the `site-checks` job (`astro check`, `eslint-plugin-astro` + `jsx-a11y`, and an axe-core audit over the built pages — all blocking).
+Both rendered surfaces — the Astro docs site (`site/`) and the app settings UI (`src/ha_mcp/settings_ui/__init__.py` + `settings.css` / `settings.js`) — follow the conventions from #1574/#1596, anchored in CI by the `site-checks` job (`astro check`, `eslint-plugin-astro` + `jsx-a11y`, and an axe-core audit over the built pages — all blocking).
 
 **Flag MEDIUM severity when a change:**
 
@@ -193,6 +194,16 @@ Both rendered surfaces — the Astro docs site (`site/`) and the add-on settings
 - Skips a heading level (e.g. `<h2>` straight to `<h4>`). Keep levels ordered; use Tailwind size classes for visual size, not the tag level.
 
 **Theme / contrast tier model (#1574):** theme (`data-theme` auto/light/dark), contrast (`data-contrast` normal/high) and shade (`data-shade`) are set on `<html>` pre-paint and mirrored between the docs site and settings UI (parity enforced by `tests/src/unit/test_anti_fouc_parity.py`). Keep new preferences in this tier model, apply them on both surfaces, and preserve the 4.5:1 custom-color contrast warning.
+
+## Addressing CodeRabbit Reviews
+
+Ensure ALL CodeRabbit review comments are addressed, both inline threads and
+top-level review bodies. CodeRabbit nests some findings — *Outside diff range
+comments* and *Nitpick comments* — inside collapsed sections of the review
+body rather than as inline threads, so they create no unresolved-thread
+signal and a green check while unaddressed. Everything must be addressed:
+read each review body in full and assess those findings exactly like inline
+comments. See AGENTS.md § *PR Review Comments* for the full-body sweep.
 
 ## Non-Blocking Suggestions and Scope
 

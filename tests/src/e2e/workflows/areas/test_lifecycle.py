@@ -1013,3 +1013,41 @@ class TestAreaFloorDestructiveNegativeInputs:
         assert "doesn't exist" in error_msg or "not found" in error_msg, (
             f"Expected 'doesn't exist'/'not found' in error message, got: {data.get('error')}"
         )
+
+
+@pytest.mark.area
+@pytest.mark.floor
+@pytest.mark.asyncio
+class TestAreaFloorReferenceNegativeInputs:
+    """
+    Negative-input test for the floor reference on ha_set_area_or_floor.
+
+    HA's area registry accepts any floor_id string and stores it, so the area
+    silently becomes an orphan (issue #2159). The tool now validates the
+    reference against the floor registry before the write.
+    """
+
+    async def test_area_create_with_unknown_floor_rejected(self, mcp_client):
+        """
+        Test: ha_set_area_or_floor(kind='area', floor_id=<unknown>) is rejected
+        rather than creating an area pointing at a floor that does not exist.
+        """
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_set_area_or_floor",
+            {
+                "kind": "area",
+                "name": f"Orphan Area {uuid.uuid4().hex[:8]}",
+                "floor_id": "nonexistent_floor_a7_e2e_xyz_404",
+            },
+        )
+
+        assert not data.get("success"), (
+            f"Expected failure for unknown floor_id, got success=True: {data}"
+        )
+        assert data["error"]["code"] == "VALIDATION_INVALID_PARAMETER", (
+            f"Expected VALIDATION_INVALID_PARAMETER, got: {data.get('error')}"
+        )
+        assert data["floor_id"] == "nonexistent_floor_a7_e2e_xyz_404", (
+            f"Error context must name the offending floor_id: {data}"
+        )

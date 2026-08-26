@@ -420,6 +420,65 @@ class TestFeatureGatedTools:
         ):
             assert FEATURE_GATED_TOOLS[name]["disabled_by"] == "enable_filesystem_tools"
 
+    def test_every_stub_names_a_real_feature_flag(self):
+        """A typo'd disabled_by would render a hint naming a setting that
+        does not exist, and would silently classify the gate as non-beta."""
+        from ha_mcp.config import FEATURE_FLAG_FIELDS
+
+        known = {f.field for f in FEATURE_FLAG_FIELDS}
+        for name, meta in FEATURE_GATED_TOOLS.items():
+            assert meta["disabled_by"] in known, (
+                f"{name}: disabled_by={meta['disabled_by']!r} is not a "
+                "registered feature flag"
+            )
+
+    def test_security_policy_stub_is_marked_non_beta(self):
+        """ha_manage_security_policy is gated by a NON-beta safety toggle
+        (#2148). The stub must say so: the UI picks its "how to enable"
+        copy from this, and _handlers_tools uses it for the LLM-API
+        exposure default."""
+        from ha_mcp.settings_ui._tools_meta import _render_stub, gate_is_beta
+
+        entry = FEATURE_GATED_TOOLS["ha_manage_security_policy"]
+        assert entry["disabled_by"] == "enable_security_policy_tool"
+        assert gate_is_beta("enable_security_policy_tool") is False
+        assert (
+            _render_stub("ha_manage_security_policy", entry)["disabled_by_beta"]
+            is False
+        )
+
+    def test_stale_cache_rows_are_classified_from_the_registry(self):
+        """The sidecar serves rows from tool_metadata.json, which an older
+        build wrote without ``disabled_by_beta``. A missing field must not
+        read as "not beta" — that would flip a beta stub's LLM-API exposure
+        from hidden to exposed on a stale cache."""
+        from ha_mcp.settings_ui._handlers_tools import _stub_gate_is_beta
+
+        assert _stub_gate_is_beta({"disabled_by": "enable_filesystem_tools"}) is True
+        assert (
+            _stub_gate_is_beta({"disabled_by": "enable_security_policy_tool"}) is False
+        )
+        # An explicit stamp wins over the registry fallback.
+        assert (
+            _stub_gate_is_beta(
+                {"disabled_by": "enable_filesystem_tools", "disabled_by_beta": False}
+            )
+            is False
+        )
+        # A registered (non-stub) row carries no gate at all.
+        assert _stub_gate_is_beta({"name": "ha_get_state"}) is False
+
+    def test_beta_stubs_are_marked_beta(self):
+        from ha_mcp.settings_ui._tools_meta import _render_stub, gate_is_beta
+
+        assert gate_is_beta("enable_filesystem_tools") is True
+        assert (
+            _render_stub("ha_write_file", FEATURE_GATED_TOOLS["ha_write_file"])[
+                "disabled_by_beta"
+            ]
+            is True
+        )
+
 
 class TestRouteRegistration:
     """Test register_settings_routes mounting under secret_path (Patch76 G1)."""
@@ -443,7 +502,9 @@ class TestRouteRegistration:
         return [call.args[0] for call in mcp.custom_route.call_args_list]
 
     def test_registers_root_in_addon_mode(self, monkeypatch):
+        monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", "/stale")
         mcp = MagicMock()
         mcp.custom_route = MagicMock(return_value=lambda fn: fn)
         register_settings_routes(mcp, MagicMock(), secret_path="/private_x")
@@ -453,10 +514,13 @@ class TestRouteRegistration:
         assert "/settings" in paths
         assert "/private_x/settings" in paths
         assert "/private_x/api/settings/tools" in paths
-        # The secret-path mount is recorded for ha_get_overview's hint (#1458)
-        assert get_http_settings_prefix() == "/private_x"
+        # App (add-on) users already have Supervisor ingress's "Open Web UI" button,
+        # so ha_get_overview must not hand MCP clients the alternate direct-path
+        # credential just to advertise a redundant settings-page route (#2236).
+        assert get_http_settings_prefix() is None
 
     def test_secret_path_only_when_not_addon(self, monkeypatch):
+        monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         mcp = MagicMock()
         mcp.custom_route = MagicMock(return_value=lambda fn: fn)
@@ -468,6 +532,21 @@ class TestRouteRegistration:
         assert "/mcp/settings" in paths
         assert "/mcp/api/settings/tools" in paths
         assert get_http_settings_prefix() == "/mcp"
+
+    def test_embedded_mount_is_not_advertised(self, monkeypatch):
+        # Embedded runs inside HA Core and has HA-managed settings entry points.
+        # HAOS Core also carries SUPERVISOR_TOKEN, so set both markers to pin the
+        # real deployment shape while keeping the direct settings route mounted.
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", "/stale")
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(return_value=lambda fn: fn)
+        register_settings_routes(mcp, MagicMock(), secret_path="/private_x")
+        paths = self._collect_paths(mcp)
+        assert "/settings" not in paths
+        assert "/private_x/settings" in paths
+        assert get_http_settings_prefix() is None
 
     def test_no_routes_when_no_addon_and_no_secret(self, monkeypatch):
         # Refuse to mount publicly: no auth → no routes.
@@ -490,11 +569,12 @@ class TestRouteRegistration:
         assert mcp.custom_route.call_count == 0
         assert get_http_settings_prefix() is None
 
-    def test_advertise_prefix_false_mounts_but_does_not_record(self, monkeypatch):
+    def test_advertise_prefix_false_clears_stale_hint_but_mounts(self, monkeypatch):
         # OAuth/OIDC dedicated-secret mount: routes are served, but the secret
         # prefix must NOT be recorded — otherwise ha_get_overview would leak it
         # to every connected MCP client (GHSA-mx64-982r-65vg).
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", "/stale")
         mcp = MagicMock()
         mcp.custom_route = MagicMock(return_value=lambda fn: fn)
         register_settings_routes(
@@ -576,6 +656,22 @@ class TestAccessibilityMarkup:
             tag = _SETTINGS_HTML[idx : idx + 140]
             assert 'role="status"' in tag, f"{span_id} not role=status"
             assert 'aria-live="polite"' in tag, f"{span_id} not aria-live"
+
+    def test_unknown_state_notices_are_assertive_live_regions(self) -> None:
+        """Both "could not read server settings" notices are failure-path
+        regions: they appear only when a features fetch failed and the
+        switches they describe go indeterminate + disabled. A screen-reader
+        user must be interrupted (role=alert / aria-live=assertive) rather
+        than told politely, if at all — the polite regions above are for
+        transient progress text."""
+        for notice_id in ("roUnknownNotice", "policyUnknownNotice"):
+            idx = _SETTINGS_HTML.find(f'id="{notice_id}"')
+            assert idx != -1, f"unknown-state notice {notice_id} missing"
+            tag = _SETTINGS_HTML[idx : idx + 140]
+            assert 'role="alert"' in tag, f"{notice_id} is not role=alert"
+            assert 'aria-live="assertive"' in tag, (
+                f"{notice_id} is not aria-live=assertive"
+            )
 
     def test_tab_js_keeps_aria_state_in_sync(self) -> None:
         # activateTab() mirrors selection to aria-selected + roving tabindex,
@@ -2739,7 +2835,9 @@ class TestEnvPinnedTools:
         assert body["llm_api_overrides"] == {"ha_get_state": False}
         # Override wins over the exposed default.
         assert body["llm_api"]["ha_get_state"] is False
-        # The stub renders hidden-by-default (feature-gated == beta).
+        # The stub renders hidden-by-default: its gate IS a beta flag, and
+        # this cached row predates the disabled_by_beta stamp, so the
+        # handler falls back to the flag registry to classify it (#2148).
         assert body["llm_api"]["ha_config_set_yaml"] is False
         # Not the in-process custom-component server: the UI hides the LLM API
         # toggle (nothing consumes the exposure on this install method).

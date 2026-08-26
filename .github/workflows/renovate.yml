@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # The default GITHUB_TOKEN cannot push commits that modify any file
       # under .github/workflows/ — GitHub blocks workflow-file mutations
@@ -37,17 +37,33 @@ jobs:
       # has Workflows: write.
       - name: Generate Renovate app token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
-          app-id: ${{ secrets.RENOVATE_APP_ID }}
+          client-id: ${{ secrets.RENOVATE_APP_ID }}
           private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+          # Without this the vulnerabilityAlerts carve-out in renovate.json is
+          # dead: an installation token that lists any permission-* input drops
+          # every permission it does not name, including vulnerability_alerts.
+          permission-vulnerability-alerts: read
+          # Renovate publishes a stability status check on every branch it
+          # writes (minimumReleaseAge). Without commit-status access GitHub
+          # answers 404 rather than 403, Renovate reads that as the repository
+          # having changed, and aborts the WHOLE run right after writing its
+          # first branch: no PR, no dependency dashboard, nothing else
+          # processed. The app installation must grant this too; the token can
+          # only ever narrow what the installation already has.
+          permission-statuses: write
+          permission-workflows: write
 
       - name: Self-hosted Renovate
-        uses: renovatebot/github-action@1a96852b0384df1837619d04c60b2d10d1f9ff08 # v46.1.21
+        uses: renovatebot/github-action@e09d604f8f803bb527bd8321ed5be06c460b8682 # v46.2.2
         with:
           configurationFile: renovate.json
+          renovate-version: 44.46.2
           token: ${{ steps.app-token.outputs.token }}
         env:
           LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
-          RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '["^cat.*", "^echo.*", "^cut.*", "^sed.*", "^git add.*"]'
           RENOVATE_REPOSITORIES: ${{ github.repository }}

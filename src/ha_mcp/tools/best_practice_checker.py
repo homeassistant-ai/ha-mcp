@@ -47,6 +47,10 @@ documented legitimate dynamic-data positions per
 * Top-level ``variables.*``
 * Action ``service_data.*`` (legacy alias for ``data``)
 
+The allowlist covers template *content*. Key *order* inside a ``variables``
+block is separately load-bearing — HA renders one key at a time — so those
+blocks get their own ordering-only pass (:func:`_check_variables_order`).
+
 Anti-patterns sourced from:
   https://github.com/homeassistant-ai/skills
   skill://home-assistant-best-practices
@@ -57,33 +61,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-_SKILL_URI_PREFIX = "skill://home-assistant-best-practices/references"
-_DEFAULT_SKILL_PREFIX = _SKILL_URI_PREFIX
-_SKILL_NAME = "home-assistant-best-practices"
-
-
-class BestPracticeCheckResult(list[str]):
-    """Warning list with an attached set of referenced skill files.
-
-    Behaves as a plain ``list[str]`` for all call sites — ``len()``,
-    indexing, iteration, equality with ``[...]`` all work unchanged.
-    ``referenced_files`` is added on top so the write tools can resolve
-    and embed the relevant skill bodies into responses.
-
-    Use :func:`_emit` to append warnings; direct ``append``/``extend``
-    skip the ``referenced_files`` mirror. Slicing, ``list()`` coercion,
-    and ``copy.copy``/``copy.deepcopy`` all return plain ``list[str]``
-    without the attribute — no current call site does any of these.
-    """
-
-    __slots__ = ("referenced_files",)
-
-    referenced_files: set[str]
-
-    def __init__(self, items: list[str] | None = None) -> None:
-        super().__init__(items or [])
-        self.referenced_files = set()
-
+from .best_practice_result import (
+    _DEFAULT_SKILL_PREFIX,
+    BestPracticeCheckResult,
+    _emit,
+)
+from .best_practice_variables import _check_variables_order
 
 # ---------------------------------------------------------------------------
 # Regex patterns for template anti-patterns
@@ -241,6 +224,11 @@ def check_automation_config(
     # Mode vs motion pattern
     _check_mode_motion(config, warnings, skill_prefix)
 
+    # Key order inside the top-level variables blocks. Both render one key at a
+    # time, so a forward reference between siblings is silently undefined.
+    for block_key in ("variables", "trigger_variables"):
+        _check_variables_order(config.get(block_key), warnings, skill_prefix, block_key)
+
     _dedupe_inplace(warnings)
     return warnings
 
@@ -260,70 +248,9 @@ def check_script_config(
 
     warnings = BestPracticeCheckResult()
     _check_action_tree(config.get("sequence", []), warnings, skill_prefix)
+    _check_variables_order(config.get("variables"), warnings, skill_prefix, "variables")
     _dedupe_inplace(warnings)
     return warnings
-
-
-# ---------------------------------------------------------------------------
-# Warning emission + skill-reference helpers
-# ---------------------------------------------------------------------------
-
-
-def _emit(
-    warnings: BestPracticeCheckResult,
-    message: str,
-    skill_prefix: str | None,
-    file_ref: str,
-) -> None:
-    """Append a warning with the 2-route ' See ...' suffix and track the file.
-
-    Args:
-        warnings: Accumulator (also holds ``referenced_files``).
-        message: Human-readable warning body — the inline alternative.
-        skill_prefix: When set, embedded as the ``skill://`` URI route.
-            When ``None``, the URI route is omitted but the other two
-            routes still appear.
-        file_ref: File path relative to the ``references/`` directory of
-            the home-assistant-best-practices skill, optionally with a
-            ``#anchor`` suffix
-            (e.g. ``"automation-patterns.md#native-conditions"``). The
-            anchor is preserved end-to-end: in the ``skill://`` URI for
-            display, and in ``referenced_files`` so the auto-embed path
-            ships only the matching markdown section instead of the
-            whole 10-20 KB reference file.
-    """
-    warnings.append(message + _skill_route_suffix(skill_prefix, file_ref))
-    warnings.referenced_files.add(f"references/{file_ref}")
-
-
-def _skill_route_suffix(skill_prefix: str | None, file_ref: str) -> str:
-    """Build the ' See ...' suffix naming the available skill access routes.
-
-    When ``skill_prefix`` is ``None`` the entire suffix is suppressed —
-    skills are off server-wide, so neither route resolves. Otherwise the
-    suffix names both so the LLM has a working path regardless of which
-    mechanism its client supports:
-
-    1. ``skill://`` URI — for clients that auto-fetch resource URIs.
-       Anchor preserved.
-    2. ``ha_get_skill_guide(skill=..., file=...)`` — explicit tool call,
-       works on every MCP client. Anchor stripped (the tool reads the
-       whole file).
-
-    Auto-embed of the matching section still happens in the next
-    write's response, driven by ``referenced_files``; the
-    ``MandatoryBPS`` opt-out param is not named here by design.
-    """
-    if not skill_prefix:
-        # Skills feature is disabled server-wide; none of the routes work.
-        # Matches the historical no-suffix behaviour.
-        return ""
-    bare_file = f"references/{file_ref.split('#', 1)[0]}"
-    routes = [
-        f"{skill_prefix}/{file_ref}",
-        f"call ha_get_skill_guide(skill={_SKILL_NAME!r}, file={bare_file!r})",
-    ]
-    return " See " + " | ".join(routes)
 
 
 # ---------------------------------------------------------------------------
@@ -588,16 +515,27 @@ def _check_repeat_actions(
 def _check_control_flow_actions(
     action: dict[str, Any], warnings: BestPracticeCheckResult, skill_prefix: str | None
 ) -> None:
-    """Check choose/if/then/else/repeat/parallel sub-trees in a single action."""
+    """Check choose/if/then/else/repeat/parallel/sequence sub-trees in one action.
+
+    ``sequence`` is both a grouping action of its own
+    (``cv.SCRIPT_ACTION_SEQUENCE``) and the canonical shape of a ``parallel:``
+    branch — HA normalises the shorthand branch list into ``{"sequence": ...}``
+    (``_SCRIPT_PARALLEL_SCHEMA`` / ``_parallel_sequence_action``). Without this
+    arm only the shorthand branch was walked, so the canonical form of both was
+    invisible to every check below this point.
+    """
     if "choose" in action:
         _check_choose_actions(action["choose"], warnings, skill_prefix)
 
     if "if" in action:
         _check_condition_templates(action["if"], warnings, skill_prefix)
 
-    for key in ("then", "else", "default"):
+    # Every one of these is a `SCRIPT_SCHEMA` position, and that schema is
+    # `vol.All(ensure_list, [script_action])` — a lone action mapping is valid
+    # wherever a list is, so both shapes have to be walked.
+    for key in ("then", "else", "default", "sequence"):
         nested = action.get(key)
-        if isinstance(nested, list):
+        if isinstance(nested, list | dict):
             _check_action_tree(nested, warnings, skill_prefix)
 
     if "repeat" in action and isinstance(action["repeat"], dict):
@@ -606,7 +544,7 @@ def _check_control_flow_actions(
     # `parallel:` runs sub-actions concurrently — same shape as `sequence`,
     # different semantics. Recurse so templates inside parallel branches
     # are inspected the same as templates inside choose/repeat sequences.
-    if "parallel" in action and isinstance(action["parallel"], list):
+    if isinstance(action.get("parallel"), list | dict):
         _check_action_tree(action["parallel"], warnings, skill_prefix)
 
 
@@ -645,6 +583,13 @@ def _check_action_tree(
         # `choose` (or `if/then/else`) action that picks between hardcoded
         # service names based on state.
         _check_service_template(action, warnings, skill_prefix)
+
+        # A `variables:` step is a legitimate template position, so it is never
+        # walked for template misuse. Its key *order* is still load-bearing —
+        # scanned separately.
+        _check_variables_order(
+            action.get("variables"), warnings, skill_prefix, "variables"
+        )
 
         # Templates in target sub-fields. Action `data`, `event_data`,
         # `service_data`, notification message/title, and `variables` are

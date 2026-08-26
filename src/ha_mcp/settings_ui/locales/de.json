@@ -12,7 +12,14 @@
     "theme.auto_os": "Automatisch (System)",
     "theme.light": "Hell",
     "theme.dark": "Dunkel",
-    "status.loading": "Lädt...",
+    "status.loading": "Lädt…",
+    "footer.installation": "Installation: {method}",
+    "footer.deployment.addon": "App/Add-on",
+    "footer.deployment.docker": "Container/Docker",
+    "footer.deployment.pyinstaller": "Eigenständige Binärdatei",
+    "footer.deployment.git": "Quellcode-Checkout",
+    "footer.deployment.pypi": "Python-Paket",
+    "footer.deployment.unknown": "unbekannt",
     "nav.skip": "Zum Inhalt springen",
     "tabs.aria": "Einstellungs-Abschnitte",
     "tabs.tools": "Tools",
@@ -21,10 +28,10 @@
     "tabs.policies": "Tool-Sicherheitsrichtlinien",
     "tabs.visibility": "Entitäts-Sichtbarkeit",
     "tabs.accessibility": "Barrierefreiheit",
-    "notice.restart_required": "⚠ Änderungen gespeichert. Starte HA-MCP neu, damit sie wirksam werden. Beim nächsten Start entfernt HA-MCP deaktivierte Tools vollständig aus der MCP-Tool-Liste. Verbinde dann den MCP-Server in deinem KI-Client neu oder aktualisiere ihn (z. B. Tool-Liste auf claude.ai aktualisieren, Connector in ChatGPT erneut hinzufügen oder aktualisieren oder Claude Desktop schließen und neu öffnen), damit die Tool-Liste neu geladen wird. Das Neustarten des Add-ons oder von Home Assistant aktualisiert NICHT die vom Client zwischengespeicherte Tool-Liste. ChatGPT liefert die zwischengespeicherte Tool-Liste manchmal auch nach dem Entfernen und erneuten Hinzufügen des Connectors weiter aus — fehlen Tools weiterhin, lösche den Connector und lege ihn unter einem anderen Namen neu an.",
-    "notice.shared_settings": "Server-weite Funktionen (Tool-Suche, YAML-Konfigurationsbearbeitung, Dateisystem-Tools usw.) erscheinen sowohl im Tab <strong>Server-Einstellungen</strong> als auch auf der Add-on-Konfigurationsseite; es sind dieselben Einstellungen. Beide Ansichten bleiben nach dem Neustart des Add-ons synchron. Änderungen erfordern einen Neustart von HA-MCP.",
-    "notice.env_pins": "Tools, die in den Umgebungsvariablen <code>DISABLED_TOOLS</code> oder <code>PINNED_TOOLS</code> aufgeführt sind, sind schreibgeschützt gesperrt; hebe die Umgebungsvariable auf, um sie hier zu bearbeiten. Anheftungs-Toggles wirken nur, wenn die Tool-Suche aktiviert ist (Tab Server-Einstellungen oder Add-on-Konfigurationsseite).",
-    "actions.restart_addon": "Add-on neu starten",
+    "notice.restart_required": "⚠ Änderungen gespeichert. Starte HA-MCP neu, damit sie wirksam werden. Beim nächsten Start entfernt HA-MCP deaktivierte Tools vollständig aus der MCP-Tool-Liste. Verbinde dich dann erneut mit dem MCP-Server in deinem KI-Client oder aktualisiere diesen (z. B. Tool-Liste auf claude.ai aktualisieren, Konnektor in ChatGPT neu hinzufügen/aktualisieren oder Claude Desktop schließen und wieder öffnen), damit die Tool-Liste neu geladen wird. Ein Neustart der App (Add-on) oder von Home Assistant aktualisiert NICHT die zwischengespeicherte Tool-Liste deines Clients. ChatGPT liefert seine zwischengespeicherte Tool-Liste manchmal selbst dann noch aus, wenn der Konnektor entfernt und neu hinzugefügt wurde — falls Tools weiterhin fehlen, lösche den Konnektor und erstelle einen neuen unter einem anderen Namen.",
+    "notice.shared_settings": "Serverweite Funktionen (Tool-Suche, YAML-Konfigurationsbearbeitung, Dateisystem-Tools usw.) werden sowohl im Tab <strong>Servereinstellungen</strong> als auch auf der App-Konfigurationsseite (Add-on) angezeigt; es sind in beiden Fällen dieselben Einstellungen. Beide Oberflächen bleiben nach dem Neustart der App (Add-on) miteinander synchronisiert. Änderungen erfordern einen Neustart von HA-MCP.",
+    "notice.env_pins": "In den Umgebungsvariablen <code>DISABLED_TOOLS</code> oder <code>PINNED_TOOLS</code> aufgeführte Tools sind schreibgeschützt gesperrt; deaktiviere die Umgebungsvariable, um sie hier zu bearbeiten. Pin-Umschalter werden erst wirksam, wenn die Tool-Suche aktiviert ist (Tab Servereinstellungen oder App-Konfigurationsseite (Add-on)).",
+    "actions.restart_addon": "App (Add-on) neu starten",
     "actions.save": "Speichern",
     "actions.save_settings": "Einstellungen speichern",
     "actions.refresh": "Neu laden",
@@ -33,7 +40,7 @@
     "tools.read_only.help": "Schaltet alle Schreibtools aus und verhindert, dass Tools Schreib- oder destruktive Aufrufe tätigen. Gemischte Lese-/Schreib-Tools (Backups, Add-ons, Energiepräferenzen, Voice-Pipelines und Code-Modus, wenn aktiviert) bleiben verfügbar, wobei ihre Schreiboperationen blockiert sind.",
     "tools.read_only.unknown": "Server-Einstellungen konnten nicht gelesen werden. Status des Nur-Lese-Modus unbekannt; diese Ansicht spiegelt möglicherweise nicht wider, was der Server erzwingt.",
     "tools.search": "Tools durchsuchen...",
-    "server.auto_save_notice": "Einstellungen auf diesem Tab werden automatisch gespeichert. Änderungen werden erst wirksam, nachdem du das Add-on neu gestartet hast (wendet sie serverseitig an) und die MCP-Server-Verbindung in deinem KI-Client neu verbindest oder aktualisierst (lädt die Tool-Liste neu), z. B. Tool-Liste auf claude.ai aktualisieren, Connector in ChatGPT erneut hinzufügen oder aktualisieren oder Claude Desktop schließen und neu öffnen. ChatGPT liefert die zwischengespeicherte Tool-Liste manchmal auch nach dem Entfernen und erneuten Hinzufügen des Connectors weiter aus — fehlen Tools weiterhin, lösche den Connector und lege ihn unter einem anderen Namen neu an.",
+    "server.auto_save_notice": "Die Einstellungen auf diesem Tab werden automatisch gespeichert. Änderungen werden erst wirksam, nachdem du HA-MCP neu gestartet hast (wendet sie serverseitig an) und den MCP-Server in deinem KI-Client neu verbunden oder aktualisiert hast (lädt die Tool-Liste neu), z. B. Tool-Liste auf claude.ai aktualisieren, Konnektor in ChatGPT neu hinzufügen oder aktualisieren oder Claude Desktop schließen und wieder öffnen. ChatGPT liefert seine zwischengespeicherte Tool-Liste manchmal selbst dann noch aus, wenn der Konnektor entfernt und neu hinzugefügt wurde — falls Tools weiterhin fehlen, lösche den Konnektor und erstelle einen neuen unter einem anderen Namen.",
     "server.sections.search": "Suche & Abgleich",
     "server.sections.operations": "Operationen",
     "server.sections.tool_surface": "Tool-Oberfläche",
@@ -52,8 +59,12 @@
     "policies.title": "Tool-Sicherheitsrichtlinien",
     "policies.intro": "Genehmigungs-Gating pro Tool für kritische Aufrufe. Verwende den Tab <strong>Tools</strong>, um das Gating für ein Tool zu aktivieren, und verfeinere dann die Abgleichbedingungen und die Genehmigungs-Lebensdauer hier. Bedingungsoperatoren: gleich, ist eins von, regex, enthält, ist vorhanden, größer als, kleiner als.",
     "policies.global.title": "Globale Einstellungen",
+    "policies.global.unknown": "Servereinstellungen konnten nicht gelesen werden. Die beiden Schalter unten werden als unbekannt angezeigt und können erst geändert werden, wenn die Seite erfolgreich neu geladen wurde; diese Ansicht spiegelt möglicherweise nicht wider, was der Server erzwingt.",
     "policies.global.enabled.label": "Tool-Sicherheitsrichtlinien aktivieren",
-    "policies.global.enabled.help": "Hauptschalter. Spiegelt den Schalter in den Server-Einstellungen. Standardmäßig ausgeschaltet. Schalte ihn ein und starte das Add-on neu, um die Gating-Middleware zu aktivieren. Während er ausgeschaltet ist, bleiben die nachfolgenden Regeln erhalten, werden aber nicht durchgesetzt.",
+    "policies.global.enabled.help": "Hauptschalter. Spiegelt den Umschalter in den Servereinstellungen wider. Standardmäßig aus. Schalte ihn ein und starte HA-MCP neu, um die Filter-Middleware zu aktivieren. Solange er aus ist, bleiben die Regeln unten bestehen, werden aber nicht durchgesetzt.",
+    "policies.global.manage_tool.label": "KI-Agenten erlauben, diese Richtlinien zu bearbeiten (ha_manage_security_policy)",
+    "policies.global.manage_tool.help": "Registriert das Tool ha_manage_security_policy, das das Richtliniendokument liest und ersetzt, das dieser Tab bearbeitet. Standardmäßig deaktiviert. Unabhängig vom Hauptschalter oben: Dies steuert, wer die Regeln bearbeiten kann, nicht ob sie erzwungen werden. Das Tool legt keine Operationen der Warteschlange für ausstehende Genehmigungen offen, aber eine durch Richtlinien geschützte Set-Aktion kann weiterhin eine Genehmigung erfordern.",
+    "policies.global.manage_tool.warning": "Wenn du dies aktivierst, können verbundene KI-Agenten die Sicherheitsrichtlinien auf diesem Tab umschreiben, einschließlich des Entfernens von Freigabeschranken. Um einen Menschen in die Schleife einzubinden, sichere das Tool BEVOR du es aktivierst: Schalte auf dem Tab Tools die Option \"Sicherheitsgeschützt\" für Manage Security Policy ein. Diese Regel kann erstellt werden, während das Tool noch ausgeschaltet ist, und sie greift, sobald der obige Hauptschalter eingeschaltet und der Server neu gestartet wurde. Starte die App (Add-on) neu, nachdem du einen der beiden Schalter umgelegt hast.",
     "policies.global.wait.label": "Wartezeit in Sekunden (5-600)",
     "policies.global.wait.help": "Wie lange die Middleware auf eine Genehmigung wartet, bevor sie eine Zeitüberschreitung aufweist.",
     "policies.global.ttl.label": "Genehmigungs-TTL in Minuten (1-60)",
@@ -63,7 +74,7 @@
     "policies.pending.empty": "Keine ausstehenden Genehmigungen.",
     "policies.rules.title": "Gegated Tools",
     "policies.rules.empty": "Derzeit keine Tools sicherheitsgegated. Aktiviere das Tool-Gating pro Tool im Tab <a href=\"#\" data-panel-link=\"tools\">Tools</a>.",
-    "accessibility.intro": "Diese Einstellungen werden sofort angewendet und im Browser und auf dem Server gespeichert, sodass sie in jedem Modus (einschließlich stdio, bei dem die Einstellungsseite bei jeder Sitzung auf einen neuen Port wechselt) Neustarts überstehen. Die Docs-Website bietet dieselben Steuerelemente in ihrer Navigationsleiste; sie hat keinen Server und speichert pro Browser.",
+    "accessibility.intro": "Diese Einstellungen werden sofort angewendet und werden in diesem Browser und auf dem Server gespeichert, sodass sie Neustarts in jedem Modus überleben (einschließlich stdio, wo die Einstellungsseite gelegentlich auf einen neuen Port verschoben werden kann). Die Dokumentationsseite bietet dieselben Steuerelemente in ihrer Navigationsleiste; sie hat keinen Server und speichert pro Browser.",
     "accessibility.storage_blocked": "Dein Browser blockiert den Site-Speicher; Auswahlen gelten nur für diese Sitzung.",
     "accessibility.theme.title": "Design",
     "accessibility.theme.help": "Ein-Klick-Farbschemata. Automatisch, die Standardeinstellung, folgt deiner OS-Präferenz und wechselt live, wenn sie sich ändert.",
@@ -85,8 +96,10 @@
     "visibility.boundary": "Ohne den Erzwingungsmodus (unten) ist dies Rauschreduzierung, keine Zugriffskontrolle: Eine versteckte Entität wird weiterhin durch ein direktes Lesen ihrer entity_id zurückgegeben und erscheint weiterhin in Automatisierungs-, Dashboard- und Template-Inhalten. Verlasse dich nicht allein auf den Filter als Sicherheitsgrenze.",
     "visibility.enabled": "Entitäts-Sichtbarkeitsfilter aktivieren",
     "visibility.enforce.title": "Erzwingungsmodus",
-    "visibility.enforce.help": "Erweitert den Filter vom Aufräumen von Suche und Übersicht auf jeden Werkzeug-Lesezugriff. Ein direkter Lesezugriff auf eine versteckte Entität liefert „nicht gefunden“, und ein Inhalts-Lesezugriff (Dashboard, Template, Automatisierung, Trace, Log oder Datei), der eine versteckte Entität offenlegen würde, wird verweigert. Bestmögliche Verschleierung gegen versehentliche Offenlegung, keine gehärtete Sicherheitsgrenze.",
-    "visibility.enforce.only_enforced": "Versteckte Entitäten für alle Werkzeuge unlesbar machen (nicht nur für die Suche)",
+    "visibility.enforce.help": "Erweitert den Filter von der Übersicht und dem Aufräumen der Suche standardmäßig auf jeden Tool-Lesevorgang außer ha_report_issue. Ein direkter Lesevorgang einer ausgeblendeten Entität gibt „nicht gefunden“ zurück, und ein Inhaltslesevorgang, der eine solche anzeigen würde, wird verweigert. Die Ausnahme für das Berichts-Tool wird unten gesteuert. Best-Effort-Verbergen gegen zufällige Exposition, keine gehärtete Sicherheitsgrenze.",
+    "visibility.enforce.only_enforced": "Versteckte Entitäten bei Tool-Lesevorgängen unlesbar machen (standardmäßig außer Fehlerberichten)",
+    "visibility.enforce.report_issue_help": "Solange dies deaktiviert ist, bleiben ha_report_issue und all seine Diagnoseausgaben – einschließlich Protokolle – bei jedem Aufruf außerhalb des Erzwingungsmodus, selbst wenn die Sichtbarkeitsdaten intakt oder nicht verfügbar sind. Aktiviere dies, um dieses Tool wie andere Lesevorgänge zu scannen und zu verweigern.",
+    "visibility.enforce.restrict_report_issue": "Erzwingungsmodus auf ha_report_issue anwenden",
     "visibility.categories.title": "Nach Kategorie verstecken",
     "visibility.categories.help": "Home Assistant markiert automatisch generierte Entitäten als Diagnose oder Konfiguration.",
     "visibility.categories.legend": "Zu versteckende Entitätskategorien",
@@ -110,21 +123,23 @@
     "visibility.assist.help": "Verstecke Entitäten, die nicht für den Assist-Sprachassistenten (Konversation) von Home Assistant freigegeben sind – entsprechend der Liste Einstellungen > Sprachassistenten > Freigeben. Fügt zwei WebSocket-Lesevorgänge pro Suche hinzu, während es aktiviert ist.",
     "visibility.assist.only_exposed": "Nur für Assist freigegebene Entitäten anzeigen",
     "features.enable_tool_search.label": "Tool-Suche aktivieren",
-    "features.enable_tool_search.help": "Ersetzt den vollständigen Tool-Katalog durch suchbasierte Entdeckung. Reduziert den Leerlauf-Kontext von ~46K auf ~5K Tokens. ⚠️ Aktiviere dies NICHT, wenn du Claude im Sonnet- oder Opus-Modus verwendest - diese Modelle haben ihre eigene integrierte Tool-Suche / aufgeschobene Tools, die mit unserer kollidiert. Um die Tool-Suche von ha-mcp mit Claude zu verwenden, deaktiviere zuerst Claudes integrierte Tool-Suche; lasse dies andernfalls ausgeschaltet. Verwende dies nur mit LLMs, denen native aufgeschobene Tools fehlen (z. B. Claude Haiku, lokale OpenAI-kompatible Modelle) oder mit kleineren Kontextfenstern. Tools werden über ha_search_tools gefunden und über kategorisierte Proxys (read/write/delete) ausgeführt. Erfordert Neustart, um wirksam zu werden.",
+    "features.enable_tool_search.help": "Ersetzt den vollständigen Tool-Katalog durch suchbasierte Entdeckung. Reduziert den Leerlauf-Kontext um rund 90 % auf etwa 5K Tokens. ⚠️ Aktiviere dies NICHT in Clients mit eigener integrierter Tool-Suche / aufgeschobenen Tools (claude.ai, Claude Desktop, Claude Code) – die beiden Suchebenen kollidieren, und die integrierte Tool-Suche des Clients ist dort die bessere Wahl; lasse dies ausgeschaltet. Ob Tools aufgeschoben werden, hängt von der Kombination aus Client und Modell ab: Verwende dies, wenn dein Setup den vollständigen Katalog von Anfang an lädt – Modelle ohne native aufgeschobene Tools (z. B. Gemini, lokale OpenAI-kompatible Modelle, Claude Haiku), Clients, die alle Tool-Schemata unabhängig vom Modell direkt einbetten (z. B. GitHub Copilot CLI), oder kleinere Kontextfenster. Auch einige Codex-Modelle und ChatGPT haben aufgeschobene Tools – prüfe direkt bei deinem Client/Modell, welche Features er hat, damit du dies nicht unnötig aktiviert lässt. Tools werden über ha_search_tools gefunden und über kategorisierte Proxys (read/write/delete) ausgeführt. Erfordert Neustart, um wirksam zu werden.",
     "features.tool_search_max_results.label": "Max. Tool-Suchergebnisse",
     "features.tool_search_max_results.help": "Maximale Anzahl von Tools, die von ha_search_tools zurückgegeben werden, wenn die Tool-Suche aktiviert ist. Niedrigere Werte (2-3) sparen Kontext-Tokens, können aber relevante Tools übersehen. Bereich: 2-10. Erfordert Neustart.",
     "features.enable_tool_security_policies.label": "Tool-Sicherheitsrichtlinien aktivieren (erweitert)",
     "features.enable_tool_security_policies.help": "Gating kritischer Tool-Aufrufe (Schloss-/Alarmsteuerung, Automatisierungsschreibvorgänge usw.) hinter Benutzergenehmigung. Wenn ein geschütztes Tool aufgerufen wird, weist der Agent den Benutzer an, den Tab Tool-Sicherheitsrichtlinien in der Web-UI zu öffnen und auf Genehmigen zu klicken, bevor der Aufruf fortgesetzt wird. Tool-bezogene Regeln mit optionalen Argumentbedingungen werden im Tab Tool-Sicherheitsrichtlinien konfiguriert. Standardmäßig ausgeschaltet. Erfordert Neustart, um wirksam zu werden.",
     "features.read_only_mode.label": "Nur-Lese-Modus",
-    "features.read_only_mode.help": "Schaltet alle Schreibtools aus und nimmt Tools die Möglichkeit, Schreib- oder destruktive Aufrufe zu tätigen. Gemischte Lese-/Schreib-Tools (Backups, Add-ons, Energiepräferenzen, Voice-Pipelines und Code-Modus, wenn aktiviert) bleiben verfügbar, wobei ihre Schreiboperationen blockiert sind. Derselbe Schalter wie im Web-UI-Tab Tools. Standardmäßig ausgeschaltet. Erfordert Neustart, um wirksam zu werden.",
+    "features.read_only_mode.help": "Schaltet alle Schreib-Tools aus und entzieht Tools die Fähigkeit, Schreib- oder destruktive Aufrufe auszuführen. Gemischte Lese-/Schreib-Tools — Backups, Apps (Add-ons), Energieeinstellungen, Sprach-Pipelines und der Code-Modus, wenn aktiviert — bleiben verfügbar, wobei ihre Schreiboperationen blockiert sind. Gleicher Umschalter wie auf dem Web-UI-Tab Tools. Standardmäßig aus. Erfordert einen Neustart, um wirksam zu werden.",
+    "features.redact_secrets.label": "Geheimnisse schwärzen",
+    "features.redact_secrets.help": "Entfernt Geheimnisse aus Tool-Antworten, bevor sie den KI-Assistenten erreichen. App-Optionen (Add-on) und als Passwörter markierte Integrationsfelder werden durch eine Markierung für gesetzt/leer ersetzt (sodass \"ist diese Zugangsbezeichnung konfiguriert?\" beantwortet bleiben kann), und andere Tool-Antworten werden von Geheimniswerten bereinigt, die der Server bereits gesehen hat (Werte, die kürzer als 6 Zeichen sind, werden übersprungen, da das Ersetzen winziger Fragmente zusammenhängende Ausgaben beschädigen würde). Felder, die von ihrem Schema nicht als Passwörter markiert wurden, können nicht erkannt werden. Standardmäßig aus.",
     "features.enable_mandatory_bps.label": "Best-Practice-Skills bei Schreibvorgängen anhängen",
     "features.enable_mandatory_bps.help": "Hauptschalter für die Funktion zur Bereitstellung von Schreib-Tool-Skill-Inhalten (Issue #1182). Wenn aktiviert (Standard), fügen die sechs Konfigurations-Schreibtools (Automatisierungen, Skripte, Szenen, Helfer, Dashboards, rohes YAML) die kanonischen Home-Assistant-Best-Practice-Referenzdateien unter skill_content bei jedem erfolgreichen Schreibvorgang an, plus automatisches Einbetten aller Referenzabschnitte, die von Best-Practice-Warnungen zitiert werden. Jedes Tool stellt auch einen per-Aufruf-Parameter MandatoryBPS zur Verfügung, den der Agent bei nachfolgenden Aufrufen auf false setzen kann, sobald er den Inhalt hat. Wenn dieser Hauptschalter ausgeschaltet ist, wird KEIN skill_content ausgegeben, unabhängig vom per-Aufruf-Parameter oder BP-Warnungen. Empfohlen EIN als erste Wahl; deaktiviere nur für Modelle mit sehr kleinen Kontextfenstern. Das Ausschalten davon kann die Schreibgenauigkeit beeinträchtigen. Erfordert Neustart, um wirksam zu werden.",
     "features.enable_strict_mandatory_bps.label": "Strikter Best-Practices-Modus",
-    "features.enable_strict_mandatory_bps.help": "Strikter Modus: verhindert, dass der Client das Tool verwendet, bis er nachweisen kann, dass er die Best Practices gelesen hat. Während er eingeschaltet ist, werden die sechs Best-Practice-Schreibtools (Automatisierungen, Skripte, Szenen, Helfer, Dashboards, rohes YAML) blockiert und geben einen Fehler zurück, der den Client anweist, das Best-Practices-Skill über ha_get_skill_guide zu lesen und den dort erhaltenen Bestätigungsschlüssel zurückzugeben. Während er eingeschaltet ist, ist das ha_get_skill_guide-Tool gesperrt aktiviert - es ist der einzige Herausgeber des Bestätigungsschlüssels. Kind der Option Best-Practice-Skills bei Schreibvorgängen anhängen oben und inert, während dieser Elternteil ausgeschaltet ist. Erfordert Neustart, um wirksam zu werden.",
+    "features.enable_strict_mandatory_bps.help": "Strikter Modus: verhindert, dass der Client das Tool verwendet, bis er nachweisen kann, dass er die Best Practices gelesen hat. Während er eingeschaltet ist, werden die sechs Best-Practice-Schreibtools (Automatisierungen, Skripte, Szenen, Helfer, Dashboards, rohes YAML) blockiert und geben einen Fehler zurück, der den Client anweist, das Best-Practices-Skill über ha_get_skill_guide zu lesen und den dort erhaltenen Bestätigungsschlüssel zurückzugeben. Während er eingeschaltet ist, ist das ha_get_skill_guide-Tool gesperrt aktiviert – es ist der einzige Herausgeber des Bestätigungsschlüssels. Kind der Option Best-Practice-Skills bei Schreibvorgängen anhängen oben und inert, während dieser Elternteil ausgeschaltet ist. Erfordert Neustart, um wirksam zu werden.",
     "features.enable_beta_features.label": "Beta-Funktionen aktivieren (Master)",
-    "features.enable_beta_features.help": "⚠ GEFAHR - diese Tools können deine Home-Assistant-Installation DAUERHAFT BESCHÄDIGEN. Sie schreiben in deine YAML-Konfiguration, dein Dateisystem, installieren benutzerdefinierte Komponenten, führen beliebigen sandboxed Python aus und bearbeiten Tool-Docstrings, die die KI sieht. Es gibt keine Garantie und keine Support-Garantie - du aktivierst sie auf EIGENES RISIKO. Erstelle ein Home-Assistant-Backup, bevor du dies einschaltest, und aktiviere es niemals in der Produktion ohne eines. Master-Gate für die 5 experimentellen Unter-Flags unten; Unter-Flags werden zur Laufzeit ignoriert, während dieser Master ausgeschaltet ist, selbst wenn sie explizit auf true gesetzt sind. Derselbe Schalter wird auch in der Web-Einstellungs-UI unter Beta-Funktionen (gefährlich) angezeigt - beide Ansichten spiegeln sich nach dem Neustart wider.",
+    "features.enable_beta_features.help": "⚠ GEFAHR — diese Tools können deine Home Assistant-Installation DAUERHAFT BESCHÄDIGEN. Sie schreiben in deine YAML-Konfiguration, dein Dateisystem, installieren benutzerdefinierte Komponenten, führen beliebigen sandboxed Python-Code aus und bearbeiten Tool-Docstrings, die die KI sieht. Es gibt keine Garantie und keine Support-Zusage — du aktivierst sie auf EIGENES RISIKO. Erstelle ein Home Assistant-Backup, bevor du dies aktivierst, und aktiviere es niemals in der Produktion ohne eines. Hauptschalter für die experimentellen Unter-Flags unten; Unter-Flags werden zur Laufzeit ignoriert, solange dieser Hauptschalter ausgeschaltet ist, selbst wenn sie explizit auf true gesetzt sind. Derselbe Schalter wird auch in der Web-Einstellungen-UI unter \"Beta-Funktionen (gefährlich)\" angezeigt — beide Oberflächen spiegeln sich beim Neustart wider.",
     "features.enable_yaml_config_editing.label": "YAML-Konfigurations-Bearbeitung aktivieren (Beta)",
-    "features.enable_yaml_config_editing.help": "Beta-Funktion. Ermöglicht KI-Assistenten, Schlüssel der obersten Ebene in configuration.yaml und packages/*.yaml hinzuzufügen, zu ersetzen oder zu entfernen. Nur auf die Whitelist gesetzte Schlüssel sind erlaubt (z. B. template, sensor, command_line, mqtt, knx); Kernschlüssel wie homeassistant, http und recorder sind blockiert. Jede Bearbeitung validiert YAML-Syntax, führt eine Konfigurationsprüfung durch und erstellt ein automatisches Backup. Änderungen an den meisten Schlüsseln erfordern einen vollständigen HA-Neustart, um wirksam zu werden. Siehe docs/beta.md für bekannte Einschränkungen. Dedizierte Tools (Automatisierungen, Skripte, Szenen, Helfer, Template-Sensoren) sollten bevorzugt werden, wenn verfügbar. ERFORDERT, dass der Master-Schalter Beta-Funktionen aktivieren oben (und in der Web-UI) eingeschaltet ist - andernfalls wird dieses Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert hier.",
+    "features.enable_yaml_config_editing.help": "Beta-Funktion. Ermöglicht KI-Assistenten, Schlüssel der obersten Ebene in configuration.yaml und packages/*.yaml hinzuzufügen, zu ersetzen oder zu entfernen. Nur auf die Whitelist gesetzte Schlüssel sind erlaubt (z. B. template, sensor, command_line, mqtt, knx); Kernschlüssel wie homeassistant, http und recorder sind blockiert. Jede Bearbeitung validiert YAML-Syntax, führt eine Konfigurationsprüfung durch und erstellt ein automatisches Backup. Änderungen an den meisten Schlüsseln erfordern einen vollständigen HA-Neustart, um wirksam zu werden. Siehe docs/beta.md für bekannte Einschränkungen. Dedizierte Tools (Automatisierungen, Skripte, Szenen, Helfer, Template-Sensoren) sollten bevorzugt werden, wenn verfügbar. ERFORDERT, dass der Master-Schalter Beta-Funktionen aktivieren oben (und in der Web-UI) eingeschaltet ist – andernfalls wird dieses Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert hier.",
     "features.enable_yaml_edit_confirm.label": "Bestätigung für YAML-Bearbeitungen erfordern (Diff-Vorschau)",
     "features.enable_yaml_edit_confirm.help": "Unter-Toggle der YAML-Konfigurationsbearbeitung, standardmäßig EIN (empfohlen). Der erste ha_config_set_yaml-Aufruf gibt ein einheitliches Diff von genau dem zurück, was sich auf der Festplatte ändern würde, plus ein Bestätigungstoken und schreibt nichts; die Bearbeitung landet nur, wenn der Aufruf mit diesem Token wiederholt wird. Existiert, damit unbeabsichtigte Änderungen außerhalb der angeforderten Bearbeitung erfasst werden, bevor sie die Festplatte erreichen (Issue #1720). Schalte nur aus, um einen Roundtrip pro Bearbeitung zu sparen.",
     "features.enable_yaml_packages_automation.label": "automation in packages/*.yaml erlauben",
@@ -134,13 +149,13 @@
     "features.enable_yaml_packages_scene.label": "scene in packages/*.yaml erlauben",
     "features.enable_yaml_packages_scene.help": "Unter-Toggle der YAML-Konfigurationsbearbeitung. Wenn eingeschaltet, akzeptiert ha_config_set_yaml yaml_path='scene' innerhalb von packages/*.yaml. Wenn ausgeschaltet, wird der Aufruf sowohl client- als auch serverseitig abgelehnt. Das Storage-Modus-Tool (ha_config_set_scene) ist nicht betroffen. Standard AUS; wirkt nur, wenn YAML-Konfigurations-Bearbeitung aktivieren oben ebenfalls eingeschaltet ist.",
     "features.enable_filesystem_tools.label": "Dateisystem-Tools aktivieren (Beta)",
-    "features.enable_filesystem_tools.help": "Setzt HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Aktiviert direkten Dateilese-/-schreibzugriff auf dein Home-Assistant-Dateisystem. WARNUNG: Dies gibt dem MCP-Server sensiblen direkten Dateizugriff auf dein System. Aktiviere nur, wenn du dem KI-Assistenten bei Dateioperationen vertraust. Erfordert Neustart, um wirksam zu werden. ERFORDERT, dass der Master-Schalter Beta-Funktionen aktivieren oben (und in der Web-UI) eingeschaltet ist - andernfalls wird dieses Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert hier.",
+    "features.enable_filesystem_tools.help": "Setzt HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Aktiviert direkten Dateilese-/-schreibzugriff auf dein Home-Assistant-Dateisystem. WARNUNG: Dies gibt dem MCP-Server sensiblen direkten Dateizugriff auf dein System. Aktiviere nur, wenn du dem KI-Assistenten bei Dateioperationen vertraust. Erfordert Neustart, um wirksam zu werden. ERFORDERT, dass der Master-Schalter Beta-Funktionen aktivieren oben (und in der Web-UI) eingeschaltet ist – andernfalls wird dieses Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert hier.",
     "features.enable_code_mode.label": "Benutzerdefinierte Tool-Sandbox aktivieren (Beta)",
-    "features.enable_code_mode.help": "Beta-Funktion. Aktiviert das ha_manage_custom_tool-Tool, das KI-Assistenten ermöglicht, benutzerdefinierten Python-Code in einer sicheren Sandbox zu erstellen, auszuführen, zu speichern und zu löschen, wenn kein integriertes Tool die Anfrage bearbeiten kann. Code wird in einem isolierten Interpreter ohne Dateisystem- oder beliebigen Netzwerkzugriff ausgeführt. Sandbox-Code kann die HA REST API treffen (api_get/api_post), WebSocket-Befehle senden (ws_send), vorhandene MCP-Tools aufrufen (call_tool) oder ein gespeichertes Tool entfernen (delete_saved_tool). Gespeicherte Tools werden standardmäßig in /data/saved_tools.json gespeichert, sodass sie Add-on-Neustarts überstehen und für jeden Client sichtbar sind, der sich verbinden kann. Siehe docs/beta.md für bekannte Einschränkungen. Erfordert Neustart, um wirksam zu werden. ERFORDERT, dass der Master-Schalter Beta-Funktionen aktivieren oben (und in der Web-UI) eingeschaltet ist - andernfalls wird dieses Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert hier.",
+    "features.enable_code_mode.help": "Beta-Funktion. Aktiviert das ha_manage_custom_tool-Tool, mit dem KI-Assistenten benutzerdefinierten Python-Code in einer sicheren Sandbox erstellen, ausführen, speichern und löschen können, wenn kein integriertes Tool die Anfrage verarbeiten kann. Code läuft in einem isolierten Interpreter ohne Dateisystem oder beliebigen Netzwerkzugriff. Sandbox-Code kann die HA REST API aufrufen (api_get/api_post), WebSocket-Befehle senden (ws_send), bestehende MCP-Tools aufrufen (call_tool) oder ein gespeichertes Tool löschen (delete_saved_tool). Gespeicherte Tools bleiben standardmäßig in /data/saved_tools.json erhalten, sodass sie Neustarts der App (Add-on) überstehen, und sind für jeden Client sichtbar, der eine Verbindung herstellen kann. Bekannte Einschränkungen findest du in docs/beta.md. Erfordert einen Neustart, um wirksam zu werden. ERFORDERT, dass der Hauptschalter \"Beta-Funktionen aktivieren\" oben (und im Web-UI) eingeschaltet ist — andernfalls wird dieses Unterflag zur Laufzeit unabhängig von seinem Wert hier ignoriert.",
     "features.enable_lite_docstrings.label": "Lite-Tool-Docstrings aktivieren (Beta)",
-    "features.enable_lite_docstrings.help": "Beta-Funktion. Ersetzt die Docstrings auf einer Handvoll schwerer ha-mcp-Tools (Automatisierungen, Skripte, Szenen, Helfer, Dashboards, ha_call_service, ha_config_set_yaml) durch kürzere Varianten, die Schema- und Beispieldetails auf das ha_get_skill_guide-Tool (oder seine skill://-Ressource) verschieben. WARNUNG: Dies reduziert die Leerlauf-Token-Nutzung, kann aber die LLM-Leistung beeinträchtigen - die gekürzten Beschreibungen verlassen sich darauf, dass das LLM tatsächlich das Skill-Tool aufruft oder die Skill-Ressource für Details liest, was nicht garantiert ist (einige Modelle überspringen den zusätzlichen Tool-Aufruf und haben am Ende weniger Anleitung als zuvor). Am besten mit einem Client gepaart, der MCP-Ressourcen unterstützt, oder mit enable_tool_search. Erfordert Neustart, um wirksam zu werden. ERFORDERT, dass der Master-Schalter Beta-Funktionen aktivieren oben (und in der Web-UI) eingeschaltet ist - andernfalls wird dieses Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert hier.",
+    "features.enable_lite_docstrings.help": "Beta-Funktion. Ersetzt die Docstrings auf einer Handvoll schwerer ha-mcp-Tools (Automatisierungen, Skripte, Szenen, Helfer, Dashboards, ha_call_service, ha_config_set_yaml) durch kürzere Varianten, die Schema- und Beispieldetails auf das ha_get_skill_guide-Tool (oder seine skill://-Ressource) verschieben. WARNUNG: Dies reduziert die Leerlauf-Token-Nutzung, kann aber die LLM-Leistung beeinträchtigen – die gekürzten Beschreibungen verlassen sich darauf, dass das LLM tatsächlich das Skill-Tool aufruft oder die Skill-Ressource für Details liest, was nicht garantiert ist (einige Modelle überspringen den zusätzlichen Tool-Aufruf und haben am Ende weniger Anleitung als zuvor). Am besten mit einem Client gepaart, der MCP-Ressourcen unterstützt, oder mit enable_tool_search. Erfordert Neustart, um wirksam zu werden. ERFORDERT, dass der Master-Schalter Beta-Funktionen aktivieren oben (und in der Web-UI) eingeschaltet ist – andernfalls wird dieses Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert hier.",
     "features.enable_dashboard_screenshot.label": "Dashboard-Screenshot-Modus aktivieren (Beta)",
-    "features.enable_dashboard_screenshot.help": "Beta-Funktion - standardmäßig deaktiviert. Fügt das ha_get_dashboard_screenshot-Tool plus include_screenshot / return_screenshot-Optionen auf den Dashboard-Get-/Set-Tools hinzu, sodass KI-Assistenten ein oder mehrere responsive Lovelace-Bilder inspizieren können (z. B. um ein Dashboard zu verifizieren, das sie gerade erstellt haben). Unterstützt stabile benannte Ansichten, Mobile-/Tablet-/Desktop-Batches und PNG-/JPEG-/WebP-/BMP-Ausgabe. Das Rendering läuft in einer separaten Opt-in-Engine - balloobs Puppet-Add-on (headless Chromium) - die du einmal installierst (füge balloobs Add-on-Repository hinzu, dann installiere Puppet) und gibst ihm ein langlebiges Zugriffstoken; bei Docker-/Container-Deployments führst du diese Engine als Sidecar aus und setzt HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nichts Schweres wird installiert, es sei denn, du aktivierst dies sowohl als auch installierst die Engine. Erfordert Neustart, um wirksam zu werden. ERFORDERT, dass der Master-Schalter Beta-Funktionen aktivieren oben (und in der Web-UI) eingeschaltet ist - andernfalls wird dieses Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert hier.",
+    "features.enable_dashboard_screenshot.help": "Beta-Funktion — standardmäßig deaktiviert. Fügt das Tool ha_get_dashboard_screenshot sowie die Optionen include_screenshot / return_screenshot zu den Dashboard-Get/Set-Tools hinzu, sodass KI-Assistenten ein oder mehrere responsive Lovelace-Bilder überprüfen können (z. B. um ein gerade erst erstelltes Dashboard zu überprüfen). Unterstützt stabile benannte Ansichten, Mobil-/Tablet-/Desktop-Batches sowie PNG/JPEG/WebP/BMP-Ausgaben. Das Rendern erfolgt in einer separaten, optionalen Engine — balloobs \"Puppet\" App (Add-on), headless Chromium —, die du einmalig installierst (füge balloobs Repository dem App-Store hinzu, installiere dann \"Puppet\") und mit einem langlebigen Zugriffstoken versiehst; bei Docker/Container-Bereitstellungen führst du diese Engine als Sidecar aus und setzt HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Es wird nichts Schweres installiert, es sei denn, du aktivierst dies und installierst die Engine. Erfordert einen Neustart, um wirksam zu werden. ERFORDERT, dass der Hauptschalter \"Beta-Funktionen aktivieren\" oben (und im Web-UI) eingeschaltet ist — andernfalls wird dieses Unterflag zur Laufzeit unabhängig von seinem Wert hier ignoriert.",
     "actions.restart_server": "HA-MCP-Server neu starten",
     "actions.restart_confirm": "HA-MCP jetzt neu starten? Die Seite wird automatisch neu geladen, sobald der Server wieder online ist.",
     "actions.view": "Ansehen",
@@ -155,7 +170,7 @@
     "actions.dismiss": "Schließen",
     "status.loaded": "Geladen",
     "status.loading_ellipsis": "Lädt…",
-    "status.loading_parentheses": "(lädt...)",
+    "status.loading_parentheses": "(wird geladen…)",
     "status.unsaved": "Nicht gespeicherte Änderungen...",
     "status.saving": "Speichert…",
     "status.saving_server_setting": "Speichert Server-Einstellung...",
@@ -168,7 +183,7 @@
     "status.stopped_offline": "Gestoppt. Diese Seite wird offline gehen",
     "status.stopped_connection": "Gestoppt (Verbindung getrennt)",
     "status.restarting": "Startet neu…",
-    "status.waiting_addon": "Warte darauf, dass das Add-on wieder online kommt…",
+    "status.waiting_addon": "Warte darauf, dass die App (Add-on) wieder online geht…",
     "errors.javascript": "JS-Fehler: {message} @ {where}",
     "errors.async": "Async-Fehler: {message}",
     "errors.network": "Netzwerkfehler: {message}",
@@ -184,7 +199,7 @@
     "errors.stop_failed": "Stoppen fehlgeschlagen",
     "errors.restart_failed": "Neustart fehlgeschlagen",
     "errors.failed_detail": "Fehlgeschlagen: {detail}",
-    "errors.addon_not_back": "Add-on ist nicht wieder online gekommen. Lade manuell neu",
+    "errors.addon_not_back": "App (Add-on) ist nicht wieder online gegangen. Lade die Seite manuell neu.",
     "errors.unparseable_suffix": " (Antwort-Body nicht parsebar)",
     "common.operation_failed": "{operation} fehlgeschlagen: {detail}",
     "common.enabled": "aktiviert",
@@ -193,7 +208,7 @@
     "common.minutes_short": "{count} Min.",
     "common.bytes": "{count} Bytes",
     "common.none": "(keine)",
-    "notice.restart.addon": "⚠ Änderungen gespeichert. Klicke auf Add-on neu starten, damit sie wirksam werden. Deaktivierte Tools werden beim nächsten Start aus der MCP-Tool-Liste entfernt. Aktualisiere dann die Tool-Liste in deinem KI-Client; das Neustarten des Add-ons allein aktualisiert nicht die zwischengespeicherte Liste des Clients.",
+    "notice.restart.addon": "⚠ Änderungen gespeichert. Klicke auf „App (Add-on) neu starten“, damit sie wirksam werden. Deaktivierte Tools werden beim nächsten Start aus der MCP-Tool-Liste entfernt. Aktualisiere dann die Tool-Liste in deinem KI-Client; das alleinige Neustarten der App aktualisiert nicht die zwischengespeicherte Liste des Clients.",
     "notice.restart.embedded": "⚠ Änderungen gespeichert. Klicke auf HA-MCP-Server neu starten, um die In-Process-Integration neu zu laden. Aktualisiere dann die MCP-Tool-Liste in deinem KI-Client.",
     "notice.restart.sidecar": "⚠ Änderungen gespeichert. Beende deinen MCP-Client vollständig und öffne ihn erneut, damit sie wirksam werden. Deaktivierte Tools werden beim nächsten Start aus der MCP-Tool-Liste entfernt.",
     "notice.restart.standalone": "⚠ Änderungen gespeichert. Starte den ha-mcp-Prozess neu und aktualisiere dann die MCP-Tool-Liste in deinem KI-Client.",
@@ -205,7 +220,8 @@
     "tools.badges.read_only": "schreibgeschützt",
     "tools.badges.writes": "schreibt",
     "tools.badges.deletes": "löscht",
-    "tools.notes.beta_disabled": "Beta. Setze {setting} in der Dev-Add-on-Konfiguration oder passender Umgebungsvariable (siehe docs/beta.md).",
+    "tools.notes.gated_disabled": "Deaktiviert. Aktiviere {setting} — der Umschalter des Tools zur Richtlinienbearbeitung befindet sich auf dem Tab Tool-Sicherheitsrichtlinien — und starte dann die App (Add-on) neu.",
+    "tools.notes.beta_disabled": "Beta. Setze {setting} in der Dev-App-Konfiguration (Add-on) oder der entsprechenden Umgebungsvariable (siehe docs/beta.md).",
     "tools.notes.env_pinned": "Angeheftet durch {variable}. Hebe die Umgebungsvariable auf, um hier zu bearbeiten.",
     "tools.notes.bps_locked": "Gesperrt, während der strikte Best-Practices-Modus eingeschaltet ist. Schalte diese Einstellung zuerst aus, um dieses Tool zu deaktivieren.",
     "tools.notes.read_only_off": "Aus. Nur-Lese-Modus ist eingeschaltet; Schreibtools sind deaktiviert.",
@@ -219,7 +235,7 @@
     "tools.states.enabled": "aktiviert",
     "tools.states.pinned": "angeheftet",
     "tools.states.security_gated": "sicherheitsgegated",
-    "tools.security.enable_first": "Aktiviere zuerst Tool-Sicherheitsrichtlinien in der Add-on-Konfiguration.",
+    "tools.security.enable_first": "Aktiviere zuerst die Tool-Sicherheitsrichtlinien in den Servereinstellungen.",
     "tools.summary.total": "{count} insgesamt",
     "tools.summary.enabled": "{count} aktiviert",
     "tools.summary.pinned": "{count} angeheftet",
@@ -269,18 +285,18 @@
     "backup.bulk.confirm": "Alle Backups löschen, die übereinstimmen: {filters}?",
     "backup.bulk.deleted": "Gelöschte Backups: {count}",
     "filesystem.custom.title": "Benutzerdefinierte Dateisystem-Verzeichnisse (erweitert)",
-    "filesystem.custom.help": "Zusätzliche Verzeichnisse (eines pro Zeile), die Datei-Tools <strong>lesen und schreiben</strong> können. Relative Konfigurationspfade und erlaubte HAOS-Geschwister-Volumes werden unterstützt. Wirkt sofort.",
+    "filesystem.custom.help": "Zusätzliche Pfade (einer pro Zeile), die Dateitools <strong>lesen und schreiben</strong> dürfen. Relative Konfigurationspfade und erlaubte HAOS-Geschwistervolumen werden unterstützt. Jeder Eintrag erlaubt diesen Pfad und alles darunter; konfigurationsrelative Dateinamen wie <code>sensor.yaml</code> können direkt eingegeben werden. Gilt sofort.",
     "filesystem.custom.blocked": "Immer blockiert: {paths}, Pfad-Traversierung (<code>..</code>) und absolute Pfade außerhalb erlaubter HAOS-Volumes.",
     "filesystem.custom.enable_first": "Aktiviere zuerst Beta-Funktionen und Dateisystem-Tools oben zum Bearbeiten.",
     "filesystem.custom.unavailable": "Benutzerdefinierte Verzeichnisse sind derzeit nicht verfügbar.",
     "filesystem.custom.save": "Verzeichnisse speichern",
     "filesystem.custom.saved_rejected": "Gespeichert. Abgelehnt (blockiert oder ungültig): {paths}",
     "origins.env_locked": "Über Umgebungsvariable gesetzt; hebe sie auf, um hier zu bearbeiten.",
-    "origins.addon_synced": "Mit dem Add-on-Konfigurations-Tab synchronisiert. Neustart nach dem Speichern erforderlich.",
+    "origins.addon_synced": "Mit dem Tab App-Konfiguration (Add-on) synchronisiert. Nach dem Speichern ist ein Neustart erforderlich.",
     "origins.env_var_unset": "Über Umgebungsvariable {variable} gesetzt; hebe sie auf, um hier zu bearbeiten.",
-    "origins.beta_legacy_bridge": "Automatisch im Add-on-Legacy-Modus aktiviert. Setze <code>enable_beta_features</code> explizit in der Konfiguration, um die Kontrolle zu übernehmen. (env: {variable})",
-    "origins.addon_runtime": "Vom Add-on-Laufzeit-Umfeld gesetzt, das vom Supervisor verwaltet wird; kann hier nicht geändert werden. (env: {variable})",
-    "origins.display_only": "Nur Anzeige. Über Umgebungsvariable oder Add-on-Einstellungen ändern.",
+    "origins.beta_legacy_bridge": "Im Legacy-Modus der App (Add-on) automatisch aktiviert. Setze <code>enable_beta_features</code> explizit in der Konfiguration, um die Kontrolle zu übernehmen. (env: {variable})",
+    "origins.addon_runtime": "Wird durch die vom Supervisor verwaltete App-Laufzeitumgebung (Add-on) festgelegt; kann hier nicht geändert werden. (env: {variable})",
+    "origins.display_only": "Nur zur Anzeige. Über Umgebungsvariable oder App-(Add-on-)Einstellungen ändern.",
     "features.errors.network": "Feature-Flags nicht verfügbar (Netzwerkfehler beim Erreichen von /api/settings/features).",
     "features.errors.http": "Feature-Flags nicht verfügbar (HTTP {status}).",
     "features.errors.json": "Feature-Flags-Antwort war kein gültiges JSON.",
@@ -289,16 +305,18 @@
     "advanced.errors.json": "Antwort zu erweiterten Einstellungen war kein gültiges JSON.",
     "advanced.sidecar.stdio_only": "Nur im stdio-Modus verfügbar. Dieser HTTP-Server hat kein Einstellungs-UI-Sidecar zum Anheften.",
     "advanced.enable_dev_mode.confirm": "⚠ Entwicklermodus aktivieren?\n\nNach dem Neustart werden versteckte Entwickler-Tools für verbundene KI-Agenten freigegeben. Aktiviere nur für Entwicklung und Tests.",
-    "advanced.code_mode_saved_tools_path.addon_locked": "Hart codiert auf <code>/data/saved_tools.json</code> im Add-on-Modus, sodass gespeicherte Tools Updates überstehen.",
+    "advanced.dev_tools_security_policy_access.confirm": "⚠ Entwicklertools Sicherheitsrichtlinien ändern lassen?\n\nSolange der Entwicklermodus aktiviert ist, können verbundene KI-Agenten Tool-Sicherheitsrichtlinien umschreiben, Genehmigungstore pro Tool hinzufügen oder entfernen und ausstehende Genehmigungen genehmigen oder ablehnen – einschließlich ihrer eigenen gesperrten Aufrufe. Nur während des Testens von Richtlinien aktivieren.",
+    "advanced.code_mode_saved_tools_path.addon_locked": "Im App-(Add-on-)Modus fest auf <code>/data/saved_tools.json</code> eingestellt, damit gespeicherte Tools Aktualisierungen überstehen.",
     "advanced.code_mode_saved_tools_path.blank_warning": "Wenn leer, werden benutzerdefinierte Tools nur im Speicher gehalten und gehen beim Neustart verloren.",
     "policies.errors.conflict": "{operation} fehlgeschlagen: Richtlinie wurde in einem anderen Tab oder einer anderen Sitzung geändert. Lade neu und wende deine Änderungen erneut an.",
     "policies.errors.load": "Richtlinie konnte nicht geladen werden: {status}",
     "policies.errors.reach_server": "Server konnte nicht erreicht werden: {message}",
-    "policies.errors.corrupt_suffix": " (tool_policy.json scheint beschädigt; bearbeite oder lösche es auf dem Add-on /data-Volume)",
+    "policies.errors.corrupt_suffix": " (tool_policy.json scheint beschädigt zu sein; bearbeite oder lösche sie im Datenverzeichnis des Servers)",
     "policies.errors.load_detail": "Richtlinie konnte nicht geladen werden: {detail}",
     "policies.errors.update_tool": "Tool-Sicherheitsrichtlinie konnte nicht aktualisiert werden: {message}",
     "policies.errors.remove_rule": "Regel konnte nicht entfernt werden: {message}",
     "policies.errors.master_save": "Tool-Sicherheitsrichtlinien-Änderung wurde nicht gespeichert. Der Server hat weiterhin den vorherigen Wert.",
+    "policies.errors.manage_tool_save": "Änderung des Richtlinienbearbeitungstools wurde nicht gespeichert. Der Server hat immer noch den vorherigen Wert.",
     "policies.operations.sync_gated": "Gegated-Toggle synchronisieren",
     "policies.operations.save_rule": "Regel speichern",
     "policies.operations.save_global": "Globale Einstellungen speichern",
@@ -349,18 +367,20 @@
     "policies.editor.validation.empty_list": "leere Liste für op={operator}",
     "policies.editor.validation.argument_required": "Argument ist erforderlich",
     "policies.pending.offline": "Kontakt zum Server verloren ({message}). Wiederhole.",
-    "policies.pending.disabled": "Tool-Sicherheitsrichtlinien sind ausgeschaltet. Schalte sie ein und starte das Add-on neu, um Gating zu aktivieren.",
-    "policies.pending.unavailable": "Live-Genehmigungen nicht verfügbar. Überprüfe das Add-on-Protokoll.",
+    "policies.pending.disabled": "Tool-Sicherheitsrichtlinien sind deaktiviert. Schalte sie ein und starte HA-MCP neu, um die Freigabe zu aktivieren.",
+    "policies.pending.unavailable": "Echtzeit-Genehmigungen nicht verfügbar. Überprüfe das HA-MCP-Protokoll.",
     "policies.pending.expires": "Läuft ab: {time}",
     "policies.pending.already_decided": "Diese Genehmigung war bereits {decision}, möglicherweise von einem anderen Tab oder einer anderen Sitzung.",
+    "policies.pending.decision.approved": "genehmigt",
+    "policies.pending.decision.denied": "abgelehnt",
     "policies.pending.invalid_token": "Dieses Genehmigungs-Token ist nicht mehr gültig (bereits verbraucht oder abgelaufen).",
     "policies.pending.action_failed": "Genehmigungs-Aktion fehlgeschlagen: {detail}",
     "visibility.errors.reach_server": "Server konnte nicht erreicht werden: {message}",
-    "visibility.errors.corrupt_suffix": " (entity_visibility.json scheint beschädigt; bearbeite oder lösche es auf dem Add-on /data-Volume)",
+    "visibility.errors.corrupt_suffix": " (entity_visibility.json scheint beschädigt zu sein; bearbeite oder lösche sie im Datenverzeichnis des Servers)",
     "visibility.errors.load_detail": "Sichtbarkeitskonfiguration konnte nicht geladen werden: {detail}",
     "visibility.errors.conflict": "Konfiguration wurde in einem anderen Tab oder einer anderen Sitzung geändert. Lade die Seite neu und wende dann deine Änderungen erneut an.",
     "advanced.homeassistant_url.label": "Home-Assistant-URL",
-    "advanced.homeassistant_url.help": "Nur Anzeige. Über HOMEASSISTANT_URL gesetzt oder vom Add-on verwaltet.",
+    "advanced.homeassistant_url.help": "Nur zur Anzeige. Über HOMEASSISTANT_URL festgelegt oder von der App (dem Add-on) verwaltet.",
     "advanced.homeassistant_token.label": "Home-Assistant-Token",
     "advanced.homeassistant_token.help": "Nur Anzeige. Über HOMEASSISTANT_TOKEN gesetzt. Aus Sicherheitsgründen hier maskiert.",
     "advanced.timeout.label": "HA-Anforderungs-Timeout (s)",
@@ -371,8 +391,6 @@
     "advanced.verify_ssl.help": "Deaktiviere TLS-Überprüfung nur in vertrauenswürdigen Netzwerken. Neustart erforderlich.",
     "advanced.fuzzy_threshold.label": "Fuzzy-Such-Schwellenwert",
     "advanced.fuzzy_threshold.help": "Niedrigere Werte erlauben lockerere Entitätsabgleichung. Bereich 0-100.",
-    "advanced.entity_search_limit.label": "Entitätssuchergebnis-Limit",
-    "advanced.entity_search_limit.help": "Maximale Entitäten, die von ha_search_entities zurückgegeben werden. Bereich 1-1000.",
     "advanced.automation_config_time_budget.label": "Automatisierungskonfigurations-Zeitbudget (s)",
     "advanced.automation_config_time_budget.help": "Maximale Zeit, die die Tiefensuche für das Abrufen von Automatisierungskonfigurationen aufwendet. Bereich 1-600. Neustart erforderlich.",
     "advanced.script_config_time_budget.label": "Skriptkonfigurations-Zeitbudget (s)",
@@ -420,12 +438,37 @@
     "advanced.extra_yaml_write_keys.label": "Zusätzliche YAML-Schreib-Keys",
     "advanced.extra_yaml_write_keys.help": "Kommagetrennte Top-Level-Keys, die ha_config_set_yaml zusätzlich zu den eingebauten schreiben darf – für YAML-first-Integrationen auf dieser Installation (z. B. alert2). Keys, die die Vertrauensgrenze von Home Assistant selbst verändern, lassen sich nie hinzufügen und werden ignoriert. Erfordert Custom Component 1.2.4 oder neuer.",
     "advanced.sidecar_pin_port.label": "Einstellungs-UI-Sidecar-Port",
-    "advanced.sidecar_pin_port.help": "0 wählt bei jedem Neustart einen freien Port; 1024-65535 heftet einen bevorzugten Port an. Neustart erforderlich.",
+    "advanced.sidecar_pin_port.help": "0 wählt beim ersten Start einen freien Port und behält ihn für spätere Neustarts bei; 1024–65535 fixiert einen bevorzugten Port (greift auf einen freien zurück, falls belegt). Neustart erforderlich.",
     "advanced.enable_dev_mode.label": "Entwicklermodus",
-    "advanced.enable_dev_mode.help": "⚠ Registriert versteckte Tools, die Einstellungen ändern und den laufenden Server ersetzen können. Nur für Entwicklung und Tests. Neustart erforderlich."
+    "advanced.enable_dev_mode.help": "⚠ Registriert versteckte Tools, die Einstellungen ändern und den laufenden Server ersetzen können. Nur für Entwicklung und Tests. Neustart erforderlich.",
+    "advanced.dev_tools_security_policy_access.label": "Zugriff der Entwicklertools auf Sicherheitsrichtlinien",
+    "advanced.dev_tools_security_policy_access.help": "⚠ Solange der Entwicklermodus aktiviert ist, können die Entwicklertools Tool-Sicherheitsrichtlinien umschreiben, Genehmigungstore pro Tool hinzufügen oder entfernen und ausstehende Genehmigungen in deinem Namen genehmigen oder ablehnen – ein KI-Agent kann seine eigenen gesperrten Aufrufe akzeptieren. Nur zum Testen von Richtlinien. Tritt ohne Neustart in Kraft.",
+    "addon.backup_hint.name": "Full-HA Snapshot-Vorschlagsebene (LLM-seitig)",
+    "addon.backup_hint.description": "Passt die Formulierung des Hinweises an, den das LLM in der\n`ha_manage_backup(scope='snapshot')`-Tool-Beschreibung sieht, wann es ein\nvollständiges Home Assistant Tarball-Backup vor riskanten Operationen\nvorschlagen soll (z.B. Massen-Gerätelöschungen). Betrifft NUR diesen einen\nLLM-seitigen Prompt-Satz.\n\nFür automatische Snapshots pro Bearbeitung von Automatisierungen / Skripten /\nHelfern / etc. nutze den separaten **Auto-Backup von Bearbeitungen aktivieren**-Schalter\nunten.",
+    "addon.secret_path.name": "Secret-Pfad Override",
+    "addon.secret_path.description": "Optionaler benutzerdefinierter HTTP-Pfad für den MCP-Server. Leer lassen, um den automatisch generierten sicheren Pfad zu verwenden.\n",
+    "addon.enable_security_policy_tool.name": "KI-Agenten erlauben, Tool-Sicherheitsrichtlinien zu bearbeiten",
+    "addon.enable_security_policy_tool.description": "Registriert das Tool ha_manage_security_policy, das verbundenen KI-Agenten erlaubt, die Tool-Sicherheitsrichtlinien zu lesen und neu zu schreiben — einschließlich des Entfernens von Genehmigungsschranken. Standardmäßig deaktiviert. Unabhängig von der Option „Tool-Sicherheitsrichtlinien“ oben: Dies steuert, wer die Regeln bearbeiten kann, nicht ob sie erzwungen werden. Das Tool kann ausstehende Genehmigungen nicht sehen oder entscheiden. Um einen Menschen in der Schleife zu halten, schütze das Tool, bevor du es aktivierst: Aktiviere „security gated“ für „Manage Security Policy“ auf dem Tab „Tools“ der Web-UI. Erfordert einen Neustart, um wirksam zu werden.",
+    "addon.enable_auto_backup.name": "Auto-Backup von Bearbeitungen aktivieren",
+    "addon.enable_auto_backup.description": "Erstellt einen Snapshot pro Entität vor jedem umschlossenen Schreib-/destruktiven MCP-Tool-Aufruf (Automatisierung, Skript, Szene, Helfer, Dashboard, Dashboard-Ressource, Label, Kategorie, Gruppe, Zone, Bereich, Kalender, Todo, Entität, Gerät, Integration und zugehörige Entfernungs-/Lösch-Tools). Die Auto-Backup-Drosselung begrenzt, wie oft dies geschieht: 0 (Standard) erstellt bei jedem solchen Aufruf einen Snapshot, N>0 maximal einen Snapshot pro N Minuten pro Entität. Snapshots werden als YAML-Dateien unter /data/ha_mcp_backups/ (Überschreibung über HAMCP_BACKUP_DIR) gespeichert und können über den Tab „Backups“ in der Web-Einstellungen-UI oder über ha_manage_backup(scope='edits', ...) aufgelistet, wiederhergestellt oder gelöscht werden. Für diese Domänen ist die Erfassung ein Best-Effort-Versuch — ein Fehler protokolliert eine WARNING und der Schreibvorgang wird fortgesetzt. Die Datei- und Raw-YAML-Tools sind die Ausnahme: ha_write_file, ha_delete_file und ha_config_set_yaml behandeln den Snapshot als Vorbedingung, sodass ein Schreibvorgang über sie verweigert wird, solange dies deaktiviert ist, und eine fehlgeschlagene Erfassung ihn blockiert. Standardmäßig aktiviert; Deaktivieren meldet sich von den Best-Effort-Erfassungen ab und nimmt die Datei- und Raw-YAML-Tools mit ihnen außer Betrieb. Erfordert einen Neustart, um wirksam zu werden.",
+    "addon.auto_backup_throttle_minutes.name": "Auto-Backup-Drosselung (Minuten)",
+    "addon.auto_backup_throttle_minutes.description": "Pro-Entität-Drosselungsfenster. 0 (Standard) erfasst einen Snapshot bei jedem umschlossenen Schreibvorgang. N>0 erfasst höchstens einen Snapshot pro N Minuten pro Entität. Bereich 0–1440.",
+    "addon.auto_backup_retain_per_entity.name": "Auto-Backup-Aufbewahrung (pro Entität)",
+    "addon.auto_backup_retain_per_entity.description": "Maximale Anzahl von Snapshots, die pro Entität behalten werden. Ältere Snapshots jenseits dieser Grenze werden bei jeder erfolgreichen Erfassung ausgetauscht. Standard 100, Bereich 1–10000.",
+    "addon.enable_snapshot_delete.name": "Snapshot-Löschung erlauben",
+    "addon.enable_snapshot_delete.description": "Lässt ha_manage_backup vollständige HA-Snapshot-Tarballs löschen (scope='snapshot', action='delete'). Standardmäßig aus – ein Snapshot könnte der letzte Wiederherstellungspunkt nach einer fehlerhaften Änderung sein, also muss ein Mensch dies hier aktiv aktivieren. Auch wenn an, bleiben geplante Backups, der neueste verbleibende Snapshot und alles jünger als der Alters-Floor unten geschützt.",
+    "addon.snapshot_delete_min_age_days.name": "Mindestalter des Snapshots zum Löschen (Tage)",
+    "addon.snapshot_delete_min_age_days.description": "Ein Snapshot muss mindestens so alt sein, bevor er gelöscht werden kann. Bereich 0–365; 0 deaktiviert den Floor (die Neuester-Snapshot- und Geplante-Backup-Schutzmaßnahmen gelten weiterhin). Standard 7.",
+    "addon.disabled_tools.name": "Deaktivierte Tools (kommagetrennt)",
+    "addon.disabled_tools.description": "Hier aufgelistete Tools sind zwangsweise aus und im Web-Settings-UI (Tools-Tab) gesperrt – sie können dort nicht wieder aktiviert werden, ohne diese Option zuerst zu entfernen. Ein kleiner Satz obligatorischer Tools (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) kann nicht deaktiviert werden und läuft weiter, auch wenn hier aufgelistet. ha_get_skill_guide kann nur deaktiviert werden, während der strikte Best-Practices-Modus (enable_strict_mandatory_bps) aus ist. Kommagetrennte Tool-Namen (z.B. ha_call_event,ha_eval_template).",
+    "addon.pinned_tools.name": "Angeheftete Tools (kommagetrennt)",
+    "addon.pinned_tools.description": "Hier aufgelistete Tools sind gesperrt angeheftet – sie erscheinen oben im Tools-Tab und können nicht vom Web-Settings-UI entfernt werden, ohne diese Option zuerst zu entfernen. Nützlich in Kombination mit Tool Search. Kommagetrennte Tool-Namen.",
+    "addon.verify_ssl.name": "TLS-Zertifikat verifizieren",
+    "addon.verify_ssl.description": "Überprüfe das TLS-Zertifikat des Home Assistant-Servers. Die App (das Add-on) verbindet sich über den Supervisor-Proxy, daher hat dies normalerweise keine Auswirkungen und sollte aktiviert bleiben. Deaktiviere es nur, wenn du die App (das Add-on) so rekonfiguriert hast, dass sie über einen öffentlichen HTTPS-Hostnamen mit einem selbstsignierten Zertifikat oder einem Hostnamen-Mismatch mit HA kommuniziert. Das Deaktivieren schwächt die Transportsicherheit — lasse es eingeschaltet, es sei denn, du weißt, dass du es brauchst. Erfordert einen Neustart, um wirksam zu werden.",
+    "addon_stable.enable_tool_search.description": "Ersetze den vollständigen Tool-Katalog durch eine suchend basierte Erkennung. Reduziert den Leerlaufkontext um etwa 90 % auf ca. 5K Token. ⚠️ Aktiviere dies NICHT in Clients mit eigener integrierter Tool-Suche / verzögerten Tools (claude.ai, Claude Desktop, Claude Code) — die beiden Suchschichten kollidieren, und die integrierte Tool-Suche des Clients ist dort die bessere Wahl; lasse dies ausgeschaltet. Ob Tools verzögert werden, hängt von deiner Client- und Modellkombination ab: Verwende dies, wenn dein Setup den vollständigen Katalog im Voraus lädt — Modelle ohne native verzögerte Tools (z. B. Gemini, OpenAI-kompatible lokale Modelle, Claude Haiku), Clients, die alle Tool-Schemas unabhängig vom Modell einbetten (z. B. GitHub Copilot CLI), oder kleinere Kontextfenster. Einige Codex-Modelle und ChatGPT beinhalten ebenfalls verzögerte Tools — überprüfe deinen Client bzw. dein Modell direkt, um dessen Funktionen zu bestätigen, damit du dies nicht unnötig aktiviert lässt. Tools werden über ha_search_tools gefunden und über kategorisierte Proxys (lesen/schreiben/löschen) ausgeführt. Erfordert einen App-(Add-on-)Neustart, um wirksam zu werden — verbinde dich danach neu oder aktualisiere den MCP-Server in deinem KI-Client, damit dieser die Tool-Liste neu lädt. Das alleinige Neustarten der App (des Add-ons) aktualisiert die zwischengespeicherte Tool-Liste eines Clients NICHT; dies gilt nach jeder Änderung einer Einstellung hier."
   },
   "tool_groups": {
-    "Add-ons": "Add-ons",
+    "Apps (add-ons)": "Apps (Add-ons)",
     "Areas & Floors": "Bereiche & Etagen",
     "Assist": "Assist",
     "Automations": "Automatisierungen",
@@ -456,273 +499,9 @@
     "Zones": "Zonen"
   },
   "tools": {
-    "ha_get_addon": {
-      "title": "Add-ons abrufen",
-      "description": "Zeigt installierte und verfügbare Add-ons oder Details zu einem bestimmten Add-on."
-    },
-    "ha_manage_addon": {
-      "title": "Add-on verwalten",
-      "description": "Verwaltet Lebenszyklus, Einstellungen und interne API eines Home-Assistant-Add-ons."
-    },
-    "ha_list_floors_areas": {
-      "title": "Etagen und Bereiche auflisten",
-      "description": "Zeigt Etagen mit verschachtelten Bereichen, einschließlich Bereiche ohne Etage."
-    },
-    "ha_remove_area_or_floor": {
-      "title": "Bereich oder Etage entfernen",
-      "description": "Entfernt einen Bereich oder eine Etage aus Home Assistant."
-    },
-    "ha_set_area_or_floor": {
-      "title": "Bereich oder Etage erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert einen Bereich oder eine Etage in Home Assistant."
-    },
-    "ha_manage_pipeline": {
-      "title": "Assist-Pipeline verwalten",
-      "description": "Zeigt, erstellt, bearbeitet und wählt bevorzugte Assist-Pipeline aus."
-    },
-    "ha_config_get_automation": {
-      "title": "Automatisierung abrufen",
-      "description": "Ruft die vollständige Konfiguration einer Home-Assistant-Automatisierung ab."
-    },
-    "ha_config_remove_automation": {
-      "title": "Automatisierung entfernen",
-      "description": "Löscht eine Home-Assistant-Automatisierung."
-    },
-    "ha_config_set_automation": {
-      "title": "Automatisierung erstellen/aktualisieren",
-      "description": "Erstellt eine neue oder aktualisiert eine bestehende Automatisierung."
-    },
-    "ha_get_blueprint": {
-      "title": "Blueprint abrufen",
-      "description": "Zeigt die Liste der Blueprints oder Details zu einem bestimmten Blueprint."
-    },
-    "ha_import_blueprint": {
-      "title": "Blueprint importieren",
-      "description": "Importiert einen Blueprint aus einer URL in Home Assistant."
-    },
-    "ha_config_get_calendar_events": {
-      "title": "Kalenderereignisse abrufen",
-      "description": "Ruft Ereignisse aus einer Kalender-Entität ab."
-    },
-    "ha_config_remove_calendar_event": {
-      "title": "Kalenderereignis entfernen",
-      "description": "Löscht ein Ereignis aus einem Home-Assistant-Kalender."
-    },
-    "ha_config_set_calendar_event": {
-      "title": "Kalenderereignis erstellen/aktualisieren",
-      "description": "Erstellt ein neues oder aktualisiert ein bestehendes Kalenderereignis."
-    },
-    "ha_get_camera_image": {
-      "title": "Kamerabild abrufen",
-      "description": "Ruft das aktuelle Standbild von einer Home-Assistant-Kamera ab."
-    },
-    "ha_get_dashboard_screenshot": {
-      "title": "Dashboard-Screenshot abrufen",
-      "description": "Ruft gerenderte Bilder einer Lovelace-Ansicht ab."
-    },
-    "ha_config_delete_dashboard": {
-      "title": "Dashboard löschen",
-      "description": "Entfernt ein in Home Assistant gespeichertes Dashboard vollständig."
-    },
-    "ha_config_delete_dashboard_resource": {
-      "title": "Dashboard-Ressource löschen",
-      "description": "Entfernt eine Lovelace-Dashboard-Ressource."
-    },
-    "ha_config_get_dashboard": {
-      "title": "Dashboard abrufen",
-      "description": "Zeigt Dashboards, deren Konfiguration oder findet Karten."
-    },
-    "ha_config_list_dashboard_resources": {
-      "title": "Dashboard-Ressourcen auflisten",
-      "description": "Zeigt Lovelace-Ressourcen: Karten, Themes, CSS und JavaScript."
-    },
-    "ha_config_set_dashboard": {
-      "title": "Dashboard erstellen/aktualisieren",
-      "description": "Erstellt ein neues oder aktualisiert ein bestehendes Home-Assistant-Dashboard."
-    },
-    "ha_config_set_dashboard_resource": {
-      "title": "Dashboard-Ressource setzen",
-      "description": "Erstellt oder aktualisiert eine Dashboard-Ressource aus Code oder externer URL."
-    },
-    "ha_dev_manage_server": {
-      "title": "MCP-Server verwalten (dev)",
-      "description": "Verwaltet den laufenden ha-mcp-Server im Entwicklermodus."
-    },
-    "ha_dev_manage_settings": {
-      "title": "Server-Einstellungen verwalten (dev)",
-      "description": "Ändert ha-mcp-Einstellungen direkt im Entwicklermodus."
-    },
-    "ha_get_device": {
-      "title": "Gerät abrufen",
-      "description": "Ruft Geräteinformationen ab, einschließlich Zigbee, Z-Wave und Matter."
-    },
-    "ha_remove_device": {
-      "title": "Gerät entfernen",
-      "description": "Entfernt ein verwaistes Gerät aus dem Home-Assistant-Register."
-    },
-    "ha_set_device": {
-      "title": "Gerät aktualisieren",
-      "description": "Aktualisiert Name, Bereich, Labels und andere Geräteeigenschaften."
-    },
-    "ha_manage_energy_prefs": {
-      "title": "Energie-Dashboard konfigurieren",
-      "description": "Verwaltet die Einstellungen des Home-Assistant-Energie-Dashboards."
-    },
-    "ha_get_entity": {
-      "title": "Entität abrufen",
-      "description": "Ruft Registerinformationen über eine oder mehrere Entitäten ab."
-    },
-    "ha_get_entity_exposure": {
-      "title": "Entitäts-Sichtbarkeit abrufen",
-      "description": "Zeigt, welche Entitäten für Sprachassistenten freigegeben sind."
-    },
-    "ha_remove_entity": {
-      "title": "Entität entfernen",
-      "description": "Entfernt eine oder mehrere Entitäten aus dem Home-Assistant-Register."
-    },
-    "ha_set_entity": {
-      "title": "Entität aktualisieren",
-      "description": "Aktualisiert Name, Bereich, Labels und andere Entitätseigenschaften."
-    },
-    "ha_delete_file": {
-      "title": "Datei löschen",
-      "description": "Löscht eine Datei aus einem erlaubten Home-Assistant-Verzeichnis."
-    },
-    "ha_list_files": {
-      "title": "Dateien auflisten",
-      "description": "Zeigt Dateien in einem erlaubten Konfigurationsverzeichnis."
-    },
-    "ha_read_file": {
-      "title": "Datei lesen",
-      "description": "Liest eine Datei aus dem Home-Assistant-Konfigurationsverzeichnis."
-    },
-    "ha_write_file": {
-      "title": "Datei schreiben",
-      "description": "Erstellt oder ändert eine Datei in einem erlaubten Verzeichnis."
-    },
-    "ha_config_list_groups": {
-      "title": "Gruppen auflisten",
-      "description": "Zeigt Home-Assistant-Entitätsgruppen und deren Mitglieder."
-    },
-    "ha_config_remove_group": {
-      "title": "Gruppe entfernen",
-      "description": "Entfernt eine Home-Assistant-Entitätsgruppe."
-    },
-    "ha_config_set_group": {
-      "title": "Gruppe erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert eine Home-Assistant-Entitätsgruppe."
-    },
-    "ha_get_hacs_info": {
-      "title": "HACS-Informationen abrufen",
-      "description": "Durchsucht den HACS-Store oder ruft Repository-Informationen ab."
-    },
-    "ha_manage_hacs": {
-      "title": "HACS verwalten",
-      "description": "Installiert, aktualisiert und fügt benutzerdefinierte HACS-Repositories hinzu."
-    },
-    "ha_config_list_helpers": {
-      "title": "Helfer auflisten",
-      "description": "Zeigt Home-Assistant-Helfer-Entitäten des ausgewählten Typs."
-    },
-    "ha_config_set_helper": {
-      "title": "Helfer erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert eine Home-Assistant-Helfer-Entität."
-    },
-    "ha_remove_helpers_integrations": {
-      "title": "Helfer oder Integration entfernen",
-      "description": "Entfernt einen Helfer oder Integrations-Konfigurationseintrag."
-    },
-    "ha_get_automation_traces": {
-      "title": "Traces abrufen",
-      "description": "Ruft Ausführungstraces von Automatisierungen und Skripten zur Diagnose ab."
-    },
-    "ha_get_history": {
-      "title": "Verlauf oder Statistiken abrufen",
-      "description": "Ruft historische Daten aus dem Home-Assistant-Speicher ab."
-    },
-    "ha_get_logs": {
-      "title": "Protokolle abrufen",
-      "description": "Ruft Home-Assistant-Protokolle aus verschiedenen Quellen ab."
-    },
-    "ha_get_integration": {
-      "title": "Integration abrufen",
-      "description": "Ruft Informationen über Integrations-Konfigurationseinträge ab."
-    },
-    "ha_get_system_health": {
-      "title": "Systemzustand abrufen",
-      "description": "Ruft Zustandsinformationen zu Home Assistant, Zigbee, Z-Wave und Integrationen ab."
-    },
-    "ha_set_integration": {
-      "title": "Integration aktualisieren",
-      "description": "Aktiviert, deaktiviert, fügt hinzu oder ändert Integrationsparameter."
-    },
-    "ha_config_get_category": {
-      "title": "Kategorie abrufen",
-      "description": "Zeigt Kategorien in einem Bereich oder Details zu einer bestimmten Kategorie."
-    },
-    "ha_config_get_label": {
-      "title": "Label abrufen",
-      "description": "Zeigt Labels oder Details zu einem bestimmten Label."
-    },
-    "ha_config_remove_category": {
-      "title": "Kategorie entfernen",
-      "description": "Entfernt eine Home-Assistant-Kategorie."
-    },
-    "ha_config_remove_label": {
-      "title": "Label entfernen",
-      "description": "Entfernt ein Home-Assistant-Label."
-    },
-    "ha_config_set_category": {
-      "title": "Kategorie erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert eine Home-Assistant-Kategorie."
-    },
-    "ha_config_set_label": {
-      "title": "Label erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert ein Home-Assistant-Label."
-    },
-    "ha_manage_radio": {
-      "title": "Funknetzwerke verwalten",
-      "description": "Verwaltet Z-Wave-, Zigbee-, Matter- und Thread-Netzwerke in Home Assistant."
-    },
-    "ha_config_get_scene": {
-      "title": "Szene abrufen",
-      "description": "Ruft die Konfiguration einer Home-Assistant-Szene ab."
-    },
-    "ha_config_remove_scene": {
-      "title": "Szene entfernen",
-      "description": "Entfernt eine Home-Assistant-Szene."
-    },
-    "ha_config_set_scene": {
-      "title": "Szene erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert eine Home-Assistant-Szene."
-    },
-    "ha_config_get_script": {
-      "title": "Skript abrufen",
-      "description": "Ruft die Konfiguration eines Home-Assistant-Skripts ab."
-    },
-    "ha_config_remove_script": {
-      "title": "Skript entfernen",
-      "description": "Entfernt ein Home-Assistant-Skript."
-    },
-    "ha_config_set_script": {
-      "title": "Skript erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert ein Home-Assistant-Skript."
-    },
-    "ha_get_overview": {
-      "title": "System-Übersicht",
-      "description": "Ruft eine KI-freundliche Übersicht von Home Assistant mit Kategorisierung ab."
-    },
-    "ha_get_state": {
-      "title": "Entitätsstatus abrufen",
-      "description": "Ruft aktuellen Status und Attribute einer oder mehrerer Entitäten ab."
-    },
-    "ha_search": {
-      "title": "Suchen",
-      "description": "Durchsucht Entitäten und Inhalte von Automatisierungen, Skripten, Szenen, Helfern und Dashboards."
-    },
     "ha_bulk_control": {
       "title": "Massensteuerung",
-      "description": "Steuert mehrere Geräte in einer einzigen Massenoperation."
+      "description": "Verwalte explizite Operationen oder eine deterministische strukturelle Massenaktion."
     },
     "ha_call_event": {
       "title": "Ereignis aufrufen",
@@ -732,21 +511,237 @@
       "title": "Dienst aufrufen",
       "description": "Ruft einen Home-Assistant-Dienst zur Steuerung von Entitäten und Automatisierungen auf."
     },
-    "ha_get_operation_status": {
-      "title": "Operationsstatus",
-      "description": "Prüft den Status einer oder mehrerer Geräteoperationen."
+    "ha_config_delete_dashboard": {
+      "title": "Dashboard löschen",
+      "description": "Entfernt ein in Home Assistant gespeichertes Dashboard vollständig."
     },
-    "ha_list_services": {
-      "title": "Dienste auflisten",
-      "description": "Zeigt verfügbare Home-Assistant-Dienste und deren Parameter."
+    "ha_config_delete_dashboard_resource": {
+      "title": "Dashboard-Ressource löschen",
+      "description": "Entfernt eine Lovelace-Dashboard-Ressource."
+    },
+    "ha_config_get_automation": {
+      "title": "Automatisierung abrufen",
+      "description": "Ruft die vollständige Konfiguration einer Home-Assistant-Automatisierung ab."
+    },
+    "ha_config_get_calendar_events": {
+      "title": "Kalenderereignisse abrufen",
+      "description": "Ruft Ereignisse aus einer Kalender-Entität ab."
+    },
+    "ha_config_get_category": {
+      "title": "Kategorie abrufen",
+      "description": "Zeigt Kategorien in einem Bereich oder Details zu einer bestimmten Kategorie."
+    },
+    "ha_config_get_dashboard": {
+      "title": "Dashboard abrufen",
+      "description": "Zeigt Dashboards, deren Konfiguration oder findet Karten."
+    },
+    "ha_config_get_label": {
+      "title": "Label abrufen",
+      "description": "Zeigt Labels oder Details zu einem bestimmten Label."
+    },
+    "ha_config_get_scene": {
+      "title": "Szene abrufen",
+      "description": "Ruft die Konfiguration einer Home-Assistant-Szene ab."
+    },
+    "ha_config_get_script": {
+      "title": "Skript abrufen",
+      "description": "Ruft die Konfiguration eines Home-Assistant-Skripts ab."
     },
     "ha_config_get_yaml": {
       "title": "YAML-Fragment lesen",
       "description": "Ruft das aktuelle YAML-Fragment nach Schlüssel aus einer oder mehreren Dateien ab."
     },
+    "ha_config_list_dashboard_resources": {
+      "title": "Dashboard-Ressourcen auflisten",
+      "description": "Zeigt Lovelace-Ressourcen: Karten, Themes, CSS und JavaScript."
+    },
+    "ha_config_list_groups": {
+      "title": "Gruppen auflisten",
+      "description": "Zeigt Home-Assistant-Entitätsgruppen und deren Mitglieder."
+    },
+    "ha_config_list_helpers": {
+      "title": "Helfer auflisten",
+      "description": "Zeigt Home-Assistant-Helfer-Entitäten des ausgewählten Typs."
+    },
+    "ha_config_remove_automation": {
+      "title": "Automatisierung entfernen",
+      "description": "Löscht eine Home-Assistant-Automatisierung."
+    },
+    "ha_config_remove_calendar_event": {
+      "title": "Kalenderereignis entfernen",
+      "description": "Löscht ein Ereignis aus einem Home-Assistant-Kalender."
+    },
+    "ha_config_remove_category": {
+      "title": "Kategorie entfernen",
+      "description": "Entfernt eine Home-Assistant-Kategorie."
+    },
+    "ha_config_remove_group": {
+      "title": "Gruppe entfernen",
+      "description": "Entferne eine dienstbasierte Home Assistant Entitätsgruppe über den Dienst group.remove."
+    },
+    "ha_config_remove_label": {
+      "title": "Label entfernen",
+      "description": "Entfernt ein Home-Assistant-Label."
+    },
+    "ha_config_remove_scene": {
+      "title": "Szene entfernen",
+      "description": "Entfernt eine Home-Assistant-Szene."
+    },
+    "ha_config_remove_script": {
+      "title": "Skript entfernen",
+      "description": "Entfernt ein Home-Assistant-Skript."
+    },
+    "ha_config_set_automation": {
+      "title": "Automatisierung erstellen/aktualisieren",
+      "description": "Erstellt eine neue oder aktualisiert eine bestehende Automatisierung."
+    },
+    "ha_config_set_calendar_event": {
+      "title": "Kalenderereignis erstellen/aktualisieren",
+      "description": "Erstellt ein neues oder aktualisiert ein bestehendes Kalenderereignis."
+    },
+    "ha_config_set_category": {
+      "title": "Kategorie erstellen/aktualisieren",
+      "description": "Erstellt oder aktualisiert eine Home-Assistant-Kategorie."
+    },
+    "ha_config_set_dashboard": {
+      "title": "Dashboard erstellen/aktualisieren",
+      "description": "Erstellt ein neues oder aktualisiert ein bestehendes Home-Assistant-Dashboard."
+    },
+    "ha_config_set_dashboard_resource": {
+      "title": "Dashboard-Ressource setzen",
+      "description": "Erstellt oder aktualisiert eine Dashboard-Ressource aus Code oder externer URL."
+    },
+    "ha_config_set_group": {
+      "title": "Gruppe erstellen/aktualisieren",
+      "description": "Erstelle oder aktualisiere eine dienstbasierte Home Assistant Entitätsgruppe über den Dienst group.set."
+    },
+    "ha_config_set_helper": {
+      "title": "Helfer erstellen/aktualisieren",
+      "description": "Erstellt oder aktualisiert eine Home-Assistant-Helfer-Entität."
+    },
+    "ha_config_set_label": {
+      "title": "Label erstellen/aktualisieren",
+      "description": "Erstellt oder aktualisiert ein Home-Assistant-Label."
+    },
+    "ha_config_set_scene": {
+      "title": "Szene erstellen/aktualisieren",
+      "description": "Erstellt oder aktualisiert eine Home-Assistant-Szene."
+    },
+    "ha_config_set_script": {
+      "title": "Skript erstellen/aktualisieren",
+      "description": "Erstellt oder aktualisiert ein Home-Assistant-Skript."
+    },
     "ha_config_set_yaml": {
       "title": "Rohes YAML bearbeiten",
-      "description": "Bearbeitet die Home-Assistant-YAML-Konfiguration; nur als letztes Mittel verwenden."
+      "description": "Füge Schlüssel der obersten Ebene in configuration.yaml oder Paketdateien hinzu, ersetze oder entferne sie."
+    },
+    "ha_delete_file": {
+      "title": "Datei löschen",
+      "description": "Löscht eine Datei aus einem erlaubten Home-Assistant-Verzeichnis."
+    },
+    "ha_dev_manage_server": {
+      "title": "MCP-Server verwalten (dev)",
+      "description": "Verwaltet den laufenden ha-mcp-Server im Entwicklermodus."
+    },
+    "ha_dev_manage_settings": {
+      "title": "Server-Einstellungen verwalten (dev)",
+      "description": "Verwaltet die ha-mcp-Servereinstellungen und die Abschnitte Tools/Richtlinien/Backups (Entwicklermodus)."
+    },
+    "ha_eval_template": {
+      "title": "Template auswerten",
+      "description": "Wertet ein Jinja2-Template mit der Home-Assistant-Engine aus."
+    },
+    "ha_get_app": {
+      "title": "Apps (Add-ons) abrufen",
+      "description": "Home Assistant-Apps abrufen (früher als Add-ons bekannt, und dieses Tool als ha_get_addon) – installierte oder verfügbare auflisten oder abrufen"
+    },
+    "ha_get_automation_traces": {
+      "title": "Traces abrufen",
+      "description": "Ruft Ausführungstraces von Automatisierungen und Skripten zur Diagnose ab."
+    },
+    "ha_get_blueprint": {
+      "title": "Blueprint abrufen",
+      "description": "Zeigt die Liste der Blueprints oder Details zu einem bestimmten Blueprint."
+    },
+    "ha_get_camera_image": {
+      "title": "Kamerabild abrufen",
+      "description": "Ruft das aktuelle Standbild von einer Home-Assistant-Kamera ab."
+    },
+    "ha_get_dashboard_screenshot": {
+      "title": "Dashboard-Screenshot abrufen",
+      "description": "Ruft gerenderte Bilder einer Lovelace-Ansicht ab."
+    },
+    "ha_get_device": {
+      "title": "Gerät abrufen (inkl. Zigbee/ZHA/Z2M, Z-Wave und Matter)",
+      "description": "Rufe Geräteinformationen mit Paginierung ab, einschließlich Zigbee (ZHA/Z2M) und Z-Wave JS Geräten."
+    },
+    "ha_get_entity": {
+      "title": "Entität abrufen",
+      "description": "Ruft Registerinformationen über eine oder mehrere Entitäten ab."
+    },
+    "ha_get_entity_exposure": {
+      "title": "Entitäts-Sichtbarkeit abrufen",
+      "description": "Zeigt, welche Entitäten für Sprachassistenten freigegeben sind."
+    },
+    "ha_get_hacs_info": {
+      "title": "HACS-Informationen abrufen",
+      "description": "Durchsucht den HACS-Store oder ruft Repository-Informationen ab."
+    },
+    "ha_get_history": {
+      "title": "Verlauf oder Statistiken abrufen",
+      "description": "Ruft historische Daten aus dem Home-Assistant-Speicher ab."
+    },
+    "ha_get_integration": {
+      "title": "Integration abrufen",
+      "description": "Ruft Informationen über Integrations-Konfigurationseinträge ab."
+    },
+    "ha_get_logs": {
+      "title": "Protokolle abrufen",
+      "description": "Ruft Home-Assistant-Protokolle aus verschiedenen Quellen ab."
+    },
+    "ha_get_operation_status": {
+      "title": "Operationsstatus",
+      "description": "Rufe den Status einer oder mehrerer Geräteoperationen mit Echtzeit-WebSocket-Verifizierung ab."
+    },
+    "ha_get_overview": {
+      "title": "System-Übersicht",
+      "description": "Ruft eine KI-freundliche Übersicht von Home Assistant mit Kategorisierung ab."
+    },
+    "ha_get_state": {
+      "title": "Entitätsstatus abrufen",
+      "description": "Ruft aktuellen Status und Attribute einer oder mehrerer Entitäten ab."
+    },
+    "ha_get_system_health": {
+      "title": "Systemzustand abrufen",
+      "description": "Ruft Zustandsinformationen zu Home Assistant, Zigbee, Z-Wave und Integrationen ab."
+    },
+    "ha_get_todo": {
+      "title": "To-do-Listen abrufen",
+      "description": "Zeigt To-do-Listen oder Aufgaben aus einer bestimmten Liste."
+    },
+    "ha_get_zone": {
+      "title": "Zonen abrufen",
+      "description": "Zeigt alle geografischen Zonen oder Details zu einer Zone."
+    },
+    "ha_import_blueprint": {
+      "title": "Blueprint importieren",
+      "description": "Importiert einen Blueprint aus einer URL in Home Assistant."
+    },
+    "ha_list_files": {
+      "title": "Dateien auflisten",
+      "description": "Zeigt Dateien in einem erlaubten Konfigurationsverzeichnis."
+    },
+    "ha_list_floors_areas": {
+      "title": "Etagen und Bereiche auflisten",
+      "description": "Zeigt Etagen mit verschachtelten Bereichen, einschließlich Bereiche ohne Etage."
+    },
+    "ha_list_services": {
+      "title": "Dienste auflisten",
+      "description": "Zeigt verfügbare Home-Assistant-Dienste und deren Parameter."
+    },
+    "ha_manage_app": {
+      "title": "App (Add-on) verwalten",
+      "description": "Eine Home Assistant-App verwalten (früher als Add-on bekannt, und dieses Tool als ha_manage_addon) – Konfiguration aktualisieren o"
     },
     "ha_manage_backup": {
       "title": "Backups verwalten",
@@ -756,6 +751,26 @@
       "title": "Benutzerdefiniertes Tool",
       "description": "Erstellt und führt Code in einer Sandbox aus und verwaltet gespeicherte Tools."
     },
+    "ha_manage_energy_prefs": {
+      "title": "Energie-Dashboard konfigurieren",
+      "description": "Verwaltet die Einstellungen des Home-Assistant-Energie-Dashboards."
+    },
+    "ha_manage_hacs": {
+      "title": "HACS verwalten",
+      "description": "HACS (Home Assistant Community Store) verwalten — installieren/aktualisieren, entfernen, benutzerdefinierte Repositories hinzufügen oder Repository aktualisieren in"
+    },
+    "ha_manage_pipeline": {
+      "title": "Assist-Pipeline verwalten",
+      "description": "Zeigt, erstellt, bearbeitet und wählt bevorzugte Assist-Pipeline aus."
+    },
+    "ha_manage_radio": {
+      "title": "Funknetzwerke verwalten",
+      "description": "Verwaltet Z-Wave-, Zigbee-, Matter- und Thread-Netzwerke in Home Assistant."
+    },
+    "ha_manage_security_policy": {
+      "title": "Sicherheitsrichtlinie verwalten",
+      "description": "Die Tool-Sicherheitsrichtlinie lesen und neu schreiben, die risikoreiche Tool-Aufrufe hinter Benutzergenehmigung schützt."
+    },
     "ha_manage_theme": {
       "title": "Themes verwalten",
       "description": "Verwaltet Home-Assistant-Oberflächen-Themes."
@@ -764,45 +779,77 @@
       "title": "Updates verwalten",
       "description": "Zeigt an, installiert, überspringt und rollt Home-Assistant-Updates zurück."
     },
+    "ha_read_file": {
+      "title": "Datei lesen",
+      "description": "Liest eine Datei aus dem Home-Assistant-Konfigurationsverzeichnis."
+    },
     "ha_reload_core": {
       "title": "Komponenten neu laden",
       "description": "Lädt die Home-Assistant-Konfiguration ohne vollständigen Neustart neu."
     },
-    "ha_restart": {
-      "title": "Home Assistant neu starten",
-      "description": "Startet Home Assistant vollständig neu."
+    "ha_remove_area_or_floor": {
+      "title": "Bereich oder Etage entfernen",
+      "description": "Entfernt einen Bereich oder eine Etage aus Home Assistant."
     },
-    "ha_get_todo": {
-      "title": "To-do-Listen abrufen",
-      "description": "Zeigt To-do-Listen oder Aufgaben aus einer bestimmten Liste."
+    "ha_remove_device": {
+      "title": "Gerät entfernen",
+      "description": "Entfernt ein verwaistes Gerät aus dem Home-Assistant-Register."
+    },
+    "ha_remove_entity": {
+      "title": "Entität entfernen",
+      "description": "Entfernt eine oder mehrere Entitäten aus dem Home-Assistant-Register."
+    },
+    "ha_remove_helpers_integrations": {
+      "title": "Helfer oder Integration entfernen",
+      "description": "Entfernt einen Helfer oder Integrations-Konfigurationseintrag."
     },
     "ha_remove_todo_item": {
       "title": "To-do-Element entfernen",
       "description": "Entfernt eine Aufgabe aus einer Home-Assistant-To-do-Liste."
     },
-    "ha_set_todo_item": {
-      "title": "To-do-Element erstellen/aktualisieren",
-      "description": "Erstellt oder aktualisiert eine Aufgabe in einer To-do-Liste."
-    },
-    "ha_eval_template": {
-      "title": "Template auswerten",
-      "description": "Wertet ein Jinja2-Template mit der Home-Assistant-Engine aus."
-    },
-    "ha_report_issue": {
-      "title": "Problem melden",
-      "description": "Sammelt Diagnosen für einen Fehlerbericht oder Feedback."
-    },
-    "ha_get_zone": {
-      "title": "Zonen abrufen",
-      "description": "Zeigt alle geografischen Zonen oder Details zu einer Zone."
-    },
     "ha_remove_zone": {
       "title": "Zone entfernen",
       "description": "Entfernt eine geografische Zone aus Home Assistant."
     },
+    "ha_report_issue": {
+      "title": "Problem melden oder Feedback geben",
+      "description": "Liefert Diagnoseinformationen und Vorlagen für Fehlerberichte oder Feedback."
+    },
+    "ha_restart": {
+      "title": "Home Assistant neu starten",
+      "description": "Startet Home Assistant vollständig neu."
+    },
+    "ha_search": {
+      "title": "Suchen",
+      "description": "Durchsucht Entitäten und Inhalte von Automatisierungen, Skripten, Szenen, Helfern und Dashboards."
+    },
+    "ha_set_area_or_floor": {
+      "title": "Bereich oder Etage erstellen/aktualisieren",
+      "description": "Erstellt oder aktualisiert einen Bereich oder eine Etage in Home Assistant."
+    },
+    "ha_set_device": {
+      "title": "Gerät aktualisieren",
+      "description": "Aktualisiert Name, Bereich, Labels und andere Geräteeigenschaften."
+    },
+    "ha_set_entity": {
+      "title": "Entität aktualisieren",
+      "description": "Aktualisiert Name, Bereich, Labels und andere Entitätseigenschaften."
+    },
+    "ha_set_integration": {
+      "title": "Integration aktualisieren",
+      "description": "Aktiviert, deaktiviert, fügt hinzu oder ändert Integrationsparameter."
+    },
+    "ha_set_todo_item": {
+      "title": "To-do-Element erstellen/aktualisieren",
+      "description": "Erstellt oder aktualisiert eine Aufgabe in einer To-do-Liste."
+    },
     "ha_set_zone": {
       "title": "Zone erstellen/aktualisieren",
       "description": "Erstellt oder aktualisiert eine geografische Zone in Home Assistant."
+    },
+    "ha_write_file": {
+      "title": "Datei schreiben",
+      "description": "Erstellt oder ändert eine Datei in einem erlaubten Verzeichnis."
     }
   }
 }

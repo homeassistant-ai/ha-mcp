@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ha-mcp"
-version = "7.14.2"
+version = "8.3.0"
 description = "Home Assistant MCP Server - Complete control of Home Assistant through MCP"
 readme = "README.md"
 # Upper bound widened to <3.15 so the package installs on Home Assistant's
@@ -28,19 +28,30 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp==3.4.4",
+    "fastmcp==3.4.7",
     "httpx[socks]==0.28.1",
     "pydantic==2.13.4",
-    "python-dotenv==1.2.2",
+    "python-dotenv==1.2.3",
     "truststore==0.10.4",
-    "websockets==16.1.1",
+    # websockets is deliberately ABSENT from this list: ha-mcp ships its own
+    # private copy (src/ha_mcp/_vendor/websockets, pinned in the vendor
+    # requirements.txt and synced by scripts/vendor_websockets.py) and never
+    # imports the shared site-packages copy. Inside Home Assistant that
+    # shared copy is unowned — ~20 integration libraries drag it in with
+    # conflicting version demands and any of their installs can replace or
+    # tear it in place (#2135/#2146); a declared dependency here would make
+    # ha-mcp PIN that contested copy, which is what forced the in-place
+    # replacements. A shared copy can still arrive transitively (fastmcp
+    # declares one), so what keeps us off it is the vendored import path,
+    # not the absence of this line — and the embedded no-stomp e2e guard is
+    # what proves no install of ours ever replaces the shared copy.
     # Range (not a hard pin) so the resolver can satisfy Home Assistant's own
     # cryptography constraint when ha-mcp is installed into the HA venv for
     # in-process embedding (HA 2026.6 pins cryptography==48.0.0, 2026.7 pins
     # 48.0.1 — the floor must admit every supported core's pin; live-found on
     # the embedded e2e lane against the HA 2026.6.4 image).
     # cryptography is a transitive dependency only — never imported in src/.
-    "cryptography>=48.0.0,<50",
+    "cryptography>=48.0.0,<51",
     "pydantic-monty==0.0.18",
     "tzdata>=2024.1",
     "packaging>=24.0",
@@ -65,6 +76,11 @@ packages = { find = { where = ["src", "."], include = ["ha_mcp*", "tests"] } }
 
 [tool.setuptools.package-data]
 ha_mcp = ["py.typed", "_pypi_marker", "settings_ui/settings.html", "settings_ui/settings.js", "settings_ui/settings.css", "settings_ui/locales/*.json", "settings_ui/locales/README.md", "resources/skills-vendor/**/*"]
+# The vendored websockets tree's non-Python files: the upstream LICENSE
+# (BSD-3 requires shipping it), the VENDORED provenance marker, and the
+# renovate-managed pin file the drift test reads.
+"ha_mcp._vendor" = ["requirements.txt"]
+"ha_mcp._vendor.websockets" = ["LICENSE", "VENDORED", "MANIFEST.sha256", "py.typed"]
 
 [tool.mypy]
 python_version = "3.13"
@@ -94,6 +110,14 @@ module = [
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+# Vendored websockets: upstream's typing, not ours to check. follow_imports
+# skip keeps our client code checked against Any instead of dragging the
+# vendored tree into the run.
+module = ["ha_mcp._vendor.*"]
+follow_imports = "skip"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
 module = [
     "homeassistant.*",
     "aiohasupervisor",
@@ -117,6 +141,9 @@ target-version = "py313"
 line-length = 88
 extend-exclude = [
     "tests/initial_test_state",
+    # Vendored websockets — upstream's code style, not ours. Kept in sync
+    # with PATHS_IGNORE in scripts/codeql_quality_gate.py.
+    "src/ha_mcp/_vendor/websockets",
     # HA integration manifests must be strict JSON (no trailing commas);
     # ruff 0.15+ formats .json files as JSONC and inserts trailing commas
     # which makes Python's json.load() reject the file at HA startup.
@@ -140,6 +167,26 @@ select = [
     "A",     # builtin shadowing
     "LOG",   # logging best practices
     "SIM",   # simplify
+    "PLE",   # pylint errors (real bugs: bad logging args, await outside async)
+    # Targeted pylint conventions/refactors/warnings. The PL family is NOT
+    # selected wholesale: PLC0415 (import-outside-top-level) fights the
+    # deliberate lazy-init architecture, and PLR2004 (magic values),
+    # PLR0913/PLR0917 (wide FastMCP tool signatures) and PLR0911 (too many
+    # returns -- a separate signal from C901's cyclomatic complexity, and
+    # noisy on this codebase's early-return validation style) are noise
+    # here. Add codes individually so a new upstream PLR rule does not land
+    # enabled by default.
+    "PLC0206", # dict-index-missing-items
+    "PLC0207", # missing-maxsplit-arg
+    "PLR0402", # manual-from-import
+    "PLR1711", # useless-return
+    "PLR1714", # repeated-equality-comparison
+    "PLR1730", # if-stmt-min-max
+    "PLR5501", # collapsible-else-if
+    "PLW0108", # unnecessary-lambda
+    "PLW0602", # global-variable-not-assigned
+    "PLW1510", # subprocess-run-without-check
+    "PLW2901", # redefined-loop-name
 ]
 ignore = [
     "E501",    # line too long — formatter handles this
@@ -162,6 +209,20 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/**/*" = ["E501", "B011"]
+# Temporary: the equivalent PLC0207/PLR5501 fixes landed in
+# homeassistant-addon-webhook-proxy-dev/ only, per the dev-first/promote-only
+# flow (allow-stable-edit is for exceptional stable-only repairs, not routine sweeps —
+# see homeassistant-addon-webhook-proxy/AGENTS.md "Dev-first, promote-only").
+# The -dev entries name where a reset-dev-from-stable run puts those same two
+# stable files (start.py stays put, mcp_proxy/ is renamed to mcp_proxy_dev/),
+# so the auto-opened reset PR lints clean. Scoped per file and per rule so
+# both rules stay live everywhere else in both trees — the -dev tree is where
+# all new webhook-proxy code is authored. Remove all four once the next
+# promote carries the fixes into stable.
+"homeassistant-addon-webhook-proxy/start.py" = ["PLR5501"]
+"homeassistant-addon-webhook-proxy/mcp_proxy/__init__.py" = ["PLC0207"]
+"homeassistant-addon-webhook-proxy-dev/start.py" = ["PLR5501"]
+"homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/__init__.py" = ["PLC0207"]
 # C901 is enforced repo-wide with no per-file exemptions (the grandfathered
 # list was fully cleared by issue #925). Do NOT add "path" = ["C901"] entries
 # here — extract helpers to bring the function below the threshold instead:
@@ -194,8 +255,9 @@ markers = [
     "error_handling: error handling and edge case tests",
     "cleanup: tests that create entities needing cleanup",
     "performance: performance measurement and regression tests",
-    "external_only: skips on HAOS inaddon tier (server runs in a separate addon container, so in-process env monkeypatching doesn't reach it)",
+    "external_only: in-process-server tiers only; skips inaddon, stdio, container-embedded, and HAOS-embedded servers",
     "inaddon_only: only runs on HAOS inaddon tier",
+    "beta_haos_only: beta HAOS image lanes with Supervisor/Core version expectations configured",
 ]
 asyncio_mode = "auto"
 
@@ -209,10 +271,20 @@ dev = [
     # pins 3.14.3), so the version tested here is one a supported HA runs.
     "aiohttp>=3.13.5",
     "build>=1.2.2",
+    # Test infrastructure imports the SHARED websockets directly (the HAOS
+    # runtime harness, the image bake, wait_helpers) to talk to Home
+    # Assistant's own WebSocket API — that is test tooling driving HA, not
+    # ha-mcp code, so it does not go through the vendored copy. Declared
+    # here so the test suite never depends on it arriving transitively;
+    # it is NOT a runtime dependency (see the note in [project.dependencies]).
+    "websockets>=15.0.1",
     "docker>=7.1.0",
     "httpx2>=2.4.0",
     "mypy>=1.17.0",
     "openai>=1.0.0",
+    "jsonschema>=4.25.1",
+    "pyinstaller>=6.0.0",
+    "pynacl>=1.6.0",
     "psutil>=7.0.0",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.1.0",

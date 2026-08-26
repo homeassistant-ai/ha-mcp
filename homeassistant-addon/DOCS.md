@@ -1,10 +1,10 @@
-# Home Assistant MCP Server Add-on
+# Home Assistant MCP Server app (add-on)
 
 AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 87+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This app enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 88+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -24,16 +24,17 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
    [![Add Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp)
 
-   Or manually add this repository URL in Supervisor → Add-on Store:
-   ```
+   Or manually add this repository URL in Settings → Apps → Install app → ⋮ → Repositories
+   (Settings → Add-ons → Add-on store before Home Assistant 2026.2):
+   ```text
    https://github.com/homeassistant-ai/ha-mcp
    ```
 
-2. **Navigate to the add-on** "Home Assistant MCP Server" from the add-on store
+2. **Navigate to the app** "Home Assistant MCP Server" from the App store
 
 3. **Click Install, Wait and then Start**
 
-4. **Check the add-on logs** for your unique MCP server URL:
+4. **Check the app logs** for your unique MCP server URL:
 
    ```
    🔐 MCP Server URL: http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw
@@ -46,11 +47,11 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
 ## Client Configuration
 
-> **You already have the add-on — connect your client to it.** The steps below point a client at this add-on's HTTP endpoint (ha-mcp running *inside* Home Assistant). You do **not** also need `uvx ha-mcp`: that starts a *separate* local copy of the server on your own machine and does **not** talk to this add-on, so running both side by side gives you two independent instances. `uvx` is the alternative for people *not* running the add-on (e.g. no Home Assistant OS) — see the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) for that path.
+> **You already have the app — connect your client to it.** The steps below point a client at this app's HTTP endpoint (ha-mcp running *inside* Home Assistant). You do **not** also need `uvx ha-mcp`: that starts a *separate* local copy of the server on your own machine and does **not** talk to this app, so running both side by side gives you two independent instances. `uvx` is the alternative for people *not* running the app (e.g. no Home Assistant OS) — see the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) for that path.
 
 ### <details><summary><b>📱 Claude Desktop</b></summary>
 
-Claude Desktop talks to MCP servers over stdio, so it reaches the add-on through **mcp-proxy**, run automatically via `uvx`. That only needs **uv** on the computer running Claude Desktop:
+Claude Desktop talks to MCP servers over stdio, so it reaches the app through **fastmcp-remote**, run automatically via `uvx`. That only needs **uv** on the computer running Claude Desktop:
 
 ```bash
 # macOS / Linux
@@ -73,17 +74,19 @@ Then add to your Claude Desktop configuration file:
   "mcpServers": {
     "home-assistant": {
       "command": "uvx",
-      "args": ["mcp-proxy", "--transport", "streamablehttp", "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"]
+      "args": ["fastmcp-remote", "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"]
     }
   }
 }
 ```
 
-Replace the URL in `args` with the one from your add-on logs. No token goes here — the add-on handles authentication behind the secret path in the URL.
+Replace the URL in `args` with the one from your app logs. No token goes here — the app handles authentication behind the secret path in the URL.
 
 **Restart Claude Desktop** after saving the configuration.
 
-**How it works:** `uvx` runs mcp-proxy, which converts the add-on's HTTP endpoint to the stdio Claude Desktop expects.
+**How it works:** `uvx` runs fastmcp-remote, which converts the app's HTTP endpoint to the stdio Claude Desktop expects.
+
+**Upgrading from mcp-proxy:** earlier versions of this guide used `mcp-proxy`. If your config still runs it and Claude Desktop shows "Server disconnected", replace it with the config above. mcp-proxy declares no upper bound on the MCP SDK, so it fails with `ImportError: cannot import name 'request_ctx'` once the SDK ships a major release ([#2073](https://github.com/homeassistant-ai/ha-mcp/issues/2073)). fastmcp-remote pins its SDK dependency to a bounded range and cannot break that way.
 
 </details>
 
@@ -98,7 +101,7 @@ claude mcp add-json home-assistant '{
 }'
 ```
 
-Replace the URL with the one from your add-on logs.
+Replace the URL with the one from your app logs.
 
 **Restart Claude Code** after adding the configuration.
 
@@ -106,7 +109,7 @@ Replace the URL with the one from your add-on logs.
 
 ### <details><summary><b>📘 Codex</b></summary>
 
-Codex connects to HTTP MCP servers directly — use the URL from your add-on logs:
+Codex connects to HTTP MCP servers directly — use the URL from your app logs:
 
 ```bash
 codex mcp add home-assistant --url http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw
@@ -118,7 +121,7 @@ codex mcp add home-assistant --url http://192.168.1.100:9583/private_zctpwlX7ZkI
 
 ### <details><summary><b>🧩 Cursor / Windsurf / other HTTP-native clients</b></summary>
 
-These connect to HTTP MCP servers directly: add a new HTTP MCP server pointing at the **MCP Server URL** from the add-on logs — no proxy needed. See your client's own MCP configuration docs for the exact field name.
+These connect to HTTP MCP servers directly: add a new HTTP MCP server pointing at the **MCP Server URL** from the app logs — no proxy needed. See your client's own MCP configuration docs for the exact field name.
 
 </details>
 
@@ -126,14 +129,14 @@ These connect to HTTP MCP servers directly: add a new HTTP MCP server pointing a
 
 For secure remote access, you have two options:
 
-#### Option A: Webhook Proxy Add-on (Simplest — if you have Nabu Casa or an existing reverse proxy)
+#### Option A: Webhook Proxy App (Simplest — if you have Nabu Casa or an existing reverse proxy)
 
-The **Webhook Proxy** add-on routes MCP traffic through your existing Home Assistant reverse proxy — no separate tunnel needed.
+The **Webhook Proxy** app routes MCP traffic through your existing Home Assistant reverse proxy — no separate tunnel needed.
 
-1. Install the **MCP Server add-on** first (if not already installed — see the Installation section above)
-2. Install the **"Webhook Proxy for HA MCP"** add-on from the add-on store
+1. Install the **MCP Server app** first (if not already installed — see the Installation section above)
+2. Install the **"Webhook Proxy for HA MCP"** app from the App store
 3. Start it and **restart Home Assistant** when prompted
-4. Copy the URL from the webhook proxy add-on logs:
+4. Copy the URL from the webhook proxy app logs:
    ```
    MCP Server URL (remote): https://xxxxx.ui.nabu.casa/api/webhook/mcp_xxxxxxxx
    ```
@@ -141,19 +144,19 @@ The **Webhook Proxy** add-on routes MCP traffic through your existing Home Assis
 
 Works with Nabu Casa, Cloudflare, DuckDNS, nginx, or any other reverse proxy pointing at HA.
 
-#### Option B: Cloudflared Add-on (No existing reverse proxy needed)
+#### Option B: Cloudflared App (No existing reverse proxy needed)
 
-Use the **Cloudflared add-on** for a dedicated tunnel:
+Use the **Cloudflared app** for a dedicated tunnel:
 
-##### Install Cloudflared Add-on
+##### Install Cloudflared App
 
 [![Add Cloudflared Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fbrenner-tobias%2Faddon-cloudflared)
 
 ##### Configure Cloudflared
 
-**Note:** The Cloudflared add-on requires a Cloudflare account and uses named tunnels. You'll need to authenticate via the browser flow when first setting up the tunnel.
+**Note:** The Cloudflared app requires a Cloudflare account and uses named tunnels. You'll need to authenticate via the browser flow when first setting up the tunnel.
 
-Add to Cloudflared add-on configuration:
+Add to Cloudflared app configuration:
 
 ```yaml
 additional_hosts:
@@ -168,7 +171,7 @@ additional_hosts:
     service: http://localhost:9583
 ```
 
-**If `localhost` doesn't reach the MCP add-on** (the Cloudflared add-on tunnels from inside its own container), point the tunnel at the MCP add-on's container hostname instead — find it on the MCP Server add-on's **Information** page (e.g. `b37de126-ha-mcp`):
+**If `localhost` doesn't reach the MCP app** (the Cloudflared app tunnels from inside its own container), point the tunnel at the MCP app's container hostname instead — find it on the MCP Server app's **Information** page (e.g. `b37de126-ha-mcp`):
 
 ```yaml
 additional_hosts:
@@ -180,7 +183,7 @@ additional_hosts:
 
 When you first start Cloudflared:
 
-1. **Check the add-on logs** for an authentication URL like:
+1. **Check the app logs** for an authentication URL like:
    ```
    Please open the following URL and log in with your Cloudflare account:
    https://xyz.cloudflare.com/argotunnel?...
@@ -205,7 +208,7 @@ https://ha-mcp-<random>.cfargotunnel.com/private_zctpwlX7ZkIAr7oqdfLPxw
 - Optional Cloudflare Zero Trust authentication
 - Centrally managed with other Home Assistant services
 
-**Note on Quick Tunnels:** True Quick Tunnel mode (temporary `*.trycloudflare.com` URLs without account) requires running `cloudflared tunnel --url http://localhost:9583` directly via CLI or Docker, which is not supported by this add-on. The Home Assistant Cloudflared add-on uses named tunnels that require a Cloudflare account for authentication and management.
+**Note on Quick Tunnels:** True Quick Tunnel mode (temporary `*.trycloudflare.com` URLs without account) requires running `cloudflared tunnel --url http://localhost:9583` directly via CLI or Docker, which is not supported by this app. The Home Assistant Cloudflared app uses named tunnels that require a Cloudflare account for authentication and management.
 
 ##### ⚠️ Disable "Block AI Training Bots"
 
@@ -224,7 +227,7 @@ Cloudflare's "Block AI training bots" feature blocks requests from AI/LLM client
 
 **Also check geo / country blocking.** Most AI/LLM services connect from US-based cloud infrastructure, so if a Cloudflare WAF rule blocks US IP addresses (or only allows your own country), your client cannot connect even with AI-bot blocking disabled. Allow your AI provider's IP ranges — Claude.ai connects from Anthropic's network, `160.79.104.0/21` (see [Anthropic's IP ranges](https://platform.claude.com/docs/en/api/ip-addresses)).
 
-See [Cloudflared add-on documentation](https://github.com/brenner-tobias/addon-cloudflared/blob/main/cloudflared/DOCS.md) for advanced configuration.
+See [Cloudflared app documentation](https://github.com/brenner-tobias/addon-cloudflared/blob/main/cloudflared/DOCS.md) for advanced configuration.
 
 </details>
 
@@ -232,12 +235,12 @@ See [Cloudflared add-on documentation](https://github.com/brenner-tobias/addon-c
 
 ## Configuration Options
 
-The add-on has minimal configuration - most settings are automatic.
+The app has minimal configuration - most settings are automatic.
 
 > 🔄 **After changing any setting, refresh your client's tool list.** When a
 > setting changes the tools the server exposes (Tool Search, Read Only Mode,
 > enabled/disabled/pinned tools, etc.), your AI client keeps serving its
-> **cached** tool list until it re-fetches. Restarting the add-on or Home
+> **cached** tool list until it re-fetches. Restarting the app or Home
 > Assistant does **not** refresh the client — you must reconnect or refresh
 > the MCP server in your AI client (e.g. re-add/refresh the connector in
 > ChatGPT, or close and reopen Claude Desktop). Symptom if you skip this:
@@ -259,7 +262,7 @@ Controls when the AI assistant suggests creating backups before operations:
 - `weak`: Rarely suggests backups
 - `auto`: Intelligent detection (future enhancement)
 
-**Note:** This is an advanced option. Enable "Show unused optional configuration options" in the add-on configuration UI to see it.
+**Note:** This is an advanced option. Enable "Show unused optional configuration options" in the app configuration UI to see it.
 
 ### secret_path (Advanced)
 
@@ -267,11 +270,11 @@ Controls when the AI assistant suggests creating backups before operations:
 
 Custom secret path override. **Leave empty for auto-generation** (recommended).
 
-- When empty, the add-on generates a secure 128-bit random path on first start
+- When empty, the app generates a secure 128-bit random path on first start
 - The path is persisted to `/data/secret_path.txt` and reused on restarts
 - Custom paths are useful for migration or specific security requirements
 
-**Note:** This is an advanced option. Enable "Show unused optional configuration options" in the add-on configuration UI to see it.
+**Note:** This is an advanced option. Enable "Show unused optional configuration options" in the app configuration UI to see it.
 
 ### verify_ssl (Advanced)
 
@@ -279,33 +282,33 @@ Custom secret path override. **Leave empty for auto-generation** (recommended).
 
 Verify the Home Assistant server's TLS certificate.
 
-The add-on talks to HA via the Supervisor proxy (`http://supervisor/core`), so this option has no effect for the default install. Disable it only if you have reconfigured the add-on to point at an HTTPS endpoint whose certificate doesn't match the hostname being called — for example a local HTTPS endpoint at `https://homeassistant.local:8123`, or a public hostname fronted by a reverse proxy whose certificate is issued for a different name.
+The app talks to HA via the Supervisor proxy (`http://supervisor/core`), so this option has no effect for the default install. Disable it only if you have reconfigured the app to point at an HTTPS endpoint whose certificate doesn't match the hostname being called — for example a local HTTPS endpoint at `https://homeassistant.local:8123`, or a public hostname fronted by a reverse proxy whose certificate is issued for a different name.
 
 When disabled, both the REST and WebSocket clients connect with hostname checking and certificate verification turned off, and a warning is logged once per client.
 
 **Note:** Disabling weakens transport security. Leave this on unless you know you need it. The OAuth flow inherits the server-wide setting — there's no per-user verify_ssl override.
 
-Requires add-on restart to take effect.
+Requires app restart to take effect.
 
 ### enable_tool_search
 
 **Default:** `false`
 
-Replaces the full tool catalog (~87 tools) with search-based discovery (~4 proxy tools). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~88 tools) with search-based discovery (~4 proxy tools). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
-> ⚠️ **Do NOT enable this if you use Claude in Sonnet or Opus modes.** Those models run their own built-in tool search / deferred tools, which conflicts with ha-mcp's — running both at once does not work. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off.
+> ⚠️ **Do NOT enable this if your client has its own built-in tool search / deferred tools (claude.ai, Claude Desktop, Claude Code).** The two search layers conflict — running both at once does not work — and the client's built-in tool search is the better choice there anyway. Leave this off in those clients. Some Codex models and ChatGPT include deferred tools too — check your client/model directly to confirm its features so you don't leave this enabled unnecessarily.
 
 **When to enable:**
-- Models **without native deferred tool support** — this includes OpenAI-compatible local models, and also **Claude Haiku** which does not use Claude's built-in deferred tool loading. Haiku users will see significant token savings with this enabled.
+- Setups that load the **full tool catalog up front** — whether that happens depends on the client and model combination. This covers models **without native deferred tool support** (OpenAI-compatible local models, Gemini, and **Claude Haiku**, which does not use Claude's built-in deferred tool loading), and clients that **inline all tool schemas regardless of model** (e.g. GitHub Copilot CLI, even when running Claude Sonnet or Opus).
 - Models with **limited context windows** (≤200K) or deployments where context cost is a concern
 - MCP clients that **cap total tools** (e.g. at 100) — reduces visible tool count to ~4
 
 **When to leave disabled (default):**
-- **Claude in Sonnet or Opus modes** — their built-in tool search conflicts with ha-mcp's. Disable one or the other.
+- **Clients with built-in tool search / deferred tools (claude.ai, Claude Desktop, Claude Code)** — the two layers conflict, and the client's built-in search is the better choice; use it instead.
 - Other clients with native deferred tool support — tools are loaded on demand, so the full catalog has no idle context cost.
 - When you need direct tool access without the search step.
 
-Requires add-on restart to take effect.
+Requires app restart to take effect.
 
 ### tool_search_max_results
 
@@ -313,7 +316,7 @@ Requires add-on restart to take effect.
 
 Maximum number of tools returned by `ha_search_tools` when `enable_tool_search` is on. Lower values (2-3) save context tokens but may miss relevant tools. Has no effect unless tool search is enabled.
 
-Requires add-on restart to take effect.
+Requires app restart to take effect.
 
 ### enable_tool_security_policies
 
@@ -330,7 +333,7 @@ Gates high-stakes tool calls (lock/alarm control, automation writes, etc.) behin
 - Single-user setups where you're comfortable with the LLM acting autonomously
 - You haven't configured any policy rules yet (with no rules, the toggle has no effect — but the runtime cost is small either way)
 
-Off by default. Requires add-on restart to take effect.
+Off by default. Requires app restart to take effect.
 
 **Example Configuration:**
 
@@ -352,7 +355,7 @@ Mixed read/write tools whose read functionality exists nowhere else stay availab
 
 - `ha_config_get_dashboard` — config/list/search reads only; screenshot renders are blocked because Puppet can persist frontend theme/dark preferences
 - `ha_manage_backup` — only listing and viewing per-edit backups
-- `ha_manage_addon` — only HTTP GET proxy reads of add-on APIs
+- `ha_manage_app` — only HTTP GET proxy reads of app (add-on) APIs
 - `ha_manage_energy_prefs` — only `mode='get'` and `dry_run=true` previews
 - `ha_manage_pipeline` — only `action='list'` / `'get'`
 - `ha_manage_custom_tool` — only `list_saved=true`
@@ -361,7 +364,7 @@ Mixed read/write tools whose read functionality exists nowhere else stay availab
 - Using the AI for analysis, audits, and suggestions only
 - Demos or shared setups where the assistant must never change anything
 
-The same toggle appears at the top of the **Tools** tab in the web UI. Off by default. Requires add-on restart to take effect.
+The same toggle appears at the top of the **Tools** tab in the web UI. Off by default. Requires app restart to take effect.
 
 **Example Configuration:**
 
@@ -369,11 +372,34 @@ The same toggle appears at the top of the **Tools** tab in the web UI. Off by de
 read_only_mode: true
 ```
 
+### redact_secrets
+
+**Default:** `false`
+
+Redacts secrets from tool responses before they reach the AI assistant. When enabled:
+
+- **App (add-on) options** (`ha_get_app`, `ha_manage_app`): any option value whose app schema marks it `format: password` is replaced with `<redacted: set>` or `<redacted: empty>` — so "is this credential configured at all?" stays answerable without disclosing the value.
+- **Integration options** (`ha_get_integration`): fields the options flow marks with a password selector get the same treatment, including the `include_schema=True` schema echo.
+- **All other tool responses** (logs, file reads, diagnostics, etc.): occurrences of secret values the server has already seen on the surfaces above are scrubbed to `<redacted>`.
+
+Redaction is schema-driven — fields not marked as passwords by their schema cannot be detected and are returned as-is until the value scrub has seen them. The value scrub skips secrets shorter than 6 characters (replacing tiny fragments would corrupt unrelated output). Writes through `ha_manage_app` keep working with partial updates (merging uses the real current options server-side), and submitting a redaction marker as a value is rejected so a redacted read can never be written back into a live config.
+
+**When to enable:**
+- App or integration configs hold credentials (API tokens, PATs, database passwords) that must not land in AI conversation transcripts
+
+Off by default. Requires app restart to take effect.
+
+**Example Configuration:**
+
+```yaml
+redact_secrets: true
+```
+
 ---
 
 ## Tool Settings Web UI
 
-The add-on exposes a web-based settings page for managing which tools are available to AI assistants. Click **"Open Web UI"** on the add-on info page to access it.
+The app exposes a web-based settings page for managing which tools are available to AI assistants. Click **"Open Web UI"** on the app info page to access it.
 
 Features:
 - **Enable/disable individual tools** — toggle each tool on or off
@@ -383,9 +409,9 @@ Features:
 - **Mandatory tools** — `ha_search`, `ha_get_overview`, `ha_get_state`, `ha_report_issue`, and `ha_manage_backup` are always enabled and cannot be disabled (listing one in `disabled_tools` is a silent no-op — it keeps running). `ha_get_skill_guide` is additionally locked enabled while strict best-practices mode (`enable_strict_mandatory_bps`) is on — strict mode publishes its acknowledgment key only through that tool; turn strict mode off first to disable it
 - **Tool Security Policies tab** — when `enable_tool_security_policies` is on, approve held tool calls and manage per-tool rules here
 - **Advanced settings** — an advanced panel with a beta master toggle (plus per-feature sub-toggles) for opting into beta tools such as raw YAML editing, filesystem tools, and code mode. See [Beta Features](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md)
-- **In-UI restart** — a "Restart Add-on" button appears after saving to apply changes with one click
+- **In-UI restart** — a "Restart App" button appears after saving to apply changes with one click
 
-**Important:** Tool configuration changes require an add-on restart to take effect. The UI will prompt you to restart after saving.
+**Important:** Tool configuration changes require an app restart to take effect. The UI will prompt you to restart after saving.
 
 ### Non-add-on installations
 
@@ -393,7 +419,7 @@ In Docker (`ha-mcp-web`) and standalone HTTP installations, the settings UI is m
 
 ### Text-field fallback
 
-If you prefer not to use the web UI (or want to set these before first start), the `disabled_tools` and `pinned_tools` options accept comma-separated tool names as seed values. On first start, the add-on creates `/data/tool_config.json` from these values; after that, the web UI is the source of truth. Mandatory tools (listed above) cannot be disabled this way.
+If you prefer not to use the web UI (or want to set these before first start), the `disabled_tools` and `pinned_tools` options accept comma-separated tool names as seed values. On first start, the app creates `/data/tool_config.json` from these values; after that, the web UI is the source of truth. Mandatory tools (listed above) cannot be disabled this way.
 
 ---
 
@@ -401,7 +427,7 @@ If you prefer not to use the web UI (or want to set these before first start), t
 
 ### Auto-Generated Secret Paths
 
-The add-on automatically generates a unique secret path on first startup using 128-bit cryptographic entropy. This ensures:
+The app automatically generates a unique secret path on first startup using 128-bit cryptographic entropy. This ensures:
 
 - Each installation has a unique, unpredictable endpoint
 - The secret is persisted across restarts
@@ -409,30 +435,30 @@ The add-on automatically generates a unique secret path on first startup using 1
 
 ### Authentication
 
-The add-on uses Home Assistant Supervisor's built-in authentication. No tokens or credentials are needed - the add-on automatically authenticates with your Home Assistant instance.
+The app uses Home Assistant Supervisor's built-in authentication. No tokens or credentials are needed - the app automatically authenticates with your Home Assistant instance.
 
 ### Network Exposure
 
-- **Local network only by default** - The add-on listens on port 9583
-- **Remote access** - Use the [Webhook Proxy add-on](../homeassistant-addon-webhook-proxy/DOCS.md) (easiest with Nabu Casa) or the Cloudflared add-on for secure HTTPS tunnels
+- **Local network only by default** - The app listens on port 9583
+- **Remote access** - Use the [Webhook Proxy app](../homeassistant-addon-webhook-proxy/DOCS.md) (easiest with Nabu Casa) or the Cloudflared app for secure HTTPS tunnels
 - **Never expose** port 9583 directly to the internet without proper security measures
 
 ### Supervisor Permissions
 
-The add-on requests `hassio_role: manager` (declared in `config.yaml`).
+The app requests `hassio_role: manager` (declared in `config.yaml`).
 `manager` is required for the Supervisor REST endpoints used to fetch
 add-on and system-service logs (`/addons/<slug>/logs`, `/<service>/logs`,
 `/core/logs`) — `default` returns 403 (see #1116). The role also supports
-explicit add-on management through `ha_manage_addon`. When dashboard
+explicit app management through `ha_manage_app`. When dashboard
 screenshots are enabled, `ha_get_dashboard_screenshot` may update only the
-schema-verified Puppet add-on's `keep_browser_open` option and restart that
-same add-on; it accepts no caller-supplied slug for those operations.
+schema-verified Puppet app's `keep_browser_open` option and restart that
+same app; it accepts no caller-supplied slug for those operations.
 
 ---
 
 ## Troubleshooting
 
-### Add-on won't start
+### App won't start
 
 **Check the logs** for errors:
 - Configuration validation errors
@@ -444,38 +470,38 @@ same add-on; it accepts no caller-supplied slug for those operations.
 ### Can't connect to MCP server
 
 **Verify:**
-1. Add-on is running (check status in Supervisor)
+1. App is running (check status in Supervisor)
 2. You copied the **complete URL** including the secret path from logs
 3. Your MCP client configuration is correct
 4. No firewall blocking port 9583 on your local network
 
-**Solution:** Restart the add-on and copy the URL from fresh logs.
+**Solution:** Restart the app and copy the URL from fresh logs.
 
 ### Lost the secret URL
 
 **Options:**
-1. Check the add-on logs (scroll to startup messages)
-2. Restart the add-on (logs will show the URL again)
-3. Read directly from `/data/secret_path.txt` using the Terminal & SSH add-on
+1. Check the app logs (scroll to startup messages)
+2. Restart the app (logs will show the URL again)
+3. Read directly from `/data/secret_path.txt` using the Terminal & SSH app
 4. Generate a new secret by deleting `/data/secret_path.txt` and restarting
 
 ### Operations failing
 
-**Check add-on logs** for detailed error messages. Common issues:
+**Check app logs** for detailed error messages. Common issues:
 
 - Invalid entity IDs (use fuzzy search to find correct IDs)
-- Missing permissions (add-on should have full access)
+- Missing permissions (app should have full access)
 - Home Assistant API errors (check HA logs)
 
 **Solution:** Review the specific error in logs and adjust your commands accordingly.
 
 ### Performance issues
 
-If the add-on is slow or unresponsive:
+If the app is slow or unresponsive:
 
 1. Check Home Assistant system resources (CPU, memory)
-2. Review add-on logs for warnings
-3. Restart the add-on
+2. Review app logs for warnings
+3. Restart the app
 4. Consider reducing concurrent AI assistant operations
 
 ---
@@ -484,15 +510,15 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 87+ MCP tools for controlling Home Assistant:
+The add-on provides 88+ MCP tools for controlling Home Assistant:
 
 > **Note:** This list is regenerated from the `master` branch on every push, but the add-on image you have installed only updates on stable releases (biweekly, Wednesdays 10:00 UTC). A tool listed below may not yet be present in your installed runtime. If so, calling it returns an "unknown tool" error until the next stable release.
 
 > Tools marked **(beta — dev channel only)** are gated behind feature flags and ship with the dev channel add-on only. See [docs/beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for setup and caveats.
 
-### Add-ons
-- `ha_get_addon` — Get Home Assistant add-ons - list installed, available, or get details for one.
-- `ha_manage_addon` — Manage a Home Assistant add-on — update its configuration or call its internal API.
+### Apps (add-ons)
+- `ha_get_app` — Get installed or available Home Assistant apps (add-ons), or details for one.
+- `ha_manage_app` — Manage Home Assistant apps (add-ons) or proxy an app API.
 
 ### Areas & Floors
 - `ha_list_floors_areas` — List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
@@ -561,7 +587,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 
 ### HACS
 - `ha_get_hacs_info` — Get HACS (Home Assistant Community Store) data — search the store or fetch repository details.
-- `ha_manage_hacs` — Manage HACS (Home Assistant Community Store) — install/update or add custom repositories.
+- `ha_manage_hacs` — Manage HACS (Home Assistant Community Store) — install/update, remove, add custom repositories, or refresh repository information.
 
 ### Helper Entities
 - `ha_config_list_helpers` — List Home Assistant helpers of a specific type with their configurations.
@@ -576,7 +602,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 ### Integrations
 - `ha_get_integration` — Get integration (config entry) information with pagination.
 - `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.
-- `ha_set_integration` — Manage an integration (config entry): enable/disable, add, or update options.
+- `ha_set_integration` — Manage an integration (config entry): enable/disable, add, update options, or reconfigure.
 
 ### Labels & Categories
 - `ha_config_get_category` — Get category info - list all categories for a scope or get a specific one by ID.
@@ -605,10 +631,10 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_search` — Search for entities (lights, sensors, switches, climate, etc.) by name, domain, or area — AND inside automation/script/scene/helper/dashboard configurations — in one call.
 
 ### Service & Device Control
-- `ha_bulk_control` — Control multiple devices with bulk operation support and WebSocket tracking.
+- `ha_bulk_control` — Manage explicit operations or one deterministic structural bulk action.
 - `ha_call_event` — Execute a custom event on the Home Assistant event bus.
 - `ha_call_service` — Execute Home Assistant services to control entities and trigger automations.
-- `ha_get_operation_status` — Check status of one or more device operations with real-time WebSocket verification.
+- `ha_get_operation_status` — Get the status of one or more device operations with real-time WebSocket verification.
 - `ha_list_services` — List available Home Assistant services with optional pagination and detail control.
 
 ### System
@@ -616,6 +642,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_config_set_yaml` **(beta — dev channel only)** — Update raw YAML configuration in configuration.yaml, packages/*.yaml, or themes/*.yaml (LAST RESORT).
 - `ha_manage_backup` — Polymorphic backup tool. See the tool description for the routing matrix.
 - `ha_manage_custom_tool` **(beta — dev channel only)** — Create and run a custom tool in a sandbox, or manage saved custom tools.
+- `ha_manage_security_policy` — Manage the tool security policy that gates high-stakes tool calls behind user approval.
 - `ha_manage_theme` — Manage Home Assistant frontend themes.
 - `ha_manage_updates` — Manage Home Assistant updates -- list, read details, batch install, skip, or un-skip.
 - `ha_reload_core` — Reload Home Assistant configuration without full restart.
@@ -658,6 +685,6 @@ https://github.com/homeassistant-ai/ha-mcp/blob/master/CONTRIBUTING.md
 
 ## License
 
-This add-on is licensed under the MIT License.
+This app is licensed under the MIT License.
 
 See [LICENSE](https://github.com/homeassistant-ai/ha-mcp/blob/master/LICENSE) for full license text.

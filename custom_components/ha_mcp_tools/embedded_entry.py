@@ -42,7 +42,9 @@ from .const import (
     OPT_SECRET_PATH_OVERRIDE,
     OPT_WEBHOOK_AUTH,
     OPT_WEBHOOK_ID_OVERRIDE,
+    WEBHOOK_AUTH_HA,
     WEBHOOK_AUTH_LEGACY,
+    WEBHOOK_AUTH_NONE,
 )
 
 # NOTE: embedded_setup / coordinator (and their embedded_server / mcp_webhook
@@ -74,9 +76,9 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     from .ui_panel import async_register_ui_panel
 
     _ensure_secrets(hass, entry)
-    # Bind the legacy OAuth root views synchronously here — before the slow
-    # background bring-up below — so they are live at boot (see the helper).
-    _prebind_legacy_oauth_views(hass, entry)
+    # Bind every applicable OAuth route synchronously here — before the slow
+    # background bring-up below — so it is live at boot (see the helper).
+    _prebind_oauth_views(hass, entry)
 
     # Admin-only "Open Web UI" sidebar panel + proxy. Registered while the entry
     # exists (its proxy returns 503 until the server is actually running), so the
@@ -190,30 +192,44 @@ async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> Non
     await hass.config_entries.async_reload(entry.entry_id)
 
 
-def _prebind_legacy_oauth_views(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Register the legacy OAuth root ``/authorize`` + ``/token`` views during
-    entry setup, before the background bring-up's (slow) package install.
+def _prebind_oauth_views(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Register OAuth routes before the background bring-up's slow install.
 
     An aiohttp route is only ever live if it is registered before Home Assistant
     freezes its HTTP app at the end of startup. Binding these views from the
     background bring-up task races HA reaching RUNNING: on a slow-install boot
-    the routes would register AFTER the freeze — never live until a restart —
-    and ``bind_legacy_views`` would see ``hass.is_running`` True and file a
-    restart repair that the restart cannot clear. Binding here, while the entry
-    is still setting up (``hass.is_running`` is False at boot), mirrors the
-    webhook-proxy add-on, which binds in its own ``async_setup_entry``. The
-    bring-up's ``async_register_webhook`` then reuses this already-bound provider.
+    the advertised metadata, scoped authorize/token, and DCR routes would never
+    become live until a restart. Bind the shared metadata/scoped pair for every
+    remote mode, DCR for none/ha_auth, and legacy's root aliases when credentials
+    are available. The later webhook registration reuses these bound views and
+    supplies the live per-request providers through ``hass.data``.
 
-    Only relevant when legacy is the configured mode and the webhook endpoint is
-    enabled (legacy OAuth guards that endpoint; with no webhook there is nothing
-    to protect). A route-ownership conflict with the webhook-proxy add-on is
-    swallowed here — the bring-up re-encounters it and files the user-facing
-    start-failed repair.
+    A legacy root-route ownership conflict with the webhook-proxy add-on is
+    swallowed here; the scoped pair remains live and background bring-up selects
+    its scoped-only provider.
     """
-    if str(entry.options.get(OPT_WEBHOOK_AUTH, "")) != WEBHOOK_AUTH_LEGACY:
-        return
     if not bool(entry.options.get(OPT_ENABLE_WEBHOOK, True)):
         return
+    auth_mode = str(entry.options.get(OPT_WEBHOOK_AUTH, ""))
+    if auth_mode not in (
+        WEBHOOK_AUTH_NONE,
+        WEBHOOK_AUTH_HA,
+        WEBHOOK_AUTH_LEGACY,
+    ):
+        return
+
+    from .mcp_webhook import _register_metadata_views
+    from .oauth_autoapprove import bind_autoapprove_views
+
+    _register_metadata_views(hass)
+    bind_autoapprove_views(hass)
+
+    if auth_mode != WEBHOOK_AUTH_LEGACY:
+        from .oauth_dcr import bind_dcr_view
+
+        bind_dcr_view(hass)
+        return
+
     client_id = entry.data.get(DATA_OAUTH_CLIENT_ID)
     client_secret = entry.data.get(DATA_OAUTH_CLIENT_SECRET)
     signing_key = entry.data.get(DATA_OAUTH_SIGNING_KEY)
@@ -221,16 +237,9 @@ def _prebind_legacy_oauth_views(hass: HomeAssistant, entry: ConfigEntry) -> None
         # _ensure_secrets mints these whenever legacy mode is configured; a gap
         # means a partial config — let the bring-up path surface it.
         return
-    from .mcp_webhook import _register_metadata_views
     from .oauth_legacy import LegacyOAuthRouteConflict, bind_legacy_views
 
     with suppress(LegacyOAuthRouteConflict):
-        # Register the RFC 8414/9728 discovery views alongside the root
-        # /authorize + /token views, both at setup time, so the discovery
-        # doc's resource_metadata URL resolves at boot for RFC-compliant
-        # clients — not just the root views. Both are idempotent, so the
-        # bring-up's async_register_webhook reuses them.
-        _register_metadata_views(hass)
         bind_legacy_views(hass, client_id, client_secret, signing_key)
 
 

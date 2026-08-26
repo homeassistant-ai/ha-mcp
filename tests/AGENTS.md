@@ -3,16 +3,67 @@
 ## Custom Component (ha_mcp_tools)
 
 - Component is installed into the Docker container by `_install_custom_component` in `src/e2e/conftest.py`
-- HA's `call_service(return_response=True)` wraps results in `{"changed_states": [], "service_response": {...}}` — tools unwrap this with `result.get("service_response", result)` before returning
+- HA's `call_service(return_response=True)` wraps results in `{"changed_states": [], "service_response": {...}}`. Most tools unwrap it with `unwrap_service_response()` (`src/ha_mcp/tools/util_helpers.py`); `ha_call_service` instead *splits* it, projecting `changed_states` into `result` and surfacing `service_response` once at the top level (issue #2085)
 - `hass.async_add_executor_job` only passes positional args — use `lambda:` wrappers for calls needing kwargs (e.g., `mkdir(parents=True, exist_ok=True)`)
 - HA Docker image uses `annotatedyaml` (PyYAML wrapper), NOT `ruamel.yaml` — custom components needing ruamel must declare it in `manifest.json` requirements
 - Feature flags (`ENABLE_YAML_CONFIG_EDITING`, `HAMCP_ENABLE_FILESYSTEM_TOOLS`) are set in `ha_container_with_fresh_config` fixture
 
+## Backend Lanes and How to Gate a Test
+
+The suite runs on several backends, and a test that only makes sense on some
+of them is gated by a marker rather than a runtime `skip`. The markers and
+their exact skip conditions are defined in
+`src/e2e/conftest.py::pytest_collection_modifyitems` — read that docstring
+before adding a gate:
+
+| Marker | Runs on |
+|---|---|
+| `haos_only` | HAOS backends only (`HAOS_TEST_IMAGE_PATH` set). **Auto-applied** to everything under `src/e2e/haos_only/` — no marker needed there |
+| `beta_haos_only` | HAOS beta-image lanes where Supervisor/Core version expectations are configured. If any expectation is set, the test runs so partial configuration fails visibly |
+| `container_only` | the testcontainer backend only (includes the container-embedded lane) |
+| `embedded_only` | the embedded testcontainer backend only (`E2E_BACKEND=embedded`) — the one lane whose session container has ha-mcp installed inside the HA image. Skips everywhere else, including `haos_embedded` |
+| `external_only` | anywhere the server-under-test runs IN the pytest process: plain testcontainer and HAOS external. Skips stdio, inaddon, container-embedded and HAOS-embedded, which cannot be reconfigured via test-process env / monkeypatch or reach an in-process mock. The name is historical — it does NOT mean "HAOS external only" |
+| `inaddon_only` | HAOS inaddon mode only (`HAOS_TEST_MODE=inaddon`), where `is_running_in_addon()` paths are live |
+| `haos_stdio_only` | HAOS stdio mode only (`HAOS_TEST_MODE=stdio`), where the installed `ha-mcp` command is exercised through a real subprocess transport |
+| `not_on_embedded` / `not_on_haos_embedded` | everywhere except that lane, for tests the lane's own session backend already covers |
+
+Pick the marker by what the test *needs*, not by where it happens to pass:
+`external_only` is about needing an in-process server you can reconfigure,
+`inaddon_only` about needing the addon's supervisor context. Read the skip
+expressions, not the summary docstring — `external_only`'s name has misled
+before (#1375 found 14 supervisor-mock tests silently skipping on every
+testcontainer run).
+
+**Two different things share the `ha_mcp_tools` name — don't conflate them:**
+
+- **The component itself** (filesystem / registry tools) is installed on
+  EVERY lane by `_install_custom_component`. A test may therefore rely on
+  component-gated behaviour with no marker — e.g. a config entry's
+  `unique_id`, which Home Assistant's own API never exposes on any endpoint.
+  Consequence for `ha_search`: a query-driven call is served by the component's
+  in-process scan, not the legacy REST path, so a test written for legacy-only
+  behaviour passes *vacuously*. Naming a `search_types` the component does not
+  serve (`"dashboard"`) sends the whole call down the legacy path.
+- **The in-process "server" config entry** of that same component (#1527) is
+  the embedded backend only, seeded separately. That one IS lane-specific.
+
+In production the component is optional (it ships via HACS), so server code
+reading component-only data must degrade honestly for installs without it
+rather than assume the e2e's always-present case.
+
 ## Test Patterns
 
 - Tests expecting tool **success**: use `mcp.call_tool_success()` inside `MCPAssertions` context
-- Tests expecting tool **failure**: use `safe_call_tool()` directly (catches `ToolError`, returns parsed dict)
-- Service availability checks should use `safe_call_tool` to probe, not `call_tool_success`
+- Tests expecting tool **failure**: use `mcp.call_tool_failure()` inside `MCPAssertions`
+  context. It rejects any result `assert_mcp_success()` would accept — including the
+  tools that succeed with no `success` key (`pending_restart`, bulk-operation payloads)
+  — so it genuinely proves the call failed. Prefer also passing `expected_error` to pin
+  *which* failure; about half the current call sites omit it and assert on the returned
+  dict themselves instead, which is equally fine.
+- `safe_call_tool()` is for calls whose outcome the test does **not** assert: `finally`
+  cleanup (so a cleanup failure cannot mask the real assertion) and service-availability
+  probes. It swallows `ToolError` and returns a parsed dict, so using it for an expected
+  failure means nothing verifies the call failed at all.
 
 ## E2E Test Patterns
 

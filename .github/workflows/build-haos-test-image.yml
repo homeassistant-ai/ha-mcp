@@ -1,6 +1,6 @@
 name: Build HAOS Test Image (Prime Shared Cache)
 
-# Bakes the pre-baked HAOS qcow2 used by haos-e2e-tests.yml — see #1281.
+# Bakes the pre-baked HAOS qcow2 used by all four HAOS E2E lanes — see #1281.
 # The workflow's job on master is to local-build the qcow2 and warm the shared
 # Actions cache; the lanes restore from that cache and local-build on a miss.
 # The PR-time job uploads the qcow2 as a workflow artifact so reviewers can
@@ -11,7 +11,7 @@ name: Build HAOS Test Image (Prime Shared Cache)
 # and push to master that touches any input baked into the qcow2.
 #
 # INVARIANT — the path triggers below MUST mirror the ``git ls-tree`` paths
-# that haos-e2e-tests.yml hashes into its image cache key (see the
+# that the four HAOS E2E workflows hash into their image cache keys (see each
 # "Compute image cache key" step). When master commits change a baked
 # input that isn't listed here, the master cache-prime stays at the
 # previous state and every subsequent PR on a cache miss builds locally
@@ -25,7 +25,7 @@ on:
   push:
     branches: [master]
     paths:
-      # Bake inputs — must match haos-e2e-tests.yml cache-key paths.
+      # Bake inputs — must match all four HAOS E2E cache-key paths.
       - 'tests/haos_image_build/**'
       - 'tests/initial_test_state/**'
       - 'custom_components/ha_mcp_tools/**'
@@ -57,8 +57,9 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           # Required for the skills bundle submodule at
           # src/ha_mcp/resources/skills-vendor (test_skills_resources.py).
           submodules: true
@@ -151,7 +152,7 @@ jobs:
 
       - name: Upload bake diagnostics
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: haos-bake-diagnostics-${{ github.sha }}
           path: /tmp/haos-bake-diagnostics/
@@ -221,7 +222,7 @@ jobs:
           echo "compression ratio: ${ratio}x"
 
       - name: Upload built image as workflow artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: haos-test-image-${{ steps.haos_version.outputs.version }}-${{ github.sha }}
           path: haos-test-image.qcow2
@@ -229,10 +230,10 @@ jobs:
           if-no-files-found: error
 
       # --- Warm the shared Actions cache (master only) -----------------------
-      # The E2E lanes (haos-e2e-tests.yml / haos-e2e-inaddon-tests.yml) restore
-      # the qcow2 from the Actions cache and fall back to a local build on a
-      # miss. Saving the image here, on the default branch, lets PR runs restore
-      # it via GitHub's default-branch cache scope and skip the local build.
+      # The external, inaddon, embedded, and stdio E2E lanes restore the qcow2
+      # from the Actions cache and fall back to a local build on a miss. Saving
+      # the image here, on the default branch, lets PR runs restore it via
+      # GitHub's default-branch cache scope and skip the local build.
       # Purely additive: on a miss/eviction the lanes fall back to a local build
       # exactly as before (#1515).
       - name: Compute E2E image cache key (master only)
@@ -240,13 +241,12 @@ jobs:
         if: github.ref == 'refs/heads/master'
         continue-on-error: true
         # INVARIANT: this git ls-tree must stay byte-IDENTICAL to the
-        # "Compute image cache key" step in BOTH haos-e2e-tests.yml and
-        # haos-e2e-inaddon-tests.yml — otherwise this warms a key the lanes
-        # never restore (a wasted prime, not a stale test: the lanes still
-        # recompute their own correct key). NOTE the push-trigger paths above
-        # are a deliberate SUPERSET (they also list homeassistant-addon-dev/**
-        # + this file), NOT an identical mirror — keep that distinction in mind
-        # when editing.
+        # "Compute image cache key" step in all four HAOS E2E workflows —
+        # otherwise this warms a key the lanes never restore (a wasted prime,
+        # not a stale test: the lanes still recompute their own correct key).
+        # NOTE the push-trigger paths above are a deliberate SUPERSET (they also
+        # list homeassistant-addon-dev/** + this file), NOT an identical mirror
+        # — keep that distinction in mind when editing.
         run: |
           # Position the qcow2 at the exact path the lanes restore to FIRST, so
           # the cache-key output below is set only once the file is in place
@@ -267,7 +267,7 @@ jobs:
       - name: Warm shared Actions cache for E2E lanes (master only)
         if: github.ref == 'refs/heads/master' && steps.e2e_cache_key.outputs.cache-key != ''
         continue-on-error: true
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: /tmp/haos-test-image.qcow2
           key: ${{ steps.e2e_cache_key.outputs.cache-key }}

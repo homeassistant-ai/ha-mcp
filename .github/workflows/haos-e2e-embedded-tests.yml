@@ -66,7 +66,9 @@ jobs:
     outputs:
       run: ${{ steps.filter.outputs.run }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Classify changed files
         id: filter
         env:
@@ -133,8 +135,9 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           # Required for tests/src/e2e/tools/test_skills_resources.py — the
           # skills bundle lives at src/ha_mcp/resources/skills-vendor.
           submodules: true
@@ -162,7 +165,7 @@ jobs:
 
       - name: Restore image from cache
         id: restore-cache
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: /tmp/haos-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
@@ -225,7 +228,7 @@ jobs:
       # in conftest.py) — never on the cached base.
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "latest"
 
@@ -268,6 +271,12 @@ jobs:
         run: |
           sudo chmod +r /boot/vmlinuz-* || true
           mkdir -p /tmp/haos-embedded-diagnostics
+          # A bake-stage failure leaves its serial log + image under
+          # /tmp/haos-build (build_image.py's work dir); capture them so
+          # the artifact is never empty on the failure hardest to see
+          # (2026-08-05: day-of-release HA 2026.8.0 bake timeouts shipped
+          # an empty artifact).
+          cp /tmp/haos-build/haos-serial.log /tmp/haos-embedded-diagnostics/bake-serial.log 2>/dev/null || true
           # Under pytest-xdist (-n2) each worker boots its OWN backing-file overlay
           # (haos-test-image-<worker>.qcow2); the base /tmp/haos-test-image.qcow2 is
           # never booted, so the enabled in-process server entry + the in-process
@@ -277,6 +286,10 @@ jobs:
           targets=(/tmp/haos-test-image-gw*.qcow2)
           if [ ${#targets[@]} -eq 0 ]; then
             targets=(/tmp/haos-test-image.qcow2)
+          fi
+          if [ ! -f "${targets[0]}" ] && [ -f /tmp/haos-build/haos-test-image.qcow2 ]; then
+            # Bake-stage failure: probe the half-baked image instead.
+            targets=(/tmp/haos-build/haos-test-image.qcow2)
           fi
           for img in "${targets[@]}"; do
             label=$(basename "$img" .qcow2)
@@ -313,7 +326,7 @@ jobs:
 
       - name: Upload HAOS embedded diagnostics
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: haos-embedded-diagnostics
           path: |

@@ -28,6 +28,7 @@ from fastmcp.tools import Tool
 from mcp.types import ToolAnnotations
 
 from ..errors import ErrorCode, create_error_response
+from ..renamed_tools import current_tool_name
 
 if TYPE_CHECKING:
     from fastmcp.server.transforms import GetToolNext
@@ -37,12 +38,23 @@ logger = logging.getLogger(__name__)
 
 # Default HA tools to pin (always visible, bypass search transform).
 #
-# These are DEFAULTS, not mandatory — users can unpin any of them via the
-# Tools tab in the settings UI by explicitly setting the tool's state to
-# ``"enabled"`` in ``tool_config.json``. Server-side, the effective pinned
-# set is computed as ``DEFAULT_PINNED_TOOLS`` minus any tool whose saved
-# state is ``"enabled"``, plus any user-pinned tools. Tools with no entry
-# in ``tool_config.json`` stay pinned by default.
+# Most of these are defaults only — users can unpin them via the Tools
+# tab in the settings UI, which sets the tool's state to ``"enabled"`` in
+# ``tool_config.json``. Server-side, the effective pinned set is computed
+# as ``DEFAULT_PINNED_TOOLS`` minus any tool whose saved state is
+# ``"enabled"``, plus any user-pinned tools. Tools with no entry in
+# ``tool_config.json`` stay pinned by default.
+#
+# EXCEPTION: tools that are also in settings_ui._tools_meta
+# .MANDATORY_TOOLS (ha_search, ha_get_overview, ha_report_issue,
+# ha_manage_backup) cannot be unpinned — the settings UI locks their pin
+# toggle, so they are always pinned as well as always enabled. This is
+# intentional (#2058): mandatory tools must stay discoverable in the
+# advertised catalog, not merely callable through the ha_call_*_tool
+# proxies, because hiding them can break the workflows they anchor (e.g.
+# the backup safety net before config writes). ha_get_skill_guide gets
+# the same pin lock while strict best-practices mode is on
+# (BPS_MANDATORY_TOOLS, #1886).
 #
 # Removed in #966 (operational recovery actions, low frequency, low value
 # in the default LLM tool surface — still discoverable via tool search):
@@ -428,6 +440,13 @@ class CategorizedSearchTransform(BM25SearchTransform):
             # Rebuild category cache if catalog has changed
             await transform._rebuild_category_cache(ctx)
 
+            # A client working from an older catalog can name a tool that has
+            # since been renamed. The category check below reads the live
+            # catalog, so it would reject that call before the re-dispatch
+            # reaches RenamedToolAliasMiddleware — resolve the name here too,
+            # and the alias covers both call shapes.
+            name = current_tool_name(name)
+
             # Tolerate `arguments` passed as a JSON string — small models
             # sometimes serialize it before sending. Parse once up front so
             # downstream logic can assume a dict (or None).
@@ -458,15 +477,22 @@ class CategorizedSearchTransform(BM25SearchTransform):
                     transform._call_write_name,
                     transform._call_delete_name,
                 )
-                and arguments["name"] in all_known
             ):
-                logger.warning(
-                    "Detected double-wrapped proxy call for '%s' via %s — unwrapping",
-                    arguments["name"],
-                    name,
-                )
-                name = arguments["name"]
-                arguments = arguments.get("arguments") or {}
+                # The envelope carries whatever name the client knows the tool
+                # by, and this check reads the live catalog — so resolve the
+                # inner name for the same reason the outer one is resolved
+                # above, or the alias covers one envelope shape and not the
+                # other.
+                inner_name = current_tool_name(arguments["name"])
+                if inner_name in all_known:
+                    logger.warning(
+                        "Detected double-wrapped proxy call for '%s' via %s"
+                        " — unwrapping",
+                        inner_name,
+                        name,
+                    )
+                    name = inner_name
+                    arguments = arguments.get("arguments") or {}
 
             if name not in allowed:
                 _raise_wrong_category_error(name, transform, proxy_name)

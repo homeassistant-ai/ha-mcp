@@ -23,6 +23,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tools_config_helpers import validate_registry_ids
 from .util_helpers import (
     JSON_STRING_COERCION,
     parse_string_list_param,
@@ -673,6 +674,14 @@ class AreaTools:
                     parsed_aliases,
                     picture,
                 )
+            )
+
+            # Issue #2159: the area registry stores an unknown floor_id
+            # verbatim, orphaning the area. ``_validate_cross_kind_params``
+            # already rejected floor_id for kind='floor', so this only ever
+            # runs for areas; None and "" (clear) skip the lookup.
+            await validate_registry_ids(
+                self._client, None, None, None, floor_id=floor_id, fail_closed=True
             )
 
             result = await self._client.send_websocket_message(message)

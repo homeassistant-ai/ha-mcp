@@ -28,6 +28,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..config import get_global_settings
+from ..llm_exposure import LLM_API_CONFIG_KEY
+from ..renamed_tools import current_tool_name, rename_retired_keys
 from ..utils.data_paths import get_data_dir
 
 if TYPE_CHECKING:
@@ -67,7 +69,11 @@ def dump_tool_metadata_cache(metadata: list[dict[str, Any]]) -> bool:
     """
     path = _get_tool_metadata_cache_path()
     try:
-        path.write_text(json.dumps(metadata))
+        # Atomic (tmp-then-rename): since the dump moved ahead of the
+        # sidecar retire it overlaps the OLD still-serving sidecar on
+        # every startup, and a truncate-write would hand a concurrent
+        # /api/tools request an empty tool list from the torn file.
+        _atomic_write_json(path, metadata)
     except OSError:
         logger.warning("Failed to dump tool metadata cache to %s", path, exc_info=True)
         return False
@@ -112,18 +118,25 @@ def _seed_tool_config_from_env(settings: Settings) -> dict[str, str]:
     PINNED_TOOLS wins ties only where a tool is not already marked
     disabled (matches the historical seed semantics). Returns an empty
     dict when neither env var names anything.
+
+    Each name is resolved to the tool's current one as it is read, so a
+    retired name on one var and the current name on the other are one key
+    and the tie rule above decides between them. Re-keying afterwards
+    instead would hand the tie to whichever var used the current spelling,
+    inverting the rule for exactly the case the rename mapping exists to
+    protect: a disabled write tool.
     """
     tools: dict[str, str] = {}
     disabled_raw = getattr(settings, "disabled_tools", "")
     if disabled_raw:
-        for name in disabled_raw.split(","):
-            name = name.strip()
+        for raw_name in disabled_raw.split(","):
+            name = current_tool_name(raw_name.strip())
             if name:
                 tools[name] = "disabled"
     pinned_raw = getattr(settings, "pinned_tools", "")
     if pinned_raw:
-        for name in pinned_raw.split(","):
-            name = name.strip()
+        for raw_name in pinned_raw.split(","):
+            name = current_tool_name(raw_name.strip())
             if name and name not in tools:
                 tools[name] = "pinned"
     return tools
@@ -150,6 +163,18 @@ def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
         except json.JSONDecodeError:
             logger.warning("Tool config at %s is not valid JSON; ignoring.", path)
         else:
+            # A state stored under a tool's retired name still belongs to
+            # that tool: without this, a disabled write tool comes back
+            # enabled the first time the server starts after the rename.
+            # Both name-keyed maps in this file need it — an orphaned
+            # ``llm_api`` override is not lost, it is worse than lost: it
+            # stays in the file, keyed on a name nothing looks up, while the
+            # tool falls through to its default, which for the app tools
+            # means exposed to every conversation agent.
+            for key in ("tools", LLM_API_CONFIG_KEY):
+                states = result.get(key)
+                if isinstance(states, dict):
+                    result[key] = rename_retired_keys(states)
             return result
 
     if settings is None:
@@ -172,16 +197,20 @@ def env_pinned_tools(settings: Settings | None = None) -> dict[str, str]:
     Used by the UI to render env-pinned rows as read-only and by the
     save handler to reject flips. PINNED_TOOLS wins ties (matches the
     existing seed semantics in load_tool_config).
+
+    Names resolve to the current tool as they are read, for the reason
+    given in ``_seed_tool_config_from_env``: the tie rule has to see one
+    key per tool, whichever spelling each var used.
     """
     if settings is None:
         settings = get_global_settings()
     pinned: dict[str, str] = {}
-    for name in (settings.disabled_tools or "").split(","):
-        name = name.strip()
+    for raw_name in (settings.disabled_tools or "").split(","):
+        name = current_tool_name(raw_name.strip())
         if name:
             pinned[name] = "disabled"
-    for name in (settings.pinned_tools or "").split(","):
-        name = name.strip()
+    for raw_name in (settings.pinned_tools or "").split(","):
+        name = current_tool_name(raw_name.strip())
         if name:
             pinned[name] = "pinned"
     return pinned
@@ -203,10 +232,13 @@ def effective_tool_config(settings: Settings | None = None) -> dict[str, Any]:
     return {**cfg, "tools": tools}
 
 
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+def _atomic_write_json(
+    path: Path, payload: dict[str, Any] | list[dict[str, Any]]
+) -> None:
     """Write ``payload`` to ``path`` atomically.
 
-    Writes to ``<path>.tmp`` first and ``os.replace``s into place so a
+    Writes to a unique same-directory temp file (``mkstemp``, since
+    #1993) first and ``os.replace``s into place so a
     crash or out-of-space mid-write cannot leave a partial/empty file —
     callers that read the file back (``load_tool_config`` /
     ``_load_backup_settings_override``) would otherwise treat a

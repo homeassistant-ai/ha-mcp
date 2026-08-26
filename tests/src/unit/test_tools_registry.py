@@ -191,7 +191,7 @@ class TestDevModeSettingsFallback:
         # (built before the field existed) can still be the cached singleton;
         # the read must degrade to "dev mode off", never AttributeError
         # (the exact crash in issues #1783/#1785).
-        import ha_mcp.config as config
+        from ha_mcp import config
         from ha_mcp.tools.tools_dev import is_dev_mode_enabled
 
         monkeypatch.setattr(config, "get_global_settings", SimpleNamespace)

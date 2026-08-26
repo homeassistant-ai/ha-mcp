@@ -79,6 +79,16 @@ def _is_disabled() -> bool:
     return os.environ.get(DISABLE_ENV, "").strip().lower() in _TRUTHY
 
 
+def is_update_check_disabled() -> bool:
+    """Public accessor for the HA_MCP_DISABLE_UPDATE_CHECK opt-out.
+
+    The HACS auto-refresh nudge gates on the same switch: an operator who
+    opted out of update phone-home should not get update-driven side
+    effects either.
+    """
+    return _is_disabled()
+
+
 def _is_newer(latest: str, current: str) -> bool:
     """Return True only when ``latest`` is a strictly higher PEP 440 release.
 
@@ -257,7 +267,10 @@ def update_command_hint(current: str) -> str:
         )
     if is_running_in_addon():
         # Add-on users update through the Supervisor UI, not pip/docker.
-        return "Update from Settings -> Add-ons -> Home Assistant MCP Server."
+        return (
+            "Update from Settings -> Apps -> Home Assistant MCP Server "
+            "(Settings -> Add-ons before Home Assistant 2026.2)."
+        )
     dev = is_dev_version(current)
     if _running_in_docker():
         # Dev images are tagged :dev (rolling); :stable is the stable channel.

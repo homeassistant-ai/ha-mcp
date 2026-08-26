@@ -29,6 +29,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import (
+    _ERROR_LOG_LINES,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantClient,
@@ -311,12 +312,14 @@ class TestGetAddonLogsViaSupervisor:
         inner_client.get.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_raises_api_error_on_403_with_role_hint(
+    async def test_raises_api_error_on_403_with_permission_hints(
         self, mock_client, addon_install, mock_async_client_class, caplog
     ):
-        """403 distinct from 401: addon's hassio_role too low. Surfaces with a
-        role-hint suggestion + warning log so operators don't read this as a
-        token-validity problem (#1126 review items 2 + 9)."""
+        """A 403 names every Supervisor app authorization boundary.
+
+        Supervisor uses it for an unrecognized token, missing API permission,
+        and an insufficient role (#1126 review items 2 + 9).
+        """
         inner_client, _ = mock_async_client_class
         mock_response = MagicMock()
         mock_response.status_code = 403
@@ -334,6 +337,8 @@ class TestGetAddonLogsViaSupervisor:
 
         assert exc_info.value.status_code == 403
         msg = str(exc_info.value)
+        assert "unrecognized" in msg
+        assert "hassio_api" in msg
         assert "hassio_role" in msg and "manager" in msg
         # Warning log fired before the raise (#1126 review item 9).
         assert any("403" in r.message for r in caplog.records)
@@ -584,7 +589,7 @@ class TestGetErrorLogBranchSelection:
         # Fetch via _raw_request (text/plain payload, not JSON).
         mock_client._raw_request.assert_awaited_once_with(
             "GET",
-            "/hassio/core/logs?lines=20000",
+            f"/hassio/core/logs?lines={_ERROR_LOG_LINES}",
             headers={"Accept": "text/plain"},
         )
 
@@ -604,8 +609,38 @@ class TestGetErrorLogBranchSelection:
             result = await mock_client.get_error_log()
 
         assert "error log via supervisor" in result
-        mock_client._supervisor_logs_get.assert_called_once_with("core")
+        # An explicit window is required: without `lines`, Supervisor applies
+        # its 100-line default, far too short a slice to tell what keeps
+        # repeating.
+        mock_client._supervisor_logs_get.assert_called_once_with(
+            "core", lines=_ERROR_LOG_LINES
+        )
         mock_client._request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_addon_and_supervised_branches_request_the_same_window(
+        self, mock_client
+    ):
+        """Both Supervisor-backed branches must read the same amount of log.
+
+        Asserted on the requests the two branches actually issue — a source
+        check would also pass on a match inside a comment.
+        """
+        mock_client._supervisor_logs_get = AsyncMock(return_value="x")
+        with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=True):
+            await mock_client.get_error_log()
+        addon_lines = mock_client._supervisor_logs_get.call_args.kwargs["lines"]
+
+        mock_response = MagicMock()
+        mock_response.text = "x"
+        mock_client._request = AsyncMock(return_value={"components": ["hassio"]})
+        mock_client._raw_request = AsyncMock(return_value=mock_response)
+        with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False):
+            await mock_client.get_error_log()
+        supervised_url = mock_client._raw_request.call_args.args[1]
+
+        assert addon_lines == _ERROR_LOG_LINES
+        assert supervised_url.endswith(f"lines={addon_lines}")
 
 
 class TestGetSystemServiceLogs:
@@ -956,7 +991,7 @@ class TestGetSupervisorLogWrapper:
         payload = _parse_tool_error(exc_info)
         suggestions = payload["error"]["suggestions"]
         assert any("not found or not installed" in s for s in suggestions)
-        assert any("ha_get_addon" in s for s in suggestions)
+        assert any("ha_get_app" in s for s in suggestions)
         # context kwargs get spread onto the response root by create_error_response
         assert payload.get("slug") == "nonexistent"
         assert payload.get("source") == "supervisor"
@@ -1006,7 +1041,7 @@ class TestGetSupervisorLogWrapper:
         assert any(
             "Verify add-on slug 'core_mosquitto' is correct" in s for s in suggestions
         )
-        assert any("ha_get_addon" in s for s in suggestions)
+        assert any("ha_get_app" in s for s in suggestions)
 
     @pytest.mark.asyncio
     async def test_level_param_emits_warning_for_supervisor_source(
@@ -1372,7 +1407,7 @@ class TestStaleToolNameReferences:
     """Regression guard for #950 bug 2: stale `ha_list_addons()` suggestions."""
 
     def test_no_tool_module_references_removed_ha_list_addons(self):
-        """`ha_list_addons` was consolidated into `ha_get_addon` — no stale refs.
+        """`ha_list_addons` was consolidated into `ha_get_app` — no stale refs.
 
         Scans every `src/ha_mcp/tools/**/*.py` with a word-boundary regex so
         the guard catches regressions in any module, not just tools_utility.py,
@@ -1387,7 +1422,7 @@ class TestStaleToolNameReferences:
         ]
         assert not offenders, (
             f"Stale `ha_list_addons` reference in: {offenders}. "
-            "Replace suggestions/docs with `ha_get_addon()` — see #950."
+            "Replace suggestions/docs with `ha_get_app()` — see #950."
         )
 
 

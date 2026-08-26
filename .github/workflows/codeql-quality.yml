@@ -18,9 +18,7 @@ name: CodeQL Code Quality
 #   - javascript  scans the JS/TS family (.js/.mjs/.cjs/.ts/.tsx/.jsx) across the
 #                 whole tree — first-party src/, the Astro site's .mjs config,
 #                 and test JS; the same PATHS_IGNORE drops the vendored fixture
-#                 tree. (CodeQL does not extract .astro component scripts, but
-#                 .astro is in the path triggers below so site/ edits still run
-#                 the gate.)
+#                 tree. (CodeQL does not extract .astro component scripts.)
 #
 # Why a custom workflow instead of GitHub's Code Quality page:
 #   - GitHub Code Quality (Preview) is gated to Team/Enterprise Cloud org plans;
@@ -37,17 +35,6 @@ permissions:
 on:
   pull_request:
     branches: [ master ]
-    paths:
-      - '**.py'
-      - '**.js'
-      - '**.mjs'
-      - '**.cjs'
-      - '**.jsx'
-      - '**.ts'
-      - '**.tsx'
-      - '**.astro'
-      - '.github/workflows/codeql-quality.yml'
-      - 'scripts/codeql_quality_gate.py'
   push:
     branches: [ master ]
     paths:
@@ -83,10 +70,12 @@ jobs:
             security_suite: codeql/javascript-queries:codeql-suites/javascript-code-scanning.qls
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.13"
 
@@ -120,7 +109,7 @@ jobs:
 
       - name: Upload SARIF artifact
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: codeql-quality-sarif-${{ matrix.language }}
           path: quality.sarif
@@ -128,3 +117,12 @@ jobs:
 
       - name: Gate on findings
         run: python scripts/codeql_quality_gate.py quality.sarif
+
+  code-quality-gate:
+    name: CodeQL Gate
+    if: ${{ always() }}
+    needs: code-quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every CodeQL analysis to pass
+        run: test "${{ needs.code-quality.result }}" = "success"

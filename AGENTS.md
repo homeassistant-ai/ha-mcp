@@ -84,13 +84,13 @@ When implementing features or debugging, consult these resources:
 | **Home Assistant REST API** | https://developers.home-assistant.io/docs/api/rest | Entity states, services, config |
 | **Home Assistant WebSocket API** | https://developers.home-assistant.io/docs/api/websocket | Real-time events, subscriptions |
 | **HA Core Source** | `gh api /search/code -f q="... repo:home-assistant/core"` | Undocumented APIs (don't clone) |
-| **HA Add-on Development** | https://developers.home-assistant.io/docs/add-ons | Add-on packaging, config.yaml |
+| **HA App (add-on) Development** | https://developers.home-assistant.io/docs/apps | App packaging, config.yaml |
 | **FastMCP Documentation** | https://gofastmcp.com/getting-started/welcome | MCP server framework |
 | **MCP Specification** | https://modelcontextprotocol.io/docs | Protocol details |
 
 ## Issue & PR Management
 
-### Automated Code Review (Codex)
+### Automated Code Review
 
 **Codex** reviews PRs automatically (`pr-codex-review-request.yml` /
 `pr-codex-review-delivery.yml`; posts as `chatgpt-codex-connector[bot]`).
@@ -101,26 +101,53 @@ document (code quality, test coverage, security patterns, MCP conventions,
 safety annotation accuracy): the `@codex review` request comment points Codex
 at it explicitly, and the Claude review skills below apply it.
 
+**CodeRabbit** (GitHub app, posts as `coderabbitai[bot]`) reviews drafts too —
+`.coderabbit.yaml` sets `reviews.auto_review.drafts: true`, since every PR here
+opens as a draft, and `auto_pause_after_reviewed_commits: 0` so it keeps
+reviewing every push instead of going quiet after five. That spends the
+per-developer hourly review allowance faster; a rate-limited push says so in a
+comment and never blocks merge, and CodeRabbit's `rate limit` command reports
+whether reviews are available without consuming one. It auto-detects `AGENTS.md` as review criteria;
+`.gemini/styleguide.md` is added through
+`knowledge_base.code_guidelines.filePatterns` (see the comment there). Repo YAML
+outranks the UI settings (only org/workspace Global Overrides beat it) and does
+not merge with them — any key it omits falls back to CodeRabbit's schema
+defaults, not to UI values. A change to `.coderabbit.yaml` never applies to the
+PR making it: on open-source repos CodeRabbit honours only the base branch's
+config, so the PR reports `Configuration used: defaults` and the change takes
+effect on merge.
+
+**Bot-authored PRs are excluded from automatic review by both tools** —
+Dependabot, Renovate, and the `github-actions[bot]` webhook-proxy promote PRs
+(dev → stable copies whose content was already reviewed in their dev PRs).
+Enforced in `.coderabbit.yaml` `ignore_usernames` and the `pull_request_target`
+admission list in `pr-codex-review-request.yml`, pinned to each other by
+`test_coderabbit_config.py`. A maintainer can still summon a review on a
+promote PR: `@coderabbitai review`, or for Codex a comment that is exactly
+`/review` (or `@ghhamcp review`) — the `issue_comment` admission list
+deliberately omits `github-actions[bot]` to keep that lever.
+
 **Division of Labor:**
 - **Codex (automatic)**: Code quality, test coverage, generic security, MCP conventions
+- **CodeRabbit (automatic, drafts included)**: Line-level review against `AGENTS.md` and `.gemini/styleguide.md`, PR walkthrough and summary
 - **Claude `/contrib-pr-review` (on-demand)**: Repo-specific security (AGENTS.md, .github/, .claude/), detailed test analysis, PR size assessment, issue linkage
 - **Claude `/my-pr-checker` (lifecycle)**: Resolve threads, fix issues, monitor CI, create improvement PRs
 
 ### Issue Labels
 
-**Triage-state labels** (applied by `issue-triage.yml` or manual triage):
+**Triage-state labels** (applied during manual triage):
 
 | Label | Meaning |
 |-------|---------|
 | `ready-to-implement` | Clear path, no decisions needed |
 | `needs-choices` | Multiple approaches, needs stakeholder input |
-| `needs-info` | Awaiting clarification from reporter |
+| `needs-info` | Awaiting clarification from reporter. `close-needs-info.yml` clocks from the label event: reminders on days 3/5/6, auto-close on day 7 without an author reply; an author reply removes the label |
 | `priority: high/medium/low` | Relative priority |
-| `triaged` | Automated triage complete |
-| `triage-failed` | Automated triage failed; circuit breaker that blocks retrigger on comments. Clear it (or run via `workflow_dispatch`) to retry |
+| `triaged` | Automated triage complete (historical — applied by the retired `issue-triage.yml` bot) |
+| `triage-failed` | Automated triage failed (historical — applied by the retired `issue-triage.yml` bot) |
 | `issue-analyzed` | Deep Claude analysis complete |
 
-**Bug-class labels** (applied via `.github/ISSUE_TEMPLATE/` form selection or manual triage):
+**Bug-class labels** (applied via `.github/ISSUE_TEMPLATE/` form selection, CodeRabbit auto-labeling, or manual triage):
 
 | Label | Meaning |
 |-------|---------|
@@ -132,7 +159,7 @@ at it explicitly, and the Claude review skills below apply it.
 
 | Label | Meaning |
 |-------|---------|
-| `addon` | Issue is specific to the Home Assistant Add-on deployment (`homeassistant-addon/`, Supervisor ingress) |
+| `addon` | Issue is specific to the Home Assistant app (add-on) deployment (`homeassistant-addon/`, Supervisor ingress) |
 | `docker` | Issue is specific to the Docker / containerized deployment (`Dockerfile`, container env) |
 | `javascript` | Issue concerns the project website / Astro app (TypeScript) under `site/` |
 
@@ -151,7 +178,7 @@ at it explicitly, and the Claude review skills below apply it.
 
 ### Issue Analysis Workflow
 
-- **Automated Triage**: Runs on new issues via `.github/workflows/issue-triage.yml` (GitHub Models). Adds `triaged` label.
+- **Automated Triage (CodeRabbit)**: `issue_enrichment` in `.coderabbit.yaml`. On new and edited issues CodeRabbit posts an enrichment comment (possible duplicates, related issues and PRs, suggested assignees) and auto-applies labels per `labeling_instructions`. Plans are manual: comment `@coderabbitai plan` on an issue, or tick the Create Plan checkbox in the enrichment comment. (Replaces the retired GitHub Models `issue-triage.yml` bot.)
 - **Deep Analysis (Claude)**: When user says "analyze issues", list issues missing `issue-analyzed` label, then invoke `/issue-analysis <number>` for each sequentially (the skill drafts analysis for user approval before posting).
 
 ```bash
@@ -161,8 +188,29 @@ gh issue list --state open --json number,title,labels --jq '.[] | select(.labels
 ### PR Review Comments
 
 **Always check for comments after pushing to a PR.** They come from bots
-(Codex, Copilot) or humans. Address human comments with highest
+(Codex, CodeRabbit, Copilot) or humans. Address human comments with highest
 priority; treat bot comments as suggestions to assess, not commands.
+
+**Read every CodeRabbit review body in full — findings hide outside the
+inline threads.** CodeRabbit folds findings into collapsed sections of the
+review body (`Outside diff range comments`, `Nitpick comments`) that never
+create inline threads, so zero unresolved threads and a green CodeRabbit
+check both look clean while findings sit unaddressed. A findings-free pass
+posts no new review at all — it edits the existing walkthrough comment in
+place — so also check that comment's `updated_at`. After each CodeRabbit
+review, sweep the full bodies before calling the round clean, e.g.:
+
+```bash
+# Findings hidden in review bodies (positive counts only):
+gh api repos/{owner}/{repo}/pulls/{n}/reviews --paginate --jq '.[].body' \
+  | grep -oiE "(outside diff range|nitpick) comments \([1-9][0-9]*\)|actionable comments posted: [1-9][0-9]*"
+# In-place walkthrough edits (a findings-free pass posts no review row):
+gh api repos/{owner}/{repo}/issues/{n}/comments --paginate \
+  --jq '.[] | select(.user.login=="coderabbitai[bot]") | .updated_at'
+```
+
+Any `Outside diff range` or `Nitpick` hit means findings only the full body
+shows — open it and assess them like any other review comment.
 
 **Reply, then resolve.** After addressing an inline comment, reply on its
 thread documenting the fix, then mark the thread resolved. When a review has
@@ -290,21 +338,13 @@ The following phrases are red flags that you're making a scope decision unilater
 
 **Code-review bot suggestions** (Codex, CodeRabbit, Copilot non-blocking nits): apply inline or dismiss. Never spawn a follow-up issue from a bot suggestion unless the user explicitly confirms it's a large, out-of-scope change. See `.gemini/styleguide.md` § *Non-Blocking Suggestions and Scope* for the bot-side rule.
 
-### Hotfix Process (Critical Bugs Only)
+### Urgent Release Process
 
-Hotfix = critical production bug in current stable release. Regular fix = bug after latest stable, or non-critical.
-
-**Hotfix branches MUST be based on `stable` tag.** Always verify the buggy code exists in stable first — if not, use `git checkout -b fix/description master` instead.
-
-```bash
-git fetch --tags --force
-git show stable:path/to/file.py | grep "buggy_code"  # verify code exists in stable
-git checkout -b hotfix/description stable
-# fix, commit, then:
-gh pr create --draft --base master
-```
-
-On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, syncs CHANGELOG to addon, updates `stable` tag (after changelog sync), and builds binaries.
+Critical fixes follow the normal development flow: branch from `master`, merge
+the fix to `master`, then manually dispatch `semver-release.yml` from `master`.
+Use its `force` input only when a release is required without a releasable
+`feat`, `fix`, `perf`, `refactor`, breaking `!`, or `BREAKING CHANGE` commit
+since the previous stable tag.
 
 ### Test Coverage Requirements
 
@@ -330,14 +370,14 @@ On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, sy
 | `e2e-tests.yml` | PR to master | Full E2E tests (~3 min) |
 | `publish-dev.yml` | Push to master | Dev release `.devN` |
 | `notify-dev-channel.yml` | Push to master (src/) | Comment on PRs/issues with dev testing instructions |
-| `semver-release.yml` | Biweekly Wed 10:00 UTC | Stable release (cuts version tag + GitHub release) |
+| `semver-release.yml` | Biweekly Wed 10:00 UTC or manual dispatch | Stable release (cuts version tag + GitHub release) |
 | `release-publish.yml` | After SemVer Release (`workflow_run`) or manual dispatch | Publish stable Docker image (`:latest` + `:stable` + semver) + MCP registry |
-| `hotfix-release.yml` | Hotfix PR merged | Immediate patch release |
 | `build-binary.yml` | Release | Linux/macOS/Windows binaries |
-| `addon-publish.yml` | Release | HA add-on update |
+| `addon-publish.yml` | Release | HA app update |
 | `sync-tool-docs.yml` | Push to master (`src/ha_mcp/tools/`, `scripts/extract_tools.py`) | Regenerate `tools.json`, README, DOCS.md |
+| `locale-sync.yml` | Daily schedule + manual dispatch | Machine-translate stale/missing strings post-merge and push them straight to master |
 
-**Docker image tags** (`ghcr.io/homeassistant-ai/ha-mcp`): stable releases push `:latest` + `:stable` + semver tags (`release-publish.yml`); dev builds push only `:dev` + `:dev-<sha>` (`publish-dev.yml`) — **never `:latest`**, which is reserved for stable. The HA add-on images live in separate repos (`-addon-{arch}`, `-addon-dev-{arch}`) and are selected by an explicit `version:` pin, not by `:latest`.
+**Docker image tags** (`ghcr.io/homeassistant-ai/ha-mcp`): stable releases push `:latest` + `:stable` + semver tags (`release-publish.yml`); dev builds push only `:dev` + `:dev-<sha>` (`publish-dev.yml`) — **never `:latest`**, which is reserved for stable. The HA app images live in separate repos (`-addon-{arch}`, `-addon-dev-{arch}`) and are selected by an explicit `version:` pin, not by `:latest`.
 
 ## Development Commands
 
@@ -376,6 +416,16 @@ uv run hamcp-test-env --no-interactive   # For automation
 - **Always run relevant e2e tests after making changes**, without waiting to be asked. Identify the relevant test file(s) for the area you changed and run them. Do not assume Docker is unavailable or prerequisites are missing — just run them and let pytest report what is skipped and why.
 
 Test token centralized in `tests/test_constants.py`.
+
+**Unit tests** (`tests/src/unit/`, no Docker) — run them in parallel, as CI does
+(`pr.yml`); serial takes 25+ minutes for ~11k tests:
+
+```bash
+cd tests && uv run pytest src/unit/ -n auto --tb=short
+```
+
+`tests/pytest.ini` sets `--maxfail=3`, so a run reporting "3 failed" has stopped
+early rather than finished — pass `--maxfail=0` when you need the full picture.
 
 ### Code Quality
 
@@ -429,7 +479,7 @@ src/ha_mcp/
 │   └── consent_form.py      # OAuth consent screen
 ├── tools/             # 36 modules, auto-discovered
 │   ├── registry.py          # Lazy auto-discovery
-│   ├── smart_search.py      # Fuzzy entity search
+│   ├── smart_search/        # Fuzzy entity search
 │   ├── device_control.py    # WebSocket-verified control
 │   ├── best_practice_checker.py # Reactive HA config validator (warns + embeds skill content)
 │   ├── tools_*.py           # Domain-specific tools
@@ -455,11 +505,35 @@ src/ha_mcp/
 
 **Lazy Initialization**: Server, client, and tools created on-demand for fast startup.
 
-**Service Layer**: Business logic in `smart_search.py`, `device_control.py` separate from tool modules.
+**Service Layer**: Business logic in `smart_search/`, `device_control.py` separate from tool modules.
 
 **WebSocket Verification**: Device operations verified via real-time state changes.
 
 **Tool Completion Semantics**: Tools should wait for operations to complete before returning, with optional `wait` parameter for control.
+
+## Terminology: apps, not add-ons
+
+Home Assistant 2026.2 renamed add-ons to apps, and the old term is deprecated.
+In anything a user or an agent reads — documentation, tool titles and
+descriptions, settings-UI strings, config-flow text — write **app (add-on)** on
+first mention and **app** afterwards, capitalised where the sentence calls for
+it. The retired term never stands on its own.
+
+Identifiers are not automatically exempt: check each one before assuming it
+stayed, because upstream has been moving them too. Measured against Supervisor
+`main` and this repo: the container prefix is **`app_`** now, with `addon_` only
+a legacy fallback (`tests/src/haos_runtime.py` reads the name from docker rather
+than assuming either); the REST API still documents and serves the Apps API at
+`/addons/...`, which is what this server calls, while `/v2/apps` is a separate
+v2 surface mounted only when the `supervisor_v2_api` feature flag is on —
+off by default, added in 2026-04 with v1 kept backward-compatible, absent from
+older Supervisors, and returning `apps` where v1 returns `addons`; and
+`developers.home-assistant.io/docs/add-ons` redirects to `/docs/apps`.
+
+What genuinely keeps the old spelling: add-on slugs, the `addon` issue label,
+the `homeassistant-addon*/` directories, this project's own `deployment_mode`
+value `addon`, and the literal pre-2026.2 menu labels inside a compatibility
+note (on those versions the panel really is *Add-ons*).
 
 ## Writing MCP Tools
 
@@ -472,7 +546,7 @@ src/ha_mcp/
 - `delete` — delete dashboards, config entries, or files (`ha_config_delete_dashboard`, `ha_delete_file`)
 - `remove` — remove registry items (`ha_remove_entity`, `ha_remove_area_or_floor`)
 - `call` — execute (`ha_call_service`, `ha_call_event`)
-- `manage` — multi-modal tools combining several operations behind one interface (`ha_manage_addon`)
+- `manage` — multi-modal tools combining several operations behind one interface (`ha_manage_app`)
 
 **Namespace prefixes**: An optional `<namespace>_` prefix between `ha_` and the verb is allowed for grouped tool families that share a domain. The full shape becomes `ha_<namespace>_<verb>_<noun>`:
 - `ha_config_<verb>_<noun>` — config-management tools (`ha_config_set_helper`, `ha_config_set_automation`, `ha_config_remove_automation`, `ha_config_delete_dashboard`)
@@ -558,7 +632,7 @@ Every tool needs `tags={"Category Name"}` (native FastMCP parameter). Drives the
 | `readOnlyHint: True` | `False` | Tool does not modify its environment |
 | `destructiveHint: True` | `True` | Tool may perform destructive updates (only meaningful when `readOnlyHint` is false). Set to `False` for non-destructive writes (e.g., creating a record) |
 | `idempotentHint: True` | `False` | Repeated calls with same args have no additional effect (only meaningful when `readOnlyHint` is false) |
-| `openWorldHint: True` | `True` | Tool reaches an external, third-party-authored world (HACS store, add-on repositories, GitHub release feeds, arbitrary import URLs). Set to `False` when the tool's domain is the local Home Assistant instance. A tool is also open-world if its output carries externally-authored content back to the client, even when a local integration (HACS, Supervisor, HA Core) makes the actual network call on its behalf — `ha_get_overview` and `ha_get_system_health` embed the update-check field that reaches PyPI / the Supervisor store, while `ha_get_blueprint` and `ha_config_list_dashboard_resources` return externally-authored content from purely local reads. Required on every tool — the default is `true`, so an omitted value silently marks a local tool as open-world |
+| `openWorldHint: True` | `True` | Tool reaches an external, third-party-authored world (HACS store, app repositories, GitHub release feeds, arbitrary import URLs). Set to `False` when the tool's domain is the local Home Assistant instance. A tool is also open-world if its output carries externally-authored content back to the client, even when a local integration (HACS, Supervisor, HA Core) makes the actual network call on its behalf — `ha_get_overview` and `ha_get_system_health` embed the update-check field that reaches PyPI / the Supervisor store, while `ha_get_blueprint` and `ha_config_list_dashboard_resources` return externally-authored content from purely local reads. Required on every tool — the default is `true`, so an omitted value silently marks a local tool as open-world |
 
 **Version baseline:** annotations describe a tool's behavior against current
 upstream versions of any external engine or component it drives; a side effect
@@ -699,7 +773,7 @@ fully validate a component change before merge.
   1.1.0 that had already shipped without the gated behaviours, so 1.1.0 builds
   split into with/without and the gate could not tell them apart).
 - **Keep the component backward-compatible with the released server.** The
-  component (HACS) and the server (add-on / PyPI / Docker) follow the same
+  component (HACS) and the server (app / PyPI / Docker) follow the same
   release cycle but are updated independently per install, so a new component
   can run against an *older* server. Never remove or tighten an existing service
   schema (e.g. dropping a param from a strict `vol.Schema`) without a shim the
@@ -711,71 +785,191 @@ fully validate a component change before merge.
 
 ## Translations
 
+**One canonical store, generated projections, automated retranslation**
+(issue #2083). The settings UI catalogs
+(`src/ha_mcp/settings_ui/locales/<code>.json`) are the canonical store for
+every string except the component's config flow: the app option strings
+live there under `addon.<key>.*` (plus `features.<key>.*` for options the
+settings UI also shows, and `addon_stable.<key>.*` for a stable-flavor
+wording deviation). Both app flavors' `translations/*.yaml` and the
+`FEATURE_META` block in `settings.js` are **generated** from that store by
+`scripts/generate_locales.py` — never edit them by hand;
+`test_derived_catalogs_match_the_canonical_store` fails until you regenerate.
+Each flavor's key list is its own `config.yaml` `schema:`, so the two YAMLs
+are different projections of the one store, and cross-surface wording
+identity holds by construction.
+
 A language ships on all four surfaces or not at all —
-`tests/src/unit/test_locale_parity.py` enforces it. One Home Assistant language
-code (`de`, `es`, `fr`, `ru`, `tlh`, `zh-Hans`) names every file:
+`tests/src/unit/test_locale_parity.py` enforces it. The same Home Assistant
+language code (`cs`, `de`, `eo`, `es`, `fr`, `it`, `ko`, `nl`, `pl`, `ru`, `sv`, `tlh`, `zh-Hans`) names every file:
 `src/ha_mcp/settings_ui/locales/<code>.json`,
 `custom_components/ha_mcp_tools/translations/<code>.json`, and
 `homeassistant-addon{,-dev}/translations/<code>.yaml`.
+That list of codes is itself pinned by
+`test_agents_md_lists_every_shipped_locale`: adding a language means adding its
+code here, in the same PR, or the suite goes red. To add a language, add the
+two authored catalogs (settings UI + component), regenerate, and let the
+translation pipeline below fill the strings. The component catalog may start
+empty; the settings one may not start `meta`-only, because four ungated checks
+read the shipped catalogs themselves: every decided `Decision` outcome and
+every `PredicateOp` operator needs a translated word
+(`policies.pending.decision.*`, `policies.operators.*` — a value that still
+spells the backend literal counts as untranslated), so does
+`policies.pending.already_decided`, the sentence those words are interpolated
+into, and at least one translated key must have English that addresses the
+reader in the second person, which is where `scripts/translate_locales.py`
+reads the catalog's address register.
+`policies.operators.exists_long` is the trap in that list: the condition editor
+renders it as its own dropdown label, but it is UI-only rather than a
+`PredicateOp` member, so no enum-derived check asks for it and a catalog
+without it reads English there until the sync fills it. Each surface reads that
+register from its own catalog, so a component catalog left at a key or two
+rests on whichever of them addresses the reader — losing it costs the engine
+the register for every later string of that language and says so only on
+stderr, which is why
+`test_every_shipped_component_catalog_gets_reader_addressing_samples` pins it.
+Author two such keys rather than one: a run that rewords one of them queues it,
+and queued keys are dropped from the sample candidates, so a surface resting on
+a single anchor is anchorless in precisely the run that rewrites it —
+`test_component_samples_survive_their_own_anchor_being_queued` pins that.
+`src/ha_mcp/settings_ui/locales/README.md` names the tests — including the one
+that skips locally until `tests/js/` has its npm dependencies.
 
 Settings UI catalogs are auto-discovered (no registration). Their `messages` may
-omit keys — English is the per-key fallback — but `tool_groups` and `tools` may
-not: each locale must carry exactly the renderable group headings and every tool
-name, no key more and none fewer. **Adding a tool therefore means translating it
-in every locale, in the PR that adds it**: the check derives the tool set from
+omit keys — English is the per-key fallback — but may not carry one `en.json`
+lacks: nothing renders it. `tool_groups` and `tools` may do neither: each locale
+must carry exactly the renderable group headings and every tool name, no key
+more and none fewer. The check derives the tool set from
 the sources (`scripts/extract_tools.py`), not from the committed
-`site/src/data/tools.json` that `sync-tool-docs.yml` regenerates only after
-merge — so the PR adding the tool goes red, rather than the next PR someone
-opens. Separately from those key rules, every surface caps how much *text* a catalog
+`site/src/data/tools.json` — the check must not depend on a generated
+artifact that a separate post-merge workflow keeps current. Separately from
+those key rules, both authored surfaces cap how much *text* a catalog
 may leave byte-identical to English or omit outright, so a stub cannot ride the
-fallbacks: 5% for the settings UI `messages`, for the `tools` titles and
-descriptions and for both add-on flavors, and 15% for the component catalogs,
+fallbacks: 5% for the settings UI `messages`, its `tools` titles and
+descriptions, and each generated app projection (per flavor, computed from
+the canonical store), and 15% for the component catalogs,
 which carry the product names as keys of their own. On top of that share, a
 `tools` entry whose title *and* description are *both* byte-identical to English
 fails by name however small its share — for feature-gated tools against either
 English rendering, the `FEATURE_GATED_TOOLS` stub or the parsed docstring.
-
 Component catalogs need every `strings.json` key with identical
-`{placeholders}`. Add-on catalogs need `name` + `description` for every
-`schema:` key of *that* flavor's `config.yaml`, and no `configuration.<key>`
-left behind for a key the schema no longer has; the two flavors differ.
+`{placeholders}`.
 
-**Changing an English string means updating every locale that carries it**,
-then `python scripts/update_locale_baseline.py`. The baseline pins the English
-each translation was written against, because key parity cannot see a string
-whose meaning changed: #1993 flipped a policy string from ALL-match to
-ANY-match and left the Chinese text asserting the opposite.
+**Changing an English string is a one-place edit** (`en.json` `messages`, a
+tool docstring, or `strings.json` + component `en.json`), and the machine
+translates the rest: `scripts/translate_locales.py` reads the English-source
+baseline diff (`tests/src/unit/locale_source_baseline.json`), retranslates
+the changed or missing keys in every language via the Gemini API free tier
+using `GEMINI_API_KEY`, validates placeholders and markup, regenerates
+the derived catalogs, and repins the baseline. The `locale-sync.yml` workflow
+runs it AFTER merge, on a daily schedule, and pushes the result straight to
+master with the release App credential (the same pattern as the version-bump
+bots and `sync-tool-docs.yml`) — so any PR, fork or same-repo, merges
+without owing translations, and one sync run picks up everything merged
+since the last one. The checks that police translated content (missing or
+orphaned keys, staleness against the baseline, cross-surface shared wording,
+the untranslated-share ceilings, filled tool sections) are gated behind
+`LOCALE_COMPLETENESS_CHECKS=1` and run in that workflow, not in PR CI —
+`test_locale_sync_gate_shape.py` pins the wiring. What a PR still owes is
+deterministic and engine-free: regenerate the derived catalogs
+(`python scripts/generate_locales.py`) when a canonical English string
+changes, and placeholder parity on component keys whose English is current.
+To choose the wording yourself, translate in your own PR **and run
+`python scripts/update_locale_baseline.py` in it** — the repinned baseline
+is what tells the next sync your wording already covers the changed English
+(hand-edits win); without the repin the sync retranslates the key and
+overwrites you. Run `scripts/translate_locales.py` locally instead to
+machine-fill in-PR or to use a different engine (it repins for you).
+The baseline pins the English each translation was written against, because
+key parity cannot see a string whose meaning changed: #1993 flipped a policy
+string from ALL-match to ANY-match and left the Chinese text asserting the
+opposite. `python scripts/update_locale_baseline.py` repins it manually after
+a hand-translation pass.
 
-The Webhook Proxy add-on and its bundled integration stay **English-only by
+**A catalog that lands after a reword is never queued for the keys it missed.**
+The pin moves when the English does, so a language whose PR was open across
+that reword merges with the older wording already translated, and the sync sees
+a hash that matches: no plan, no correction, indefinitely. Nothing else catches
+it either — key parity sees a value and the share ceiling sees a translated
+one. When a locale PR spans an English change, diff the affected keys against
+that surface's own English before merging — `en.json` for `messages`, the tool
+definitions for `tools` (`en.json` ships that section empty), and
+`custom_components/ha_mcp_tools/strings.json` for the component catalog.
+Numbers and code-ish literals are the cheap tell, since a reword usually moves
+one, and `test_translations_keep_english_numbers_and_identifiers` checks
+exactly that across all three. Repinning is not the repair — it
+writes the same hash and queues nothing. Deleting the stale value is: the
+planner treats a missing key as work for that locale alone.
+
+**A tool docstring is one of those English strings.** `en.json` ships `tools`
+empty, so the English a `tools` entry translates is read from the tool
+definition in `src/ha_mcp/tools/` — the `title=` kwarg and the summary
+paragraph of the docstring, or the `FEATURE_GATED_TOOLS` stub where a gated
+tool shows one instead. Editing that summary moves the English out from under
+six catalogs; the pipeline retranslates them. A parameter's
+`Field(description=...)` is NOT in the baseline — only the title and the
+docstring summary are — so editing one owes no translation work. One
+deliberate exception: a
+change to a feature-gated tool's PARSED docstring (its stub unchanged) is
+stub-review work, not translation work — the pipeline holds that baseline key
+stale, and the locale-sync run stays red until a human confirms the stub
+still describes the tool and runs `python scripts/update_locale_baseline.py`.
+
+**Rate limits and outages degrade loudly, never silently.** The sync is intended
+to remain on Gemini's free tier. Active RPM and RPD limits are project- and
+tier-specific and are shown in Google AI Studio. Engine calls use a
+conservative fixed interval rather than claiming one universal free-tier
+ceiling, and retry transient errors (429/5xx,
+timeouts) with backoff; a request that keeps failing marks its strings failed
+and the run continues, and two consecutive dead batches stop the run early
+instead of burning the remaining quota. A partial run — a daily-quota hit,
+an outage — still commits every finished translation plus
+`tests/src/unit/locale_sync_progress.json`, which the next run reads to
+resume where it stopped: **re-running the workflow — or just waiting for the
+next day's cron — is the entire recovery procedure.** Only a fully
+successful run repins the baseline and deletes the progress file, so the
+sync runs stay red until every string is translated and nothing
+unvalidated ever ships. **The fallback when the engine is down is a human**:
+anyone can hand-translate the strings the dry-run
+lists, run `python scripts/generate_locales.py` and
+`python scripts/update_locale_baseline.py`, and open an ordinary PR — the
+next sync run no-ops (it also cleans up any committed progress file).
+Hand-edits always win; the machine only ever touches strings whose English
+changed. The engine itself is one function (`_call_gemini`) with
+`GEMINI_API_URL` / `GEMINI_MODEL` / `GEMINI_API_KEY` overrides for any
+Gemini-compatible endpoint, so replacing the provider stays a one-function
+change.
+
+The Webhook Proxy app and its bundled integration stay **English-only by
 decision** — not worth the upkeep. The test records that, so any other new
 catalog directory fails until it is either translated everywhere or listed as
 English-only alongside them.
 
-## Home Assistant Add-on
+## Home Assistant App
 
 **Required files:**
-- `repository.yaml` (root) - For HA add-on store recognition
+- `repository.yaml` (root) - For HA app store recognition
 - `homeassistant-addon/config.yaml` - Must match `pyproject.toml` version
 
-**Two add-on flavors:** `homeassistant-addon/` (stable, slug `ha_mcp`) and
+**Two app flavors:** `homeassistant-addon/` (stable, slug `ha_mcp`) and
 `homeassistant-addon-dev/` (dev channel, slug `ha_mcp_dev`) are *separate*
-add-ons with *separate* `config.yaml` files.
+apps with *separate* `config.yaml` files.
 
 **Functional config is NOT auto-synced between them.** The release pipeline
 only syncs the *version* (the `update-addon-config` job) and the *changelog*
 (the `Copy changelog to addon directory` step in `semver-release.yml`) into
 `homeassistant-addon/`. Functional keys — `ingress`, `ports`,
 `host_network`, `options`/`schema`, etc. — must be edited **by hand** in each
-flavor. When you add a non-beta capability to the dev add-on that should also
+flavor. When you add a non-beta capability to the dev app that should also
 ship on stable (e.g. `ingress` for the web Settings UI / "Open Web UI" button),
 mirror it into `homeassistant-addon/config.yaml` **in the same PR**. Assuming
-"the release pipeline handles it" is what kept `ingress` off the stable add-on.
+"the release pipeline handles it" is what kept `ingress` off the stable app.
 Beta-only keys are the deliberate exception — see the NOTE in
 `homeassistant-addon/config.yaml` and `docs/beta.md`.
 
-### Webhook Proxy add-on: dev-first, promote-only
+### Webhook Proxy app: dev-first, promote-only
 
-**Any work on the Webhook Proxy add-on must start by reading
+**Any work on the Webhook Proxy app must start by reading
 [`homeassistant-addon-webhook-proxy/AGENTS.md`](homeassistant-addon-webhook-proxy/AGENTS.md)**
 — it owns the full flow (flavors, versioning guard, promotion, testing).
 The short version: `homeassistant-addon-webhook-proxy/` (stable) is never
@@ -783,7 +977,7 @@ edited directly by a PR in regular operation; every change (code *and* docs)
 lands on `homeassistant-addon-webhook-proxy-dev/` with a version bump, and
 stable is updated only via the manual promote workflow.
 
-**Docs**: https://developers.home-assistant.io/docs/add-ons
+**Docs**: https://developers.home-assistant.io/docs/apps
 
 ## API Research
 

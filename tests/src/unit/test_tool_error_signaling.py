@@ -138,13 +138,26 @@ class TestExceptionToStructuredError:
         assert result["error"]["suggestions"] == suggestions
 
     def test_no_suggestions_when_none(self):
-        """No suggestions key should be added when suggestions is None."""
+        """No suggestions key is added when the caller passes none AND the
+        classified error code has no configured default.
+
+        Was written against ``ValueError`` -> ``VALIDATION_FAILED``, which
+        had no ``DEFAULT_SUGGESTIONS`` entry at the time. That code now has
+        one (errors.py), so a bare ``ValueError`` legitimately gets a
+        default suggestion — this test now exercises a message-classified
+        path (``RESOURCE_NOT_FOUND``) that still has no default, to keep
+        testing the actual contract: "no suggestions" only when there is
+        truly nothing to suggest, not just because the caller omitted the
+        parameter.
+        """
         result = exception_to_structured_error(
-            ValueError("test error"),
+            Exception("resource not found"),
             raise_error=False,
         )
 
+        assert result["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert "suggestions" not in result["error"]
+        assert "suggestion" not in result["error"]
 
     def test_tool_error_message_is_valid_json(self):
         """ToolError message should be valid JSON."""

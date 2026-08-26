@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from typing import Any, NoReturn
 
 import httpx
-from websockets.exceptions import WebSocketException
 
+from .._vendor.websockets.exceptions import WebSocketException
 from .._version import get_supervisor_base_url, is_running_in_addon
 from ..config import get_global_settings
 from .supervisor_client import make_supervisor_httpx_client
@@ -36,10 +36,26 @@ def _is_ssl_error(exc: BaseException) -> bool:
 logger = logging.getLogger(__name__)
 
 # Transient gateway statuses from a reverse proxy / Supervisor ingress — HA Core
-# restarting or briefly overloaded behind it. The upstream couldn't be reached,
-# so the request did not execute and retrying is safe even for writes.
-_RETRYABLE_STATUS = frozenset({502, 503, 504})
+# restarting or briefly overloaded behind it. Retried for SAFE METHODS ONLY.
+#
+# None of them proves Home Assistant did not execute the request: RFC 9110 has
+# 502 as "received an invalid response from an inbound server", which a proxy
+# only sends after reaching it, and 504 as the upstream answering too slowly.
+# #1623 extended the retry to writes on the premise that "a gateway 5xx means
+# the request never reached the backend"; that premise is false, and replaying
+# a write can double-apply it — fire an event twice, run a script twice, or
+# turn a completed DELETE into a misleading 404 on the replay.
+#
+# The flake class #1623 fixed was a 502 storm failing ~190 tests at once, which
+# is overwhelmingly reads; those keep the retry. A write that fails loudly is
+# recoverable by the caller, which a silent double-apply is not.
+_RETRYABLE_GATEWAY_STATUS = frozenset({502, 503, 504})
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _MAX_REQUEST_ATTEMPTS = 3
+# Journald window requested for the Core error log on Supervisor-backed
+# installs. Both such branches of get_error_log() build their request from this
+# constant, so the window they ask for cannot drift apart.
+_ERROR_LOG_LINES = 20000
 
 
 class HomeAssistantError(Exception):
@@ -300,7 +316,8 @@ class HomeAssistantClient:
         Handles auth, HTTP 4xx/5xx, and transport errors in one place.
         Callers parse the body themselves (JSON via `_request`, text via
         `get_addon_logs`, etc.). Transient gateway errors (502/503/504) are
-        retried with bounded exponential backoff before surfacing.
+        retried with bounded exponential backoff for safe methods only; a write
+        is never replayed.
 
         Raises:
             HomeAssistantAuthError: 401 response.
@@ -319,10 +336,11 @@ class HomeAssistantClient:
                 if response.status_code >= 400:
                     message, error_data = self._error_message_from_response(response)
 
-                    if (
-                        response.status_code in _RETRYABLE_STATUS
-                        and attempt < _MAX_REQUEST_ATTEMPTS
-                    ):
+                    retryable = (
+                        response.status_code in _RETRYABLE_GATEWAY_STATUS
+                        and method.upper() in _SAFE_METHODS
+                    )
+                    if retryable and attempt < _MAX_REQUEST_ATTEMPTS:
                         logger.warning(
                             f"Transient {response.status_code} from Home Assistant "
                             f"(attempt {attempt}/{_MAX_REQUEST_ATTEMPTS}), retrying "
@@ -391,13 +409,26 @@ class HomeAssistantClient:
         return await self._request("GET", "/config")
 
     async def get_states(self) -> list[dict[str, Any]]:
-        """Get all entity states."""
+        """Get all entity states.
+
+        Raises ``HomeAssistantConnectionError`` when the response isn't the
+        JSON array ``/states`` always returns on success -- including
+        ``_request``'s own empty-dict fallback for an unparseable body.
+        Silently returning ``[]`` here would let a genuine fetch failure
+        masquerade as "this instance has zero entities", which no real,
+        running Home Assistant instance produces; callers that need to
+        verify something against the live entity set (e.g. a bulk-control
+        safety check) would otherwise treat that failure as "verified,
+        nothing to worry about" instead of "could not verify".
+        """
         logger.debug("Fetching all entity states")
         result = await self._request("GET", "/states")
         if isinstance(result, list):
             return result
-        else:
-            return []
+        raise HomeAssistantConnectionError(
+            f"Home Assistant /states returned an unexpected response shape: "
+            f"{type(result).__name__}"
+        )
 
     async def get_entity_state(self, entity_id: str) -> dict[str, Any]:
         """
@@ -411,28 +442,6 @@ class HomeAssistantClient:
         """
         logger.debug(f"Fetching state for entity: {entity_id}")
         return await self._request("GET", f"/states/{entity_id}")
-
-    async def set_entity_state(
-        self, entity_id: str, state: str, attributes: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """
-        Set entity state.
-
-        Args:
-            entity_id: Entity ID
-            state: New state value
-            attributes: Optional attributes dictionary
-
-        Returns:
-            Updated entity state
-        """
-        logger.debug(f"Setting state for entity {entity_id} to {state}")
-
-        payload: dict[str, Any] = {"state": state}
-        if attributes:
-            payload["attributes"] = attributes
-
-        return await self._request("POST", f"/states/{entity_id}", json=payload)
 
     async def call_service(
         self,
@@ -489,41 +498,6 @@ class HomeAssistantClient:
         """Get all available services."""
         logger.debug("Fetching available services")
         return await self._request("GET", "/services")
-
-    async def get_history(
-        self,
-        entity_id: str | None = None,
-        start_time: str | None = None,
-        end_time: str | None = None,
-    ) -> list[list[dict[str, Any]]]:
-        """
-        Get historical data.
-
-        Args:
-            entity_id: Optional entity ID to filter
-            start_time: Optional start time (ISO format)
-            end_time: Optional end time (ISO format)
-
-        Returns:
-            Historical data
-        """
-        logger.debug(f"Fetching history for entity: {entity_id}")
-
-        params = {}
-        if start_time:
-            params["start_time"] = start_time
-        if end_time:
-            params["end_time"] = end_time
-
-        endpoint = "/history/period"
-        if entity_id:
-            endpoint += f"/{entity_id}"
-
-        result = await self._request("GET", endpoint, params=params)
-        if isinstance(result, list):
-            return result
-        else:
-            return []
 
     async def get_logbook(
         self,
@@ -643,7 +617,11 @@ class HomeAssistantClient:
         """
         if is_running_in_addon():
             logger.debug("Fetching error log via Supervisor direct (core service)")
-            return await self._supervisor_logs_get("core")
+            # An explicit `lines` is required: without it Supervisor applies its
+            # 100-line default, which is far too short a slice to tell what keeps
+            # repeating. `_get_supervisor_log` plumbs the same parameter for the
+            # same reason (#1734).
+            return await self._supervisor_logs_get("core", lines=_ERROR_LOG_LINES)
 
         if await self._is_supervised_install():
             logger.debug(
@@ -651,7 +629,7 @@ class HomeAssistantClient:
             )
             raw_response = await self._raw_request(
                 "GET",
-                "/hassio/core/logs?lines=20000",
+                f"/hassio/core/logs?lines={_ERROR_LOG_LINES}",
                 headers={"Accept": "text/plain"},
             )
             return raw_response.text
@@ -676,11 +654,21 @@ class HomeAssistantClient:
         glitch or HTTP error returns False without setting the cache,
         so the next call re-probes. This is the only path that
         intentionally fails open — caller proceeds on the historical
-        Container branch (which on HAOS will also fail, but with a
-        clearer 404 than a probe-side exception would surface).
+        Container branch.
 
-        Auth / connection / HTTP errors are caught explicitly; runtime
-        bugs (TypeError, AttributeError) and BaseException derivatives
+        A 401 is deliberately excluded from that fail-open: it is a
+        definitive answer about the credential rather than a transient
+        glitch, and swallowing it strands exactly the install class this
+        probe exists for. Failing open sends a Supervised caller down
+        the Container branch to ``/api/error_log``, which HA Core never
+        registers under ``SUPERVISOR`` (see ``get_error_log``), so the
+        auth failure resurfaces as a 404 and the caller answers with
+        connection advice instead of "re-create the LLAT". Letting
+        ``HomeAssistantAuthError`` propagate reaches the auth handler
+        directly. Transport / HTTP fail-open is unchanged.
+
+        Connection / HTTP errors are caught explicitly; runtime bugs
+        (TypeError, AttributeError) and BaseException derivatives
         (KeyboardInterrupt, CancelledError) deliberately propagate so
         they're not silenced as "not supervised".
         """
@@ -689,16 +677,17 @@ class HomeAssistantClient:
         try:
             config = await self._request("GET", "/config")
         except (
-            HomeAssistantAuthError,
             HomeAssistantAPIError,
             HomeAssistantConnectionError,
             httpx.HTTPError,
             TimeoutError,
         ) as exc:
-            # Fail-open on transport / HTTP-layer failures only. Note:
-            # a 401 here likely means the LLA is bad and the /error_log
-            # fallback will also 401 — the user gets a clearer auth error
-            # from that path than a swallowed probe error would surface.
+            # Fail-open on transport / HTTP-layer failures only.
+            # HomeAssistantAuthError is deliberately absent: a 401 is a
+            # definitive verdict on the credential, and failing open on
+            # it routes a Supervised caller to /api/error_log — a route
+            # that does not exist there — turning the auth error into a
+            # 404 (see the docstring).
             # Logged at WARNING so it's visible at default log levels
             # without spamming on every call (probe runs at most once
             # per session per outcome).
@@ -715,8 +704,9 @@ class HomeAssistantClient:
     async def get_addon_logs(self, slug: str, lines: int | None = None) -> str:
         """Fetch an add-on's container logs.
 
-        Branch on ``is_running_in_addon()`` (which keys off ``SUPERVISOR_TOKEN``
-        in env): inside the add-on container goes directly to the Supervisor
+        Branch on ``is_running_in_addon()``, which requires a truthy
+        ``SUPERVISOR_TOKEN`` and excludes ``HA_MCP_EMBEDDED``: inside the app
+        (add-on) container goes directly to the Supervisor
         REST API at ``http://supervisor/addons/{slug}/logs`` with the
         Supervisor token. The HA Core proxy at
         ``/api/hassio/addons/{slug}/logs`` rejects this token+path combination
@@ -741,8 +731,9 @@ class HomeAssistantClient:
         Raises:
             HomeAssistantAuthError: 401 response, or ``SUPERVISOR_TOKEN`` empty
                 at call time on the addon branch.
-            HomeAssistantAPIError: 403 (role too low — addon needs hassio_role
-                ``manager``), 404 (unknown slug), or other non-2xx. The
+            HomeAssistantAPIError: 403 (unrecognized token, missing
+                ``hassio_api``, or insufficient ``hassio_role``), 404
+                (unknown slug), or other non-2xx. The
                 ``status_code`` attribute lets callers map to specific
                 suggestions.
             HomeAssistantConnectionError: Network, timeout, or transport error.
@@ -786,25 +777,28 @@ class HomeAssistantClient:
 
         ``path`` is everything between ``http://supervisor/`` and ``/logs``:
 
-        - ``"addons/<slug>"`` for add-on container logs
+        - ``"addons/<slug>"`` for app (add-on) container logs
         - ``"<service>"`` (where service ∈ {supervisor, host, core, dns, audio,
           cli, multicast, observer}) for system-service logs
 
         ``lines`` maps to the endpoint's ``?lines=`` journald-window query
         param; omitted → Supervisor's 100-line default window.
 
-        Bypasses ``HomeAssistantClient.httpx_client`` because the Supervisor
-        endpoint uses a different base URL (``http://supervisor``) and a
-        different token (``SUPERVISOR_TOKEN``) than HA Core REST. Both
-        endpoints require the addon's ``hassio_role`` to be ``manager`` (not
-        ``default``); a ``default`` role gets a 403 here — see #1116.
+        Bypasses ``HomeAssistantClient.httpx_client`` because that client targets
+        Home Assistant Core through ``http://supervisor/core/api``, while logs
+        belong to Supervisor at ``http://supervisor``. Both clients use the same
+        ``SUPERVISOR_TOKEN``; the Core proxy requires ``homeassistant_api``, while
+        system-service and arbitrary app-log paths require ``hassio_api`` and
+        ``hassio_role: manager``. The recognized-app-token exception is
+        ``/addons/self/logs``.
 
         Raises:
             HomeAssistantAuthError: ``SUPERVISOR_TOKEN`` absent at call time,
                 or 401 from Supervisor.
-            HomeAssistantAPIError: 403 (role too low — distinct branch with
-                role hint), 404, other 4xx/5xx. Tries to parse Supervisor's
-                ``{"result":"error","message":"..."}`` JSON envelope before
+            HomeAssistantAPIError: 403 (unrecognized token, missing
+                ``hassio_api``, or insufficient role), 404, other 4xx/5xx.
+                Parses Supervisor's ``{"result":"error","message":"..."}``
+                JSON envelope before
                 falling back to text body / reason phrase / placeholder.
             HomeAssistantConnectionError: Timeout or transport error, with
                 distinct messages so callers can tell them apart.
@@ -850,18 +844,19 @@ class HomeAssistantClient:
         if response.status_code == 401:
             raise HomeAssistantAuthError(f"Invalid Supervisor token for /{path}/logs")
         if response.status_code == 403:
-            # Distinct from 401: token is valid but addon's hassio_role isn't
-            # high enough. Most-likely cause for this exact endpoint at the
-            # time #1116 surfaced (default → manager bump in addon config.yaml
-            # is the same-PR companion fix).
+            # Supervisor uses 403 for an unrecognized app token, missing
+            # hassio_api permission, or a hassio_role that cannot access this
+            # endpoint. The default-to-manager role bump fixed #1116, but it is
+            # not the only possible cause.
             logger.warning(
-                "Supervisor returned 403 for /%s/logs — addon hassio_role may "
-                "be too low (need 'manager')",
+                "Supervisor returned 403 for /%s/logs — check token, hassio_api, "
+                "and hassio_role (need 'manager')",
                 path,
             )
             raise HomeAssistantAPIError(
-                f"Supervisor forbids /{path}/logs (403) — addon's hassio_role "
-                "may be 'default'; need 'manager' or higher",
+                f"Supervisor forbids /{path}/logs (403) — token may be unrecognized, "
+                "app may lack hassio_api, or hassio_role may not allow this endpoint "
+                "(manager required)",
                 status_code=403,
                 response_data={"path": path},
             )
@@ -884,14 +879,15 @@ class HomeAssistantClient:
     async def _get_addon_logs_via_supervisor(
         self, slug: str, lines: int | None = None
     ) -> str:
-        """Fetch add-on container logs directly from Supervisor's REST API.
+        """Fetch app (add-on) container logs directly from Supervisor REST.
 
-        Distinct from ``tools_bug_report._fetch_addon_logs``: that helper is
-        hardcoded to ``/addons/self/logs`` and silently swallows failures
-        (it's an aux-data fetch for bug reports, fine to skip on error). This
-        helper takes arbitrary slugs and surfaces failures as exceptions
-        because callers (``ha_get_logs(source="supervisor", slug=...)``) need
-        them. Both endpoints require ``hassio_role: manager``.
+        Distinct from ``tools_bug_report._fetch_addon_logs``: that auxiliary
+        helper uses the app self-service path ``/addons/self/logs`` and may skip
+        failures. This helper takes arbitrary slugs and surfaces failures because
+        callers (``ha_get_logs(source="supervisor", slug=...)``) need them.
+        Arbitrary app-log slugs require a recognized app token with ``hassio_api``
+        and ``hassio_role: manager``; ``/addons/self/logs`` bypasses the role and
+        API-permission checks but still requires a recognized app token.
 
         Delegates to ``_supervisor_logs_get`` so error handling stays in
         lockstep with ``_get_system_service_logs``.
@@ -906,26 +902,21 @@ class HomeAssistantClient:
         ``service`` must be one of the eight Supervisor-managed services:
         ``supervisor``, ``host``, ``core``, ``dns``, ``audio``, ``cli``,
         ``multicast``, ``observer``. Caller is responsible for validating
-        ``service`` against the allowed set; this helper does no validation
-        and will raise ``HomeAssistantAPIError`` on any unknown path (404).
+        ``service``; this helper performs no validation, and unsupported paths
+        are rejected by the selected direct-Supervisor or Core-proxy route.
 
         Branch on ``is_running_in_addon()`` — mirror of ``get_addon_logs``:
-        inside the addon container goes directly to Supervisor at
+        inside the app (add-on) container goes directly to Supervisor at
         ``http://supervisor/{service}/logs`` with the Supervisor token
-        (``hassio_role: manager`` required). On non-addon installs (Docker
+        (``hassio_api`` and ``hassio_role: manager`` required). On non-app
+        installs (Docker
         without Supervisor, pyinstaller, pip pointing at a normal HA URL),
         falls back to the HA Core proxy at ``/api/hassio/{service}/logs``.
 
-        All seven slugs are whitelisted in HA Core's hassio proxy
+        All eight service slugs are whitelisted in HA Core's hassio proxy
         (``homeassistant/components/hassio/http.py`` — ``PATHS_ADMIN``), so
         an admin LLA is sufficient to reach any of them from outside the
-        addon.
-
-        Closes #1260: pre-fix this method had only the addon-direct branch,
-        so non-addon installs (the Docker image, uvx ha-mcp, etc.) hit the
-        ``SUPERVISOR_TOKEN``-absent fail-fast in ``_supervisor_logs_get`` for
-        every service, while the sibling ``source="supervisor"`` (addon
-        logs) call kept working through its own Core-proxy fallback.
+        app.
         """
         if is_running_in_addon():
             return await self._supervisor_logs_get(service, lines=lines)
@@ -961,15 +952,6 @@ class HomeAssistantClient:
             # setup/teardown handlers" applies (connection probe is the analog).
             logger.error(f"Failed to connect to Home Assistant: {e}")
             return False, str(e)
-
-    async def get_system_health(self) -> dict[str, Any]:
-        """Get system health information."""
-        logger.debug("Fetching system health")
-        try:
-            return await self._request("GET", "/system_health/info")
-        except HomeAssistantAPIError:
-            # System health might not be available in all HA instances
-            return {"status": "unknown", "message": "System health not available"}
 
     # Automation Configuration Management
 
@@ -1258,6 +1240,28 @@ class HomeAssistantClient:
         logger.debug(f"Starting config flow for handler: {handler}")
         return await self._request("POST", "/config/config_entries/flow", json=payload)
 
+    async def start_reconfigure_flow(
+        self, handler: str, entry_id: str
+    ) -> dict[str, Any]:
+        """Start Home Assistant's official reconfigure flow for an entry.
+
+        Home Assistant selects ``SOURCE_RECONFIGURE`` when ``entry_id`` is
+        included in the config-flow start payload. The integration's
+        ``async_step_reconfigure`` then owns validation and updates the
+        existing entry in place; this method deliberately does not edit
+        storage or delete/recreate entries.
+        """
+        logger.debug(
+            "Starting reconfigure flow for handler %s and entry %s",
+            handler,
+            entry_id,
+        )
+        return await self._request(
+            "POST",
+            "/config/config_entries/flow",
+            json={"handler": handler, "entry_id": entry_id},
+        )
+
     async def submit_config_flow_step(
         self, flow_id: str, user_input: dict[str, Any]
     ) -> dict[str, Any]:
@@ -1275,6 +1279,10 @@ class HomeAssistantClient:
             HomeAssistantAPIError: If flow submission fails
         """
         logger.debug(f"Submitting flow step for flow_id: {flow_id}")
+        # POST, so no gateway retry — see _RETRYABLE_GATEWAY_STATUS. This is
+        # the call that motivated the rule: HA consumes the flow_id on success,
+        # so a replay returns 404 "Invalid flow specified", a definitive-looking
+        # 4xx that hides a first attempt which may already have committed.
         return await self._request(
             "POST", f"/config/config_entries/flow/{flow_id}", json=user_input
         )
@@ -1429,6 +1437,43 @@ class HomeAssistantClient:
             }
         )
 
+    async def list_config_entries(self) -> list[dict[str, Any]]:
+        """List all config entries from Home Assistant."""
+        logger.debug("Listing Home Assistant config entries")
+        entries: Any = await self._request("GET", "/config/config_entries/entry")
+        if not isinstance(entries, list):
+            raise HomeAssistantAPIError(
+                "Unexpected response format from config entries API",
+                status_code=500,
+            )
+        return [dict(entry) for entry in entries if isinstance(entry, dict)]
+
+    async def _list_registry(self, ws_type: str, label: str) -> list[dict[str, Any]]:
+        """Read a registry list, raising rather than returning a partial one.
+
+        Callers use "empty" to mean the entry genuinely has nothing registered,
+        so a malformed response must never degrade to [].
+        """
+        response = await self.send_websocket_message({"type": ws_type})
+        result: Any = response.get("result") if isinstance(response, dict) else None
+        if not isinstance(result, list) or not all(
+            isinstance(item, dict) for item in result
+        ):
+            detail = response.get("error") if isinstance(response, dict) else response
+            raise HomeAssistantAPIError(
+                f"Unexpected response from {label} registry API: {detail!r}",
+                status_code=500,
+            )
+        return [dict(item) for item in result]
+
+    async def list_entity_registry(self) -> list[dict[str, Any]]:
+        """List Home Assistant's entity registry through the official WebSocket API."""
+        return await self._list_registry("config/entity_registry/list", "entity")
+
+    async def list_device_registry(self) -> list[dict[str, Any]]:
+        """List Home Assistant's device registry through the official WebSocket API."""
+        return await self._list_registry("config/device_registry/list", "device")
+
     async def get_config_entry(self, entry_id: str) -> dict[str, Any]:
         """
         Get config entry details.
@@ -1440,25 +1485,17 @@ class HomeAssistantClient:
             entry_id: Config entry ID
 
         Returns:
-            Full config entry data
+            Home Assistant's config-entry fragment (``ConfigEntry.as_json_fragment``):
+            identity, state and capability flags. It carries NO ``data`` key, so the
+            entry's connection settings and credentials are not in it.
 
         Raises:
             HomeAssistantAPIError: If entry not found or API error
         """
         logger.debug(f"Getting config entry: {entry_id}")
-        # List all entries and filter by entry_id.
-        # Typed as Any because _request returns dict[str, Any] generically,
-        # but this endpoint actually returns a list.
-        entries: Any = await self._request("GET", "/config/config_entries/entry")
-
-        if not isinstance(entries, list):
-            raise HomeAssistantAPIError(
-                "Unexpected response format from config entries API",
-                status_code=500,
-            )
-
+        entries = await self.list_config_entries()
         found: dict[str, Any] | None = next(
-            (dict(e) for e in entries if e.get("entry_id") == entry_id), None
+            (entry for entry in entries if entry.get("entry_id") == entry_id), None
         )
         if found is None:
             raise HomeAssistantAPIError(
@@ -2097,14 +2134,3 @@ class HomeAssistantClient:
                     status_code=405,
                 ) from e
             raise
-
-
-async def create_client() -> HomeAssistantClient:
-    """Create and return a new Home Assistant client."""
-    return HomeAssistantClient()
-
-
-async def test_connection_with_config() -> tuple[bool, str | None]:
-    """Test connection using configuration settings."""
-    async with HomeAssistantClient() as client:
-        return await client.test_connection()

@@ -60,6 +60,7 @@ def _standard_mode_logging_state():
         (logger, logger.filters[:])
         for logger in (
             logging.getLogger("mcp.server.streamable_http"),
+            logging.getLogger("mcp.server.streamable_http_manager"),
             logging.getLogger("fastmcp.server.server"),
         )
     ]

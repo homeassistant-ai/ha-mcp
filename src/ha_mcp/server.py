@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
 import yaml  # type: ignore[import-untyped]
 from fastmcp import FastMCP
@@ -20,9 +20,8 @@ from pydantic import Field
 
 from .config import _PACKAGE_VERSION, get_global_settings
 from .errors import ErrorCode, create_error_response
-from .tools.enhanced import EnhancedToolsMixin
+from .hacs_auto_refresh import hacs_refresh_lifespan
 from .tools.helpers import raise_tool_error
-from .tools.util_helpers import strip_internal_fields
 from .transforms import DEFAULT_PINNED_TOOLS
 
 if TYPE_CHECKING:
@@ -77,7 +76,7 @@ SERVER_ICONS = [
 ]
 
 
-class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
+class HomeAssistantSmartMCPServer:
     """Home Assistant MCP Server with smart tools and fuzzy search.
 
     Uses lazy initialization to improve startup time:
@@ -144,6 +143,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             version=server_version,
             icons=SERVER_ICONS,
             instructions=instructions,
+            lifespan=hacs_refresh_lifespan,
         )
 
         # Register all tools and expert prompts
@@ -196,9 +196,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Register tools
         self.tools_registry.register_all_tools()
 
-        # Register enhanced tools for first/second interaction success
-        self.register_enhanced_tools()
-
         # Register bundled skills as MCP resources
         self._register_skills()
 
@@ -229,6 +226,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Apply tool search transform (must come after all tools and
         # the skill guide tool are registered so it can wrap everything)
         self._apply_tool_search()
+
+        # Keep the pre-rename tool names callable for clients that still hold
+        # an older catalog. First in the chain, so everything after it sees the
+        # current name it is keyed on.
+        from .tools.renamed_tool_middleware import RenamedToolAliasMiddleware
+
+        self.mcp.add_middleware(RenamedToolAliasMiddleware())
 
         # Convert Pydantic type-validation errors to structured ToolErrors so
         # models get actionable guidance instead of raw Pydantic messages.
@@ -284,6 +288,17 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # ENABLE_TOOL_SECURITY_POLICIES. Must come last so the middleware
         # wraps the final tool surface (including the search proxies).
         self._apply_tool_security_policies()
+
+        # Known-secret-value scrub (#2157) — registered just before the
+        # visibility outbound half so that half stays innermost (its scan
+        # must see truly raw output; a secret value could embed a hidden
+        # entity id). Since the visibility scan only refuses or passes
+        # through — never rewrites — this scrubber still sees the unmodified
+        # tool output on the way back out. Consults the live redact_secrets
+        # flag per call and is a passthrough while the flag is off.
+        from .redaction import RedactSecretsMiddleware
+
+        self.mcp.add_middleware(RedactSecretsMiddleware())
 
         # Entity visibility enforce mode, OUTBOUND half (#2015) — added LAST
         # so it is innermost: its result scan sees the raw tool output before
@@ -422,10 +437,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 "again \u2014 call it directly.\n\n"
                 f"A few default tools are listed directly "
                 f"({', '.join(DEFAULT_PINNED_TOOLS)}) — these are the "
-                f"starting pins, but users can unpin any of them via the "
-                f"Tools tab in the settings UI, so the actual visible set "
-                f"may be a subset of this list. Everything else must be "
-                f"discovered via search.\n\n"
+                f"starting pins, and users can unpin the non-mandatory "
+                f"ones via the Tools tab in the settings UI, so the "
+                f"actual visible set may be a subset of this list. "
+                f"Everything else must be discovered via search.\n\n"
                 "DO NOT assume a capability is unavailable because you "
                 "don't see a direct tool for it. ALWAYS search first."
             )
@@ -595,14 +610,15 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "conditions actions get show detail"
         ),
         # s09: "create helper" → ha_config_set_helper should outrank remove_helper
-        # Covers all 27 helper types (12 simple + 15 flow-based, unified in #967).
+        # Covers all 29 helper types (12 simple + 17 flow-based, unified in #967).
         "ha_config_set_helper": (
             "create update new add helper "
             "input_boolean input_button input_number input_text input_datetime "
             "input_select counter timer schedule zone person tag "
             "template group utility_meter derivative min_max threshold "
             "integration statistics trend random filter tod "
-            "generic_thermostat switch_as_x generic_hygrostat"
+            "generic_thermostat switch_as_x generic_hygrostat "
+            "history_stats mold_indicator"
         ),
         # Boost tools that compete with ha_search for common queries
         "ha_config_get_script": (
@@ -631,8 +647,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "binary_sensor command_line rest mqtt knx platform yaml-only "
             "config file modify add remove replace"
         ),
-        "ha_manage_addon": (
-            "manage addon add-on configure settings options port network boot "
+        "ha_manage_app": (
+            "manage app apps addon add-on configure settings options port network boot "
             "watchdog auto_update supervisor ingress proxy websocket api rest "
             "esphome nodered node-red frigate mosquitto mqtt zigbee2mqtt zigbee "
             "z-wave zwave appdaemon hacs studio code server file editor terminal "
@@ -1789,51 +1805,6 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         )
         return response
 
-    # Helper methods required by EnhancedToolsMixin
-
-    async def smart_entity_search(
-        self, query: str, domain_filter: str | None = None, limit: int = 10
-    ) -> dict[str, Any]:
-        """Bridge method to existing smart search implementation."""
-        return cast(
-            dict[str, Any],
-            await self.smart_tools.smart_entity_search(
-                query=query, limit=limit, include_attributes=False
-            ),
-        )
-
-    async def get_entity_state(self, entity_id: str) -> dict[str, Any]:
-        """Bridge method to existing entity state implementation."""
-        return await self.client.get_entity_state(entity_id)
-
-    async def call_service(
-        self,
-        domain: str,
-        service: str,
-        entity_id: str | None = None,
-        data: dict | None = None,
-    ) -> list[dict[str, Any]] | dict[str, Any]:
-        """Bridge method to existing service call implementation."""
-        service_data = data or {}
-        if entity_id:
-            service_data["entity_id"] = entity_id
-        return await self.client.call_service(domain, service, service_data)
-
-    async def get_entities_by_area(self, area_name: str) -> dict[str, Any]:
-        """Bridge method to existing area functionality.
-
-        ``smart_tools.get_entities_by_area`` enriches per-entity dicts
-        with leading-underscore internals (``_hidden_by`` etc.) so
-        downstream search branches can apply the score penalty without
-        a second registry lookup. Strip them here so this public bridge
-        doesn't leak internals to MCP clients.
-        """
-        result = await self.smart_tools.get_entities_by_area(
-            area_query=area_name, group_by_domain=True
-        )
-        strip_internal_fields(result)
-        return cast(dict[str, Any], result)
-
     async def start(self) -> None:
         """Start the Smart MCP server with async compatibility."""
         logger.info(
@@ -1853,8 +1824,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         except Exception as e:
             logger.error(f"❌ Error testing connection: {e}")
 
-        # Log available tools count
-        logger.info("🔧 Smart server with enhanced tools loaded")
+        # Log successful server initialization
+        logger.info("🔧 Home Assistant MCP tools loaded")
 
         # Run the MCP server with async compatibility
         await self.mcp.run_async()

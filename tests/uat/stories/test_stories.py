@@ -114,27 +114,40 @@ def _run_bat_scenario(scenario: dict, agent: str, ha_url: str, ha_token: str) ->
         capture_output=True,
         text=True,
         timeout=300,
+        check=False,
     )
 
     if result.returncode != 0:
-        logger.error(f"BAT runner failed: {result.stderr}")
+        # run_uat.py never exits after emitting its summary, so a non-zero exit
+        # means no result was produced. Its one "agent unavailable" exit cannot
+        # reach us either: the caller already resolved the agent through the
+        # same shutil.which check the runner uses. So this is a broken run —
+        # surface it instead of degrading it into a skip.
+        pytest.fail(
+            f"BAT runner exited {result.returncode}.\n"
+            f"Stderr: {result.stderr[-2000:]}\n"
+            f"Stdout: {result.stdout[-1000:]}"
+        )
 
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError:
-        return {
-            "agents": {agent: {"available": False, "all_passed": False}},
-            "raw_stdout": result.stdout,
-            "raw_stderr": result.stderr,
-        }
+        pytest.fail(
+            f"BAT runner exited 0 but its stdout is not JSON.\n"
+            f"Stdout: {result.stdout[-1000:]}\n"
+            f"Stderr: {result.stderr[-2000:]}"
+        )
+        return None  # py/mixed-returns: unreachable, pytest.fail always raises
 
 
 def _evaluate_result(story: dict, result: dict, agent: str) -> None:
     """Evaluate BAT results against story expectations."""
     agent_result = result.get("agents", {}).get(agent, {})
 
-    if not agent_result.get("available", False):
-        pytest.skip(f"Agent '{agent}' not available")
+    # No "agent unavailable" skip here: the caller resolved the agent through
+    # shutil.which before running, and run_uat exits non-zero (now a failure,
+    # above) when the single agent it was asked for is missing. An exit-0 run
+    # therefore cannot report the agent as unavailable.
 
     # Basic pass: agent completed without errors
     all_passed = agent_result.get("all_passed", False)

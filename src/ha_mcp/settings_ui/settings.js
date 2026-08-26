@@ -232,6 +232,17 @@ const policyState = {
   enabled: false,
   enabledKnown: false,
   gatedTools: new Set(),
+  // enable_security_policy_tool — registers ha_manage_security_policy, the
+  // MCP tool that can rewrite these rules. Independent of `enabled`: it
+  // governs who may edit the policy, not whether it is enforced.
+  manageToolEnabled: false,
+  manageToolKnown: false,
+  // The raw /api/settings/features entries behind the two switches
+  // (origin / editable / env_var), or null when the fetch failed. An
+  // env-pinned flag reports editable:false and every save is rejected, so
+  // the switch must lock and explain — same as the generated feature rows.
+  masterFlag: null,
+  manageToolFlag: null,
 };
 
 // Read Only Mode (read_only_mode feature flag) — same tri-state shape
@@ -243,12 +254,41 @@ const policyState = {
 const readOnlyState = {
   enabled: false,
   enabledKnown: false,
+  // Raw flag entry, as with the policy switches above: READ_ONLY_MODE can
+  // be env-pinned (Docker / standalone), and a switch that looks live
+  // while every save 4xxs is worse than one that says why it is locked.
+  flag: null,
 };
 
 // Mixed read/write tools that stay enabled in Read Only Mode (their
 // write operations are blocked server-side at call time). Populated
 // from data.read_only_exempt in loadTools().
 let READ_ONLY_EXEMPT = new Set();
+
+// Whether the features payload actually reported one flag. "Known" is per
+// FLAG, not per response: /api/settings/features emits `value` for every
+// flag it knows, so a missing entry means this server build (or an overlay
+// in front of it) did not report that flag — not that it is off. Treating
+// absence as false renders the switch off-and-editable, and the next save
+// would overwrite an enabled server value with it.
+function flagReported(flag) {
+  return !!flag && flag.value !== undefined && flag.value !== null;
+}
+
+// Reset every flag-backed switch to "unknown". Shared by loadPolicyState's
+// two failure paths so a transient 503 and a network error leave identical
+// state — the switches then render indeterminate + disabled, not "off".
+function _clearFlagSwitchState() {
+  policyState.enabled = false;
+  policyState.enabledKnown = false;
+  policyState.masterFlag = null;
+  policyState.manageToolEnabled = false;
+  policyState.manageToolKnown = false;
+  policyState.manageToolFlag = null;
+  readOnlyState.enabled = false;
+  readOnlyState.enabledKnown = false;
+  readOnlyState.flag = null;
+}
 
 async function loadPolicyState() {
   // policyState.enabled mirrors the addon-config flag
@@ -260,23 +300,28 @@ async function loadPolicyState() {
     const fresp = await fetch('./api/settings/features');
     if (fresp.ok) {
       const fdata = await fresp.json();
-      const flag = (fdata.flags || {})['enable_tool_security_policies'];
+      // The payload also carries is_addon, which envLockedNoteHtml needs
+      // for its add-on-vs-standalone wording. Landing straight on the
+      // Policies tab never runs loadFeatureFlags(), so pick it up here too.
+      if (typeof fdata.is_addon === 'boolean') IS_ADDON_MODE = fdata.is_addon;
+      const flags = fdata.flags || {};
+      const flag = flags['enable_tool_security_policies'];
       policyState.enabled = !!(flag && flag.value);
-      policyState.enabledKnown = true;
-      const roFlag = (fdata.flags || {})['read_only_mode'];
+      policyState.enabledKnown = flagReported(flag);
+      policyState.masterFlag = flag || null;
+      const toolFlag = flags['enable_security_policy_tool'];
+      policyState.manageToolEnabled = !!(toolFlag && toolFlag.value);
+      policyState.manageToolKnown = flagReported(toolFlag);
+      policyState.manageToolFlag = toolFlag || null;
+      const roFlag = flags['read_only_mode'];
       readOnlyState.enabled = !!(roFlag && roFlag.value);
-      readOnlyState.enabledKnown = true;
+      readOnlyState.enabledKnown = flagReported(roFlag);
+      readOnlyState.flag = roFlag || null;
     } else {
-      policyState.enabled = false;
-      policyState.enabledKnown = false;
-      readOnlyState.enabled = false;
-      readOnlyState.enabledKnown = false;
+      _clearFlagSwitchState();
     }
   } catch (_e) {
-    policyState.enabled = false;
-    policyState.enabledKnown = false;
-    readOnlyState.enabled = false;
-    readOnlyState.enabledKnown = false;
+    _clearFlagSwitchState();
   }
   try {
     const r = await fetch('./api/policy/config');
@@ -491,14 +536,36 @@ async function applyInfoChrome() {
         '⚠ Changes saved. Restart the ha-mcp process, then refresh the MCP tool list in your AI client.'
       );
     }
-    // Version footer — show the running ha-mcp build at the bottom
-    // of every page. ``info.version`` is whatever
-    // ``HA_MCP_BUILD_VERSION`` the addon's Dockerfile set (e.g.
-    // ``7.5.0`` on stable, ``7.5.0.dev355`` on dev), with a fallback
-    // to package metadata in standalone deployments.
+    // Footer — show the running build and the same deployment classification
+    // used by ha_report_issue. The backend keeps embedded and sidecar distinct
+    // because they need different restart behavior; preserve those concise
+    // names here and clarify the less obvious packaging-oriented values.
     if (info.version) {
       const fEl = document.getElementById('versionFooterText');
-      if (fEl) fEl.textContent = 'ha-mcp ' + info.version;
+      const deploymentMode = typeof info.deployment_mode === 'string'
+        ? info.deployment_mode
+        : '';
+      const deploymentLabels = {
+        embedded: 'embedded',
+        sidecar: 'sidecar',
+        addon: t('footer.deployment.addon', {}, 'app/add-on'),
+        docker: t('footer.deployment.docker', {}, 'container/docker'),
+        pyinstaller: t('footer.deployment.pyinstaller', {}, 'standalone binary'),
+        git: t('footer.deployment.git', {}, 'source checkout'),
+        pypi: t('footer.deployment.pypi', {}, 'python package'),
+        unknown: t('footer.deployment.unknown', {}, 'unknown'),
+      };
+      const deploymentLabel = Object.prototype.hasOwnProperty.call(
+        deploymentLabels, deploymentMode
+      ) ? deploymentLabels[deploymentMode] : deploymentMode;
+      const installation = deploymentLabel
+        ? ' · ' + t(
+          'footer.installation',
+          {method: deploymentLabel},
+          'installation: {method}'
+        )
+        : '';
+      if (fEl) fEl.textContent = 'ha-mcp ' + info.version + installation;
     }
   } catch (e) {
     // A transient /api/settings/info failure must not leave the restart
@@ -648,7 +715,7 @@ async function _runRestartReloadCycle(previousInstanceId) {
     // never actually fired (silent supervisor failure → instance_id
     // never flipped) OR supervisor is genuinely slower than the cap.
     // Surface a clear next-step instead of silently doing nothing.
-    btn.textContent = t('errors.addon_not_back', {}, 'App (add-on) did not come back online. Reload manually');
+    btn.textContent = t('errors.addon_not_back', {}, 'App (add-on) did not come back online. Reload the page manually.');
     btn.disabled = false;
     restartInProgress = false;
   }
@@ -752,15 +819,14 @@ function isReadOnlyForcedOff(t) {
 }
 
 function syncReadOnlyToggle() {
-  const cb = document.getElementById('read-only-mode-toggle');
-  if (cb) {
-    cb.checked = !!readOnlyState.enabled;
-  } else {
-    // The toggle is part of the Tools-tab template; a missing element
-    // means template drift (or this surface lacks the row). Warn once so
-    // the desync is debuggable instead of silently no-op.
-    console.warn('syncReadOnlyToggle: #read-only-mode-toggle not found');
-  }
+  applyFlagToggle({
+    toggleId: 'read-only-mode-toggle',
+    noteId: 'read-only-locked',
+    fieldName: 'read_only_mode',
+    value: readOnlyState.enabled,
+    known: readOnlyState.enabledKnown,
+    flag: readOnlyState.flag,
+  });
   // When the features fetch failed, readOnlyState.enabledKnown is false
   // and render() paints write tools as enabled even though the server may
   // still block them. Surface that uncertainty. Function-scope lookup
@@ -935,6 +1001,12 @@ function render() {
         : (isFeatureGated ? false : (isMandatory || state === 'pinned' || DEFAULT_PINNED.includes(t.name))));
       const lockEnabled = roForcedOff || isEnvPinned || isMandatory || isFeatureGated;
       const lockPinned = roForcedOff || isEnvPinned || isMandatory || isFeatureGated || !isEnabled;
+      // The security gate is a policy RULE keyed by tool name, so it can be
+      // authored for a tool that is not registered yet. Feature-gated rows
+      // therefore keep this switch live (when policies are on): otherwise
+      // the first enable+restart would expose the tool ungated, which is
+      // exactly the window ha_manage_security_policy must not have.
+      const canGate = policyState.enabled && (isEnabled || isFeatureGated);
 
       const sourceDesc = (t.description || '').split('\n')[0].slice(0, 120);
       const toolCopy = localizedToolCopy(t, sourceDesc);
@@ -957,12 +1029,24 @@ function render() {
       // destructive tool showing no tier badge would understate its risk.
       else badges += `<span class="badge unknown">${escapeHtml(category) || '?'}</span>`;
 
+      // Two flavors of "how to turn this on": beta gates point at the dev
+      // App (add-on) config, non-beta ones (the policy-editing tool) at
+      // their own settings tab. disabled_by_beta comes from the server so
+      // the client never has to know which flags are beta.
       const gatedNote = disabledBy
-        ? `<div class="disabled-by-note">${tHtml(
-            'tools.notes.beta_disabled',
-            {setting: `<code>${escapeHtml(disabledBy)}</code>`},
-            'Beta. Set {setting} in the dev App (add-on) config or the matching env var (see docs/beta.md).'
-          )}</div>`
+        ? `<div class="disabled-by-note">${
+            t.disabled_by_beta === false
+              ? tHtml(
+                  'tools.notes.gated_disabled',
+                  {setting: `<code>${escapeHtml(disabledBy)}</code>`},
+                  'Disabled. Turn on {setting} — the policy-editing tool\'s toggle is on the Tool Security Policies tab — then restart the App (add-on).'
+                )
+              : tHtml(
+                  'tools.notes.beta_disabled',
+                  {setting: `<code>${escapeHtml(disabledBy)}</code>`},
+                  'Beta. Set {setting} in the dev App (add-on) config or the matching env var (see docs/beta.md).'
+                )
+          }</div>`
         : '';
       const envPinnedNote = isEnvPinned
         ? `<div class="feature-locked-note">${tHtml(
@@ -1029,12 +1113,12 @@ function render() {
               `<span class="slider"></span></label>` +
             `<span>${escapeHtml(tr('tools.states.pinned', {}, 'pinned'))}</span>` +
           `</div>` +
-          `<div class="toggle-group ${(policyState.enabled && isEnabled) ? '' : 'disabled-toggle'}" ` +
+          `<div class="toggle-group ${canGate ? '' : 'disabled-toggle'}" ` +
                `title="${policyState.enabled ? '' : escapeHtml(tr('tools.security.enable_first', {}, 'Enable Tool Security Policies in App (add-on) config first.'))}">` +
             `<label class="switch"><input type="checkbox" name="tool:${escapeHtml(t.name)}:gated" data-tool="${escapeHtml(t.name)}" data-field="gated" ` +
               `aria-label="${escapeHtml(tr('tools.aria.security_gated', {title}, `${title} security gated`))}" ` +
               `${policyState.gatedTools.has(t.name) ? 'checked' : ''} ` +
-              `${(policyState.enabled && isEnabled) ? '' : 'disabled'}>` +
+              `${canGate ? '' : 'disabled'}>` +
               `<span class="slider"></span></label>` +
             `<span>${escapeHtml(tr('tools.states.security_gated', {}, 'security gated'))}</span>` +
           `</div>` +
@@ -1835,48 +1919,50 @@ document.getElementById('modalBackdrop').addEventListener('click', (e) => {
 
 document.getElementById('stopSidecarBtn').addEventListener('click', stopSidecar);
 
-// Feature-flag metadata (display labels + help text). Keyed by the
-// Settings field name. The strings are intentionally copied verbatim
-// from ``homeassistant-addon-dev/translations/en.yaml`` so the web
-// UI and the add-on Configuration tab read identically — a user who
-// flips between the two surfaces never wonders if the option name
-// or warning text shifted meaning. Keep them in sync when one side
-// changes; the addon-dev translations file is the source of truth.
+// FEATURE_META:BEGIN GENERATED (scripts/generate_locales.py)
+// English fallback + row order for the feature toggles. Do not edit:
+// the strings and their order come from the features.* keys in
+// locales/en.json — edit that file, then run
+// scripts/generate_locales.py.
+// The master/sub-flag gating these rows describe is enforced by
+// config.py:_apply_feature_flag_overrides; the UI dims sub-rows and
+// re-renders live when the master toggle flips.
 const FEATURE_META = {
   enable_tool_search: {
     label: "Enable tool search",
-    help: "Replace the full tool catalog with search-based discovery. Reduces idle context from ~46K to ~5K tokens. ⚠️ Do NOT enable this if you use Claude in Sonnet or Opus modes. Those models have their own built-in tool search / deferred tools, which conflicts with ours. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off. Use this only with LLMs that lack native deferred tools (e.g. Claude Haiku, local OpenAI-compatible models) or with smaller context windows. Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete). Requires restart to take effect.",
+    help: "Replace the full tool catalog with search-based discovery. Reduces idle context by roughly 90%, to about 5K tokens. ⚠️ Do NOT enable this in clients with their own built-in tool search / deferred tools (claude.ai, Claude Desktop, Claude Code) — the two search layers conflict, and the client's built-in tool search is the better choice there; leave this off. Whether tools are deferred depends on your client and model combination: use this when your setup loads the full catalog up front — models without native deferred tools (e.g. Gemini, OpenAI-compatible local models, Claude Haiku), clients that inline all tool schemas regardless of model (e.g. GitHub Copilot CLI), or smaller context windows. Some Codex models and ChatGPT include deferred tools too — check your client/model directly to confirm its features so you don't leave this enabled unnecessarily. Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete). Requires restart to take effect.",
   },
   tool_search_max_results: {
     label: "Tool search max results",
     help: "Maximum number of tools returned by ha_search_tools when tool search is enabled. Lower values (2-3) save context tokens but may miss relevant tools. Range: 2-10. Requires restart.",
   },
   enable_tool_security_policies: {
-    label: "Enable Tool Security Policies",
-    help: "Opt-in middleware that gates high-stakes MCP tool calls behind user approval. When enabled, tools that match a rule in the Tool Security Policies tab require you to click Approve in the web UI before they run. Off by default. Per-tool rules with optional argument conditions are configured in the Tool Security Policies tab. Requires restart to take effect.",
+    label: "Enable Tool Security Policies (advanced)",
+    help: "Gate high-stakes tool calls (lock/alarm control, automation writes, etc.) behind user approval. When a guarded tool is called, the agent tells the user to open the Tool Security Policies tab in the web UI and click Approve before the call proceeds. Per-tool rules with optional argument conditions are configured in the Tool Security Policies tab. Off by default. Requires restart to take effect.",
   },
   read_only_mode: {
     label: "Read Only Mode",
-    help: "Turns all write tools off and blocks tools from making any write or destructive calls. Mixed read/write tools (dashboard configuration, backups, Apps (add-ons), energy preferences, voice pipelines, and code mode when enabled) stay listed with their write operations blocked server-side. Dashboard screenshots remain blocked because Puppet can persist frontend preferences. The AI gets a clear READ_ONLY_MODE error if it tries. Mirrors the toggle at the top of the Tools tab. Off by default. Requires restart to take effect (applies live in standalone HTTP mode).",
+    help: "Toggles all write tools off, and removes ability for tools to make any write or destructive calls. Mixed read/write tools — backups, Apps (add-ons), energy preferences, voice pipelines, and code mode when enabled — stay available with their write operations blocked. Same toggle as the web UI Tools tab. Off by default. Requires restart to take effect.",
+  },
+  redact_secrets: {
+    label: "Redact Secrets",
+    help: "Redacts secrets from tool responses before they reach the AI assistant. App (add-on) options and integration fields marked as passwords are replaced with a set/empty marker (so \"is this credential configured?\" stays answerable), and other tool responses are scrubbed of secret values the server has already seen (values shorter than 6 characters are skipped, since replacing tiny fragments would corrupt unrelated output). Fields not marked as passwords by their schema cannot be detected. Off by default.",
   },
   enable_mandatory_bps: {
     label: "Attach best-practice skills on writes",
-    help: "Master switch for the write-tool skill content delivery feature (issue #1182). When enabled (default), the six config write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) attach the canonical Home Assistant best-practice reference files under skill_content on every successful write, plus auto-embed any reference sections cited by best-practice warnings. Each tool also exposes a per-call MandatoryBPS parameter the agent can set to false on subsequent calls once it has the content. When this master switch is off, NO skill_content goes out regardless of the per-call parameter or BP warnings. Recommended ON as the first choice; disable only for models with very small context windows. Turning this off may degrade write accuracy. Requires restart to take effect.",
+    help: "Master switch for the write-tool skill content delivery feature (issue #1182). When enabled (default), the six config write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) attach the canonical Home Assistant best-practice reference files under `skill_content` on every successful write, plus auto-embed any reference sections cited by best-practice warnings. Each tool also exposes a per-call `MandatoryBPS` parameter the agent can set to false on subsequent calls once it has the content. When this master switch is off, NO skill_content goes out regardless of the per-call parameter or BP warnings. Recommended ON as the first choice; disable only for models with very small context windows. Turning this off may degrade write accuracy. Requires restart to take effect.",
   },
   enable_strict_mandatory_bps: {
     label: "Strict best-practices mode",
-    help: "Strict mode: prevents the client from using the tool until it can prove that it read the best practices. While on, the six best-practice write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) are blocked and return an error directing the client to read the best-practices skill via ha_get_skill_guide and pass back the acknowledgment key it obtains there. While on, the ha_get_skill_guide tool is locked enabled — it is the only publisher of the acknowledgment key. Nested under \"Attach best-practice skills on writes\" above and inert while that parent toggle is off. Requires restart to take effect (applies live in standalone HTTP mode).",
+    help: "Strict mode: prevents the client from using the tool until it can prove that it read the best practices. While on, the six best-practice write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) are blocked and return an error directing the client to read the best-practices skill via ha_get_skill_guide and pass back the acknowledgment key it obtains there. While on, the ha_get_skill_guide tool is locked enabled — it is the only publisher of the acknowledgment key. Child of the \"Attach best-practice skills on writes\" option above and inert while that parent is off. Requires restart to take effect.",
   },
-  // Master beta toggle — gates the 5 sub-flags below at runtime
-  // (see config.py:_apply_feature_flag_overrides master gate). UI
-  // dims sub-rows when this is off and re-renders live on flip.
   enable_beta_features: {
-    label: "Enable beta features",
-    help: "⚠ DANGER. These tools can PERMANENTLY DAMAGE your Home Assistant installation. They write to your YAML config, write to your filesystem, install custom components, run arbitrary sandboxed Python, and edit tool docstrings the AI sees. There is no warranty and no support guarantee. You enable them at your OWN RISK. Take a Home Assistant backup before turning this on, and never enable in production without one. Master toggle for the 5 experimental tools below; sub-toggles are dimmed and ignored at runtime while this is off (even a sub-flag set via env var is forced off until the master is on). Requires restart to take effect.",
+    label: "Enable beta features (master)",
+    help: "⚠ DANGER — these tools can PERMANENTLY DAMAGE your Home Assistant installation. They write to your YAML config, your filesystem, install custom components, run arbitrary sandboxed Python, and edit tool docstrings the AI sees. There is no warranty and no support guarantee — you enable them at your OWN RISK. Take a Home Assistant backup before turning this on, and never enable in production without one. Master gate for the experimental sub-flags below; sub-flags are ignored at runtime while this master is off, even when explicitly set to true. The same toggle is also surfaced in the web settings UI under \"Beta features (dangerous)\" — either surface reflects the other on restart.",
   },
   enable_yaml_config_editing: {
     label: "Enable YAML config editing (beta)",
-    help: "Beta feature, disabled by default. Allows AI assistants to add, replace, or remove top-level keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant, http, and recorder are blocked. Each edit validates YAML syntax, runs a config check, and creates an automatic backup. Changes to most keys require a full HA restart to take effect. See docs/beta.md for known limitations. Dedicated tools (automations, scripts, scenes, helpers, template sensors) should be preferred when available.",
+    help: "Beta feature. Allows AI assistants to add, replace, or remove top-level keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant, http, and recorder are blocked. Each edit validates YAML syntax, runs a config check, and creates an automatic backup. Changes to most keys require a full HA restart to take effect. See docs/beta.md for known limitations. Dedicated tools (automations, scripts, scenes, helpers, template sensors) should be preferred when available. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
   enable_yaml_edit_confirm: {
     label: "Require confirmation for YAML edits (diff preview)",
@@ -1896,21 +1982,22 @@ const FEATURE_META = {
   },
   enable_filesystem_tools: {
     label: "Enable filesystem tools (beta)",
-    help: "Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write access to your Home Assistant filesystem. WARNING: This gives the MCP server sensitive direct file access to your system. Only enable if you trust the AI assistant with file operations. Requires restart to take effect.",
+    help: "Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write access to your Home Assistant filesystem. WARNING: This gives the MCP server sensitive direct file access to your system. Only enable if you trust the AI assistant with file operations. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
   enable_code_mode: {
-    label: "Enable code-mode sandbox (beta)",
-    help: "Beta feature, disabled by default. Enables ha_manage_custom_tool, a sandboxed Python interpreter (pydantic-monty) that lets AI assistants write/run/save/delete custom tools when no built-in tool covers the request. Sandbox cannot touch the filesystem or arbitrary network, but CAN call any registered MCP tool, hit the HA REST API, or send HA WebSocket commands, effectively 'do whatever existing tools allow you to do, in any combination'. Saved tools persist and are visible to any client that can connect to ha-mcp. See docs/beta.md for known limitations. Requires restart to take effect.",
+    label: "Enable custom tool sandbox (beta)",
+    help: "Beta feature. Enables the ha_manage_custom_tool tool, which lets AI assistants create, run, save, and delete custom Python code in a secure sandbox when no built-in tool can handle the request. Code runs in an isolated interpreter with no filesystem or arbitrary network access. Sandbox code can hit the HA REST API (api_get/api_post), send WebSocket commands (ws_send), call existing MCP tools (call_tool), or remove a saved tool (delete_saved_tool). Saved tools persist to /data/saved_tools.json by default so they survive app (add-on) restarts, and are visible to any client that can connect. See docs/beta.md for known limitations. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
   enable_lite_docstrings: {
     label: "Enable lite tool docstrings (beta)",
-    help: "Beta feature, disabled by default. Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). WARNING: this reduces idle token usage, but may degrade LLM performance. The trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect.",
+    help: "Beta feature. Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
   enable_dashboard_screenshot: {
     label: "Enable dashboard screenshot mode (beta)",
-    help: "Beta feature, disabled by default. Adds the ha_get_dashboard_screenshot tool plus include_screenshot / return_screenshot options on the dashboard get/set tools, so AI assistants can inspect one or more responsive Lovelace images (e.g. to verify a dashboard they just created). Supports stable named views, mobile/tablet/desktop batches, and PNG/JPEG/WebP/BMP output. Rendering runs in a separate, opt-in engine, balloob's \"Puppet\" App (add-on) (headless Chromium), which you install once (add balloob's App (add-on) repository, then install \"Puppet\") and give a long-lived access token; on Docker/Container deployments you run that engine as a sidecar and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is installed unless you both enable this and install the engine. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on. Otherwise this sub-flag is ignored at runtime regardless of its value here.",
+    help: "Beta feature — disabled by default. Adds the ha_get_dashboard_screenshot tool plus include_screenshot / return_screenshot options on the dashboard get/set tools, so AI assistants can inspect one or more responsive Lovelace images (e.g. to verify a dashboard they just created). Supports stable named views, mobile/tablet/desktop batches, and PNG/JPEG/WebP/BMP output. Rendering runs in a separate, opt-in engine — balloob's \"Puppet\" App (add-on), headless Chromium — which you install once (add balloob's repository to the App store, then install \"Puppet\") and give a long-lived access token; on Docker/Container deployments you run that engine as a sidecar and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is installed unless you both enable this and install the engine. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
 };
+// FEATURE_META:END GENERATED
 
 // The beta sub-flag fields gated by the master beta toggle. Populated
 // from the ``beta_sub_flags`` array in the /api/settings/features
@@ -2436,7 +2523,20 @@ async function saveFeatureFlag(fieldName, value) {
   if (data?.restart_required) {
     markRestartRequired();
   }
-  return true;
+  // The parsed body (truthy, so `if (!ok)` call sites are unaffected), not
+  // a bare true: both save paths echo `applied` — the server stating what
+  // it persisted — which a caller can fall back on when the follow-up
+  // re-read fails.
+  return data || {};
+}
+
+// The value the server echoed back for one field of a saveFeatureFlag
+// response, or undefined when the body carried no usable echo (a 200 with
+// a truncated body, or a future response shape without `applied`).
+function appliedFlagValue(saved, fieldName) {
+  const applied = saved && saved.applied;
+  const value = applied ? applied[fieldName] : undefined;
+  return typeof value === 'boolean' ? value : undefined;
 }
 
 // ===== Tool Security Policies tab =====
@@ -2452,20 +2552,100 @@ async function saveFeatureFlag(fieldName, value) {
 // This mirrors the syncPolicyRule() flow used by the Tools-tab toggle.
 let policyRuleEdits = {};
 
-async function syncPolicyMasterToggle() {
+async function syncPolicyGlobalToggles() {
   // The master toggle on this tab is just a UI mirror of the same
   // `enable_tool_security_policies` feature flag the Server Settings
   // tab exposes — the addon-config flag is the single source of truth.
   // We rely on loadPolicyState() to have populated policyState.enabled
   // (it fetches /api/settings/features) so the only work here is to
   // reflect that bit into the checkbox.
+  //
+  // The policy-editing tool toggle (enable_security_policy_tool) rides
+  // the same fetch. It is NOT nested under the master: registering
+  // ha_manage_security_policy is independent of whether the rules are
+  // enforced, so the row stays usable with the master off.
   await loadPolicyState();
-  const cb = document.getElementById('policy-master-toggle');
-  if (cb) cb.checked = !!policyState.enabled;
+  paintPolicyGlobalToggles();
+}
+
+// Paint-only half of the sync above: both switches plus the unknown-state
+// notice, from whatever policyState currently holds. Split out so a save
+// handler that has just re-read the state can repaint without refetching.
+function paintPolicyGlobalToggles() {
+  applyFlagToggle({
+    toggleId: 'policy-master-toggle',
+    noteId: 'policy-master-locked',
+    fieldName: 'enable_tool_security_policies',
+    value: policyState.enabled,
+    known: policyState.enabledKnown,
+    flag: policyState.masterFlag,
+  });
+  applyFlagToggle({
+    toggleId: 'policy-manage-tool-toggle',
+    noteId: 'policy-manage-tool-locked',
+    fieldName: 'enable_security_policy_tool',
+    value: policyState.manageToolEnabled,
+    known: policyState.manageToolKnown,
+    flag: policyState.manageToolFlag,
+  });
+  // When a flag could not be read — the whole fetch failed, or the payload
+  // simply didn't carry that entry — an unchecked-and-editable switch would
+  // claim "off" for a server that may well have it on. Surface that
+  // uncertainty whenever EITHER switch is unknown (same treatment the
+  // Tools-tab read-only notice gets). Function-scope lookup (guarded) so
+  // this id need not be a top-level handler binding.
+  const notice = document.getElementById('policyUnknownNotice');
+  if (notice) {
+    notice.classList.toggle(
+      'show',
+      !policyState.enabledKnown || !policyState.manageToolKnown
+    );
+  }
+}
+
+// Paint one hand-written feature-flag switch — the two on this tab and the
+// Tools-tab Read Only Mode one — giving them what renderFeatureRows gives
+// the generated Server Settings rows:
+//   unknown (the features fetch failed) -> indeterminate + disabled, so
+//     the checkbox cannot be read as the server's answer;
+//   env-pinned (editable:false) -> disabled with the same locked note,
+//     because every save of a pinned flag is rejected server-side;
+//   otherwise -> checked from the value, editable.
+function applyFlagToggle({toggleId, noteId, fieldName, value, known, flag}) {
+  const cb = document.getElementById(toggleId);
+  if (!cb) {
+    // Part of a static panel template; a missing element means template
+    // drift. Warn so the desync is debuggable instead of a silent no-op.
+    console.warn('applyFlagToggle: #' + toggleId + ' not found');
+    return;
+  }
+  const locked = known && !!flag && flag.editable === false;
+  cb.checked = !!value;
+  cb.indeterminate = !known;
+  cb.disabled = !known || locked;
+  const row = cb.closest('.feature-row');
+  if (row) row.classList.toggle('locked', locked);
+  const note = document.getElementById(noteId);
+  if (!note) {
+    console.warn('applyFlagToggle: #' + noteId + ' not found');
+    return;
+  }
+  if (!locked) {
+    note.innerHTML = '';
+    note.style.display = 'none';
+    return;
+  }
+  // Same two-branch copy renderFeatureRows uses: env vars get the
+  // addon-aware "unset it to edit" banner, other non-editable origins
+  // their own note. tHtml/escapeHtml keep catalog strings safe in innerHTML.
+  note.innerHTML = flag.origin === 'env'
+    ? envLockedNoteHtml(flag.env_var, fieldName)
+    : escapeHtml(ORIGIN_LOCKED_NOTE[flag.origin] || '');
+  note.style.display = '';
 }
 
 async function policyLoadConfig() {
-  await syncPolicyMasterToggle();
+  await syncPolicyGlobalToggles();
   const errEl = document.getElementById('policy-load-error');
   if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
   let resp;
@@ -3313,18 +3493,57 @@ async function policyDecide(token, action) {
     return;
   }
   if (!resp.ok) {
-    let body;
-    try { body = await resp.json(); } catch (_) { body = {error: 'HTTP ' + resp.status}; }
+    // Only a body that actually parsed can carry a server message, so an
+    // unparsable one leaves serverError empty rather than standing in with the
+    // status line: a stand-in reads as a server message to both branches that
+    // consult it — the 503 default and the generic detail — and shadows the
+    // translated line meant to cover exactly this case.
+    let body = {};
+    let serverError = '';
+    try {
+      body = (await resp.json()) || {};
+      if (typeof body.error === 'string') serverError = body.error;
+    } catch (_) { /* not JSON — no server message to show */ }
     if (resp.status === 409 && body.current_decision) {
+      // current_decision is a backend enum, not display text: interpolating it
+      // raw leaves an English word inside a translated sentence.
+      const decision = t(
+        'policies.pending.decision.' + body.current_decision,
+        {},
+        body.current_decision
+      );
       alert(t(
         'policies.pending.already_decided',
-        {decision: body.current_decision},
-        'This approval was already ' + body.current_decision + ', possibly by another tab or session.'
+        {decision},
+        'This approval was already ' + decision + ', possibly by another tab or session.'
       ));
     } else if (resp.status === 404) {
       alert(t('policies.pending.invalid_token', {}, 'This approval token is no longer valid (already consumed or expired).'));
+    } else if (resp.status === 503) {
+      // Same three causes as policyLoadPending's 503, answered the same way.
+      // The 503 body is a fixed English paragraph, so folding it into
+      // 'policies.pending.action_failed' spliced five English lines into the
+      // middle of a translated clause.
+      if (policyState.enabledKnown && !policyState.enabled) {
+        alert(t(
+          'policies.pending.disabled',
+          {},
+          'Tool Security Policies is turned off. Toggle it on (top of this tab or in Server Settings) and restart the App (add-on) to enable gating.'
+        ));
+      } else {
+        // Feature is on (or we could not determine the flag). The server's
+        // message names which of the remaining causes applied, so it stands
+        // on its own rather than inside a sentence. Without one — a 503 from
+        // an ingress or reverse proxy in front of us — the translated line is
+        // all the user gets, which is what policyLoadPending does too.
+        alert(serverError || t(
+          'policies.pending.unavailable',
+          {},
+          'Live approvals unavailable. Check the App (add-on) log for ImportError / RuntimeError details.'
+        ));
+      }
     } else {
-      const detail = body.error || resp.statusText;
+      const detail = serverError || resp.statusText || 'HTTP ' + resp.status;
       alert(t('policies.pending.action_failed', {detail}, 'Approval action failed: ' + detail));
     }
   }
@@ -3338,8 +3557,8 @@ document.getElementById('policy-save-global-btn').addEventListener('click', save
 // shows up in Server Settings (and the addon's config.yaml) on reload.
 document.getElementById('policy-master-toggle').addEventListener('change', async (e) => {
   const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
-  const ok = await saveFeatureFlag('enable_tool_security_policies', e.target.checked);
-  if (!ok) {
+  const saved = await saveFeatureFlag('enable_tool_security_policies', e.target.checked);
+  if (!saved) {
     // Save definitely failed — the server still has the old value.
     // Revert the checkbox and surface the failure (set the status AFTER
     // the revert so it isn't clobbered).
@@ -3351,15 +3570,51 @@ document.getElementById('policy-master-toggle').addEventListener('change', async
     ), false, true);
     return;
   }
-  // Re-read the truth from the server and sync the checkbox back to
-  // it. If the follow-up read can't confirm what the server has, revert
-  // to the pre-flip value so the UI doesn't lie about persisted state.
+  // Re-read the truth from the server. If that read can't confirm, fall
+  // back to the value the save echoed — still the server telling us what
+  // it wrote. Only when neither is available does the switch go to the
+  // unknown treatment; reverting to the pre-flip value would assert a
+  // state the server no longer has.
   await loadPolicyState();
-  if (policyState.enabledKnown) {
-    e.target.checked = !!policyState.enabled;
-  } else {
-    e.target.checked = previous;
+  if (!policyState.enabledKnown) {
+    const applied = appliedFlagValue(saved, 'enable_tool_security_policies');
+    if (applied !== undefined) {
+      policyState.enabled = applied;
+      policyState.enabledKnown = true;
+    }
   }
+  paintPolicyGlobalToggles();
+});
+
+// Policy-editing tool toggle (enable_security_policy_tool) — same
+// save-then-verify flow as the master above. The tool only appears in or
+// disappears from the MCP catalog on the next restart, which
+// saveFeatureFlag's restart-required banner already tells the user.
+document.getElementById('policy-manage-tool-toggle').addEventListener('change', async (e) => {
+  const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
+  const saved = await saveFeatureFlag('enable_security_policy_tool', e.target.checked);
+  if (!saved) {
+    // Save definitely failed — the server still has the old value.
+    // Revert the checkbox and surface the failure (set the status AFTER
+    // the revert so it isn't clobbered).
+    e.target.checked = previous;
+    updateStatus(t(
+      'policies.errors.manage_tool_save',
+      {},
+      'Policy-editing tool change did not save. The server still has the previous value'
+    ), false, true);
+    return;
+  }
+  // Same confirm-then-fall-back order as the master toggle above.
+  await loadPolicyState();
+  if (!policyState.manageToolKnown) {
+    const applied = appliedFlagValue(saved, 'enable_security_policy_tool');
+    if (applied !== undefined) {
+      policyState.manageToolEnabled = applied;
+      policyState.manageToolKnown = true;
+    }
+  }
+  paintPolicyGlobalToggles();
 });
 
 // Read Only Mode toggle (Tools tab, above the search box) — same flag
@@ -3367,8 +3622,8 @@ document.getElementById('policy-master-toggle').addEventListener('change', async
 // /api/settings/features, re-read server truth, revert on failure.
 document.getElementById('read-only-mode-toggle').addEventListener('change', async (e) => {
   const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
-  const ok = await saveFeatureFlag('read_only_mode', e.target.checked);
-  if (!ok) {
+  const saved = await saveFeatureFlag('read_only_mode', e.target.checked);
+  if (!saved) {
     // Save definitely failed — the server still has the previous value.
     // Revert the checkbox and leave readOnlyState.enabled untouched (do
     // NOT write an unconfirmed value). Set the status AFTER the revert
@@ -3382,15 +3637,19 @@ document.getElementById('read-only-mode-toggle').addEventListener('change', asyn
     ), false, true);
     return;
   }
-  // Re-read the truth from the server and sync the checkbox back to it.
+  // Re-read the truth from the server; if that read couldn't confirm,
+  // fall back to the value the save echoed rather than reverting to a
+  // pre-flip state the server no longer has. Neither available means the
+  // switch goes unknown (indeterminate + the #roUnknownNotice).
   await loadPolicyState();
-  if (readOnlyState.enabledKnown) {
-    e.target.checked = !!readOnlyState.enabled;
-  } else {
-    // Save reported OK but the follow-up read couldn't confirm — revert
-    // to the pre-flip value rather than assert an unconfirmed state.
-    e.target.checked = previous;
+  if (!readOnlyState.enabledKnown) {
+    const applied = appliedFlagValue(saved, 'read_only_mode');
+    if (applied !== undefined) {
+      readOnlyState.enabled = applied;
+      readOnlyState.enabledKnown = true;
+    }
   }
+  syncReadOnlyToggle();
   // Re-render so write-tool rows reflect the forced-off state instantly.
   render();
 });
@@ -3475,10 +3734,9 @@ const ADVANCED_FIELD_META = {
   max_retries:         { label: "HA request max retries",      help: "Retry budget per failed REST call. Range 0–20. Restart required." },
   verify_ssl:          { label: "Verify SSL certificates",     help: "Skip TLS verification only on trusted networks (self-signed certs, hostname mismatch). Restart required." },
   fuzzy_threshold:     { label: "Fuzzy-search threshold",      help: "Lower = looser entity match. Range 0–100." },
-  entity_search_limit: { label: "Entity search result limit",  help: "Max entities returned by ha_search_entities. Range 1–1000." },
-  automation_config_time_budget: { label: "Automation config time budget (s)", help: "Max seconds ha_search/ha_deep_search spends fetching automation configs before returning a partial result. Raise on instances with many automations. Range 1–600. Restart required." },
-  script_config_time_budget:     { label: "Script config time budget (s)",     help: "Max seconds ha_search/ha_deep_search spends fetching script configs before returning a partial result. Range 1–600. Restart required." },
-  scene_config_time_budget:      { label: "Scene config time budget (s)",      help: "Max seconds ha_search/ha_deep_search spends fetching scene configs before returning a partial result. Range 1–600. Restart required." },
+  automation_config_time_budget: { label: "Automation config time budget (s)", help: "Max seconds deep search spends fetching automation configs before returning a partial result. Raise on instances with many automations. Range 1–600. Restart required." },
+  script_config_time_budget:     { label: "Script config time budget (s)",     help: "Max seconds deep search spends fetching script configs before returning a partial result. Range 1–600. Restart required." },
+  scene_config_time_budget:      { label: "Scene config time budget (s)",      help: "Max seconds deep search spends fetching scene configs before returning a partial result. Range 1–600. Restart required." },
   individual_config_timeout:     { label: "Per-request config fetch timeout (s)", help: "Timeout for each individual automation/script/scene config fetch during deep search. On HA servers that serve config reads serially, raise this and/or lower the batch size so queued requests don't time out. Values above the HA request timeout (HA_TIMEOUT, default 30) have no extra effect — the HTTP client gives up first. Range 1–600. Restart required." },
   individual_fetch_batch_size:   { label: "Config fetch batch size",          help: "How many per-id config fetches deep search issues concurrently. Lower toward 1 on HA servers that serve config reads serially (symptom: 'timed out' partial-result warnings). Range 1–100. Restart required." },
   backup_hint:         { label: "Backup-hint level",           help: "Tunes how strongly the LLM is prompted to take a full-HA snapshot before risky writes." },
@@ -3497,8 +3755,9 @@ const ADVANCED_FIELD_META = {
   code_mode_max_invocations: { label: "Code-mode max invocations",    help: "API/tool-call cap per sandbox run. Restart required." },
   code_mode_saved_tools_path:{ label: "Saved-tools path",              help: "JSON file where ha_manage_custom_tool persists saved tools across restarts. Restart required." },
   extra_yaml_write_keys:     { label: "Extra YAML write keys",        help: "Comma-separated top-level keys ha_config_set_yaml may write in addition to the built-in ones, for YAML-first integrations on this install (e.g. alert2). Keys that redefine Home Assistant's own trust boundary can never be added and are ignored. Requires custom component 1.2.4 or newer." },
-  sidecar_pin_port:    { label: "Settings UI sidecar port",    help: "0 = a new free port each restart (default); set 1024–65535 to pin a fixed port so the settings URL stays stable across restarts. Falls back to a free port if the pinned one is busy. Restart required." },
+  sidecar_pin_port:    { label: "Settings UI sidecar port",    help: "0 picks a free port on first start and keeps it for later restarts; 1024–65535 pins a preferred port (falls back to a free one if taken). Restart required." },
   enable_dev_mode:     { label: "Developer mode",               help: "⚠ DANGER: registers hidden developer tools (ha_dev_manage_server, ha_dev_manage_settings) that let AI agents change server settings and replace the running server version (e.g. install a PR build). For development and testing only. Restart required." },
+  dev_tools_security_policy_access: { label: "Dev tools security policy access", help: "⚠ DANGER: while developer mode is on, lets the developer tools rewrite tool security policies, add or remove per-tool approval gates, and approve or deny pending approvals on your behalf — an AI agent can accept its own gated calls. For policy testing only. Takes effect without a restart." },
 };
 
 // Fields that require an MCP-host restart to take effect when changed
@@ -3512,7 +3771,7 @@ const ADVANCED_RESTART_REQUIRED = new Set([
   "log_level", "debug",
   "mcp_server_name", "mcp_server_version", "environment",
   // fuzzy_threshold is read once by SmartSearchTools at the
-  // lazy-init singleton (tools/smart_search.py) — changes
+  // lazy-init singleton (tools/smart_search/) — changes
   // need restart to rebuild the searcher.
   "fuzzy_threshold",
   // The three smart-search time budgets are read once at import by
@@ -3712,6 +3971,20 @@ function renderAdvancedSection(containerId, fields) {
           'advanced.enable_dev_mode.confirm',
           {},
           '⚠ Enable developer mode?\n\nAfter the next restart, hidden developer tools are exposed to connected AI agents. They can change server settings and replace the running server version. Only enable this for development and testing.'
+        )
+      )) {
+        input.checked = false;
+        return;
+      }
+      // Policy access hands the same agents the security policies that
+      // gate them (and the approval queue) — its own confirm, since it
+      // is stored independently of the dev-mode toggle above (it only
+      // takes effect while dev mode is on).
+      if (fname === 'dev_tools_security_policy_access' && input.checked && !confirm(
+        t(
+          'advanced.dev_tools_security_policy_access.confirm',
+          {},
+          '⚠ Let developer tools change security policies?\n\nWhile developer mode is on, connected AI agents will be able to rewrite tool security policies, add or remove per-tool approval gates, and approve or deny pending approvals — including their own gated calls. Enable only while testing policies.'
         )
       )) {
         input.checked = false;
@@ -3983,8 +4256,10 @@ loadFsCustomPaths();
 
   // #1574 review: localStorage is the synchronous store the anti-FOUC
   // script reads at paint time, but it is origin-scoped and the stdio
-  // sidecar binds a fresh random port (= fresh empty origin) per session.
-  // This hook therefore (a) mirrors every change to the server
+  // sidecar's port (= the origin) can still change: stable by default
+  // since #2131, yet fresh on first spawn, a lost ui.state, a pin
+  // change, or a taken remembered port. This hook therefore (a) mirrors
+  // every change to the server
   // (./api/settings/theme -> theme_prefs.json), which seeds the next
   // fresh origin via the server-prefs head script, and (b) surfaces a
   // blocked localStorage (private mode) once instead of silently losing
@@ -4213,6 +4488,7 @@ async function visibilityLoadConfig() {
   const cats = c.exclude_categories || [];
   document.getElementById('visibility-enabled').checked = !!c.enabled;
   document.getElementById('visibility-enforce').checked = !!c.enforce;
+  document.getElementById('visibility-restrict-report-issue').checked = !!c.restrict_report_issue;
   document.getElementById('visibility-cat-diagnostic').checked = cats.includes('diagnostic');
   document.getElementById('visibility-cat-config').checked = cats.includes('config');
   document.getElementById('visibility-exclude-hidden').checked = !!c.exclude_hidden;
@@ -4234,6 +4510,7 @@ async function visibilitySaveConfig() {
     version: visibilityVersion,
     enabled: document.getElementById('visibility-enabled').checked,
     enforce: document.getElementById('visibility-enforce').checked,
+    restrict_report_issue: document.getElementById('visibility-restrict-report-issue').checked,
     exclude_categories: cats,
     exclude_hidden: document.getElementById('visibility-exclude-hidden').checked,
     deny_entity_ids: _visibilityParseList(document.getElementById('visibility-deny').value, '\n'),

@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import socket
+import ssl
 import subprocess
 import time
 import urllib.error
@@ -131,6 +132,13 @@ SSH_ADDON_PASSWORD = os.environ.get("HAOS_TEST_SSH_PASSWORD", "haosdebug")
 SSHPASS_BIN = os.environ.get("HAOS_TEST_SSHPASS_BIN", "sshpass")
 
 
+# docker's two ways of saying the target container cannot be exec'd into: the
+# name matches nothing, or it matches a container that is not running. Both mean
+# the resolved name is stale, so both take the same re-resolve and both are
+# worth capturing VM state for.
+_CONTAINER_MISS_TOKENS = ("no such container", "is not running")
+
+
 def ssh_exec(
     cmd: list[str], *, timeout: float = 30.0
 ) -> subprocess.CompletedProcess[str]:
@@ -222,10 +230,88 @@ def ssh_exec(
             # and would otherwise be lost in CI output. Re-raise as
             # RuntimeError with full stderr+stdout so failures are
             # actionable.
+            diag = ""
+            if any(token in stderr for token in _CONTAINER_MISS_TOKENS):
+                diag = _container_miss_diagnostics(ssh_cmd, env)
             raise RuntimeError(
                 f"ssh_exec failed (exit {exc.returncode}, attempt={attempt}): "
-                f"cmd={cmd!r} stderr={exc.stderr!r} stdout={exc.stdout!r}"
+                f"cmd={cmd!r} stderr={exc.stderr!r} stdout={exc.stdout!r}{diag}"
             ) from exc
+
+
+def _container_miss_diagnostics(ssh_cmd: list[str], env: dict[str, str]) -> str:
+    """Best-effort VM state capture for a container miss.
+
+    A container docker reports as absent or stopped while the addon's HTTP
+    endpoint still serves means the container exists under a name the test
+    did not predict — so the failure message must carry the actual names.
+    This capture deliberately uses ``docker ps -a`` with statuses: unlike
+    resolution, seeing the exited containers is the point. Reuses the
+    caller's assembled ssh wrapper with the remote command swapped out;
+    failures here must never mask the original error.
+    """
+    captured: list[str] = []
+    for label, remote in (
+        ("docker_ps", "docker ps -a --format '{{.Names}} {{.Status}}'"),
+        ("ha_addons", "ha addons --raw-json | head -c 2000"),
+    ):
+        try:
+            probe = subprocess.run(
+                [*ssh_cmd[:-1], remote],
+                capture_output=True,
+                text=True,
+                timeout=20.0,
+                env=env,
+                check=False,
+            )
+            captured.append(f"{label}={probe.stdout.strip()!r}")
+        except Exception as probe_err:  # pragma: no cover - diagnostics best-effort
+            captured.append(f"{label}_error={probe_err!r}")
+    return " | " + " | ".join(captured)
+
+
+def _resolve_addon_container(addon_slug: str) -> str | None:
+    """Return the addon's actual container name on the booted HAOS.
+
+    Supervisor's addon container prefix changed from ``addon_`` to ``app_``
+    (the add-ons to apps rename), and HAOS self-updates Supervisor at boot,
+    so which prefix a CI VM uses depends on the Supervisor build it booted
+    with — run 30553159100's capture shows ``app_local_ha_mcp_dev`` running
+    while ``addon_local_ha_mcp_dev`` resolves to nothing. Read the name from
+    docker instead of assuming a prefix.
+
+    Only RUNNING containers are listed: ``docker exec`` requires one, so an
+    Exited leftover under either prefix is never the right answer. Candidates
+    are tested in a fixed order — ``app_`` before the legacy ``addon_`` — so a
+    VM that somehow carries both resolves to the current name deterministically
+    rather than by listing order.
+
+    A clean listing that carries neither name (e.g. the addon is mid-restart)
+    resolves to the legacy name. If the ``docker ps`` call itself fails this
+    returns ``None`` rather than propagating, so an unreadable listing degrades
+    to the caller trying both supported names instead of blocking an exec that
+    would have worked.
+    """
+    try:
+        listing = ssh_exec(["docker", "ps", "--format", "{{.Names}}"], timeout=20.0)
+    except (RuntimeError, subprocess.TimeoutExpired) as err:
+        LOG.debug("container listing failed (%s); trying both prefixes", err)
+        return None
+    running = set(listing.stdout.split())
+    for candidate in (f"app_{addon_slug}", f"addon_{addon_slug}"):
+        if candidate in running:
+            return candidate
+    return f"addon_{addon_slug}"
+
+
+def _is_container_miss(err: Exception) -> bool:
+    """Whether ``err`` is docker refusing the exec for want of a live container.
+
+    Both shapes count: the name matching nothing, and a container that stopped
+    between the listing and the exec.
+    """
+    text = str(err).lower()
+    return any(token in text for token in _CONTAINER_MISS_TOKENS)
 
 
 def docker_exec_in_addon(
@@ -234,19 +320,42 @@ def docker_exec_in_addon(
     """Run ``cmd`` inside an addon container via SSH + docker exec.
 
     ``addon_slug`` is the Supervisor slug (e.g. ``local_ha_mcp_dev``);
-    the helper resolves it to the Docker container name (
-    ``addon_<slug>``). Returns stdout of the command. Raises
-    ``RuntimeError`` with stderr+stdout context on non-zero exit
-    (via the wrapping in ``ssh_exec``).
+    the container name is resolved from docker via
+    :func:`_resolve_addon_container` (the prefix differs across Supervisor
+    builds). Returns stdout of the command. Raises ``RuntimeError`` with
+    stderr+stdout context on non-zero exit (via the wrapping in
+    ``ssh_exec``), carrying the ``docker ps`` and Supervisor addon list for a
+    container miss.
+
+    A miss fails fast — there is no retry window. It only costs one second
+    attempt: the resolved name can go stale (a listing taken while the addon is
+    mid-restart resolves to the legacy fallback, then the real container
+    returns under the other prefix; or the container stops between listing and
+    exec), so a miss re-resolves once and re-runs only when the name actually
+    changed. When the listing was unreadable to begin with, the second attempt
+    is the other prefix.
 
     Used by item 8's filesystem-poisoning E2E to make
     ``/data/saved_tools.json`` unwriteable inside the dev addon
     container mid-test, force the save-warning rollback, then chmod
     back in the test's finally block.
     """
-    container = f"addon_{addon_slug}"
-    result = ssh_exec(["docker", "exec", container, *cmd], timeout=timeout)
-    return result.stdout
+    resolved = _resolve_addon_container(addon_slug)
+    first = resolved if resolved is not None else f"addon_{addon_slug}"
+    try:
+        return ssh_exec(["docker", "exec", first, *cmd], timeout=timeout).stdout
+    except RuntimeError as err:
+        if not _is_container_miss(err):
+            raise
+        second = (
+            _resolve_addon_container(addon_slug)
+            if resolved is not None
+            else f"app_{addon_slug}"
+        )
+        if second is None or second == first:
+            raise
+        LOG.debug("container %r missing; retrying once as %r", first, second)
+        return ssh_exec(["docker", "exec", second, *cmd], timeout=timeout).stdout
 
 
 def is_haos_inaddon_mode() -> bool:
@@ -277,6 +386,18 @@ def is_haos_embedded_mode() -> bool:
     single value (``external`` default / ``inaddon`` / ``embedded``).
     """
     return os.environ.get("HAOS_TEST_MODE", "external") == "embedded"
+
+
+def is_haos_stdio_mode() -> bool:
+    """True iff this run targets the external stdio HAOS tier.
+
+    The stdio mode boots the same real HAOS backend as the external lane but
+    runs the server-under-test as the installed ``ha-mcp`` command and connects
+    through a real stdio JSON-RPC transport. This is distinct from both the
+    in-process FastMCP client used by the external lane and the embedded server
+    entry running inside Home Assistant.
+    """
+    return os.environ.get("HAOS_TEST_MODE", "external") == "stdio"
 
 
 def is_haos_backend_selected() -> bool:
@@ -894,6 +1015,128 @@ def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
 # runtime); kept in step with the container backend's ``_EMBEDDED_SERVER_CONFIG_SUBDIR``.
 _HAOS_CONFIG_DIR = "/supervisor/homeassistant"
 _HAOS_EMBEDDED_SERVER_DATA_DIR = f"{_HAOS_CONFIG_DIR}/.ha_mcp"
+_HAOS_TLS_DIR = f"{_HAOS_CONFIG_DIR}/ssl"
+_HAOS_TLS_CERT_NAME = "haos-e2e-cert.pem"
+_HAOS_TLS_KEY_NAME = "haos-e2e-key.pem"
+HAOS_TLS_CERTIFICATE_PATH = f"/config/ssl/{_HAOS_TLS_CERT_NAME}"
+HAOS_TLS_KEY_PATH = f"/config/ssl/{_HAOS_TLS_KEY_NAME}"
+_HA_HTTP_CONFIG_META_KEYS = frozenset({"created_at", "error", "error_message"})
+
+
+def clean_home_assistant_http_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Strip read-only metadata from an HTTP config returned by Core."""
+    return {
+        key: value
+        for key, value in config.items()
+        if key not in _HA_HTTP_CONFIG_META_KEYS
+    }
+
+
+def build_home_assistant_tls_config(
+    stable: dict[str, Any], *, certificate_path: str, key_path: str
+) -> dict[str, Any]:
+    """Build a pending TLS trial while preserving the active HTTP settings."""
+    return {
+        **clean_home_assistant_http_config(stable),
+        "ssl_certificate": certificate_path,
+        "ssl_key": key_path,
+    }
+
+
+def stage_home_assistant_tls_in_qcow2(image_path: Path) -> Path:
+    """Stage a hostname-only Core certificate without enabling TLS yet.
+
+    The certificate is deliberately valid for ``haos-e2e.local`` but not
+    ``127.0.0.1``. Trusting it from the host therefore reproduces issue #2241's
+    exact IP-address-mismatch failure when the legacy app proxy uses HTTPX's
+    default verification. The final E2E enables it at runtime through Core's
+    supported HTTP configuration API, in the worker's already-running VM.
+
+    Returns the host-side certificate path — the caller exports it as
+    ``HAOS_TEST_TLS_CA_PATH`` so the test can trust it via ``SSL_CERT_FILE``.
+    That trust path is also why the self-signed cert carries
+    ``basicConstraints=CA:TRUE``: the host uses the same file as its CA.
+    """
+    import atexit
+    import shutil
+    import tempfile
+
+    workdir = Path(tempfile.mkdtemp(prefix="haos-core-tls-"))
+    certificate = workdir / _HAOS_TLS_CERT_NAME
+    key = workdir / _HAOS_TLS_KEY_NAME
+    try:
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-sha256",
+                "-nodes",
+                # Staging reruns per image prep, but VM clock drift or an
+                # image reused across a day boundary would turn a 1-day cert
+                # into a confusing "certificate has expired" failure.
+                "-days",
+                "30",
+                "-subj",
+                "/CN=haos-e2e.local",
+                "-addext",
+                "subjectAltName=DNS:haos-e2e.local",
+                "-addext",
+                "basicConstraints=critical,CA:TRUE",
+                "-addext",
+                "keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign",
+                "-addext",
+                "extendedKeyUsage=serverAuth",
+                "-keyout",
+                str(key),
+                "-out",
+                str(certificate),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        subprocess.run(
+            [
+                "guestfish",
+                "--rw",
+                "-a",
+                str(image_path),
+                "run",
+                ":",
+                "mount",
+                "/dev/sda8",
+                "/",
+                ":",
+                "mkdir-p",
+                _HAOS_TLS_DIR,
+                ":",
+                "copy-in",
+                str(certificate),
+                _HAOS_TLS_DIR,
+                ":",
+                "copy-in",
+                str(key),
+                _HAOS_TLS_DIR,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        shutil.rmtree(workdir, ignore_errors=True)
+        raise RuntimeError(
+            f"Failed to stage Home Assistant TLS files into {image_path}: {exc}"
+        ) from exc
+    LOG.info("Staged HA Core TLS files into %s (host CA: %s)", image_path, certificate)
+    # The caller reads the certificate as a trust anchor for the rest of the
+    # session, so remove the workdir (and its private key) only at exit.
+    atexit.register(shutil.rmtree, workdir, ignore_errors=True)
+    return certificate
 
 
 def stage_embedded_server_feature_flags_in_qcow2(
@@ -986,6 +1229,136 @@ def stage_embedded_server_feature_flags_in_qcow2(
         )
     finally:
         _shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _home_assistant_ws_command(
+    base_url: str,
+    token: str,
+    command: dict[str, Any],
+    *,
+    timeout: float = 60.0,
+    verify_ssl: bool = True,
+) -> Any:
+    """Run one authenticated Home Assistant WebSocket command."""
+    import websockets.sync.client
+
+    ws_url = (
+        base_url.replace("http://", "ws://").replace("https://", "wss://")
+        + "/api/websocket"
+    )
+    ssl_context: ssl.SSLContext | None = None
+    if ws_url.startswith("wss://"):
+        ssl_context = ssl.create_default_context()
+        if not verify_ssl:
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+
+    with websockets.sync.client.connect(
+        ws_url,
+        max_size=None,
+        open_timeout=min(timeout, 30.0),
+        ssl=ssl_context,
+    ) as ws:
+        first = json.loads(ws.recv())
+        if first.get("type") != "auth_required":
+            raise RuntimeError(f"WS handshake: expected auth_required, got {first!r}")
+        ws.send(json.dumps({"type": "auth", "access_token": token}))
+        auth_resp = json.loads(ws.recv())
+        if auth_resp.get("type") != "auth_ok":
+            raise RuntimeError(f"WS auth rejected: {auth_resp}")
+
+        msg_id = 1
+        ws.send(json.dumps({"id": msg_id, **command}))
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                raw = ws.recv(timeout=max(deadline - time.monotonic(), 1.0))
+            except TimeoutError:
+                continue
+            if not isinstance(raw, str):
+                raw = raw.decode()
+            response = json.loads(raw)
+            if response.get("id") != msg_id:
+                continue
+            if not response.get("success", False):
+                raise RuntimeError(
+                    f"Home Assistant WS command {command.get('type')!r} failed: "
+                    f"{response.get('error') or response!r}"
+                )
+            return response.get("result")
+    raise TimeoutError(
+        f"Home Assistant WS command {command.get('type')!r} got no response "
+        f"within {timeout}s"
+    )
+
+
+def get_home_assistant_http_config(
+    base_url: str,
+    token: str,
+    *,
+    timeout: float = 60.0,
+    verify_ssl: bool = True,
+) -> dict[str, Any]:
+    """Read Core's stable, pending, default, and active HTTP config slots."""
+    result = _home_assistant_ws_command(
+        base_url,
+        token,
+        {"type": "http/config"},
+        timeout=timeout,
+        verify_ssl=verify_ssl,
+    )
+    if not isinstance(result, dict):
+        raise RuntimeError(f"http/config returned a non-object result: {result!r}")
+    return result
+
+
+def configure_home_assistant_http(
+    base_url: str,
+    token: str,
+    config: dict[str, Any],
+    *,
+    timeout: float = 60.0,
+    verify_ssl: bool = True,
+) -> bool:
+    """Stage an HTTP config and return whether Core scheduled its restart.
+
+    The underlying ``http/config/configure`` WS command requires an admin
+    token and a Core in ``CoreState.running`` — mid-restart Core rejects it
+    with ``not_running``, which surfaces here as ``RuntimeError``.
+    """
+    result = _home_assistant_ws_command(
+        base_url,
+        token,
+        {"type": "http/config/configure", "config": config},
+        timeout=timeout,
+        verify_ssl=verify_ssl,
+    )
+    if not isinstance(result, dict) or not isinstance(result.get("restart"), bool):
+        raise RuntimeError(
+            f"http/config/configure returned an invalid result: {result!r}"
+        )
+    return result["restart"]
+
+
+def promote_home_assistant_http_config(
+    base_url: str,
+    token: str,
+    *,
+    timeout: float = 60.0,
+    verify_ssl: bool = True,
+) -> None:
+    """Promote Core's live pending HTTP config to the stable slot."""
+    result = _home_assistant_ws_command(
+        base_url,
+        token,
+        {"type": "http/config/promote"},
+        timeout=timeout,
+        verify_ssl=verify_ssl,
+    )
+    if result is not None:
+        raise RuntimeError(
+            f"http/config/promote returned an unexpected result: {result!r}"
+        )
 
 
 def enable_config_entry(
@@ -1485,7 +1858,7 @@ def _probe_addon_ha_link(addon_mcp_url: str, budget: float) -> None:
             timeout=inner,
             init_timeout=inner,
         ) as client:
-            await client.call_tool("ha_get_addon", {}, timeout=inner)
+            await client.call_tool("ha_get_app", {}, timeout=inner)
 
     async def _bounded() -> None:
         try:
@@ -1494,7 +1867,7 @@ def _probe_addon_ha_link(addon_mcp_url: str, budget: float) -> None:
             # wait_for raises a bare TimeoutError(), whose repr carries nothing.
             # Name the target so the loop's final report is actionable.
             raise TimeoutError(
-                f"ha_get_addon at {addon_mcp_url} did not answer within "
+                f"ha_get_app at {addon_mcp_url} did not answer within "
                 f"{budget:.1f}s (fastmcp's own {inner:.1f}s deadlines did not "
                 f"fire, so the stall was not in initialize or the read)"
             ) from exc
@@ -1515,7 +1888,7 @@ def wait_for_addon_ha_link_ready(
     can land in that window and fail with ``CONNECTION_FAILED`` — which reads
     as a product bug rather than a setup race.
 
-    ``ha_get_addon`` is the probe because it needs both legs of that path (the
+    ``ha_get_app`` is the probe because it needs both legs of that path (the
     Core WebSocket and the Supervisor API) and is the call that surfaced the
     race. Returns False on timeout so the caller can fail with context.
     Transient errors are retried; bugs propagate.
@@ -1610,12 +1983,17 @@ def _wait_port(port: int, host: str = "127.0.0.1", timeout: float = 180.0) -> No
     raise TimeoutError(f"{host}:{port} did not open within {timeout}s")
 
 
-def _wait_http_ok(url: str, timeout: float = 300.0) -> None:
+def _wait_http_ok(url: str, timeout: float = 300.0, *, verify_ssl: bool = True) -> None:
     deadline = time.monotonic() + timeout
     last_err: Exception | None = None
+    context: ssl.SSLContext | None = None
+    if url.startswith("https://") and not verify_ssl:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=5.0) as resp:
+            with urllib.request.urlopen(url, timeout=5.0, context=context) as resp:
                 if resp.status == 200:
                     return
         except (urllib.error.URLError, urllib.error.HTTPError, OSError) as e:
@@ -2072,7 +2450,7 @@ def trigger_dev_addon_update(
         _await_supervisor_ws_result(ws, msg_id, op_endpoint, op_deadline)
 
     def _supervisor_post_with_job_retry(
-        endpoint: str, op_timeout: int, *, data: dict | None = None
+        endpoint: str, op_timeout: float, *, data: dict | None = None
     ) -> None:
         """POST a Supervisor endpoint, retrying the transient per-addon
         ``Another job is running for job group ...`` collision.

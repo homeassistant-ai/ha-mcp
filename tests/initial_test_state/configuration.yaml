@@ -18,14 +18,19 @@ automation: !include automations.yaml
 script: !include scripts.yaml
 scene: !include scenes.yaml
 
-# HTTP configuration for proxy support
-http:
-  use_x_forwarded_for: true
-  trusted_proxies:
-    - 127.0.0.0/8
-    - 10.0.0.0/8
-    - 172.16.0.0/12
-    - 192.168.0.0/16
+# NO `http:` BLOCK HERE, DELIBERATELY. HA 2026.8 moved HTTP config into a
+# storage-backed store (Settings UI) and turned YAML into a ONE-SHOT
+# migration that lands as an unconfirmed *pending trial*: Core serves it,
+# schedules a revert 5 minutes later, and — when nothing promotes it —
+# reverts to the stored config and RESTARTS Core. That restart landed
+# mid-suite and killed the tail of the external HAOS lane. The same release
+# also changed the Supervisor-managed default port from 8123 to 80, so the
+# reverted config is not even the port this suite talks to.
+# The settings this block used to carry (server_port 8123, plus the
+# use_x_forwarded_for/trusted_proxies proxy pair) now live in
+# .storage/http as a CONFIRMED `stable` config with yaml_migration_done
+# already true — no migration, no trial, no revert, no repair issue, and
+# Core stays on 8123 on every backend. Add HTTP settings there, not here.
 
 demo:
 
@@ -70,3 +75,13 @@ template:
         device_class: temperature
         state_class: measurement
         unit_of_measurement: "°C"
+      # mold_indicator's flow requires a humidity source alongside the two
+      # temperature ones. HA's EntitySelector validates only the entity_id
+      # shape, so a temperature sensor would be accepted here and then log
+      # "unsupported unit" and hold the helper at unknown forever.
+      - name: demo Humidity
+        unique_id: e2e_demo_humidity
+        state: "{{ 45.0 }}"
+        device_class: humidity
+        state_class: measurement
+        unit_of_measurement: "%"

@@ -1750,9 +1750,7 @@ class TestRunOAuthServerSettingsUI:
         async def fake_run_async(**kwargs):
             pass
 
-        mock_mcp.run_async = MagicMock(
-            side_effect=lambda **kwargs: fake_run_async(**kwargs)
-        )
+        mock_mcp.run_async = MagicMock(side_effect=fake_run_async)
         mock_server = MagicMock()
         mock_server.mcp = mock_mcp
 

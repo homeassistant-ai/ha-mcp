@@ -123,7 +123,8 @@ class TestAddonStructure:
 
     def test_stable_addon_exposes_nonbeta_tool_options(self):
         """Stable add-on must expose the NON-beta operator options that dev
-        has — ``tool_search_max_results``, ``disabled_tools``, ``pinned_tools``
+        has — ``tool_search_max_results``, ``disabled_tools``,
+        ``pinned_tools``, ``read_only_mode``, ``enable_security_policy_tool``
         — in both ``options`` and ``schema``. These are not beta features, so
         the web-UI master gate doesn't apply; without them in the stable
         schema they were unreachable on stable (start.py wrote defaults, the
@@ -142,6 +143,14 @@ class TestAddonStructure:
             # (an on-by-default value would silently break every write
             # tool on upgrade).
             "read_only_mode": ("bool?", False),
+            # Redact Secrets (#2157) — non-beta safety toggle, default OFF
+            # (no redaction runs while off; the sentinel write guards are
+            # unconditional — see config.py).
+            "redact_secrets": ("bool?", False),
+            # Policy-editing tool (#2148) — non-beta, default OFF (an
+            # on-by-default value would hand every connected agent the
+            # ability to rewrite the approval gates).
+            "enable_security_policy_tool": ("bool?", False),
         }
         for key, (schema_type, default) in expected.items():
             assert key in config["options"], f"{key!r} must be in stable options"
@@ -153,7 +162,7 @@ class TestAddonStructure:
             )
 
     def test_stable_and_dev_agree_on_nonbeta_tool_options(self):
-        """The three non-beta tool options must stay in sync between the
+        """The non-beta tool options must stay in sync between the
         stable and dev add-ons — same defaults AND same schema types. Guards
         against future one-sided drift (the exact bug class this fix
         addresses: dev gains/changes an option, stable is forgotten)."""
@@ -162,6 +171,8 @@ class TestAddonStructure:
             "disabled_tools",
             "pinned_tools",
             "read_only_mode",
+            "redact_secrets",
+            "enable_security_policy_tool",
         )
         with open(f"{ADDON_DIR}/config.yaml") as f:
             stable = yaml.safe_load(f)
@@ -209,6 +220,48 @@ class TestAddonStructure:
             'start.py exports os.environ["READ_ONLY_MODE"] — they must match'
         )
 
+    def test_start_py_wires_security_policy_tool_env(self):
+        """start.py must read the ``enable_security_policy_tool`` addon option
+        and export it as ``ENABLE_SECURITY_POLICY_TOOL``, and that env name
+        must match the one ``config.FEATURE_FLAG_FIELDS`` registers for the
+        ``enable_security_policy_tool`` flag. In addon mode this export is
+        the only channel that reaches the server (the override-file applier
+        skips non-beta flags whose origin is 'addon'), so without it the
+        Policies-tab toggle would be dead on both flavors (issue #2148).
+        Source-level contract mirroring the read_only_mode wiring test."""
+        start_src = (_REPO_ROOT / ADDON_DIR / "start.py").read_text(encoding="utf-8")
+        # Two substrings, not one: the call wraps across lines under the
+        # formatter, so a single contiguous match would be format-fragile.
+        assert "enable_security_policy_tool = resolve_bool_option(" in start_src, (
+            "start.py must resolve the enable_security_policy_tool addon "
+            "option via resolve_bool_option"
+        )
+        assert '"enable_security_policy_tool", False' in start_src, (
+            "start.py must read the enable_security_policy_tool option key "
+            "with a False default"
+        )
+        assert 'os.environ["ENABLE_SECURITY_POLICY_TOOL"]' in start_src, (
+            "start.py must export the ENABLE_SECURITY_POLICY_TOOL env var the "
+            "server reads"
+        )
+
+        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config.py").read_text(
+            encoding="utf-8"
+        )
+        m = re.search(
+            r'FeatureFlagField\(\s*"enable_security_policy_tool"\s*,\s*"([^"]+)"',
+            config_src,
+        )
+        assert m is not None, (
+            "config.py FEATURE_FLAG_FIELDS must register an "
+            "enable_security_policy_tool entry"
+        )
+        assert m.group(1) == "ENABLE_SECURITY_POLICY_TOOL", (
+            f"enable_security_policy_tool env name in config.py is "
+            f"{m.group(1)!r}, but start.py exports "
+            'os.environ["ENABLE_SECURITY_POLICY_TOOL"] — they must match'
+        )
+
     def test_start_py_wires_strict_mandatory_bps_env(self):
         """start.py must read the ``enable_strict_mandatory_bps`` addon option
         and export it as ``ENABLE_STRICT_MANDATORY_BPS``, and that env name
@@ -244,6 +297,35 @@ class TestAddonStructure:
             f"enable_strict_mandatory_bps env name in config.py is "
             f"{m.group(1)!r}, but start.py exports "
             'os.environ["ENABLE_STRICT_MANDATORY_BPS"] — they must match'
+        )
+
+    def test_start_py_wires_redact_secrets_env(self):
+        """start.py must read the ``redact_secrets`` addon option and export
+        it as the ``REDACT_SECRETS`` env var, and that env name must match the
+        one ``config.FEATURE_FLAG_FIELDS`` registers for the ``redact_secrets``
+        flag. Source-level contract mirroring the read_only_mode wiring test
+        (issue #2157)."""
+        start_src = (_REPO_ROOT / ADDON_DIR / "start.py").read_text(encoding="utf-8")
+        assert 'resolve_bool_option(config, "redact_secrets"' in start_src, (
+            "start.py must resolve the redact_secrets addon option via "
+            "resolve_bool_option"
+        )
+        assert 'os.environ["REDACT_SECRETS"]' in start_src, (
+            "start.py must export the REDACT_SECRETS env var the server reads"
+        )
+
+        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config.py").read_text(
+            encoding="utf-8"
+        )
+        m = re.search(
+            r'FeatureFlagField\(\s*"redact_secrets"\s*,\s*"([^"]+)"', config_src
+        )
+        assert m is not None, (
+            "config.py FEATURE_FLAG_FIELDS must register a redact_secrets entry"
+        )
+        assert m.group(1) == "REDACT_SECRETS", (
+            f"redact_secrets env name in config.py is {m.group(1)!r}, but "
+            'start.py exports os.environ["REDACT_SECRETS"] — they must match'
         )
 
     @pytest.mark.skipif(

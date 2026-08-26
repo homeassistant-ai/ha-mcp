@@ -461,9 +461,12 @@ class TestResourcesIdentifierValidation:
 
     async def test_set_with_none_resource_id_routes_to_create(self, tools):
         # Control: None remains the documented "create-new" sentinel.
+        # HA returns the created resource keyed by ``id`` (which is what
+        # _extract_resource_id reads); the previous ``resource_id`` key was
+        # read by nothing, so the create silently yielded resource_id=None.
         tools._client.send_websocket_message.return_value = {
             "success": True,
-            "result": {"resource_id": "x"},
+            "result": {"id": "x"},
         }
         result = await tools.ha_config_set_dashboard_resource(
             url="/local/test.js", resource_type="module"
@@ -932,6 +935,48 @@ class TestIntegrationsIdentifierValidation:
         tools._client.send_websocket_message.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_set_integration_reconfigure_rejects_empty_entry_id(self, tools, bad):
+        # The reconfigure arm reaches HA through start_reconfigure_flow rather
+        # than config_entries/disable, so it needs its own guard assertion.
+        tools._client.start_reconfigure_flow = AsyncMock()
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_set_integration(
+                entry_id=bad, reconfigure=True, config={"host": "192.0.2.1"}
+            )
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "entry_id"' in str(excinfo.value), str(excinfo.value)
+        tools._client.start_reconfigure_flow.assert_not_awaited()
+
+    async def test_set_integration_reconfigure_rejects_missing_entry_id(self, tools):
+        """reconfigure=True without entry_id has nothing to reconfigure."""
+        tools._client.start_reconfigure_flow = AsyncMock()
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_set_integration(reconfigure=True, config={"host": "h"})
+        _assert_invalid_param(excinfo)
+        assert "entry_id" in str(excinfo.value)
+        tools._client.start_reconfigure_flow.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            pytest.param({"domain": "shelly"}, id="with_domain"),
+            pytest.param({"enabled": False}, id="with_enabled"),
+            pytest.param({"domain": "shelly", "enabled": True}, id="with_both"),
+        ],
+    )
+    async def test_set_integration_reconfigure_rejects_other_mode_arguments(
+        self, tools, extra
+    ):
+        """Reconfigure is its own mode; it cannot be combined with the others."""
+        tools._client.start_reconfigure_flow = AsyncMock()
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_set_integration(
+                entry_id="abc", reconfigure=True, config={"host": "h"}, **extra
+            )
+        _assert_invalid_param(excinfo)
+        tools._client.start_reconfigure_flow.assert_not_awaited()
+
+    @pytest.mark.parametrize("bad", ["", "   "])
     async def test_set_integration_rejects_empty_domain(self, tools, bad):
         # ``domain`` is passed straight into ``start_config_flow``; without
         # the guard, ``domain=""`` would surface as a misleading HA
@@ -1139,7 +1184,7 @@ class TestRegistryIdentifierValidation:
         mock_ws_client.send_websocket_message.assert_not_called()
 
 
-# --- tools_addons.py (Iter6 — ha_manage_addon slug) ----------------------
+# --- tools_addons.py (Iter6 — ha_manage_app slug) ----------------------
 
 
 def _register_addon_tools_and_capture(mock_client):
@@ -1163,17 +1208,17 @@ def _register_addon_tools_and_capture(mock_client):
 class TestAddonsIdentifierValidation:
     @pytest.mark.parametrize("bad", ["", "   "])
     async def test_manage_addon_rejects_empty_slug(self, mock_ws_client, bad):
-        # ``ha_manage_addon`` is multi-modal (proxy / config / websocket);
+        # ``ha_manage_app`` is multi-modal (proxy / config / websocket);
         # ``slug`` is required across all modes and propagates to the
         # Supervisor API on every dispatch arm. Without the guard,
         # ``slug=""`` would surface as a misleading "addon not found" /
         # 404 from the Supervisor; the up-front guard names the offending
         # parameter before any backend call.
         captured = _register_addon_tools_and_capture(mock_ws_client)
-        ha_manage_addon = captured["ha_manage_addon"]
+        ha_manage_app = captured["ha_manage_app"]
 
         with pytest.raises(ToolError) as excinfo:
-            await ha_manage_addon(slug=bad, path="/api/health")
+            await ha_manage_app(slug=bad, path="/api/health")
         _assert_invalid_param(excinfo)
         assert '"parameter": "slug"' in str(excinfo.value), str(excinfo.value)
         mock_ws_client.send_websocket_message.assert_not_called()
@@ -1234,12 +1279,37 @@ class TestHacsActionValidation:
         # ``_resolve_hacs_repo_id`` (no empty-check) into a HACS lookup
         # miss, or — for a numeric-looking candidate — reach
         # ``hacs/repository/download`` with an empty repository field.
-        # Same destructive-WS-call class as ``ha_manage_addon``; the
+        # Same destructive-WS-call class as ``ha_manage_app``; the
         # guard fires before any backend call (including the HACS
         # availability check) so neither the supervisor nor HACS sees
         # the empty id.
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_manage_hacs(action="download", repository_id=bad)
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "repository_id"' in str(excinfo.value), str(excinfo.value)
+        tools._client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.parametrize("bad", [None, "", "   "])
+    async def test_manage_hacs_remove_rejects_empty_repository_id(self, tools, bad):
+        # ``remove`` is the file's newest destructive entry point (PR #2124)
+        # and shares download's up-front guard — including ``None``, the
+        # parameter's own default and the likeliest agent mistake.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="remove", repository_id=bad)
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "repository_id"' in str(excinfo.value), str(excinfo.value)
+        tools._client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.parametrize("bad", [None, "", "   "])
+    async def test_manage_hacs_update_information_rejects_empty_repository_id(
+        self, tools, bad
+    ):
+        # ``update_information`` shares the download/remove up-front guard:
+        # an empty id must fail before the HACS availability check or any
+        # WS round-trip, not fall through ``_resolve_hacs_repo_id`` into a
+        # lookup miss.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="update_information", repository_id=bad)
         _assert_invalid_param(excinfo)
         assert '"parameter": "repository_id"' in str(excinfo.value), str(excinfo.value)
         tools._client.send_websocket_message.assert_not_called()

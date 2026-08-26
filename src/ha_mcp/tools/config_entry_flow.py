@@ -7,23 +7,95 @@ Config Entry Flow API.
 
 The create/update entry point is the unified ha_config_set_helper tool in
 tools_config_helpers.py, which routes to create_flow_helper / update_flow_helper
-for the 15 helper types listed in FLOW_HELPER_TYPES.
+for the 17 helper types listed in FLOW_HELPER_TYPES.
+
+The same flow walkers drive every other config-entry surface, not just
+helpers: ``ha_set_integration`` creates entries for arbitrary domains through
+``create_config_entry`` and edits them through ``update_config_entry_options``;
+``ha_config_set_helper(helper_type="config_subentry")`` drives subentry flows
+through ``set_config_subentry``. Changing a live entry's connection settings is
+a different problem — it commits in place and Home Assistant reloads afterwards
+— and lives in ``config_entry_reconfigure``, which depends on this module for
+the shared flow-abort and sentinel-rejection helpers.
+
+The step machinery those entry points drive lives in three sibling modules,
+imported in one direction only (menu <- form <- walker <- here):
+
+- ``config_entry_flow_menu``: menu selection keys and menu-step handling
+- ``config_entry_flow_form``: form-step schema consumption and reuse tracking
+- ``config_entry_flow_walker``: step submission, HA error translation, flow
+  introspection, and the two flow walkers
 """
 
 import asyncio
-import copy
+import json
 import logging
-from collections.abc import Iterator
-from enum import StrEnum
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal
 
-from ..client.rest_client import HomeAssistantAPIError
+from fastmcp.exceptions import ToolError
+
 from ..errors import ErrorCode, create_error_response
+from ..redaction import sentinel_option_keys
+from .config_entry_flow_form import _extract_schema_field_names
+from .config_entry_flow_walker import (
+    POST_COMMIT_STATUSES,
+    _FlowType,
+    _handle_config_subentry_flow_steps,
+    _handle_flow_steps,
+)
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
 
-# 15 helpers that use Config Entry Flow API (Issue #324).
+
+async def _abort_flow_best_effort(client: Any, flow_id: str) -> None:
+    """Abort a still-pending flow without hiding the original failure."""
+    try:
+        await asyncio.wait_for(client.abort_config_flow(flow_id), timeout=5.0)
+    except Exception as abort_err:
+        logger.warning("Failed to abort flow %s after error: %s", flow_id, abort_err)
+
+
+async def _abort_subentry_flow_best_effort(client: Any, flow_id: str) -> None:
+    """Abort a pending subentry flow without hiding the original failure."""
+    try:
+        await asyncio.wait_for(client.abort_config_subentry_flow(flow_id), timeout=5.0)
+    except Exception as abort_err:
+        logger.warning(
+            "Failed to abort config subentry flow %s after error: %s",
+            flow_id,
+            abort_err,
+        )
+
+
+def _reject_redaction_sentinels(config_dict: dict[str, Any]) -> None:
+    """Reject config values that are redaction placeholders (#2157).
+
+    A caller round-tripping a redacted read back through a flow write would
+    overwrite the live credential with the placeholder string. Omitting the
+    key keeps the current value, so rejection loses nothing. Active
+    regardless of the redact_secrets toggle: a sentinel captured while
+    redaction was on must not overwrite a credential after the operator
+    turns it off.
+    """
+    sentinel_keys = sentinel_option_keys(config_dict)
+    if sentinel_keys:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "config contains redaction placeholder values for: "
+                f"{', '.join(sentinel_keys)}. These came from a redacted "
+                "read, not real values — omit these keys to keep the "
+                "current values, or submit the real value.",
+                context={"parameter": "config"},
+            )
+        )
+
+
+# 17 helpers that use Config Entry Flow API (Issue #324, #2187).
+# `otp` is the one helper-typed config flow deliberately left out: its confirm
+# step demands a live TOTP code derived from the secret, which no flow walker
+# can supply. It stays reachable through ha_set_integration(domain="otp").
 SUPPORTED_HELPERS = Literal[
     "template",
     "group",
@@ -40,6 +112,8 @@ SUPPORTED_HELPERS = Literal[
     "generic_thermostat",
     "switch_as_x",
     "generic_hygrostat",
+    "history_stats",
+    "mold_indicator",
 ]
 
 # Value-set form of SUPPORTED_HELPERS for runtime routing checks.
@@ -61,34 +135,10 @@ FLOW_HELPER_TYPES: frozenset[str] = frozenset(
         "generic_thermostat",
         "switch_as_x",
         "generic_hygrostat",
+        "history_stats",
+        "mold_indicator",
     }
 )
-
-# Keys used to specify a menu selection — stripped before submitting form data.
-_MENU_SELECTION_KEYS = frozenset({"group_type", "next_step_id", "menu_option"})
-
-# Flow step types an MCP client cannot drive: external steps need a browser
-# (OAuth / cloud authorization), progress steps wait on HA-side async work.
-# Surfaced as structured errors instead of attempted (issue #1814).
-_UNDRIVABLE_STEP_TYPES = frozenset(
-    {"external", "external_done", "progress", "progress_done"}
-)
-_RECONFIGURE_SUCCESS_REASONS = frozenset(
-    {
-        "reauth_successful",
-        "reconfigure_successful",
-    }
-)
-_MISSING_DEFAULT = object()
-
-
-class _FlowType(StrEnum):
-    """HA config flow result type strings."""
-
-    FORM = "form"
-    MENU = "menu"
-    ABORT = "abort"
-    CREATE_ENTRY = "create_entry"
 
 
 # ---------------------------------------------------------------------------
@@ -98,979 +148,6 @@ class _FlowType(StrEnum):
 # tools_config_helpers.py. They take a client instance as an explicit
 # parameter so the same logic can be used from any caller.
 # ---------------------------------------------------------------------------
-
-
-def _handle_menu_step(
-    flow_id: str,
-    current_step: dict[str, Any],
-    remaining_config: dict[str, Any],
-) -> str:
-    """Extract menu selection from config, raising on missing selection.
-
-    Returns the menu choice string. Mutates remaining_config to pop
-    the consumed selection key.
-    """
-    menu_choice = None
-    for key in _MENU_SELECTION_KEYS:
-        if key in remaining_config:
-            menu_choice = remaining_config.pop(key)
-            break
-
-    if not menu_choice:
-        menu_options = current_step.get("menu_options", [])
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS,
-                "Menu step requires a selection. "
-                "Add 'group_type' or 'next_step_id' to your config.",
-                suggestions=[
-                    f"Available options: {menu_options}",
-                    'Example: {"group_type": "light", "name": "My Group", ...}',
-                ],
-                context={
-                    "flow_id": flow_id,
-                    "step_id": current_step.get("step_id"),
-                    "menu_options": menu_options,
-                },
-            )
-        )
-
-    return str(menu_choice)
-
-
-def iter_schema_fields(data_schema: Any) -> Iterator[dict[str, Any]]:
-    """Yield leaf field definitions from a flow schema, descending into sections."""
-    if not isinstance(data_schema, list):
-        return
-    for field in data_schema:
-        if not isinstance(field, dict):
-            continue
-        nested_schema = field.get("schema")
-        if isinstance(nested_schema, list):
-            yield from iter_schema_fields(nested_schema)
-            continue
-        yield field
-
-
-def _section_path(path_prefix: str, name: Any) -> str:
-    """Return the dotted config path for a named or anonymous section."""
-    if not isinstance(name, str):
-        return path_prefix
-    return f"{path_prefix}.{name}" if path_prefix else name
-
-
-def _record_ignored_section_keys(
-    ignored_config_keys: set[str] | None,
-    remaining_config: dict[str, Any],
-    section_path: str,
-) -> None:
-    """Record undeclared keys remaining inside an explicit section dict."""
-    if ignored_config_keys is None:
-        return
-    ignored_config_keys.update(
-        f"{section_path}.{key}" if section_path else key
-        for key in remaining_config
-        if key not in _MENU_SELECTION_KEYS
-    )
-
-
-def _field_default_value(field: dict[str, Any]) -> Any:
-    """Return a serialized schema field's default/suggested value, if present."""
-    description = field.get("description")
-    if isinstance(description, dict) and description.get("suggested_value") is not None:
-        return copy.deepcopy(description["suggested_value"])
-    if field.get("suggested_value") is not None:
-        return copy.deepcopy(field["suggested_value"])
-    if "default" in field:
-        return copy.deepcopy(field["default"])
-    return _MISSING_DEFAULT
-
-
-def _schema_default_values(data_schema: list[Any]) -> dict[str, Any]:
-    """Build default form data from serialized schema suggestions/defaults."""
-    defaults: dict[str, Any] = {}
-    for field in data_schema:
-        if not isinstance(field, dict):
-            continue
-        name = field.get("name")
-        nested_schema = field.get("schema")
-        if not isinstance(name, str):
-            continue
-        if isinstance(nested_schema, list):
-            nested_defaults = _schema_default_values(nested_schema)
-            if nested_defaults:
-                defaults[name] = nested_defaults
-            continue
-        default = _field_default_value(field)
-        if default is not _MISSING_DEFAULT:
-            defaults[name] = default
-    return defaults
-
-
-def _required_section_defaults(field: dict[str, Any]) -> dict[str, Any]:
-    """Return default data for a required section, otherwise an empty dict."""
-    nested_schema = field.get("schema")
-    if not field.get("required") or not isinstance(nested_schema, list):
-        return {}
-    return _schema_default_values(nested_schema)
-
-
-def _ignored_keys_warnings(
-    ignored_config_keys: set[str], remaining_config: dict[str, Any]
-) -> list[str]:
-    """Build warnings for caller-supplied config keys no flow step consumed."""
-    warnings: list[str] = []
-    ignored = ignored_config_keys | {
-        key for key in remaining_config if key not in _MENU_SELECTION_KEYS
-    }
-    if ignored:
-        warnings.append(
-            "Ignored config keys not declared by the Home Assistant flow "
-            f"schema: {', '.join(sorted(ignored))}"
-        )
-    leftover_menu_keys = _MENU_SELECTION_KEYS & remaining_config.keys()
-    if leftover_menu_keys:
-        warnings.append(
-            "Ignored menu selection key(s) with no matching menu step: "
-            f"{', '.join(sorted(leftover_menu_keys))}"
-        )
-    return warnings
-
-
-def _consume_section_schema(
-    field: dict[str, Any],
-    explicit_section: dict[str, Any] | None,
-    remaining_config: dict[str, Any],
-    ignored_config_keys: set[str] | None,
-    consumed_config_keys: set[str] | None,
-    path_prefix: str,
-) -> dict[str, Any]:
-    """Consume config values for a nested flow section."""
-    nested_schema = field.get("schema")
-    if not isinstance(nested_schema, list):
-        return {}
-
-    name = field.get("name")
-    section_path = _section_path(path_prefix, name)
-    nested_data = _required_section_defaults(field)
-
-    if explicit_section is not None:
-        explicit_remaining = dict(explicit_section)
-        nested_data.update(
-            _consume_form_schema(
-                nested_schema,
-                explicit_remaining,
-                ignored_config_keys,
-                consumed_config_keys,
-                section_path,
-            )
-        )
-        _record_ignored_section_keys(
-            ignored_config_keys,
-            explicit_remaining,
-            section_path,
-        )
-
-    nested_data.update(
-        _consume_form_schema(
-            nested_schema,
-            remaining_config,
-            ignored_config_keys,
-            consumed_config_keys,
-            section_path,
-        )
-    )
-    return nested_data
-
-
-def _mark_consumed(
-    consumed_config_keys: set[str] | None,
-    path_prefix: str,
-    name: str,
-) -> None:
-    """Record that a caller-supplied form key, not an injected default, was used."""
-    if consumed_config_keys is not None:
-        consumed_config_keys.add(_section_path(path_prefix, name))
-
-
-def _auto_confirm_form_payload(current_step: dict[str, Any]) -> dict[str, Any] | None:
-    """Return payload for HA preview/confirmation-only forms we can safely advance."""
-    if "preview" not in current_step:
-        return None
-    data_schema = current_step.get("data_schema")
-    if not isinstance(data_schema, list) or len(data_schema) != 1:
-        return None
-    field = data_schema[0]
-    if not isinstance(field, dict) or not field.get("required"):
-        return None
-    name = field.get("name")
-    if not isinstance(name, str) or name in _MENU_SELECTION_KEYS:
-        return None
-    default = _field_default_value(field)
-    if default is not False:
-        return None
-    selector = field.get("selector")
-    if isinstance(selector, dict) and selector and "boolean" not in selector:
-        return None
-    return {name: True}
-
-
-def _consume_form_schema(
-    data_schema: list[Any],
-    remaining_config: dict[str, Any],
-    ignored_config_keys: set[str] | None = None,
-    consumed_config_keys: set[str] | None = None,
-    path_prefix: str = "",
-) -> dict[str, Any]:
-    """Consume matching config values and shape nested flow sections.
-
-    Mutates ``remaining_config`` by removing every consumed key. Flat child
-    values override the same value inside an explicitly supplied section dict.
-    Unknown keys inside explicit section dicts are added to
-    ``ignored_config_keys`` with their dotted section path.
-    """
-    form_data: dict[str, Any] = {}
-
-    for field in data_schema:
-        if not isinstance(field, dict):
-            continue
-
-        name = field.get("name")
-        nested_schema = field.get("schema")
-        if isinstance(nested_schema, list):
-            section_name = name if isinstance(name, str) else None
-            explicit_section = None
-            if section_name is not None and section_name in remaining_config:
-                explicit_value = remaining_config.pop(section_name)
-                if not isinstance(explicit_value, dict):
-                    form_data[section_name] = explicit_value
-                    _mark_consumed(consumed_config_keys, path_prefix, section_name)
-                    continue
-                explicit_section = explicit_value
-
-            nested_data = _consume_section_schema(
-                field,
-                explicit_section,
-                remaining_config,
-                ignored_config_keys,
-                consumed_config_keys,
-                path_prefix,
-            )
-            if nested_data:
-                if section_name is not None:
-                    form_data[section_name] = nested_data
-                else:
-                    form_data.update(nested_data)
-            continue
-
-        if (
-            isinstance(name, str)
-            and name not in _MENU_SELECTION_KEYS
-            and name in remaining_config
-        ):
-            form_data[name] = remaining_config.pop(name)
-            _mark_consumed(consumed_config_keys, path_prefix, name)
-
-    return form_data
-
-
-def _extract_schema_field_names(data_schema: Any) -> set[str] | None:
-    """Extract the set of field names declared by a step's data_schema.
-
-    HA returns data_schema as a list of {name, selector, required, ...} dicts.
-    Nested leaf names are included; section-container names are omitted.
-    Returns ``None`` when the schema is absent or not a list (signalling
-    the caller to fall back to legacy submit-all behaviour). Returns a
-    (possibly empty) set when the schema is present and parseable.
-    """
-    if not isinstance(data_schema, list):
-        return None
-    names: set[str] = set()
-    for field in iter_schema_fields(data_schema):
-        name = field.get("name")
-        if isinstance(name, str):
-            names.add(name)
-    return names
-
-
-def _handle_form_step(
-    flow_id: str,
-    current_step: dict[str, Any],
-    remaining_config: dict[str, Any],
-    ignored_config_keys: set[str] | None = None,
-    consumed_config_keys: set[str] | None = None,
-) -> dict[str, Any]:
-    """Validate a form step and return form data to submit.
-
-    When the step's ``data_schema`` is provided, pops ONLY the keys declared
-    in that schema from ``remaining_config`` (mutating it) so any unconsumed
-    keys remain available for subsequent steps. Menu selection keys are never
-    submitted. Fields declared inside a section are grouped under the section
-    key; callers may provide them flat or inside an explicit section dict.
-
-    When ``data_schema`` is absent (HA didn't tell us field names), falls
-    back to legacy behaviour: submit all non-menu keys and clear them. This
-    keeps single-step flows working when HA omits the schema.
-
-    Raises ToolError on validation errors.
-    """
-    if current_step.get("errors"):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Form validation failed",
-                suggestions=["Fix the field errors and retry with corrected values"],
-                context={
-                    "flow_id": flow_id,
-                    "step_id": current_step.get("step_id"),
-                    "errors": current_step["errors"],
-                    "data_schema": current_step.get("data_schema"),
-                },
-            )
-        )
-
-    data_schema = current_step.get("data_schema")
-
-    form_data: dict[str, Any] = {}
-    if not isinstance(data_schema, list):
-        # Legacy fallback: no schema info — dump every non-menu key and
-        # consume them all so a follow-up step (rare without schema) won't
-        # re-submit the same data.
-        for key in list(remaining_config.keys()):
-            if key in _MENU_SELECTION_KEYS:
-                continue
-            form_data[key] = remaining_config.pop(key)
-            _mark_consumed(consumed_config_keys, "", key)
-    else:
-        form_data = _consume_form_schema(
-            data_schema, remaining_config, ignored_config_keys, consumed_config_keys
-        )
-
-    return form_data
-
-
-def _parse_flow_api_error(
-    api_error: HomeAssistantAPIError,
-) -> dict[str, Any]:
-    """Extract structured field-level info from an HA flow 4xx response.
-
-    Home Assistant returns voluptuous validation failures during flow
-    submission as either:
-
-    - ``{"message": "User input malformed: extra keys not allowed @ data['name']"}``
-      (raised before form validation, e.g. unknown field in payload)
-    - ``{"errors": {"base": "..."}, "description_placeholders": {...}}``
-      (per-field errors after voluptuous validation succeeds)
-    - Free-form text (when the body isn't JSON).
-
-    Returns a dict with at least:
-      - ``message``: the most informative human-readable string we found.
-      - ``field_errors``: dict of field-name -> error code/message, when
-        the body contained an ``errors`` map. Empty dict otherwise.
-      - ``raw``: the response_data dict (or ``None``) for diagnostics.
-    """
-    body = api_error.response_data or {}
-    field_errors: dict[str, Any] = {}
-    message_parts: list[str] = []
-
-    if isinstance(body, dict):
-        errors_field = body.get("errors")
-        if isinstance(errors_field, dict):
-            field_errors = {
-                key: val for key, val in errors_field.items() if isinstance(key, str)
-            }
-
-        # HA's stock 400 carries a `message` key with the voluptuous detail.
-        msg = body.get("message")
-        if isinstance(msg, str) and msg.strip():
-            message_parts.append(msg.strip())
-
-        # description_placeholders sometimes carry the human-readable error.
-        placeholders = body.get("description_placeholders")
-        if isinstance(placeholders, dict):
-            for key, val in placeholders.items():
-                if isinstance(val, str) and val.strip():
-                    message_parts.append(f"{key}: {val.strip()}")
-
-    if not message_parts:
-        # Fall back to the wrapper exception message ("API error: 400 - ...").
-        message_parts.append(str(api_error))
-
-    return {
-        "message": " | ".join(dict.fromkeys(message_parts)),  # de-dupe, preserve order
-        "field_errors": field_errors,
-        "raw": body if isinstance(body, dict) else None,
-    }
-
-
-async def _process_menu_flow_result(
-    flow_result: dict[str, Any],
-    client: Any,
-    intro_flow_id: str | None,
-    menu_choice: str | None,
-) -> dict[str, Any]:
-    """Return schema or menu_options dict for a MENU-type flow result."""
-    info: dict[str, Any] = {}
-    if menu_choice:
-        if not intro_flow_id:
-            return info
-        try:
-            step = await asyncio.wait_for(
-                client.submit_config_flow_step(
-                    intro_flow_id, {"next_step_id": menu_choice}
-                ),
-                timeout=10.0,
-            )
-        except (HomeAssistantAPIError, TimeoutError):
-            return info
-        if step.get("type") == _FlowType.FORM:
-            schema = step.get("data_schema")
-            if isinstance(schema, list):
-                info["schema"] = schema
-        return info
-
-    options = flow_result.get("menu_options")
-    if isinstance(options, list):
-        filtered = [opt for opt in options if isinstance(opt, str)]
-        if filtered:
-            info["menu_options"] = filtered
-    return info
-
-
-async def fetch_helper_flow_info(
-    client: Any,
-    helper_type: str | None,
-    menu_choice: str | None = None,
-) -> dict[str, Any]:
-    """Best-effort introspection of a helper's config-entry flow.
-
-    Starts a fresh introspection flow (always aborted) and returns a dict
-    with optional keys ``"schema"`` and ``"menu_options"`` so a single HA
-    round-trip serves both the schema-attach path (used by
-    ``_raise_flow_api_error`` and the pre-flow validation gates in
-    ``_handle_flow_helper``) and the menu-sub-types path (used when a
-    menu-rooted helper has no branch chosen yet — issue #1186).
-
-    Behaviour:
-
-    - FORM at top: ``{"schema": [...]}``
-    - MENU at top with ``menu_choice``: submits and returns the branch
-      form schema as ``{"schema": [...]}`` (no ``menu_options`` since
-      the caller already picked a branch)
-    - MENU at top without ``menu_choice``: ``{"menu_options": [...]}``
-    - any failure or unparseable shape: ``{}`` (callers branch on
-      ``"schema" in info`` / ``"menu_options" in info``)
-    """
-    info: dict[str, Any] = {}
-    if not helper_type or client is None:
-        return info
-    intro_flow_id: str | None = None
-    try:
-        flow_result = await client.start_config_flow(helper_type)
-        intro_flow_id = flow_result.get("flow_id")
-        flow_type = flow_result.get("type")
-
-        if flow_type == _FlowType.FORM:
-            schema = flow_result.get("data_schema")
-            if isinstance(schema, list):
-                info["schema"] = schema
-            return info
-
-        if flow_type == _FlowType.MENU:
-            return await _process_menu_flow_result(
-                flow_result, client, intro_flow_id, menu_choice
-            )
-
-        return info
-    except Exception:
-        return info
-    finally:
-        if intro_flow_id:
-            try:
-                await asyncio.wait_for(
-                    client.abort_config_flow(intro_flow_id), timeout=5.0
-                )
-            except Exception as abort_err:
-                logger.debug(
-                    f"Failed to abort introspection flow {intro_flow_id}: {abort_err}"
-                )
-
-
-def _build_flow_error_context(
-    flow_id: str,
-    status_code: int,
-    helper_type: str | None,
-    menu_choice: str | None,
-    current_step: dict[str, Any] | None,
-    submitted: dict[str, Any] | None,
-    parsed_raw: dict[str, Any] | None,
-) -> dict[str, Any]:
-    context: dict[str, Any] = {"flow_id": flow_id, "status_code": status_code}
-    if helper_type:
-        context["helper_type"] = helper_type
-    if menu_choice:
-        context["menu_choice"] = menu_choice
-    if current_step is not None:
-        context["step_id"] = current_step.get("step_id")
-    if submitted is not None:
-        context["submitted_keys"] = sorted(submitted.keys())
-    if parsed_raw is not None:
-        context["response_body"] = parsed_raw
-    return context
-
-
-async def _raise_flow_api_error(
-    api_error: HomeAssistantAPIError,
-    *,
-    client: Any,
-    flow_id: str,
-    helper_type: str | None,
-    menu_choice: str | None,
-    current_step: dict[str, Any] | None,
-    submitted: dict[str, Any] | None,
-) -> None:
-    """Translate an HA 4xx during a flow submit into a structured ToolError.
-
-    For 400/422 responses, parses ``response_data`` for field-level info
-    via ``_parse_flow_api_error``. When the body is unstructured (no
-    ``errors`` map), attaches the helper's ``data_schema`` (if it can be
-    fetched) so the caller has actionable information.
-
-    Always raises ``ToolError`` — never returns.
-    """
-    parsed = _parse_flow_api_error(api_error)
-    field_errors = parsed["field_errors"]
-    status_code = api_error.status_code or 0
-
-    context = _build_flow_error_context(
-        flow_id,
-        status_code,
-        helper_type,
-        menu_choice,
-        current_step,
-        submitted,
-        parsed["raw"],
-    )
-
-    suggestions: list[str] = []
-    message: str
-
-    current_schema = None
-    if current_step is not None:
-        step_schema = current_step.get("data_schema")
-        if isinstance(step_schema, list):
-            current_schema = step_schema
-
-    # Single introspection round-trip — used by both branches below.
-    info = await fetch_helper_flow_info(client, helper_type, menu_choice)
-    schema = info.get("schema") or current_schema
-
-    if field_errors:
-        # Structured field errors — tell the caller which fields failed.
-        context["field_errors"] = field_errors
-        readable = ", ".join(f"{k}: {v}" for k, v in field_errors.items())
-        message = f"Helper validation failed — {readable}"
-        suggestions.append(
-            "Fix the field(s) listed in 'field_errors' and retry the call."
-        )
-        # Issue #1149: also attach the data_schema so the LLM sees the field
-        # shape (selector, required, ...) alongside the per-field error
-        # codes — symmetric with the unstructured-error branch below.
-        # `field_errors` tells "what failed", `data_schema` tells "what's
-        # accepted"; together they're enough for self-correction.
-        if schema is not None:
-            context["data_schema"] = schema
-    else:
-        # Unstructured — attach the data_schema so the LLM has something to use.
-        message = (
-            f"Home Assistant rejected the {helper_type or 'flow'} request "
-            f"({status_code}): {parsed['message']}"
-        )
-        if schema is not None:
-            context["data_schema"] = schema
-            suggestions.append(
-                "Inspect 'data_schema' in this error to see the fields HA expects, "
-                "then retry with a corrected config."
-            )
-
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            message,
-            suggestions=suggestions,
-            context=context,
-        )
-    )
-
-
-async def _submit_step(
-    submit_fn: Any,
-    flow_id: str,
-    payload: dict[str, Any],
-    *,
-    client: Any,
-    helper_type: str | None,
-    last_menu_choice: str | None,
-    current_step: dict[str, Any],
-) -> dict[str, Any]:
-    try:
-        return await asyncio.wait_for(submit_fn(flow_id, payload), timeout=20.0)
-    except HomeAssistantAPIError as api_err:
-        if api_err.status_code in (400, 422):
-            await _raise_flow_api_error(
-                api_err,
-                client=client,
-                flow_id=flow_id,
-                helper_type=helper_type,
-                menu_choice=last_menu_choice,
-                current_step=current_step,
-                submitted=payload,
-            )
-        raise
-
-
-def _finish_flow_entry(
-    flow_id: str,
-    current_step: dict[str, Any],
-    *,
-    supplied_keys: list[str],
-    saw_form_step: bool,
-    any_form_key_consumed: bool,
-    ignored_config_keys: set[str],
-    remaining_config: dict[str, Any],
-) -> dict[str, Any]:
-    """Build the CREATE_ENTRY success response, or raise on total key miss.
-
-    When the flow presented at least one form step, the caller supplied
-    config keys, and NONE were consumed by any form (typos / wrong field
-    names), the flow was walked on empty forms and HA saved form defaults —
-    not the caller's values. A success + warning there reads as "done" to an
-    LLM caller, so fail loudly with the schema route instead. Partial
-    consumption — and flows that complete without any form step (instant
-    creates) — keep the established success + warnings contract.
-    """
-    if supplied_keys and saw_form_step and not any_form_key_consumed:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Flow completed without consuming any of the supplied "
-                "config keys — every form step was submitted empty, so "
-                "the flow saved its defaults, not your values",
-                suggestions=[
-                    "Check the field names against the flow's data_schema — "
-                    "ha_get_integration(entry_id=..., include_schema=True) "
-                    "shows the accepted fields — then retry with corrected "
-                    "keys.",
-                ],
-                context={
-                    "flow_id": flow_id,
-                    "supplied_keys": supplied_keys,
-                    "details": current_step,
-                },
-            )
-        )
-    response: dict[str, Any] = {"success": True, "entry": current_step}
-    warnings = _ignored_keys_warnings(ignored_config_keys, remaining_config)
-    if warnings:
-        response["warnings"] = warnings
-    return response
-
-
-def _raise_flow_abort(flow_id: str, current_step: dict[str, Any]) -> NoReturn:
-    """Raise the structured error for an ABORT flow step."""
-    reason = current_step.get("reason")
-    abort_suggestions: list[str] = []
-    if reason in ("already_configured", "single_instance_allowed"):
-        # Common benign aborts on the add-integration path (#1814): give the
-        # caller a route to the existing entry instead of a bare failure.
-        abort_suggestions.append(
-            "The integration is already set up — use "
-            "ha_get_integration() to find the existing entry."
-        )
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            f"Flow aborted: {reason}",
-            suggestions=abort_suggestions or None,
-            context={"flow_id": flow_id, "details": current_step},
-        )
-    )
-
-
-async def _handle_flow_steps(
-    client: Any,
-    flow_id: str,
-    initial_step: dict[str, Any],
-    config: dict[str, Any],
-    submit_fn: Any = None,
-    helper_type: str | None = None,
-) -> dict[str, Any]:
-    """Walk a multi-step config flow handling menu and form steps (max 10 steps).
-
-    HA flows can present steps in sequence:
-    - ``menu``: caller supplies selection via ``group_type``/``next_step_id`` key
-    - ``form``: caller supplies field values; aborts immediately on validation errors
-    - ``create_entry``: flow complete
-    - ``abort``: flow terminated by HA
-
-    Args:
-        client: HomeAssistantClient instance
-        flow_id: Flow ID from start_config_flow or start_options_flow
-        initial_step: The first step returned by the flow start call
-        config: Full caller-provided config dict. Menu selection keys are
-            consumed by menu steps; remaining keys are submitted on the
-            first form step.
-        submit_fn: Async function to submit a step. Defaults to
-            client.submit_config_flow_step (create). Pass
-            client.submit_options_flow_step for options (update) flows.
-        helper_type: Optional helper type (e.g. ``"statistics"``). When
-            provided, surfaces the helper's data_schema in error context
-            for unstructured HA 4xx responses so the caller can react.
-
-    Returns:
-        ``{"success": True, "entry": result}`` on success, plus ``warnings``
-        when SOME caller-supplied config keys were not declared by any flow
-        step. When the flow presented at least one form step and NONE of the
-        supplied keys were consumed, raises ``VALIDATION_INVALID_PARAMETER``
-        instead of reporting a misleading success — the flow completed on
-        empty forms (defaults), applying nothing the caller asked for (see
-        :func:`_finish_flow_entry`). Raises ToolError on any failure.
-    """
-    if submit_fn is None:
-        submit_fn = client.submit_config_flow_step
-    remaining_config = dict(config)
-    current_step = initial_step
-    last_menu_choice: str | None = None
-    ignored_config_keys: set[str] = set()
-    supplied_keys = sorted(k for k in config if k not in _MENU_SELECTION_KEYS)
-    saw_form_step = False
-    any_form_key_consumed = False
-    max_steps = 10
-
-    for step_num in range(max_steps):
-        result_type = current_step.get("type")
-
-        if result_type == _FlowType.CREATE_ENTRY:
-            return _finish_flow_entry(
-                flow_id,
-                current_step,
-                supplied_keys=supplied_keys,
-                saw_form_step=saw_form_step,
-                any_form_key_consumed=any_form_key_consumed,
-                ignored_config_keys=ignored_config_keys,
-                remaining_config=remaining_config,
-            )
-
-        if result_type == _FlowType.ABORT:
-            _raise_flow_abort(flow_id, current_step)
-
-        if result_type == _FlowType.MENU:
-            menu_choice = _handle_menu_step(flow_id, current_step, remaining_config)
-            last_menu_choice = menu_choice
-            logger.debug(
-                f"Flow step {step_num}: menu '{menu_choice}' "
-                f"(step_id={current_step.get('step_id')})"
-            )
-            current_step = await _submit_step(
-                submit_fn,
-                flow_id,
-                {"next_step_id": menu_choice},
-                client=client,
-                helper_type=helper_type,
-                last_menu_choice=last_menu_choice,
-                current_step=current_step,
-            )
-
-        elif result_type == _FlowType.FORM:
-            # _handle_form_step pops only the keys declared in the current
-            # step's data_schema, leaving any other keys in remaining_config
-            # for subsequent steps (HA can present multi-step forms, e.g.
-            # statistics: user step then pick-characteristic step).
-            saw_form_step = True
-            consumed_form_keys: set[str] = set()
-            form_data = _auto_confirm_form_payload(current_step)
-            if form_data is None:
-                form_data = _handle_form_step(
-                    flow_id,
-                    current_step,
-                    remaining_config,
-                    ignored_config_keys,
-                    consumed_form_keys,
-                )
-            if consumed_form_keys:
-                any_form_key_consumed = True
-            logger.debug(
-                f"Flow step {step_num}: form submit "
-                f"(step_id={current_step.get('step_id')}, keys={list(form_data.keys())})"
-            )
-            current_step = await _submit_step(
-                submit_fn,
-                flow_id,
-                form_data,
-                client=client,
-                helper_type=helper_type,
-                last_menu_choice=last_menu_choice,
-                current_step=current_step,
-            )
-
-        elif result_type in _UNDRIVABLE_STEP_TYPES:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Flow reached a '{result_type}' step that cannot be "
-                    "completed via MCP (browser/OAuth authorization or an "
-                    "asynchronous provider step)",
-                    suggestions=[
-                        "Complete this flow in the Home Assistant UI "
-                        "(Settings > Devices & Services)."
-                    ],
-                    context={"flow_id": flow_id, "details": current_step},
-                )
-            )
-
-        else:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.INTERNAL_UNEXPECTED,
-                    f"Unexpected flow result type: {result_type}",
-                    context={"flow_id": flow_id, "details": current_step},
-                )
-            )
-
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.TIMEOUT_OPERATION,
-            f"Flow exceeded {max_steps} steps",
-            context={"flow_id": flow_id, "max_steps": max_steps},
-        )
-    )
-
-
-async def _handle_config_subentry_flow_steps(
-    client: Any,
-    flow_id: str,
-    initial_step: dict[str, Any],
-    config: dict[str, Any],
-    *,
-    is_reconfigure: bool,
-) -> dict[str, Any]:
-    """Walk a config subentry flow and accept HA's reconfigure-success abort.
-
-    Successful results include ``warnings`` when caller-supplied config keys
-    were not declared by any flow step.
-    """
-    remaining_config = dict(config)
-    current_step = initial_step
-    last_menu_choice: str | None = None
-    ignored_config_keys: set[str] = set()
-    max_steps = 10
-
-    for step_num in range(max_steps):
-        result_type = current_step.get("type")
-
-        if result_type == _FlowType.CREATE_ENTRY:
-            response: dict[str, Any] = {
-                "success": True,
-                "operation": "created",
-                "flow_result": current_step,
-            }
-            warnings = _ignored_keys_warnings(ignored_config_keys, remaining_config)
-            if warnings:
-                response["warnings"] = warnings
-            return response
-
-        if result_type == _FlowType.ABORT:
-            reason = current_step.get("reason")
-            if is_reconfigure and reason in _RECONFIGURE_SUCCESS_REASONS:
-                response = {
-                    "success": True,
-                    "operation": "reconfigured",
-                    "flow_result": current_step,
-                }
-                warnings = _ignored_keys_warnings(ignored_config_keys, remaining_config)
-                if warnings:
-                    response["warnings"] = warnings
-                return response
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Config subentry flow aborted: {reason}",
-                    context={"flow_id": flow_id, "details": current_step},
-                )
-            )
-
-        if result_type == _FlowType.MENU:
-            menu_choice = _handle_menu_step(flow_id, current_step, remaining_config)
-            last_menu_choice = menu_choice
-            logger.debug(
-                "Config subentry flow step %s: menu %s (step_id=%s)",
-                step_num,
-                menu_choice,
-                current_step.get("step_id"),
-            )
-            current_step = await _submit_step(
-                client.submit_config_subentry_flow_step,
-                flow_id,
-                {"next_step_id": menu_choice},
-                client=client,
-                helper_type=None,
-                last_menu_choice=last_menu_choice,
-                current_step=current_step,
-            )
-            continue
-
-        if result_type == _FlowType.FORM:
-            form_data = _handle_form_step(
-                flow_id,
-                current_step,
-                remaining_config,
-                ignored_config_keys,
-            )
-            logger.debug(
-                "Config subentry flow step %s: form submit (step_id=%s, keys=%s)",
-                step_num,
-                current_step.get("step_id"),
-                sorted(form_data.keys()),
-            )
-            current_step = await _submit_step(
-                client.submit_config_subentry_flow_step,
-                flow_id,
-                form_data,
-                client=client,
-                helper_type=None,
-                last_menu_choice=last_menu_choice,
-                current_step=current_step,
-            )
-            continue
-
-        if result_type in {"progress", "progress_done"}:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Config subentry flow requires an asynchronous progress step",
-                    suggestions=[
-                        "Complete the provider setup in Home Assistant so the external resource is available.",
-                        "Retry the same ha_config_set_helper call after the resource is ready.",
-                    ],
-                    context={"flow_id": flow_id, "details": current_step},
-                )
-            )
-
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.INTERNAL_UNEXPECTED,
-                f"Unexpected config subentry flow result type: {result_type}",
-                context={"flow_id": flow_id, "details": current_step},
-            )
-        )
-
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.TIMEOUT_OPERATION,
-            f"Config subentry flow exceeded {max_steps} steps",
-            context={"flow_id": flow_id, "max_steps": max_steps},
-        )
-    )
 
 
 async def set_config_subentry(
@@ -1088,7 +165,15 @@ async def set_config_subentry(
     subentry, provided reconfigures that existing subentry.
     ``show_advanced_options`` is a no-op on HA 2026.6+ and kept only for older
     HA versions pending removal before HA 2027.6.
+
+    The reconfigure branch fails when the flow leaves any supplied config key
+    unconsumed, where it previously returned success plus a warning — see
+    :func:`_handle_config_subentry_flow_steps` for why. It also walks with
+    ``keep_current_values`` (issue #2254), so a partial patch keeps the
+    subentry fields it does not name instead of resetting them. The create
+    branch is unchanged on both counts.
     """
+    _reject_redaction_sentinels(config_dict)
     flow_result = await client.start_config_subentry_flow(
         entry_id,
         subentry_type,
@@ -1122,18 +207,23 @@ async def set_config_subentry(
             flow_result,
             config_dict,
             is_reconfigure=subentry_id is not None,
+            keep_current_values=subentry_id is not None,
         )
-    except Exception:
-        try:
-            await asyncio.wait_for(
-                client.abort_config_subentry_flow(flow_id), timeout=5.0
-            )
-        except Exception as abort_err:
-            logger.warning(
-                "Failed to abort config subentry flow %s after error: %s",
-                flow_id,
-                abort_err,
-            )
+    except asyncio.CancelledError:
+        await _abort_subentry_flow_best_effort(client, flow_id)
+        raise
+    except Exception as flow_error:
+        payload: dict[str, Any] = {}
+        if isinstance(flow_error, ToolError):
+            try:
+                parsed_payload = json.loads(str(flow_error))
+            except (TypeError, ValueError):
+                parsed_payload = {}
+            if isinstance(parsed_payload, dict):
+                payload = parsed_payload
+        post_commit_status = payload.get("status") in POST_COMMIT_STATUSES
+        if payload.get("flow_budget_exhausted") or not post_commit_status:
+            await _abort_subentry_flow_best_effort(client, flow_id)
         raise
 
     response = {
@@ -1202,7 +292,19 @@ async def update_config_entry_options(
     ``ha_set_integration`` path passes ``None`` to accept any domain). Starts
     an options flow, walks the flow steps, and returns the result. Aborts the
     flow on error. ``noun`` only affects response wording.
+
+    This edits an existing entry, so the walk runs with
+    ``keep_current_values``: every field an options step declares that
+    ``config_dict`` does not name is submitted with the value the step itself
+    carries, exactly as the HA UI's "Configure" dialog posts back the boxes
+    nobody touched. Before issue #2254 those keys were dropped and voluptuous
+    substituted each field's static default, so a one-key patch silently reset
+    the rest of the entry's options. A key the caller sets to ``None`` is the
+    opposite request and is honoured as a clear, which for a field carrying a
+    schema default means submitting the ``None`` for Home Assistant to
+    validate rather than omitting it into that default.
     """
+    _reject_redaction_sentinels(config_dict)
     config_entry = await client.get_config_entry(entry_id)
     actual_domain = config_entry.get("domain")
     if expected_domain is not None and actual_domain != expected_domain:
@@ -1244,6 +346,7 @@ async def update_config_entry_options(
             config_dict,
             submit_fn=client.submit_options_flow_step,
             helper_type=expected_domain,
+            keep_current_values=True,
         )
     except Exception:
         try:
@@ -1301,6 +404,7 @@ async def create_config_entry(
     and returns the result. Aborts the flow on error. ``noun`` only affects
     response wording.
     """
+    _reject_redaction_sentinels(config_dict)
     flow_result = await client.start_config_flow(domain)
     flow_id = flow_result.get("flow_id")
 

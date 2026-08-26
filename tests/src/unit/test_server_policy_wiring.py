@@ -30,6 +30,41 @@ def _make_server_stub(*, enable_policies: bool) -> MagicMock:
     return stub
 
 
+def test_alias_middleware_is_registered_before_the_policy_gate():
+    """Registration order IS inbound order (first added = outermost).
+
+    Both halves of the retired-name defence are pinned: the gate resolves the
+    name itself (see ``policy/test_middleware.py``), and the alias still runs
+    ahead of it, which is what keeps every other name-keyed middleware in the
+    chain reading the current name. Running the real ``_initialize_server``
+    against a MagicMock records both the inline ``add_middleware`` calls and
+    the ``_apply_*`` helpers, in order.
+    """
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+    from ha_mcp.tools.renamed_tool_middleware import RenamedToolAliasMiddleware
+
+    stub = MagicMock()
+    stub.mcp = MagicMock()
+    HomeAssistantSmartMCPServer._initialize_server(stub)
+
+    calls = list(stub.mock_calls)
+    alias = [
+        index
+        for index, (name, args, _kwargs) in enumerate(calls)
+        if name == "mcp.add_middleware"
+        and args
+        and isinstance(args[0], RenamedToolAliasMiddleware)
+    ]
+    policy = [
+        index
+        for index, (name, _args, _kwargs) in enumerate(calls)
+        if name == "_apply_tool_security_policies"
+    ]
+    assert alias, "the alias middleware is not registered at all"
+    assert policy, "the policy gate is not wired at all"
+    assert alias[0] < policy[0]
+
+
 def test_policy_middleware_attached_when_enabled():
     """Enabled flag → ApprovalQueue attached and one PolicyMiddleware added."""
     from ha_mcp.policy.middleware import PolicyMiddleware

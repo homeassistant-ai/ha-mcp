@@ -49,7 +49,10 @@ import pytest
 import requests
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN
 
+from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX
+
 from ...utilities.streamable_http import parse_mcp_response
+from ...utilities.wait_helpers import wait_for_condition
 
 # ``not_on_embedded``: this test boots its OWN dedicated in-process MCP server container to
 # prove the install method end to end. The embedded backend (E2E_BACKEND=embedded)
@@ -73,6 +76,12 @@ _ENTRY_ID = "e2e_test_ha_mcp_server_entry"
 _WEBHOOK_ID = "mcp_e2e_ha_mcp_server_0123456789abcdef"
 _SECRET_PATH = "/private_e2e_ha_mcp_server_secret"
 _SERVER_PORT = 9584
+# Where the in-process server keeps its data dir: the component points
+# HA_MCP_CONFIG_DIR at ``hass.config.path(SERVER_CONFIG_SUBDIR)``, so it lands
+# under the bind-mounted /config and is readable from the host. Duplicated from
+# custom_components/ha_mcp_tools/const.py (SERVER_CONFIG_SUBDIR), same as
+# conftest's _EMBEDDED_SERVER_CONFIG_SUBDIR.
+_SERVER_CONFIG_SUBDIR = ".ha_mcp"
 
 # The whole fastmcp dependency tree is runtime-installed on first bring-up.
 _READY_TIMEOUT_S = 600
@@ -545,3 +554,61 @@ class TestEmbeddedServerEndToEnd:
                 # component's tool-search mode).
                 assert stamps["ha_search"]["pinned"] is True
                 assert stamps["ha_get_state"]["pinned"] is False
+
+    async def test_embedded_server_skips_the_startup_nudge(self, embedded_ha):
+        """The in-process server must NOT run the HACS startup nudge.
+
+        ``hacs_refresh_lifespan`` is attached to the server itself, so the
+        in-process server runs it too (``embedded_server`` enters
+        ``mcp._lifespan_manager()`` around uvicorn). The nudge inside it must
+        return at the ``is_embedded()`` gate: the component ships its own
+        ``hacs_nudge``, and running both would double HACS's GitHub fetches.
+        The negative lanes' positive counterparts live in
+        tests/src/e2e/workflows/hacs/test_auto_refresh_startup.py.
+
+        Readiness is the ``embedded_ha`` fixture itself — it only yields once
+        MCP ``initialize`` succeeded, which is past server start and so past
+        the lifespan.
+
+        NOTE (skip-ceiling coupling): see
+        ``test_invalidate_caches_recovers_from_editable_finder_keyerror``
+        above — this module is ``container_only`` + ``not_on_embedded``, so
+        adding a test here bumps the haos, haos_inaddon, haos_embedded and
+        embedded ceilings in
+        tests/src/e2e/basic/test_backend_dispatch_smoke.py by one.
+        """
+        _base_url, _session_id, config_path, _container = embedded_ha
+        data_dir = config_path / _SERVER_CONFIG_SUBDIR
+
+        # The component creates this dir during bring-up; the test seeds
+        # nothing into it. Its absence would mean the glob below is pointed at
+        # the wrong path, which would make "no marker" prove nothing.
+        assert data_dir.is_dir(), (
+            f"{data_dir} does not exist, so the in-process server's data dir "
+            "is not where this test looks — check SERVER_CONFIG_SUBDIR in "
+            "custom_components/ha_mcp_tools/const.py. /config contents: "
+            f"{sorted(p.name for p in config_path.iterdir())}"
+        )
+
+        def marker_files() -> list[Path]:
+            return list(data_dir.glob(f"{MARKER_FILENAME_PREFIX}_*.json"))
+
+        # 10 s: the container ships a loaded HACS, so a regressed
+        # is_embedded gate completes its pass (and writes the marker) on the
+        # immediate first attempt — this window is over the completion time,
+        # not the retry schedule, which only starts when that attempt fails.
+        appeared = await wait_for_condition(
+            marker_files,
+            timeout=10,
+            condition_name=(
+                "(not expected) HACS refresh marker in the in-process server's data dir"
+            ),
+        )
+        assert not appeared, (
+            "The in-process server wrote a HACS refresh marker "
+            f"({[p.name for p in marker_files()]}), but the embedded install "
+            "skips the nudge by design — the component's own hacs_nudge covers "
+            "it, and running both doubles HACS's GitHub fetches. The "
+            "is_embedded() gate in maybe_refresh_hacs_after_update is what "
+            "must hold here."
+        )

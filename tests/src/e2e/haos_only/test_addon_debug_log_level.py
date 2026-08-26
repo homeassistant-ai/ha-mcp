@@ -217,11 +217,11 @@ async def test_web_ui_debug_log_level_reaches_addon_log(
 
     # Resolve the dev addon's Supervisor slug while the shared client is
     # still live (pre-restart).
-    data = parse_mcp_result(await mcp_client.call_tool("ha_get_addon", {}))
+    data = parse_mcp_result(await mcp_client.call_tool("ha_get_app", {}))
     addons = data.get("addons") or []
     dev_addon = next((a for a in addons if a.get("name") == DEV_ADDON_NAME), None)
     assert dev_addon is not None, (
-        f"Dev addon {DEV_ADDON_NAME!r} not in ha_get_addon listing: "
+        f"Dev addon {DEV_ADDON_NAME!r} not in ha_get_app listing: "
         f"{[a.get('name') for a in addons]}"
     )
     slug = dev_addon["slug"]

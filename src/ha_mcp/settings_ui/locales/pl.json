@@ -1,0 +1,855 @@
+{
+  "meta": {
+    "native_name": "Polski",
+    "dir": "ltr"
+  },
+  "messages": {
+    "app.document_title": "Ustawienia narzędzi HA-MCP",
+    "app.title": "Ustawienia HA-MCP",
+    "language.label": "Język",
+    "language.auto": "Automatycznie",
+    "theme.label": "Motyw",
+    "theme.auto_os": "Automatycznie (system operacyjny)",
+    "theme.light": "Jasny",
+    "theme.dark": "Ciemny",
+    "status.loading": "Ładowanie…",
+    "footer.installation": "instalacja: {method}",
+    "footer.deployment.addon": "aplikacja/dodatek",
+    "footer.deployment.docker": "kontener/docker",
+    "footer.deployment.pyinstaller": "samodzielny plik bynarny",
+    "footer.deployment.git": "klocek źródłowy",
+    "footer.deployment.pypi": "pakiet python",
+    "footer.deployment.unknown": "nieznany",
+    "nav.skip": "Przejdź do treści",
+    "tabs.aria": "Sekcje ustawień",
+    "tabs.tools": "Narzędzia",
+    "tabs.server": "Ustawienia serwera",
+    "tabs.backups": "Kopie zapasowe",
+    "tabs.policies": "Zasady bezpieczeństwa narzędzi",
+    "tabs.visibility": "Widoczność encji",
+    "tabs.accessibility": "Dostępność",
+    "notice.restart_required": "⚠ Zmiany zapisane. Uruchom ponownie HA-MCP, aby zaczęły obowiązywać. Przy następnym uruchomieniu HA-MCP całkowicie usuwa wyłączone narzędzia z listy narzędzi MCP. Następnie połącz się ponownie lub odśwież serwer MCP w swoim kliencie AI (np. odśwież listę narzędzi na claude.ai, dodaj ponownie/odśwież łącznik w ChatGPT albo zamknij i otwórz ponownie Claude Desktop), aby ponownie wczytać listę narzędzi. Ponowne uruchomienie aplikacji (dodatku) lub Home Assistant NIE odświeża listy narzędzi w pamięci podręcznej klienta. ChatGPT czasami nadal udostępnia listę narzędzi z pamięci podręcznej nawet po usunięciu i ponownym dodaniu łącznika — jeśli narzędzi nadal brakuje, usuń łącznik i utwórz nowy pod inną nazwą.",
+    "notice.shared_settings": "Funkcje obejmujące cały serwer (wyszukiwanie narzędzi, edycja konfiguracji YAML, narzędzia systemu plików itp.) pojawiają się zarówno na karcie <strong>Ustawienia serwera</strong>, jak i na stronie konfiguracji aplikacji (dodatku); są to dokładnie te same ustawienia. Oba interfejsy pozostają ze sobą zsynchronizowane po ponownym uruchomieniu aplikacji (dodatku). Zmiany wymagają ponownego uruchomienia HA-MCP.",
+    "notice.env_pins": "Narzędzia wymienione w zmiennych środowiskowych <code>DISABLED_TOOLS</code> lub <code>PINNED_TOOLS</code> są zablokowane jako tylko do odczytu; usuń zmienną środowiskową, aby je tutaj edytować. Przełączniki przypięcia działają tylko wtedy, gdy włączone jest wyszukiwanie narzędzi (karta Ustawienia serwera lub strona konfiguracji aplikacji (dodatku)).",
+    "actions.restart_addon": "Uruchom ponownie aplikację (dodatek)",
+    "actions.save": "Zapisz",
+    "actions.save_settings": "Zapisz ustawienia",
+    "actions.refresh": "Odśwież",
+    "actions.close": "Zamknij",
+    "tools.read_only.label": "Tryb tylko do odczytu",
+    "tools.read_only.help": "Wyłącza wszystkie narzędzia do zapisu i blokuje każdemu narzędziu możliwość wykonywania operacji zapisu lub destrukcyjnych. Narzędzia mieszane do odczytu/zapisu (kopie zapasowe, Aplikacje (dodatki), preferencje energetyczne, potoki głosowe i tryb kodu, gdy włączony) pozostają dostępne, ale ich operacje zapisu są zablokowane.",
+    "tools.read_only.unknown": "Nie udało się odczytać ustawień serwera. Status trybu tylko do odczytu jest nieznany; ten widok może nie odzwierciedlać tego, co wymusza serwer.",
+    "tools.search": "Szukaj narzędzi...",
+    "server.auto_save_notice": "Ustawienia na tej karcie zapisują się automatycznie. Zmiany zaczną obowiązywać dopiero po ponownym uruchomieniu HA-MCP (stosuje je po stronie serwera) oraz ponownym połączeniu lub odświeżeniu serwera MCP w kliencie AI (ponownie wczytuje listę narzędzi), np. odśwież listę narzędzi na claude.ai, dodaj ponownie lub odśwież łącznik w ChatGPT albo zamknij i otwórz ponownie Claude Desktop. ChatGPT czasami nadal udostępnia listę narzędzi z pamięci podręcznej nawet po usunięciu i ponownym dodaniu łącznika — jeśli narzędzi nadal brakuje, usuń łącznik i utwórz nowy pod inną nazwą.",
+    "server.sections.search": "Wyszukiwanie i dopasowywanie",
+    "server.sections.operations": "Operacje",
+    "server.sections.tool_surface": "Powierzchnia narzędzi",
+    "server.sections.diagnostics": "Diagnostyka",
+    "server.sections.sidecar": "Panel boczny interfejsu ustawień",
+    "server.sections.beta": "Funkcje beta (niebezpieczne)",
+    "server.sections.developer": "Deweloper",
+    "server.sidecar.disable": "Trwale wyłącz serwer ustawień",
+    "server.sidecar.disable_title": "Trwale wyłącza interfejs użytkownika ustawień: zatrzymuje ten serwer ORAZ zapisuje ~/.ha-mcp/settings_ui_disabled, aby nie uruchamiał się ponownie przy przyszłych uruchomieniach ha-mcp. Usuń ten plik, aby ponownie włączyć.",
+    "backups.loading": "Ładowanie stanu kopii zapasowej…",
+    "backups.filter.domain": "Domena (np. automation)",
+    "backups.filter.domain_aria": "Filtruj kopie zapasowe według domeny",
+    "backups.filter.entity": "ID encji",
+    "backups.filter.entity_aria": "Filtruj kopie zapasowe według ID encji",
+    "backups.bulk_delete": "Masowe usuwanie pasujących…",
+    "policies.title": "Zasady bezpieczeństwa narzędzi",
+    "policies.intro": "Bramkowanie zatwierdzeń dla wywołań wysokiego ryzyka, dla każdego narzędzia. Użyj karty <strong>Narzędzia</strong>, aby włączyć bramkowanie dla narzędzia, a następnie doprecyzuj warunki dopasowania i czas życia zatwierdzenia tutaj. Operatory warunków: równa się, jest jednym z, regex, zawiera, jest obecny, większy niż, mniejszy niż.",
+    "policies.global.title": "Ustawienia globalne",
+    "policies.global.unknown": "Nie udało się odczytać ustawień serwera. Dwa poniższe przełączniki są wyświetlane jako nieznane i nie można ich zmienić, dopóki strona nie załaduje się pomyślnie; ten widok może nie odzwierciedlać tego, co wymusza serwer.",
+    "policies.global.enabled.label": "Włącz zasady bezpieczeństwa narzędzi",
+    "policies.global.enabled.help": "Główny przełącznik. Odzwierciedla przełącznik w ustawieniach serwera. Domyślnie wyłączony. Włącz i uruchom ponownie HA-MCP, aby aktywować oprogramowanie pośredniczące kontroli dostępu. Gdy jest wyłączony, poniższe reguły pozostają zachowane, ale nie są egzekwowane.",
+    "policies.global.manage_tool.label": "Zezwól agentom AI na edycję tych zasad (ha_manage_security_policy)",
+    "policies.global.manage_tool.help": "Rejestruje narzędzie ha_manage_security_policy, które odczytuje i zastępuje dokument zasad edytowany na tej karcie. Domyślnie wyłączone. Niezależne od powyższego głównego przełącznika: to kontroluje, kto może edytować zasady, a nie czy są one egzekwowane. Narzędzie nie udostępnia operacji kolejki oczekujących zatwierdzeń, ale akcja ustawienia bramkowana polityką nadal może wymagać zatwierdzenia.",
+    "policies.global.manage_tool.warning": "Włączenie tej opcji pozwala podłączonym agentom AI modyfikować zasady bezpieczeństwa na tej karcie, w tym usuwać blokady zatwierdzania. Aby zachować udział człowieka, zabezpiecz narzędzie ZANIM je włączysz: na karcie Narzędzia włącz \"zabezpieczone zasadami bezpieczeństwa\" dla zarządzania zasadami bezpieczeństwa. Tę regułę można utworzyć, gdy narzędzie jest jeszcze wyłączone, a zacznie ona obowiązywać po włączeniu głównego przełącznika powyżej i ponownym uruchomieniu serwera. Uruchom ponownie aplikację (dodatek) po przełączeniu któregokolwiek przełącznika.",
+    "policies.global.wait.label": "Czekaj sekund (5-600)",
+    "policies.global.wait.help": "Jak długo oprogramowanie pośredniczące czeka na zatwierdzenie przed przekroczeniem limitu czasu.",
+    "policies.global.ttl.label": "TTL zatwierdzenia minuty (1-60)",
+    "policies.global.ttl.help": "Jak długo oczekujące zatwierdzenie pozostaje w kolejce przed wygaśnięciem.",
+    "policies.global.save": "Zapisz ustawienia globalne",
+    "policies.pending.title": "Oczekujące zatwierdzenia",
+    "policies.pending.empty": "Brak oczekujących zatwierdzeń.",
+    "policies.rules.title": "Narzędzia bramkowane",
+    "policies.rules.empty": "Brak narzędzi aktualnie bramkowanych bezpieczeństwem. Włącz bramkowanie dla poszczególnych narzędzi z karty <a href=\"#\" data-panel-link=\"tools\">Narzędzia</a>.",
+    "accessibility.intro": "Te ustawienia są stosowane natychmiast i są zapisywane w tej przeglądarce oraz na serwerze, dzięki czemu przetrwają ponowne uruchomienia w każdym trybie (w tym stdio, gdzie strona ustawień może czasami przenieść się na nowy port). Strona dokumentacji oferuje te same kontrolki w swoim pasku nawigacyjnym; nie ma serwera i zapisuje ustawienia dla każdej przeglądarki.",
+    "accessibility.storage_blocked": "Twoja przeglądarka blokuje przechowywanie danych witryny; wybrane opcje obowiązują tylko w tej sesji.",
+    "accessibility.theme.title": "Motyw",
+    "accessibility.theme.help": "Schematy kolorów jednym kliknięciem. Automatyczny, domyślny, podąża za preferencjami Twojego systemu operacyjnego i zmienia się na żywo, gdy te się zmieniają.",
+    "accessibility.theme.preset": "Gotowy motyw",
+    "accessibility.theme.paper": "Papierowy",
+    "accessibility.theme.gray": "Szary",
+    "accessibility.theme.contrast": "Wysoki kontrast",
+    "accessibility.text_size.title": "Rozmiar tekstu",
+    "accessibility.text_size.help": "Skaluje bazowy rozmiar czcionki. Powiększenie przeglądarki (Ctrl/Cmd +) nadal działa niezależnie od tego.",
+    "accessibility.colors.title": "Niestandardowe kolory",
+    "accessibility.colors.help": "Wybierz własne kolory na podstawie wybranego motywu. Każda próbka otwiera systemowy wizualny selektor kolorów.",
+    "accessibility.colors.background": "Tło",
+    "accessibility.colors.text": "Tekst",
+    "accessibility.colors.accent": "Akcent",
+    "accessibility.colors.low_contrast": "Wybrane kolory tła i tekstu mają współczynnik kontrastu poniżej 4.5:1 i mogą być trudne do odczytania razem.",
+    "accessibility.colors.clear": "Wyczyść niestandardowe kolory",
+    "accessibility.reset": "Przywróć domyślne",
+    "visibility.intro": "Ukryj encje o niskiej wartości (automatycznie generowane encje diagnostyczne lub pomocnicze, lub jawna lista) przed narzędziami do odczytu kolekcji <code>ha_search</code> i <code>ha_get_overview</code>, aby wyniki wyszukiwania i przeglądu były mniej zaśmiecone. Domyślnie wyłączone; zmiany zostaną zastosowane przy następnym wywołaniu narzędzia.",
+    "visibility.boundary": "Bez trybu wymuszenia (poniżej), jest to redukcja szumu, a nie kontrola dostępu: ukryta encja jest nadal zwracana przez bezpośredni odczyt jej entity_id i nadal pojawia się w automatyzacjach, panelach i zawartości szablonów. Nie polegaj wyłącznie na filtrze jako granicy bezpieczeństwa.",
+    "visibility.enabled": "Włącz filtr widoczności encji",
+    "visibility.enforce.title": "Tryb wymuszenia",
+    "visibility.enforce.help": "Rozszerza domyślnie filtr z ukrywania w wyszukiwaniu i przeglądzie na każdy odczyt narzędzia, z wyjątkiem ha_report_issue. Bezpośredni odczyt ukrytej encji zwraca „nie znaleziono”, a odczyt zawartości, który by ją ujawnił, jest odrzucany. Wyjątek dotyczący narzędzia raportowania jest kontrolowany poniżej. Ukrywanie w najlepszej wierze przed przypadkowym ujawnieniem, a nie twarda granica bezpieczeństwa.",
+    "visibility.enforce.only_enforced": "Uczyń ukryte encje nieczytelnymi we wszystkich odczytach narzędzi (domyślnie z wyjątkiem raportów błędów)",
+    "visibility.enforce.report_issue_help": "Gdy ta opcja jest wyłączona, ha_report_issue oraz wszystkie jego dane diagnostyczne — w tym logi — pozostają poza trybem egzekwowania przy każdym wywołaniu, nawet gdy dane widoczności są poprawne lub niedostępne. Włącz tę opcję, aby skanować i odrzucać to narzędzie podobnie jak inne odczyty.",
+    "visibility.enforce.restrict_report_issue": "Zastosuj tryb egzekwowania do ha_report_issue",
+    "visibility.categories.title": "Ukryj według kategorii",
+    "visibility.categories.help": "Home Assistant oznacza automatycznie generowane encje jako diagnostyczne lub konfiguracyjne.",
+    "visibility.categories.legend": "Kategorie encji do ukrycia",
+    "visibility.categories.diagnostic": "Diagnostyczne",
+    "visibility.categories.config": "Konfiguracyjne",
+    "visibility.categories.hidden": "Również encje już ukryte w Home Assistant",
+    "visibility.area_label.title": "Ukryj według obszaru lub etykiety",
+    "visibility.area_label.help": "Identyfikatory obszarów lub etykiet, oddzielone przecinkami; encje w dowolnym wymienionym obszarze lub etykiecie są ukryte.",
+    "visibility.areas": "Obszary",
+    "visibility.labels": "Etykiety",
+    "visibility.entities.title": "Ukryj konkretne encje",
+    "visibility.entities.help": "Jeden entity_id na linię. Pozostają ukryte nawet bez wpisu w rejestrze encji.",
+    "visibility.entities.denied": "Zablokowane identyfikatory encji",
+    "visibility.allowlist.title": "Ogranicz do listy dozwolonych",
+    "visibility.allowlist.help": "Zaawansowane: gdy którekolwiek pole listy dozwolonych jest ustawione, filtr odwraca działanie – tylko encje pasujące do listy dozwolonych pozostają widoczne, wszystko inne jest ukryte (w tym encje dodane później). Pozostaw wszystkie trzy puste, aby wyłączyć.",
+    "visibility.allowlist.areas": "Dozwolone obszary",
+    "visibility.allowlist.labels": "Dozwolone etykiety",
+    "visibility.allowlist.entities_help": "Dozwolone identyfikatory encji, jeden na linię.",
+    "visibility.allowlist.entities": "Dozwolone identyfikatory encji",
+    "visibility.assist.title": "Uwzględnij ekspozycję na Assist",
+    "visibility.assist.help": "Ukryj encje niewystawione na asystenta głosowego Home Assistant Assist („konwersacja”), odzwierciedlając listę Ustawienia > Asystenci głosowi > Wystaw. Dodaje dwa odczyty websocket na wyszukiwanie, gdy jest włączone.",
+    "visibility.assist.only_exposed": "Pokaż tylko encje wystawione na Assist",
+    "features.enable_tool_search.label": "Włącz wyszukiwanie narzędzi",
+    "features.enable_tool_search.help": "Zastępuje pełny katalog narzędzi odkrywaniem opartym na wyszukiwaniu. Zmniejsza bezczynny kontekst o około 90%, do około 5 tys. tokenów. ⚠️ NIE włączaj tej opcji w klientach z własnym wbudowanym wyszukiwaniem narzędzi / odroczonymi narzędziami (claude.ai, Claude Desktop, Claude Code) — dwie warstwy wyszukiwania kolidują ze sobą, a wbudowane wyszukiwanie narzędzi klienta jest tam lepszym wyborem; pozostaw tę opcję wyłączoną. To, czy narzędzia są odroczone, zależy od kombinacji klienta i modelu: użyj tej opcji, gdy Twoja konfiguracja ładuje pełny katalog z góry — modele bez natywnych odroczonych narzędzi (np. Gemini, lokalne modele kompatybilne z OpenAI, Claude Haiku), klienci, którzy włączają wszystkie schematy narzędzi niezależnie od modelu (np. GitHub Copilot CLI), lub mniejsze okna kontekstowe. Niektóre modele Codex i ChatGPT również zawierają odroczone narzędzia — sprawdź bezpośrednio swojego klienta/model, aby potwierdzić jego funkcje, aby nie pozostawiać tej opcji włączonej niepotrzebnie. Narzędzia są znajdowane za pomocą ha_search_tools i wykonywane za pośrednictwem skategoryzowanych proxy (odczyt/zapis/usuwanie). Wymaga ponownego uruchomienia, aby zmiany weszły w życie.",
+    "features.tool_search_max_results.label": "Maksymalna liczba wyników wyszukiwania narzędzi",
+    "features.tool_search_max_results.help": "Maksymalna liczba narzędzi zwracanych przez ha_search_tools, gdy wyszukiwanie narzędzi jest włączone. Niższe wartości (2-3) oszczędzają tokeny kontekstu, ale mogą pominąć istotne narzędzia. Zakres: 2-10. Wymaga ponownego uruchomienia.",
+    "features.enable_tool_security_policies.label": "Włącz zasady bezpieczeństwa narzędzi (zaawansowane)",
+    "features.enable_tool_security_policies.help": "Zabezpiecz wywołania narzędzi wysokiego ryzyka (kontrola zamków/alarmów, zapisy automatyzacji itp.) za zgodą użytkownika. Gdy wywoływane jest zabezpieczone narzędzie, agent informuje użytkownika, aby otworzył zakładkę „Zasady bezpieczeństwa narzędzi” w interfejsie sieciowym i kliknął „Zatwierdź”, zanim wywołanie zostanie wykonane. Reguły dla poszczególnych narzędzi z opcjonalnymi warunkami argumentów są konfigurowane w zakładce „Zasady bezpieczeństwa narzędzi”. Domyślnie wyłączone. Wymaga ponownego uruchomienia, aby zmiany weszły w życie.",
+    "features.read_only_mode.label": "Tryb tylko do odczytu",
+    "features.read_only_mode.help": "Wyłącza wszystkie narzędzia zapisujące oraz usuwa możliwość wykonywania przez narzędzia jakichkolwiek wywołań zapisujących lub destrukcyjnych. Mieszane narzędzia do odczytu i zapisu — kopie zapasowe, aplikacje (dodatki), preferencje energii, potoki głosowe oraz tryb kodu, gdy jest włączony — pozostają dostępne z zablokowanymi operacjami zapisu. Ten sam przełącznik co na karcie Narzędzia w interfejsie webowym. Domyślnie wyłączony. Wymaga ponownego uruchomienia, aby zacząć obowiązywać.",
+    "features.redact_secrets.label": "Redaguj sekrety",
+    "features.redact_secrets.help": "Usuwa poufne dane z odpowiedzi narzędzi, zanim dotrą one do asystenta AI. Opcje aplikacji (dodatku) i pola integracji oznaczone jako hasła są zastępowane znacznikiem ustawienia/pustej wartości (dzięki czemu na pytanie \"czy to poświadczenie jest skonfigurowane?\" nadal można odpowiedzieć), a inne odpowiedzi narzędzi są czyszczone z poufnych wartości, które serwer już widział (wartości krótsze niż 6 znaków są pomijane, ponieważ zastępowanie malutkich fragmentów mogłoby uszkodzić powiązane dane wyjściowe). Pola nieoznaczone jako hasła przez ich schemat nie mogą zostać wykryte. Domyślnie wyłączone.",
+    "features.enable_mandatory_bps.label": "Dołącz umiejętności najlepszych praktyk przy zapisach",
+    "features.enable_mandatory_bps.help": "Główny przełącznik funkcji dostarczania treści umiejętności narzędzi do zapisu (problem #1182). Gdy włączone (domyślnie), sześć narzędzi do zapisu konfiguracji (automatyzacje, skrypty, sceny, pomocnicy, panele, surowy YAML) dołącza kanoniczne pliki referencyjne najlepszych praktyk Home Assistant w sekcji `skill_content` przy każdym udanym zapisie, plus automatycznie osadza wszelkie sekcje referencyjne cytowane w ostrzeżeniach dotyczących najlepszych praktyk. Każde narzędzie udostępnia również parametr `MandatoryBPS` dla każdego wywołania, który agent może ustawić na „fałsz” w kolejnych wywołaniach, gdy już posiada treść. Gdy ten główny przełącznik jest wyłączony, ŻADNA treść `skill_content` nie jest wysyłana, niezależnie od parametru dla każdego wywołania lub ostrzeżeń BP. Zalecane WŁĄCZONE jako pierwszy wybór; wyłącz tylko dla modeli z bardzo małymi oknami kontekstowymi. Wyłączenie tej opcji może obniżyć dokładność zapisu. Wymaga ponownego uruchomienia, aby zmiany weszły w życie.",
+    "features.enable_strict_mandatory_bps.label": "Tryb ścisłych najlepszych praktyk",
+    "features.enable_strict_mandatory_bps.help": "Tryb ścisły: uniemożliwia klientowi korzystanie z narzędzia, dopóki nie udowodni, że zapoznał się z najlepszymi praktykami. Gdy włączony, sześć narzędzi do zapisu najlepszych praktyk (automatyzacje, skrypty, sceny, pomocnicy, panele, surowy YAML) jest blokowanych i zwraca błąd, nakazując klientowi zapoznanie się z umiejętnościami najlepszych praktyk za pomocą ha_get_skill_guide i przekazanie z powrotem klucza potwierdzenia, który tam uzyska. Gdy włączony, narzędzie ha_get_skill_guide jest zablokowane i włączone — jest jedynym wydawcą klucza potwierdzenia. Opcja podrzędna opcji „Dołącz umiejętności najlepszych praktyk przy zapisach” powyżej i nieaktywna, gdy opcja nadrzędna jest wyłączona. Wymaga ponownego uruchomienia, aby zmiany weszły w życie.",
+    "features.enable_beta_features.label": "Włącz funkcje beta (główne)",
+    "features.enable_beta_features.help": "⚠ NIEBEZPIECZEŃSTWO — te narzędzia mogą TRWALE USZKODZIĆ Twoją instalację Home Assistant. Zapisują one do Twojej konfiguracji YAML, Twojego systemu plików, instalują niestandardowe komponenty, uruchamiają dowolny piaskownicowany Python i edytują docstringi narzędzi, które widzi AI. Nie ma gwarancji ani zapewnienia wsparcia — włączasz je na WŁASNE RYZYKO. Wykonaj kopię zapasową Home Assistant przed włączeniem tej opcji i nigdy nie włączaj jej w środowisku produkcyjnym bez kopii. Główna brama dla poniższych eksperymentalnych pod-flag; pod-flagi są ignorowane w czasie działania, gdy ta główna brama jest wyłączona, nawet jeśli są jawnie ustawione na true. Ten sam przełącznik jest również dostępny w interfejsie ustawień sieciowych pod nazwą \"Funkcje beta (niebezpieczne)\" — każda z tych powierzchni odzwierciedla drugą po ponownym uruchomieniu.",
+    "features.enable_yaml_config_editing.label": "Włącz edycję konfiguracji YAML (beta)",
+    "features.enable_yaml_config_editing.help": "Funkcja beta. Umożliwia asystentom AI dodawanie, zastępowanie lub usuwanie kluczy najwyższego poziomu w configuration.yaml i packages/*.yaml. Dozwolone są tylko klucze z białej listy (np. template, sensor, command_line, mqtt, knx); klucze podstawowe, takie jak homeassistant, http i recorder, są zablokowane. Każda edycja waliduje składnię YAML, uruchamia sprawdzanie konfiguracji i tworzy automatyczną kopię zapasową. Zmiany większości kluczy wymagają pełnego restartu HA, aby weszły w życie. Zobacz docs/beta.md, aby poznać znane ograniczenia. Dedykowane narzędzia (automations, scripts, scenes, helpers, template sensors) powinny być preferowane, gdy są dostępne. WYMAGA włączenia głównego przełącznika „Enable beta features” powyżej (i w interfejsie sieciowym) — w przeciwnym razie ta pod-flaga jest ignorowana podczas działania, niezależnie od jej wartości tutaj.",
+    "features.enable_yaml_edit_confirm.label": "Wymagaj potwierdzenia dla edycji YAML (podgląd różnic)",
+    "features.enable_yaml_edit_confirm.help": "Pod-przełącznik edycji konfiguracji YAML, domyślnie WŁĄCZONY (zalecane). Pierwsze wywołanie ha_config_set_yaml zwraca ujednoliconą różnicę dokładnie tego, co zmieniłoby się na dysku, plus token potwierdzenia i nic nie zapisuje; edycja zostaje zastosowana tylko wtedy, gdy wywołanie zostanie powtórzone z tym tokenem. Istnieje, aby niezamierzone zmiany poza żądaną edycją zostały wychwycone, zanim trafią na dysk (problem #1720). Wyłącz tylko, aby zaoszczędzić jedną rundę komunikacji na edycję.",
+    "features.enable_yaml_packages_automation.label": "Zezwól na automatyzację w packages/*.yaml",
+    "features.enable_yaml_packages_automation.help": "Pod-przełącznik edycji konfiguracji YAML. Gdy włączony, ha_config_set_yaml akceptuje yaml_path='automation' wewnątrz packages/*.yaml. Gdy wyłączony, wywołanie jest odrzucane zarówno po stronie klienta, jak i serwera. Narzędzie w trybie przechowywania (ha_config_set_automation) pozostaje nienaruszone. Domyślnie WYŁĄCZONE; działa tylko wtedy, gdy „Enable YAML config editing” powyżej jest również włączone.",
+    "features.enable_yaml_packages_script.label": "Zezwól na skrypty w packages/*.yaml",
+    "features.enable_yaml_packages_script.help": "Pod-przełącznik edycji konfiguracji YAML. Gdy włączony, ha_config_set_yaml akceptuje yaml_path='script' wewnątrz packages/*.yaml. Gdy wyłączony, wywołanie jest odrzucane zarówno po stronie klienta, jak i serwera. Narzędzie w trybie przechowywania (ha_config_set_script) pozostaje nienaruszone. Domyślnie WYŁĄCZONE; działa tylko wtedy, gdy „Enable YAML config editing” powyżej jest również włączone.",
+    "features.enable_yaml_packages_scene.label": "Zezwól na sceny w packages/*.yaml",
+    "features.enable_yaml_packages_scene.help": "Pod-przełącznik edycji konfiguracji YAML. Gdy włączony, ha_config_set_yaml akceptuje yaml_path='scene' wewnątrz packages/*.yaml. Gdy wyłączony, wywołanie jest odrzucane zarówno po stronie klienta, jak i serwera. Narzędzie w trybie przechowywania (ha_config_set_scene) pozostaje nienaruszone. Domyślnie WYŁĄCZONE; działa tylko wtedy, gdy „Enable YAML config editing” powyżej jest również włączone.",
+    "features.enable_filesystem_tools.label": "Włącz narzędzia systemu plików (beta)",
+    "features.enable_filesystem_tools.help": "Ustawia HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Umożliwia bezpośredni dostęp do odczytu/zapisu plików w systemie plików Home Assistant. OSTRZEŻENIE: Daje to serwerowi MCP wrażliwy, bezpośredni dostęp do plików w Twoim systemie. Włącz tylko, jeśli ufasz asystentowi AI w operacjach na plikach. Wymaga restartu, aby zmiany weszły w życie. WYMAGA włączenia głównego przełącznika „Enable beta features” powyżej (i w interfejsie sieciowym) — w przeciwnym razie ta pod-flaga jest ignorowana podczas działania, niezależnie od jej wartości tutaj.",
+    "features.enable_code_mode.label": "Włącz piaskownicę niestandardowych narzędzi (beta)",
+    "features.enable_code_mode.help": "Funkcja w wersji beta. Włącza narzędzie ha_manage_custom_tool, które pozwala asystentom AI tworzyć, uruchamiać, zapisywać i usuwać niestandardowy kod w języku Python w bezpiecznej piaskownicy (sandbox), gdy żadne wbudowane narzędzie nie jest w stanie obsłużyć żądania. Kod uruchamia się w odizolowanym interpreterze bez dostępu do systemu plików ani nieograniczonego dostępu do sieci. Kod w piaskownicy może wywoływać API REST HA (api_get/api_post), wysyłać polecenia WebSocket (ws_send), wywoływać istniejące narzędzia MCP (call_tool) lub usuwać zapisane narzędzie (delete_saved_tool). Zapisane narzędzia są domyślnie zachowywane w /data/saved_tools.json, dzięki czemu przetrwają ponowne uruchomienie aplikacji (dodatku), i są widoczne dla każdego klienta, który może się połączyć. Znane ograniczenia opisano w pliku docs/beta.md. Wymaga ponownego uruchomienia, aby zacząć obowiązywać. WYMAGA, aby główny przełącznik \"Włącz funkcje beta\" powyżej (i w interfejsie webowym) był włączony — w przeciwnym razie ta podflaga jest ignorowana w czasie wykonywania niezależnie od jej wartości.",
+    "features.enable_lite_docstrings.label": "Włącz uproszczone docstringi narzędzi (beta)",
+    "features.enable_lite_docstrings.help": "Funkcja beta. Zastępuje docstringi w kilku „ciężkich” narzędziach ha-mcp (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) krótszymi wariantami, które odkładają szczegóły schematu i przykładów do narzędzia ha_get_skill_guide (lub jego zasobu skill://). OSTRZEŻENIE: zmniejsza to zużycie tokenów w stanie bezczynności, ale może obniżyć wydajność LLM — skrócone opisy polegają na tym, że LLM faktycznie wywołuje narzędzie skill lub czyta zasób skill w celu uzyskania szczegółów, co nie jest gwarantowane (niektóre modele pominą dodatkowe wywołanie narzędzia i ostatecznie będą miały mniej wskazówek niż wcześniej). Najlepiej używać w połączeniu z klientem obsługującym zasoby MCP lub z enable_tool_search. Wymaga restartu, aby zmiany weszły w życie. WYMAGA włączenia głównego przełącznika „Enable beta features” powyżej (i w interfejsie sieciowym) — w przeciwnym razie ta pod-flaga jest ignorowana podczas działania, niezależnie od jej wartości tutaj.",
+    "features.enable_dashboard_screenshot.label": "Włącz tryb zrzutów ekranu pulpitu nawigacyjnego (beta)",
+    "features.enable_dashboard_screenshot.help": "Funkcja w wersji beta — domyślnie wyłączona. Dodaje narzędzie ha_get_dashboard_screenshot oraz opcje include_screenshot / return_screenshot w narzędziach pobierania/ustawiania pulpitów, dzięki czemu asystenci AI mogą sprawdzać jeden lub więcej responsywnych obrazów Lovelace (np. w celu zweryfikowania właśnie utworzonego pulpitu). Obsługuje stabilne nazwane widoki, partie mobilne/tabletowe/desktopowe oraz wyjście w formacie PNG/JPEG/WebP/BMP. Renderowanie odbywa się w osobnym, opcjonalnym silniku — aplikacji (dodatku) \"Puppet\" autorstwa balloob, bezgłowym Chromium — który instalujesz raz (dodajesz repozytorium balloob do sklepu z aplikacjami, a następnie instalujesz \"Puppet\") i przekazujesz długoterminowy token dostępu; w przypadku wdrożeń na Dockerze/Containerze uruchamiasz ten silnik jako kontener pomocniczy (sidecar) i ustawiasz zmienną HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Żadne duże komponenty nie są instalowane, dopóki zarówno nie włączysz tej opcji, jak i nie zainstalujesz silnika. Wymaga ponownego uruchomienia, aby zacząć obowiązywać. WYMAGA, aby główny przełącznik \"Włącz funkcje beta\" powyżej (i w interfejsie webowym) był włączony — w przeciwnym razie ta podflaga jest ignorowana w czasie wykonywania niezależnie od jej wartości.",
+    "actions.restart_server": "Uruchom ponownie serwer HA-MCP",
+    "actions.restart_confirm": "Uruchomić ponownie HA-MCP teraz? Strona załaduje się automatycznie, gdy serwer ponownie będzie online.",
+    "actions.view": "Wyświetl",
+    "actions.diff": "Porównaj",
+    "actions.restore": "Przywróć",
+    "actions.delete": "Usuń",
+    "actions.edit": "edytuj",
+    "actions.remove": "Usuń",
+    "actions.cancel": "Anuluj",
+    "actions.approve": "Zatwierdź",
+    "actions.deny": "Odrzuć",
+    "actions.dismiss": "Odrzuć",
+    "status.loaded": "Załadowano",
+    "status.loading_ellipsis": "Ładowanie…",
+    "status.loading_parentheses": "(ładowanie…)",
+    "status.unsaved": "Niezapisane zmiany...",
+    "status.saving": "Zapisywanie…",
+    "status.saving_server_setting": "Zapisywanie ustawień serwera...",
+    "status.saved": "Zapisano.",
+    "status.saved_restart": "Zapisano. Wymagane ponowne uruchomienie.",
+    "status.saved_llm_api": "Zapisano. Udostępnienie API LLM zostanie zastosowane przy następnej wiadomości agenta.",
+    "status.saved_reload_failed": "Zapisano (ponowne ładowanie nie powiodło się; odśwież, aby zweryfikować).",
+    "status.nothing_editable": "Nic do edycji.",
+    "status.stopping": "Zatrzymywanie...",
+    "status.stopped_offline": "Zatrzymano. Ta strona przejdzie w tryb offline",
+    "status.stopped_connection": "Zatrzymano (połączenie zerwane)",
+    "status.restarting": "Ponowne uruchamianie…",
+    "status.waiting_addon": "Oczekiwanie na powrót aplikacji (dodatku) do trybu online…",
+    "errors.javascript": "Błąd JS: {message} @ {where}",
+    "errors.async": "Błąd asynchroniczny: {message}",
+    "errors.network": "Błąd sieci: {message}",
+    "errors.network_endpoint": "Błąd sieci podczas łączenia z {endpoint}: {message}",
+    "errors.http_endpoint": "{endpoint} zwrócił HTTP {status} {detail}",
+    "errors.json_endpoint": "Nie udało się sparsować odpowiedzi {endpoint} jako JSON: {message}",
+    "errors.render": "Renderowanie nie powiodło się: {message} (otwórz narzędzia deweloperskie przeglądarki, aby zobaczyć stos)",
+    "errors.save_failed": "Zapisywanie nie powiodło się",
+    "errors.save_failed_detail": "Zapisywanie nie powiodło się: {message}",
+    "errors.save_failed_http": "Zapisywanie nie powiodło się (HTTP {status})",
+    "errors.save_failed_non_json": "Zapisywanie nie powiodło się (HTTP {status}, treść nie-JSON)",
+    "errors.load_failed": "Ładowanie nie powiodło się: {status}",
+    "errors.stop_failed": "Zatrzymywanie nie powiodło się",
+    "errors.restart_failed": "Ponowne uruchomienie nie powiodło się",
+    "errors.failed_detail": "Nie powiodło się: {detail}",
+    "errors.addon_not_back": "Aplikacja (dodatek) nie wróciła do trybu online. Odśwież stronę ręcznie.",
+    "errors.unparseable_suffix": " (nieparsowalna treść odpowiedzi)",
+    "common.operation_failed": "{operation} nie powiodła się: {detail}",
+    "common.enabled": "włączone",
+    "common.disabled": "wyłączone",
+    "common.env_locked": "zablokowane przez zmienną środowiskową",
+    "common.minutes_short": "{count} min",
+    "common.bytes": "{count} bajtów",
+    "common.none": "(brak)",
+    "notice.restart.addon": "⚠ Zmiany zapisane. Kliknij \"Uruchom ponownie aplikację (dodatek)\", aby zaczęły obowiązywać. Wyłączone narzędzia zostaną usunięte z listy narzędzi MCP przy następnym uruchomieniu. Następnie odśwież listę narzędzi w kliencie AI; samo ponowne uruchomienie aplikacji nie odświeża listy w pamięci podręcznej klienta.",
+    "notice.restart.embedded": "⚠ Zmiany zapisane. Kliknij „Restart HA-MCP Server”, aby ponownie załadować integrację w procesie. Następnie odśwież listę narzędzi MCP w swoim kliencie AI.",
+    "notice.restart.sidecar": "⚠ Zmiany zapisane. Całkowicie zamknij i ponownie otwórz klienta MCP, aby zmiany weszły w życie. Wyłączone narzędzia zostaną usunięte z listy narzędzi MCP przy następnym uruchomieniu.",
+    "notice.restart.standalone": "⚠ Zmiany zapisane. Uruchom ponownie proces ha-mcp, a następnie odśwież listę narzędzi MCP w swoim kliencie AI.",
+    "server.sidecar.confirm_disable": "⚠ TRWALE wyłączyć serwer ustawień?\n\nSpowoduje to zatrzymanie serwera i zapisanie znacznika, który uniemożliwi jego ponowne uruchomienie. Aby przywrócić dostęp, usuń ~/.ha-mcp/settings_ui_disabled i usuń ustawienie HA_MCP_DISABLE_SETTINGS_UI. Kontynuować?",
+    "tools.empty": "Nie znaleziono narzędzi. Sidecar odczytuje ~/.ha-mcp/tool_metadata.json. Jeśli brakuje pliku lub jest pusty, uruchom ponownie klienta MCP. Szczegóły znajdziesz w ~/.ha-mcp/sidecar.log.",
+    "tools.group_count": "{enabled}/{total} włączonych",
+    "tools.group_toggle_title": "Włącz/wyłącz wszystkie narzędzia w tej grupie",
+    "tools.badges.mandatory": "obowiązkowe",
+    "tools.badges.read_only": "tylko do odczytu",
+    "tools.badges.writes": "zapisuje",
+    "tools.badges.deletes": "usuwa",
+    "tools.notes.gated_disabled": "Wyłączone. Włącz {setting} — przełącznik narzędzia edycji zasad znajduje się na karcie Zasady bezpieczeństwa narzędzi — a następnie uruchom ponownie aplikację (dodatek).",
+    "tools.notes.beta_disabled": "Wersja beta. Ustaw {setting} w konfiguracji deweloperskiej aplikacji (dodatku) lub w pasującej zmiennej środowiskowej (zobacz docs/beta.md).",
+    "tools.notes.env_pinned": "Przypięte przez {variable}. Usuń ustawienie zmiennej środowiskowej, aby edytować tutaj.",
+    "tools.notes.bps_locked": "Zablokowane, gdy włączony jest tryb ścisłych najlepszych praktyk. Najpierw wyłącz to ustawienie, aby wyłączyć to narzędzie.",
+    "tools.notes.read_only_off": "Wyłączone. Tryb tylko do odczytu jest włączony; narzędzia do zapisu są wyłączone.",
+    "tools.notes.read_only_partial": "Tryb tylko do odczytu: operacje zapisu tego narzędzia są zablokowane; operacje odczytu pozostają dostępne.",
+    "tools.llm_api.label": "API LLM",
+    "tools.llm_api.help": "Udostępnij to narzędzie agentom konwersacyjnym Home Assistant poprzez API LLM. Zostanie zastosowane przy następnej wiadomości agenta; ponowne uruchomienie nie jest wymagane.",
+    "tools.aria.llm_api": "{title} udostępnione API LLM agenta konwersacyjnego",
+    "tools.aria.enabled": "{title} włączone",
+    "tools.aria.pinned": "{title} przypięte",
+    "tools.aria.security_gated": "{title} zabezpieczone",
+    "tools.states.enabled": "włączone",
+    "tools.states.pinned": "przypięte",
+    "tools.states.security_gated": "zabezpieczone",
+    "tools.security.enable_first": "Najpierw włącz zasady bezpieczeństwa narzędzi w ustawieniach serwera.",
+    "tools.summary.total": "{count} wszystkich",
+    "tools.summary.enabled": "{count} włączonych",
+    "tools.summary.pinned": "{count} przypiętych",
+    "tools.summary.disabled": "{count} wyłączonych",
+    "tools.read_only.save_failed": "Zmiana trybu tylko do odczytu nie została zapisana. Serwer nadal ma poprzednią wartość.",
+    "backup.fields.enable_auto_backup.label": "Automatyczne tworzenie kopii zapasowych edycji",
+    "backup.fields.enable_auto_backup.help": "Wykonaj migawkę przed każdym opakowanym zapisem lub destrukcyjnym wywołaniem narzędzia.",
+    "backup.fields.auto_backup_throttle_minutes.label": "Ograniczenie (minuty)",
+    "backup.fields.auto_backup_throttle_minutes.help": "Ograniczenie na encję. 0 = każdy zapis; N > 0 = co najwyżej jedna kopia zapasowa na N minut. Zakres 0–1440.",
+    "backup.fields.auto_backup_retain_per_entity.label": "Zachowaj na encję",
+    "backup.fields.auto_backup_retain_per_entity.help": "Maksymalna liczba migawek przechowywanych na encję (1–10000). Starsze są usuwane.",
+    "backup.fields.auto_backup_dir.label": "Nadpisanie katalogu kopii zapasowych",
+    "backup.fields.auto_backup_dir.help": "Pozostaw puste, aby użyć domyślnego katalogu; w przeciwnym razie wprowadź ścieżkę absolutną.",
+    "backup.fields.auto_backup_calendar_lookahead_days.label": "Przewidywanie kalendarza (dni)",
+    "backup.fields.auto_backup_calendar_lookahead_days.help": "Jak daleko w przyszłość wysyłać zapytania o zdarzenia kalendarza dla migawek przed edycją. Zakres 1–365.",
+    "backup.fields.enable_snapshot_delete.label": "Zezwól na usuwanie migawek",
+    "backup.fields.enable_snapshot_delete.help": "Zezwól ha_manage_backup na usuwanie pełnych migawek HA, jednocześnie chroniąc zaplanowane, najnowsze i zbyt młode migawki.",
+    "backup.fields.snapshot_delete_min_age_days.label": "Minimalny wiek migawki do usunięcia (dni)",
+    "backup.fields.snapshot_delete_min_age_days.help": "Migawka musi mieć co najmniej tyle lat, zanim zostanie usunięta. Zakres 0–365.",
+    "backup.origins.addon": "Zsynchronizowano z Supervisor. Wymagane ponowne uruchomienie po zapisaniu.",
+    "backup.origins.file": "Utrwalone lokalnie; wchodzi w życie natychmiast.",
+    "backup.origins.default": "Używanie domyślnych; pierwsze zapisanie tworzy lokalny plik nadpisujący.",
+    "backup.errors.load_settings": "Nie można załadować ustawień kopii zapasowych.",
+    "backup.errors.unavailable": "Ustawienia kopii zapasowych niedostępne.",
+    "backup.errors.load_list": "Błąd ładowania kopii zapasowych",
+    "backup.errors.load_one": "Nie można załadować kopii zapasowej „{name}”: {message}",
+    "backup.errors.diff": "Nie można porównać kopii zapasowej „{name}”: {message}",
+    "backup.errors.restore": "Przywracanie „{name}” nie powiodło się: {message}",
+    "backup.errors.restore_detail": "Przywracanie nie powiodło się: {detail}",
+    "backup.errors.delete": "Usuwanie „{name}” nie powiodło się: {message}",
+    "backup.errors.delete_detail": "Usuwanie nie powiodło się: {detail}",
+    "backup.errors.bulk_delete": "Masowe usuwanie nie powiodło się: {detail}",
+    "backup.state.status": "Status",
+    "backup.state.throttle": "Ograniczenie",
+    "backup.state.retain": "Zachowaj na encję",
+    "backup.state.directory": "Katalog",
+    "backup.state.total": "Łącznie",
+    "backup.empty": "Brak kopii zapasowych. Włącz automatyczne tworzenie kopii zapasowych i edytuj encję, aby utworzyć pierwszą.",
+    "backup.modal.view": "Widok: {name}",
+    "backup.modal.diff": "Porównaj: {name}",
+    "backup.identical": "(identyczne)",
+    "backup.confirm.restore": "Przywrócić {name}?\n\nSpowoduje to nadpisanie bieżącego stanu encji. Najpierw zostanie wykonana kopia zapasowa bezpieczeństwa.",
+    "backup.confirm.delete": "Usunąć {name}? Tej operacji nie można cofnąć.",
+    "backup.restored": "Przywrócono. Kopia zapasowa bezpieczeństwa: {name}",
+    "backup.bulk.prompt_days": "Usuń kopie zapasowe starsze niż N dni (pozostaw puste, aby użyć tylko bieżących filtrów):",
+    "backup.bulk.filter_required": "Ustaw co najmniej jeden filtr (Domena, Encja lub wiek w dniach).",
+    "backup.bulk.confirm": "Usunąć wszystkie kopie zapasowe pasujące do: {filters}?",
+    "backup.bulk.deleted": "Usunięto {count} kopii zapasowych",
+    "filesystem.custom.title": "Niestandardowe katalogi systemu plików (zaawansowane)",
+    "filesystem.custom.help": "Dodatkowe ścieżki (po jednej w linii), do których narzędzia plikowe mogą <strong>mieć dostęp do odczytu i zapisu</strong>. Obsługiwane są względne ścieżki konfiguracji oraz dozwolone wolumeny pokrewne HAOS. Każdy wpis zezwala na tę ścieżkę oraz wszystko, co się w niej znajduje; nazwy plików względne dla konfiguracji, takie jak <code>sensor.yaml</code>, można wpisywać bezpośrednio. Wchodzi w życie natychmiast.",
+    "filesystem.custom.blocked": "Zawsze blokowane: {paths}, przechodzenie po ścieżkach (<code>..</code>) oraz ścieżki bezwzględne poza dozwolonymi woluminami HAOS.",
+    "filesystem.custom.enable_first": "Włącz funkcje beta i narzędzia systemu plików powyżej, aby edytować.",
+    "filesystem.custom.unavailable": "Niestandardowe katalogi są obecnie niedostępne.",
+    "filesystem.custom.save": "Zapisz katalogi",
+    "filesystem.custom.saved_rejected": "Zapisano. Odrzucono (zablokowane lub nieprawidłowe): {paths}",
+    "origins.env_locked": "Ustawiono za pomocą zmiennej środowiskowej; usuń ją, aby edytować tutaj.",
+    "origins.addon_synced": "Zsynchronizowano z kartą konfiguracji aplikacji (dodatku). Po zapisaniu wymagane jest ponowne uruchomienie.",
+    "origins.env_var_unset": "Ustawiono za pomocą zmiennej środowiskowej {variable}; usuń ją, aby edytować tutaj.",
+    "origins.beta_legacy_bridge": "Włączone automatycznie w trybie starszej wersji aplikacji (dodatku). Ustaw <code>enable_beta_features</code> jawnie w konfiguracji, aby przejąć kontrolę. (zmienna środowiskowa: {variable})",
+    "origins.addon_runtime": "Ustawione przez środowisko wykonawcze aplikacji (dodatku) zarządzane przez Supervisor; nie można tego zmienić tutaj. (zmienna środowiskowa: {variable})",
+    "origins.display_only": "Tylko do wyświetlania. Zmień za pomocą zmiennej środowiskowej lub ustawień aplikacji (dodatku).",
+    "features.errors.network": "Flagi funkcji niedostępne (błąd sieci podczas łączenia z /api/settings/features).",
+    "features.errors.http": "Flagi funkcji niedostępne (HTTP {status}).",
+    "features.errors.json": "Odpowiedź flag funkcji nie była prawidłowym JSON-em.",
+    "advanced.errors.network": "Ustawienia zaawansowane niedostępne (błąd sieci podczas łączenia z /api/settings/advanced).",
+    "advanced.errors.http": "Ustawienia zaawansowane niedostępne (HTTP {status}).",
+    "advanced.errors.json": "Odpowiedź ustawień zaawansowanych nie była prawidłowym JSON-em.",
+    "advanced.sidecar.stdio_only": "Dostępne tylko w trybie stdio. Ten serwer HTTP nie ma sidecara interfejsu użytkownika ustawień do przypięcia.",
+    "advanced.enable_dev_mode.confirm": "⚠ Włączyć tryb deweloperski?\n\nPo ponownym uruchomieniu ukryte narzędzia deweloperskie zostaną udostępnione połączonym agentom AI. Włącz tylko do celów programistycznych i testowych.",
+    "advanced.dev_tools_security_policy_access.confirm": "⚠ Zezwolić narzędziom deweloperskim na zmianę zasad bezpieczeństwa?\n\nGdy tryb deweloperski jest włączony, połączeni agenci AI będą mogli przepisywać zasady bezpieczeństwa narzędzi, dodawać lub usuwać bramki zatwierdzania dla poszczególnych narzędzi oraz zatwierdzać lub odrzucać oczekujące zatwierdzenia — w tym własne wywołania z bramkami. Włącz tylko podczas testowania zasad.",
+    "advanced.code_mode_saved_tools_path.addon_locked": "W trybie aplikacji (dodatku) ścieżka jest na stałe ustawiona na <code>/data/saved_tools.json</code>, aby zapisane narzędzia przetrwały aktualizacje.",
+    "advanced.code_mode_saved_tools_path.blank_warning": "Jeśli puste, niestandardowe narzędzia są przechowywane tylko w pamięci i tracone po ponownym uruchomieniu.",
+    "policies.errors.conflict": "{operation} nie powiodła się: zasada została zmodyfikowana w innej zakładce lub sesji. Odśwież i ponownie zastosuj swoje zmiany.",
+    "policies.errors.load": "Nie można załadować zasady: {status}",
+    "policies.errors.reach_server": "Nie można połączyć się z serwerem: {message}",
+    "policies.errors.corrupt_suffix": " (plik tool_policy.json wydaje się uszkodzony; edytuj go lub usuń w katalogu danych serwera)",
+    "policies.errors.load_detail": "Nie udało się załadować zasady: {detail}",
+    "policies.errors.update_tool": "Nie udało się zaktualizować zasady bezpieczeństwa narzędzia: {message}",
+    "policies.errors.remove_rule": "Nie udało się usunąć reguły: {message}",
+    "policies.errors.master_save": "Zmiana zasad bezpieczeństwa narzędzi nie została zapisana. Serwer nadal ma poprzednią wartość.",
+    "policies.errors.manage_tool_save": "Zmiana narzędzia do edycji zasad nie została zapisana. Serwer nadal ma poprzednią wartość.",
+    "policies.operations.sync_gated": "Synchronizuj przełącznik bramkowania",
+    "policies.operations.save_rule": "Zapisz regułę",
+    "policies.operations.save_global": "Zapisz ustawienia globalne",
+    "policies.predicate.invalid": "(nieprawidłowe)",
+    "policies.operators.exists": "istnieje",
+    "policies.operators.exists_long": "jest obecne (dowolna wartość)",
+    "policies.operators.eq": "równa się",
+    "policies.operators.neq": "NIE równa się",
+    "policies.operators.in": "jest jednym z",
+    "policies.operators.not_in": "NIE jest jednym z",
+    "policies.operators.contains": "zawiera",
+    "policies.operators.regex": "pasuje do wyrażenia regularnego",
+    "policies.operators.gt": "jest większe niż",
+    "policies.operators.lt": "jest mniejsze niż",
+    "policies.card.no_conditions": "(brak warunków, reguła pasuje do każdego wywołania tego narzędzia)",
+    "policies.card.always_row": "(zawsze — bramkuje każde wywołanie tego narzędzia)",
+    "policies.card.and_join": " ORAZ ",
+    "policies.card.remove_title": "Usuń z zasady",
+    "policies.card.conditions_intro": "Wymagaj zatwierdzenia, gdy DOWOLNY warunek pasuje (brak warunków = zawsze wymagaj zatwierdzenia):",
+    "policies.card.add_condition": "+ Dodaj warunek",
+    "policies.card.argument": "Argument:",
+    "policies.card.argument_placeholder": "np. args.color_temp",
+    "policies.card.match_when": "Dopasuj, gdy:",
+    "policies.card.value": "Wartość:",
+    "policies.card.save_condition": "Zapisz warunek",
+    "policies.card.remember_for": "Zapamiętaj zatwierdzenie na:",
+    "policies.card.minutes_single": "minut (0 = jednorazowe)",
+    "policies.card.confirm_remove": "Usunąć „{tool}” z zasady bezpieczeństwa?",
+    "policies.editor.any_argument_title": "Dopasuj każdy argument wywołania do tego warunku.",
+    "policies.editor.any_argument": "(dowolny argument)",
+    "policies.editor.other_path": "(inne, wpisz ścieżkę)",
+    "policies.editor.value_source_http": "Pobieranie źródła wartości nie powiodło się (HTTP {status}); powrót do swobodnego tekstu",
+    "policies.editor.value_source_error": "Pobieranie źródła wartości nie powiodło się ({message}); powrót do swobodnego tekstu",
+    "policies.editor.schema_http": "Pobieranie schematu narzędzia nie powiodło się (HTTP {status}); powrót do swobodnego tekstu",
+    "policies.editor.schema_error": "Pobieranie schematu narzędzia nie powiodło się ({message}); powrót do swobodnego tekstu",
+    "policies.editor.hint.exists": "Pozostaw puste, aby bramkować, gdy argument jest obecny, niezależnie od wartości.",
+    "policies.editor.hint.list": "Wybierz jedną lub więcej wartości, lub wpisz listę JSON. Pozostaw puste, aby bramkować dowolną wartość.",
+    "policies.editor.hint.regex": "Wyrażenie regularne do dopasowania argumentu.",
+    "policies.editor.hint.contains": "Podciąg lub element listy. Pozostaw puste, aby bramkować dowolną wartość.",
+    "policies.editor.hint.number": "Liczba do porównania.",
+    "policies.editor.hint.equals": "Wartość, której argument musi być równy. Pozostaw puste, aby bramkować dowolną wartość.",
+    "policies.editor.loading_choices": "Ładowanie opcji…",
+    "policies.editor.pick_value": "(wybierz wartość)",
+    "policies.editor.placeholder.blank": "zazwyczaj pozostawione puste",
+    "policies.editor.validation.pick_one_or_more": "wybierz co najmniej jedną wartość",
+    "policies.editor.validation.pick_value": "wybierz wartość",
+    "policies.editor.validation.value_required": "wartość jest wymagana dla op={operator}",
+    "policies.editor.validation.empty_list": "pusta lista dla op={operator}",
+    "policies.editor.validation.argument_required": "argument jest wymagany",
+    "policies.pending.offline": "Utracono kontakt z serwerem ({message}). Ponawianie próby.",
+    "policies.pending.disabled": "Zasady bezpieczeństwa narzędzi są wyłączone. Włącz je i uruchom ponownie HA-MCP, aby włączyć kontrolę dostępu.",
+    "policies.pending.unavailable": "Zatwierdzanie na żywo jest niedostępne. Sprawdź logi HA-MCP.",
+    "policies.pending.expires": "Wygasa: {time}",
+    "policies.pending.already_decided": "To zatwierdzenie zostało już {decision}, prawdopodobnie przez inną kartę lub sesję.",
+    "policies.pending.decision.approved": "zatwierdzone",
+    "policies.pending.decision.denied": "odrzucone",
+    "policies.pending.invalid_token": "Ten token zatwierdzenia jest już nieważny (już zużyty lub wygasły).",
+    "policies.pending.action_failed": "Akcja zatwierdzenia nie powiodła się: {detail}",
+    "visibility.errors.reach_server": "Nie można połączyć się z serwerem: {message}",
+    "visibility.errors.corrupt_suffix": " (plik entity_visibility.json wydaje się uszkodzony; edytuj go lub usuń w katalogu danych serwera)",
+    "visibility.errors.load_detail": "Nie udało się załadować konfiguracji widoczności: {detail}",
+    "visibility.errors.conflict": "Konfiguracja została zmieniona w innej zakładce lub sesji. Odśwież stronę, a następnie ponownie zastosuj swoje zmiany.",
+    "advanced.homeassistant_url.label": "Adres URL Home Assistant",
+    "advanced.homeassistant_url.help": "Tylko do wyświetlania. Ustawiane przez HOMEASSISTANT_URL lub zarządzane przez aplikację (dodatek).",
+    "advanced.homeassistant_token.label": "Token Home Assistant",
+    "advanced.homeassistant_token.help": "Tylko do wyświetlenia. Ustawiane za pomocą HOMEASSISTANT_TOKEN. Zamaskowane tutaj ze względów bezpieczeństwa.",
+    "advanced.timeout.label": "Limit czasu żądania HA (s)",
+    "advanced.timeout.help": "Limit czasu HTTP dla każdego żądania. Zakres 1–600. Wymagany restart.",
+    "advanced.max_retries.label": "Maks. liczba ponownych prób żądania HA",
+    "advanced.max_retries.help": "Budżet ponownych prób na każde nieudane wywołanie REST. Zakres 0–20. Wymagany restart.",
+    "advanced.verify_ssl.label": "Weryfikuj certyfikaty SSL",
+    "advanced.verify_ssl.help": "Wyłącz weryfikację TLS tylko w zaufanych sieciach. Wymagany restart.",
+    "advanced.fuzzy_threshold.label": "Próg wyszukiwania rozmytego",
+    "advanced.fuzzy_threshold.help": "Niższe wartości pozwalają na luźniejsze dopasowanie encji. Zakres 0–100.",
+    "advanced.automation_config_time_budget.label": "Limit czasu konfiguracji automatyzacji (s)",
+    "advanced.automation_config_time_budget.help": "Maksymalny czas, jaki głębokie wyszukiwanie poświęca na pobieranie konfiguracji automatyzacji. Zakres 1–600. Wymagany restart.",
+    "advanced.script_config_time_budget.label": "Limit czasu konfiguracji skryptu (s)",
+    "advanced.script_config_time_budget.help": "Maksymalny czas, jaki głębokie wyszukiwanie poświęca na pobieranie konfiguracji skryptów. Zakres 1–600. Wymagany restart.",
+    "advanced.scene_config_time_budget.label": "Limit czasu konfiguracji sceny (s)",
+    "advanced.scene_config_time_budget.help": "Maksymalny czas, jaki głębokie wyszukiwanie poświęca na pobieranie konfiguracji scen. Zakres 1–600. Wymagany restart.",
+    "advanced.individual_config_timeout.label": "Limit czasu pobierania konfiguracji na żądanie (s)",
+    "advanced.individual_config_timeout.help": "Limit czasu dla każdego pobierania konfiguracji automatyzacji/skryptu/sceny. Zakres 1–600. Wymagany restart.",
+    "advanced.individual_fetch_batch_size.label": "Rozmiar partii pobierania konfiguracji",
+    "advanced.individual_fetch_batch_size.help": "Równoczesne pobieranie konfiguracji dla każdego ID. Zmniejsz do 1 na szeregowych serwerach HA. Zakres 1–100. Wymagany restart.",
+    "advanced.backup_hint.label": "Poziom podpowiedzi o kopii zapasowej",
+    "advanced.backup_hint.help": "Kontroluje, jak silnie LLM jest zachęcany do wykonania pełnej migawki HA przed ryzykownymi zapisami.",
+    "advanced.backup_hint.choices.strong": "Silny",
+    "advanced.backup_hint.choices.normal": "Normalny",
+    "advanced.backup_hint.choices.weak": "Słaby",
+    "advanced.backup_hint.choices.auto": "Automatyczny",
+    "advanced.dashboard_screenshot_engine_url.label": "Adres URL silnika zrzutów ekranu pulpitu nawigacyjnego",
+    "advanced.dashboard_screenshot_engine_url.help": "Bazowy adres URL silnika zrzutów ekranu. Pozostaw puste dla automatycznego wykrywania przez Supervisor. Obowiązuje natychmiast.",
+    "advanced.enable_websocket.label": "Włącz WebSocket",
+    "advanced.enable_websocket.help": "Monitorowanie stanu WebSocket. Wyłączenie powoduje powrót do odpytywania i pogarsza działanie wielu narzędzi. Wymagany restart.",
+    "advanced.enabled_tool_modules.label": "Włączone moduły narzędzi",
+    "advanced.enabled_tool_modules.help": "Nazwy modułów oddzielone przecinkami lub 'all'. Wymagany restart.",
+    "advanced.enable_dashboard_partial_tools.label": "Narzędzia do częściowej aktualizacji pulpitu nawigacyjnego",
+    "advanced.enable_dashboard_partial_tools.help": "Narzędzia częściowego pulpitu nawigacyjnego, efektywne pod względem tokenów. Wyłącz dla klientów korzystających z programowego użycia narzędzi.",
+    "advanced.mcp_server_name.label": "Nazwa serwera MCP",
+    "advanced.mcp_server_name.help": "Zgłaszana w uzgadnianiu MCP. Wymaga ponownego uruchomienia.",
+    "advanced.mcp_server_version.label": "Wersja serwera MCP",
+    "advanced.mcp_server_version.help": "Domyślnie jest to wersja pakietu. Nadpisanie może wprowadzić klientów w błąd. Wymaga ponownego uruchomienia.",
+    "advanced.environment.label": "Środowisko",
+    "advanced.environment.help": "development lub production. Wpływa na szczegółowość logowania. Wymaga ponownego uruchomienia.",
+    "advanced.log_level.label": "Poziom logowania",
+    "advanced.log_level.help": "DEBUG/INFO/WARNING/ERROR/CRITICAL. Wymaga ponownego uruchomienia.",
+    "advanced.debug.label": "Tryb debugowania",
+    "advanced.debug.help": "Szczegółowe logowanie żądań. Może ujawnić wrażliwe dane. Wymaga ponownego uruchomienia.",
+    "advanced.code_mode_max_duration.label": "Tryb kodu: maks. czas trwania (s)",
+    "advanced.code_mode_max_duration.help": "Limit czasu rzeczywistego na uruchomienie piaskownicy. Zakres 1–300. Wymaga ponownego uruchomienia.",
+    "advanced.code_mode_max_memory.label": "Tryb kodu: maks. pamięć (bajty)",
+    "advanced.code_mode_max_memory.help": "Limit pamięci na uruchomienie piaskownicy. Zakres 1–256 MB. Wymaga ponownego uruchomienia.",
+    "advanced.code_mode_max_recursion.label": "Tryb kodu: maks. rekurencja",
+    "advanced.code_mode_max_recursion.help": "Limit głębokości rekurencji na uruchomienie piaskownicy. Wymaga ponownego uruchomienia.",
+    "advanced.code_mode_max_invocations.label": "Tryb kodu: maks. wywołania",
+    "advanced.code_mode_max_invocations.help": "Limit wywołań API/narzędzi na uruchomienie piaskownicy. Wymaga ponownego uruchomienia.",
+    "advanced.code_mode_saved_tools_path.label": "Ścieżka zapisanych narzędzi",
+    "advanced.code_mode_saved_tools_path.help": "Plik JSON używany do zachowywania niestandardowych narzędzi po ponownym uruchomieniu. Wymaga ponownego uruchomienia.",
+    "advanced.extra_yaml_write_keys.label": "Dodatkowe klucze zapisu YAML",
+    "advanced.extra_yaml_write_keys.help": "Klucze najwyższego poziomu oddzielone przecinkami, które ha_config_set_yaml może zapisywać oprócz wbudowanych, dla integracji opartych na YAML w tej instalacji (np. alert2). Klucze, które redefiniują własną granicę zaufania Home Assistant, nigdy nie mogą być dodane i są ignorowane. Wymaga niestandardowego komponentu w wersji 1.2.4 lub nowszej.",
+    "advanced.sidecar_pin_port.label": "Port sidecar interfejsu ustawień",
+    "advanced.sidecar_pin_port.help": "0 wybiera wolny port przy pierwszym uruchomieniu i zachowuje go na kolejne restarty; 1024–65535 przypina preferowany port (wraca do wolnego, jeśli jest zajęty). Wymaga ponownego uruchomienia.",
+    "advanced.enable_dev_mode.label": "Tryb dewelopera",
+    "advanced.enable_dev_mode.help": "⚠ Rejestruje ukryte narzędzia, które mogą zmieniać ustawienia i zastępować działający serwer. Tylko do celów deweloperskich i testowych. Wymaga ponownego uruchomienia.",
+    "advanced.dev_tools_security_policy_access.label": "Dostęp do zasad bezpieczeństwa narzędzi deweloperskich",
+    "advanced.dev_tools_security_policy_access.help": "⚠ Gdy tryb dewelopera jest włączony, umożliwia narzędziom deweloperskim przepisywanie zasad bezpieczeństwa narzędzi, dodawanie lub usuwanie bramek zatwierdzających dla poszczególnych narzędzi oraz zatwierdzanie lub odrzucanie oczekujących zatwierdzeń w Twoim imieniu — agent AI może akceptować własne wywołania z bramkami. Tylko do testowania zasad. Wchodzi w życie bez ponownego uruchomienia.",
+    "addon.backup_hint.name": "Poziom sugestii pełnej migawki HA (dla LLM)",
+    "addon.backup_hint.description": "Dostosowuje sformułowanie podpowiedzi, którą LLM widzi w opisie narzędzia `ha_manage_backup(scope='snapshot')`, dotyczącej tego, kiedy sugerować pełną kopię zapasową Home Assistant w formacie tarball przed ryzykownymi operacjami (np. masowe usuwanie urządzeń). Wpływa TYLKO na to jedno zdanie podpowiedzi skierowane do LLM.\n\nW przypadku automatycznych migawek automatyzacji / skryptów / pomocników / itp. dla każdej edycji, użyj oddzielnego przełącznika **Włącz automatyczne tworzenie kopii zapasowych edycji** poniżej.",
+    "addon.secret_path.name": "Nadpisanie tajnej ścieżki",
+    "addon.secret_path.description": "Opcjonalna niestandardowa ścieżka HTTP dla serwera MCP. Pozostaw puste, aby użyć automatycznie generowanej bezpiecznej ścieżki.\n",
+    "addon.enable_security_policy_tool.name": "Zezwól agentom AI na edycję zasad bezpieczeństwa narzędzi",
+    "addon.enable_security_policy_tool.description": "Rejestruje narzędzie ha_manage_security_policy, które pozwala połączonym agentom AI czytać i przepisywać polityki bezpieczeństwa narzędzi — w tym usuwanie bramek zatwierdzeń. Domyślnie wyłączone. Niezależnie od opcji Polityki bezpieczeństwa narzędzi powyżej: to kontroluje, kto może edytować zasady, a nie to, czy są one egzekwowane. Narzędzie nie może widzieć ani decydować o oczekujących zatwierdzeniach. Aby utrzymać człowieka w pętli, ustaw bramkę dla narzędzia przed jego włączeniem: włącz „security gated” dla Manage Security Policy w zakładce Narzędzia interfejsu webowego. Wymaga ponownego uruchomienia, aby zmiany weszły w życie.",
+    "addon.enable_auto_backup.name": "Włącz automatyczne tworzenie kopii zapasowych zmian",
+    "addon.enable_auto_backup.description": "Tworzy migawkę dla każdej encji przed każdym wywołaniem narzędzia MCP do zapisu/destrukcyjnego (automatyzacja, skrypt, scena, pomocnik, pulpit nawigacyjny, zasób pulpitu nawigacyjnego, etykieta, kategoria, grupa, strefa, obszar, kalendarz, zadanie, encja, urządzenie, integracja oraz pokrewne narzędzia do usuwania/kasowania). Ogranicznik automatycznej kopii zapasowej określa, jak często to się dzieje: 0 (domyślnie) tworzy migawkę przy każdym takim wywołaniu, N>0 co najwyżej jedną migawkę na N minut na encję. Migawki są zapisywane jako pliki YAML w katalogu /data/ha_mcp_backups/ (można zmienić za pomocą HAMCP_BACKUP_DIR) i są wyświetlane, przywracane lub usuwane za pośrednictwem zakładki Kopie zapasowe w interfejsie ustawień sieciowych lub za pomocą ha_manage_backup(scope='edits', ...). Dla tych domen przechwytywanie jest typu \"best-effort\" (najlepszych starań) — niepowodzenie loguje OSTRZEŻENIE, a zapis jest kontynuowany. Narzędzia do plików i surowego YAML są wyjątkiem: ha_write_file, ha_delete_file i ha_config_set_yaml traktują migawkę jako warunek wstępny, więc zapis za ich pośrednictwem jest odrzucany, gdy ta opcja jest wyłączona, a nieudane przechwycenie go blokuje. Domyślnie włączone; odznaczenie wyłącza przechwytywanie typu \"best-effort\" i wyłącza z użytku narzędzia do plików i surowego YAML. Wymaga ponownego uruchomienia, aby zmiany weszły w życie.",
+    "addon.auto_backup_throttle_minutes.name": "Ograniczenie automatycznej kopii zapasowej (minuty)",
+    "addon.auto_backup_throttle_minutes.description": "Okno ograniczenia dla każdej encji. 0 (domyślnie) tworzy migawkę przy każdym opakowanym zapisie. N>0 tworzy co najwyżej jedną migawkę na N minut dla każdej encji. Zakres 0–1440.",
+    "addon.auto_backup_retain_per_entity.name": "Przechowywanie automatycznych kopii zapasowych (na encję)",
+    "addon.auto_backup_retain_per_entity.description": "Maksymalna liczba migawek przechowywanych dla każdej encji. Starsze migawki przekraczające ten limit są usuwane przy każdym udanym przechwyceniu. Domyślnie 100, zakres 1–10000.",
+    "addon.enable_snapshot_delete.name": "Zezwól na usuwanie migawek",
+    "addon.enable_snapshot_delete.description": "Pozwala ha_manage_backup usuwać pełne archiwa migawek HA (scope='snapshot', action='delete'). Domyślnie wyłączone — migawka może być ostatnim punktem odzyskiwania po błędnej zmianie, dlatego człowiek musi wyrazić na to zgodę. Nawet gdy jest włączone, zaplanowane kopie zapasowe, najnowsza pozostała migawka i wszystko młodsze niż dolna granica wieku poniżej pozostają chronione.",
+    "addon.snapshot_delete_min_age_days.name": "Minimalny wiek migawki do usunięcia (dni)",
+    "addon.snapshot_delete_min_age_days.description": "Migawka musi być co najmniej tak stara, zanim będzie mogła zostać usunięta. Zakres 0–365; 0 wyłącza limit (ochrona najnowszej migawki i zaplanowanych kopii zapasowych nadal obowiązuje). Domyślnie 7.",
+    "addon.disabled_tools.name": "Wyłączone narzędzia (oddzielone przecinkami)",
+    "addon.disabled_tools.description": "Narzędzia wymienione tutaj są wymuszone na wyłączone i zablokowane w interfejsie użytkownika Ustawień (zakładka Tools) — nie można ich ponownie włączyć bez wcześniejszego wyłączenia tej opcji. Niewielki zestaw obowiązkowych narzędzi (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) nie może zostać wyłączony i działa nadal, nawet jeśli jest tutaj wymieniony. ha_get_skill_guide może zostać wyłączony tylko wtedy, gdy tryb ścisłych najlepszych praktyk (enable_strict_mandatory_bps) jest wyłączony. Nazwy narzędzi oddzielone przecinkami (np. ha_call_event,ha_eval_template).",
+    "addon.pinned_tools.name": "Przypięte narzędzia (oddzielone przecinkami)",
+    "addon.pinned_tools.description": "Narzędzia wymienione tutaj są zablokowane jako przypięte — pojawiają się na górze zakładki „Narzędzia” i nie można ich odpiąć z interfejsu ustawień sieciowych bez wcześniejszego usunięcia tej opcji. Przydatne w połączeniu z wyszukiwaniem narzędzi. Nazwy narzędzi oddzielone przecinkami.",
+    "addon.verify_ssl.name": "Weryfikuj certyfikat TLS",
+    "addon.verify_ssl.description": "Zweryfikuj certyfikat TLS serwera Home Assistant. Aplikacja (dodatek) łączy się przez proxy Supervisora, więc zazwyczaj nie ma to wpływu i powinno pozostać włączone. Wyłącz tylko wtedy, gdy skonfigurowano aplikację (dodatek) tak, aby komunikowała się z HA przez publiczną nazwę hosta HTTPS z certyfikatem z podpisem własnym lub niedopasowaniem nazwy hosta. Wyłączenie osłabia bezpieczeństwo transportu — pozostaw włączone, chyba że wiesz, że tego potrzebujesz. Wymaga ponownego uruchomienia, aby zaczęło obowiązywać.",
+    "addon_stable.enable_tool_search.description": "Zastąp pełny katalog narzędzi wyszukiwaniem. Zmniejsza bezczynny kontekst o około 90%, do około 5K tokenów. ⚠️ NIE włączaj tego w klientach z własnym wbudowanym wyszukiwaniem narzędzi / odroczonymi narzędziami (claude.ai, Claude Desktop, Claude Code) — obie warstwy wyszukiwania będą w konflikcie, a wbudowane wyszukiwanie narzędzi klienta jest w tym przypadku lepszym wyborem; pozostaw to wyłączone. To, czy narzędzia są odraczane, zależy od kombinacji klienta i modelu: użyj tego, gdy konfiguracja ładowała pełny katalog na początku — modele bez natywnych odroczonych narzędzi (np. Gemini, modele lokalne kompatybilne z OpenAI, Claude Haiku), klienci, którzy wstawiają wszystkie schematy narzędzi niezależnie od modelu (np. GitHub Copilot CLI), lub mniejsze okna kontekstu. Niektóre modele Codex i ChatGPT również zawierają odroczone narzędzia — sprawdź bezpośrednio swojego klienta/model, aby potwierdzić jego funkcje, aby nie pozostawiać tego włączonego niepotrzebnie. Narzędzia są wyszukiwane przez ha_search_tools i wykonywane za pośrednictwem skategoryzowanych serwerów proxy (odczyt/zapis/usuwanie). Wymaga ponownego uruchomienia aplikacji (dodatku), aby zaczęło obowiązywać — następnie połącz się ponownie lub odśwież serwer MCP w kliencie AI, aby załadował listę narzędzi ponownie. Samo ponowne uruchomienie aplikacji (dodatku) NIE odświeża listy narzędzi w pamięci podręcznej klienta; dotyczy to zmiany dowolnego ustawienia tutaj."
+  },
+  "tools": {
+    "ha_bulk_control": {
+      "title": "Sterowanie zbiorcze",
+      "description": "Zarządzaj jawnymi operacjami lub jedną deterministyczną strukturalną akcją masową."
+    },
+    "ha_call_event": {
+      "title": "Wywołaj zdarzenie",
+      "description": "Wykonaj niestandardowe zdarzenie na magistrali zdarzeń Home Assistant."
+    },
+    "ha_call_service": {
+      "title": "Wywołaj usługę",
+      "description": "Wykonaj usługi Home Assistant, aby sterować encjami i wyzwalać automatyzacje."
+    },
+    "ha_config_delete_dashboard": {
+      "title": "Usuń pulpit nawigacyjny",
+      "description": "Całkowicie usuń pulpit nawigacyjny w trybie przechowywania."
+    },
+    "ha_config_delete_dashboard_resource": {
+      "title": "Usuń zasób pulpitu nawigacyjnego",
+      "description": "Usuń zasób pulpitu nawigacyjnego."
+    },
+    "ha_config_get_automation": {
+      "title": "Pobierz konfigurację automatyzacji",
+      "description": "Pobierz konfigurację automatyzacji Home Assistant."
+    },
+    "ha_config_get_calendar_events": {
+      "title": "Pobierz wydarzenia z kalendarza",
+      "description": "Pobierz wydarzenia z kalendarza z encji kalendarza."
+    },
+    "ha_config_get_category": {
+      "title": "Pobierz kategorię",
+      "description": "Pobierz informacje o kategorii - wyświetl wszystkie kategorie dla zakresu lub pobierz konkretną po ID."
+    },
+    "ha_config_get_dashboard": {
+      "title": "Pobierz pulpit nawigacyjny",
+      "description": "Pobierz informacje o pulpicie nawigacyjnym - wyświetl wszystkie pulpity, pobierz konfigurację lub wyszukaj karty."
+    },
+    "ha_config_get_label": {
+      "title": "Pobierz etykietę",
+      "description": "Pobierz informacje o etykiecie - wyświetl wszystkie etykiety lub pobierz konkretną po ID."
+    },
+    "ha_config_get_scene": {
+      "title": "Pobierz konfigurację sceny",
+      "description": "Pobierz konfigurację sceny Home Assistant."
+    },
+    "ha_config_get_script": {
+      "title": "Pobierz konfigurację skryptu",
+      "description": "Pobierz konfigurację skryptu Home Assistant."
+    },
+    "ha_config_get_yaml": {
+      "title": "Odczytaj fragment konfiguracji YAML",
+      "description": "Odczytaj fragment YAML pod kluczem w pliku konfiguracyjnym lub znajdź plik, który go definiuje."
+    },
+    "ha_config_list_dashboard_resources": {
+      "title": "Wyświetl zasoby pulpitu nawigacyjnego",
+      "description": "Wyświetl zasoby pulpitu nawigacyjnego Lovelace (niestandardowe karty, motywy, CSS/JS)."
+    },
+    "ha_config_list_groups": {
+      "title": "Wyświetl grupy",
+      "description": "Wyświetl grupy encji Home Assistant wraz z ich encjami członkowskimi."
+    },
+    "ha_config_list_helpers": {
+      "title": "Wyświetl pomocników",
+      "description": "Wyświetl pomocników Home Assistant określonego typu wraz z ich konfiguracjami."
+    },
+    "ha_config_remove_automation": {
+      "title": "Usuń automatyzację",
+      "description": "Usuń automatyzację Home Assistant."
+    },
+    "ha_config_remove_calendar_event": {
+      "title": "Usuń wydarzenie z kalendarza",
+      "description": "Usuń wydarzenie z kalendarza."
+    },
+    "ha_config_remove_category": {
+      "title": "Usuń kategorię",
+      "description": "Usuń kategorię Home Assistant."
+    },
+    "ha_config_remove_group": {
+      "title": "Usuń grupę",
+      "description": "Usuń grupę encji Home Assistant opartą na usłudze za pośrednictwem usługi group.remove."
+    },
+    "ha_config_remove_label": {
+      "title": "Usuń etykietę",
+      "description": "Usuń etykietę Home Assistant."
+    },
+    "ha_config_remove_scene": {
+      "title": "Usuń scenę",
+      "description": "Usuń scenę Home Assistant."
+    },
+    "ha_config_remove_script": {
+      "title": "Usuń skrypt",
+      "description": "Usuń skrypt Home Assistant."
+    },
+    "ha_config_set_automation": {
+      "title": "Utwórz lub zaktualizuj automatyzację",
+      "description": "Utwórz lub zaktualizuj automatyzację Home Assistant."
+    },
+    "ha_config_set_calendar_event": {
+      "title": "Utwórz lub zaktualizuj wydarzenie w kalendarzu",
+      "description": "Utwórz nowe wydarzenie w kalendarzu."
+    },
+    "ha_config_set_category": {
+      "title": "Utwórz lub zaktualizuj kategorię",
+      "description": "Utwórz lub zaktualizuj kategorię Home Assistant."
+    },
+    "ha_config_set_dashboard": {
+      "title": "Utwórz lub zaktualizuj pulpit nawigacyjny",
+      "description": "Utwórz lub zaktualizuj pulpit nawigacyjny Home Assistant."
+    },
+    "ha_config_set_dashboard_resource": {
+      "title": "Ustaw zasób pulpitu nawigacyjnego",
+      "description": "Utwórz lub zaktualizuj zasób pulpitu nawigacyjnego (kod wbudowany lub zewnętrzny URL)."
+    },
+    "ha_config_set_group": {
+      "title": "Utwórz lub zaktualizuj grupę",
+      "description": "Utwórz lub zaktualizuj grupę encji Home Assistant opartą na usłudze za pośrednictwem usługi group.set."
+    },
+    "ha_config_set_helper": {
+      "title": "Utwórz lub zaktualizuj pomocnika",
+      "description": "Utwórz lub zaktualizuj encje pomocnicze Home Assistant i podpozycje konfiguracji"
+    },
+    "ha_config_set_label": {
+      "title": "Utwórz lub zaktualizuj etykietę",
+      "description": "Utwórz lub zaktualizuj etykietę Home Assistant."
+    },
+    "ha_config_set_scene": {
+      "title": "Utwórz lub zaktualizuj scenę",
+      "description": "Utwórz lub zaktualizuj scenę Home Assistant."
+    },
+    "ha_config_set_script": {
+      "title": "Utwórz lub zaktualizuj skrypt",
+      "description": "Utwórz lub zaktualizuj skrypt Home Assistant."
+    },
+    "ha_config_set_yaml": {
+      "title": "Ustaw konfigurację YAML",
+      "description": "Dodaj, zastąp lub usuń klucze najwyższego poziomu w plikach configuration.yaml lub pakietach."
+    },
+    "ha_delete_file": {
+      "title": "Usuń plik",
+      "description": "Usuń plik z dozwolonych katalogów."
+    },
+    "ha_dev_manage_server": {
+      "title": "Zarządzaj serwerem MCP (dev)",
+      "description": "Zarządzaj samym działającym serwerem ha-mcp (tryb deweloperski)."
+    },
+    "ha_dev_manage_settings": {
+      "title": "Zarządzaj ustawieniami serwera (dev)",
+      "description": "Zarządzaj ustawieniami serwera ha-mcp oraz interfejsami Narzędzia/Zasady/Kopie zapasowe (tryb deweloperski)."
+    },
+    "ha_eval_template": {
+      "title": "Oceń szablon",
+      "description": "Oceń szablony Jinja2 za pomocą silnika szablonów Home Assistant."
+    },
+    "ha_get_app": {
+      "title": "Pobierz aplikacje (dodatki)",
+      "description": "Pobierz aplikacje Home Assistant (dawniej znane jako dodatki, a to narzędzie jako ha_get_addon) – wyświetl listę zainstalowanych, dostępnych lub pobierz d"
+    },
+    "ha_get_automation_traces": {
+      "title": "Pobierz ślady automatyzacji",
+      "description": "Pobierz ślady wykonania dla automatyzacji i skryptów w celu debugowania problemów."
+    },
+    "ha_get_blueprint": {
+      "title": "Pobierz schemat",
+      "description": "Pobierz informacje o schemacie - wyświetl wszystkie schematy lub pobierz szczegóły dla konkretnego."
+    },
+    "ha_get_camera_image": {
+      "title": "Pobierz obraz z kamery",
+      "description": "Pobierz obraz migawki z encji kamery Home Assistant."
+    },
+    "ha_get_dashboard_screenshot": {
+      "title": "Pobierz zrzut ekranu pulpitu nawigacyjnego",
+      "description": "Pobierz renderowane obrazy widoku pulpitu nawigacyjnego Home Assistant Lovelace."
+    },
+    "ha_get_device": {
+      "title": "Pobierz urządzenie (w tym Zigbee/ZHA/Z2M, Z-Wave i Matter)",
+      "description": "Pobierz informacje o urządzeniu z paginacją, w tym urządzenia Zigbee (ZHA/Z2M) i Z-Wave JS."
+    },
+    "ha_get_entity": {
+      "title": "Pobierz encję",
+      "description": "Pobierz informacje z rejestru encji dla jednej lub więcej encji."
+    },
+    "ha_get_entity_exposure": {
+      "title": "Pobierz ekspozycję encji",
+      "description": "Pobierz ustawienia ekspozycji encji - wyświetl wszystkie lub pobierz ustawienia dla konkretnej encji."
+    },
+    "ha_get_hacs_info": {
+      "title": "Pobierz informacje HACS",
+      "description": "Pobierz dane HACS (Home Assistant Community Store) — przeszukaj sklep lub pobierz szczegóły repozytorium."
+    },
+    "ha_get_history": {
+      "title": "Pobierz historię lub statystyki encji",
+      "description": "Pobierz dane historyczne z rejestratora Home Assistant."
+    },
+    "ha_get_integration": {
+      "title": "Pobierz integrację",
+      "description": "Pobierz informacje o integracji (wpisie konfiguracyjnym) z paginacją."
+    },
+    "ha_get_logs": {
+      "title": "Pobierz logi",
+      "description": "Pobierz logi Home Assistant z różnych źródeł."
+    },
+    "ha_get_operation_status": {
+      "title": "Pobierz status operacji",
+      "description": "Pobierz status jednej lub więcej operacji urządzenia z weryfikacją WebSocket w czasie rzeczywistym."
+    },
+    "ha_get_overview": {
+      "title": "Pobierz przegląd systemu",
+      "description": "Pobierz przyjazny dla AI przegląd systemu z inteligentną kategoryzacją."
+    },
+    "ha_get_state": {
+      "title": "Pobierz stan encji",
+      "description": "Pobierz bieżący status, stan i atrybuty jednej lub więcej encji (świateł, przełączników, czujników, klimatyzacji, osłon, zamków, fa"
+    },
+    "ha_get_system_health": {
+      "title": "Pobierz kondycję systemu (w tym diagnostykę ZHA/Z-Wave/integracji)",
+      "description": "Pobierz kondycję systemu Home Assistant, w tym Zigbee (ZHA), Z-Wave JS oraz zrzuty diagnostyczne dla poszczególnych integracji."
+    },
+    "ha_get_todo": {
+      "title": "Pobierz listę zadań",
+      "description": "Pobierz listy zadań lub elementy - wyświetl wszystkie listy zadań lub pobierz elementy z konkretnej listy."
+    },
+    "ha_get_zone": {
+      "title": "Pobierz strefę",
+      "description": "Pobierz informacje o strefie - wyświetl wszystkie strefy lub pobierz szczegóły dla konkretnej."
+    },
+    "ha_import_blueprint": {
+      "title": "Importuj schemat",
+      "description": "Importuj schemat z adresu URL."
+    },
+    "ha_list_files": {
+      "title": "Wyświetl pliki",
+      "description": "Wyświetl pliki w katalogu w konfiguracji Home Assistant."
+    },
+    "ha_list_floors_areas": {
+      "title": "Wyświetl piętra i obszary",
+      "description": "Wyświetl piętra posortowane rosnąco według poziomu, każde z zagnieżdżonymi przypisanymi obszarami, plus obszary bez przypisanego piętra."
+    },
+    "ha_list_services": {
+      "title": "Wyświetl dostępne usługi",
+      "description": "Wyświetl dostępne usługi Home Assistant z opcjonalną paginacją i kontrolą szczegółów."
+    },
+    "ha_manage_app": {
+      "title": "Zarządzaj aplikacją (dodatkiem)",
+      "description": "Zarządzaj aplikacją Home Assistant (dawniej znaną jako dodatek, a to narzędzie jako ha_manage_addon) – zaktualizuj jej konfigurację o"
+    },
+    "ha_manage_backup": {
+      "title": "Zarządzaj kopiami zapasowymi",
+      "description": "Polimorficzne narzędzie do tworzenia kopii zapasowych. Zobacz opis narzędzia, aby uzyskać matrycę routingu."
+    },
+    "ha_manage_custom_tool": {
+      "title": "Niestandardowe narzędzie",
+      "description": "Utwórz i uruchom niestandardowe narzędzie w piaskownicy, lub zarządzaj zapisanymi niestandardowymi narzędziami (tryb kodu)."
+    },
+    "ha_manage_energy_prefs": {
+      "title": "Zarządzaj preferencjami panelu energii",
+      "description": "Zarządzaj preferencjami panelu energii Home Assistant."
+    },
+    "ha_manage_hacs": {
+      "title": "Zarządzaj HACS",
+      "description": "Zarządzaj HACS (Home Assistant Community Store) — instaluj/aktualizuj, usuwaj, dodawaj niestandardowe repozytoria lub odświeżaj repozytorium w"
+    },
+    "ha_manage_pipeline": {
+      "title": "Zarządzaj potokiem Assist",
+      "description": "Zarządzaj potokami Assist Home Assistant."
+    },
+    "ha_manage_radio": {
+      "title": "Zarządzaj radiami (Z-Wave / Zigbee / Matter / Thread)",
+      "description": "Zarządzaj radiami Home Assistant — Z-Wave, Zigbee, Matter i Thread."
+    },
+    "ha_manage_security_policy": {
+      "title": "Zarządzaj polityką bezpieczeństwa",
+      "description": "Czytaj i przepisuj politykę bezpieczeństwa narzędzia, która blokuje wywołania narzędzi wysokiego ryzyka za zgodą użytkownika."
+    },
+    "ha_manage_theme": {
+      "title": "Zarządzaj motywami interfejsu",
+      "description": "Zarządzaj motywami interfejsu Home Assistant."
+    },
+    "ha_manage_updates": {
+      "title": "Zarządzaj aktualizacjami",
+      "description": "Zarządzaj aktualizacjami Home Assistant -- wyświetlaj, czytaj szczegóły, instaluj zbiorczo, pomijaj lub cofaj pominięcie."
+    },
+    "ha_read_file": {
+      "title": "Czytaj plik",
+      "description": "Czytaj plik z katalogu konfiguracyjnego Home Assistant."
+    },
+    "ha_reload_core": {
+      "title": "Przeładuj komponenty rdzenia",
+      "description": "Przeładuj konfigurację Home Assistant bez pełnego restartu."
+    },
+    "ha_remove_area_or_floor": {
+      "title": "Usuń obszar lub piętro",
+      "description": "Usuń obszar lub piętro Home Assistant."
+    },
+    "ha_remove_device": {
+      "title": "Usuń urządzenie",
+      "description": "Usuń osierocone urządzenie z rejestru urządzeń Home Assistant."
+    },
+    "ha_remove_entity": {
+      "title": "Usuń encję",
+      "description": "Usuń jedną lub więcej encji z rejestru encji Home Assistant."
+    },
+    "ha_remove_helpers_integrations": {
+      "title": "Usuń pomocnika lub integrację",
+      "description": "Usuń pomocnika Home Assistant lub wpis konfiguracji integracji."
+    },
+    "ha_remove_todo_item": {
+      "title": "Usuń element listy zadań",
+      "description": "Usuń element z listy zadań Home Assistant."
+    },
+    "ha_remove_zone": {
+      "title": "Usuń strefę",
+      "description": "Usuń strefę Home Assistant."
+    },
+    "ha_report_issue": {
+      "title": "Zgłoś problem lub opinię",
+      "description": "Uzyskaj informacje diagnostyczne i szablony do zgłaszania problemów lub opinii."
+    },
+    "ha_restart": {
+      "title": "Uruchom ponownie Home Assistant",
+      "description": "Uruchom ponownie Home Assistant."
+    },
+    "ha_search": {
+      "title": "Szukaj",
+      "description": "Szukaj encji (świateł, czujników, przełączników, klimatyzacji itp.) według nazwy, domeny lub obszaru — ORAZ wewnątrz automatyzacji/skryptów"
+    },
+    "ha_set_area_or_floor": {
+      "title": "Utwórz lub zaktualizuj obszar lub piętro",
+      "description": "Utwórz lub zaktualizuj obszar lub piętro Home Assistant."
+    },
+    "ha_set_device": {
+      "title": "Ustaw urządzenie",
+      "description": "Zaktualizuj właściwości urządzenia, takie jak nazwa, obszar, stan wyłączenia lub etykiety."
+    },
+    "ha_set_entity": {
+      "title": "Ustaw encję",
+      "description": "Zaktualizuj właściwości encji w rejestrze encji."
+    },
+    "ha_set_integration": {
+      "title": "Ustaw integrację",
+      "description": "Zarządzaj integracją (wpisem konfiguracyjnym): włącz/wyłącz, dodaj lub zaktualizuj opcje."
+    },
+    "ha_set_todo_item": {
+      "title": "Ustaw element listy zadań",
+      "description": "Utwórz lub zaktualizuj element listy zadań w Home Assistant."
+    },
+    "ha_set_zone": {
+      "title": "Ustaw strefę",
+      "description": "Utwórz lub zaktualizuj strefę Home Assistant."
+    },
+    "ha_write_file": {
+      "title": "Zapisz plik",
+      "description": "Zapisz plik do dozwolonych katalogów w konfiguracji Home Assistant."
+    }
+  },
+  "tool_groups": {
+    "Apps (add-ons)": "Aplikacje (dodatki)",
+    "Areas & Floors": "Obszary i piętra",
+    "Assist": "Assist",
+    "Automations": "Automatyzacje",
+    "Blueprints": "Schematy",
+    "Calendar": "Kalendarz",
+    "Camera": "Kamera",
+    "Dashboard": "Panel",
+    "Dashboards": "Panele",
+    "Developer": "Deweloper",
+    "Device Registry": "Rejestr urządzeń",
+    "Energy": "Energia",
+    "Entity Registry": "Rejestr encji",
+    "Files": "Pliki",
+    "Groups": "Grupy",
+    "HACS": "HACS",
+    "Helper Entities": "Encje pomocnicze",
+    "History & Statistics": "Historia i statystyki",
+    "Integrations": "Integracje",
+    "Labels & Categories": "Etykiety i kategorie",
+    "Matter": "Matter",
+    "Scenes": "Sceny",
+    "Scripts": "Skrypty",
+    "Search & Discovery": "Wyszukiwanie i odkrywanie",
+    "Service & Device Control": "Sterowanie usługami i urządzeniami",
+    "System": "System",
+    "Todo Lists": "Listy zadań",
+    "Utilities": "Narzędzia",
+    "Zones": "Strefy"
+  }
+}

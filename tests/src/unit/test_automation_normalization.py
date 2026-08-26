@@ -726,3 +726,79 @@ class TestConflictingRootKeys:
 
     def test_non_dict_returns_empty(self):
         assert _detect_conflicting_root_keys(["not", "a", "dict"]) == []
+
+
+class TestUserNamespaceIsNotAliased:
+    """A variables block is the user's own namespace, not HA's action schema.
+
+    The 'sequences' -> 'sequence' alias applies at any depth, so before this
+    guard a user variable named 'sequences' was renamed in what was written to
+    HA — breaking every '{{ sequences }}' reference in the automation — and was
+    dropped outright when a sibling named 'sequence' also existed.
+    """
+
+    def test_action_level_variables_keep_a_sequences_key(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "sensor.a"}],
+            "actions": [{"variables": {"sequences": "{{ other }}", "other": "5"}}],
+        }
+
+        result = _normalize_automation_config(config)
+
+        assert result["actions"][0]["variables"] == {
+            "sequences": "{{ other }}",
+            "other": "5",
+        }
+
+    def test_sequences_beside_sequence_is_not_dropped(self):
+        """The collision branch deleted the user's value before the write."""
+        config = {
+            "triggers": [],
+            "actions": [
+                {"variables": {"sequences": "keep me", "sequence": "also mine"}}
+            ],
+        }
+
+        result = _normalize_automation_config(config)
+
+        assert result["actions"][0]["variables"] == {
+            "sequences": "keep me",
+            "sequence": "also mine",
+        }
+
+    def test_top_level_variables_and_trigger_variables(self):
+        config = {
+            "triggers": [],
+            "actions": [],
+            "variables": {"sequences": "a"},
+            "trigger_variables": {"sequences": "b"},
+        }
+
+        result = _normalize_automation_config(config)
+
+        assert result["variables"] == {"sequences": "a"}
+        assert result["trigger_variables"] == {"sequences": "b"}
+
+    def test_guard_reaches_nested_values_inside_a_variables_block(self):
+        """A variable's *value* is user data too, however deeply nested."""
+        config = {
+            "triggers": [],
+            "actions": [{"variables": {"payload": [{"sequences": ["x"]}]}}],
+        }
+
+        result = _normalize_automation_config(config)
+
+        assert result["actions"][0]["variables"]["payload"] == [{"sequences": ["x"]}]
+
+    def test_sequences_outside_a_variables_block_is_still_normalized(self):
+        """The alias itself is unchanged — only the user namespace is exempt."""
+        config = {
+            "triggers": [],
+            "actions": [{"repeat": {"count": 2, "sequences": [{"delay": "1"}]}}],
+        }
+
+        result = _normalize_automation_config(config)
+
+        repeat = result["actions"][0]["repeat"]
+        assert repeat["sequence"] == [{"delay": "1"}]
+        assert "sequences" not in repeat

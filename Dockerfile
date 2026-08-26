@@ -5,7 +5,7 @@
 # Base images pinned by digest - Renovate will create PRs for updates
 
 # --- Build stage: install dependencies with uv ---
-FROM ghcr.io/astral-sh/uv:0.11.28-python3.13-trixie-slim@sha256:08477888ac23d6cfbeb8c7dc6fc70cf297fd38b7bf35522be33ce832750ca242 AS builder
+FROM ghcr.io/astral-sh/uv:0.11.33-python3.13-trixie-slim@sha256:ddcc6242921ee120cf279fdcedfc8bb917c9af4de9ad791495e4c7deb479a296 AS builder
 
 WORKDIR /app
 
@@ -23,7 +23,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev
 
 # --- Runtime stage: clean image without uv ---
-FROM python:3.13-slim@sha256:3de9a8d7aedbb7984dc18f2dff178a7850f16c1ae7c34ba9d7ecc23d0755e35f
+FROM python:3.13-slim@sha256:7e3a6aca9d74f93cca21a91d86a8dad8c34749afd5b4a98ee481c9c47b9f5ed4
 
 LABEL org.opencontainers.image.title="Home Assistant MCP Server" \
       org.opencontainers.image.description="AI assistant integration for Home Assistant via Model Context Protocol" \
@@ -35,9 +35,31 @@ LABEL org.opencontainers.image.title="Home Assistant MCP Server" \
 # that callers running with `--user UID:GID` overrides — common in hardened
 # Docker setups, see issue #1125 — can stat HOME-relative paths. Write
 # access stays restricted to mcpuser via ownership.
-RUN groupadd -r mcpuser \
-    && useradd -r -g mcpuser -m mcpuser \
-    && chmod 0755 /home/mcpuser
+#
+# ~/.ha-mcp is pre-created and owned by mcpuser because Docker initializes a
+# fresh named volume from the image's directory at the mount point, ownership
+# included. Without this the mount point wouldn't exist in the image, Docker
+# would create it root-owned, and the documented
+# `-v ha-mcp-data:/home/mcpuser/.ha-mcp` would leave the container unable to
+# write there. ha-mcp then warns and falls back to a tmpdir (see
+# utils/data_paths.py), losing settings on every restart — issue #2078.
+#
+# The UID/GID are pinned rather than left to `-r`'s dynamic allocation: a
+# volume records numeric ownership, not names. If a base-image update shifted
+# the IDs `groupadd -r`/`useradd -r` hand out, an existing ha-mcp-data volume
+# would stay owned by the old UID and the new process couldn't write to it —
+# reintroducing exactly the tmpdir fallback this change exists to prevent.
+# 999 is what `-r` already allocated on this base image, so pinning it changed
+# nothing for existing deployments: volumes and `chown 999:999` bind mounts
+# created before the pin keep working.
+# Bind-mounting a host directory instead? It must be writable by UID 999 —
+# or by whatever UID you pass to `--user`, which a 999-owned named volume
+# will NOT satisfy.
+RUN groupadd -r -g 999 mcpuser \
+    && useradd -r -u 999 -g mcpuser -m mcpuser \
+    && chmod 0755 /home/mcpuser \
+    && mkdir -p /home/mcpuser/.ha-mcp \
+    && chown mcpuser:mcpuser /home/mcpuser/.ha-mcp
 
 WORKDIR /app
 

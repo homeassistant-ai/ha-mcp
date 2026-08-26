@@ -40,7 +40,19 @@ class _SearchBase:
             logger.debug(f"Could not fetch {label}: {result}")
             cause = str(result) or type(result).__name__
         elif isinstance(result, dict) and result.get("success"):
-            registry = result.get("result", [])
+            # No default for a missing key: a legitimate empty registry is
+            # "result": [], so an absent result is a malformed envelope and
+            # must degrade loudly, not read as available-and-empty.
+            payload = result.get("result")
+            if isinstance(payload, list):
+                registry = payload
+            elif payload is None and "result" not in result:
+                cause = "malformed result payload: result key missing"
+            else:
+                cause = (
+                    "malformed result payload: expected list, "
+                    f"got {type(payload).__name__}"
+                )
         elif isinstance(result, dict):
             cause = str(result.get("error") or "request failed")
         else:

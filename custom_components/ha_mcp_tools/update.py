@@ -109,8 +109,10 @@ class ServerUpdateEntity(CoordinatorEntity[ServerVersionCoordinator], UpdateEnti
 
     @property
     def auto_update(self) -> bool:
-        """Reflect the entry's automatic-update option."""
-        return bool(self._entry.options.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE))
+        """Reflect the effective automatic-update policy."""
+        return not self.coordinator.hass.config.skip_pip and bool(
+            self._entry.options.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)
+        )
 
     @property
     def release_url(self) -> str | None:
@@ -126,8 +128,10 @@ class ServerUpdateEntity(CoordinatorEntity[ServerVersionCoordinator], UpdateEnti
 
     @property
     def supported_features(self) -> UpdateEntityFeature:
-        """RELEASE_NOTES only on the stable channel — dev builds have no tags."""
-        features = UpdateEntityFeature.INSTALL
+        """Expose install only when Home Assistant may manage the package."""
+        features = UpdateEntityFeature(0)
+        if not self.coordinator.hass.config.skip_pip:
+            features |= UpdateEntityFeature.INSTALL
         data = self.coordinator.data
         if data is not None and data.dist != DIST_NAME_DEV:
             features |= UpdateEntityFeature.RELEASE_NOTES
@@ -257,6 +261,14 @@ class ServerUpdateEntity(CoordinatorEntity[ServerVersionCoordinator], UpdateEnti
         that can still fail (review finding).
         """
         data = self.coordinator.data
+        if self.coordinator.hass.config.skip_pip:
+            raise HomeAssistantError(
+                "The HA-MCP server package is externally managed by the system "
+                "package manager because Home Assistant was started with "
+                "skip_pip. Install the update there, then reload this "
+                "integration."
+            )
+
         target = version or self.latest_version
         if target is None:
             raise HomeAssistantError("No target version available to install.")

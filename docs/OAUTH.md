@@ -19,6 +19,7 @@ Removing the URL field and sanitizing form output eliminates both attack surface
 **Docker:**
 ```bash
 docker run -d -p 8086:8086 \
+  -v ha-mcp-data:/home/mcpuser/.ha-mcp \
   -e HOMEASSISTANT_URL=https://your-ha-instance.example.com \
   -e MCP_BASE_URL=https://your-mcp-server.example.com \
   ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-oauth
@@ -67,6 +68,7 @@ For production, set up a [persistent Cloudflare Tunnel](https://developers.cloud
 ```bash
 docker run -d --name ha-mcp-oauth \
   -p 8086:8086 \
+  -v ha-mcp-data:/home/mcpuser/.ha-mcp \
   -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
   -e MCP_BASE_URL=https://your-tunnel.trycloudflare.com \
   ghcr.io/homeassistant-ai/ha-mcp:latest \
@@ -131,7 +133,7 @@ Check that `HOMEASSISTANT_URL` is correct and accessible from the server running
 
 ### Can I use OAuth with Home Assistant OS?
 
-No. The ha-mcp add-on doesn't support OAuth mode.
+No. The ha-mcp app (add-on) doesn't support OAuth mode.
 
 **Alternatives:**
 - Run ha-mcp OAuth on another device (Raspberry Pi, NAS, PC)

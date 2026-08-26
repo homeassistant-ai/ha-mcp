@@ -19,10 +19,18 @@ import json
 import logging
 
 import pytest
-import websockets
-from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
-from websockets.frames import Close
 
+# The vendored copy — the same module object the production client binds, so
+# monkeypatching its ``connect`` lands where HomeAssistantWebSocketClient
+# looks, and the exception/frame classes are the ones its except clauses
+# actually catch (the shared library's same-named classes are different
+# types).
+from ha_mcp._vendor import websockets
+from ha_mcp._vendor.websockets.exceptions import (
+    ConnectionClosedError,
+    ConnectionClosedOK,
+)
+from ha_mcp._vendor.websockets.frames import Close
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.client.websocket_client import (
     MAX_WS_MESSAGE_BYTES,

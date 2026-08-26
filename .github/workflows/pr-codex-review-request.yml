@@ -24,7 +24,7 @@ jobs:
       ${{
         (github.event_name == 'pull_request_target' &&
           !contains(
-            fromJSON('["dependabot[bot]", "ha-mcp-renovate[bot]"]'),
+            fromJSON('["dependabot[bot]", "ha-mcp-renovate[bot]", "github-actions[bot]"]'),
             github.event.pull_request.user.login
           )) ||
         (github.event_name == 'issue_comment' &&
@@ -45,7 +45,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Validate and dispatch Codex review request
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           github-token: ${{ github.token }}
           script: |

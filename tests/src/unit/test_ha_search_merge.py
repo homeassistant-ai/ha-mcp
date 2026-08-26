@@ -8,9 +8,12 @@ on ``has_more``/``next_offset``, and the budget-exhaustion ``partial`` flag.
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.tools import tools_search
 from ha_mcp.tools.smart_search._deep import DeepSearchMixin
 from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
 from ha_mcp.tools.tools_search import (
@@ -479,12 +482,51 @@ def test_finalize_partial_state_extends_errors_not_clobbers() -> None:
         response, partial_local=True, errors_local=orchestrator_errors
     )
     assert response["partial"] is True
+    assert response["partial_reason"] == "entities: ws_connection_closed"
     # Both sets of errors must survive — payload errors first (already in
     # response from the merge), orchestrator surface errors appended.
     assert response["errors"] == [
         {"surface": "config-internal", "code": "BUDGET"},
         {"surface": "entities", "error": "ws_connection_closed"},
     ]
+
+
+def test_finalize_partial_state_appends_existing_reason() -> None:
+    """A local branch error must not clobber payload-side incompleteness."""
+    response = {
+        "partial": True,
+        "partial_reason": "config: budget exhausted",
+        "errors": [],
+    }
+
+    _finalize_partial_state(
+        response,
+        partial_local=True,
+        errors_local=[{"surface": "entities", "error": "ws closed"}],
+    )
+
+    # Routed through _merge_partial_reason like every other writer, so the
+    # separator and the de-duplication are the module's, not this call site's.
+    assert response["partial_reason"] == (
+        "config: budget exhausted ; entities: ws closed"
+    )
+
+
+def test_finalize_partial_state_does_not_repeat_an_identical_reason() -> None:
+    """The shared merger de-dups; the inline concat it replaced did not."""
+    response = {
+        "partial": True,
+        "partial_reason": "entities: ws closed",
+        "errors": [],
+    }
+
+    _finalize_partial_state(
+        response,
+        partial_local=True,
+        errors_local=[{"surface": "entities", "error": "ws closed"}],
+    )
+
+    assert response["partial_reason"] == "entities: ws closed"
 
 
 def test_finalize_partial_state_noop_when_no_branch_raised() -> None:
@@ -498,6 +540,48 @@ def test_finalize_partial_state_noop_when_no_branch_raised() -> None:
     _finalize_partial_state(response, partial_local=False, errors_local=[])
     assert response["partial"] is True
     assert response["errors"] == [{"surface": "config-internal", "code": "BUDGET"}]
+
+
+def _entities_only_request() -> tools_search._ResolvedSearch:
+    """A resolved request that fans out to the entity branch only."""
+    return tools_search._ResolvedSearch(
+        query="lamp",
+        query_text="lamp",
+        domain_filter=None,
+        area_filter=None,
+        state_filter=None,
+        parsed_search_types=None,
+        parsed_fields=None,
+        result_fields=None,
+        limit=10,
+        offset=0,
+        exact_match=False,
+        include_hidden=False,
+        include_config=False,
+        group_by_domain=False,
+        per_domain_limit=None,
+        config_time_budget=None,
+        registry_eligible=True,
+        body_eligible=False,
+        body_skipped_by_intent_gate=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_branch_exception_without_a_message_reports_its_type() -> None:
+    """``str(TimeoutError())`` is "", which used to yield ``"entities: "``."""
+    tools = tools_search.SearchTools(MagicMock(), MagicMock())
+
+    async def _time_out(**kwargs: object) -> dict:
+        raise TimeoutError
+
+    tools._ha_search_entities = _time_out  # type: ignore[method-assign]
+
+    response = await tools._legacy_ha_search(_entities_only_request(), None)
+
+    assert response["partial"] is True
+    assert response["errors"] == [{"surface": "entities", "error": "TimeoutError"}]
+    assert response["partial_reason"] == "entities: TimeoutError"
 
 
 # Entity-intent skip warning emission ------------------------------------
@@ -725,7 +809,10 @@ def test_select_scene_ids_registry_succeeded_zero_ha_managed_skips_all() -> None
         ("scene.y", "Y", "uid-y", 100),
     ]
     sids, integration_skipped = SceneSearchMixin._select_scene_ids_to_fetch(
-        scored, configs={}, homeassistant_scene_uids=set(), registry_failed=False
+        scored,
+        homeassistant_scene_uids=set(),
+        registry_failed=False,
+        slug_to_storage_id={},
     )
     assert sids == []
     assert integration_skipped == 2
@@ -740,7 +827,10 @@ def test_select_scene_ids_registry_failed_attempts_all() -> None:
         ("scene.y", "Y", "uid-y", 100),
     ]
     sids, integration_skipped = SceneSearchMixin._select_scene_ids_to_fetch(
-        scored, configs={}, homeassistant_scene_uids=set(), registry_failed=True
+        scored,
+        homeassistant_scene_uids=set(),
+        registry_failed=True,
+        slug_to_storage_id={},
     )
     assert sorted(sids) == ["uid-x", "uid-y"]
     assert integration_skipped == 0
@@ -756,28 +846,35 @@ def test_select_scene_ids_mixed_ha_and_integration_splits_correctly() -> None:
     ]
     sids, integration_skipped = SceneSearchMixin._select_scene_ids_to_fetch(
         scored,
-        configs={},
         homeassistant_scene_uids={"uid-x"},
         registry_failed=False,
+        slug_to_storage_id={},
     )
     assert sids == ["uid-x"]
     assert integration_skipped == 2
 
 
-def test_select_scene_ids_skips_already_fetched_configs() -> None:
-    """Scenes whose config is already in the bulk-fetched dict are
-    skipped from the per-id fetch regardless of integration / HA status."""
+def test_select_scene_ids_translates_a_renamed_scenes_slug_to_its_storage_key() -> None:
+    """A scene renamed in the UI must still be recognised as HA-managed.
+
+    Scenes are enumerated by entity-id slug, but the HA-managed set holds
+    storage keys, and Home Assistant never re-keys storage on a rename. Without
+    the registry translation the two never match, so every renamed HA scene is
+    miscounted as integration-managed and its config is never fetched -- it
+    silently drops out of config-body search results.
+    """
     scored = [
-        ("scene.x", "X", "uid-x", 100),
-        ("scene.y", "Y", "uid-y", 100),
+        ("scene.led_desk_strip_night_light", "LED", "led_desk_strip_night_light", 100)
     ]
+
     sids, integration_skipped = SceneSearchMixin._select_scene_ids_to_fetch(
         scored,
-        configs={"uid-x": {"name": "X"}},
-        homeassistant_scene_uids={"uid-x", "uid-y"},
+        homeassistant_scene_uids={"night_light_led_desk_strip"},
         registry_failed=False,
+        slug_to_storage_id={"led_desk_strip_night_light": "night_light_led_desk_strip"},
     )
-    assert sids == ["uid-y"]
+
+    assert sids == ["led_desk_strip_night_light"]
     assert integration_skipped == 0
 
 

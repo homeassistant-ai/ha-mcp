@@ -562,6 +562,7 @@ class FakeConfigEntry:
         data=None,
         entry_id="entry",
         *,
+        unique_id=None,
         state=None,
         source="user",
         supports_options=False,
@@ -586,6 +587,7 @@ class FakeConfigEntry:
         self.entry_id = entry_id
         # config_entries-row fields (all optional so the many flow-helper callers
         # that pass only domain/title/options/data/entry_id are unaffected).
+        self.unique_id = unique_id
         self.state = state
         self.source = source
         self.supports_options = supports_options
@@ -717,6 +719,7 @@ def empty_view(monkeypatch):
 # =============================================================================
 class TestInfo:
     def test_shape(self):
+        """Advertise the complete component capability contract."""
         # Drift guard: info must advertise EVERY shipped capability (the server
         # gates each consumer on membership) and mirror CAPABILITIES exactly.
         info = wsapi._do_info(FakeHass(config=FakeConfig(time_zone="America/New_York")))
@@ -724,6 +727,7 @@ class TestInfo:
         assert info["component_version"] == COMPONENT_VERSION
         assert info["capabilities"] == [
             "search",
+            "search_entity_membership",
             "overview",
             "helpers_list",
             "states",
@@ -779,7 +783,7 @@ class TestInfo:
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"] == COMPONENT_VERSION == "1.3.0"
+        assert manifest["version"] == COMPONENT_VERSION == "2.0.1"
 
 
 # =============================================================================
@@ -1563,7 +1567,13 @@ class TestScorerParity:
                 "state": "on",
             }
             match = _match_exact_search_entity(
-                entity, query_lower, None, set(), _PARITY_HIDDEN, True
+                entity,
+                query_lower,
+                None,
+                set(),
+                _PARITY_HIDDEN,
+                True,
+                denied_member_ids=set(),
             )
             if match:
                 ranked.append((match["entity_id"], match["score"]))
@@ -1928,6 +1938,7 @@ class TestSchemaValidation:
         return _REAL_VOL.Schema(wsapi._search_schema())
 
     def test_valid_params_apply_defaults(self, monkeypatch):
+        """Apply stable defaults to valid search parameters."""
         schema = self._schema(monkeypatch)
         out = schema({"type": wsapi.WS_SEARCH, "query": "kitchen"})
         assert out["exact"] is True
@@ -1935,6 +1946,25 @@ class TestSchemaValidation:
         assert out["include_config"] is False
         assert out["limit"] == wsapi.DEFAULT_LIMIT
         assert out["offset"] == 0
+        assert "result_fields" not in out
+
+    def test_membership_result_fields_are_allowlisted(self, monkeypatch):
+        """Accept only the public aggregate-membership result fields."""
+        schema = self._schema(monkeypatch)
+        out = schema(
+            {
+                "type": wsapi.WS_SEARCH,
+                "result_fields": ["is_group", "member_entity_ids"],
+            }
+        )
+        assert out["result_fields"] == ["is_group", "member_entity_ids"]
+        with pytest.raises(_REAL_VOL.Invalid):
+            schema(
+                {
+                    "type": wsapi.WS_SEARCH,
+                    "result_fields": ["hue_type"],
+                }
+            )
 
     @pytest.mark.parametrize(
         "bad",
@@ -3365,6 +3395,7 @@ class TestConfigEntries:
             "options": {"discovery": True},
             "data": {"password": "DATA_SECRET_XYZ"},
             "entry_id": entry_id,
+            "unique_id": "mqtt-unique-1",
             "created_at": self._CREATED_AT,
             "modified_at": self._MODIFIED_AT,
             "supported_subentry_types": {"device": {"supports_reconfigure": True}},
@@ -3399,6 +3430,9 @@ class TestConfigEntries:
                 "modified_at": self._MODIFIED_AT.timestamp(),
                 "entry_id": "cfg1",
                 "domain": "mqtt",
+                # Superset field: core's as_json_fragment withholds unique_id,
+                # the component supplies it for the reconfigure identity anchor.
+                "unique_id": "mqtt-unique-1",
                 "title": "Mosquitto",
                 "state": "loaded",  # ConfigEntryState.value
                 "source": "user",
@@ -4222,3 +4256,33 @@ class TestRegistries:
                 FakeHass(),
                 {"registries": ["category"], "category_scopes": ["automation"]},
             )
+
+
+class TestConfigEntryUniqueId:
+    """The one field the component adds beyond core's as_json_fragment."""
+
+    def test_row_carries_unique_id_which_core_withholds(self):
+        """Core omits unique_id everywhere; this row is the only source.
+
+        REST /api/config/config_entries, config_entries/get and get_single all
+        serialize ConfigEntry.as_json_fragment, which has no unique_id key.
+        """
+        row = wsapi._config_entry_row(
+            FakeConfigEntry("mqtt", entry_id="cfg1", unique_id="abc-123"),
+            frozenset(),
+        )
+
+        assert row["unique_id"] == "abc-123"
+
+    def test_row_reports_a_genuinely_absent_unique_id_as_none(self):
+        """Present key, None value — distinguishable from an older component.
+
+        A server reading an older component sees the KEY MISSING, which is what
+        lets this be additive within schema_version 1 with no version gate.
+        """
+        row = wsapi._config_entry_row(
+            FakeConfigEntry("mqtt", entry_id="cfg2"), frozenset()
+        )
+
+        assert "unique_id" in row
+        assert row["unique_id"] is None

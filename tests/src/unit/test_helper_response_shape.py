@@ -269,7 +269,7 @@ class TestUniformResponseShape:
         A regression that re-nests this string under ``data``, or drops the
         ``warnings.append`` entirely, would slip past the category test —
         this fills that gap. The ``area.kitchen`` is registered (so the
-        upstream ``_validate_registry_ids`` lookup passes) and the failure
+        upstream ``validate_registry_ids`` lookup passes) and the failure
         happens at the post-create registry-update step itself.
         """
 
@@ -1099,7 +1099,7 @@ class TestSweepWarningsShape:
 
     **Relaxed helper (no top-level ``success`` — status-marker / payload-bag
     shape) — 2 of 8:**
-    - ``tools_addons.py``: ``ha_manage_addon`` config mode with
+    - ``tools_addons.py``: ``ha_manage_app`` config mode with
       ``options`` returns ``status: "pending_restart"`` + top-level
       warnings (closure tool, registered via ``register_addon_tools``)
     - ``tools_integrations.py``: ``ha_get_integration`` single-entry
@@ -1219,7 +1219,7 @@ class TestSweepWarningsShape:
 
     @pytest.mark.asyncio
     async def test_addons_manage_addon_options_ignored_fields_warnings_shape(self):
-        """Shape-pins the ignored_fields warning emit in ``ha_manage_addon``
+        """Shape-pins the ignored_fields warning emit in ``ha_manage_app``
         when options include a field not in the add-on schema. Config mode
         with ``options`` returns ``status: "pending_restart"`` (no top-level
         ``success``) — uses the relaxed helper. Mirrors the mock pattern in
@@ -1242,7 +1242,7 @@ class TestSweepWarningsShape:
         client.base_url = "http://localhost:8123"
         client.token = "test-token"
         register_addon_tools(mock_mcp, client)
-        manage_addon = registered["ha_manage_addon"]
+        manage_addon = registered["ha_manage_app"]
 
         async def mock_supervisor_api(client_arg, endpoint, **kwargs):
             if endpoint == "/addons/test_addon/info":

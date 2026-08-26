@@ -9,10 +9,17 @@ each containing 'entity_id' and 'action' keys.
 """
 
 import logging
+from uuid import uuid4
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    assert_mcp_success,
+    parse_mcp_result,
+    safe_call_tool,
+)
+from ...utilities.wait_helpers import wait_for_entity_state
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +51,240 @@ def _extract_bulk_boolean_entity_id(data: dict) -> str | None:
 @pytest.mark.core
 class TestBulkControl:
     """Test ha_bulk_control tool functionality."""
+
+    async def test_selector_dry_run_resolves_area_and_exclusion(self, mcp_client):
+        """Preview exact area leaves after applying an entity exclusion."""
+        suffix = uuid4().hex[:8]
+        area_id: str | None = None
+        entity_ids: list[str] = []
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                area_data = await mcp.call_tool_success(
+                    "ha_set_area_or_floor",
+                    {"kind": "area", "name": f"Bulk selector {suffix}"},
+                )
+                area_id = area_data["area_id"]
+
+                for label in ("included", "excluded"):
+                    create_data = await mcp.call_tool_success(
+                        "ha_config_set_helper",
+                        {
+                            "helper_type": "input_boolean",
+                            "name": f"Bulk selector {label} {suffix}",
+                            "initial": False,
+                        },
+                    )
+                    entity_id = _extract_bulk_boolean_entity_id(create_data)
+                    assert entity_id, f"Missing helper entity_id: {create_data}"
+                    entity_ids.append(entity_id)
+                    await mcp.call_tool_success(
+                        "ha_set_entity",
+                        {"entity_id": entity_id, "area_id": area_id},
+                    )
+
+                for entity_id in entity_ids:
+                    assert await wait_for_entity_state(mcp_client, entity_id, "off"), (
+                        f"Selector helper {entity_id} was not registered in time"
+                    )
+
+                data = await mcp.call_tool_success(
+                    "ha_bulk_control",
+                    {
+                        "selector": {
+                            "domain": "input_boolean",
+                            "area_ids": [area_id],
+                            "exclude_entity_ids": [entity_ids[1]],
+                        },
+                        "action": "off",
+                        "dry_run": True,
+                    },
+                )
+
+            assert data["dry_run"] is True
+            assert data["dispatched"] is False
+            assert data["resolution"]["resolved_entity_ids"] == [entity_ids[0]]
+            assert data["resolution"]["excluded_entity_ids"] == [entity_ids[1]]
+        finally:
+            for entity_id in entity_ids:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_remove_helpers_integrations",
+                    {
+                        "helper_type": "input_boolean",
+                        "target": entity_id,
+                        "confirm": True,
+                    },
+                )
+            if area_id is not None:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_remove_area_or_floor",
+                    {"kind": "area", "id": area_id},
+                )
+
+    async def test_selector_dispatch_turns_off_included_and_spares_excluded(
+        self, mcp_client
+    ):
+        """A real (non-dry-run) dispatch actually spares the excluded entity.
+
+        The dry-run test above only asserts the PREVIEW names the right
+        entities; it never observes a real dispatch or the excluded
+        entity's actual post-dispatch state. This is the guarantee the PR
+        exists to make -- so turn both helpers on, dispatch for real, and
+        confirm the excluded one's live state never moved.
+        """
+        suffix = uuid4().hex[:8]
+        area_id: str | None = None
+        entity_ids: list[str] = []
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                area_data = await mcp.call_tool_success(
+                    "ha_set_area_or_floor",
+                    {"kind": "area", "name": f"Bulk dispatch {suffix}"},
+                )
+                area_id = area_data["area_id"]
+
+                for label in ("included", "excluded"):
+                    create_data = await mcp.call_tool_success(
+                        "ha_config_set_helper",
+                        {
+                            "helper_type": "input_boolean",
+                            "name": f"Bulk dispatch {label} {suffix}",
+                            "initial": True,
+                        },
+                    )
+                    entity_id = _extract_bulk_boolean_entity_id(create_data)
+                    assert entity_id, f"Missing helper entity_id: {create_data}"
+                    entity_ids.append(entity_id)
+                    await mcp.call_tool_success(
+                        "ha_set_entity",
+                        {"entity_id": entity_id, "area_id": area_id},
+                    )
+
+                for entity_id in entity_ids:
+                    assert await wait_for_entity_state(mcp_client, entity_id, "on"), (
+                        f"Bulk dispatch helper {entity_id} was not registered in time"
+                    )
+
+                included_id, excluded_id = entity_ids
+                data = await mcp.call_tool_success(
+                    "ha_bulk_control",
+                    {
+                        "selector": {
+                            "domain": "input_boolean",
+                            "area_ids": [area_id],
+                            "exclude_entity_ids": [excluded_id],
+                        },
+                        "action": "off",
+                    },
+                )
+
+                assert await wait_for_entity_state(mcp_client, included_id, "off"), (
+                    f"Included helper {included_id} was not turned off by the dispatch"
+                )
+                excluded_data = await mcp.call_tool_success(
+                    "ha_get_state", {"entity_id": excluded_id}
+                )
+                assert excluded_data.get("data", {}).get("state") == "on", (
+                    f"Excluded helper's real state must never move: got {excluded_data}"
+                )
+
+            assert data.get("dry_run") is None
+            assert data["resolution"]["resolved_entity_ids"] == [included_id]
+            assert data["resolution"]["excluded_entity_ids"] == [excluded_id]
+        finally:
+            for entity_id in entity_ids:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_remove_helpers_integrations",
+                    {
+                        "helper_type": "input_boolean",
+                        "target": entity_id,
+                        "confirm": True,
+                    },
+                )
+            if area_id is not None:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_remove_area_or_floor",
+                    {"kind": "area", "id": area_id},
+                )
+
+    async def test_operations_mode_rejects_real_group_and_member_conflict(
+        self, mcp_client
+    ):
+        """A real HA group entity plus one of its own members must be rejected.
+
+        This is the live bug the group-safety gate exists to close: a batch
+        built from an entity list (operations mode) that names an aggregate
+        alongside one of the individual members it already cascades to. Unit
+        tests cover the detection logic against mocked state; this drives the
+        same gate through a group.set-created group so the check is proven
+        against Home Assistant's real entity_id/member_entity_ids shape, not
+        just a fixture.
+        """
+        object_id = f"test_e2e_bulk_conflict_{uuid4().hex[:8]}"
+        group_entity_id = f"group.{object_id}"
+
+        async with MCPAssertions(mcp_client) as mcp:
+            # Discovered dynamically, not hardcoded to specific demo-platform
+            # entities: mirrors test_bulk_control_multiple_lights' own
+            # pattern for finding real lights to build a batch from. Routed
+            # through call_tool_success (not a bare mcp_client.call_tool) so
+            # a real ha_search failure fails the test loudly instead of
+            # being silently read as "no entities" and skipped.
+            search_data = await mcp.call_tool_success(
+                "ha_search", {"domain_filter": "light", "limit": 5}
+            )
+            results = search_data.get("entities", [])
+            if len(results) < 2:
+                pytest.skip(
+                    "Need at least 2 lights to build a real group for this test"
+                )
+            member_entity_ids = [r.get("entity_id") for r in results[:2]]
+
+            create_data = await mcp.call_tool_success(
+                "ha_config_set_group",
+                {
+                    "object_id": object_id,
+                    "name": "E2E Bulk Conflict Test",
+                    "entities": member_entity_ids,
+                },
+            )
+            assert create_data.get("entity_id") == group_entity_id, (
+                f"Entity ID mismatch: {create_data}"
+            )
+
+            try:
+                # The group and one of its own real members in the same
+                # batch -- the exact shape that let a group's cascade
+                # silently override an entity meant to be spared.
+                await mcp.call_tool_failure(
+                    "ha_bulk_control",
+                    {
+                        "operations": create_operations(
+                            [group_entity_id, member_entity_ids[0]], "off"
+                        )
+                    },
+                    expected_error="group/aggregate entity",
+                )
+                logger.info("Group+member conflict correctly rejected")
+
+                # The group alone is unambiguous and must still dispatch --
+                # proves the rejection above is about the conflict, not
+                # about the group entity being untouchable.
+                await mcp.call_tool_success(
+                    "ha_bulk_control",
+                    {"operations": create_operations([group_entity_id], "off")},
+                )
+                logger.info("Group targeted alone dispatched normally")
+            finally:
+                # safe_call_tool, not mcp.call_tool_success: a cleanup
+                # failure here must not raise inside `finally` and mask a
+                # real assertion failure from the try block above.
+                await safe_call_tool(
+                    mcp_client, "ha_config_remove_group", {"object_id": object_id}
+                )
 
     async def test_bulk_turn_on_single_light(self, mcp_client, test_light_entity):
         """Test bulk_control with a single light entity."""

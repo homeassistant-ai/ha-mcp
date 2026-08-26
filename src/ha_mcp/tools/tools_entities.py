@@ -35,6 +35,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tools_config_helpers import validate_registry_ids
 from .tools_voice_assistant import KNOWN_ASSISTANTS
 from .util_helpers import (
     JSON_STRING_COERCION,
@@ -126,7 +127,11 @@ async def fetch_entity_enrichment_via_component(
     ]
     merged: dict[str, dict[str, Any]] = {}
     try:
-        ws = await get_websocket_client(url=client.base_url, token=client.token)
+        ws = await get_websocket_client(
+            url=client.base_url,
+            token=client.token,
+            verify_ssl=getattr(client, "verify_ssl", None),
+        )
         for chunk in chunks:
             raw = await ws.send_command(WS_ENTITY_ENRICH, entity_ids=chunk)
             result = raw.get("result")
@@ -594,8 +599,8 @@ class EntityTools:
                     context={"new_entity_id": new_entity_id},
                 )
             )
-        current_domain = entity_id.split(".")[0]
-        new_domain = new_entity_id.split(".")[0]
+        current_domain = entity_id.split(".", maxsplit=1)[0]
+        new_domain = new_entity_id.split(".", maxsplit=1)[0]
         if current_domain != new_domain:
             raise_tool_error(
                 create_error_response(
@@ -1011,6 +1016,7 @@ class EntityTools:
         new_device_name: str | None = None,
         device_class: str | None = None,
         parsed_options: dict[str, dict[str, Any]] | None = None,
+        preflighted: bool = False,
     ) -> dict[str, Any]:
         """Update a single entity. Orchestrates the phase pipeline."""
         # Phase 1: For add/remove label operations, fetch current labels first
@@ -1059,6 +1065,23 @@ class EntityTools:
 
         # Save original entity_id before potential rename
         original_entity_id = entity_id
+
+        # Issue #2159: validate cross-registry references immediately before
+        # the write — the narrowest window against a concurrent registry
+        # deletion (#2160 placed the area check here for the same reason).
+        # The bulk path preflights its shared labels/categories once at tool
+        # entry and passes preflighted=True so N entities don't repeat the
+        # lookups. For label add, only the added IDs are checked: the merged
+        # set may legitimately carry pre-existing dangling labels, whose
+        # cleanup path (label_operation="remove") must stay open.
+        if not preflighted:
+            await validate_registry_ids(
+                self._client,
+                area_id,
+                parsed_labels if label_operation in ("set", "add") else None,
+                parsed_categories,
+                fail_closed=True,
+            )
 
         # Phase 3: Send entity registry update (covers all fields except expose_to)
         (
@@ -1193,6 +1216,7 @@ class EntityTools:
                     parsed_labels,
                     label_operation,
                     None,  # expose_to batched separately below
+                    preflighted=True,  # labels/categories validated at entry
                 )
                 for eid in entity_ids
             ],
@@ -1782,6 +1806,21 @@ class EntityTools:
             parsed_labels = _parse_string_list_field(labels, "labels")
             parsed_options = _parse_options_param(options)
             parsed_expose_to = _parse_expose_to_param(expose_to)
+
+            # Issue #2159 bulk preflight: labels/categories are shared across
+            # the fan-out, so validate them once here instead of once per
+            # entity inside _update_single_entity (area_id was rejected for
+            # bulk above). The single-entity path instead validates
+            # immediately before its registry write, minimizing the
+            # check-to-write window.
+            if is_bulk:
+                await validate_registry_ids(
+                    self._client,
+                    None,
+                    parsed_labels if label_operation in ("set", "add") else None,
+                    parsed_categories,
+                    fail_closed=True,
+                )
 
             # Single entity case
             if not is_bulk:

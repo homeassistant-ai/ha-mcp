@@ -33,15 +33,13 @@ import threading  # noqa: E402
 from collections.abc import Coroutine  # noqa: E402
 from typing import TYPE_CHECKING, Any, NoReturn  # noqa: E402
 
-from fastmcp.exceptions import ToolError  # noqa: E402
-from pydantic import ValidationError as PydanticValidationError  # noqa: E402
-
 from ha_mcp.browser_landing import (  # noqa: E402
     register_browser_landing as _register_landing_route,
 )
 from ha_mcp.browser_landing import (  # noqa: E402
     register_healthz as _register_healthz_route,
 )
+from ha_mcp.log_filters import install_sdk_log_filters  # noqa: E402
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -155,12 +153,16 @@ This typically happens when running Docker without the -i flag:
 To fix this, use one of the following options:
 
   1. Add the -i flag to enable interactive stdin:
-     docker run -i -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \\
+     docker run -i -v ha-mcp-data:/home/mcpuser/.ha-mcp \\
+       -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \\
        ghcr.io/homeassistant-ai/ha-mcp:latest
 
   2. Use HTTP mode instead (recommended for servers/automation):
-     docker run -d -p 8086:8086 -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \\
+     docker run -d -p 8086:8086 -v ha-mcp-data:/home/mcpuser/.ha-mcp \\
+       -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \\
        ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web
+
+The -v flag keeps your settings when the container is re-created.
 
 For more information, see:
   https://github.com/homeassistant-ai/ha-mcp#-docker
@@ -380,68 +382,6 @@ mcp = _DeferredMCP()
 _LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
-class StatelessSessionLogFilter(logging.Filter):
-    """Suppress the routine 'Terminating session: None' log from the MCP SDK.
-
-    In stateless HTTP mode every request creates and tears down a temporary
-    session whose id is ``None``, so the SDK emits an INFO
-    ``Terminating session: None`` (mcp/server/streamable_http.py) on *every*
-    request. The line is routine but looks alarming and has repeatedly
-    confused users into thinking the connection is broken.
-
-    Returning ``False`` drops the record at this logger before it reaches any
-    handler. (Merely downgrading the level to DEBUG did not work: the level
-    gate is applied before the filter runs, so the record was already admitted
-    and still emitted -- just relabelled.) Real session terminations carry an
-    actual id and are not matched, so they still log.
-
-    # TODO: remove when modelcontextprotocol/python-sdk#2329 is resolved
-    """
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        if record.name != "mcp.server.streamable_http":
-            return True
-        try:
-            message = record.getMessage()
-        except (ValueError, TypeError):
-            # A malformed %-format record on this logger is not our target, and
-            # a filter must not raise: filters run in Logger.handle() with no
-            # exception handling, so a raise would crash the logging call.
-            return True
-        # Drop the stateless teardown noise; keep everything else.
-        return "Terminating session: None" not in message
-
-
-class ToolValidationLogFilter(logging.Filter):
-    """Demote fastmcp tool-failure tracebacks to single-line warnings.
-
-    Pydantic ValidationError and tool-raised ToolError aren't server bugs,
-    so the traceback through fastmcp/pydantic internals is just noise. The
-    structured error detail is preserved in the WARNING message; stack is
-    intentionally dropped because these are user-input errors, not bugs.
-    """
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        if record.name != "fastmcp.server.server" or not record.exc_info:
-            return True
-
-        msg = record.getMessage()
-        err = record.exc_info[1]
-        if "Error validating tool" in msg and isinstance(err, PydanticValidationError):
-            record.msg = f"{msg}: {err.errors(include_url=False)}"
-        elif "Error calling tool" in msg and isinstance(err, ToolError):
-            record.msg = f"{msg}: {err}"
-        else:
-            return True
-
-        record.args = ()
-        record.levelno = logging.WARNING
-        record.levelname = "WARNING"
-        record.exc_info = None
-        record.exc_text = None
-        return True
-
-
 class ProbeAccessLogFilter(logging.Filter):
     """Drop benign, non-MCP HTTP probe noise from the uvicorn access log.
 
@@ -499,19 +439,32 @@ def _setup_logging(log_level_str: str, force: bool = True) -> None:
     of the sweep ``force`` performs (which removes *and closes* every root
     handler) so ``ha_report_issue`` keeps its startup diagnostics.
     """
+    log_level = getattr(logging, log_level_str)
+
+    import fastmcp
+
     from ha_mcp.utils.usage_logger import preserve_startup_collector
 
     with preserve_startup_collector():
         logging.basicConfig(
-            level=getattr(logging, log_level_str),
+            level=log_level,
             format="%(asctime)s %(name)s %(levelname)s: %(message)s",
             datefmt=_LOG_DATE_FORMAT,
             force=force,
         )
-    logging.getLogger("mcp.server.streamable_http").addFilter(
-        StatelessSessionLogFilter()
-    )
-    logging.getLogger("fastmcp.server.server").addFilter(ToolValidationLogFilter())
+
+    fastmcp_logger = logging.getLogger("fastmcp")
+    if fastmcp.settings.log_enabled:
+        # FastMCP configures its own handler and disables propagation, so the root
+        # level above does not control its OIDC diagnostics. Preserve that handler
+        # and formatting while honoring ha-mcp's LOG_LEVEL setting.
+        fastmcp_logger.setLevel(log_level)
+    else:
+        # FastMCP deliberately leaves its logger unconfigured when logging is
+        # disabled. Prevent that NOTSET namespace from inheriting our root handler.
+        fastmcp_logger.setLevel(logging.CRITICAL + 1)
+
+    install_sdk_log_filters()
 
 
 def _log_startup_version() -> None:
@@ -570,8 +523,6 @@ def _get_timestamped_uvicorn_log_config() -> dict:
 
 async def _cleanup_resources() -> None:
     """Clean up all server resources gracefully."""
-    global _server
-
     logger.info("Cleaning up server resources...")
 
     # Close WebSocket listener service if running
@@ -605,6 +556,25 @@ async def _cleanup_resources() -> None:
             logger.warning(f"Server cleanup failed: {e}")
 
     logger.info("Server resources cleaned up")
+
+
+def _log_cleanup_result(task: "asyncio.Future[None]") -> None:
+    """Consume the cleanup task's outcome so a failure is never silent.
+
+    ``asyncio.wait`` does not retrieve results, and the timeout path
+    deliberately abandons rather than awaits (see the ``finally`` block), so
+    without this nothing observes ``cleanup_task``. An exception left
+    unretrieved this close to loop teardown surfaces only as a GC-time "Task
+    exception was never retrieved" error, which is unstructured and not
+    guaranteed to be emitted before exit. Mirrors what ``_cancel_tasks`` does
+    for the tasks it reaps. Cancellation is the expected abandoned-timeout
+    outcome and stays silent.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning(f"Resource cleanup raised: {exc!r}")
 
 
 async def _cancel_tasks(*tasks: asyncio.Task) -> None:
@@ -688,11 +658,19 @@ async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
             logger.error("Server task cancelled without a shutdown signal")
             raise
     finally:
-        try:
-            await asyncio.wait_for(
-                _cleanup_resources(), timeout=SHUTDOWN_TIMEOUT_SECONDS
-            )
-        except TimeoutError:
+        # Cancel-and-abandon, not wait_for: wait_for awaits the cancelled
+        # coroutine before raising, and the cleanup stack swallows
+        # CancelledError at several layers (per-client in
+        # WebSocketManager.disconnect, in client.disconnect's own task-cancel
+        # guard), so a hung close handshake could block shutdown past the
+        # budget. A straggler is left to the runner's own task sweep.
+        cleanup_task = asyncio.ensure_future(_cleanup_resources())
+        cleanup_task.add_done_callback(_log_cleanup_result)
+        _done, cleanup_pending = await asyncio.wait(
+            {cleanup_task}, timeout=SHUTDOWN_TIMEOUT_SECONDS
+        )
+        if cleanup_pending:
+            cleanup_task.cancel()
             logger.warning("Resource cleanup timed out")
 
         try:
@@ -726,7 +704,7 @@ def _signal_handler(signum: int, frame: Any) -> None:
     This handler initiates graceful shutdown on first signal.
     On second signal, forces immediate exit.
     """
-    global _shutdown_in_progress, _shutdown_event
+    global _shutdown_in_progress
 
     sig_name = signal.Signals(signum).name
 
@@ -899,27 +877,27 @@ def _maybe_spawn_settings_sidecar() -> None:
     is async; this happens before the main stdio loop so there's no
     nested-loop conflict with ``_run_entrypoint``'s own ``asyncio.run``.
 
-    Performance: the dump constructs the full FastMCP server, which is
-    heavy. Skip it (and the server build) when there's nothing to spawn
-    for — sidecar disabled or already alive. Warm restarts that already
-    have a sidecar pay zero cold-start tax from this path.
+    Performance: the dump constructs the full FastMCP server via the
+    cached ``_get_server()`` singleton the stdio session builds anyway,
+    so this only front-loads that cost. The dump runs as maybe_spawn's
+    ``prepare`` hook — winner-only, inside the spawn lock — because the
+    replacement sidecar must read a cache dumped by the SAME parent that
+    spawned it: a spawn-lock loser with a different environment could
+    otherwise overwrite the winner's cache (issue #2131 review), and the
+    sidecar reloads that shared file per request.
     """
     from ha_mcp.settings_ui import (
         _get_tool_metadata,
         dump_tool_metadata_cache,
     )
     from ha_mcp.stdio_settings_sidecar import (
-        _existing_sidecar_alive,
         _is_disabled,
         maybe_spawn,
     )
 
-    # Cheap gates first; skip the heavy metadata dump when the sidecar
-    # would be a no-op anyway. Any condition that makes maybe_spawn()
-    # short-circuit also makes the dump pointless (the running sidecar
-    # already has a cache from a prior parent startup; a disabled
-    # sidecar never reads one).
-    if _is_disabled() or _existing_sidecar_alive():
+    # Disabled is the only dump-skipping gate; maybe_spawn() logs the
+    # skip reason (a disabled sidecar never reads the cache).
+    if _is_disabled():
         try:
             maybe_spawn()
         except Exception as e:
@@ -930,32 +908,35 @@ def _maybe_spawn_settings_sidecar() -> None:
             )
         return
 
-    try:
-        metadata = asyncio.run(_get_tool_metadata(_get_server()))
-        dumped = dump_tool_metadata_cache(metadata)
-        # Log a deliberate one-liner so users debugging an empty
-        # settings page can see whether the parent's dump succeeded
-        # by grepping the stdio process output (which Claude Desktop
-        # surfaces in its MCP server log panel).
-        logger.info(
-            "Tool metadata cache: %d tools dumped, write %s",
-            len(metadata),
-            "succeeded" if dumped else "FAILED",
-        )
-    except Exception as e:
-        # Cache dump is best-effort — the sidecar falls back to an empty
-        # tools list rather than blocking stdio startup. Include the
-        # exception class in the warning so ops can distinguish
+    def _dump_metadata_cache() -> None:
+        # One-off asyncio.run is safe here: this runs before the main
+        # stdio loop, so there's no nested-loop conflict with
+        # _run_entrypoint's own asyncio.run. Best-effort — the sidecar
+        # falls back to an empty tools list rather than blocking stdio
+        # startup. The exception class in the warning distinguishes
         # server-init failures (Pydantic ValidationError) from cache I/O
         # (OSError) from event-loop issues (RuntimeError).
-        logger.warning(
-            "Failed to dump tool metadata cache (%s)",
-            type(e).__name__,
-            exc_info=True,
-        )
+        try:
+            metadata = asyncio.run(_get_tool_metadata(_get_server()))
+            dumped = dump_tool_metadata_cache(metadata)
+            # Deliberate one-liner so users debugging an empty settings
+            # page can see whether the parent's dump succeeded by
+            # grepping the stdio process output (which Claude Desktop
+            # surfaces in its MCP server log panel).
+            logger.info(
+                "Tool metadata cache: %d tools dumped, write %s",
+                len(metadata),
+                "succeeded" if dumped else "FAILED",
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to dump tool metadata cache (%s)",
+                type(e).__name__,
+                exc_info=True,
+            )
 
     try:
-        maybe_spawn()
+        maybe_spawn(prepare=_dump_metadata_cache)
     except Exception as e:
         # Spawn failures already log inside maybe_spawn(); the bare
         # except here is a defense-in-depth guard for any unexpected
@@ -992,6 +973,19 @@ def _get_http_runtime(default_port: int = 8086) -> tuple[str, int, str]:
     ``run_async``, any ``FASTMCP_HOST`` value in the environment is
     ignored — ``MCP_HOST`` is the only env var that affects bind host
     for ha-mcp's CLI entry points.
+
+    The ``0.0.0.0`` default is deliberate and documented: SECURITY.md
+    § "Local network is the trusted zone for standard mode" states that the
+    HTTP entrypoints bind to all interfaces so LAN peers can reach them, and
+    its Scope section excludes "LAN-peer access to standard-mode HTTP
+    endpoints".
+
+    The default ``/mcp`` path is *not* blessed the same way once the bind
+    leaves loopback. That combination is what ``_warn_if_default_path_exposed``
+    warns about, and SECURITY.md's Scope classes it under "a misconfigured
+    deployment" — meaning such reports are declined, not that the
+    configuration is endorsed. Operators on a non-loopback bind are still
+    expected to set a high-entropy ``MCP_SECRET_PATH``.
     """
 
     host = os.getenv("MCP_HOST", "0.0.0.0")
@@ -1008,7 +1002,9 @@ def _get_http_runtime(default_port: int = 8086) -> tuple[str, int, str]:
 # Default ``MCP_SECRET_PATH`` value, shared by ``_get_http_runtime`` (the
 # read-from-env fallback) and ``_warn_if_default_path_exposed`` (the
 # hardening-nudge predicate). Single source of truth so the two sites
-# can't drift.
+# can't drift. Safe on a loopback bind; on a non-loopback bind it is the
+# misconfiguration ``_warn_if_default_path_exposed`` flags, which SECURITY.md
+# declines to action without endorsing — see ``_get_http_runtime`` above.
 DEFAULT_MCP_PATH = "/mcp"
 
 # Hostname literals (not IP addresses) treated as loopback by
@@ -1112,7 +1108,7 @@ def _oidc_verify_id_token_enabled() -> bool:
 
     Off by default: FastMCP's OIDCProxy verifies the access token as a JWT,
     which works for providers like Authentik and Keycloak. Providers that
-    issue opaque access tokens (Google always; Auth0 without an API
+    issue opaque access tokens (such as Authelia, or Auth0 without an API
     audience) need ``verify_id_token=True`` so FastMCP verifies the ID token
     instead.
     """
@@ -1552,7 +1548,7 @@ def main_oidc() -> None:
     """Run server with OIDC authentication over HTTP.
 
     This mode enables authentication via an external OIDC provider
-    (Authentik, Keycloak, Auth0, Google, etc.). All authenticated users
+    (Authentik, Keycloak, Auth0, etc.). All authenticated users
     share the same Home Assistant instance via the configured credentials.
 
     Unlike OAuth mode which collects per-user HA credentials via a consent form,
@@ -1574,7 +1570,7 @@ def main_oidc() -> None:
       patterns accepted from dynamically-registered clients. Strongly recommended for
       internet-facing deployments.
     - OIDC_VERIFY_ID_TOKEN (optional, default: false): Set true for providers that issue
-      opaque access tokens (e.g. Google, or Auth0 without an API audience).
+      opaque access tokens (e.g. Authelia, or Auth0 without an API audience).
     - OIDC_AUDIENCE (optional): Expected `aud` claim for IdP-issued access tokens.
       Without it (and with OIDC_VERIFY_ID_TOKEN off), FastMCP's JWT verifier checks
       issuer, signature, and expiry but not audience. With OIDC_VERIFY_ID_TOKEN=true,
@@ -1591,6 +1587,8 @@ def main_oidc() -> None:
     - HA_MCP_DISABLE_SETTINGS_UI (optional): set truthy to not serve the
       settings UI at all
     - LOG_LEVEL (optional, default: INFO)
+    - FASTMCP_LOG_ENABLED (optional, default: true): Set false to suppress
+      FastMCP framework logs while leaving ha-mcp logs at LOG_LEVEL.
     """
     # Configure logging for OIDC mode (force=True needed since logging may already be configured)
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -1676,8 +1674,7 @@ async def _run_oidc_server(
         port: Port to listen on
         path: MCP endpoint path
     """
-    from fastmcp.server.auth.oidc_proxy import OIDCProxy
-
+    from ha_mcp.auth.oidc_compat import HaMcpOIDCProxy
     from ha_mcp.server import HomeAssistantSmartMCPServer
     from ha_mcp.transport_security import ensure_host_origin_guard_default_off
 
@@ -1695,6 +1692,11 @@ async def _run_oidc_server(
         # IdP (Authentik, Keycloak, etc.) -- unlike `False`, this does not
         # log a security warning at startup that consent is disabled.
         "require_authorization_consent": "external",
+        # This entrypoint provides OIDC, so request the protocol-level scope
+        # that makes upstream providers return an ID token. FastMCP also
+        # advertises this scope through protected resource metadata so MCP
+        # clients include it in the authorization flow.
+        "required_scopes": ["openid"],
         # Preserve `or None`: an empty-but-set env var must not bypass
         # FastMCP's derive-from-client-secret default for jwt_signing_key.
         "jwt_signing_key": os.getenv("OIDC_JWT_SIGNING_KEY") or None,
@@ -1718,7 +1720,8 @@ async def _run_oidc_server(
         proxy_kwargs["audience"] = audience
 
     # Create OIDC auth provider — auto-discovers endpoints from config_url
-    auth = OIDCProxy(**proxy_kwargs)
+    auth = HaMcpOIDCProxy(**proxy_kwargs)
+    auth.setup_scope_compatibility()
 
     # Standard server with shared credentials (no proxy client needed)
     global _server

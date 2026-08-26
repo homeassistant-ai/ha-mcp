@@ -35,6 +35,7 @@ def _make_coordinator(data=None) -> MagicMock:
     coordinator = MagicMock(name="coordinator")
     coordinator.data = data
     coordinator.hass = MagicMock(name="hass")
+    coordinator.hass.config.skip_pip = False
     return coordinator
 
 
@@ -56,6 +57,7 @@ def _make_install_hass(*, bringup=None, installed_version=None) -> MagicMock:
     """A hass wired for async_install's post-reload flow: awaits the bring-up
     task (if any) then reads the installed version via the executor."""
     hass = MagicMock(name="hass")
+    hass.config.skip_pip = False
     hass.config_entries.async_reload = AsyncMock()
     hass.data = {DOMAIN: {DATA_BRINGUP_TASK: bringup}}
 
@@ -110,6 +112,16 @@ class TestProperties:
         entity = _make_entity(entry=_make_entry(options=options))
         assert entity.auto_update is expected
 
+    def test_skip_pip_disables_auto_update(self):
+        coordinator = _make_coordinator(_info())
+        coordinator.hass.config.skip_pip = True
+        entity = _make_entity(
+            coordinator=coordinator,
+            entry=_make_entry(options={OPT_AUTO_UPDATE: True}),
+        )
+
+        assert entity.auto_update is False
+
     def test_release_url_stable_channel(self):
         entity = _make_entity(
             coordinator=_make_coordinator(_info(latest="1.2.0", dist=DIST_NAME_STABLE))
@@ -151,6 +163,20 @@ class TestProperties:
     def test_supported_features_install_only_when_coordinator_data_absent(self):
         entity = _make_entity(coordinator=_make_coordinator(None))
         assert entity.supported_features == upd.UpdateEntityFeature.INSTALL
+
+    @pytest.mark.parametrize(
+        ("dist", "expected"),
+        [
+            (DIST_NAME_STABLE, upd.UpdateEntityFeature.RELEASE_NOTES),
+            (DIST_NAME_DEV, upd.UpdateEntityFeature(0)),
+        ],
+    )
+    def test_skip_pip_removes_install_feature(self, dist, expected):
+        coordinator = _make_coordinator(_info(dist=dist))
+        coordinator.hass.config.skip_pip = True
+        entity = _make_entity(coordinator=coordinator)
+
+        assert entity.supported_features == expected
 
 
 class _FakeResp:
@@ -356,6 +382,25 @@ class TestReleaseNotesComponentHold:
 
 
 class TestAsyncInstall:
+    async def test_skip_pip_rejects_install_without_writing_or_reloading(self):
+        entry = _make_entry(data={"existing": "kept"})
+        hass = _make_install_hass(installed_version="1.2.0")
+        hass.config.skip_pip = True
+        coordinator = _make_coordinator(_info(latest="1.2.0"))
+        entity = _make_entity(coordinator=coordinator, entry=entry)
+        entity.hass = hass
+        coordinator.hass.config.skip_pip = True
+
+        with pytest.raises(
+            upd.HomeAssistantError,
+            match="externally managed by the system package manager",
+        ):
+            await entity.async_install("1.2.0", backup=False)
+
+        assert entry.data == {"existing": "kept"}
+        hass.config_entries.async_update_entry.assert_not_called()
+        hass.config_entries.async_reload.assert_not_awaited()
+
     async def test_writes_pending_marker_and_reloads(self):
         entry = _make_entry(data={"existing": "kept"})
         hass = _make_install_hass(installed_version="1.2.0")

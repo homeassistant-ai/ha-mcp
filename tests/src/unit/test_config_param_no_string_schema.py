@@ -16,18 +16,28 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import TypeAdapter, ValidationError
 
 
 def _get_param_schema(
     register_fn: Callable[..., Any], tool_name: str, param_name: str
 ) -> dict[str, Any]:
+    """Return one parameter schema from a freshly registered MCP tool."""
+    return _get_tool_parameters(register_fn, tool_name)["properties"][param_name]
+
+
+def _get_tool_parameters(
+    register_fn: Callable[..., Any], tool_name: str
+) -> dict[str, Any]:
+    """Return the complete JSON schema for a freshly registered MCP tool."""
     from fastmcp import FastMCP
 
     async def _inner() -> dict[str, Any]:
+        """Register the tool and retrieve its complete schema asynchronously."""
         mcp = FastMCP("test")
         register_fn(mcp, MagicMock(), device_tools=MagicMock())
         tool = await mcp.get_tool(tool_name)
-        return tool.parameters["properties"][param_name]  # type: ignore[no-any-return]
+        return tool.parameters
 
     return asyncio.run(_inner())
 
@@ -198,4 +208,111 @@ def test_list_param_advertises_array(module, register_fn, tool_name, param_name)
     )
     assert has_array, (
         f"{tool_name}.{param_name}: schema does not include type:array. Schema: {schema}"
+    )
+
+
+def test_bulk_operations_schema_names_required_item_fields():
+    """Models must see the bulk item contract instead of an untyped object."""
+    from ha_mcp.tools.tools_service import register_service_tools
+
+    parameters = _get_tool_parameters(register_service_tools, "ha_bulk_control")
+    operations = parameters["properties"]["operations"]
+    item_schema = operations["items"]
+    if "$ref" in item_schema:
+        item_schema = parameters["$defs"][item_schema["$ref"].rsplit("/", 1)[-1]]
+
+    assert item_schema["type"] == "object"
+    assert set(item_schema["required"]) == {"entity_id", "action"}
+    assert {
+        "entity_id",
+        "action",
+        "parameters",
+        "timeout_seconds",
+        "validate_first",
+    } <= set(item_schema["properties"])
+    assert item_schema["additionalProperties"] is False
+    assert item_schema["properties"]["entity_id"]["minLength"] == 1
+    assert item_schema["properties"]["action"]["minLength"] == 1
+    assert item_schema["properties"]["timeout_seconds"]["minimum"] == 0
+    assert "service" not in item_schema["properties"]
+    assert "domain" not in item_schema["properties"]
+    assert "Use action='off', not service='turn_off'" in operations["description"]
+
+
+@pytest.mark.parametrize("obsolete_key", ["domain", "service"])
+def test_bulk_operation_schema_rejects_obsolete_keys(
+    obsolete_key: str,
+):
+    """The advertised item contract rejects obsolete service-style keys."""
+    from ha_mcp.tools.tools_service import BulkControlOperation
+
+    operation = {
+        "entity_id": "light.kitchen",
+        "action": "off",
+        obsolete_key: "light" if obsolete_key == "domain" else "turn_off",
+    }
+
+    with pytest.raises(ValidationError):
+        TypeAdapter(BulkControlOperation).validate_python(operation)
+
+
+def test_bulk_operation_parameters_coerce_json_object_string():
+    """Nested parameters retain the project's lenient JSON-string compatibility."""
+    from ha_mcp.tools.tools_service import BulkControlOperation
+
+    operation = TypeAdapter(BulkControlOperation).validate_python(
+        {
+            "entity_id": "light.kitchen",
+            "action": "on",
+            "parameters": '{"brightness_pct": 30}',
+        }
+    )
+
+    assert operation["parameters"] == {"brightness_pct": 30}
+
+
+def test_bulk_operation_timeout_rejects_negative_and_accepts_zero():
+    """Bulk timeout validation rejects negatives without excluding zero."""
+    from ha_mcp.tools.tools_service import BulkControlOperation
+
+    adapter = TypeAdapter(BulkControlOperation)
+    operation = {"entity_id": "light.kitchen", "action": "off"}
+
+    with pytest.raises(ValidationError):
+        adapter.validate_python({**operation, "timeout_seconds": -1})
+
+    # ``True`` is the trap: ``float(True)`` is 1.0, so a bool that slips past
+    # the schema reads downstream as a one-second timeout.
+    for invalid_value in (float("inf"), "inf", float("nan"), True, False):
+        with pytest.raises(ValidationError):
+            adapter.validate_python({**operation, "timeout_seconds": invalid_value})
+
+    assert (
+        adapter.validate_python({**operation, "timeout_seconds": 0})["timeout_seconds"]
+        == 0
+    )
+    assert (
+        adapter.validate_python({**operation, "timeout_seconds": 0.5})[
+            "timeout_seconds"
+        ]
+        == 0.5
+    )
+
+
+@pytest.mark.parametrize("invalid_value", [None, 0, 1, "false", "true"])
+def test_bulk_operation_validate_first_requires_a_strict_boolean(invalid_value):
+    """Only JSON booleans satisfy the advertised validate_first contract."""
+    from ha_mcp.tools.tools_service import BulkControlOperation
+
+    adapter = TypeAdapter(BulkControlOperation)
+    operation = {"entity_id": "light.kitchen", "action": "off"}
+
+    with pytest.raises(ValidationError):
+        adapter.validate_python({**operation, "validate_first": invalid_value})
+
+    assert (
+        adapter.validate_python({**operation, "validate_first": False})[
+            "validate_first"
+        ]
+        is False
     )

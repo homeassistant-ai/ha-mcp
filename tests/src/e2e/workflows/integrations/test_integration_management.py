@@ -8,6 +8,7 @@ import logging
 import pytest
 
 from ...utilities.assertions import (
+    MCPAssertions,
     assert_mcp_success,
     safe_call_tool,
 )
@@ -219,6 +220,119 @@ class TestIntegrationManagement:
                 {"target": entry_id, "confirm": True},
             )
 
+    async def test_partial_options_submit_keeps_unnamed_fields(self, mcp_client):
+        """A one-field options patch must not reset the fields it omits (#2254).
+
+        The bug: the walker submitted ONLY caller-named keys, so every field
+        the caller left out went back to whatever voluptuous substitutes for an
+        absent key — its static schema default — while the tool still reported
+        success. The sibling test above never caught it because ``group``'s
+        light options are all ``vol.Required``, and required fields were
+        already backfilled from the step's own suggestion.
+
+        ``group`` with ``group_type="sensor"`` is the reachable repro: its
+        OPTIONS schema extends the basic one with
+        ``vol.Optional(CONF_IGNORE_NON_NUMERIC, default=False)``, an OPTIONAL
+        field carrying a static default. Set it true, patch a different field,
+        and pre-fix it silently fell back to false. Deliberately an e2e rather
+        than a unit test: the unit suite pins the payload against a
+        hand-written copy of HA's schema serialization, so it would keep
+        passing if HA changed how it serializes ``suggested_value``. Only a
+        real options flow proves the values actually survive the round trip.
+
+        The baseline is set through the OPTIONS flow, not at create time:
+        ``ignore_non_numeric`` lives in group's ``SENSOR_OPTIONS`` and not in
+        its config schema, so passing it to the add call is dropped as an
+        undeclared key (the tool says so in ``warnings``) and never reaches
+        the entry. That full submit doubles as the control: it proves a
+        complete form still applies every field, so a failure below is the
+        PARTIAL path specifically.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_set_integration",
+                {
+                    "domain": "group",
+                    "config": {
+                        "group_type": "sensor",
+                        "name": "test_partial_options_2254_e2e",
+                        "entities": [],
+                        "hide_members": False,
+                        "type": "max",
+                    },
+                },
+            )
+            entry_id = data["entry_id"]
+
+            try:
+                await wait_for_tool_result(
+                    mcp_client,
+                    tool_name="ha_get_integration",
+                    arguments={"entry_id": entry_id},
+                    predicate=lambda d: d.get("success") is True,
+                    description="added sensor group is registered",
+                )
+
+                # BASELINE via a FULL options submit — every field named.
+                await mcp.call_tool_success(
+                    "ha_set_integration",
+                    {
+                        "entry_id": entry_id,
+                        "config": {
+                            "entities": [],
+                            "hide_members": False,
+                            "type": "max",
+                            "ignore_non_numeric": True,
+                        },
+                    },
+                )
+                await wait_for_tool_result(
+                    mcp_client,
+                    tool_name="ha_get_integration",
+                    arguments={"entry_id": entry_id},
+                    predicate=lambda d: (
+                        d.get("entry", {}).get("options", {}).get("ignore_non_numeric")
+                        is True
+                    ),
+                    description="baseline option is set before the partial patch",
+                )
+
+                # The patch under test: name ONLY 'type'. Every other field in
+                # the step is left out, which is what used to reset them.
+                update_data = await mcp.call_tool_success(
+                    "ha_set_integration",
+                    {"entry_id": entry_id, "config": {"type": "min"}},
+                )
+                assert update_data.get("updated") is True
+
+                verify_data = await wait_for_tool_result(
+                    mcp_client,
+                    tool_name="ha_get_integration",
+                    arguments={"entry_id": entry_id},
+                    predicate=lambda d: (
+                        d.get("entry", {}).get("options", {}).get("type") == "min"
+                    ),
+                    description="the patched field took effect",
+                )
+                options = verify_data["entry"]["options"]
+
+                # The regression assert: pre-#2254 this was False, silently
+                # reset from the static schema default because the key was
+                # omitted.
+                assert options.get("ignore_non_numeric") is True, (
+                    "Partial options submit reset 'ignore_non_numeric' to its "
+                    "schema default — the #2254 wipe is back. Fields the "
+                    "caller never named must survive the patch. Got options: "
+                    f"{options}"
+                )
+                assert options.get("type") == "min"
+            finally:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_remove_helpers_integrations",
+                    {"target": entry_id, "confirm": True},
+                )
+
     async def test_add_integration_unknown_domain_fails(self, mcp_client):
         """Add mode surfaces a structured error for an unknown domain."""
         data = await safe_call_tool(
@@ -277,3 +391,198 @@ class TestIntegrationManagement:
         assert "already_deleted" not in json.dumps(data), (
             f"Stale already_deleted marker leaked into error: {data!r}"
         )
+
+    # The fixture seeds a `filesize` entry (see
+    # tests/initial_test_state/.storage/core.config_entries). It is the only
+    # integration in the harness that implements async_step_reconfigure, and it
+    # commits through async_update_reload_and_abort — the same HA call whose
+    # scheduled reload the verification retry loop has to outlast — so the
+    # confirmed path gets real CI coverage instead of skipping forever.
+    RECONFIGURE_ENTRY_ID = "01KRECONFIGUREE2E000000001"
+    RECONFIGURE_PATH_A = "/config/www/filesize_e2e_a.txt"
+    RECONFIGURE_PATH_B = "/config/www/filesize_e2e_b.txt"
+
+    async def test_reconfigure_target_advertises_supports_reconfigure(self, mcp_client):
+        """ha_get_integration exposes the discovery signal for reconfigure mode."""
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
+            )
+
+        entry = data.get("entry", data)
+        assert entry.get("domain") == "filesize", entry
+        assert entry.get("supports_reconfigure") is True, entry
+
+    async def test_reconfigure_preflight_is_read_only(self, mcp_client):
+        """The preflight validates and issues a token without touching the entry."""
+        async with MCPAssertions(mcp_client) as mcp:
+            before = await mcp.call_tool_success(
+                "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
+            )
+            # Preview only — nothing is submitted to HA, so the target path
+            # does not have to differ from the current one here.
+            result = await mcp.call_tool_success(
+                "ha_set_integration",
+                {
+                    "entry_id": self.RECONFIGURE_ENTRY_ID,
+                    "reconfigure": True,
+                    "config": {"file_path": self.RECONFIGURE_PATH_B},
+                },
+            )
+
+            assert result.get("status") == "preview", result
+            assert "preview" not in result, result
+            assert result.get("operation") == "reconfigure", result
+            confirm_token = result.get("confirm_token")
+            assert isinstance(confirm_token, str) and confirm_token.startswith(
+                "sha256:"
+            ), result
+
+            after = await mcp.call_tool_success(
+                "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
+            )
+
+        before_entry = before.get("entry", before)
+        after_entry = after.get("entry", after)
+        stable_fields = (
+            "entry_id",
+            "domain",
+            "unique_id",
+            "title",
+            "state",
+            "disabled_by",
+        )
+        assert {field: after_entry.get(field) for field in stable_fields} == {
+            field: before_entry.get(field) for field in stable_fields
+        }
+
+    async def test_reconfigure_rejects_a_stale_token(self, mcp_client):
+        """A token issued for a different target config cannot be replayed."""
+        async with MCPAssertions(mcp_client) as mcp:
+            preview = await mcp.call_tool_success(
+                "ha_set_integration",
+                {
+                    "entry_id": self.RECONFIGURE_ENTRY_ID,
+                    "reconfigure": True,
+                    "config": {"file_path": self.RECONFIGURE_PATH_B},
+                },
+            )
+            stale = await mcp.call_tool_failure(
+                "ha_set_integration",
+                {
+                    "entry_id": self.RECONFIGURE_ENTRY_ID,
+                    "reconfigure": True,
+                    # A different target config than the token was issued for.
+                    "config": {"file_path": self.RECONFIGURE_PATH_A},
+                    "confirm_token": preview["confirm_token"],
+                },
+            )
+
+        assert stale.get("status") == "stale_preflight", stale
+        assert "confirm_token" not in stale, stale
+
+    async def test_reconfigure_confirmed_applies_and_verifies(self, mcp_client):
+        """The confirmed path drives HA's real reconfigure flow end to end.
+
+        Targets whichever of the two paths the entry is NOT currently on, and
+        restores the starting one in a `finally`. filesize's reconfigure step
+        calls `_abort_if_unique_id_configured()`, which does not exclude the
+        entry being reconfigured (core `config_entries.py`), so reconfiguring
+        to the path it already holds aborts with `already_configured` — this
+        test must not assume a starting path or an ordering.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            current = await mcp.call_tool_success(
+                "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
+            )
+            # `title` is the observable: filesize names the entry after the
+            # file's basename and retitles it on reconfigure. The entry's
+            # unique_id would be the more direct signal, but Home Assistant
+            # does not expose it — `ConfigEntry.as_json_fragment` omits it, and
+            # every config-entry endpoint serializes through that fragment.
+            start_title = (current.get("entry", current) or {}).get("title")
+            target = (
+                self.RECONFIGURE_PATH_A
+                if start_title == self.RECONFIGURE_PATH_B.rsplit("/", 1)[-1]
+                else self.RECONFIGURE_PATH_B
+            )
+            start_path = (
+                self.RECONFIGURE_PATH_B
+                if target == self.RECONFIGURE_PATH_A
+                else self.RECONFIGURE_PATH_A
+            )
+            try:
+                preview = await mcp.call_tool_success(
+                    "ha_set_integration",
+                    {
+                        "entry_id": self.RECONFIGURE_ENTRY_ID,
+                        "reconfigure": True,
+                        "config": {"file_path": target},
+                    },
+                )
+                result = await mcp.call_tool_success(
+                    "ha_set_integration",
+                    {
+                        "entry_id": self.RECONFIGURE_ENTRY_ID,
+                        "reconfigure": True,
+                        "config": {"file_path": target},
+                        "confirm_token": preview["confirm_token"],
+                    },
+                )
+
+                assert result.get("operation") == "reconfigure", result
+                # The entry reloads cleanly and keeps its identity, so this is
+                # the fully verified outcome — not the degraded one the reload
+                # race used to produce for a reconfigure that worked.
+                assert result.get("status") == "applied_and_verified", result
+                verification = result.get("verification", {})
+                assert verification.get("entry_state") == "loaded", result
+                assert verification.get("operational_state_verified") is True, result
+                assert verification.get("identity_verification") == "complete", result
+                # Against a real core the change stream must be what answered.
+                # Every unit fixture builds its own frames, so a parser that
+                # rejects the shape Home Assistant actually sends
+                # (`as_json_fragment` emits `modified_at.timestamp()`, a float)
+                # degrades every reconfigure to polling with the suite still
+                # green. This is the only assertion that sees the real shape.
+                assert verification.get("operational_state_source") == "observed", (
+                    result
+                )
+                # filesize keys its entry on the file path, so a path change
+                # re-keys the unique_id through
+                # async_update_reload_and_abort(unique_id=...). That is a
+                # legitimate re-key, reported rather than refused — and it is
+                # only observable because the harness installs ha_mcp_tools
+                # (conftest copies the component in), which is the sole source
+                # of a config entry's unique_id.
+                assert (
+                    verification.get("unique_id_verification")
+                    == "changed_during_change"
+                ), result
+
+                changed = await mcp.call_tool_success(
+                    "ha_get_integration", {"entry_id": self.RECONFIGURE_ENTRY_ID}
+                )
+                changed_entry = changed.get("entry", changed)
+                assert changed_entry.get("title") == target.rsplit("/", 1)[-1], (
+                    changed_entry
+                )
+            finally:
+                if start_path != target:
+                    restore_preview = await mcp.call_tool_success(
+                        "ha_set_integration",
+                        {
+                            "entry_id": self.RECONFIGURE_ENTRY_ID,
+                            "reconfigure": True,
+                            "config": {"file_path": start_path},
+                        },
+                    )
+                    await mcp.call_tool_success(
+                        "ha_set_integration",
+                        {
+                            "entry_id": self.RECONFIGURE_ENTRY_ID,
+                            "reconfigure": True,
+                            "config": {"file_path": start_path},
+                            "confirm_token": restore_preview["confirm_token"],
+                        },
+                    )
