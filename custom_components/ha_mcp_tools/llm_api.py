@@ -59,7 +59,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import llm
 from homeassistant.helpers.httpx_client import get_async_client
-from voluptuous_openapi import convert_to_voluptuous
 
 from .const import (
     DATA_LLM_API_UNSUB,
@@ -127,6 +126,21 @@ _FALLBACK_DENY_TOOLS = frozenset(
 _SEARCH_TOOL_NAME = "ha_search_tools"
 _CALL_TOOL_NAME = "ha_call_tool"
 _SEARCH_RESULT_LIMIT = 8
+
+
+def convert_to_voluptuous(schema: Any) -> vol.Schema:
+    """Convert an OpenAPI schema on stable and Probatio-based HA Core."""
+    try:
+        probatio = importlib.import_module("probatio")
+    except ModuleNotFoundError as err:
+        if err.name != "probatio":
+            raise
+        legacy = importlib.import_module("voluptuous_openapi")
+        converter = legacy.convert_to_voluptuous
+    else:
+        converter = probatio.from_openapi
+    return cast(vol.Schema, converter(schema))
+
 
 # Used when the server's initialize result carries no instructions (it always
 # should — ha-mcp ships server-level instructions — but never render an empty
@@ -538,9 +552,7 @@ class HaMcpLlmApi(llm.API):
     def _convert_parameters(self, tool: Any) -> vol.Schema | None:
         """Convert one tool's JSON schema, or None (logged) when it fails."""
         try:
-            # cast: voluptuous_openapi is an untyped (ignored) import, so the
-            # call returns Any; its documented return type is vol.Schema.
-            return cast(vol.Schema, convert_to_voluptuous(tool.inputSchema))
+            return convert_to_voluptuous(tool.inputSchema)
         except Exception:
             # One unconvertible schema must not take down the whole
             # toolset for the conversation — skip that tool, loudly.

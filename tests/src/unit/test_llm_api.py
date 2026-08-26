@@ -263,6 +263,36 @@ class TestRegistrationLifecycle:
         assert "no importable 'mcp' client SDK" in caplog.text
 
 
+class TestSchemaConversionCompatibility:
+    def test_prefers_probatio_when_home_assistant_provides_it(self, monkeypatch):
+        schema = {"type": "object"}
+        probatio = SimpleNamespace(from_openapi=lambda value: {"probatio": value})
+
+        def _import_module(name):
+            assert name == "probatio"
+            return probatio
+
+        monkeypatch.setattr(llm_api.importlib, "import_module", _import_module)
+
+        assert llm_api.convert_to_voluptuous(schema) == {"probatio": schema}
+
+    def test_falls_back_to_voluptuous_openapi_on_stable_core(self, monkeypatch):
+        schema = {"type": "object"}
+        legacy = SimpleNamespace(
+            convert_to_voluptuous=lambda value: {"voluptuous_openapi": value}
+        )
+
+        def _import_module(name):
+            if name == "probatio":
+                raise ModuleNotFoundError("No module named 'probatio'", name="probatio")
+            assert name == "voluptuous_openapi"
+            return legacy
+
+        monkeypatch.setattr(llm_api.importlib, "import_module", _import_module)
+
+        assert llm_api.convert_to_voluptuous(schema) == {"voluptuous_openapi": schema}
+
+
 class TestFullModeInstance:
     async def test_lists_exposed_tools_with_converted_schemas_and_prompt(
         self, monkeypatch
