@@ -875,7 +875,10 @@ class TestTransientGraphFailures:
         )
 
         now = [1000.0]
-        with patch.object(_graph.time, "monotonic", lambda: now[0]):
+        # Patch the module seam, not `_graph.time`: that attribute is the
+        # stdlib module itself, so patching through it fakes the clock for
+        # every module in the process for the duration of the block.
+        with patch.object(_graph, "_monotonic", lambda: now[0]):
             for _ in range(3):
                 await _graph.fetch_related_buckets(client, QUERY)
             assert client.send_websocket_message.await_count == 2

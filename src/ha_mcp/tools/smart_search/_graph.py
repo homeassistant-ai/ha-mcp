@@ -130,6 +130,16 @@ _UNSUPPORTED_TTL_S = 300.0
 _UNSUPPORTED_STRIKES_REQUIRED = 2
 
 
+def _monotonic() -> float:
+    """Monotonic clock read, isolated so tests can advance it deterministically.
+
+    Mirrors ``component_api._monotonic``. The seam matters because ``_graph.time``
+    IS the stdlib ``time`` module, so patching ``monotonic`` through it would
+    replace the clock for every module in the process, not just this one.
+    """
+    return time.monotonic()
+
+
 @dataclass
 class _Unsupported:
     """Per-client rejection history. One object so the two fields cannot drift.
@@ -171,12 +181,12 @@ def _unsupported_recently(client: Any) -> bool:
     since = state.since if state else None
     if since is None:
         return False
-    if (time.monotonic() - since) < _UNSUPPORTED_TTL_S:
+    if (_monotonic() - since) < _UNSUPPORTED_TTL_S:
         logger.warning(
             "Skipping Home Assistant's reference graph: this instance rejected "
             "search/related as an unknown command. Results come from the "
             "configuration-body scan alone. Retrying in at most %.0fs.",
-            _UNSUPPORTED_TTL_S - (time.monotonic() - since),
+            _UNSUPPORTED_TTL_S - (_monotonic() - since),
         )
         return True
     _UNSUPPORTED.pop(client, None)
@@ -314,7 +324,7 @@ async def fetch_related_buckets(client: Any, entity_id: str) -> GraphResult | No
             state.strikes += 1
             strikes = state.strikes
             if strikes >= _UNSUPPORTED_STRIKES_REQUIRED:
-                state.since = time.monotonic()
+                state.since = _monotonic()
                 logger.warning(
                     "Home Assistant rejected search/related %d times; its "
                     "`search` integration appears not to be loaded. Pausing "
