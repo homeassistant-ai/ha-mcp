@@ -4624,6 +4624,109 @@ class TestSupervisorApiCall:
         )
 
     @pytest.mark.asyncio
+    async def test_addon_mode_non_object_json_caps_error_message(self, monkeypatch):
+        """A valid-JSON non-object body cannot produce an unbounded tool error."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            200,
+            json=["x" * 1000] * 200,
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(client, "/addons")
+
+        payload = _parse_tool_error(exc_info)
+        message = payload["error"]["message"]
+        prefix = "Command failed: Supervisor returned an invalid response: "
+        suffix = "\n[Supervisor response truncated to 50 KiB]"
+        assert message.startswith(prefix)
+        assert message.endswith(suffix)
+        assert len(message) == len("Command failed: ") + 50 * 1024
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_error_payload_message_is_capped(self, monkeypatch):
+        """An oversized Supervisor error message is bounded before it is raised."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            502,
+            json={"result": "error", "message": "y" * (50 * 1024 + 1)},
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(client, "/addons")
+
+        payload = _parse_tool_error(exc_info)
+        suffix = "\n[Supervisor response truncated to 50 KiB]"
+        assert payload["error"]["message"] == (
+            "Command failed: " + "y" * (50 * 1024 - len(suffix)) + suffix
+        )
+
+    @pytest.mark.asyncio
+    async def test_addon_mode_non_mapping_result_payload_is_capped(self, monkeypatch):
+        """An oversized non-mapping result payload is bounded before it is raised."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "test-supervisor-token")
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock()
+        direct_client = AsyncMock()
+        direct_client.request.return_value = httpx.Response(
+            200,
+            json={"result": "ok", "data": "z" * (50 * 1024 + 1)},
+        )
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=direct_client)
+        context.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons.make_supervisor_httpx_client",
+                return_value=context,
+                create=True,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _supervisor_api_call(client, "/addons")
+
+        payload = _parse_tool_error(exc_info)
+        message = payload["error"]["message"]
+        prefix = "Supervisor API GET /addons returned an invalid result payload: "
+        suffix = "\n[Supervisor response truncated to 50 KiB]"
+        assert message.startswith(prefix)
+        assert message.endswith(suffix)
+        assert len(message) == 50 * 1024
+
+    @pytest.mark.asyncio
     async def test_addon_mode_write_redirect_reports_unknown_outcome(self, monkeypatch):
         """A redirect cannot prove whether Supervisor applied the received write."""
         from ha_mcp.tools.tools_addons import _supervisor_api_call
