@@ -30,7 +30,7 @@
                 "description": "ha-mcp 'a'baqa'/YAML janmey wIvlu'bogh lo'bogh 'a'baqa' YAML choHmeH patmey le' yIcher. ha-mcp turwI' DuHmey UI-Daq DuHmeyvam leghlu' je, 'ej SIbI' Qap; pagh Dataghqa'moHnIS. Daqmey pegh (chovnatlh .storage) 'ej Hung veH ngoqmey (homeassistant, http, frontend, lovelace) bottaH botwI' bIngHom; juSlaH pagh.",
                 "data": {
                     "allowed_dirs": "'a'baqa' ghajwI' Daqmey latlh",
-                    "extra_yaml_keys": "YAML ghItlhmeH ngoqmey latlh"
+                    "extra_yaml_keys": "YAML ghItlhmeH lIwmey chelbogh"
                 },
                 "data_description": {
                     "allowed_dirs": "config ghajwI' Daq'e' bopbogh Daqmey; HochvaD laDmeH ghItlhmeH je chaw' noblu' (chovnatlh pyscript). Daq veghlu'bogh 'ej config HurDaq 'oHbogh De' 'ay'mey luteqlu'.",
