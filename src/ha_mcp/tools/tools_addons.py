@@ -726,6 +726,10 @@ async def _supervisor_api_call(
             if _JOB_COLLISION_MARKER not in error_text.lower():
                 _raise_supervisor_api_failure(result, endpoint)
 
+            # The marker test runs on the raw text; everything below reports
+            # it, so bind the size once the classification is settled.
+            error_text = _bounded_supervisor_text(error_text)
+
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 # The retry budget is exhausted; the group may be stuck or
