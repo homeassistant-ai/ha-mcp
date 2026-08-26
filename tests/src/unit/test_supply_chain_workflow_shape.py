@@ -2,6 +2,7 @@
 
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -201,6 +202,54 @@ def test_renovate_log_levels_make_failures_actionable_without_warning_noise() ->
     )
 
 
+def _tracked_dockerfiles() -> set[Path]:
+    """Every Dockerfile Renovate can see, which is exactly the tracked ones.
+
+    Enumerated through Git rather than walking the filesystem. This project's
+    workflow tells contributors to keep worktrees under `worktree/` (AGENTS.md)
+    and agents place theirs under `.claude/worktrees/`, so a walk finds whole
+    nested copies of the repository and the assertion below fails on any
+    machine following those instructions.
+
+    Excluding those by directory NAME is the wrong instrument: `.claude` also
+    holds the tracked `.claude/skills/` tree, so a Dockerfile added there later
+    would be invisible to this guard while Renovate still applied its rules to
+    it. Tracked-ness is the property that actually matters, so ask Git for it.
+
+    Raises rather than degrading if Git cannot answer: silently scanning
+    nothing would let this guard pass while asserting about an empty set.
+    """
+    listing = subprocess.run(
+        [
+            "git",
+            # The unit-test job runs inside a container with the workspace
+            # bind-mounted from the host, so the checkout is owned by a
+            # different uid than the process and Git's dubious-ownership
+            # check refuses to read the index at all. Scoped to this one
+            # invocation; no Git config is written anywhere.
+            "-c",
+            "safe.directory=*",
+            "-C",
+            str(_REPO_ROOT),
+            "ls-files",
+            "-z",
+            "Dockerfile",
+            "*/Dockerfile",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    # Carry Git's own stderr into the failure. ``check=True`` would raise
+    # ``CalledProcessError`` naming only the exit status, which says nothing
+    # about why Git refused.
+    assert listing.returncode == 0, (
+        "cannot enumerate tracked Dockerfiles, so this guard cannot run: "
+        f"git exited {listing.returncode}: {listing.stderr.strip()}"
+    )
+    return {_REPO_ROOT / rel for rel in listing.stdout.split("\0") if rel}
+
+
 def test_python_runtime_automation_is_digest_only() -> None:
     config = json.loads((_REPO_ROOT / "renovate.json").read_text(encoding="utf-8"))
     package_rules = config["packageRules"]
@@ -228,7 +277,7 @@ def test_python_runtime_automation_is_digest_only() -> None:
 
     python_dockerfiles = {
         path.relative_to(_REPO_ROOT).as_posix()
-        for path in _REPO_ROOT.rglob("Dockerfile")
+        for path in _tracked_dockerfiles()
         if "FROM python:" in path.read_text(encoding="utf-8")
     }
     assert python_dockerfiles - set(proxy_rule["matchFileNames"]) == {

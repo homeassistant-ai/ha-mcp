@@ -20,7 +20,6 @@ from ..tools_config_dashboards import (
 from ..tools_integrations import fetch_entry_options_with_status
 from ._config import (
     AUTOMATION_CONFIG_TIME_BUDGET,
-    BULK_REST_TIMEOUT,
     DEFAULT_CONCURRENCY_LIMIT,
     INDIVIDUAL_CONFIG_TIMEOUT,
     INDIVIDUAL_FETCH_BATCH_SIZE,
@@ -30,6 +29,13 @@ from ._fetch import (
     http_500_diagnosis_hint,
     is_timeout_error,
     record_first_failure,
+)
+from ._graph import (
+    GraphResult,
+    _graph_applies,
+    _graph_partial_reasons,
+    _merge_graph_hits,
+    fetch_related_buckets,
 )
 from ._scenes import SceneSearchMixin
 
@@ -96,6 +102,22 @@ def _is_no_stored_config(resp: dict[str, Any]) -> bool:
 
 class DeepSearchMixin(SceneSearchMixin):
     """deep_search orchestration + per-type automation/script/helper/dashboard/flow search."""
+
+    async def _consult_reference_graph(
+        self, query_lower: str, search_types: list[str]
+    ) -> GraphResult | None:
+        """Home Assistant's reference graph for an entity_id-shaped query.
+
+        Returns ``None`` without a round trip when the query is not an entity
+        id (the graph takes an item id, so a free-text term is a guaranteed
+        miss) or when this call requested no surface the graph can speak to.
+        ``None`` also covers a graph that could not be reached or read, and is
+        kept distinct from a successful empty answer: only the latter says
+        anything about what does not reference the entity.
+        """
+        if not _graph_applies(query_lower, search_types):
+            return None
+        return await fetch_related_buckets(self.client, query_lower)
 
     async def deep_search(
         self,
@@ -191,6 +213,23 @@ class DeepSearchMixin(SceneSearchMixin):
             # Pre-resolve unique_ids from cached entity states to avoid redundant API calls
             automation_unique_id_map = self._build_automation_uid_map(all_entities)
 
+            # Home Assistant's reference graph, for an entity_id-shaped query
+            # only (discussion #2258). Consulted BEFORE the per-id fetches so
+            # its answer can push already-confirmed configs to the back of the
+            # budget queue, and merged into the buckets after they are built.
+            # ``None`` = not consulted or unavailable, which is kept distinct
+            # from an empty graph: only a successful call licenses the partial
+            # message's claim that every non-template reference was reported.
+            graph_applicable = _graph_applies(query_lower, search_types)
+            related = await self._consult_reference_graph(query_lower, search_types)
+            # Filled by the scene branch's registry walk when it runs; used
+            # to key reference-graph scene hits by storage id rather than slug.
+            scene_storage_ids: dict[str, str] = {}
+            graph_buckets = related.buckets if related else {}
+            graph_automations = graph_buckets.get("automations", set())
+            graph_scripts = graph_buckets.get("scripts", set())
+            graph_scenes = graph_buckets.get("scenes", set())
+
             # Create semaphore for limiting concurrent API calls
             semaphore = asyncio.Semaphore(concurrency_limit)
 
@@ -240,6 +279,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     query_lower,
                     exact_match,
                     config_time_budget=config_time_budget,
+                    graph_entity_ids=graph_automations,
                 )
                 phase_done += 1
                 await safe_progress(
@@ -262,6 +302,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     query_lower,
                     exact_match,
                     config_time_budget=config_time_budget,
+                    graph_entity_ids=graph_scripts,
                 )
                 phase_done += 1
                 await safe_progress(
@@ -286,6 +327,8 @@ class DeepSearchMixin(SceneSearchMixin):
                     exact_match,
                     config_time_budget=config_time_budget,
                     prefetched_registry=prefetched_registry,
+                    storage_ids_out=scene_storage_ids,
+                    graph_entity_ids=graph_scenes,
                 )
                 phase_done += 1
                 await safe_progress(
@@ -332,6 +375,16 @@ class DeepSearchMixin(SceneSearchMixin):
                     message=f"dashboards searched ({len(results['dashboards'])} matches)",
                 )
 
+            graph_surfaces_skipped = _merge_graph_hits(
+                results,
+                related,
+                all_entities,
+                search_types,
+                lambda slug: self._resolve_scene_storage_id(
+                    {}, slug, scene_storage_ids
+                ),
+            )
+
             await _scrub_results_for_enforce(results, self.client)
 
             return self._paginate_and_build_response(
@@ -354,6 +407,10 @@ class DeepSearchMixin(SceneSearchMixin):
                 script_failed_sample=script_failed_sample,
                 helper_failed=helper_failed,
                 dashboard_failed=dashboard_failed,
+                graph_consulted=related is not None,
+                graph_dropped=related.dropped if related else None,
+                graph_surfaces_skipped=graph_surfaces_skipped,
+                graph_unavailable=(graph_applicable and related is None),
             )
 
         except ToolError:
@@ -398,12 +455,17 @@ class DeepSearchMixin(SceneSearchMixin):
         exact_match: bool,
         *,
         config_time_budget: float | None = None,
+        graph_entity_ids: set[str] | None = None,
     ) -> tuple[list[dict[str, Any]], int, int, int, int, str | None]:
-        """Deep-search automations: two-tier config fetch (REST bulk -> budgeted individual).
+        """Deep-search automations: budgeted per-id config fetch.
+
+        ``graph_entity_ids`` are automation entity_ids Home Assistant's
+        reference graph already confirmed reference the query, so their config
+        bodies are fetched LAST — see ``_individual_fetch_budgeted``.
 
         Returns ``(matches, skipped_count, failed_count, yaml_skipped_count,
-        timeout_count, failed_sample)``. ``skipped_count`` is non-zero only when bulk fetch
-        fell back to the per-id Attempt-C path AND its wall-clock budget
+        timeout_count, failed_sample)``. ``skipped_count`` is non-zero when the
+        per-id fetch's wall-clock budget
         exhausted before all configs were fetched; ``failed_count`` is
         non-zero when individual config fetches raised a non-404, non-timeout
         exception (caught at ``debug``-level); ``yaml_skipped_count`` is
@@ -445,18 +507,9 @@ class DeepSearchMixin(SceneSearchMixin):
                 )
             )
 
-        # Phase 2: bulk fetch (REST)
-        configs = await self._bulk_fetch_configs(
-            "/config/automation/config",
-            lambda item: item.get("id"),
-            BULK_REST_TIMEOUT,
-            "Automation",
-        )
-        bulk_fetched = configs is not None
-        if configs is None:
-            configs = {}
+        configs: dict[str, dict[str, Any]] = {}
 
-        # Attempt C: parallel individual REST calls with time budget (LAST RESORT)
+        # Attempt C: parallel per-id REST calls under a wall-clock budget
         skipped_count = 0
         failed_count = 0
         yaml_skipped_count = 0
@@ -468,80 +521,78 @@ class DeepSearchMixin(SceneSearchMixin):
         # (#1784 follow-up). The remaining failures are counted
         # (``failed_count``) but not summarized.
         failed_errors: list[str] = []
-        if not bulk_fetched:
-            uids_to_fetch = [
-                uid for _, _, uid, _ in scored if uid and uid not in configs
-            ]
+        uids_to_fetch = [uid for _, _, uid, _ in scored if uid]
 
-            async def _fetch_automation_config(
-                uid: str,
-            ) -> tuple[str, dict[str, Any] | None, str | None]:
-                try:
-                    config = await asyncio.wait_for(
-                        self.client._request("GET", f"/config/automation/config/{uid}"),
-                        timeout=INDIVIDUAL_CONFIG_TIMEOUT,
-                    )
-                    return (uid, config, None)
-                except HomeAssistantAPIError as e:
-                    if e.status_code == 404:
-                        # YAML-defined automations 404 on the per-id REST
-                        # endpoint by design (it only serves UI-storage
-                        # automations). Classify distinctly so the warning
-                        # explains the gap is structural, not transient.
-                        logger.debug(
-                            f"Automation individual config fetch ({uid}) "
-                            "returned 404 — likely YAML-defined; not exposed "
-                            "via /config/automation/config."
-                        )
-                        return (uid, None, "yaml_skipped")
+        async def _fetch_automation_config(
+            uid: str,
+        ) -> tuple[str, dict[str, Any] | None, str | None]:
+            try:
+                config = await asyncio.wait_for(
+                    self.client._request("GET", f"/config/automation/config/{uid}"),
+                    timeout=INDIVIDUAL_CONFIG_TIMEOUT,
+                )
+                return (uid, config, None)
+            except HomeAssistantAPIError as e:
+                if e.status_code == 404:
+                    # YAML-defined automations 404 on the per-id REST
+                    # endpoint by design (it only serves UI-storage
+                    # automations). Classify distinctly so the warning
+                    # explains the gap is structural, not transient.
                     logger.debug(
-                        f"Automation individual config fetch ({uid}) failed: {e}"
+                        f"Automation individual config fetch ({uid}) "
+                        "returned 404 — likely YAML-defined; not exposed "
+                        "via /config/automation/config."
                     )
-                    record_first_failure(failed_errors, e)
-                    return (uid, None, "failed")
-                except TimeoutError:
-                    # asyncio.wait_for hit INDIVIDUAL_CONFIG_TIMEOUT. Classify
-                    # distinctly from "failed": on servers that serialize
-                    # config reads, a batch's tail requests queue past the
-                    # timeout while still perfectly healthy (#1784).
+                    return (uid, None, "yaml_skipped")
+                logger.debug(f"Automation individual config fetch ({uid}) failed: {e}")
+                record_first_failure(failed_errors, e)
+                return (uid, None, "failed")
+            except TimeoutError:
+                # asyncio.wait_for hit INDIVIDUAL_CONFIG_TIMEOUT. Classify
+                # distinctly from "failed": on servers that serialize
+                # config reads, a batch's tail requests queue past the
+                # timeout while still perfectly healthy (#1784).
+                logger.debug(
+                    f"Automation individual config fetch ({uid}) timed "
+                    f"out after {INDIVIDUAL_CONFIG_TIMEOUT}s."
+                )
+                return (uid, None, "timeout")
+            except Exception as e:
+                if is_timeout_error(e):
+                    # The REST client's own httpx timeout (HA_TIMEOUT)
+                    # fired first and arrived wrapped in a
+                    # HomeAssistantConnectionError — still a timeout,
+                    # not a failure. See is_timeout_error.
                     logger.debug(
-                        f"Automation individual config fetch ({uid}) timed "
-                        f"out after {INDIVIDUAL_CONFIG_TIMEOUT}s."
+                        f"Automation individual config fetch ({uid}) "
+                        f"timed out (client-side HTTP timeout): {e}"
                     )
                     return (uid, None, "timeout")
-                except Exception as e:
-                    if is_timeout_error(e):
-                        # The REST client's own httpx timeout (HA_TIMEOUT)
-                        # fired first and arrived wrapped in a
-                        # HomeAssistantConnectionError — still a timeout,
-                        # not a failure. See is_timeout_error.
-                        logger.debug(
-                            f"Automation individual config fetch ({uid}) "
-                            f"timed out (client-side HTTP timeout): {e}"
-                        )
-                        return (uid, None, "timeout")
-                    logger.debug(
-                        f"Automation individual config fetch ({uid}) failed: {e}"
-                    )
-                    record_first_failure(failed_errors, e)
-                    return (uid, None, "failed")
+                logger.debug(f"Automation individual config fetch ({uid}) failed: {e}")
+                record_first_failure(failed_errors, e)
+                return (uid, None, "failed")
 
-            (
-                fetched_configs,
-                failed_count,
-                skipped_count,
-                yaml_skipped_count,
-                timeout_count,
-            ) = await self._individual_fetch_budgeted(
-                uids_to_fetch,
-                _fetch_automation_config,
-                config_time_budget
-                if config_time_budget is not None
-                else AUTOMATION_CONFIG_TIME_BUDGET,
-                "Automation",
-                "automations",
-            )
-            configs.update(fetched_configs)
+        (
+            fetched_configs,
+            failed_count,
+            skipped_count,
+            yaml_skipped_count,
+            timeout_count,
+        ) = await self._individual_fetch_budgeted(
+            uids_to_fetch,
+            _fetch_automation_config,
+            config_time_budget
+            if config_time_budget is not None
+            else AUTOMATION_CONFIG_TIME_BUDGET,
+            "Automation",
+            "automations",
+            deprioritize={
+                uid
+                for entity_id in graph_entity_ids or ()
+                if (uid := automation_unique_id_map.get(entity_id))
+            },
+        )
+        configs.update(fetched_configs)
 
         # Phase 3: Score with whatever configs we have
         matches = [
@@ -551,6 +602,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 "score": m["score"],
                 "match_in_name": m["match_in_name"],
                 "match_in_config": m["match_in_config"],
+                "match_in_references": False,
                 "config": m["config"] if m["config"] else None,
             }
             for m in self._score_config_entries(
@@ -573,8 +625,9 @@ class DeepSearchMixin(SceneSearchMixin):
         exact_match: bool,
         *,
         config_time_budget: float | None = None,
+        graph_entity_ids: set[str] | None = None,
     ) -> tuple[list[dict[str, Any]], int, int, int, int, str | None]:
-        """Deep-search scripts: same two-tier strategy as automations.
+        """Deep-search scripts: same per-id fetch strategy as automations.
 
         Returns ``(matches, skipped_count, failed_count, yaml_skipped_count,
         timeout_count, failed_sample)``; semantics identical to ``_deep_search_automations``
@@ -597,18 +650,7 @@ class DeepSearchMixin(SceneSearchMixin):
             )
             scored.append((entity_id, friendly_name, script_id, name_score))
 
-        # Phase 2: bulk fetch
-        configs = await self._bulk_fetch_configs(
-            "/config/script/config",
-            lambda item: (
-                item.get("id") or item.get("alias", "").lower().replace(" ", "_")
-            ),
-            INDIVIDUAL_CONFIG_TIMEOUT,
-            "Script",
-        )
-        bulk_fetched = configs is not None
-        if configs is None:
-            configs = {}
+        configs: dict[str, dict[str, Any]] = {}
 
         # Attempt C: parallel individual fetch with budget (see #879)
         skipped_count = 0
@@ -622,71 +664,72 @@ class DeepSearchMixin(SceneSearchMixin):
         # (#1784 follow-up). The remaining failures are counted
         # (``failed_count``) but not summarized.
         failed_errors: list[str] = []
-        if not bulk_fetched:
-            sids_to_fetch = [
-                sid for _, _, sid, _ in scored if sid and sid not in configs
-            ]
+        sids_to_fetch = [sid for _, _, sid, _ in scored if sid]
 
-            async def _fetch_script_config(
-                sid: str,
-            ) -> tuple[str, dict[str, Any] | None, str | None]:
-                try:
-                    config_resp = await asyncio.wait_for(
-                        self.client.get_script_config(sid),
-                        timeout=INDIVIDUAL_CONFIG_TIMEOUT,
-                    )
-                    return (sid, config_resp.get("config", {}), None)
-                except HomeAssistantAPIError as e:
-                    if e.status_code == 404:
-                        # YAML-defined scripts 404 on the per-id REST endpoint.
-                        # See _fetch_automation_config for the rationale; same
-                        # structural-gap class.
-                        logger.debug(
-                            f"Script individual config fetch ({sid}) returned "
-                            "404 — likely YAML-defined; not exposed via "
-                            "/config/script/config."
-                        )
-                        return (sid, None, "yaml_skipped")
-                    logger.debug(f"Script individual config fetch ({sid}) failed: {e}")
-                    record_first_failure(failed_errors, e)
-                    return (sid, None, "failed")
-                except TimeoutError:
-                    # See _fetch_automation_config: per-request timeout under
-                    # batch concurrency, distinct from a real failure (#1784).
+        async def _fetch_script_config(
+            sid: str,
+        ) -> tuple[str, dict[str, Any] | None, str | None]:
+            try:
+                config_resp = await asyncio.wait_for(
+                    self.client.get_script_config(sid),
+                    timeout=INDIVIDUAL_CONFIG_TIMEOUT,
+                )
+                return (sid, config_resp.get("config", {}), None)
+            except HomeAssistantAPIError as e:
+                if e.status_code == 404:
+                    # YAML-defined scripts 404 on the per-id REST endpoint.
+                    # See _fetch_automation_config for the rationale; same
+                    # structural-gap class.
                     logger.debug(
-                        f"Script individual config fetch ({sid}) timed out "
-                        f"after {INDIVIDUAL_CONFIG_TIMEOUT}s."
+                        f"Script individual config fetch ({sid}) returned "
+                        "404 — likely YAML-defined; not exposed via "
+                        "/config/script/config."
+                    )
+                    return (sid, None, "yaml_skipped")
+                logger.debug(f"Script individual config fetch ({sid}) failed: {e}")
+                record_first_failure(failed_errors, e)
+                return (sid, None, "failed")
+            except TimeoutError:
+                # See _fetch_automation_config: per-request timeout under
+                # batch concurrency, distinct from a real failure (#1784).
+                logger.debug(
+                    f"Script individual config fetch ({sid}) timed out "
+                    f"after {INDIVIDUAL_CONFIG_TIMEOUT}s."
+                )
+                return (sid, None, "timeout")
+            except Exception as e:
+                if is_timeout_error(e):
+                    # Client-side HTTP timeout arrived wrapped; still a
+                    # timeout. See _fetch_automation_config.
+                    logger.debug(
+                        f"Script individual config fetch ({sid}) timed "
+                        f"out (client-side HTTP timeout): {e}"
                     )
                     return (sid, None, "timeout")
-                except Exception as e:
-                    if is_timeout_error(e):
-                        # Client-side HTTP timeout arrived wrapped; still a
-                        # timeout. See _fetch_automation_config.
-                        logger.debug(
-                            f"Script individual config fetch ({sid}) timed "
-                            f"out (client-side HTTP timeout): {e}"
-                        )
-                        return (sid, None, "timeout")
-                    logger.debug(f"Script individual config fetch ({sid}) failed: {e}")
-                    record_first_failure(failed_errors, e)
-                    return (sid, None, "failed")
+                logger.debug(f"Script individual config fetch ({sid}) failed: {e}")
+                record_first_failure(failed_errors, e)
+                return (sid, None, "failed")
 
-            (
-                fetched_configs,
-                failed_count,
-                skipped_count,
-                yaml_skipped_count,
-                timeout_count,
-            ) = await self._individual_fetch_budgeted(
-                sids_to_fetch,
-                _fetch_script_config,
-                config_time_budget
-                if config_time_budget is not None
-                else SCRIPT_CONFIG_TIME_BUDGET,
-                "Script",
-                "scripts",
-            )
-            configs.update(fetched_configs)
+        (
+            fetched_configs,
+            failed_count,
+            skipped_count,
+            yaml_skipped_count,
+            timeout_count,
+        ) = await self._individual_fetch_budgeted(
+            sids_to_fetch,
+            _fetch_script_config,
+            config_time_budget
+            if config_time_budget is not None
+            else SCRIPT_CONFIG_TIME_BUDGET,
+            "Script",
+            "scripts",
+            deprioritize={
+                entity_id.removeprefix("script.")
+                for entity_id in graph_entity_ids or ()
+            },
+        )
+        configs.update(fetched_configs)
 
         # Phase 3: Score scripts
         matches = [
@@ -697,6 +740,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 "score": m["score"],
                 "match_in_name": m["match_in_name"],
                 "match_in_config": m["match_in_config"],
+                "match_in_references": False,
                 "config": m["config"] if m["config"] else None,
             }
             for m in self._score_config_entries(
@@ -843,6 +887,11 @@ class DeepSearchMixin(SceneSearchMixin):
                                 "score": total_score,
                                 "match_in_name": match_in_name,
                                 "match_in_config": config_match_score >= threshold,
+                                # Helpers are not a search/related item type,
+                                # so this is always False here. Emitted anyway
+                                # so every config record carries the key and a
+                                # caller never has to probe for it.
+                                "match_in_references": False,
                                 "config": helper,
                             }
                         )
@@ -1038,6 +1087,9 @@ class DeepSearchMixin(SceneSearchMixin):
                 "dashboard_title": title,
                 "score": 100,
                 "match_in_config": True,
+                # Dashboards are not a search/related item type, so this is
+                # always False; emitted so every config record carries the key.
+                "match_in_references": False,
             }
         return list(records.values()), failed
 
@@ -1113,6 +1165,7 @@ class DeepSearchMixin(SceneSearchMixin):
                             "dashboard_title": title,
                             "score": config_score,
                             "match_in_config": True,
+                            "match_in_references": False,
                             "config": config,
                         }
                     ], False
@@ -1210,6 +1263,10 @@ class DeepSearchMixin(SceneSearchMixin):
         script_failed_sample: str | None = None,
         helper_failed: int = 0,
         dashboard_failed: int = 0,
+        graph_consulted: bool = False,
+        graph_dropped: dict[str, set[str]] | None = None,
+        graph_surfaces_skipped: set[str] | None = None,
+        graph_unavailable: bool = False,
     ) -> dict[str, Any]:
         """Merge per-type results, sort by score, paginate, and assemble the response."""
         tagged_results: list[tuple[str, dict[str, Any]]] = []
@@ -1262,6 +1319,16 @@ class DeepSearchMixin(SceneSearchMixin):
         self._apply_scene_partial_flag(response, scene_stats)
         self._apply_per_type_partial_flag(
             response,
+            # Scenes are a graph bucket too, so a scene-only search whose
+            # configs all failed must still get the scope sentence explaining
+            # that plain references were covered anyway. Without this the
+            # caller reads the scene "not scanned" fragment with no statement
+            # of what the graph still accounted for.
+            scene_body_incomplete=bool(
+                scene_stats.get("skipped")
+                or scene_stats.get("failed")
+                or scene_stats.get("timeout")
+            ),
             automation_skipped=automation_skipped,
             script_skipped=script_skipped,
             automation_failed=automation_failed,
@@ -1274,6 +1341,10 @@ class DeepSearchMixin(SceneSearchMixin):
             script_failed_sample=script_failed_sample,
             helper_failed=helper_failed,
             dashboard_failed=dashboard_failed,
+            graph_consulted=graph_consulted,
+            graph_dropped=graph_dropped,
+            graph_surfaces_skipped=graph_surfaces_skipped,
+            graph_unavailable=graph_unavailable,
         )
         return response
 
@@ -1293,6 +1364,11 @@ class DeepSearchMixin(SceneSearchMixin):
         script_failed_sample: str | None = None,
         helper_failed: int = 0,
         dashboard_failed: int = 0,
+        graph_consulted: bool = False,
+        graph_dropped: dict[str, set[str]] | None = None,
+        graph_surfaces_skipped: set[str] | None = None,
+        graph_unavailable: bool = False,
+        scene_body_incomplete: bool = False,
     ) -> None:
         """Set ``partial: True`` when the deep-search per-type fetch path lost
         data — either the Attempt-C wall-clock budget exhausted
@@ -1304,6 +1380,12 @@ class DeepSearchMixin(SceneSearchMixin):
         serialize config reads a concurrent batch's tail queues past the
         timeout while perfectly healthy, so the wording points at the
         batch-size/timeout knobs rather than at the entities, #1784).
+        The ``graph_*`` parameters carry the reference-graph disclosures
+        built by :func:`_graph_partial_reasons`: whether the graph answered,
+        what it named that this server does not model, what it named on a
+        surface ``search_types`` excluded, and whether it was unreachable on a
+        query it applies to.
+
         ``helper_failed`` / ``dashboard_failed`` cover the helper- and
         dashboard-list/config backends, whose per-unit ``except`` blocks
         would otherwise swallow a backend outage to an empty list with no
@@ -1377,7 +1459,14 @@ class DeepSearchMixin(SceneSearchMixin):
                     "is not exhaustive. Pass `config_time_budget=` on "
                     "`ha_search` to raise the per-call limit (or, for the "
                     f"default, set {budget_env} or the matching field in "
-                    "the web Settings UI's Advanced section)."
+                    "the web Settings UI's Advanced section). That trades "
+                    "latency for completeness rather than removing the cost: "
+                    "Home Assistant serializes these per-id config reads, so "
+                    "the ceiling is its throughput, and on a large instance "
+                    "the budget needed can exceed what a caller will wait "
+                    "for. Installing the HA-MCP Custom Component removes the "
+                    "per-id fetches entirely by reading the loaded config "
+                    "in-process."
                 )
             if failed:
                 # Name ONE representative error inline when the fetch path
@@ -1417,6 +1506,25 @@ class DeepSearchMixin(SceneSearchMixin):
                     "HAMCP_INDIVIDUAL_CONFIG_TIMEOUT (or the matching fields "
                     "in the web Settings UI's Advanced section)."
                 )
+        reasons.extend(
+            _graph_partial_reasons(
+                graph_consulted=graph_consulted,
+                graph_dropped=graph_dropped,
+                graph_surfaces_skipped=graph_surfaces_skipped,
+                graph_unavailable=graph_unavailable,
+                body_scan_incomplete=scene_body_incomplete
+                or bool(
+                    automation_skipped
+                    or automation_failed
+                    or automation_yaml_skipped
+                    or automation_timeout
+                    or script_skipped
+                    or script_failed
+                    or script_yaml_skipped
+                    or script_timeout
+                ),
+            )
+        )
         if helper_failed:
             reasons.append(
                 f"{helper_failed} helper backend(s) not scanned (per-type list, "
@@ -1606,6 +1714,9 @@ class DeepSearchMixin(SceneSearchMixin):
             "score": total_score,
             "match_in_name": match_in_name,
             "match_in_config": config_score >= threshold,
+            # See the collection-helper builder: always False for helpers,
+            # emitted so the key is present on every config record.
+            "match_in_references": False,
         }
         if include_config:
             result["config"] = options

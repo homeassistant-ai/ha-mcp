@@ -62,8 +62,8 @@ class TestAttemptCParallelFetch:
     def mock_client(self):
         client = MagicMock()
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        # Bulk fetch fails (triggers Tier 3)
-        client._request = AsyncMock(side_effect=Exception("Bulk fetch unavailable"))
+        # Per-id fetch fails
+        client._request = AsyncMock(side_effect=Exception("config fetch unavailable"))
         client.send_websocket_message = AsyncMock(
             side_effect=Exception("WebSocket unavailable")
         )
@@ -181,8 +181,6 @@ class TestAttemptCParallelFetch:
         async def _slow_fetch(method: str, url: str) -> dict:
             nonlocal call_count
             uid = url.rsplit("/", maxsplit=1)[-1]
-            if url.rstrip("/") == "/config/automation/config":
-                raise Exception("Bulk unavailable")
             call_count += 1
             await asyncio.sleep(0.01)  # Minimal sleep to yield control
             return {"id": uid, "action": []}
@@ -272,18 +270,16 @@ class TestAttemptCParallelFetch:
             return {"id": "x", "config": {}, "action": []}
 
         if search_type == "automation":
-            # `_request` covers both the bulk-fetch URL (must raise to force
-            # Tier 3) and the per-id URL (must count). Discriminate by path.
+            # `_request` serves the per-id config URL, which is the only
+            # config fetch left now the bulk tier is gone. One shape per id.
             async def _auto_request(method: str, url: str) -> dict:
-                if url.rstrip("/") == "/config/automation/config":
-                    raise Exception("Bulk unavailable")
                 return await _count_individual()
 
             mock_client._request = AsyncMock(side_effect=_auto_request)
         else:
             # Script/scene per-id calls go through a dedicated client method;
             # the fixture's `_request`/`send_websocket_message` exceptions
-            # already block their bulk-fetch and registry-walk tiers.
+            # already block their registry walk.
             async def _typed_individual(sid: str) -> dict:
                 return await _count_individual()
 
@@ -316,7 +312,7 @@ class TestAttemptCScriptParallelFetch:
     def mock_client(self):
         client = MagicMock()
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        client._request = AsyncMock(side_effect=Exception("Bulk fetch unavailable"))
+        client._request = AsyncMock(side_effect=Exception("config fetch unavailable"))
         client.send_websocket_message = AsyncMock(
             side_effect=Exception("WebSocket unavailable")
         )
@@ -415,7 +411,7 @@ class TestYamlSkippedClassification:
         client = MagicMock()
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
         # Bulk fetch fails (triggers Tier 3 per-id fallback).
-        client._request = AsyncMock(side_effect=Exception("Bulk fetch unavailable"))
+        client._request = AsyncMock(side_effect=Exception("config fetch unavailable"))
         client.send_websocket_message = AsyncMock(
             side_effect=Exception("WebSocket unavailable")
         )
@@ -450,8 +446,6 @@ class TestYamlSkippedClassification:
             # Bulk URL stays at the fixture's generic Exception (drives
             # fallback to Attempt C); per-id URL returns 404 like the
             # live HA REST API does for YAML-defined automations.
-            if url.rstrip("/") == "/config/automation/config":
-                raise Exception("Bulk fetch unavailable")
             raise HomeAssistantAPIError(
                 f"API error: 404 - Not Found ({url})", status_code=404
             )
@@ -513,8 +507,6 @@ class TestYamlSkippedClassification:
         mock_client.get_states = AsyncMock(return_value=automations)
 
         async def _per_id_mixed(method: str, url: str) -> dict:
-            if url.rstrip("/") == "/config/automation/config":
-                raise Exception("Bulk fetch unavailable")
             if url.endswith("uid_500"):
                 raise HomeAssistantAPIError(
                     "API error: 500 - Internal Server Error", status_code=500
@@ -566,8 +558,6 @@ class TestYamlSkippedClassification:
         mock_client.get_states = AsyncMock(return_value=automations)
 
         async def _per_id_none_status(method: str, url: str) -> dict:
-            if url.rstrip("/") == "/config/automation/config":
-                raise Exception("Bulk fetch unavailable")
             # status_code defaults to None — not an explicit 404.
             raise HomeAssistantAPIError("API error: connection reset")
 
@@ -669,8 +659,6 @@ class TestYamlSkippedClassification:
         mock_client.get_states = AsyncMock(return_value=automations)
 
         async def _mixed_per_id(method: str, url: str) -> dict:
-            if url.rstrip("/") == "/config/automation/config":
-                raise Exception("Bulk fetch unavailable")
             if url.endswith("uid_ui_one"):
                 # The query token lives only here, inside the config body.
                 return {
@@ -742,7 +730,7 @@ class TestYamlSkippedThroughDeepSearch:
         client = MagicMock()
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
         # Bulk fetch fails (triggers Tier 3 per-id fallback).
-        client._request = AsyncMock(side_effect=Exception("Bulk fetch unavailable"))
+        client._request = AsyncMock(side_effect=Exception("config fetch unavailable"))
         client.send_websocket_message = AsyncMock(
             side_effect=Exception("WebSocket unavailable")
         )
@@ -781,8 +769,6 @@ class TestYamlSkippedThroughDeepSearch:
         mock_client.get_states = AsyncMock(return_value=automations)
 
         async def _per_id_404(method: str, url: str) -> dict:
-            if url.rstrip("/") == "/config/automation/config":
-                raise Exception("Bulk fetch unavailable")
             raise HomeAssistantAPIError(
                 f"API error: 404 - Not Found ({url})", status_code=404
             )
@@ -880,7 +866,7 @@ class TestTimeoutClassification:
         client = MagicMock()
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
         # Bulk fetch fails (triggers Tier 3 per-id fallback).
-        client._request = AsyncMock(side_effect=Exception("Bulk fetch unavailable"))
+        client._request = AsyncMock(side_effect=Exception("config fetch unavailable"))
         client.send_websocket_message = AsyncMock(
             side_effect=Exception("WebSocket unavailable")
         )
@@ -911,8 +897,6 @@ class TestTimeoutClassification:
         mock_client.get_states = AsyncMock(return_value=automations)
 
         async def _slow_per_id(method: str, url: str) -> dict:
-            if url.rstrip("/") == "/config/automation/config":
-                raise Exception("Bulk fetch unavailable")
             # Healthy but slow — the serialized-server shape from #1784:
             # the request WOULD return 200, it just outlives the timeout.
             await asyncio.sleep(0.2)
@@ -1016,8 +1000,6 @@ class TestTimeoutClassification:
         mock_client.get_states = AsyncMock(return_value=automations)
 
         async def _slow_per_id(method: str, url: str) -> dict:
-            if url.rstrip("/") == "/config/automation/config":
-                raise Exception("Bulk fetch unavailable")
             await asyncio.sleep(0.2)
             return {"id": url.rsplit("/", 1)[-1], "alias": "slow"}
 
@@ -1069,7 +1051,7 @@ class TestSceneTimeoutClassification:
         client = MagicMock()
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
         # Bulk fetch + registry walk fail (triggers Tier 3, attempt-all).
-        client._request = AsyncMock(side_effect=Exception("Bulk fetch unavailable"))
+        client._request = AsyncMock(side_effect=Exception("config fetch unavailable"))
         client.send_websocket_message = AsyncMock(
             side_effect=Exception("WebSocket unavailable")
         )
@@ -1191,7 +1173,7 @@ class TestWrappedClientTimeoutClassification:
     def mock_client(self):
         client = MagicMock()
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        client._request = AsyncMock(side_effect=Exception("Bulk fetch unavailable"))
+        client._request = AsyncMock(side_effect=Exception("config fetch unavailable"))
         client.send_websocket_message = AsyncMock(
             side_effect=Exception("WebSocket unavailable")
         )
@@ -1229,8 +1211,6 @@ class TestWrappedClientTimeoutClassification:
         mock_client.get_states = AsyncMock(return_value=automations)
 
         async def _wrapped_timeout(method: str, url: str) -> dict:
-            if url.rstrip("/") == "/config/automation/config":
-                raise Exception("Bulk fetch unavailable")
             try:
                 raise httpx.ReadTimeout("timed out")
             except httpx.ReadTimeout as cause:
@@ -1278,8 +1258,6 @@ class TestWrappedClientTimeoutClassification:
         mock_client.get_states = AsyncMock(return_value=automations)
 
         async def _refused(method: str, url: str) -> dict:
-            if url.rstrip("/") == "/config/automation/config":
-                raise Exception("Bulk fetch unavailable")
             raise HomeAssistantConnectionError(
                 "Failed to connect to Home Assistant: refused"
             )
@@ -1463,7 +1441,7 @@ class TestFailedSampleThroughDeepSearch:
         client = MagicMock()
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
         # Bulk fetch fails (triggers Tier 3 per-id fallback).
-        client._request = AsyncMock(side_effect=Exception("Bulk fetch unavailable"))
+        client._request = AsyncMock(side_effect=Exception("config fetch unavailable"))
         client.send_websocket_message = AsyncMock(
             side_effect=Exception("WebSocket unavailable")
         )
@@ -1498,8 +1476,6 @@ class TestFailedSampleThroughDeepSearch:
         mock_client.get_states = AsyncMock(return_value=automations)
 
         async def _per_id_500(method: str, url: str) -> dict:
-            if url.rstrip("/") == "/config/automation/config":
-                raise Exception("Bulk fetch unavailable")
             # aiohttp's generic production 500 body — the realistic sample for
             # the ``!secret`` scenario (the cause is HA-log-only).
             raise HomeAssistantAPIError(
@@ -1535,8 +1511,6 @@ class TestFailedSampleThroughDeepSearch:
         mock_client.get_states = AsyncMock(return_value=automations)
 
         async def _per_id_boom(method: str, url: str) -> dict:
-            if url.rstrip("/") == "/config/automation/config":
-                raise Exception("Bulk fetch unavailable")
             raise RuntimeError("generic explosion")
 
         mock_client._request = AsyncMock(side_effect=_per_id_boom)
@@ -1606,8 +1580,6 @@ class TestFailedSampleThroughDeepSearch:
         mock_client.get_states = AsyncMock(return_value=automations)
 
         async def _per_id_mixed(method: str, url: str) -> dict:
-            if url.rstrip("/") == "/config/automation/config":
-                raise Exception("Bulk fetch unavailable")
             if url.endswith("uid_one"):
                 raise HomeAssistantAPIError(
                     "API error: 404 - Not Found", status_code=404
@@ -1800,8 +1772,6 @@ class TestFailedSampleThroughDeepSearch:
         mock_client.get_states = AsyncMock(return_value=automations)
 
         async def _per_id_500(method: str, url: str) -> dict:
-            if url.rstrip("/") == "/config/automation/config":
-                raise Exception("Bulk fetch unavailable")
             raise HomeAssistantAPIError(
                 "API error: 500 - 500 Internal Server Error", status_code=500
             )
