@@ -2292,8 +2292,9 @@ def _already_decided_cases() -> list[tuple[str, str]]:
     """
     from ha_mcp.policy.approval_queue import Decision
     from ha_mcp.settings_ui._i18n import CATALOGS, DEFAULT_LOCALE
+    from ha_mcp.settings_ui._locale_policy import BEST_EFFORT_LOCALES
 
-    locales = sorted(set(CATALOGS) - {DEFAULT_LOCALE})
+    locales = sorted(set(CATALOGS) - {DEFAULT_LOCALE} - BEST_EFFORT_LOCALES)
     outcomes = sorted(set(get_args(Decision)) - {"pending"})
     # Both sides are discovered, so either emptying out collects zero cases
     # and the class below passes without driving the handler once.
@@ -2306,6 +2307,14 @@ def _already_decided_cases() -> list[tuple[str, str]]:
         "cases drive cannot be reached, so either the branch or this is dead"
     )
     return [(locale, outcome) for locale in locales for outcome in outcomes]
+
+
+def test_best_effort_locales_are_outside_hard_js_copy_cases() -> None:
+    from ha_mcp.settings_ui._locale_policy import BEST_EFFORT_LOCALES
+
+    assert BEST_EFFORT_LOCALES.isdisjoint(
+        locale for locale, _ in _already_decided_cases()
+    )
 
 
 class TestAlreadyDecidedCopy:

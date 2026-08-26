@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from collections import Counter
@@ -25,11 +26,20 @@ from ha_mcp.settings_ui._i18n import (
     select_locale,
     serialize_payload,
 )
+from ha_mcp.settings_ui._locale_policy import BEST_EFFORT_LOCALES
 
 
 def _shipped_locales() -> list[str]:
     """Registered catalog codes except English, which has no translations."""
-    return sorted(code for code in CATALOGS if code != DEFAULT_LOCALE)
+    return sorted(
+        code
+        for code in CATALOGS
+        if code != DEFAULT_LOCALE and code not in BEST_EFFORT_LOCALES
+    )
+
+
+def test_best_effort_catalogs_are_outside_hard_locale_gates() -> None:
+    assert BEST_EFFORT_LOCALES.isdisjoint(_shipped_locales())
 
 
 def _catalog_file(locale: str) -> str:
@@ -75,6 +85,33 @@ def test_catalogs_are_discovered_without_registration(tmp_path: Path) -> None:
 
     assert sorted(catalogs) == ["en", "it"]
     assert build_payload("it", catalogs)["messages"]["a"] == "Uno"
+
+
+@pytest.mark.parametrize(
+    "payload", [b"{not json", b"[]", b"\xff"], ids=["json", "shape", "utf8"]
+)
+def test_invalid_best_effort_catalog_warns_without_blocking_other_locales(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    payload: bytes,
+) -> None:
+    _write_catalog(tmp_path, "en", native_name="English", messages={"a": "A"})
+    _write_catalog(tmp_path, "de", native_name="Deutsch", messages={"a": "Eins"})
+    (tmp_path / "tlh.json").write_bytes(payload)
+
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui._i18n"):
+        catalogs = load_catalogs(tmp_path)
+
+    assert sorted(catalogs) == ["de", "en"]
+    assert "Skipping best-effort locale tlh" in caplog.text
+
+
+def test_invalid_strict_catalog_still_blocks_loading(tmp_path: Path) -> None:
+    _write_catalog(tmp_path, "en", native_name="English", messages={"a": "A"})
+    (tmp_path / "de.json").write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(ImportError, match=r"de\.json"):
+        load_catalogs(tmp_path)
 
 
 def test_incomplete_catalog_falls_back_to_english(tmp_path: Path) -> None:
@@ -421,15 +458,26 @@ def test_native_names_name_their_own_language() -> None:
 
 
 def test_tlh_catalog_loads_and_is_registered() -> None:
-    from ha_mcp.settings_ui._i18n import CATALOGS
-
-    assert "tlh" in CATALOGS
-    assert CATALOGS["tlh"]["meta"]["native_name"] == "tlhIngan Hol (Klingon)"
-    assert CATALOGS["tlh"]["meta"]["dir"] == "ltr"
-    assert CATALOGS["tlh"]["messages"]
-    assert CATALOGS["tlh"]["messages"]["actions.save"] == "pol"
-    assert CATALOGS["tlh"]["tool_groups"]
-    assert CATALOGS["tlh"]["tools"]
+    catalog = CATALOGS.get("tlh")
+    issues: list[str] = []
+    if catalog is None:
+        issues.append("catalog did not load or register")
+    else:
+        messages = catalog["messages"]
+        expected = {
+            "meta.native_name": catalog["meta"]["native_name"]
+            == "tlhIngan Hol (Klingon)",
+            "meta.dir": catalog["meta"]["dir"] == "ltr",
+            "messages": bool(messages),
+            "messages.actions.save": messages.get("actions.save") == "pol",
+            "tool_groups": bool(catalog["tool_groups"]),
+            "tools": bool(catalog["tools"]),
+        }
+        issues.extend(label for label, valid in expected.items() if not valid)
+    if issues:
+        logging.getLogger(__name__).warning(
+            "best-effort locale tlh: %s", ", ".join(issues)
+        )
 
 
 def test_disallowed_inline_markup_is_rejected(tmp_path: Path) -> None:
@@ -696,6 +744,8 @@ def _assert_catalog_words(prefix: str, values: list[str], what: str) -> None:
 
     for locale, catalog in sorted(CATALOGS.items()):
         messages = catalog["messages"]
+        if locale in BEST_EFFORT_LOCALES:
+            continue
         missing = [key for value in values if (key := prefix + value) not in messages]
         assert not missing, (
             f"{_catalog_file(locale)} is missing {missing}. The page payload "

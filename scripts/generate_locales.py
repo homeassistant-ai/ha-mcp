@@ -21,6 +21,11 @@ key and field the text is resolved in override order:
 A locale that lacks a key falls back to English, mirroring the settings UI's
 own per-key fallback, so every generated catalog is structurally complete.
 
+Best-effort locales are still generated when their canonical catalog is valid.
+If one is invalid, generation uses an empty override map (therefore English
+fallback), and ``--check`` reports any best-effort output drift as a warning
+instead of returning failure.
+
 ``FEATURE_META`` (the settings UI's English fallback for feature rows, and
 the row order) is generated from ``en.json``'s ``features.*`` keys between
 marker comments in ``settings.js``.
@@ -43,6 +48,7 @@ from pathlib import Path
 import yaml  # type: ignore[import-untyped]
 
 from ha_mcp.settings_ui._i18n import _validate_string_map
+from ha_mcp.settings_ui._locale_policy import is_best_effort_locale
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCALES_DIR = REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
@@ -67,10 +73,22 @@ def load_catalogs() -> dict[str, dict[str, str]]:
     """
     catalogs: dict[str, dict[str, str]] = {}
     for path in sorted(LOCALES_DIR.glob("*.json")):
-        data = json.loads(path.read_text(encoding="utf-8"))
-        catalogs[path.stem] = _validate_string_map(
-            data.get("messages"), context=f"{path.name}.messages"
-        )
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError(f"{path.name} must contain a JSON object")
+            catalogs[path.stem] = _validate_string_map(
+                data.get("messages"), context=f"{path.name}.messages"
+            )
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            if not is_best_effort_locale(path.stem):
+                raise
+            print(
+                f"::warning file={path}::Using English fallback for best-effort "
+                f"locale {path.stem} because its catalog is invalid: {exc}",
+                file=sys.stderr,
+            )
+            catalogs[path.stem] = {}
     if "en" not in catalogs:
         raise SystemExit(f"no en.json in {LOCALES_DIR}")
     return catalogs
@@ -211,13 +229,39 @@ def generated_files() -> dict[Path, str]:
     return outputs
 
 
+def _committed_text(path: Path) -> str:
+    """Read generated output, tolerating corrupt best-effort locale bytes."""
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeError as exc:
+        if not is_best_effort_locale(path.stem):
+            raise
+        relative = path.relative_to(REPO_ROOT)
+        print(
+            f"::warning file={relative}::best-effort locale output is not "
+            f"valid UTF-8 and will be treated as stale: {exc}",
+            file=sys.stderr,
+        )
+        return ""
+
+
 def check() -> int:
     """Exit 1 naming every derived file that no longer matches the canon."""
     stale: list[str] = []
     for path, content in generated_files().items():
-        committed = path.read_text(encoding="utf-8") if path.exists() else ""
+        committed = _committed_text(path)
         if committed != content:
-            stale.append(str(path.relative_to(REPO_ROOT)))
+            relative = str(path.relative_to(REPO_ROOT))
+            if is_best_effort_locale(path.stem):
+                print(
+                    f"::warning file={relative}::best-effort locale output is "
+                    "out of sync; run python scripts/generate_locales.py to refresh it",
+                    file=sys.stderr,
+                )
+            else:
+                stale.append(relative)
             diff = difflib.unified_diff(
                 committed.splitlines()[:20],
                 content.splitlines()[:20],
@@ -239,7 +283,7 @@ def check() -> int:
 def write() -> int:
     changed = 0
     for path, content in generated_files().items():
-        if not path.exists() or path.read_text(encoding="utf-8") != content:
+        if _committed_text(path) != content:
             path.write_text(content, encoding="utf-8", newline="\n")
             changed += 1
             print(f"wrote {path.relative_to(REPO_ROOT)}")

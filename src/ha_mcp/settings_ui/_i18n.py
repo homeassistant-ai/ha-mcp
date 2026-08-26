@@ -8,10 +8,15 @@ individual translations may be incomplete and safely inherit missing values.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
+
+from ._locale_policy import is_best_effort_locale
+
+_LOGGER = logging.getLogger(__name__)
 
 DEFAULT_LOCALE = "en"
 LOCALE_COOKIE = "ha_mcp_locale"
@@ -87,6 +92,48 @@ def _validate_tools(value: Any, *, context: str) -> dict[str, dict[str, str]]:
     return result
 
 
+def _load_catalog_file(path: Path) -> dict[str, Any]:
+    """Load and validate one catalog without coupling it to its siblings."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ImportError(f"Invalid settings UI locale catalog: {path}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError(f"Locale catalog {path} must contain a JSON object")
+
+    meta = raw.get("meta")
+    if not isinstance(meta, dict):
+        raise ValueError(f"Locale catalog {path} must define a meta object")
+    native_name = meta.get("native_name")
+    direction = meta.get("dir", "ltr")
+    if not isinstance(native_name, str) or not native_name.strip():
+        raise ValueError(f"Locale catalog {path} needs meta.native_name")
+    if direction not in ("ltr", "rtl"):
+        raise ValueError(f"Locale catalog {path} meta.dir must be ltr or rtl")
+
+    unknown_sections = set(raw) - {"meta", "messages", "tool_groups", "tools"}
+    if unknown_sections:
+        raise ValueError(
+            f"Locale catalog {path} has unsupported sections: "
+            f"{sorted(unknown_sections)}"
+        )
+
+    return {
+        "meta": {"native_name": native_name, "dir": direction},
+        "messages": _validate_string_map(
+            raw.get("messages"), context=f"{path.name}.messages"
+        ),
+        "tool_groups": _validate_string_map(
+            raw.get("tool_groups"), context=f"{path.name}.tool_groups"
+        ),
+        "tools": _validate_tools(raw.get("tools"), context=f"{path.name}.tools"),
+    }
+
+
+def _warn_best_effort_catalog(locale: str, path: Path, exc: Exception) -> None:
+    _LOGGER.warning("Skipping best-effort locale %s from %s: %s", locale, path, exc)
+
+
 def load_catalogs(
     directory: Path = LOCALES_DIR, settings_html: Path = _SETTINGS_HTML
 ) -> dict[str, dict[str, Any]]:
@@ -106,47 +153,38 @@ def load_catalogs(
     for path in paths:
         locale = path.stem.lower().replace("_", "-")
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ImportError(f"Invalid settings UI locale catalog: {path}") from exc
-        if not isinstance(raw, dict):
-            raise ValueError(f"Locale catalog {path} must contain a JSON object")
-
-        meta = raw.get("meta")
-        if not isinstance(meta, dict):
-            raise ValueError(f"Locale catalog {path} must define a meta object")
-        native_name = meta.get("native_name")
-        direction = meta.get("dir", "ltr")
-        if not isinstance(native_name, str) or not native_name.strip():
-            raise ValueError(f"Locale catalog {path} needs meta.native_name")
-        if direction not in ("ltr", "rtl"):
-            raise ValueError(f"Locale catalog {path} meta.dir must be ltr or rtl")
-
-        unknown_sections = set(raw) - {"meta", "messages", "tool_groups", "tools"}
-        if unknown_sections:
-            raise ValueError(
-                f"Locale catalog {path} has unsupported sections: "
-                f"{sorted(unknown_sections)}"
-            )
-
-        catalogs[locale] = {
-            "meta": {"native_name": native_name, "dir": direction},
-            "messages": _validate_string_map(
-                raw.get("messages"), context=f"{path.name}.messages"
-            ),
-            "tool_groups": _validate_string_map(
-                raw.get("tool_groups"), context=f"{path.name}.tool_groups"
-            ),
-            "tools": _validate_tools(raw.get("tools"), context=f"{path.name}.tools"),
-        }
+            catalogs[locale] = _load_catalog_file(path)
+        except (ImportError, ValueError) as exc:
+            if not is_best_effort_locale(locale):
+                raise
+            _warn_best_effort_catalog(locale, path, exc)
 
     if DEFAULT_LOCALE not in catalogs:
         raise ImportError(
             f"The settings UI requires {DEFAULT_LOCALE}.json in {directory}"
         )
-    _validate_placeholder_parity(catalogs)
-    _validate_inline_markup(catalogs)
-    _validate_panel_links(catalogs, settings_html)
+
+    strict_catalogs = {
+        locale: catalog
+        for locale, catalog in catalogs.items()
+        if not is_best_effort_locale(locale)
+    }
+    _validate_placeholder_parity(strict_catalogs)
+    _validate_inline_markup(strict_catalogs)
+    _validate_panel_links(strict_catalogs, settings_html)
+
+    for locale in sorted(set(catalogs) - set(strict_catalogs)):
+        candidate = {
+            DEFAULT_LOCALE: catalogs[DEFAULT_LOCALE],
+            locale: catalogs[locale],
+        }
+        try:
+            _validate_placeholder_parity(candidate)
+            _validate_inline_markup(candidate)
+            _validate_panel_links(candidate, settings_html)
+        except ValueError as exc:
+            _warn_best_effort_catalog(locale, directory / f"{locale}.json", exc)
+            del catalogs[locale]
     return catalogs
 
 

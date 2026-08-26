@@ -1,5 +1,6 @@
 """Test Home Assistant add-on structure and configuration."""
 
+import importlib.util
 import os
 import re
 import stat
@@ -18,12 +19,46 @@ except ImportError:
 ADDON_DIR = "homeassistant-addon"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
+_POLICY_PATH = _REPO_ROOT / "src/ha_mcp/settings_ui/_locale_policy.py"
+_POLICY_SPEC = importlib.util.spec_from_file_location("_locale_policy", _POLICY_PATH)
+if _POLICY_SPEC is None or _POLICY_SPEC.loader is None:  # pragma: no cover
+    raise ImportError(f"cannot load locale policy from {_POLICY_PATH}")
+_POLICY = importlib.util.module_from_spec(_POLICY_SPEC)
+_POLICY_SPEC.loader.exec_module(_POLICY)
+is_best_effort_locale = _POLICY.is_best_effort_locale
+
+
+def _report_translation_issues(path: Path, issues: list[str]) -> None:
+    """Warn for a best-effort locale, while preserving strict failures."""
+    if not issues:
+        return
+    message = "; ".join(issues)
+    if is_best_effort_locale(path.stem):
+        print(
+            f"::warning file={path}::best-effort locale {path.stem}: {message}",
+            file=sys.stderr,
+        )
+        return
+    raise AssertionError(message)
+
+
 # Resolved once at import: pytest parametrizes at collection time, so an empty
 # list would collect zero cases and report as skipped rather than failed.
 # test_addon_config_glob_is_not_empty below is what keeps that honest.
 _ADDON_DIRS = sorted(
     path.parent.name for path in _REPO_ROOT.glob("homeassistant-addon*/config.yaml")
 )
+
+
+def test_best_effort_addon_translation_issues_warn_instead_of_fail(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    issues = ["missing configuration.example"]
+    _report_translation_issues(Path("translations/tlh.yaml"), issues)
+    assert "::warning file=translations/tlh.yaml" in capsys.readouterr().err
+
+    with pytest.raises(AssertionError, match=r"missing configuration\.example"):
+        _report_translation_issues(Path("translations/de.yaml"), issues)
 
 
 class TestAddonStructure:
@@ -390,30 +425,33 @@ class TestAddonStructure:
         translation_files = sorted(Path(addon_dir, "translations").glob("*.yaml"))
         assert translation_files, f"{addon_dir}/translations has no *.yaml files"
         for tf in translation_files:
-            with open(tf, encoding="utf-8") as f:
-                translations = yaml.safe_load(f)
-            configuration = translations.get("configuration", {})
-            orphaned = sorted(set(configuration) - declared_keys)
-            assert not orphaned, (
-                f"{tf} documents `configuration` key(s) that {addon_dir}/"
-                f"config.yaml no longer declares in `schema:`: {orphaned}. "
-                "Supervisor renders nothing for them — delete the entries."
-            )
-            for key in sorted(schema_keys):
-                entry = configuration.get(key)
-                assert entry is not None, (
-                    f"{tf} is missing a `configuration.{key}` entry for the "
-                    "schema field declared in config.yaml"
+            try:
+                with open(tf, encoding="utf-8") as f:
+                    translations = yaml.safe_load(f)
+                configuration = translations.get("configuration", {})
+                orphaned = sorted(set(configuration) - declared_keys)
+                assert not orphaned, (
+                    f"{tf} documents `configuration` key(s) that {addon_dir}/"
+                    f"config.yaml no longer declares in `schema:`: {orphaned}. "
+                    "Supervisor renders nothing for them — delete the entries."
                 )
-                assert entry.get("name"), (
-                    f"{tf} `configuration.{key}` needs a non-empty `name` "
-                    "(Supervisor renders it as the user-facing toggle label)"
-                )
-                assert entry.get("description"), (
-                    f"{tf} `configuration.{key}` needs a non-empty "
-                    "`description` (Supervisor renders it as the help tooltip "
-                    "under the toggle)"
-                )
+                for key in sorted(schema_keys):
+                    entry = configuration.get(key)
+                    assert entry is not None, (
+                        f"{tf} is missing a `configuration.{key}` entry for the "
+                        "schema field declared in config.yaml"
+                    )
+                    assert entry.get("name"), (
+                        f"{tf} `configuration.{key}` needs a non-empty `name` "
+                        "(Supervisor renders it as the user-facing toggle label)"
+                    )
+                    assert entry.get("description"), (
+                        f"{tf} `configuration.{key}` needs a non-empty "
+                        "`description` (Supervisor renders it as the help tooltip "
+                        "under the toggle)"
+                    )
+            except Exception as exc:
+                _report_translation_issues(tf, [str(exc)])
 
     def test_addon_names_are_backup_filename_safe(self):
         r"""No add-on ``name`` may contain ``/``.
