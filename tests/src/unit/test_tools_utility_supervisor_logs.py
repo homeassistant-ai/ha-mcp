@@ -445,6 +445,7 @@ class TestGetAddonLogsViaSupervisor:
         mock_client.timeout = 0.01
 
         async def _hang_forever(*_args, **_kwargs):
+            """Model a Supervisor response that never completes."""
             await asyncio.Event().wait()
 
         inner_client.get.side_effect = _hang_forever
