@@ -1459,13 +1459,14 @@ class DeepSearchMixin(SceneSearchMixin):
                     "is not exhaustive. Pass `config_time_budget=` on "
                     "`ha_search` to raise the per-call limit (or, for the "
                     f"default, set {budget_env} or the matching field in "
-                    "the web Settings UI's Advanced section). On an instance "
-                    "where this happens on every search, raising the budget "
-                    "cannot fix it: Home Assistant serializes these per-id "
-                    "config reads, so the scan is bounded by the server, not "
-                    "by this limit. Installing the HA-MCP Custom Component "
-                    "removes the per-id fetches entirely by reading the "
-                    "loaded config in-process."
+                    "the web Settings UI's Advanced section). That trades "
+                    "latency for completeness rather than removing the cost: "
+                    "Home Assistant serializes these per-id config reads, so "
+                    "the ceiling is its throughput, and on a large instance "
+                    "the budget needed can exceed what a caller will wait "
+                    "for. Installing the HA-MCP Custom Component removes the "
+                    "per-id fetches entirely by reading the loaded config "
+                    "in-process."
                 )
             if failed:
                 # Name ONE representative error inline when the fetch path
