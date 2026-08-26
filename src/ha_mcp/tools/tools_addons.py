@@ -284,9 +284,7 @@ def _supervisor_rest_failure(
     response_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Normalize direct REST failure and retain 4xx/5xx status metadata."""
-    # ``error`` is built from the Supervisor payload, so it is only as bounded
-    # as whatever Supervisor sent; it reaches the model as the tool error.
-    error_text = _bounded_supervisor_text(str(error))
+    error_text = str(error)
     result: dict[str, Any] = {"success": False, "error": error_text}
     if response.is_error:
         result["_status_code"] = response.status_code
@@ -564,7 +562,12 @@ def _raise_supervisor_api_failure(
     endpoint: str,
 ) -> NoReturn:
     """Raise the structured exception represented by a non-retryable result."""
-    error_text = str(result.get("error", f"Supervisor API call failed: {endpoint}"))
+    # Both transports land here, and both carry Supervisor's own text: the
+    # direct REST payload and the message Core relays over the WebSocket
+    # bridge. Bind the size once, where every failure passes.
+    error_text = _bounded_supervisor_text(
+        str(result.get("error", f"Supervisor API call failed: {endpoint}"))
+    )
     status_code = result.get("_status_code")
     response_data = result.get("_response_data")
     if status_code == 401:

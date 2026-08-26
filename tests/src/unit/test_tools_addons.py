@@ -4624,6 +4624,30 @@ class TestSupervisorApiCall:
         )
 
     @pytest.mark.asyncio
+    async def test_core_routed_failure_message_is_capped(self, monkeypatch):
+        """A Core-relayed Supervisor failure cannot produce an unbounded error."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        client = _make_mock_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: " + "w" * (50 * 1024 + 1),
+            }
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await _supervisor_api_call(client, "/addons")
+
+        payload = _parse_tool_error(exc_info)
+        suffix = "\n[Supervisor response truncated to 50 KiB]"
+        message = payload["error"]["message"]
+        assert message.startswith("Command failed: w")
+        assert message.endswith(suffix)
+        assert len(message) == 50 * 1024
+
+    @pytest.mark.asyncio
     async def test_addon_mode_non_object_json_caps_error_message(self, monkeypatch):
         """A valid-JSON non-object body cannot produce an unbounded tool error."""
         from ha_mcp.tools.tools_addons import _supervisor_api_call
@@ -4656,7 +4680,7 @@ class TestSupervisorApiCall:
         suffix = "\n[Supervisor response truncated to 50 KiB]"
         assert message.startswith(prefix)
         assert message.endswith(suffix)
-        assert len(message) == len("Command failed: ") + 50 * 1024
+        assert len(message) == 50 * 1024
 
     @pytest.mark.asyncio
     async def test_addon_mode_error_payload_message_is_capped(self, monkeypatch):
@@ -4687,9 +4711,13 @@ class TestSupervisorApiCall:
 
         payload = _parse_tool_error(exc_info)
         suffix = "\n[Supervisor response truncated to 50 KiB]"
-        assert payload["error"]["message"] == (
-            "Command failed: " + "y" * (50 * 1024 - len(suffix)) + suffix
-        )
+        message = payload["error"]["message"]
+        # The status-code path prefixes the bounded Supervisor text, so the
+        # constant framing sits outside the bound.
+        prefix = "Command failed: "
+        assert message.startswith(prefix + "y")
+        assert message.endswith(suffix)
+        assert len(message.removeprefix(prefix)) == 50 * 1024
 
     @pytest.mark.asyncio
     async def test_addon_mode_non_mapping_result_payload_is_capped(self, monkeypatch):
