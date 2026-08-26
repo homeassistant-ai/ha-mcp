@@ -220,12 +220,34 @@ def _tracked_dockerfiles() -> set[Path]:
     nothing would let this guard pass while asserting about an empty set.
     """
     listing = subprocess.run(
-        ["git", "-C", str(_REPO_ROOT), "ls-files", "-z", "Dockerfile", "*/Dockerfile"],
+        [
+            "git",
+            # The unit-test job runs inside a container with the workspace
+            # bind-mounted from the host, so the checkout is owned by a
+            # different uid than the process and Git's dubious-ownership
+            # check refuses to read the index at all. Scoped to this one
+            # invocation; no Git config is written anywhere.
+            "-c",
+            "safe.directory=*",
+            "-C",
+            str(_REPO_ROOT),
+            "ls-files",
+            "-z",
+            "Dockerfile",
+            "*/Dockerfile",
+        ],
         capture_output=True,
         text=True,
-        check=True,
-    ).stdout
-    return {_REPO_ROOT / rel for rel in listing.split("\0") if rel}
+        check=False,
+    )
+    # Carry Git's own stderr into the failure. ``check=True`` would raise
+    # ``CalledProcessError`` naming only the exit status, which says nothing
+    # about why Git refused.
+    assert listing.returncode == 0, (
+        "cannot enumerate tracked Dockerfiles, so this guard cannot run: "
+        f"git exited {listing.returncode}: {listing.stderr.strip()}"
+    )
+    return {_REPO_ROOT / rel for rel in listing.stdout.split("\0") if rel}
 
 
 def test_python_runtime_automation_is_digest_only() -> None:
