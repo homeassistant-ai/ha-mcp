@@ -17,6 +17,7 @@ Covers two REST-client paths and their tools_utility wrappers:
   error translation.
 """
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -429,6 +430,24 @@ class TestGetAddonLogsViaSupervisor:
         log-watchers) can tell them apart (#1126 review item 7)."""
         inner_client, _ = mock_async_client_class
         inner_client.get.side_effect = httpx.TimeoutException("supervisor timeout")
+
+        with pytest.raises(HomeAssistantConnectionError) as exc_info:
+            await mock_client.get_addon_logs("core_mosquitto")
+
+        assert "Timeout" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_supervisor_log_fetch_has_overall_deadline(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        """A stalled Supervisor log body must not wait forever on per-chunk IO."""
+        inner_client, _ = mock_async_client_class
+        mock_client.timeout = 0.01
+
+        async def _hang_forever(*_args, **_kwargs):
+            await asyncio.Event().wait()
+
+        inner_client.get.side_effect = _hang_forever
 
         with pytest.raises(HomeAssistantConnectionError) as exc_info:
             await mock_client.get_addon_logs("core_mosquitto")
