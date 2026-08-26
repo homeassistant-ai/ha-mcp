@@ -316,13 +316,17 @@ def _supervisor_invalid_response(
     return _supervisor_rest_failure(response, error)
 
 
+def _bounded_supervisor_text(value: str) -> str:
+    """Return model-safe Supervisor text, marking any truncation visibly."""
+    if len(value) <= _MAX_RESPONSE_SIZE:
+        return value
+    prefix_size = _MAX_RESPONSE_SIZE - len(_SUPERVISOR_RESPONSE_TRUNCATION_SUFFIX)
+    return value[:prefix_size] + _SUPERVISOR_RESPONSE_TRUNCATION_SUFFIX
+
+
 def _bounded_supervisor_response_text(response: httpx.Response) -> str:
     """Return a model-safe Supervisor response body with visible truncation."""
-    body = response.text.strip()
-    if len(body) <= _MAX_RESPONSE_SIZE:
-        return body
-    prefix_size = _MAX_RESPONSE_SIZE - len(_SUPERVISOR_RESPONSE_TRUNCATION_SUFFIX)
-    return body[:prefix_size] + _SUPERVISOR_RESPONSE_TRUNCATION_SUFFIX
+    return _bounded_supervisor_text(response.text.strip())
 
 
 def _normalize_supervisor_rest_response(
@@ -558,7 +562,12 @@ def _raise_supervisor_api_failure(
     endpoint: str,
 ) -> NoReturn:
     """Raise the structured exception represented by a non-retryable result."""
-    error_text = str(result.get("error", f"Supervisor API call failed: {endpoint}"))
+    # Both transports land here, and both carry Supervisor's own text: the
+    # direct REST payload and the message Core relays over the WebSocket
+    # bridge. Bind the size once, where every failure passes.
+    error_text = _bounded_supervisor_text(
+        str(result.get("error", f"Supervisor API call failed: {endpoint}"))
+    )
     status_code = result.get("_status_code")
     response_data = result.get("_response_data")
     if status_code == 401:
@@ -613,7 +622,7 @@ def _supervisor_result_mapping(
         return payload
 
     verb = method.upper()
-    message = (
+    message = _bounded_supervisor_text(
         f"Supervisor API {verb} {endpoint} returned an invalid result payload: "
         f"{payload!r}"
     )
@@ -716,6 +725,10 @@ async def _supervisor_api_call(
             )
             if _JOB_COLLISION_MARKER not in error_text.lower():
                 _raise_supervisor_api_failure(result, endpoint)
+
+            # The marker test runs on the raw text; everything below reports
+            # it, so bind the size once the classification is settled.
+            error_text = _bounded_supervisor_text(error_text)
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
