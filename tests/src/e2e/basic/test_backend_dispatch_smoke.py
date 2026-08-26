@@ -101,16 +101,21 @@ _SKIP_CEILING_PER_LANE = {
     # the runtime form never counted. The same sweep converted the backup
     # age-floor happy-path test's runtime skip to ``external_only``, adding
     # one more on the four out-of-process lanes.
-    "container": 78,  # was 75; +3 embedded_only conversion
-    "haos": 56,  # was 53; +3 embedded_only conversion
+    # #2270 adds one ``beta_haos_only`` version-attestation item. It runs in
+    # the two beta HAOS lanes and adds one collection-time skip elsewhere.
+    # Beta variants share backend keys, so they inherit the ceiling increase
+    # while running the attestation instead of skipping it. Its in-app-only
+    # self-update guard adds a second skip outside the in-app lanes.
+    "container": 79,  # was 75; +3 embedded_only, +1 beta_haos_only
+    "haos": 58,  # observed on #2270 after both new marker-gated tests
     # HAOS stdio is the external HAOS set plus ``external_only`` tests, whose
     # test-process monkeypatches cannot reach the subprocess server. The first
     # full lane run on 2026-08-18 observed 103 collection-time marker skips
     # (plus 9 runtime skips); keep the same five-item buffer as established
     # lanes (108), +1 #2241 haos_tls scenario, +3 #2239 dependency conflict,
     # +3 embedded_only conversion, +1 backup external_only conversion.
-    "haos_stdio": 116,
-    "haos_inaddon": 85,  # was 81; +3 embedded_only, +1 backup external_only
+    "haos_stdio": 117,
+    "haos_inaddon": 86,  # was 81; +3 embedded, +1 backup, +1 beta
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
     # lane's marker-skips PLUS two embedded-specific additions:
     #   - haos_only + inaddon_only tests skip on embedded just like on container
@@ -126,7 +131,7 @@ _SKIP_CEILING_PER_LANE = {
     # +1 visibility e2e (haos_stdio_only) and +1 #2241 haos_tls scenario
     # (haos_only) bridge 133 -> 135.
     # Read future changes from CI instead of deriving them.
-    "embedded": 136,  # was 135; +1 backup external_only conversion
+    "embedded": 137,  # was 135; +1 backup, +1 beta_haos_only
     # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it
     # skips the SAME set as the external HAOS lane (container_only + inaddon_only)
     # PLUS two haos_embedded-specific additions:
@@ -143,8 +148,8 @@ _SKIP_CEILING_PER_LANE = {
     # container_only). Parametrize inflates that to the CI-observed count of
     # 107 in the 2026-08-18 CI run (106 before the self-restart e2e).
     # Read future changes from CI instead of deriving them.
-    # was 108; +3 #2239 conflict, +3 embedded_only, +1 backup external_only
-    "haos_embedded": 115,
+    # #2270 stable observed 118 marker skips; beta observed 117.
+    "haos_embedded": 118,
 }
 
 

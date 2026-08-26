@@ -704,8 +704,9 @@ class HomeAssistantClient:
     async def get_addon_logs(self, slug: str, lines: int | None = None) -> str:
         """Fetch an add-on's container logs.
 
-        Branch on ``is_running_in_addon()`` (which keys off ``SUPERVISOR_TOKEN``
-        in env): inside the add-on container goes directly to the Supervisor
+        Branch on ``is_running_in_addon()``, which requires a truthy
+        ``SUPERVISOR_TOKEN`` and excludes ``HA_MCP_EMBEDDED``: inside the app
+        (add-on) container goes directly to the Supervisor
         REST API at ``http://supervisor/addons/{slug}/logs`` with the
         Supervisor token. The HA Core proxy at
         ``/api/hassio/addons/{slug}/logs`` rejects this token+path combination
@@ -730,8 +731,9 @@ class HomeAssistantClient:
         Raises:
             HomeAssistantAuthError: 401 response, or ``SUPERVISOR_TOKEN`` empty
                 at call time on the addon branch.
-            HomeAssistantAPIError: 403 (role too low — addon needs hassio_role
-                ``manager``), 404 (unknown slug), or other non-2xx. The
+            HomeAssistantAPIError: 403 (unrecognized token, missing
+                ``hassio_api``, or insufficient ``hassio_role``), 404
+                (unknown slug), or other non-2xx. The
                 ``status_code`` attribute lets callers map to specific
                 suggestions.
             HomeAssistantConnectionError: Network, timeout, or transport error.
@@ -775,25 +777,28 @@ class HomeAssistantClient:
 
         ``path`` is everything between ``http://supervisor/`` and ``/logs``:
 
-        - ``"addons/<slug>"`` for add-on container logs
+        - ``"addons/<slug>"`` for app (add-on) container logs
         - ``"<service>"`` (where service ∈ {supervisor, host, core, dns, audio,
           cli, multicast, observer}) for system-service logs
 
         ``lines`` maps to the endpoint's ``?lines=`` journald-window query
         param; omitted → Supervisor's 100-line default window.
 
-        Bypasses ``HomeAssistantClient.httpx_client`` because the Supervisor
-        endpoint uses a different base URL (``http://supervisor``) and a
-        different token (``SUPERVISOR_TOKEN``) than HA Core REST. Both
-        endpoints require the addon's ``hassio_role`` to be ``manager`` (not
-        ``default``); a ``default`` role gets a 403 here — see #1116.
+        Bypasses ``HomeAssistantClient.httpx_client`` because that client targets
+        Home Assistant Core through ``http://supervisor/core/api``, while logs
+        belong to Supervisor at ``http://supervisor``. Both clients use the same
+        ``SUPERVISOR_TOKEN``; the Core proxy requires ``homeassistant_api``, while
+        system-service and arbitrary app-log paths require ``hassio_api`` and
+        ``hassio_role: manager``. The recognized-app-token exception is
+        ``/addons/self/logs``.
 
         Raises:
             HomeAssistantAuthError: ``SUPERVISOR_TOKEN`` absent at call time,
                 or 401 from Supervisor.
-            HomeAssistantAPIError: 403 (role too low — distinct branch with
-                role hint), 404, other 4xx/5xx. Tries to parse Supervisor's
-                ``{"result":"error","message":"..."}`` JSON envelope before
+            HomeAssistantAPIError: 403 (unrecognized token, missing
+                ``hassio_api``, or insufficient role), 404, other 4xx/5xx.
+                Parses Supervisor's ``{"result":"error","message":"..."}``
+                JSON envelope before
                 falling back to text body / reason phrase / placeholder.
             HomeAssistantConnectionError: Timeout or transport error, with
                 distinct messages so callers can tell them apart.
@@ -839,18 +844,19 @@ class HomeAssistantClient:
         if response.status_code == 401:
             raise HomeAssistantAuthError(f"Invalid Supervisor token for /{path}/logs")
         if response.status_code == 403:
-            # Distinct from 401: token is valid but addon's hassio_role isn't
-            # high enough. Most-likely cause for this exact endpoint at the
-            # time #1116 surfaced (default → manager bump in addon config.yaml
-            # is the same-PR companion fix).
+            # Supervisor uses 403 for an unrecognized app token, missing
+            # hassio_api permission, or a hassio_role that cannot access this
+            # endpoint. The default-to-manager role bump fixed #1116, but it is
+            # not the only possible cause.
             logger.warning(
-                "Supervisor returned 403 for /%s/logs — addon hassio_role may "
-                "be too low (need 'manager')",
+                "Supervisor returned 403 for /%s/logs — check token, hassio_api, "
+                "and hassio_role (need 'manager')",
                 path,
             )
             raise HomeAssistantAPIError(
-                f"Supervisor forbids /{path}/logs (403) — addon's hassio_role "
-                "may be 'default'; need 'manager' or higher",
+                f"Supervisor forbids /{path}/logs (403) — token may be unrecognized, "
+                "app may lack hassio_api, or hassio_role may not allow this endpoint "
+                "(manager required)",
                 status_code=403,
                 response_data={"path": path},
             )
@@ -873,14 +879,15 @@ class HomeAssistantClient:
     async def _get_addon_logs_via_supervisor(
         self, slug: str, lines: int | None = None
     ) -> str:
-        """Fetch add-on container logs directly from Supervisor's REST API.
+        """Fetch app (add-on) container logs directly from Supervisor REST.
 
-        Distinct from ``tools_bug_report._fetch_addon_logs``: that helper is
-        hardcoded to ``/addons/self/logs`` and silently swallows failures
-        (it's an aux-data fetch for bug reports, fine to skip on error). This
-        helper takes arbitrary slugs and surfaces failures as exceptions
-        because callers (``ha_get_logs(source="supervisor", slug=...)``) need
-        them. Both endpoints require ``hassio_role: manager``.
+        Distinct from ``tools_bug_report._fetch_addon_logs``: that auxiliary
+        helper uses the app self-service path ``/addons/self/logs`` and may skip
+        failures. This helper takes arbitrary slugs and surfaces failures because
+        callers (``ha_get_logs(source="supervisor", slug=...)``) need them.
+        Arbitrary app-log slugs require a recognized app token with ``hassio_api``
+        and ``hassio_role: manager``; ``/addons/self/logs`` bypasses the role and
+        API-permission checks but still requires a recognized app token.
 
         Delegates to ``_supervisor_logs_get`` so error handling stays in
         lockstep with ``_get_system_service_logs``.
@@ -895,26 +902,21 @@ class HomeAssistantClient:
         ``service`` must be one of the eight Supervisor-managed services:
         ``supervisor``, ``host``, ``core``, ``dns``, ``audio``, ``cli``,
         ``multicast``, ``observer``. Caller is responsible for validating
-        ``service`` against the allowed set; this helper does no validation
-        and will raise ``HomeAssistantAPIError`` on any unknown path (404).
+        ``service``; this helper performs no validation, and unsupported paths
+        are rejected by the selected direct-Supervisor or Core-proxy route.
 
         Branch on ``is_running_in_addon()`` — mirror of ``get_addon_logs``:
-        inside the addon container goes directly to Supervisor at
+        inside the app (add-on) container goes directly to Supervisor at
         ``http://supervisor/{service}/logs`` with the Supervisor token
-        (``hassio_role: manager`` required). On non-addon installs (Docker
+        (``hassio_api`` and ``hassio_role: manager`` required). On non-app
+        installs (Docker
         without Supervisor, pyinstaller, pip pointing at a normal HA URL),
         falls back to the HA Core proxy at ``/api/hassio/{service}/logs``.
 
-        All seven slugs are whitelisted in HA Core's hassio proxy
+        All eight service slugs are whitelisted in HA Core's hassio proxy
         (``homeassistant/components/hassio/http.py`` — ``PATHS_ADMIN``), so
         an admin LLA is sufficient to reach any of them from outside the
-        addon.
-
-        Closes #1260: pre-fix this method had only the addon-direct branch,
-        so non-addon installs (the Docker image, uvx ha-mcp, etc.) hit the
-        ``SUPERVISOR_TOKEN``-absent fail-fast in ``_supervisor_logs_get`` for
-        every service, while the sibling ``source="supervisor"`` (addon
-        logs) call kept working through its own Core-proxy fallback.
+        app.
         """
         if is_running_in_addon():
             return await self._supervisor_logs_get(service, lines=lines)

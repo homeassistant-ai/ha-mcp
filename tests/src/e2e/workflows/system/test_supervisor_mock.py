@@ -1,13 +1,13 @@
-"""E2E tests for the direct-Supervisor httpx call sites against a mock sidecar.
+"""E2E tests for a direct-Supervisor httpx subset against a mock sidecar.
 
-Closes the coverage gap from issue #1129: prior to this, the three call sites
-that hit ``http://supervisor`` directly (logs via rest_client, bug-report addon
-log fetch, settings_ui addon self-restart) had only mock-based unit tests. Now
-they exercise the real socket path against a stdlib ``http.server`` sidecar
-served from ``tests/src/e2e/utilities/supervisor_mock.py``.
+The sidecar exercises production log call sites over a real socket. Its
+``/addons/self/restart`` endpoint is covered by a raw wire-contract probe;
+settings-handler behavior remains unit-tested. It is served from
+``tests/src/e2e/utilities/supervisor_mock.py``.
 
-Out of scope (intentional): the WS-proxy ``supervisor/api`` path used by
-``tools_addons.py``. See #1129 for why that's deferred.
+In app mode, ``tools_addons.py`` also uses direct Supervisor REST for
+``/addons`` and ``/store``. Those management endpoints are covered by unit
+tests and the real HAOS lanes, not this sidecar.
 """
 
 from __future__ import annotations
@@ -82,7 +82,7 @@ class TestGetLogsSystemService:
 
     @pytest.mark.parametrize("service", sorted(SYSTEM_SERVICES))
     async def test_each_system_service(self, mcp_client, supervisor_mock, service: str):
-        """All seven Supervisor-managed services are reachable."""
+        """Every Supervisor-managed service is reachable."""
         async with MCPAssertions(mcp_client) as mcp:
             result = await mcp.call_tool_success(
                 "ha_get_logs",
@@ -132,9 +132,8 @@ class TestSettingsUiRestart:
 
     Tested via a raw httpx call rather than constructing a starlette Request,
     because the request shape is irrelevant to the Supervisor wire contract;
-    the wire contract is what this PR adds coverage for. The handler's branch
-    logic (success / token-missing / connection drop) is already covered by
-    unit tests in tests/src/unit/test_settings_ui.py.
+    the handler's success, token-missing, and connection-drop branches remain
+    covered by unit tests in tests/src/unit/test_settings_ui.py.
     """
 
     async def test_restart_request_succeeds(self, supervisor_mock):
@@ -166,7 +165,7 @@ class TestFixtureWiring:
     """
 
     async def test_is_running_in_addon_returns_true(self, supervisor_mock):
-        """SUPERVISOR_TOKEN set → addon-mode branch is taken."""
+        """A token in this non-embedded process selects the app-mode branch."""
         assert is_running_in_addon() is True
 
     async def test_base_url_resolves_to_mock(self, supervisor_mock):
@@ -190,8 +189,9 @@ class TestMockResilience:
     async def test_concurrent_log_fetches(self, mcp_client, supervisor_mock):
         """Five parallel ha_get_logs calls all succeed.
 
-        The mock and the MCP server share the test event loop; if either
-        serialises requests incorrectly this surfaces as a hang or an error.
+        The MCP calls share pytest's event loop while the threaded mock handles
+        concurrent socket requests; serialization problems surface as a hang or
+        error.
         """
         async with MCPAssertions(mcp_client) as mcp:
             results = await asyncio.gather(
@@ -229,7 +229,7 @@ class TestMockResilience:
         Exercises the auth-failure path through the full ha_get_logs →
         _supervisor_logs_get → mock chain. The explicit
         ``except HomeAssistantAuthError`` clause in
-        ``_get_system_service_log`` (added alongside this PR) routes the
+        ``_get_system_service_log`` routes the
         401 through ``exception_to_structured_error`` so callers get a
         structured ``code`` + remediation suggestions instead of the raw
         FastMCP wrap they used to get.
@@ -255,21 +255,17 @@ class TestMockResilience:
     async def test_insufficient_role_supervisor_call_surfaces_403(
         self, mcp_client, supervisor_mock, monkeypatch
     ):
-        """Valid token but addon hassio_role too low → 403 → structured tool error.
+        """The fixture's low-role sentinel produces a structured 403 tool error.
 
         Covers the role-mismatch branch in ``_get_system_service_log`` added
         alongside the #1116 fix (the addon's ``hassio_role`` bump from
         ``default`` → ``manager`` was the matching production change). Without
         this E2E the 403-handling path has no real-socket coverage.
 
-        Asserts both:
-          - the error code is AUTH_INVALID_TOKEN (today _classify_api_status
-            maps both 401 and 403 to this — distinguishing them would need a
-            new ErrorCode), and
-          - the role-specific suggestion (``hassio_role must be 'manager'``)
-            from the 403 branch reaches the caller.
-        The second assertion is what proves the 403 branch fired specifically,
-        not the 401 branch (which has a different suggestion set).
+        Supervisor 403 responses are ambiguous: an unrecognized app token,
+        missing ``hassio_api``, or an insufficient role can all cause one.
+        The assertions verify the shared 403 classification and role remediation,
+        not that Supervisor identified the fixture's precise cause.
         """
         monkeypatch.setenv("SUPERVISOR_TOKEN", MOCK_INSUFFICIENT_ROLE_TOKEN)
         result = await safe_call_tool(

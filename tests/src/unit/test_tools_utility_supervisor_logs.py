@@ -312,12 +312,14 @@ class TestGetAddonLogsViaSupervisor:
         inner_client.get.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_raises_api_error_on_403_with_role_hint(
+    async def test_raises_api_error_on_403_with_permission_hints(
         self, mock_client, addon_install, mock_async_client_class, caplog
     ):
-        """403 distinct from 401: addon's hassio_role too low. Surfaces with a
-        role-hint suggestion + warning log so operators don't read this as a
-        token-validity problem (#1126 review items 2 + 9)."""
+        """A 403 names every Supervisor app authorization boundary.
+
+        Supervisor uses it for an unrecognized token, missing API permission,
+        and an insufficient role (#1126 review items 2 + 9).
+        """
         inner_client, _ = mock_async_client_class
         mock_response = MagicMock()
         mock_response.status_code = 403
@@ -335,6 +337,8 @@ class TestGetAddonLogsViaSupervisor:
 
         assert exc_info.value.status_code == 403
         msg = str(exc_info.value)
+        assert "unrecognized" in msg
+        assert "hassio_api" in msg
         assert "hassio_role" in msg and "manager" in msg
         # Warning log fired before the raise (#1126 review item 9).
         assert any("403" in r.message for r in caplog.records)
