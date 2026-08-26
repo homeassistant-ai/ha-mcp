@@ -120,20 +120,23 @@ def _rt(rt_id="rt-1", user=None, client_name="", token_type=""):
     )
 
 
-def _stub_ha_mcp_surface(monkeypatch, *, mcp, landing_mod=None) -> None:
+def _stub_ha_mcp_surface(
+    monkeypatch, *, mcp, landing_mod=None, log_filters_mod=None
+) -> None:
     """Install a minimal in-memory ``ha_mcp`` package so ``_serve`` runs hermetically.
 
     Wires a non-sentinel connection (so ``_serve`` passes its refuse-to-serve
     guard), a server whose ``.mcp`` is ``mcp``, no-op settings routes, and a stub
-    uvicorn. Pass ``landing_mod`` to stub ``ha_mcp.browser_landing``; omit it to
-    simulate an OLDER installed server without the landing helper — modeled as a
-    module missing the ``register_browser_landing`` attribute, so the from-import
-    in ``_serve`` raises the same ImportError class its guard catches. Injection
-    (a sys.modules hit) is the only hermetic way to force that failure: deleting
-    the entry is NOT enough, because the editable install (``uv sync``) adds a
-    meta-path finder that resolves ``ha_mcp.*`` by name and would re-import the
-    REAL module even though the parent ``ha_mcp`` is faked with an empty
-    ``__path__`` (live-found in CI).
+    uvicorn. Pass ``landing_mod`` to stub ``ha_mcp.browser_landing`` and
+    ``log_filters_mod`` to stub ``ha_mcp.log_filters``; omit either to simulate
+    an OLDER installed server without that helper — modeled as a module missing
+    the ``register_browser_landing`` / ``install_sdk_log_filters`` attribute, so
+    the from-import in ``_serve`` raises the same ImportError class its guard
+    catches. Injection (a sys.modules hit) is the only hermetic way to force
+    that failure: deleting the entry is NOT enough, because the editable install
+    (``uv sync``) adds a meta-path finder that resolves ``ha_mcp.*`` by name and
+    would re-import the REAL module even though the parent ``ha_mcp`` is faked
+    with an empty ``__path__`` (live-found in CI).
     """
     settings = SimpleNamespace(
         homeassistant_url="http://127.0.0.1:8123", homeassistant_token="jwt"
@@ -169,6 +172,11 @@ def _stub_ha_mcp_surface(monkeypatch, *, mcp, landing_mod=None) -> None:
         landing_mod = ModuleType("ha_mcp.browser_landing")
     ha_mcp_mod.browser_landing = landing_mod
     mods["ha_mcp.browser_landing"] = landing_mod
+    if log_filters_mod is None:
+        # Older-server stand-in, same reasoning as landing_mod above.
+        log_filters_mod = ModuleType("ha_mcp.log_filters")
+    ha_mcp_mod.log_filters = log_filters_mod
+    mods["ha_mcp.log_filters"] = log_filters_mod
     for name, mod in mods.items():
         monkeypatch.setitem(sys.modules, name, mod)
 
@@ -2728,6 +2736,179 @@ class TestServeBrowserLanding:
         # was swallowed, not propagated).
         assert reached == ["/private_secret"]
         assert isinstance(mgr._thread_exc, _StopServe)
+
+
+# ---------------------------------------------------------------------------
+# _serve log-filter installation
+# ---------------------------------------------------------------------------
+
+
+class TestServeLogFilters:
+    """Parity with the CLI HTTP runner and the add-on's start.py: _serve must
+    install the shared SDK/fastmcp log-noise filters (routine stateless
+    teardown, benign tool-validation tracebacks, disconnect-caused "session
+    crashed" tracebacks) so the in-process embedded server doesn't log
+    alarming noise the other two launchers already suppress."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_env(self):
+        """Snapshot/restore the env vars _thread_main stages, per-test."""
+        keys = ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
+        saved = {k: os.environ.get(k) for k in keys}
+        for key in keys:
+            os.environ.pop(key, None)
+        yield
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_serve_installs_log_filters(self, tmp_path, monkeypatch):
+        """_serve calls install_sdk_log_filters() when it is available."""
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+
+        class _StopServe(Exception):
+            pass
+
+        class _FakeMcp:
+            def http_app(self, path, stateless_http):
+                raise _StopServe
+
+        fake_mcp = _FakeMcp()
+        install_calls: list = []
+        log_filters_mod = ModuleType("ha_mcp.log_filters")
+        log_filters_mod.install_sdk_log_filters = lambda: install_calls.append(True)
+        _stub_ha_mcp_surface(monkeypatch, mcp=fake_mcp, log_filters_mod=log_filters_mod)
+
+        mgr._thread_main("tok")
+
+        assert install_calls == [True]
+        assert isinstance(mgr._thread_exc, _StopServe)
+
+    def test_serve_tolerates_missing_log_filters_module(self, tmp_path, monkeypatch):
+        """Backward-compat: an OLDER bundled ha-mcp (the component reaches
+        users ahead of the server) has no log_filters module. _serve must
+        swallow the ImportError and keep serving, same as the
+        browser-landing guard."""
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+
+        class _StopServe(Exception):
+            pass
+
+        reached: list = []
+
+        class _FakeMcp:
+            def http_app(self, path, stateless_http):
+                reached.append(path)
+                raise _StopServe
+
+        # log_filters_mod omitted ⇒ ha_mcp.log_filters is present but the
+        # helper attribute is absent (import fails).
+        _stub_ha_mcp_surface(monkeypatch, mcp=_FakeMcp())
+
+        mgr._thread_main("tok")
+
+        assert reached == ["/private_secret"]
+        assert isinstance(mgr._thread_exc, _StopServe)
+
+
+class TestInstallLogFiltersIfAvailable:
+    """Direct unit coverage of _install_log_filters_if_available()'s branch
+    logic. CodeRabbit review finding: the _serve()-level tests above only
+    assert that serving continues either way, never that the SILENT
+    "older ha-mcp" case and the WARNING cases are actually distinguishable
+    by their log output -- dropping the err.name check entirely would leave
+    the suite green while every older install started logging noise on
+    every startup. These tests call the function directly (no need for the
+    full _stub_ha_mcp_surface/_thread_main harness) and assert on caplog.
+    """
+
+    def setup_method(self):
+        """Snapshot ha_mcp.* sys.modules entries so each test's fakes don't
+        leak into the next -- ha_mcp is genuinely importable in this test
+        process (unlike the fully-stubbed harness the heavier _serve()-level
+        tests above build)."""
+        self._saved = {
+            name: sys.modules.get(name) for name in ("ha_mcp", "ha_mcp.log_filters")
+        }
+
+    def teardown_method(self):
+        """Restore the snapshotted sys.modules entries exactly."""
+        for name, mod in self._saved.items():
+            if mod is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = mod
+
+    def test_genuinely_missing_module_is_silent(self, monkeypatch, caplog):
+        """The true 'older ha-mcp, module doesn't exist yet' case. Patches
+        builtins.__import__ to deterministically raise
+        ModuleNotFoundError(name='ha_mcp.log_filters') for that exact name,
+        the same technique test_different_missing_dependency_warns_and_names_it
+        uses below -- NOT faking the parent ha_mcp package's __path__: this
+        repo's editable install (uv sync) adds a meta-path finder that
+        resolves ha_mcp.* by name and would re-import the REAL module even
+        with an empty __path__ on the faked parent ("live-found in CI" per
+        _stub_ha_mcp_surface's own docstring above), which would make this
+        test pass vacuously -- no exception raised at all, not the silent
+        branch actually exercised. This is exactly the branch CodeRabbit
+        found untested."""
+        sys.modules.pop("ha_mcp.log_filters", None)
+        real_import = __import__
+
+        def _fake_import(name, *args, **kwargs):
+            if name == "ha_mcp.log_filters":
+                raise ModuleNotFoundError(
+                    "No module named 'ha_mcp.log_filters'", name="ha_mcp.log_filters"
+                )
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", _fake_import)
+
+        with caplog.at_level("WARNING", logger=es._LOGGER.name):
+            es._install_log_filters_if_available()
+
+        assert caplog.records == []
+
+    def test_module_present_but_attribute_missing_warns(self, caplog):
+        """The existing ImportError case (module exists, helper attribute
+        doesn't) must actually log a WARNING -- the discriminating half of
+        the same gap: a prior test proved serving continues, not that the
+        output differs from the silent case above."""
+        sys.modules["ha_mcp.log_filters"] = ModuleType("ha_mcp.log_filters")
+
+        with caplog.at_level("WARNING", logger=es._LOGGER.name):
+            es._install_log_filters_if_available()
+
+        assert "Could not install MCP SDK log-noise filters" in caplog.text
+
+    def test_different_missing_dependency_warns_and_names_it(self, monkeypatch, caplog):
+        """A ModuleNotFoundError for anything OTHER than ha_mcp.log_filters
+        itself (e.g. a stale fastmcp/pydantic left over from a previous
+        install -- _purge_ha_mcp_modules deliberately never reinstalls
+        third-party dependencies) is not the older-server case and must
+        warn, naming the actual missing dependency rather than staying
+        silent."""
+        sys.modules.pop("ha_mcp.log_filters", None)
+        real_import = __import__
+
+        def _fake_import(name, *args, **kwargs):
+            if name == "ha_mcp.log_filters":
+                raise ModuleNotFoundError("No module named 'fastmcp'", name="fastmcp")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", _fake_import)
+
+        with caplog.at_level("WARNING", logger=es._LOGGER.name):
+            es._install_log_filters_if_available()
+
+        assert "fastmcp" in caplog.text
+        assert "Could not install MCP SDK log-noise filters" in caplog.text
 
 
 # ---------------------------------------------------------------------------
