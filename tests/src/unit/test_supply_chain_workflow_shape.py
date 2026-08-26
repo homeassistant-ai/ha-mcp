@@ -320,3 +320,46 @@ def test_dev_release_tag_cleanup_uses_authenticated_github_api() -> None:
         in cleanup_run
     )
     assert "git push origin --delete" not in create_run + cleanup_run
+
+
+def test_renovate_can_write_the_status_check_it_publishes() -> None:
+    """Renovate must not abort its whole run right after writing a branch.
+
+    ``minimumReleaseAge`` makes Renovate publish a stability status check on
+    every branch it writes. GitHub answers a commit-status call from a token
+    without that permission with 404, not 403, and Renovate reads 404 there as
+    the repository having changed underneath it and aborts the ENTIRE run,
+    before opening the PR, before updating the dependency dashboard, and
+    before processing any other dependency. That is silent: the abort logs
+    below error level, so the workflow still reports success.
+
+    This pins the workflow half only. The app installation must grant
+    ``statuses`` as well, which no test here can see: an installation token
+    can only narrow the permissions the installation already holds.
+    """
+    steps = _workflow(_WORKFLOW_DIR / "renovate.yml")["jobs"]["renovate"]["steps"]
+    token_step = next(
+        step for step in steps if "create-github-app-token" in str(step.get("uses", ""))
+    )
+    assert token_step["with"].get("permission-statuses") == "write", (
+        "Renovate needs commit-status write, and a token listing any "
+        "permission-* input drops every permission it does not name"
+    )
+
+
+def test_a_renovate_abort_fails_the_workflow() -> None:
+    """A run that dies mid-way must not report success.
+
+    Renovate exits non-zero only when some record is logged at error level or
+    above, so a fatal abort logged at info leaves the workflow green. This one
+    hid two weeks of dead runs.
+    """
+    config = json.loads((_REPO_ROOT / "renovate.json").read_text(encoding="utf-8"))
+    promoted = {
+        remap["matchMessage"]
+        for remap in config["logLevelRemap"]
+        if remap["newLogLevel"] == "error"
+    }
+    assert "Repository has changed during renovation - aborting" in promoted, (
+        "this abort ends the whole repository run, so it cannot stay at info"
+    )
