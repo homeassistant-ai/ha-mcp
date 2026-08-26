@@ -34,7 +34,7 @@ import uuid
 
 import pytest
 
-from ..utilities.assertions import assert_mcp_success
+from ..utilities.assertions import MCPAssertions, safe_call_tool
 from ..utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
@@ -68,10 +68,10 @@ async def test_reference_graph_flags_an_automation_that_uses_the_entity(mcp_clie
         ],
     }
 
-    create_result = await mcp_client.call_tool(
-        "ha_config_set_automation", {"config": automation_config}
-    )
-    assert_mcp_success(create_result, "create reference-graph probe automation")
+    async with MCPAssertions(mcp_client) as mcp:
+        await mcp.call_tool_success(
+            "ha_config_set_automation", {"config": automation_config}
+        )
 
     try:
         data = await wait_for_tool_result(
@@ -103,7 +103,11 @@ async def test_reference_graph_flags_an_automation_that_uses_the_entity(mcp_clie
         )
         logger.info("✅ reference graph flagged %s", _ALIAS)
     finally:
-        await mcp_client.call_tool(
-            "ha_config_remove_automation", {"identifier": _PROBE_ENTITY_ID}
+        # ``safe_call_tool`` so a cleanup failure cannot mask the real
+        # assertion above (tests/AGENTS.md "Test Patterns").
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_remove_automation",
+            {"identifier": _PROBE_ENTITY_ID},
         )
         logger.info("🧹 Cleaned up probe automation")

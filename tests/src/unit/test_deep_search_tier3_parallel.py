@@ -270,8 +270,8 @@ class TestAttemptCParallelFetch:
             return {"id": "x", "config": {}, "action": []}
 
         if search_type == "automation":
-            # `_request` covers both the bulk-fetch URL (must raise to force
-            # Tier 3) and the per-id URL (must count). One shape for every id.
+            # `_request` serves the per-id config URL, which is the only
+            # config fetch left now the bulk tier is gone. One shape per id.
             async def _auto_request(method: str, url: str) -> dict:
                 return await _count_individual()
 

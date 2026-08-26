@@ -2,6 +2,7 @@
 
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -201,14 +202,30 @@ def test_renovate_log_levels_make_failures_actionable_without_warning_noise() ->
     )
 
 
-# Directory names that hold a NESTED working copy rather than repository
-# content: the gitignored `worktree/` tree this project's own workflow tells
-# contributors to use, and the agent worktrees under `.claude/`. Renovate only
-# ever sees tracked files, so a Dockerfile inside one of these is not something
-# its rules must account for. Without this filter the assertion below fails on
-# any machine that has a worktree checked out, which is every machine following
-# AGENTS.md.
-_IGNORED_TREES = frozenset({"worktree", ".claude", "node_modules", ".venv"})
+def _tracked_dockerfiles() -> set[Path]:
+    """Every Dockerfile Renovate can see, which is exactly the tracked ones.
+
+    Enumerated through Git rather than walking the filesystem. This project's
+    workflow tells contributors to keep worktrees under `worktree/` (AGENTS.md)
+    and agents place theirs under `.claude/worktrees/`, so a walk finds whole
+    nested copies of the repository and the assertion below fails on any
+    machine following those instructions.
+
+    Excluding those by directory NAME is the wrong instrument: `.claude` also
+    holds the tracked `.claude/skills/` tree, so a Dockerfile added there later
+    would be invisible to this guard while Renovate still applied its rules to
+    it. Tracked-ness is the property that actually matters, so ask Git for it.
+
+    Raises rather than degrading if Git cannot answer: silently scanning
+    nothing would let this guard pass while asserting about an empty set.
+    """
+    listing = subprocess.run(
+        ["git", "-C", str(_REPO_ROOT), "ls-files", "-z", "Dockerfile", "*/Dockerfile"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return {_REPO_ROOT / rel for rel in listing.split("\0") if rel}
 
 
 def test_python_runtime_automation_is_digest_only() -> None:
@@ -237,12 +254,9 @@ def test_python_runtime_automation_is_digest_only() -> None:
     }, "webhook-proxy images change only through the dev-first promotion workflow"
 
     python_dockerfiles = {
-        rel
-        for path in _REPO_ROOT.rglob("Dockerfile")
-        if not _IGNORED_TREES.intersection(
-            (rel := path.relative_to(_REPO_ROOT).as_posix()).split("/")
-        )
-        and "FROM python:" in path.read_text(encoding="utf-8")
+        path.relative_to(_REPO_ROOT).as_posix()
+        for path in _tracked_dockerfiles()
+        if "FROM python:" in path.read_text(encoding="utf-8")
     }
     assert python_dockerfiles - set(proxy_rule["matchFileNames"]) == {
         "Dockerfile",
