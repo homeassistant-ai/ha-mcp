@@ -104,7 +104,7 @@
         },
         "legacy_hacs_source": {
             "title": "repository ngo'vo' jomlu' component",
-            "description": "componentvamvaD ha-mcp turwI' repository wa'DIch Hotlh HACS, vaj component Dotlh mI' (1.x) QInmey je 'angbe' 'ej turwI' Dotlh mI' (7.x) QInmey je 'ang. chu'moHtaH HACS, 'ach pongmey muj pol. tI'meH: HACSvo' repositoryvam yIteq (integration DuHmey config De' 'ay'mey je pollu'), repository le' 'oHmeH homeassistant-ai/ha-mcp-integration yIchel, componentvo' yIjomqa', 'ej Home Assistant yItaghqa'moH."
+            "description": "componentvamvaD ha-mcp turwI' repository wa'DIch Hotlh HACS, vaj component Dotlh mI' (2.x) QInmey je 'angbe' 'ej turwI' Dotlh mI' QInmey je 'ang. chu'moHtaH HACS, 'ach pongmey muj pol. tI'meH: HACSvo' repositoryvam yIteq (integration DuHmey config De' 'ay'mey je pollu'), repository le' 'oHmeH homeassistant-ai/ha-mcp-integration yIchel, componentvo' yIjomqa', 'ej Home Assistant yItaghqa'moH."
         },
         "legacy_oauth_restart": {
             "title": "OAuth ngo' choH lo'meH Home Assistant yItaghqa'moH",

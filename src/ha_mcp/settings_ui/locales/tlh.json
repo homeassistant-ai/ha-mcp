@@ -86,7 +86,7 @@
     "visibility.boundary": "ra'meH mIw (bIng) lo'be'lu'chugh, wab nIS neH mIwvam; naw' SeHbe': entity_id lo'taHvIS laDmeH mIw pIQchugh, Dol So'lu'bogh 'anglu'taH, 'ej automation, dashboard, template ngaSbogh De'Daq 'anglu'taH. Hung veH 'oH botwI' neH'e' 'e' yIHarQo'.",
     "visibility.enabled": "Dol leghlu'ghach botwI' QotlhHa'",
     "visibility.enforce.title": "ra'meH mIw",
-    "visibility.enforce.help": "nejwI' 'ej Hoch leghwI' De' nISbe'moH neH botwI'; ra'meH mIwDaq jan Hoch laDlu'DI' SeH je. Dol So'lu'bogh laDmeH mIw pIQ lo'lu'DI' “tu'be'lu'” jang, 'ej Dol So'lu'bogh 'anglaHbogh De' (dashboard, template, automation, trace, log, 'a'baqa' je) laDlu'chugh lajHa'lu'. bong 'anglu'ghach So'meH nID; Hung veH HoSghaj 'oHbe'.",
+    "visibility.enforce.help": "nejwI' 'ej Hoch leghwI' De' nISbe'moH neH botwI'; ra'meH mIwDaq jan Hoch laDlu'DI' ha_report_issue neH lu'elnISbe' 'ej SeH je. Dol So'lu'bogh laDmeH mIw pIQ lo'lu'DI' “tu'be'lu'” jang, 'ej Dol So'lu'bogh 'anglaHbogh De' (dashboard, template, automation, trace, log, 'a'baqa' je) laDlu'chugh lajHa'lu'. bong 'anglu'ghach So'meH nID; Hung veH HoSghaj 'oHbe'.",
     "visibility.enforce.only_enforced": "Hoch janmeyDaq Dolmey luSo'lu'bogh laDlaH pagh (nejwI'Daq neHbe')",
     "visibility.categories.title": "Segh lo'taHvIS So'",
     "visibility.categories.help": "Qagh nejmeH pagh <code>config</code> Dolmey'e' Dolmey luchenmoHlu'bogh per Home Assistant.",
@@ -111,7 +111,7 @@
     "visibility.assist.help": "Home Assistant Assist (“conversation”) ghogh QaHwI'vaD 'anglu'be'bogh Dolmey So'; DuHmey > ghogh QaHwI'pu' > 'ang tetlh rur. chu'lu'taHvIS, nejlu' Hochlogh WebSocket-Daq cha'logh laD.",
     "visibility.assist.only_exposed": "Assist-vaD Dolmey 'anglu'bogh neH 'ang",
     "features.enable_tool_search.label": "janmey nejwI' yIQotlhHa'",
-    "features.enable_tool_search.help": "janmey naQ qa'meH nejlu'taHvIS tu'lu'bogh janmey neH 'ang. lo'be'lu'taHvIS context 46K tokenvo' 5K tokenDaq machmoH. ⚠️ Claude Sonnet Opus ghap Dalo'chugh, yIchu'Qo' — jan nejmeH pat / deferred tools luqeng modelmeyvetlh, 'ej patmaj nIS. Claude tlhej ha-mcp jan nej Dalo'meH, wa'DIch Claude jan nej pat yIchu'Ha'; pagh yIchu'Ha'taH. native deferred tools ghajbe'bogh LLMmey (chovnatlh Claude Haiku, SumDaq Qapbogh OpenAI-compatible models) ghap context Qorwagh mach ghajbogh LLMmey neHvaD yIlo'. ha_search_tools vegh janmey tu'lu', 'ej laD/ghItlh/teq proxy Seghmey vegh lo'lu'. QapchoHmeH add-on Dataghqa'moHnIS.",
+    "features.enable_tool_search.help": "janmey naQ qa'meH nejlu'taHvIS tu'lu'bogh janmey neH 'ang. lo'be'lu'taHvIS context 90% machmoH, 5K token retlhDaq. ⚠️ claude.ai, GitHub, ChatGPT pagh Claude Sonnet Opus Dalo'chugh, yIchu'Qo' — jan nejmeH pat / deferred tools luqeng modelmeyvetlh, 'ej patmaj nIS. Claude tlhej ha-mcp jan nej Dalo'meH, wa'DIch Claude jan nej pat yIchu'Ha'; pagh yIchu'Ha'taH. native deferred tools ghajbe'bogh LLMmey (chovnatlh Claude Haiku, SumDaq Qapbogh OpenAI-compatible models) ghap context Qorwagh mach ghajbogh LLMmey neHvaD yIlo'. ha_search_tools vegh janmey tu'lu', 'ej laD/ghItlh/teq proxy Seghmey vegh lo'lu'. QapchoHmeH add-on Dataghqa'moHnIS.",
     "features.tool_search_max_results.label": "jan nej mI' jenqu'",
     "features.tool_search_max_results.help": "jan nej chu'lu'taHvIS ha_search_tools nobbogh janmey mI' jenqu'. mI' mach (2-3) wIvlu'chugh context tokenmey pol, 'ach janmey lI' 'op leghbe'laH. veH 2-10. QapchoHmeH add-on Dataghqa'moHnIS.",
     "features.enable_tool_security_policies.label": "jan Hung chutmey tIQotlhHa' ('Itlh)",
@@ -270,7 +270,7 @@
     "backup.bulk.confirm": "Hoch polqa'meH De' rapbogh DaQaw''a': {filters}?",
     "backup.bulk.deleted": "{count} polqa'meH De' Qaw'ta'",
     "filesystem.custom.title": "'a'baqa'mey pat qawHaqmey pIm ('Itlh)",
-    "filesystem.custom.help": "'a'baqa' janmey <strong>laDlaHbogh 'ej ghItlhlaHbogh</strong> qawHaqmey chel (Hoch tlheghDaq wa'). chermeH Hemey naQbe'mey 'ej chaw'lu'bogh HAOS volumes jIlmey laj. SIbI' Qap.",
+    "filesystem.custom.help": "'a'baqa' janmey <strong>laDlaHbogh 'ej ghItlhlaHbogh</strong> qawHaqmey chel (Hoch tlheghDaq wa'). chermeH Hemey naQbe'mey 'ej chaw'lu'bogh HAOS volumes jIlmey laj; <code>sensor.yaml</code> rur chermeH 'a'baqa' pong DaghItlhlaH. SIbI' Qap.",
     "filesystem.custom.blocked": "reH botlu': {paths}, HeDaq <code>..</code> lo'lu'ghach, chaw'lu'bogh HAOS volumes HurDaq naQbogh Hemey je.",
     "filesystem.custom.enable_first": "choHmeH Dung Beta DuHmey tIchu' 'ej 'a'baqa'mey pat janmey tIchu'.",
     "filesystem.custom.unavailable": "DaH qawHaqmey pIm lo'laHbe'.",
@@ -430,9 +430,9 @@
     "addon.backup_hint.description": "Qobbogh mIw qaSpa' Home Assistant tarball backup naQ chupmeH\n`ha_manage_backup(scope='snapshot')` jan DelmeH ghItlhDaq LLMvaD\n'anglu'bogh qeS mu'mey choH. chovnatlh janmey law' teqmeH mIw.\nLLM-vaD QInvam wa' neH SIgh.\n\nautomation / script / helper / latlh choH Hoch qaSpa' nuv\nvangnISbe'taHvIS snapshot chenmoHmeH, bIngDaq **choHmey\nauto-backup yIQotlhHa'** DuH pIm yIlo'.",
     "addon.secret_path.name": "pegh He le'",
     "addon.secret_path.description": "MCP turwI'vaD HTTP He le' wIvlaHlu'. chIm yIpol; vaj He pegh chenmoH pat.\n",
-    "addon_stable.enable_tool_search.description": "janmey naQ qa'meH nejlu'taHvIS tu'lu'bogh janmey neH 'ang. lo'be'lu'taHvIS context 46K tokenvo' 5K tokenDaq machmoH. ⚠️ Claude Sonnet Opus ghap Dalo'chugh, yIchu'Qo' — jan nejmeH pat / deferred tools luqeng modelmeyvetlh, 'ej patmaj nIS. Claude tlhej ha-mcp jan nej Dalo'meH, wa'DIch Claude jan nej pat yIchu'Ha'; pagh yIchu'Ha'taH. native deferred tools ghajbe'bogh LLMmey (chovnatlh Claude Haiku, SumDaq Qapbogh OpenAI-compatible models) ghap context Qorwagh mach ghajbogh LLMmey neHvaD yIlo'. ha_search_tools vegh janmey tu'lu', 'ej laD/ghItlh/teq proxy Seghmey vegh lo'lu'. QapchoHmeH add-on Dataghqa'moHnIS — ghIq jan tetlh chu' laDmeH AI nIqHomlIjDaq MCP turwI' yIrarqa' pagh AI nIqHomlIj jan tetlh yIlaDqa'. add-on neH Dataghqa'moHchugh, AI nIqHom jan tetlh ngeqlu'bogh chu'moHbe'lu'; naDev DuH Hoch DachoHta'DI' mIwvam yIqaSmoH.",
+    "addon_stable.enable_tool_search.description": "janmey naQ qa'meH nejlu'taHvIS tu'lu'bogh janmey neH 'ang. lo'be'lu'taHvIS context 90% machmoH, 5K token retlhDaq. ⚠️ claude.ai, GitHub, ChatGPT pagh Claude Sonnet Opus Dalo'chugh, yIchu'Qo' — jan nejmeH pat / deferred tools luqeng modelmeyvetlh, 'ej patmaj nIS. Claude tlhej ha-mcp jan nej Dalo'meH, wa'DIch Claude jan nej pat yIchu'Ha'; pagh yIchu'Ha'taH. native deferred tools ghajbe'bogh LLMmey (chovnatlh Claude Haiku, SumDaq Qapbogh OpenAI-compatible models) ghap context Qorwagh mach ghajbogh LLMmey neHvaD yIlo'. ha_search_tools vegh janmey tu'lu', 'ej laD/ghItlh/teq proxy Seghmey vegh lo'lu'. QapchoHmeH add-on Dataghqa'moHnIS — ghIq jan tetlh chu' laDmeH AI nIqHomlIjDaq MCP turwI' yIrarqa' pagh AI nIqHomlIj jan tetlh yIlaDqa'. add-on neH Dataghqa'moHchugh, AI nIqHom jan tetlh ngeqlu'bogh chu'moHbe'lu'; naDev DuH Hoch DachoHta'DI' mIwvam yIqaSmoH.",
     "addon.enable_auto_backup.name": "choHmey auto-backup yIQotlhHa'",
-    "addon.enable_auto_backup.description": "MCP jan ghItlh/Qaw' Hoch qaSpa' Dol snapshot pol (automation, script, scene, helper, dashboard, label, category, group, zone, area, calendar, todo, Dol, integration, latlh teq/polHa' janmey je). /data/ha_mcp_backups/ bIngDaq YAML teywI'pu' snapshotmey pollu' (HAMCP_BACKUP_DIR vegh qa'laH), 'ej web DuHmey UI Backups jIHDaq pagh ha_manage_backup(scope='edits', ...) vegh tetlhlu', polqa'lu', Qaw'lu' ghap. nID neH — Qagh QonoSDaq ghuH ghItlhlu', 'ach mIw ghItlh botbe'. motlh chu'lu'; wIvHa'meH yIwIvHa'. QapchoHmeH add-on Dataghqa'moHnIS.",
+    "addon.enable_auto_backup.description": "MCP jan ghItlh/Qaw' Hoch qaSpa' Dol snapshot pol (automation, script, scene, helper, dashboard, label, category, group, zone, area, calendar, todo, Dol, integration, latlh teq/polHa' janmey je). poH botwI': 0 (motlh) = Hoch mIw; N > 0 = Dol HochvaD N tupmeyDaq wa' snapshot neH. /data/ha_mcp_backups/ bIngDaq YAML teywI'pu' snapshotmey pollu' (HAMCP_BACKUP_DIR vegh qa'laH), 'ej web DuHmey UI Backups jIHDaq pagh ha_manage_backup(scope='edits', ...) vegh tetlhlu', polqa'lu', Qaw'lu' ghap. nID neH — Qagh QonoSDaq ghuH ghItlhlu', 'ach mIw ghItlh botbe'. ha_write_file, ha_delete_file, ha_config_set_yaml jevaD snapshot poQlu'. motlh chu'lu'; wIvHa'meH yIwIvHa'. QapchoHmeH add-on Dataghqa'moHnIS.",
     "addon.auto_backup_throttle_minutes.name": "auto-backup poH veH (tup)",
     "addon.auto_backup_throttle_minutes.description": "Dol HochvaD poH veH. 0 (motlh) wIvlu'chugh, ghItlh Hoch qaSpa' snapshot chenmoH. N>0 wIvlu'chugh, Hoch N tupDaq Dol HochvaD wa' snapshot neH chenmoH. veH 0–1440.",
     "addon.auto_backup_retain_per_entity.name": "auto-backup polmeH mI' (Dol Hoch)",
@@ -770,7 +770,7 @@
     },
     "ha_config_set_yaml": {
       "title": "YAML chermeH De' mung choH",
-      "description": "configuration.yaml, packages/*.yaml, themes/*.yaml jeDaq YAML chermeH De' mung chu'moH (mIw Qav)."
+      "description": "configuration.yaml pagh package 'a'baqa'meyDaq YAML chermeH De' mung chu'moH (mIw Qav)."
     },
     "ha_manage_backup": {
       "title": "polqa'meH De' SeH",

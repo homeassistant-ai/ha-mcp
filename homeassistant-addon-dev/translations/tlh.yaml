@@ -28,12 +28,12 @@ configuration:
   enable_tool_search:
     name: janmey nejwI' yIQotlhHa'
     description: janmey naQ qa'meH nejlu'taHvIS tu'lu'bogh janmey neH 'ang. lo'be'lu'taHvIS
-      context 46K tokenvo' 5K tokenDaq machmoH. ⚠️ Claude Sonnet Opus ghap Dalo'chugh,
-      yIchu'Qo' — jan nejmeH pat / deferred tools luqeng modelmeyvetlh, 'ej patmaj
-      nIS. Claude tlhej ha-mcp jan nej Dalo'meH, wa'DIch Claude jan nej pat yIchu'Ha';
-      pagh yIchu'Ha'taH. native deferred tools ghajbe'bogh LLMmey (chovnatlh Claude
-      Haiku, SumDaq Qapbogh OpenAI-compatible models) ghap context Qorwagh mach ghajbogh
-      LLMmey neHvaD yIlo'. ha_search_tools vegh janmey tu'lu', 'ej laD/ghItlh/teq
+      context 90% machmoH, 5K token retlhDaq. ⚠️ claude.ai, GitHub, ChatGPT pagh Claude
+      Sonnet Opus Dalo'chugh, yIchu'Qo' — jan nejmeH pat / deferred tools luqeng modelmeyvetlh,
+      'ej patmaj nIS. Claude tlhej ha-mcp jan nej Dalo'meH, wa'DIch Claude jan nej
+      pat yIchu'Ha'; pagh yIchu'Ha'taH. native deferred tools ghajbe'bogh LLMmey (chovnatlh
+      Claude Haiku, SumDaq Qapbogh OpenAI-compatible models) ghap context Qorwagh
+      mach ghajbogh LLMmey neHvaD yIlo'. ha_search_tools vegh janmey tu'lu', 'ej laD/ghItlh/teq
       proxy Seghmey vegh lo'lu'. QapchoHmeH add-on Dataghqa'moHnIS.
   enable_tool_security_policies:
     name: jan Hung chutmey tIQotlhHa' ('Itlh)
@@ -180,13 +180,16 @@ configuration:
       wIvlu'pu'chugh je buSHa'lu'.
   enable_auto_backup:
     name: choHmey auto-backup yIQotlhHa'
-    description: MCP jan ghItlh/Qaw' Hoch qaSpa' Dol snapshot pol (automation, script,
-      scene, helper, dashboard, label, category, group, zone, area, calendar, todo,
-      Dol, integration, latlh teq/polHa' janmey je). /data/ha_mcp_backups/ bIngDaq
-      YAML teywI'pu' snapshotmey pollu' (HAMCP_BACKUP_DIR vegh qa'laH), 'ej web DuHmey
-      UI Backups jIHDaq pagh ha_manage_backup(scope='edits', ...) vegh tetlhlu', polqa'lu',
-      Qaw'lu' ghap. nID neH — Qagh QonoSDaq ghuH ghItlhlu', 'ach mIw ghItlh botbe'.
-      motlh chu'lu'; wIvHa'meH yIwIvHa'. QapchoHmeH add-on Dataghqa'moHnIS.
+    description: 'MCP jan ghItlh/Qaw'' Hoch qaSpa'' Dol snapshot pol (automation,
+      script, scene, helper, dashboard, label, category, group, zone, area, calendar,
+      todo, Dol, integration, latlh teq/polHa'' janmey je). poH botwI'': 0 (motlh)
+      = Hoch mIw; N > 0 = Dol HochvaD N tupmeyDaq wa'' snapshot neH. /data/ha_mcp_backups/
+      bIngDaq YAML teywI''pu'' snapshotmey pollu'' (HAMCP_BACKUP_DIR vegh qa''laH),
+      ''ej web DuHmey UI Backups jIHDaq pagh ha_manage_backup(scope=''edits'', ...)
+      vegh tetlhlu'', polqa''lu'', Qaw''lu'' ghap. nID neH — Qagh QonoSDaq ghuH ghItlhlu'',
+      ''ach mIw ghItlh botbe''. ha_write_file, ha_delete_file, ha_config_set_yaml
+      jevaD snapshot poQlu''. motlh chu''lu''; wIvHa''meH yIwIvHa''. QapchoHmeH add-on
+      Dataghqa''moHnIS.'
   auto_backup_throttle_minutes:
     name: auto-backup poH veH (tup)
     description: Dol HochvaD poH veH. 0 (motlh) wIvlu'chugh, ghItlh Hoch qaSpa' snapshot
