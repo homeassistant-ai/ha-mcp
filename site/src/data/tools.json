@@ -2914,7 +2914,7 @@
     "inputSchema": {
       "properties": {
         "query": {
-          "type": "Annotated[str | None, Field(default=None, description='What to search for (entity name fragment, free-text config term, entity_id). Searches BOTH the entity registry (entity_ids, friendly names, areas) AND configuration bodies (automation triggers/actions, script sequences, scene contents, helper bodies, dashboard cards) in one call. Use this for any find-something-in-HA question — entity OR config. Omit `query` to enumerate by `domain_filter`, `area_filter`, and/or `state_filter` alone (registry-listing mode); configuration-body search is skipped in that mode because there is no term to match against.')]",
+          "type": "Annotated[str | None, Field(default=None, description='What to search for (entity name fragment, free-text config term, entity_id). Searches BOTH the entity registry (entity_ids, friendly names, areas) AND configuration bodies (automation triggers/actions, script sequences, scene contents, helper bodies, dashboard cards) in one call. Use this for any find-something-in-HA question — entity OR config. Pass the exact entity_id, not a name fragment, when checking what a rename or delete would break: that form reports automations, scripts and scenes referencing it even when their configuration could not be read. Omit `query` to enumerate by `domain_filter`, `area_filter`, and/or `state_filter` alone (registry-listing mode); configuration-body search is skipped in that mode because there is no term to match against.')]",
           "default": null
         },
         "domain_filter": {
@@ -2970,7 +2970,7 @@
           "default": null
         },
         "config_time_budget": {
-          "type": "Annotated[float | None, Field(default=None, gt=0, le=300, description=\"Per-call override for the per-id config-fetch wall-clock budget (seconds). Replaces the per-type HAMCP_*_CONFIG_TIME_BUDGET defaults for the automation, script, AND scene branches when their bulk-fetch falls through to per-id Attempt-C. Use when a `partial: True` response names time-budget skipping. Stateless per-call: one caller raising the budget doesn't affect others. None = use the per-type env defaults.\")]",
+          "type": "Annotated[float | None, Field(default=None, gt=0, le=300, description=\"Per-call override for the per-id config-fetch wall-clock budget (seconds). Replaces the per-type HAMCP_*_CONFIG_TIME_BUDGET defaults for the automation, script, AND scene branches. Use when a `partial: True` response names time-budget skipping. Stateless per-call: one caller raising the budget doesn't affect others. None = use the per-type env defaults.\")]",
           "default": null
         }
       }
