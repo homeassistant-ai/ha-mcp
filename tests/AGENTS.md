@@ -40,6 +40,10 @@ testcontainer run).
   EVERY lane by `_install_custom_component`. A test may therefore rely on
   component-gated behaviour with no marker — e.g. a config entry's
   `unique_id`, which Home Assistant's own API never exposes on any endpoint.
+  Consequence for `ha_search`: a query-driven call is served by the component's
+  in-process scan, not the legacy REST path, so a test written for legacy-only
+  behaviour passes *vacuously*. Naming a `search_types` the component does not
+  serve (`"dashboard"`) sends the whole call down the legacy path.
 - **The in-process "server" config entry** of that same component (#1527) is
   the embedded backend only, seeded separately. That one IS lane-specific.
 

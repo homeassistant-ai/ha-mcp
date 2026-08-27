@@ -2,7 +2,7 @@
 
 import logging
 
-from ha_mcp.__main__ import StatelessSessionLogFilter
+from ha_mcp.log_filters import StatelessSessionLogFilter
 
 
 class TestStatelessSessionLogFilter:

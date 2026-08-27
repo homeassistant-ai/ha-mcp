@@ -49,9 +49,10 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from functools import cache
 from typing import TYPE_CHECKING, Any, cast
 
 import voluptuous as vol
@@ -59,7 +60,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import llm
 from homeassistant.helpers.httpx_client import get_async_client
-from voluptuous_openapi import convert_to_voluptuous
 
 from .const import (
     DATA_LLM_API_UNSUB,
@@ -127,6 +127,25 @@ _FALLBACK_DENY_TOOLS = frozenset(
 _SEARCH_TOOL_NAME = "ha_search_tools"
 _CALL_TOOL_NAME = "ha_call_tool"
 _SEARCH_RESULT_LIMIT = 8
+
+
+@cache
+def _schema_converter() -> Callable[[Any], Any]:
+    """Resolve the Core-provided schema converter once, off the event loop."""
+    try:
+        legacy = importlib.import_module("voluptuous_openapi")
+    except ModuleNotFoundError as err:
+        if err.name != "voluptuous_openapi":
+            raise
+        probatio = importlib.import_module("probatio")
+        return cast(Callable[[Any], Any], probatio.from_openapi)
+    return cast(Callable[[Any], Any], legacy.convert_to_voluptuous)
+
+
+def convert_to_voluptuous(schema: Any) -> vol.Schema:
+    """Convert an OpenAPI schema on stable and Probatio-based HA Core."""
+    return cast(vol.Schema, _schema_converter()(schema))
+
 
 # Used when the server's initialize result carries no instructions (it always
 # should — ha-mcp ships server-level instructions — but never render an empty
@@ -199,24 +218,25 @@ def _is_transport_failure(err: BaseException) -> bool:
 
 
 def _import_mcp_sdk() -> None:
-    """Import the mcp client SDK modules (blocking; run on the executor).
+    """Import lazy LLM dependencies (blocking; run on the executor).
 
-    Raises ImportError when the SDK is not importable — the caller decides
-    whether that skips registration (SDK missing entirely) or surfaces as a
-    conversation error.
+    Raises ImportError when the MCP SDK or Core's schema converter is not
+    importable — the caller decides whether that skips registration or
+    surfaces as a conversation error.
     """
     importlib.import_module("mcp.client.session")
     importlib.import_module("mcp.client.streamable_http")
+    _schema_converter()
 
 
 async def async_probe_mcp_sdk(hass: HomeAssistant) -> bool:
-    """Return True when the mcp client SDK imports (first import off-loop)."""
+    """Return True when lazy LLM dependencies import (first import off-loop)."""
     try:
         await hass.async_add_executor_job(_import_mcp_sdk)
     except ImportError as err:
         _LOGGER.warning(
-            "The installed server package provides no importable 'mcp' client "
-            "SDK (%s); the conversation-agent LLM API will not be available",
+            "A required LLM dependency is not importable (%s); the "
+            "conversation-agent LLM API will not be available",
             err,
         )
         return False
@@ -538,9 +558,7 @@ class HaMcpLlmApi(llm.API):
     def _convert_parameters(self, tool: Any) -> vol.Schema | None:
         """Convert one tool's JSON schema, or None (logged) when it fails."""
         try:
-            # cast: voluptuous_openapi is an untyped (ignored) import, so the
-            # call returns Any; its documented return type is vol.Schema.
-            return cast(vol.Schema, convert_to_voluptuous(tool.inputSchema))
+            return convert_to_voluptuous(tool.inputSchema)
         except Exception:
             # One unconvertible schema must not take down the whole
             # toolset for the conversation — skip that tool, loudly.

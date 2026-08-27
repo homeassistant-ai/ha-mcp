@@ -19,6 +19,10 @@
       "newLogLevel": "error"
     },
     {
+      "matchMessage": "Repository has changed during renovation - aborting",
+      "newLogLevel": "error"
+    },
+    {
       "matchMessage": "/^Some release\\(s\\) did not have a releaseTimestamp, but as we're running with minimumReleaseAgeBehaviour=timestamp-optional, proceeding\\. See debug logs for more information$/",
       "newLogLevel": "info"
     }
@@ -50,7 +54,7 @@
       "datasourceTemplate": "{{{datasource}}}"
     },
     {
-      "description": "Vendored library pins. src/ha_mcp/_vendor/ holds third-party code copied verbatim from the pinned sdist, so no package manager sees it: enabledManagers excludes pip_requirements and dependabot's uv ecosystem reads only pyproject.toml/uv.lock. Without this manager a CVE fix would never open a PR. A bump alone does not regenerate the tree — tests/src/unit/test_vendored_websockets.py fails the renovate PR until scripts/vendor_websockets.py is re-run and the result committed, which is the intended handoff.",
+      "description": "Vendored library pins. src/ha_mcp/_vendor/ holds third-party code copied verbatim from the pinned sdist, so no package manager sees it: enabledManagers excludes pip_requirements and dependabot's uv ecosystem reads only pyproject.toml/uv.lock. Without this manager a CVE fix would never open a PR. A bump alone does not regenerate the tree \u2014 tests/src/unit/test_vendored_websockets.py fails the renovate PR until scripts/vendor_websockets.py is re-run and the result committed, which is the intended handoff.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^src/ha_mcp/_vendor/requirements\\.txt$/"

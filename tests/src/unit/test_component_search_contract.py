@@ -57,6 +57,11 @@ AUTOMATION_KEYS = {
     "score",
     "match_in_name",
     "match_in_config",
+    # Discussion #2258: set when HA's own reference graph names this config as
+    # referencing the queried entity. Emitted on EVERY config record, not only
+    # graph hits, so a caller can read it without probing for the key -- the
+    # component surface must carry it too or the two routes drift.
+    "match_in_references",
 }
 SCRIPT_KEYS = AUTOMATION_KEYS | {"script_id"}
 SCENE_KEYS = AUTOMATION_KEYS | {"scene_id"}
@@ -67,6 +72,7 @@ HELPER_COLLECTION_KEYS = {
     "score",
     "match_in_name",
     "match_in_config",
+    "match_in_references",
 }
 HELPER_FLOW_KEYS = {
     "entry_id",
@@ -75,6 +81,7 @@ HELPER_FLOW_KEYS = {
     "score",
     "match_in_name",
     "match_in_config",
+    "match_in_references",
 }
 ENTITY_KEYS = {
     "entity_id",
