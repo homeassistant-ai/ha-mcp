@@ -138,8 +138,8 @@ def _schema_converter() -> Callable[[Any], Any]:
         if err.name != "voluptuous_openapi":
             raise
         probatio = importlib.import_module("probatio")
-        return probatio.from_openapi
-    return legacy.convert_to_voluptuous
+        return cast(Callable[[Any], Any], probatio.from_openapi)
+    return cast(Callable[[Any], Any], legacy.convert_to_voluptuous)
 
 
 def convert_to_voluptuous(schema: Any) -> vol.Schema:
