@@ -653,7 +653,7 @@
     },
     "ha_get_app": {
       "title": "获取应用（add-on）",
-      "description": "获取 Home Assistant 应用（原名 add-on，此工具原名为 ha_get_addon） - 列出已安装、可用或获取 d"
+      "description": "获取已安装或可用的 Home Assistant 应用（附加组件），或获取其中一个的详细信息。"
     },
     "ha_get_automation_traces": {
       "title": "获取自动化追踪",
@@ -741,7 +741,7 @@
     },
     "ha_manage_app": {
       "title": "管理应用（add-on）",
-      "description": "管理 Home Assistant 应用（原名 add-on，此工具原名为 ha_manage_addon） — 更新其配置或"
+      "description": "管理 Home Assistant 应用（附加组件）或代理应用 API。"
     },
     "ha_manage_backup": {
       "title": "管理备份",

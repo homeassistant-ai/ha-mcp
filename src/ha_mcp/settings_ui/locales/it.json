@@ -653,7 +653,7 @@
     },
     "ha_get_app": {
       "title": "Ottieni app (componenti aggiuntivi)",
-      "description": "Ottieni le app di Home Assistant (precedentemente note come componenti aggiuntivi, e questo strumento come ha_get_addon) - elenca quelle installate, disponibili o ottieni dettagli"
+      "description": "Ottieni le app (componenti aggiuntivi) di Home Assistant installate o disponibili, oppure i dettagli per una."
     },
     "ha_get_automation_traces": {
       "title": "Ottieni le tracce delle automazioni",
@@ -741,7 +741,7 @@
     },
     "ha_manage_app": {
       "title": "Gestisci app (componente aggiuntivo)",
-      "description": "Gestisci un'app di Home Assistant (precedentemente nota come componente aggiuntivo, e questo strumento come ha_manage_addon) — aggiorna la sua configurazione o"
+      "description": "Gestisci le app (componenti aggiuntivi) di Home Assistant o fai da proxy per l'API di un'app."
     },
     "ha_manage_backup": {
       "title": "Gestisci i backup",

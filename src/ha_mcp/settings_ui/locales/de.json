@@ -653,7 +653,7 @@
     },
     "ha_get_app": {
       "title": "Apps (Add-ons) abrufen",
-      "description": "Home Assistant-Apps abrufen (früher als Add-ons bekannt, und dieses Tool als ha_get_addon) – installierte oder verfügbare auflisten oder abrufen"
+      "description": "Installierte oder verfügbare Home Assistant Apps (Add-ons) oder Details zu einer abrufen."
     },
     "ha_get_automation_traces": {
       "title": "Traces abrufen",
@@ -741,7 +741,7 @@
     },
     "ha_manage_app": {
       "title": "App (Add-on) verwalten",
-      "description": "Eine Home Assistant-App verwalten (früher als Add-on bekannt, und dieses Tool als ha_manage_addon) – Konfiguration aktualisieren o"
+      "description": "Home Assistant Apps (Add-ons) verwalten oder eine App-API proxyn."
     },
     "ha_manage_backup": {
       "title": "Backups verwalten",

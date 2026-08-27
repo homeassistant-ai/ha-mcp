@@ -653,7 +653,7 @@
     },
     "ha_get_app": {
       "title": "Obtenir des applications (add-ons)",
-      "description": "Obtenir les applications Home Assistant (anciennement connues sous le nom d'add-ons, et cet outil sous le nom de ha_get_addon) — lister les applications installées, disponibles, ou obtenir d"
+      "description": "Obtenez les applications (add-ons) Home Assistant installées ou disponibles, ou les détails de l'une d'entre elles."
     },
     "ha_get_automation_traces": {
       "title": "Obtenir les traces",
@@ -741,7 +741,7 @@
     },
     "ha_manage_app": {
       "title": "Gérer l'application (add-on)",
-      "description": "Gérer une application Home Assistant (anciennement connue sous le nom d'add-on, et cet outil sous le nom de ha_manage_addon) — mettre à jour sa configuration ou"
+      "description": "Gérez les applications (add-ons) Home Assistant ou agissez comme proxy pour l'API d'une application."
     },
     "ha_manage_backup": {
       "title": "Gérer les sauvegardes",
