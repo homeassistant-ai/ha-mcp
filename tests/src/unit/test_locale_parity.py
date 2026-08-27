@@ -41,6 +41,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import warnings
 from collections import Counter
 from functools import cache
 from pathlib import Path, PurePosixPath
@@ -394,6 +395,7 @@ def test_every_locale_ships_on_every_surface() -> None:
     )
 
 
+@pytest.mark.filterwarnings("always:best-effort locale")
 def test_best_effort_locale_surface_problems_are_warning_only() -> None:
     issues: list[str] = []
     locale_lines = [
@@ -431,9 +433,10 @@ def test_best_effort_locale_surface_problems_are_warning_only() -> None:
                 issues.append(f"invalid {path.relative_to(_REPO_ROOT)}: {exc}")
 
     if issues:
-        print(
-            "::warning::best-effort locale audit: " + "; ".join(issues),
-            file=sys.stderr,
+        warnings.warn(
+            "best-effort locale audit: " + "; ".join(issues),
+            pytest.PytestWarning,
+            stacklevel=1,
         )
 
 
@@ -855,11 +858,6 @@ def _non_english_settings_locales() -> list[str]:
         for path in SETTINGS_LOCALES.glob("*.json")
         if path.stem != "en" and path.stem not in BEST_EFFORT_LOCALES
     )
-
-
-def test_best_effort_locales_are_outside_hard_content_gates() -> None:
-    assert BEST_EFFORT_LOCALES.isdisjoint(_translated_component_locales())
-    assert BEST_EFFORT_LOCALES.isdisjoint(_non_english_settings_locales())
 
 
 @cache

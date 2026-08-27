@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -260,15 +261,40 @@ class TestRegistrationLifecycle:
 
         assert fake_llm_apis(hass) == {}
         assert DATA_LLM_API_UNSUB not in hass.data.get(DOMAIN, {})
-        assert "no importable 'mcp' client SDK" in caplog.text
+        assert "required LLM dependency is not importable" in caplog.text
 
 
 class TestSchemaConversionCompatibility:
-    def test_prefers_probatio_when_home_assistant_provides_it(self, monkeypatch):
+    @pytest.fixture(autouse=True)
+    def _clear_schema_converter_cache(self):
+        llm_api._schema_converter.cache_clear()
+        yield
+        llm_api._schema_converter.cache_clear()
+
+    def test_prefers_stable_core_converter_when_available(self, monkeypatch):
+        schema = {"type": "object"}
+        legacy = SimpleNamespace(
+            convert_to_voluptuous=lambda value: {"voluptuous_openapi": value}
+        )
+
+        def _import_module(name):
+            assert name == "voluptuous_openapi"
+            return legacy
+
+        monkeypatch.setattr(llm_api.importlib, "import_module", _import_module)
+
+        assert llm_api.convert_to_voluptuous(schema) == {"voluptuous_openapi": schema}
+
+    def test_falls_back_to_probatio_on_newer_core(self, monkeypatch):
         schema = {"type": "object"}
         probatio = SimpleNamespace(from_openapi=lambda value: {"probatio": value})
 
         def _import_module(name):
+            if name == "voluptuous_openapi":
+                raise ModuleNotFoundError(
+                    "No module named 'voluptuous_openapi'",
+                    name="voluptuous_openapi",
+                )
             assert name == "probatio"
             return probatio
 
@@ -276,21 +302,41 @@ class TestSchemaConversionCompatibility:
 
         assert llm_api.convert_to_voluptuous(schema) == {"probatio": schema}
 
-    def test_falls_back_to_voluptuous_openapi_on_stable_core(self, monkeypatch):
-        schema = {"type": "object"}
+    async def test_converter_import_is_warmed_once_off_event_loop(self, monkeypatch):
+        main_thread = threading.get_ident()
+        imports: list[tuple[str, int]] = []
         legacy = SimpleNamespace(
             convert_to_voluptuous=lambda value: {"voluptuous_openapi": value}
         )
 
         def _import_module(name):
+            imports.append((name, threading.get_ident()))
+            if name.startswith("mcp."):
+                return SimpleNamespace()
+            if name == "voluptuous_openapi":
+                return legacy
             if name == "probatio":
                 raise ModuleNotFoundError("No module named 'probatio'", name="probatio")
-            assert name == "voluptuous_openapi"
-            return legacy
+            raise AssertionError(name)
 
+        async def _executor(func, *args):
+            return await asyncio.to_thread(func, *args)
+
+        hass = _make_hass()
+        hass.async_add_executor_job = AsyncMock(side_effect=_executor)
         monkeypatch.setattr(llm_api.importlib, "import_module", _import_module)
 
+        assert await llm_api.async_probe_mcp_sdk(hass)
+        schema = {"type": "object"}
         assert llm_api.convert_to_voluptuous(schema) == {"voluptuous_openapi": schema}
+        assert llm_api.convert_to_voluptuous(schema) == {"voluptuous_openapi": schema}
+
+        assert [name for name, _ in imports] == [
+            "mcp.client.session",
+            "mcp.client.streamable_http",
+            "voluptuous_openapi",
+        ]
+        assert all(thread_id != main_thread for _, thread_id in imports)
 
 
 class TestFullModeInstance:

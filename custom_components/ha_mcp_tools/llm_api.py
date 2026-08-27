@@ -49,9 +49,10 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from functools import cache
 from typing import TYPE_CHECKING, Any, cast
 
 import voluptuous as vol
@@ -128,18 +129,22 @@ _CALL_TOOL_NAME = "ha_call_tool"
 _SEARCH_RESULT_LIMIT = 8
 
 
+@cache
+def _schema_converter() -> Callable[[Any], Any]:
+    """Resolve the Core-provided schema converter once, off the event loop."""
+    try:
+        legacy = importlib.import_module("voluptuous_openapi")
+    except ModuleNotFoundError as err:
+        if err.name != "voluptuous_openapi":
+            raise
+        probatio = importlib.import_module("probatio")
+        return probatio.from_openapi
+    return legacy.convert_to_voluptuous
+
+
 def convert_to_voluptuous(schema: Any) -> vol.Schema:
     """Convert an OpenAPI schema on stable and Probatio-based HA Core."""
-    try:
-        probatio = importlib.import_module("probatio")
-    except ModuleNotFoundError as err:
-        if err.name != "probatio":
-            raise
-        legacy = importlib.import_module("voluptuous_openapi")
-        converter = legacy.convert_to_voluptuous
-    else:
-        converter = probatio.from_openapi
-    return cast(vol.Schema, converter(schema))
+    return cast(vol.Schema, _schema_converter()(schema))
 
 
 # Used when the server's initialize result carries no instructions (it always
@@ -213,14 +218,15 @@ def _is_transport_failure(err: BaseException) -> bool:
 
 
 def _import_mcp_sdk() -> None:
-    """Import the mcp client SDK modules (blocking; run on the executor).
+    """Import lazy LLM dependencies (blocking; run on the executor).
 
-    Raises ImportError when the SDK is not importable — the caller decides
-    whether that skips registration (SDK missing entirely) or surfaces as a
-    conversation error.
+    Raises ImportError when the MCP SDK or Core's schema converter is not
+    importable — the caller decides whether that skips registration or
+    surfaces as a conversation error.
     """
     importlib.import_module("mcp.client.session")
     importlib.import_module("mcp.client.streamable_http")
+    _schema_converter()
 
 
 async def async_probe_mcp_sdk(hass: HomeAssistant) -> bool:
@@ -229,8 +235,8 @@ async def async_probe_mcp_sdk(hass: HomeAssistant) -> bool:
         await hass.async_add_executor_job(_import_mcp_sdk)
     except ImportError as err:
         _LOGGER.warning(
-            "The installed server package provides no importable 'mcp' client "
-            "SDK (%s); the conversation-agent LLM API will not be available",
+            "A required LLM dependency is not importable (%s); the "
+            "conversation-agent LLM API will not be available",
             err,
         )
         return False

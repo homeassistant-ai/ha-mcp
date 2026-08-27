@@ -134,6 +134,89 @@ def _warn_best_effort_catalog(locale: str, path: Path, exc: Exception) -> None:
     _LOGGER.warning("Skipping best-effort locale %s from %s: %s", locale, path, exc)
 
 
+def _warn_best_effort_entry(locale: str, entry: str, exc: Exception) -> None:
+    _LOGGER.warning(
+        "Ignoring invalid best-effort locale %s %s; using English fallback: %s",
+        locale,
+        entry,
+        exc,
+    )
+
+
+def _catalog_fragment(
+    catalog: dict[str, Any],
+    *,
+    messages: dict[str, str] | None = None,
+    tools: dict[str, dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Return a minimal catalog used to validate one translated entry."""
+    return {
+        "meta": catalog["meta"],
+        "messages": messages or {},
+        "tool_groups": {},
+        "tools": tools or {},
+    }
+
+
+def _sanitize_best_effort_catalog(
+    locale: str,
+    catalog: dict[str, Any],
+    english: dict[str, Any],
+    settings_html: Path,
+) -> dict[str, Any]:
+    """Drop only invalid translated entries so the rest of a locale survives."""
+    sanitized = {
+        "meta": dict(catalog["meta"]),
+        "messages": dict(catalog["messages"]),
+        "tool_groups": dict(catalog["tool_groups"]),
+        "tools": {
+            tool_name: dict(fields) for tool_name, fields in catalog["tools"].items()
+        },
+    }
+    known_panels = _known_panels(settings_html)
+
+    for key, translated in tuple(sanitized["messages"].items()):
+        english_messages = (
+            {key: english["messages"][key]} if key in english["messages"] else {}
+        )
+        candidate = {
+            DEFAULT_LOCALE: _catalog_fragment(english, messages=english_messages),
+            locale: _catalog_fragment(sanitized, messages={key: translated}),
+        }
+        try:
+            _validate_placeholder_parity(candidate)
+            _validate_inline_markup(candidate)
+            _validate_panel_links(candidate, settings_html, known_panels=known_panels)
+        except ValueError as exc:
+            del sanitized["messages"][key]
+            _warn_best_effort_entry(locale, f"message {key!r}", exc)
+
+    for tool_name, translated_tool in tuple(sanitized["tools"].items()):
+        for field, translated in tuple(translated_tool.items()):
+            english_field = english["tools"].get(tool_name, {}).get(field)
+            english_tools = (
+                {tool_name: {field: english_field}} if english_field is not None else {}
+            )
+            candidate = {
+                DEFAULT_LOCALE: _catalog_fragment(english, tools=english_tools),
+                locale: _catalog_fragment(
+                    sanitized,
+                    tools={tool_name: {field: translated}},
+                ),
+            }
+            try:
+                _validate_placeholder_parity(candidate)
+            except ValueError as exc:
+                del translated_tool[field]
+                _warn_best_effort_entry(
+                    locale, f"tool {tool_name!r} field {field!r}", exc
+                )
+        if not translated_tool:
+            del sanitized["tools"][tool_name]
+
+    return sanitized
+
+
 def load_catalogs(
     directory: Path = LOCALES_DIR, settings_html: Path = _SETTINGS_HTML
 ) -> dict[str, dict[str, Any]]:
@@ -174,17 +257,9 @@ def load_catalogs(
     _validate_panel_links(strict_catalogs, settings_html)
 
     for locale in sorted(set(catalogs) - set(strict_catalogs)):
-        candidate = {
-            DEFAULT_LOCALE: catalogs[DEFAULT_LOCALE],
-            locale: catalogs[locale],
-        }
-        try:
-            _validate_placeholder_parity(candidate)
-            _validate_inline_markup(candidate)
-            _validate_panel_links(candidate, settings_html)
-        except ValueError as exc:
-            _warn_best_effort_catalog(locale, directory / f"{locale}.json", exc)
-            del catalogs[locale]
+        catalogs[locale] = _sanitize_best_effort_catalog(
+            locale, catalogs[locale], catalogs[DEFAULT_LOCALE], settings_html
+        )
     return catalogs
 
 
@@ -272,7 +347,10 @@ def _known_panels(settings_html: Path = _SETTINGS_HTML) -> set[str]:
 
 
 def _validate_panel_links(
-    catalogs: dict[str, dict[str, Any]], settings_html: Path = _SETTINGS_HTML
+    catalogs: dict[str, dict[str, Any]],
+    settings_html: Path = _SETTINGS_HTML,
+    *,
+    known_panels: set[str] | None = None,
 ) -> None:
     """Reject cross-panel links that point at a tab which does not exist.
 
@@ -285,7 +363,7 @@ def _validate_panel_links(
     and group labels go through ``escapeHtml``, so a link written there shows
     as visible garbled markup rather than a dead link — wrong, but not silent.
     """
-    panels = _known_panels(settings_html)
+    panels = known_panels if known_panels is not None else _known_panels(settings_html)
     english_messages = catalogs[DEFAULT_LOCALE]["messages"]
     for locale, catalog in catalogs.items():
         for key, value in catalog["messages"].items():

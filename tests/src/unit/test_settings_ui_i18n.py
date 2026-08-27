@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import warnings
 from collections import Counter
 from pathlib import Path
 from typing import get_args
@@ -38,8 +39,8 @@ def _shipped_locales() -> list[str]:
     )
 
 
-def test_best_effort_catalogs_are_outside_hard_locale_gates() -> None:
-    assert BEST_EFFORT_LOCALES.isdisjoint(_shipped_locales())
+def test_only_klingon_is_best_effort() -> None:
+    assert frozenset({"tlh"}) == BEST_EFFORT_LOCALES
 
 
 def _catalog_file(locale: str) -> str:
@@ -203,6 +204,33 @@ def test_placeholder_mismatch_is_rejected(tmp_path: Path) -> None:
         load_catalogs(tmp_path)
 
 
+def test_invalid_best_effort_message_falls_back_without_dropping_locale(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={"saved": "Saved {count}", "greeting": "Hello"},
+    )
+    _write_catalog(
+        tmp_path,
+        "tlh",
+        native_name="tlhIngan Hol (Klingon)",
+        messages={"saved": "pol", "greeting": "nuqneH"},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui._i18n"):
+        catalogs = load_catalogs(tmp_path)
+
+    assert catalogs["tlh"]["messages"] == {"greeting": "nuqneH"}
+    assert build_payload("tlh", catalogs)["messages"] == {
+        "saved": "Saved {count}",
+        "greeting": "nuqneH",
+    }
+    assert "tlh message 'saved'" in caplog.text
+
+
 def test_tool_placeholder_mismatch_is_rejected(tmp_path: Path) -> None:
     _write_catalog(
         tmp_path,
@@ -223,6 +251,45 @@ def test_tool_placeholder_mismatch_is_rejected(tmp_path: Path) -> None:
         ValueError, match=r"tool 'ha_example'.*description.*placeholders"
     ):
         load_catalogs(tmp_path)
+
+
+def test_invalid_best_effort_tool_field_falls_back_without_dropping_siblings(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={},
+        tools={
+            "ha_example": {
+                "title": "Example",
+                "description": "Run for {entity}",
+            }
+        },
+    )
+    _write_catalog(
+        tmp_path,
+        "tlh",
+        native_name="tlhIngan Hol (Klingon)",
+        messages={},
+        tools={
+            "ha_example": {
+                "title": "ghantoH",
+                "description": "qaghom",
+            }
+        },
+    )
+
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui._i18n"):
+        catalogs = load_catalogs(tmp_path)
+
+    assert catalogs["tlh"]["tools"] == {"ha_example": {"title": "ghantoH"}}
+    assert build_payload("tlh", catalogs)["tools"]["ha_example"] == {
+        "title": "ghantoH",
+        "description": "Run for {entity}",
+    }
+    assert "tlh tool 'ha_example' field 'description'" in caplog.text
 
 
 def test_unknown_text_direction_is_rejected(tmp_path: Path) -> None:
@@ -457,6 +524,7 @@ def test_native_names_name_their_own_language() -> None:
     )
 
 
+@pytest.mark.filterwarnings("always:best-effort locale")
 def test_tlh_catalog_loads_and_is_registered() -> None:
     catalog = CATALOGS.get("tlh")
     issues: list[str] = []
@@ -475,8 +543,10 @@ def test_tlh_catalog_loads_and_is_registered() -> None:
         }
         issues.extend(label for label, valid in expected.items() if not valid)
     if issues:
-        logging.getLogger(__name__).warning(
-            "best-effort locale tlh: %s", ", ".join(issues)
+        warnings.warn(
+            "best-effort locale tlh: " + ", ".join(issues),
+            pytest.PytestWarning,
+            stacklevel=1,
         )
 
 
