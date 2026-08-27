@@ -107,9 +107,12 @@ def test_invalid_best_effort_catalog_warns_without_blocking_other_locales(
     assert "Skipping best-effort locale tlh" in caplog.text
 
 
-def test_invalid_strict_catalog_still_blocks_loading(tmp_path: Path) -> None:
+@pytest.mark.parametrize("payload", [b"{not json", b"\xff"], ids=["json", "utf8"])
+def test_invalid_strict_catalog_still_blocks_loading(
+    tmp_path: Path, payload: bytes
+) -> None:
     _write_catalog(tmp_path, "en", native_name="English", messages={"a": "A"})
-    (tmp_path / "de.json").write_text("{not json", encoding="utf-8")
+    (tmp_path / "de.json").write_bytes(payload)
 
     with pytest.raises(ImportError, match=r"de\.json"):
         load_catalogs(tmp_path)

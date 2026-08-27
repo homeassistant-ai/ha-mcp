@@ -96,7 +96,7 @@ def _load_catalog_file(path: Path) -> dict[str, Any]:
     """Load and validate one catalog without coupling it to its siblings."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ImportError(f"Invalid settings UI locale catalog: {path}") from exc
     if not isinstance(raw, dict):
         raise ValueError(f"Locale catalog {path} must contain a JSON object")

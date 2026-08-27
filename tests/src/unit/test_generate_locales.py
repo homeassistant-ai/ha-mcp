@@ -50,6 +50,32 @@ def test_invalid_best_effort_catalog_warns_and_uses_english_fallback(
     assert "best-effort locale tlh" in stderr
 
 
+def test_invalid_best_effort_entries_warn_and_preserve_valid_messages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    locales = tmp_path / "locales"
+    locales.mkdir()
+    (locales / "en.json").write_text(
+        json.dumps({"messages": {"valid": "English", "blank": "Fallback"}}),
+        encoding="utf-8",
+    )
+    (locales / "tlh.json").write_text(
+        json.dumps({"messages": {"valid": "Qapla'", "blank": "", "non_string": 3}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(generate_locales, "LOCALES_DIR", locales)
+
+    catalogs = generate_locales.load_catalogs()
+
+    assert catalogs["tlh"] == {"valid": "Qapla'"}
+    stderr = capsys.readouterr().err
+    assert "Ignoring invalid best-effort locale entry" in stderr
+    assert "tlh.json.messages.blank" in stderr
+    assert "tlh.json.messages.non_string" in stderr
+
+
 class TestResolveText:
     def test_override_order_is_flavor_then_features_then_addon(self) -> None:
         messages = {

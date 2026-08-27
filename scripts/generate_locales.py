@@ -64,6 +64,29 @@ FEATURE_META_END = "// FEATURE_META:END GENERATED"
 _FEATURE_KEY_RE = re.compile(r"^features\.([a-z0-9_]+)\.label$")
 
 
+def _validate_best_effort_messages(
+    value: object, *, context: str, path: Path
+) -> dict[str, str]:
+    """Drop invalid entries while retaining valid best-effort translations."""
+    if not isinstance(value, dict):
+        return _validate_string_map(value, context=context)
+
+    result: dict[str, str] = {}
+    for key, text in value.items():
+        try:
+            result.update(_validate_string_map({key: text}, context=context))
+        except ValueError as exc:
+            entry = (
+                f"{context}.{key}" if isinstance(key, str) else f"{context}[{key!r}]"
+            )
+            print(
+                f"::warning file={path}::Ignoring invalid best-effort locale "
+                f"entry {entry}: {exc}",
+                file=sys.stderr,
+            )
+    return result
+
+
 def load_catalogs() -> dict[str, dict[str, str]]:
     """Every canonical catalog's ``messages`` section, keyed by locale code.
 
@@ -77,9 +100,14 @@ def load_catalogs() -> dict[str, dict[str, str]]:
             data = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 raise ValueError(f"{path.name} must contain a JSON object")
-            catalogs[path.stem] = _validate_string_map(
-                data.get("messages"), context=f"{path.name}.messages"
-            )
+            context = f"{path.name}.messages"
+            messages = data.get("messages")
+            if is_best_effort_locale(path.stem):
+                catalogs[path.stem] = _validate_best_effort_messages(
+                    messages, context=context, path=path
+                )
+            else:
+                catalogs[path.stem] = _validate_string_map(messages, context=context)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             if not is_best_effort_locale(path.stem):
                 raise
