@@ -810,9 +810,11 @@ language code (`cs`, `de`, `eo`, `es`, `fr`, `it`, `ko`, `nl`, `pl`, `ru`, `sv`,
 locale, remains available on all four surfaces when its files are valid, and
 uses English per-key fallback when they are incomplete. It is excluded from
 automatic translation planning so it consumes no model quota. Catalog parsing,
-surface registration, and generated-drift problems are reported as warnings
-rather than blocking CI or locale-sync. Completeness and literal parity are not
-checked for `tlh`: missing entries fall back to English, and imperfect novelty
+surface registration, generated drift, and generated add-on schema-coverage
+problems are reported as warnings rather than blocking CI or locale-sync.
+Strict completeness and literal-parity gates do not apply to `tlh`: settings-UI
+completeness and literal parity are not checked, generated add-on coverage gaps
+are warning-only, missing entries fall back to English, and imperfect novelty
 copy is accepted without a diagnostic. Every other locale and every shared,
 English-side pipeline failure remain hard failures.
 

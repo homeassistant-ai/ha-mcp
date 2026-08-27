@@ -394,6 +394,7 @@ class TestAddonStructure:
             "translation check would silently collect zero cases"
         )
 
+    @pytest.mark.filterwarnings("always:best-effort locale")
     @pytest.mark.parametrize("addon_dir", _ADDON_DIRS)
     def test_translations_cover_every_schema_key(self, addon_dir):
         """Every key declared in ``config.yaml``'s ``schema:`` must have a
