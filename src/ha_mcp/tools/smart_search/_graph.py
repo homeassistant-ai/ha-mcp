@@ -359,14 +359,15 @@ async def fetch_related_buckets(client: Any, entity_id: str) -> GraphResult | No
 # two 0-or-100 signals against a threshold of 100), so a graph hit sorts
 # indistinguishably from a body hit.
 #
-# Fuzzy mode is not symmetric, and no value here makes it so: the 100 cap
-# belongs to the config-body score (``_search_in_dict``), while the NAME score
-# from ``_calculate_entity_score`` accumulates without a ceiling — a name
-# echoing the queried entity's words can pass 100 on its own. So with
-# ``exact_match=False`` a graph-ONLY hit (``_merge_graph_hits`` leaves an
-# already-scored record's score alone) can sort below a match that merely
-# resembles the query, and land on a later page under a small ``limit``. It is
-# still counted in ``total_matches`` unless visibility enforcement scrubs it.
+# Fuzzy mode is not symmetric, and no value here makes it so without breaking
+# the tie above: the 100 cap belongs to the config-body score
+# (``_search_in_dict``), while the NAME score from ``_calculate_entity_score``
+# accumulates without a ceiling — a name echoing the queried entity's words can
+# pass 100 on its own. So with ``exact_match=False`` a graph-ONLY hit
+# (``_merge_graph_hits`` leaves an already-scored record's score alone) can sort
+# below a match that merely resembles the query, and land on a later page under
+# a small ``limit``. It is still counted in ``total_matches`` unless visibility
+# enforcement scrubs it.
 _GRAPH_HIT_SCORE = 100
 
 
