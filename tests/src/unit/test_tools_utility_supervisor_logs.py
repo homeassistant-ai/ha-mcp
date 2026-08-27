@@ -454,7 +454,7 @@ class TestGetAddonLogsViaSupervisor:
         with pytest.raises(HomeAssistantConnectionError) as exc_info:
             await mock_client.get_addon_logs("core_mosquitto")
 
-        assert "Timeout" in str(exc_info.value)
+        assert "after 0.01s: TimeoutError" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_raises_connection_error_on_network_failure_with_distinct_message(
