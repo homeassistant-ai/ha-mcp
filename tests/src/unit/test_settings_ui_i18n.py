@@ -234,6 +234,36 @@ def test_invalid_best_effort_message_falls_back_without_dropping_locale(
     assert "tlh message 'saved'" in caplog.text
 
 
+@pytest.mark.parametrize("invalid", ["", 7], ids=["blank", "non-string"])
+def test_invalid_best_effort_message_value_preserves_valid_siblings(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    invalid: object,
+) -> None:
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={"invalid": "English fallback", "valid": "Valid"},
+    )
+    _write_catalog(
+        tmp_path,
+        "tlh",
+        native_name="tlhIngan Hol (Klingon)",
+        messages={"invalid": invalid, "valid": "Qapla'"},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui._i18n"):
+        catalogs = load_catalogs(tmp_path)
+
+    assert catalogs["tlh"]["messages"] == {"valid": "Qapla'"}
+    assert build_payload("tlh", catalogs)["messages"] == {
+        "invalid": "English fallback",
+        "valid": "Qapla'",
+    }
+    assert "tlh message 'invalid'" in caplog.text
+
+
 def test_tool_placeholder_mismatch_is_rejected(tmp_path: Path) -> None:
     _write_catalog(
         tmp_path,
@@ -291,6 +321,40 @@ def test_invalid_best_effort_tool_field_falls_back_without_dropping_siblings(
     assert build_payload("tlh", catalogs)["tools"]["ha_example"] == {
         "title": "ghantoH",
         "description": "Run for {entity}",
+    }
+    assert "tlh tool 'ha_example' field 'description'" in caplog.text
+
+
+def test_invalid_best_effort_tool_field_preserves_valid_siblings(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    _write_catalog(
+        tmp_path,
+        "en",
+        native_name="English",
+        messages={},
+        tools={
+            "ha_example": {
+                "title": "Example",
+                "description": "English fallback",
+            }
+        },
+    )
+    _write_catalog(
+        tmp_path,
+        "tlh",
+        native_name="tlhIngan Hol (Klingon)",
+        messages={},
+        tools={"ha_example": {"title": "ghantoH", "description": 7}},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.settings_ui._i18n"):
+        catalogs = load_catalogs(tmp_path)
+
+    assert catalogs["tlh"]["tools"] == {"ha_example": {"title": "ghantoH"}}
+    assert build_payload("tlh", catalogs)["tools"]["ha_example"] == {
+        "title": "ghantoH",
+        "description": "English fallback",
     }
     assert "tlh tool 'ha_example' field 'description'" in caplog.text
 

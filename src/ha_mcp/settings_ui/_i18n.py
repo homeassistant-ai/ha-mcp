@@ -92,7 +92,86 @@ def _validate_tools(value: Any, *, context: str) -> dict[str, dict[str, str]]:
     return result
 
 
-def _load_catalog_file(path: Path) -> dict[str, Any]:
+def _warn_best_effort_catalog(locale: str, path: Path, exc: Exception) -> None:
+    _LOGGER.warning("Skipping best-effort locale %s from %s: %s", locale, path, exc)
+
+
+def _warn_best_effort_entry(locale: str, entry: str, exc: Exception) -> None:
+    _LOGGER.warning(
+        "Ignoring invalid best-effort locale %s %s; using English fallback: %s",
+        locale,
+        entry,
+        exc,
+    )
+
+
+def _validate_best_effort_string_map(
+    value: Any,
+    *,
+    locale: str,
+    context: str,
+    entry_kind: str,
+) -> dict[str, str]:
+    """Drop invalid best-effort strings while preserving valid siblings."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{context} must be an object")
+
+    result: dict[str, str] = {}
+    for key, text in value.items():
+        try:
+            result.update(_validate_string_map({key: text}, context=context))
+        except ValueError as exc:
+            _warn_best_effort_entry(locale, f"{entry_kind} {key!r}", exc)
+    return result
+
+
+def _validate_best_effort_tools(
+    value: Any, *, locale: str, context: str
+) -> dict[str, dict[str, str]]:
+    """Drop invalid best-effort tool fields while preserving valid siblings."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{context} must be an object")
+
+    result: dict[str, dict[str, str]] = {}
+    for tool_name, tool_values in value.items():
+        if not isinstance(tool_name, str) or not isinstance(tool_values, dict):
+            exc = ValueError(f"{context} entries must be objects keyed by tool name")
+            _warn_best_effort_entry(locale, f"tool {tool_name!r}", exc)
+            continue
+
+        translated: dict[str, str] = {}
+        for field, field_value in tool_values.items():
+            if field not in ("title", "description"):
+                exc = ValueError(
+                    f"{context}.{tool_name} has unsupported field: {field!r}"
+                )
+                _warn_best_effort_entry(
+                    locale, f"tool {tool_name!r} field {field!r}", exc
+                )
+                continue
+            try:
+                validated = _validate_tools(
+                    {tool_name: {field: field_value}}, context=context
+                )
+            except ValueError as exc:
+                _warn_best_effort_entry(
+                    locale, f"tool {tool_name!r} field {field!r}", exc
+                )
+                continue
+            if field in validated[tool_name]:
+                translated[field] = validated[tool_name][field]
+        if translated:
+            result[tool_name] = translated
+    return result
+
+
+def _load_catalog_file(
+    path: Path, *, best_effort_locale: str | None = None
+) -> dict[str, Any]:
     """Load and validate one catalog without coupling it to its siblings."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -118,29 +197,39 @@ def _load_catalog_file(path: Path) -> dict[str, Any]:
             f"{sorted(unknown_sections)}"
         )
 
+    if best_effort_locale is None:
+        messages = _validate_string_map(
+            raw.get("messages"), context=f"{path.name}.messages"
+        )
+        tool_groups = _validate_string_map(
+            raw.get("tool_groups"), context=f"{path.name}.tool_groups"
+        )
+        tools = _validate_tools(raw.get("tools"), context=f"{path.name}.tools")
+    else:
+        messages = _validate_best_effort_string_map(
+            raw.get("messages"),
+            locale=best_effort_locale,
+            context=f"{path.name}.messages",
+            entry_kind="message",
+        )
+        tool_groups = _validate_best_effort_string_map(
+            raw.get("tool_groups"),
+            locale=best_effort_locale,
+            context=f"{path.name}.tool_groups",
+            entry_kind="tool group",
+        )
+        tools = _validate_best_effort_tools(
+            raw.get("tools"),
+            locale=best_effort_locale,
+            context=f"{path.name}.tools",
+        )
+
     return {
         "meta": {"native_name": native_name, "dir": direction},
-        "messages": _validate_string_map(
-            raw.get("messages"), context=f"{path.name}.messages"
-        ),
-        "tool_groups": _validate_string_map(
-            raw.get("tool_groups"), context=f"{path.name}.tool_groups"
-        ),
-        "tools": _validate_tools(raw.get("tools"), context=f"{path.name}.tools"),
+        "messages": messages,
+        "tool_groups": tool_groups,
+        "tools": tools,
     }
-
-
-def _warn_best_effort_catalog(locale: str, path: Path, exc: Exception) -> None:
-    _LOGGER.warning("Skipping best-effort locale %s from %s: %s", locale, path, exc)
-
-
-def _warn_best_effort_entry(locale: str, entry: str, exc: Exception) -> None:
-    _LOGGER.warning(
-        "Ignoring invalid best-effort locale %s %s; using English fallback: %s",
-        locale,
-        entry,
-        exc,
-    )
 
 
 def _catalog_fragment(
@@ -236,7 +325,10 @@ def load_catalogs(
     for path in paths:
         locale = path.stem.lower().replace("_", "-")
         try:
-            catalogs[locale] = _load_catalog_file(path)
+            catalogs[locale] = _load_catalog_file(
+                path,
+                best_effort_locale=(locale if is_best_effort_locale(locale) else None),
+            )
         except (ImportError, ValueError) as exc:
             if not is_best_effort_locale(locale):
                 raise
