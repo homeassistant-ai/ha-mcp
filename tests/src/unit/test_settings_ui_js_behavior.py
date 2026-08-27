@@ -2292,8 +2292,9 @@ def _already_decided_cases() -> list[tuple[str, str]]:
     """
     from ha_mcp.policy.approval_queue import Decision
     from ha_mcp.settings_ui._i18n import CATALOGS, DEFAULT_LOCALE
+    from ha_mcp.settings_ui._locale_policy import BEST_EFFORT_LOCALES
 
-    locales = sorted(set(CATALOGS) - {DEFAULT_LOCALE})
+    locales = sorted(set(CATALOGS) - {DEFAULT_LOCALE} - BEST_EFFORT_LOCALES)
     outcomes = sorted(set(get_args(Decision)) - {"pending"})
     # Both sides are discovered, so either emptying out collects zero cases
     # and the class below passes without driving the handler once.

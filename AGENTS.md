@@ -801,10 +801,23 @@ identity holds by construction.
 
 A language ships on all four surfaces or not at all —
 `tests/src/unit/test_locale_parity.py` enforces it. The same Home Assistant
-language code (`cs`, `de`, `eo`, `es`, `fr`, `it`, `ko`, `nl`, `pl`, `ru`, `sv`, `zh-Hans`) names every file:
+language code (`cs`, `de`, `eo`, `es`, `fr`, `it`, `ko`, `nl`, `pl`, `ru`, `sv`, `tlh`, `zh-Hans`) names every file:
 `src/ha_mcp/settings_ui/locales/<code>.json`,
 `custom_components/ha_mcp_tools/translations/<code>.json`, and
 `homeassistant-addon{,-dev}/translations/<code>.yaml`.
+
+`tlh` is the deliberate best-effort exception. It is a hand-maintained novelty
+locale, remains available on all four surfaces when its files are valid, and
+uses English per-key fallback when they are incomplete. It is excluded from
+automatic translation planning so it consumes no model quota. Catalog parsing,
+surface registration, generated drift, and generated add-on schema-coverage
+problems are reported as warnings rather than blocking CI or locale-sync.
+Strict completeness and literal-parity gates do not apply to `tlh`: settings-UI
+completeness and literal parity are not checked, generated add-on coverage gaps
+are warning-only, missing entries fall back to English, and imperfect novelty
+copy is accepted without a diagnostic. Every other locale and every shared,
+English-side pipeline failure remain hard failures.
+
 That list of codes is itself pinned by
 `test_agents_md_lists_every_shipped_locale`: adding a language means adding its
 code here, in the same PR, or the suite goes red. To add a language, add the

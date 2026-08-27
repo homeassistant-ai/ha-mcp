@@ -24,6 +24,15 @@ Home Assistant language code names every file:
 - `homeassistant-addon/translations/<code>.yaml` (generated)
 - `homeassistant-addon-dev/translations/<code>.yaml` (generated)
 
+Klingon (`tlh`) is the one best-effort exception. Its catalogs may be edited
+manually and still ship, but the automatic translation planner never queues
+them. Missing strings use English fallback; invalid or stale Klingon catalogs
+produce warnings instead of failing CI or the daily locale sync. The runtime
+loader skips an invalid Klingon settings catalog, and the generator can project
+English into its add-on catalogs, so Klingon cannot prevent any other locale
+from loading or updating. All other language codes remain subject to every
+hard gate below.
+
 Add the two authored catalogs, then run `python scripts/generate_locales.py`
 and merge: the post-merge `locale-sync.yml` workflow machine-fills every string
 over its next daily runs. The component catalog may start as an empty object;
