@@ -835,7 +835,8 @@ class HomeAssistantClient:
                     )
         except (TimeoutError, httpx.TimeoutException) as e:
             raise HomeAssistantConnectionError(
-                f"Timeout fetching /{path}/logs from Supervisor: {e}"
+                f"Timeout fetching /{path}/logs from Supervisor after "
+                f"{self.timeout}s: {e or type(e).__name__}"
             ) from e
         except httpx.HTTPError as e:
             raise HomeAssistantConnectionError(

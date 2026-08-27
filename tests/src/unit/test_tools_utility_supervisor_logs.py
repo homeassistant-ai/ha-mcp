@@ -437,6 +437,7 @@ class TestGetAddonLogsViaSupervisor:
         assert "Timeout" in str(exc_info.value)
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(10)
     async def test_supervisor_log_fetch_has_overall_deadline(
         self, mock_client, addon_install, mock_async_client_class
     ):
