@@ -823,18 +823,20 @@ class HomeAssistantClient:
         )
 
         try:
-            async with make_supervisor_httpx_client(
-                timeout=httpx.Timeout(self.timeout),
-                verify=self.verify_ssl,
-            ) as client:
-                response = await client.get(
-                    relative_path,
-                    headers={"Accept": "text/plain"},
-                    params={"lines": lines} if lines is not None else None,
-                )
-        except httpx.TimeoutException as e:
+            async with asyncio.timeout(self.timeout):
+                async with make_supervisor_httpx_client(
+                    timeout=httpx.Timeout(self.timeout),
+                    verify=self.verify_ssl,
+                ) as client:
+                    response = await client.get(
+                        relative_path,
+                        headers={"Accept": "text/plain"},
+                        params={"lines": lines} if lines is not None else None,
+                    )
+        except (TimeoutError, httpx.TimeoutException) as e:
             raise HomeAssistantConnectionError(
-                f"Timeout fetching /{path}/logs from Supervisor: {e}"
+                f"Timeout fetching /{path}/logs from Supervisor after "
+                f"{self.timeout}s: {str(e) or type(e).__name__}"
             ) from e
         except httpx.HTTPError as e:
             raise HomeAssistantConnectionError(
