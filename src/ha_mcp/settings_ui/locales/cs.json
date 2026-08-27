@@ -622,7 +622,7 @@
     },
     "ha_get_app": {
       "title": "Získat aplikace (doplňky)",
-      "description": "Získat aplikace Home Assistant (dříve známé jako doplňky a tento nástroj jako ha_get_addon) – vypsat nainstalované, dostupné nebo získat d"
+      "description": "Získat nainstalované nebo dostupné aplikace (doplňky) Home Assistant, nebo podrobnosti o jedné z nich."
     },
     "ha_get_automation_traces": {
       "title": "Získat trasování automatizací",
@@ -710,7 +710,7 @@
     },
     "ha_manage_app": {
       "title": "Spravovat aplikaci (doplněk)",
-      "description": "Spravovat aplikaci Home Assistant (dříve známou jako doplněk a tento nástroj jako ha_manage_addon) – aktualizovat její konfiguraci o"
+      "description": "Spravovat aplikace (doplňky) Home Assistant nebo zajistit proxy pro API aplikace."
     },
     "ha_manage_backup": {
       "title": "Spravovat zálohy",

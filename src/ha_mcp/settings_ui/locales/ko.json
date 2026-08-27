@@ -653,7 +653,7 @@
     },
     "ha_get_app": {
       "title": "앱(애드온) 조회",
-      "description": "Home Assistant 앱(예전 명칭은 애드온이며 이 도구도 ha_get_addon이었습니다)을 조회합니다. 설치된 앱이나 설치 가능한 앱을 나열하고 상세 정보를 가져옵니다."
+      "description": "설치되었거나 사용 가능한 Home Assistant 앱(애드온) 또는 특정 앱의 상세 정보를 가져옵니다."
     },
     "ha_get_automation_traces": {
       "title": "자동화 추적 기록 조회",
@@ -741,7 +741,7 @@
     },
     "ha_manage_app": {
       "title": "앱(애드온) 관리",
-      "description": "Home Assistant 앱(예전 명칭은 애드온이며 이 도구도 ha_manage_addon이었습니다)을 관리합니다. 설정을 변경하거나 앱을 제어합니다."
+      "description": "Home Assistant 앱(애드온)을 관리하거나 앱 API를 프록시합니다."
     },
     "ha_manage_backup": {
       "title": "백업 관리",
