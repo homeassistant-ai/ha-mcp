@@ -148,6 +148,33 @@ def test_zh_cn_region_normalizes_to_zh_hans(tmp_path: Path) -> None:
     )
 
 
+def test_traditional_chinese_regions_normalize_to_zh_hant(tmp_path: Path) -> None:
+    _write_catalog(tmp_path, "en", native_name="English", messages={})
+    _write_catalog(
+        tmp_path,
+        "zh-Hans",
+        native_name="简体中文",
+        messages={"greeting": "你好"},
+    )
+    _write_catalog(
+        tmp_path,
+        "zh-Hant",
+        native_name="繁體中文",
+        messages={"greeting": "您好"},
+    )
+    catalogs = load_catalogs(tmp_path)
+
+    for locale in ("zh-TW", "zh-HK", "zh-MO"):
+        assert normalize_locale(locale, catalogs) == "zh-hant"
+        assert select_locale(ha_language=locale, catalogs=catalogs) == "zh-hant"
+    assert normalize_locale("zh-Hans-HK", catalogs) == "zh-hans"
+    assert normalize_locale("zh-Hans-TW", catalogs) == "zh-hans"
+    assert normalize_locale("zh-Hant-CN", catalogs) == "zh-hant"
+    assert select_locale(accept_language="zh-TW,zh;q=0.9", catalogs=catalogs) == (
+        "zh-hant"
+    )
+
+
 def test_placeholder_mismatch_is_rejected(tmp_path: Path) -> None:
     _write_catalog(
         tmp_path,
