@@ -137,7 +137,9 @@ class TestCheckCli:
         )
 
         assert generate_locales.check() == 0
-        assert "warning" in capsys.readouterr().err.lower()
+        captured = capsys.readouterr()
+        assert "warning" in captured.err.lower()
+        assert "best-effort locale drift was reported" in captured.out
 
     def test_check_keeps_invalid_strict_output_hard(
         self,

@@ -250,6 +250,7 @@ def _committed_text(path: Path) -> str:
 def check() -> int:
     """Exit 1 naming every derived file that no longer matches the canon."""
     stale: list[str] = []
+    best_effort_stale: list[str] = []
     for path, content in generated_files().items():
         committed = _committed_text(path)
         if committed != content:
@@ -260,6 +261,7 @@ def check() -> int:
                     "out of sync; run python scripts/generate_locales.py to refresh it",
                     file=sys.stderr,
                 )
+                best_effort_stale.append(relative)
             else:
                 stale.append(relative)
             diff = difflib.unified_diff(
@@ -276,6 +278,12 @@ def check() -> int:
             file=sys.stderr,
         )
         return 1
+    if best_effort_stale:
+        print(
+            "strict derived locale catalogs are in sync; best-effort locale "
+            f"drift was reported above for: {best_effort_stale}"
+        )
+        return 0
     print("derived locale catalogs are in sync")
     return 0
 

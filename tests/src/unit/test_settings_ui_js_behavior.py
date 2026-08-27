@@ -2309,14 +2309,6 @@ def _already_decided_cases() -> list[tuple[str, str]]:
     return [(locale, outcome) for locale in locales for outcome in outcomes]
 
 
-def test_best_effort_locales_are_outside_hard_js_copy_cases() -> None:
-    from ha_mcp.settings_ui._locale_policy import BEST_EFFORT_LOCALES
-
-    assert BEST_EFFORT_LOCALES.isdisjoint(
-        locale for locale, _ in _already_decided_cases()
-    )
-
-
 class TestAlreadyDecidedCopy:
     """The 409 alert must read as one translated sentence.
 

@@ -809,11 +809,12 @@ language code (`cs`, `de`, `eo`, `es`, `fr`, `it`, `ko`, `nl`, `pl`, `ru`, `sv`,
 `tlh` is the deliberate best-effort exception. It is a hand-maintained novelty
 locale, remains available on all four surfaces when its files are valid, and
 uses English per-key fallback when they are incomplete. It is excluded from
-automatic translation planning so it consumes no model quota, and any
-`tlh`-specific catalog, completeness, literal-parity, registration, or
-generated-drift problem is reported as a warning rather than blocking CI or
-locale-sync. Every other locale and every shared, English-side pipeline failure
-remain hard failures.
+automatic translation planning so it consumes no model quota. Catalog parsing,
+surface registration, and generated-drift problems are reported as warnings
+rather than blocking CI or locale-sync. Completeness and literal parity are not
+checked for `tlh`: missing entries fall back to English, and imperfect novelty
+copy is accepted without a diagnostic. Every other locale and every shared,
+English-side pipeline failure remain hard failures.
 
 That list of codes is itself pinned by
 `test_agents_md_lists_every_shipped_locale`: adding a language means adding its

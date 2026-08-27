@@ -5,6 +5,7 @@ import os
 import re
 import stat
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -34,9 +35,10 @@ def _report_translation_issues(path: Path, issues: list[str]) -> None:
         return
     message = "; ".join(issues)
     if is_best_effort_locale(path.stem):
-        print(
-            f"::warning file={path}::best-effort locale {path.stem}: {message}",
-            file=sys.stderr,
+        warnings.warn(
+            f"best-effort locale {path.stem} in {path}: {message}",
+            pytest.PytestWarning,
+            stacklevel=2,
         )
         return
     raise AssertionError(message)
@@ -50,12 +52,13 @@ _ADDON_DIRS = sorted(
 )
 
 
-def test_best_effort_addon_translation_issues_warn_instead_of_fail(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_best_effort_addon_translation_issues_warn_instead_of_fail() -> None:
     issues = ["missing configuration.example"]
-    _report_translation_issues(Path("translations/tlh.yaml"), issues)
-    assert "::warning file=translations/tlh.yaml" in capsys.readouterr().err
+    with pytest.warns(
+        pytest.PytestWarning,
+        match=r"best-effort locale tlh.*missing configuration\.example",
+    ):
+        _report_translation_issues(Path("translations/tlh.yaml"), issues)
 
     with pytest.raises(AssertionError, match=r"missing configuration\.example"):
         _report_translation_issues(Path("translations/de.yaml"), issues)
