@@ -14,7 +14,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from ._locale_policy import is_best_effort_locale
+from . import _locale_policy
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -327,10 +327,12 @@ def load_catalogs(
         try:
             catalogs[locale] = _load_catalog_file(
                 path,
-                best_effort_locale=(locale if is_best_effort_locale(locale) else None),
+                best_effort_locale=(
+                    locale if _locale_policy.is_best_effort_locale(locale) else None
+                ),
             )
         except (ImportError, ValueError) as exc:
-            if not is_best_effort_locale(locale):
+            if not _locale_policy.is_best_effort_locale(locale):
                 raise
             _warn_best_effort_catalog(locale, path, exc)
 
@@ -342,7 +344,7 @@ def load_catalogs(
     strict_catalogs = {
         locale: catalog
         for locale, catalog in catalogs.items()
-        if not is_best_effort_locale(locale)
+        if not _locale_policy.is_best_effort_locale(locale)
     }
     _validate_placeholder_parity(strict_catalogs)
     _validate_inline_markup(strict_catalogs)
