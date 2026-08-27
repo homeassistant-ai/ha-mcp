@@ -106,6 +106,29 @@ def _fake_session(
     return session
 
 
+def _spy_httpx_async_client(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Patch ``httpx.AsyncClient`` to record its constructor kwargs.
+
+    ``verify`` has no public accessor on a constructed client (it is only
+    reachable via private ``_transport`` internals), so pinning it needs
+    capturing the call itself rather than introspecting the result. Returns
+    the dict the next construction's kwargs land in; a real subclass (not a
+    bare Mock) so callers still get a fully functioning client, since
+    ``AsyncExitStack`` drives real ``__aenter__``/``aclose`` on it.
+    """
+    import httpx
+
+    captured: dict[str, Any] = {}
+
+    class _SpyAsyncClient(httpx.AsyncClient):
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _SpyAsyncClient)
+    return captured
+
+
 def _make_api(hass, mode: str = EXPOSURE_FULL) -> Any:
     return llm_api.HaMcpLlmApi(
         hass=hass,
@@ -709,6 +732,7 @@ class TestLoopbackHttpClientTimeout:
         import httpx
 
         opened: dict[str, Any] = {}
+        constructed_kwargs = _spy_httpx_async_client(monkeypatch)
 
         @asynccontextmanager
         async def _canonical_client(url, http_client=None):
@@ -751,6 +775,10 @@ class TestLoopbackHttpClientTimeout:
             # embedded secret_path to the proxy (review finding).
             assert used_client.trust_env is False
             assert not used_client.is_closed
+            # verify has no public accessor on a constructed client (review
+            # finding) - pin it via the AsyncClient spy's captured kwargs
+            # instead of introspecting private transport internals.
+            assert constructed_kwargs["verify"] is False
 
         # Scoped to this one session: closed when the session exits.
         assert used_client.is_closed
@@ -814,9 +842,32 @@ class TestPreRenameSdkFallback:
         # path.
         assert opened["httpx_client_factory"] is llm_api._loopback_httpx_client_factory
 
-    async def test_loopback_factory_builds_a_client_that_ignores_env_proxies(self):
+    async def test_loopback_factory_builds_a_client_that_ignores_env_proxies(
+        self, monkeypatch
+    ):
+        constructed_kwargs = _spy_httpx_async_client(monkeypatch)
+
         client = llm_api._loopback_httpx_client_factory()
         try:
             assert client.trust_env is False
+            # verify has no public accessor (review finding) - pin it via
+            # the spy's captured kwargs instead of private transport
+            # internals.
+            assert constructed_kwargs["verify"] is False
+        finally:
+            await client.aclose()
+
+    async def test_loopback_factory_zero_args_gets_a_real_timeout_not_none(self):
+        # Regression (review finding on #2276): the factory forwarded
+        # timeout=None straight to httpx.AsyncClient, which disables EVERY
+        # timeout rather than applying a sane default — unlike the
+        # reference create_mcp_http_client this substitutes for, which
+        # treats None as "no timeout was supplied" and fills in its own
+        # default. A future caller invoking this factory with no timeout
+        # (as this test does) must not get an unbounded loopback client.
+        client = llm_api._loopback_httpx_client_factory()
+        try:
+            assert client.timeout.connect is not None
+            assert client.timeout.read is not None
         finally:
             await client.aclose()

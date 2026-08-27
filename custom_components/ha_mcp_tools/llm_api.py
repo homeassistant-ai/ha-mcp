@@ -237,8 +237,23 @@ def _loopback_httpx_client_factory(
     too, so a real SSL context is pure waste and this call must never be
     diverted through an environment proxy (which would also leak the URL's
     embedded ``secret_path`` to it).
+
+    ``timeout`` mirrors ``create_mcp_http_client`` (the factory this
+    substitutes for): a ``None`` here means "no timeout was supplied", not
+    "disable timeouts" — the real ``streamablehttp_client`` caller always
+    passes an explicit ``httpx.Timeout``, but a bare ``None`` reaching
+    ``httpx.AsyncClient`` directly disables every timeout outright (review
+    finding), which is the wrong zero-argument default for a fallback aimed
+    at unknown old environments.
     """
     import httpx
+    from mcp.shared._httpx_utils import (
+        MCP_DEFAULT_SSE_READ_TIMEOUT,
+        MCP_DEFAULT_TIMEOUT,
+    )
+
+    if timeout is None:
+        timeout = httpx.Timeout(MCP_DEFAULT_TIMEOUT, read=MCP_DEFAULT_SSE_READ_TIMEOUT)
 
     return httpx.AsyncClient(
         headers=headers, timeout=timeout, auth=auth, verify=False, trust_env=False
