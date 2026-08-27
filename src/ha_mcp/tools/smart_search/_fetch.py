@@ -201,7 +201,7 @@ class ConfigFetchMixin(ScoringMixin):
 
         ``deprioritize`` moves the named ids to the BACK of the queue while
         keeping every id in it (relative order preserved within each group).
-        The automation and script callers pass the ids Home Assistant's
+        The automation, script and scene callers pass the ids Home Assistant's
         reference graph already confirmed reference the queried entity: their
         match status is settled without reading the body, so under budget
         pressure the budget belongs to the ids that are NOT in the set, which
