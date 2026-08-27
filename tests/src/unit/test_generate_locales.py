@@ -10,6 +10,7 @@ has no canonical string.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -18,6 +19,61 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO_ROOT / "scripts"))
 import generate_locales  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "payload", [b"{not json", b"[]", b"\xff"], ids=["json", "shape", "utf8"]
+)
+def test_invalid_best_effort_catalog_warns_and_uses_english_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    payload: bytes,
+) -> None:
+    locales = tmp_path / "locales"
+    locales.mkdir()
+    (locales / "en.json").write_text(
+        json.dumps({"messages": {"addon.opt.name": "English name"}}),
+        encoding="utf-8",
+    )
+    (locales / "tlh.json").write_bytes(payload)
+    monkeypatch.setattr(generate_locales, "LOCALES_DIR", locales)
+
+    catalogs = generate_locales.load_catalogs()
+
+    assert catalogs == {
+        "en": {"addon.opt.name": "English name"},
+        "tlh": {},
+    }
+    stderr = capsys.readouterr().err
+    assert "::warning file=" in stderr
+    assert "best-effort locale tlh" in stderr
+
+
+def test_invalid_best_effort_entries_warn_and_preserve_valid_messages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    locales = tmp_path / "locales"
+    locales.mkdir()
+    (locales / "en.json").write_text(
+        json.dumps({"messages": {"valid": "English", "blank": "Fallback"}}),
+        encoding="utf-8",
+    )
+    (locales / "tlh.json").write_text(
+        json.dumps({"messages": {"valid": "Qapla'", "blank": "", "non_string": 3}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(generate_locales, "LOCALES_DIR", locales)
+
+    catalogs = generate_locales.load_catalogs()
+
+    assert catalogs["tlh"] == {"valid": "Qapla'"}
+    stderr = capsys.readouterr().err
+    assert "Ignoring invalid best-effort locale entry" in stderr
+    assert "tlh.json.messages.blank" in stderr
+    assert "tlh.json.messages.non_string" in stderr
 
 
 class TestResolveText:
@@ -91,6 +147,41 @@ class TestCheckCli:
         )
         assert generate_locales.check() == 1
         assert "stale.yaml" in capsys.readouterr().err
+
+    def test_check_warns_for_stale_best_effort_output(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        stale = tmp_path / "homeassistant-addon" / "translations" / "tlh.yaml"
+        stale.parent.mkdir(parents=True)
+        stale.write_bytes(b"\xff")
+        monkeypatch.setattr(generate_locales, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(
+            generate_locales, "generated_files", lambda: {stale: "new\n"}
+        )
+
+        assert generate_locales.check() == 0
+        captured = capsys.readouterr()
+        assert "warning" in captured.err.lower()
+        assert "best-effort locale drift was reported" in captured.out
+
+    def test_check_keeps_invalid_strict_output_hard(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        stale = tmp_path / "homeassistant-addon" / "translations" / "de.yaml"
+        stale.parent.mkdir(parents=True)
+        stale.write_bytes(b"\xff")
+        monkeypatch.setattr(generate_locales, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(
+            generate_locales, "generated_files", lambda: {stale: "new\n"}
+        )
+
+        with pytest.raises(UnicodeDecodeError):
+            generate_locales.check()
 
     def test_main_routes_the_check_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[str] = []

@@ -417,6 +417,16 @@ uv run hamcp-test-env --no-interactive   # For automation
 
 Test token centralized in `tests/test_constants.py`.
 
+**Unit tests** (`tests/src/unit/`, no Docker) — run them in parallel, as CI does
+(`pr.yml`); serial takes 25+ minutes for ~11k tests:
+
+```bash
+cd tests && uv run pytest src/unit/ -n auto --tb=short
+```
+
+`tests/pytest.ini` sets `--maxfail=3`, so a run reporting "3 failed" has stopped
+early rather than finished — pass `--maxfail=0` when you need the full picture.
+
 ### Code Quality
 
 C901 (mccabe complexity ≤10) is enforced repo-wide with zero per-file exemptions (issue #925 cleared the grandfathered list) — never reintroduce a `["C901"]` per-file-ignore; extract helpers instead.
@@ -791,10 +801,23 @@ identity holds by construction.
 
 A language ships on all four surfaces or not at all —
 `tests/src/unit/test_locale_parity.py` enforces it. The same Home Assistant
-language code (`cs`, `de`, `eo`, `es`, `fr`, `it`, `ko`, `nl`, `pl`, `ru`, `sv`, `zh-Hans`) names every file:
+language code (`cs`, `de`, `eo`, `es`, `fr`, `it`, `ko`, `nl`, `pl`, `ru`, `sv`, `tlh`, `zh-Hans`) names every file:
 `src/ha_mcp/settings_ui/locales/<code>.json`,
 `custom_components/ha_mcp_tools/translations/<code>.json`, and
 `homeassistant-addon{,-dev}/translations/<code>.yaml`.
+
+`tlh` is the deliberate best-effort exception. It is a hand-maintained novelty
+locale, remains available on all four surfaces when its files are valid, and
+uses English per-key fallback when they are incomplete. It is excluded from
+automatic translation planning so it consumes no model quota. Catalog parsing,
+surface registration, generated drift, and generated add-on schema-coverage
+problems are reported as warnings rather than blocking CI or locale-sync.
+Strict completeness and literal-parity gates do not apply to `tlh`: settings-UI
+completeness and literal parity are not checked, generated add-on coverage gaps
+are warning-only, missing entries fall back to English, and imperfect novelty
+copy is accepted without a diagnostic. Every other locale and every shared,
+English-side pipeline failure remain hard failures.
+
 That list of codes is itself pinned by
 `test_agents_md_lists_every_shipped_locale`: adding a language means adding its
 code here, in the same PR, or the suite goes red. To add a language, add the
@@ -896,7 +919,10 @@ empty, so the English a `tools` entry translates is read from the tool
 definition in `src/ha_mcp/tools/` — the `title=` kwarg and the summary
 paragraph of the docstring, or the `FEATURE_GATED_TOOLS` stub where a gated
 tool shows one instead. Editing that summary moves the English out from under
-six catalogs; the pipeline retranslates them. One deliberate exception: a
+six catalogs; the pipeline retranslates them. A parameter's
+`Field(description=...)` is NOT in the baseline — only the title and the
+docstring summary are — so editing one owes no translation work. One
+deliberate exception: a
 change to a feature-gated tool's PARSED docstring (its stub unchanged) is
 stub-review work, not translation work — the pipeline holds that baseline key
 stale, and the locale-sync run stays red until a human confirms the stub

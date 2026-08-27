@@ -1,0 +1,236 @@
+---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/tlh.json (keys addon.*, features.*,
+# addon_dev.*); regenerate with: python scripts/generate_locales.py
+configuration:
+  backup_hint:
+    name: HA naQ snapshot chupmeH pat (LLM-vaD)
+    description: 'Qobbogh mIw qaSpa'' Home Assistant tarball backup naQ chupmeH
+
+      `ha_manage_backup(scope=''snapshot'')` jan DelmeH ghItlhDaq LLMvaD
+
+      ''anglu''bogh qeS mu''mey choH. chovnatlh janmey law'' teqmeH mIw.
+
+      LLM-vaD QInvam wa'' neH SIgh.
+
+
+      automation / script / helper / latlh choH Hoch qaSpa'' nuv
+
+      vangnISbe''taHvIS snapshot chenmoHmeH, bIngDaq **choHmey
+
+      auto-backup yIQotlhHa''** DuH pIm yIlo''.'
+  secret_path:
+    name: pegh He le'
+    description: 'MCP turwI''vaD HTTP He le'' wIvlaHlu''. chIm yIpol; vaj He pegh
+      chenmoH pat.
+
+      '
+  enable_tool_search:
+    name: janmey nejwI' yIQotlhHa'
+    description: janmey naQ qa'meH nejlu'taHvIS tu'lu'bogh janmey neH 'ang. lo'be'lu'taHvIS
+      context 90% machmoH, 5K token retlhDaq. ⚠️ claude.ai, GitHub, ChatGPT pagh Claude
+      Sonnet Opus Dalo'chugh, yIchu'Qo' — jan nejmeH pat / deferred tools luqeng modelmeyvetlh,
+      'ej patmaj nIS. Claude tlhej ha-mcp jan nej Dalo'meH, wa'DIch Claude jan nej
+      pat yIchu'Ha'; pagh yIchu'Ha'taH. native deferred tools ghajbe'bogh LLMmey (chovnatlh
+      Claude Haiku, SumDaq Qapbogh OpenAI-compatible models) ghap context Qorwagh
+      mach ghajbogh LLMmey neHvaD yIlo'. ha_search_tools vegh janmey tu'lu', 'ej laD/ghItlh/teq
+      proxy Seghmey vegh lo'lu'. QapchoHmeH add-on Dataghqa'moHnIS.
+  enable_tool_security_policies:
+    name: jan Hung chutmey tIQotlhHa' ('Itlh)
+    description: 'jan Qob lo''lu''DI'' (ngaQ/alarm SeH, automation ghItlh, latlh)
+      lo''wI'' chaw'' poQmoH. jan Hunglu''bogh lo''DI'', agent jatlh: web UI-Daq jan
+      Hung chutmey jIH yIpoS ''ej QaptaHmeH lajmeH leQ yIwIv. jan HochvaD chutmey,
+      argument wanI''mey wIvlaHbogh je jan Hung chutmey jIHDaq cherlu''. motlh chu''Ha''lu''.
+      QapchoHmeH add-on Dataghqa''moHnIS.'
+  enable_security_policy_tool:
+    name: Let AI agents edit tool security policies
+    description: 'Registers the ha_manage_security_policy tool, which lets connected
+      AI agents read and rewrite the tool security policies — including removing approval
+      gates. Off by default. Independent of the Tool Security Policies option above:
+      this controls who can edit the rules, not whether they are enforced. The tool
+      cannot see or decide pending approvals. To keep a human in the loop, gate the
+      tool before enabling it: switch on "security gated" for Manage Security Policy
+      in the Tools tab of the web UI. Requires restart to take effect.'
+  read_only_mode:
+    name: laDlaH neH mIw
+    description: jan ghItlh Hoch chu'Ha', 'ej janmeyvaD ghItlhmeH Qaw'meH je Qum chaw'
+      teq. laD/ghItlh mIwmey ghajbogh janmey (backups, add-ons, energy DuHmey, ghogh
+      pipelines, code mode chu'lu'chugh je) tu'lu'taH, 'ach ghItlh mIwmey botlu'.
+      web UI janmey jIHDaq rap leQ. motlh chu'Ha'lu'. QapchoHmeH add-on Dataghqa'moHnIS.
+  redact_secrets:
+    name: Redact Secrets
+    description: Redacts secrets from tool responses before they reach the AI assistant.
+      App (add-on) options and integration fields marked as passwords are replaced
+      with a set/empty marker (so "is this credential configured?" stays answerable),
+      and other tool responses are scrubbed of secret values the server has already
+      seen (values shorter than 6 characters are skipped, since replacing tiny fragments
+      would corrupt unrelated output). Fields not marked as passwords by their schema
+      cannot be detected. Off by default.
+  enable_beta_features:
+    name: Beta DuHmey yIQotlhHa' (wa'DIch SeHwI')
+    description: ⚠ QOB — Home AssistantlIj QIHlaHqu' janmeyvam. YAML configlIj, 'a'baqa'
+      patlIj je ghItlh; componentmey le' jom; sandbox Python ngoqmey lutu'; AI leghbogh
+      jan docstrings choH. QaptaH 'e' lay'lu'be', 'ej QaH lay'lu'be' — Qob Hoch DavIv.
+      Dachu'pa' Home Assistant backup yIchenmoH, 'ej backup ghajbe'chugh pat QaptaHboghDaq
+      yIchu'Qo'. bIngDaq Beta DuH puqmey vaghvaD wa'DIch lojmIt 'oH; wa'DIchvam chu'Ha'lu'taHvIS,
+      true wIvlu'pu'chugh je QaptaHvIS DuH puqmey buSHa'lu'. web DuHmey UI bIngDaq
+      "Beta DuHmey (Qob)" leQDaq 'anglu' je — add-on taghqa'moHlu'DI' cha' Daqmey
+      rap.
+  enable_yaml_config_editing:
+    name: YAML config choH yIQotlhHa' (Beta)
+    description: Beta DuH. configuration.yaml packages/*.yaml jeDaq ngoqmey jen chellaH,
+      qa'laH, teqlaH AI assistants. ngoqmey luchaw'lu'bogh neH lo'laH (chovnatlh template,
+      sensor, command_line, mqtt, knx); homeassistant, http, recorder rur ngoqmey
+      botlh lubotlu'. Hoch choHDI' YAML pab nuD, config nuD, 'ej backup chenmoH pat.
+      ngoqmey HochHom choHmey QapchoHmoHmeH Home Assistant naQ Dataghqa'moHnIS. veHmey
+      SovmeH docs/beta.md yIlaD. janmey le' (automations, scripts, scenes, helpers,
+      template sensors) tu'lu'chugh, wa'DIch yIlo'. DungDaq "Beta DuHmey yIQotlhHa'"
+      leQ chu'lu'nIS (web UI-Daq je); pagh QaptaHvIS DuH puqvam buSHa'lu'; naDev true
+      wIvlu'pu'chugh je buSHa'lu'.
+  enable_yaml_packages_automation:
+    name: packages/*.yaml-Daq automation yIchaw'
+    description: YAML config choHmeH DuH puq leQ. chu'lu'chugh, packages/*.yaml qoDaq
+      yaml_path='automation' laj ha_config_set_yaml. chu'Ha'lu'chugh, AI nIqHomDaq
+      turwI'Daq je rI'meH nID lajbe'lu'. storage-mode jan (ha_config_set_automation)
+      SIghbe'. motlh OFF; DungDaq "YAML config choH yIQotlhHa'" chu'lu'chugh neH Qap.
+  enable_yaml_packages_script:
+    name: packages/*.yaml-Daq script yIchaw'
+    description: YAML config choHmeH DuH puq leQ. chu'lu'chugh, packages/*.yaml qoDaq
+      yaml_path='script' laj ha_config_set_yaml. chu'Ha'lu'chugh, AI nIqHomDaq turwI'Daq
+      je rI'meH nID lajbe'lu'. storage-mode jan (ha_config_set_script) SIghbe'. motlh
+      OFF; DungDaq "YAML config choH yIQotlhHa'" chu'lu'chugh neH Qap.
+  enable_yaml_packages_scene:
+    name: packages/*.yaml-Daq scene yIchaw'
+    description: YAML config choHmeH DuH puq leQ. chu'lu'chugh, packages/*.yaml qoDaq
+      yaml_path='scene' laj ha_config_set_yaml. chu'Ha'lu'chugh, AI nIqHomDaq turwI'Daq
+      je rI'meH nID lajbe'lu'. storage-mode jan (ha_config_set_scene) SIghbe'. motlh
+      OFF; DungDaq "YAML config choH yIQotlhHa'" chu'lu'chugh neH Qap.
+  enable_yaml_edit_confirm:
+    name: YAML choH woqmeH chaw' yIpoQ (diff legh)
+    description: 'YAML config choHmeH DuH puq leQ; motlh ON (chup). wa''DIch ha_config_set_yaml
+      rI''lu''DI'', diskDaq choHbejbogh Dochmey unified diff, confirm token je nob,
+      ''ej pagh ghItlh; tokenvetlh lo''taHvIS janvam rI''lu''qa''DI'' neH choH ghItlh.
+      diskDaq ghoSpa'' choHmey poQbe''bogh leghmeH tu''lu'' (issue #1720). choH HochvaD
+      wa''logh rI''nISbe''meH neH yIchu''Ha''.'
+  enable_code_mode:
+    name: jan le' sandbox yIQotlhHa' (Beta)
+    description: Beta DuH. ha_manage_custom_tool jan chu', vaj jan motlh Qapbe'DI'
+      AI assistantsvaD sandbox HungDaq Python ngoq le' ngoq chenmoH, QapmoH, pol,
+      teq je chaw'. interpreter che'ronDaq ngoq Qap; 'a'baqa' pat SIr'o' je naw'laHbe'.
+      HA REST API (api_get/api_post) QumlaH sandbox ngoq, WebSocket commands (ws_send)
+      ngeHlaH, MCP janmey QaptaHbogh (call_tool) rItlaH, pagh jan polta'bogh (delete_saved_tool)
+      Qaw'laH. motlh /data/saved_tools.json-Daq jan polta'bogh pol, vaj add-on taghqa'moHlu'pu'DI'
+      poltaH; 'ej AI nIqHom rarlaHbogh HochvaD leghlu'. veHmey SovmeH docs/beta.md
+      yIlaD. QapchoHmeH add-on Dataghqa'moHnIS. DungDaq "Beta DuHmey yIQotlhHa'" leQ
+      chu'lu'nIS (web UI-Daq je); pagh QaptaHvIS DuH puqvam buSHa'lu'; naDev true
+      wIvlu'pu'chugh je buSHa'lu'.
+  enable_lite_docstrings:
+    name: jan docstrings mach yIQotlhHa' (Beta)
+    description: 'Beta DuH. ha-mcp janmey ''ugh ''op docstrings (automations, scripts,
+      scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) ngaSbogh Dotlh
+      nI'' qa''meH Dotlh mach lo''; schema ghantoH De'' je ha_get_skill_guide janDaq
+      (pagh skill:// resource-Daq) QIj. ghuH: lo''be''lu''taHvIS tokenmey machmoH,
+      ''ach LLM Qapchu''ghach QIHlaH — De'' SuqmeH skill jan rItnIS LLM pagh skill
+      resource laDnIS, ''ej mIwvam luQoy Hoch model net lay''laHbe'' (jan rI''meH
+      mIw latlh buSHa''laH model ''op, vaj qeS puS ghaj). MCP resources QapmoHbogh
+      AI nIqHom tlhej pagh enable_tool_search tlhej lo''lu''DI'' qaq. QapchoHmeH add-on
+      Dataghqa''moHnIS. DungDaq "Beta DuHmey yIQotlhHa''" leQ chu''lu''nIS (web UI-Daq
+      je); pagh QaptaHvIS DuH puqvam buSHa''lu''; naDev true wIvlu''pu''chugh je buSHa''lu''.'
+  enable_mandatory_bps:
+    name: ghItlhDI' mIw nIvmey yIchel
+    description: 'jan ghItlh laH De'' nobmeH pat wa''DIch SeH (issue #1182). chu''lu''chugh
+      (motlh), config ghItlh janmey jav (automations, scripts, scenes, helpers, dashboards,
+      YAML raw) ghItlh Qap HochDaq `skill_content` bIngDaq Home Assistant mIw QaQ
+      paq teywI''mey motlh chel; mIw QaQ ghuHmey bopbogh paq ''ay''mey Hoch chel je.
+      Hoch janDaq `MandatoryBPS` parameter tu''lu''; De'' laDta''DI'' agent, ghIq
+      jan rI''DI'' false wIvlaH. wa''DIch leQvam chu''Ha''lu''chugh, skill_content
+      noblu''be''chu'', per-call parameter BP ghuHmey ghap ram. wa''DIch wIv''e''
+      ON chuplu''; context Qorwagh machqu'' ghajbogh modelvaD neH yIchu''Ha''. leQvam
+      chu''Ha''lu''chugh, ghItlhlu''DI'' Qagh law'' qaSlaH. QapchoHmeH add-on Dataghqa''moHnIS.'
+  enable_strict_mandatory_bps:
+    name: mIw QaQ pabmeH mIw tlhoy
+    description: 'mIw tlhoy: mIw QaQ laDta'' ''e'' tobmeH AI nIqHom poQ; tobpa'' jan
+      lo''laHbe''. chu''lu''taHvIS, mIw QaQ ghItlh janmey jav (automations, scripts,
+      scenes, helpers, dashboards, YAML raw) botlu'', ''ej Qagh QIn agentvaD jatlh:
+      ha_get_skill_guide vegh mIw QaQ skill yIlaD, ''ej pa'' Suqbogh lajta''ghach
+      ngoq yInobqa''. chu''lu''taHvIS, ha_get_skill_guide chu''taH net poQ — lajta''ghach
+      ngoq neH ''ang janvam. DungDaq "ghItlhDI'' mIw nIvmey yIchel" DuH puq ''oH,
+      ''ej DuHvetlh chu''Ha''lu''chugh Qapbe''. QapchoHmeH add-on Dataghqa''moHnIS.'
+  enable_filesystem_tools:
+    name: '''a''baqa'' pat janmey tIQotlhHa'' (Beta)'
+    description: 'HAMCP_ENABLE_FILESYSTEM_TOOLS=true wIv. Home Assistant ''a''baqa''mey
+      laDmeH ghItlhmeH je mIw pIQ chu''moH. ghuH: MCP turwI''vaD patlIj ''a''baqa''mey
+      laDmeH ghItlhmeH je mIw pIQ nob. QoblaH mIwvam. ''a''baqa'' mIwmeyvaD AI assistant
+      Davoqchugh neH yIchu''. QapchoHmeH add-on Dataghqa''moHnIS. DungDaq "Beta DuHmey
+      yIQotlhHa''" leQ chu''lu''nIS (web UI-Daq je); pagh QaptaHvIS DuH puqvam buSHa''lu'';
+      naDev true wIvlu''pu''chugh je buSHa''lu''.'
+  enable_dashboard_screenshot:
+    name: dashboard screenshot mIw yIQotlhHa' (Beta)
+    description: Beta DuH — motlh chu'Ha'lu'. ha_get_dashboard_screenshot jan chel,
+      'ej dashboard get/set janmeyDaq include_screenshot / return_screenshot DuHmey
+      chel; vaj Lovelace mIlloghmey wa' pagh law' nIbHa'bogh nuDlaH AI assistants
+      (chovnatlh dashboard chenmoHpu'bogh nuDmeH). views ponglu'bogh Qapchu', mobile/tablet/desktop
+      batchmey je mIllogh chenmoHlaH; PNG/JPEG/WebP/BMP output chenmoHlaH je. engine
+      pIm wIvlu'boghDaq render Qap — balloob "Puppet" add-on (headless Chromium) —
+      wa'logh Dajom (balloob add-on repository yIchel, ghIq "Puppet" yIjom) 'ej long-lived
+      access token yInob; Docker/Container patDaq enginevetlh sidecar rur DaqapmoH,
+      'ej HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL yIcher. wa'DIchvam engine je Dalo'be'chugh
+      pagh 'ugh jomlu'. QapchoHmeH add-on Dataghqa'moHnIS. DungDaq "Beta DuHmey yIQotlhHa'"
+      leQ chu'lu'nIS (web UI-Daq je); pagh QaptaHvIS DuH puqvam buSHa'lu'; naDev true
+      wIvlu'pu'chugh je buSHa'lu'.
+  enable_auto_backup:
+    name: choHmey auto-backup yIQotlhHa'
+    description: 'MCP jan ghItlh/Qaw'' Hoch qaSpa'' Dol snapshot pol (automation,
+      script, scene, helper, dashboard, label, category, group, zone, area, calendar,
+      todo, Dol, integration, latlh teq/polHa'' janmey je). poH botwI'': 0 (motlh)
+      = Hoch mIw; N > 0 = Dol HochvaD N tupmeyDaq wa'' snapshot neH. /data/ha_mcp_backups/
+      bIngDaq YAML teywI''pu'' snapshotmey pollu'' (HAMCP_BACKUP_DIR vegh qa''laH),
+      ''ej web DuHmey UI Backups jIHDaq pagh ha_manage_backup(scope=''edits'', ...)
+      vegh tetlhlu'', polqa''lu'', Qaw''lu'' ghap. nID neH — Qagh QonoSDaq ghuH ghItlhlu'',
+      ''ach mIw ghItlh botbe''. ha_write_file, ha_delete_file, ha_config_set_yaml
+      jevaD snapshot poQlu''. motlh chu''lu''; wIvHa''meH yIwIvHa''. QapchoHmeH add-on
+      Dataghqa''moHnIS.'
+  auto_backup_throttle_minutes:
+    name: auto-backup poH veH (tup)
+    description: Dol HochvaD poH veH. 0 (motlh) wIvlu'chugh, ghItlh Hoch qaSpa' snapshot
+      chenmoH. N>0 wIvlu'chugh, Hoch N tupDaq Dol HochvaD wa' snapshot neH chenmoH.
+      veH 0–1440.
+  auto_backup_retain_per_entity:
+    name: auto-backup polmeH mI' (Dol Hoch)
+    description: Dol HochvaD snapshotmey polbogh mI' jenqu'. Hoch polta'ghach QapDI',
+      snapshotmey ngo' veH juSbogh Qaw'lu'. motlh 100; veH 1–10000.
+  enable_snapshot_delete:
+    name: snapshot Qaw'meH chaw' yInob
+    description: HA snapshot tarballmey naQ Qaw'laH ha_manage_backup (scope='snapshot',
+      action='delete'). motlh chu'Ha'lu' — choH muj qaSpu'DI' cheghmeH snapshot Qav
+      'oHlaH, vaj naDev nuv wIv poQlu'. chu'lu'chugh je, backups nablu'bogh, snapshot
+      chu'qu' ratlhbogh. bIngDaq ngo' veH tu'lu'; snapshot ngo'be'chugh Qaw'laHbe'lu'.
+  snapshot_delete_min_age_days:
+    name: snapshot Qaw'meH ngo' veH (jaj)
+    description: snapshot Qaw'laHlu'pa' ngo'nIS. veH 0–365; 0 wIvlu'chugh veH chu'Ha'
+      (snapshot chu'qu' backups nablu'bogh je HungtaH). motlh 7.
+  tool_search_max_results:
+    name: jan nej mI' jenqu'
+    description: jan nej chu'lu'taHvIS ha_search_tools nobbogh janmey mI' jenqu'.
+      mI' mach (2-3) wIvlu'chugh context tokenmey pol, 'ach janmey lI' 'op leghbe'laH.
+      veH 2-10. QapchoHmeH add-on Dataghqa'moHnIS.
+  disabled_tools:
+    name: janmey luQotlhlu'bogh (comma-mey)
+    description: naDev lutetlhlu'bogh janmey luchu'Ha'lu' 'ej web DuHmey UI (janmey
+      jIH)Daq ngaQ — naDev DuH teqbe'lu'pa' pa' luchu'qa'laHbe'lu'. janmey lupoQlu'bogh
+      mach (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      luchu'Ha'laHbe'lu', 'ej naDev lutetlhlu'chugh je QaptaH. mIw QaQ tlhoy (enable_strict_mandatory_bps)
+      chu'Ha'lu'taHvIS neH ha_get_skill_guide chu'Ha'laHlu'. comma-mey lo'ta' jan
+      pongmey tIghItlh (chovnatlh ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: janmey lungu'lu'bogh (comma-mey)
+    description: naDev lutetlhlu'bogh janmey luwIvlu' 'ej ngaQ — janmey jIH DungDaq
+      lu'anglu', 'ej web DuHmey UI-Daq DuHvam teqbe'lu'pa' luwIvHa'laHbe'lu'. jan
+      nej pat tlhej lo'lu'DI' lI'. comma-mey lo'ta' jan pongmey tIghItlh.
+  verify_ssl:
+    name: TLS certificate yI'ol
+    description: Home Assistant turwI' TLS certificate lugh 'e' yI'ol. Supervisor
+      proxy vegh rar add-on, vaj motlh pagh choH. add-on Dacherqa'ta' 'ej HochvaD
+      poSbogh HTTPS hostname, nIteb 'ollu'bogh certificate, pagh hostname muj lo'chugh
+      neH yIchu'Ha'. chu'Ha'lu'chugh Qum Hung pujmoH — poQbe'chugh yIchu'taH. QapchoHmeH
+      add-on Dataghqa'moHnIS.

@@ -35,6 +35,8 @@ from translate_locales import (  # noqa: E402
     _validate,
 )
 
+from ha_mcp.settings_ui._locale_policy import BEST_EFFORT_LOCALES  # noqa: E402
+
 _SETTINGS_LOCALES = _REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
 # Catalogs that carry translated text. A catalog with no `messages` yet has no
 # wording to sample, so sampling it would fail on emptiness rather than on the
@@ -45,7 +47,9 @@ _SETTINGS_LOCALES = _REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
 _TRANSLATED_LOCALES = sorted(
     path.stem
     for path in _SETTINGS_LOCALES.glob("*.json")
-    if path.stem != "en" and json.loads(path.read_text("utf-8")).get("messages")
+    if path.stem != "en"
+    and path.stem not in BEST_EFFORT_LOCALES
+    and json.loads(path.read_text("utf-8")).get("messages")
 )
 # The other authored surface samples its own catalog, never the settings one
 # (`_surface_catalogs`), so it needs its own list. Read the production constant
@@ -56,7 +60,9 @@ _TRANSLATED_LOCALES = sorted(
 _COMPONENT_LOCALES = sorted(
     path.stem
     for path in translate_locales.COMPONENT_DIR.glob("*.json")
-    if path.stem != "en" and _flatten(json.loads(path.read_text("utf-8")))
+    if path.stem != "en"
+    and path.stem not in BEST_EFFORT_LOCALES
+    and _flatten(json.loads(path.read_text("utf-8")))
 )
 
 
@@ -588,6 +594,39 @@ class TestFlattenRoundTrip:
 
 
 class TestPlanning:
+    def test_best_effort_settings_locale_is_not_an_automatic_target(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        locales = tmp_path / "locales"
+        locales.mkdir()
+        for locale in ("en", "de", "tlh"):
+            (locales / f"{locale}.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(translate_locales, "LOCALES_DIR", locales)
+
+        assert translate_locales._target_locales() == ["de"]
+
+    def test_best_effort_component_locale_is_not_planned(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        component = tmp_path / "component"
+        component.mkdir()
+        (component / "en.json").write_text(
+            json.dumps({"config": {"title": "English"}}), encoding="utf-8"
+        )
+        for locale in ("de", "tlh"):
+            (component / f"{locale}.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(translate_locales, "COMPONENT_DIR", component)
+        monkeypatch.setattr(
+            translate_locales, "PROGRESS_PATH", tmp_path / "progress.json"
+        )
+
+        plan = Plan()
+        translate_locales._plan_component(plan, changed={})
+
+        assert [(item.locale, item.key) for item in plan.items] == [
+            ("de", "config.title")
+        ]
+
     def test_missing_and_changed_messages_are_planned(self) -> None:
         plan = Plan()
         _plan_locale_messages(

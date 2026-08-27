@@ -41,6 +41,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import warnings
 from collections import Counter
 from functools import cache
 from pathlib import Path, PurePosixPath
@@ -48,6 +49,7 @@ from typing import Any
 
 import pytest
 
+from ha_mcp.settings_ui._locale_policy import BEST_EFFORT_LOCALES
 from ha_mcp.settings_ui._tools_meta import FEATURE_GATED_TOOLS, primary_tag
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -188,15 +190,21 @@ def _surfaces() -> dict[str, set[str]]:
     """Return locale codes per surface, keyed by the path pattern to fix."""
     surfaces = {
         "src/ha_mcp/settings_ui/locales/<code>.json": {
-            path.stem for path in SETTINGS_LOCALES.glob("*.json")
+            path.stem
+            for path in SETTINGS_LOCALES.glob("*.json")
+            if path.stem not in BEST_EFFORT_LOCALES
         },
         "custom_components/ha_mcp_tools/translations/<code>.json": {
-            path.stem for path in COMPONENT_TRANSLATIONS.glob("*.json")
+            path.stem
+            for path in COMPONENT_TRANSLATIONS.glob("*.json")
+            if path.stem not in BEST_EFFORT_LOCALES
         },
     }
     for addon_dir in ADDON_DIRS:
         surfaces[f"{addon_dir.name}/translations/<code>.yaml"] = {
-            path.stem for path in (addon_dir / "translations").glob("*.yaml")
+            path.stem
+            for path in (addon_dir / "translations").glob("*.yaml")
+            if path.stem not in BEST_EFFORT_LOCALES
         }
     return surfaces
 
@@ -231,7 +239,9 @@ def _component_catalog(locale: str) -> dict[str, str]:
 
 def _translated_component_locales() -> list[str]:
     return sorted(
-        path.stem for path in COMPONENT_TRANSLATIONS.glob("*.json") if path.stem != "en"
+        path.stem
+        for path in COMPONENT_TRANSLATIONS.glob("*.json")
+        if path.stem != "en" and path.stem not in BEST_EFFORT_LOCALES
     )
 
 
@@ -383,6 +393,51 @@ def test_every_locale_ships_on_every_surface() -> None:
             )
         )
     )
+
+
+@pytest.mark.filterwarnings("always:best-effort locale")
+def test_best_effort_locale_surface_problems_are_warning_only() -> None:
+    issues: list[str] = []
+    locale_lines = [
+        line
+        for line in AGENTS_MD.read_text(encoding="utf-8").splitlines()
+        if "names every file:" in line
+    ]
+    documented = set(re.findall(r"`([A-Za-z-]+)`", "\n".join(locale_lines)))
+    for locale in sorted(BEST_EFFORT_LOCALES):
+        if locale not in documented:
+            issues.append(f"AGENTS.md does not list {locale}")
+        paths = (
+            SETTINGS_LOCALES / f"{locale}.json",
+            COMPONENT_TRANSLATIONS / f"{locale}.json",
+            *(
+                addon_dir / "translations" / f"{locale}.yaml"
+                for addon_dir in ADDON_DIRS
+            ),
+        )
+        missing = [
+            str(path.relative_to(_REPO_ROOT)) for path in paths if not path.exists()
+        ]
+        issues.extend(f"missing {path}" for path in missing)
+
+        for path in paths[:2]:
+            if not path.exists():
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    issues.append(
+                        f"invalid {path.relative_to(_REPO_ROOT)}: expected an object"
+                    )
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                issues.append(f"invalid {path.relative_to(_REPO_ROOT)}: {exc}")
+
+    if issues:
+        warnings.warn(
+            "best-effort locale audit: " + "; ".join(issues),
+            pytest.PytestWarning,
+            stacklevel=1,
+        )
 
 
 def test_every_translation_surface_is_guarded_or_english_only() -> None:
@@ -657,15 +712,7 @@ def test_derived_catalogs_match_the_canonical_store() -> None:
     check left is that the committed files are exactly what the generator
     emits — same guarantee, no pin to maintain.
     """
-    stale = [
-        str(path.relative_to(_REPO_ROOT))
-        for path, content in generate_locales.generated_files().items()
-        if not path.exists() or path.read_text(encoding="utf-8") != content
-    ]
-    assert not stale, (
-        f"derived locale catalogs are out of sync with the canonical store: "
-        f"{stale}. Run: python scripts/generate_locales.py"
-    )
+    assert generate_locales.check() == 0
 
 
 # The strings shipped from BOTH authored surfaces, by (surface, key).
@@ -807,7 +854,9 @@ def _settings_catalog(locale: str) -> dict[str, Any]:
 def _non_english_settings_locales() -> list[str]:
     """Settings UI catalog codes except ``en``, which carries no overrides."""
     return sorted(
-        path.stem for path in SETTINGS_LOCALES.glob("*.json") if path.stem != "en"
+        path.stem
+        for path in SETTINGS_LOCALES.glob("*.json")
+        if path.stem != "en" and path.stem not in BEST_EFFORT_LOCALES
     )
 
 
@@ -2578,9 +2627,11 @@ def test_agents_md_lists_every_shipped_locale() -> None:
     )
 
     documented = set(re.findall(r"`([A-Za-z-]+)`", lines[0]))
-    shipped = set(_non_english_settings_locales())
+    shipped = {
+        path.stem for path in SETTINGS_LOCALES.glob("*.json") if path.stem != "en"
+    }
 
-    assert documented == shipped, (
+    assert documented - BEST_EFFORT_LOCALES == shipped - BEST_EFFORT_LOCALES, (
         "AGENTS.md § Translations lists "
         f"{sorted(documented)} but the shipped catalogs are {sorted(shipped)}. "
         "Update the line so the documented set matches what ships."

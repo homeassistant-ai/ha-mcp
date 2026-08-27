@@ -16,6 +16,11 @@ name: Locale Sync
 # them, or that no locale carries — so a hand translation survives exactly
 # when its PR also repinned the baseline (scripts/update_locale_baseline.py,
 # which is what tells the bot the changed English is already covered).
+# Klingon (`tlh`) is an explicit best-effort/manual locale. The planner skips
+# it, so it consumes no Gemini quota and cannot make a run partial; generated
+# projections use its valid hand-authored strings and English fallback for
+# missing ones. `tlh`-specific drift and validation report warnings only. All
+# other locales, English sources, and shared pipeline failures remain strict.
 #
 # Verification is three layers. (1) Every returned string is validated
 # before it is written (placeholder, markup, formatting-tag and panel-link

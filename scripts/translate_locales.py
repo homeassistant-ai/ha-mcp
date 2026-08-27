@@ -17,6 +17,10 @@ is described to the engine by the catalog's own ``meta.native_name``):
   from the tool definitions via ``scripts/extract_tools.py``)
 - ``custom_components/ha_mcp_tools/translations/<code>.json``
 
+Locales listed in ``BEST_EFFORT_LOCALES`` are deliberately excluded from both
+authored surfaces. They remain hand-editable and use the normal English
+fallback without consuming translation quota or making this job fail.
+
 The engine is one function (``_call_gemini``): the Gemini API free tier,
 keyed by ``GEMINI_API_KEY``, with ``GEMINI_MODEL`` / ``GEMINI_API_URL``
 overrides for any Gemini-compatible endpoint. The fallback when the engine is
@@ -78,6 +82,7 @@ from ha_mcp.settings_ui._i18n import (  # noqa: E402
     _PLACEHOLDER_RE,
     _TAG_LIKE_RE,
 )
+from ha_mcp.settings_ui._locale_policy import is_best_effort_locale  # noqa: E402
 
 LOCALES_DIR = REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
 COMPONENT_DIR = REPO_ROOT / "custom_components" / "ha_mcp_tools" / "translations"
@@ -241,7 +246,11 @@ def _changed_keys(module: Any) -> dict[str, set[str]]:
 
 
 def _target_locales() -> list[str]:
-    return sorted(p.stem for p in LOCALES_DIR.glob("*.json") if p.stem != "en")
+    return sorted(
+        p.stem
+        for p in LOCALES_DIR.glob("*.json")
+        if p.stem != "en" and not is_best_effort_locale(p.stem)
+    )
 
 
 def _flatten(value: Any, prefix: str = "") -> dict[str, str]:
@@ -389,7 +398,7 @@ def _plan_component(plan: Plan, changed: dict[str, set[str]]) -> None:
     changed_component = changed.get(COMPONENT_SURFACE, set())
     progress = _progress_load()
     for path in sorted(COMPONENT_DIR.glob("*.json")):
-        if path.stem == "en":
+        if path.stem == "en" or is_best_effort_locale(path.stem):
             continue
         flat = _flatten(_load_json(path))
         loc_changed = {

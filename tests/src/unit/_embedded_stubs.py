@@ -613,12 +613,17 @@ def install() -> None:
         async_register_api=_llm_async_register_api,
     )
     _pin_llm_on_helpers()
-    # voluptuous_openapi (an HA-core runtime dependency, not installed in this
-    # test environment). Pass-through conversion: the unit tests assert wiring,
-    # not the real JSON-schema -> voluptuous translation.
+    # HA Core's schema conversion dependency differs across supported releases:
+    # stable uses voluptuous_openapi while 2026.9+ provides Probatio. Pass-through
+    # conversion keeps these unit tests focused on wiring; compatibility selection
+    # itself is covered in test_llm_api.
     setmod(
         "voluptuous_openapi",
         convert_to_voluptuous=lambda schema: {"_converted": schema},
+    )
+    setmod(
+        "probatio",
+        from_openapi=lambda schema: {"_converted": schema},
     )
     # aiohttp_client + event helpers for the periodic auto-update check
     # (embedded_setup fetches PyPI; embedded_entry registers the interval).

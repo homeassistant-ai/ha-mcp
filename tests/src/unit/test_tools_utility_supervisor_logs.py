@@ -17,6 +17,7 @@ Covers two REST-client paths and their tools_utility wrappers:
   error translation.
 """
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -312,12 +313,14 @@ class TestGetAddonLogsViaSupervisor:
         inner_client.get.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_raises_api_error_on_403_with_role_hint(
+    async def test_raises_api_error_on_403_with_permission_hints(
         self, mock_client, addon_install, mock_async_client_class, caplog
     ):
-        """403 distinct from 401: addon's hassio_role too low. Surfaces with a
-        role-hint suggestion + warning log so operators don't read this as a
-        token-validity problem (#1126 review items 2 + 9)."""
+        """A 403 names every Supervisor app authorization boundary.
+
+        Supervisor uses it for an unrecognized token, missing API permission,
+        and an insufficient role (#1126 review items 2 + 9).
+        """
         inner_client, _ = mock_async_client_class
         mock_response = MagicMock()
         mock_response.status_code = 403
@@ -335,6 +338,8 @@ class TestGetAddonLogsViaSupervisor:
 
         assert exc_info.value.status_code == 403
         msg = str(exc_info.value)
+        assert "unrecognized" in msg
+        assert "hassio_api" in msg
         assert "hassio_role" in msg and "manager" in msg
         # Warning log fired before the raise (#1126 review item 9).
         assert any("403" in r.message for r in caplog.records)
@@ -430,6 +435,26 @@ class TestGetAddonLogsViaSupervisor:
             await mock_client.get_addon_logs("core_mosquitto")
 
         assert "Timeout" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    @pytest.mark.timeout(10)
+    async def test_supervisor_log_fetch_has_overall_deadline(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        """A stalled Supervisor log body must not wait forever on per-chunk IO."""
+        inner_client, _ = mock_async_client_class
+        mock_client.timeout = 0.01
+
+        async def _hang_forever(*_args, **_kwargs):
+            """Model a Supervisor response that never completes."""
+            await asyncio.Event().wait()
+
+        inner_client.get.side_effect = _hang_forever
+
+        with pytest.raises(HomeAssistantConnectionError) as exc_info:
+            await mock_client.get_addon_logs("core_mosquitto")
+
+        assert "after 0.01s: TimeoutError" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_raises_connection_error_on_network_failure_with_distinct_message(

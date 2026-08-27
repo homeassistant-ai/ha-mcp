@@ -271,6 +271,14 @@ def _apply_embedded_only_skip(
         item.add_marker(skip_marker)
 
 
+def _apply_beta_haos_only_skip(
+    item: Any, beta_selected: bool, skip_marker: Any
+) -> None:
+    """Skip a ``beta_haos_only`` item outside the beta image lanes."""
+    if "beta_haos_only" in item.keywords and not beta_selected:
+        item.add_marker(skip_marker)
+
+
 def pytest_collection_modifyitems(config, items):
     """Enforce backend markers and auto-apply ``haos_only`` to its dir.
 
@@ -290,6 +298,9 @@ def pytest_collection_modifyitems(config, items):
       is an in-process FastMCP server talking HTTP to HAOS). Skipped on stdio,
       inaddon, container-embedded, and HAOS-embedded. The name is historical and
       does NOT mean "HAOS external only"; see the skip expression below.
+    - ``beta_haos_only``: only runs when at least one beta image expectation
+      variable is set. Partial expectation sets deliberately run so the test
+      can report the missing contract value.
     - ``inaddon_only``: HAOS inaddon mode only (``mcp_client`` is HTTP
       to the addon's MCP endpoint, ``is_running_in_addon()=True`` paths
       exercised). Skipped on external mode and on testcontainer.
@@ -302,6 +313,14 @@ def pytest_collection_modifyitems(config, items):
     haos = is_haos_backend_selected()
     inaddon = haos and is_haos_inaddon_mode()
     haos_stdio = haos and is_haos_stdio_mode()
+    beta_haos = any(
+        os.environ.get(name)
+        for name in (
+            "HAOS_EXPECTED_SUPERVISOR_CHANNEL",
+            "HAOS_EXPECTED_SUPERVISOR_MIN_VERSION",
+            "HAOS_EXPECTED_CORE_VERSION",
+        )
+    )
     # The embedded backend (#1527) is a testcontainer variant, so ``haos`` is
     # False here — ``haos_only`` still skips and ``container_only`` still runs on
     # it. What differs is that the in-process server lives INSIDE the container:
@@ -341,6 +360,9 @@ def pytest_collection_modifyitems(config, items):
         reason="embedded testcontainer backend required (E2E_BACKEND=embedded); "
         "only that lane installs ha-mcp inside the HA image"
     )
+    skip_beta_haos_only = pytest.mark.skip(
+        reason="beta HAOS image expectations are not configured"
+    )
     skip_not_on_embedded = pytest.mark.skip(
         reason="redundant on the embedded backend (the lane's own session "
         "backend already exercises this path)"
@@ -363,6 +385,7 @@ def pytest_collection_modifyitems(config, items):
         if "haos_stdio_only" in keywords and not haos_stdio:
             item.add_marker(skip_haos_stdio_only)
         _apply_haos_tls_skip(item, haos_embedded, skip_haos_tls)
+        _apply_beta_haos_only_skip(item, beta_haos, skip_beta_haos_only)
         # Deliberate: inserting the haos_tls dispatch above broke the old
         # ``elif`` chain into this ``if``. An item carrying several gate
         # markers now collects one skip marker per gate instead of the first

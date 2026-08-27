@@ -282,6 +282,33 @@ def test_apply_haos_tls_skip_gates_on_the_embedded_lane() -> None:
     assert ordinary.markers == []
 
 
+def test_apply_beta_haos_only_skip_gates_on_beta_expectations() -> None:
+    """The runtime-version canary runs only in a selected beta HAOS lane."""
+    from tests.src.e2e import conftest as e2e_conftest
+
+    class Item:
+        def __init__(self, *, beta: bool) -> None:
+            self.keywords = {"beta_haos_only": True} if beta else {}
+            self.markers: list[Any] = []
+
+        def add_marker(self, marker: Any) -> None:
+            self.markers.append(marker)
+
+    marker = object()
+
+    disabled = Item(beta=True)
+    e2e_conftest._apply_beta_haos_only_skip(disabled, False, marker)
+    assert disabled.markers == [marker]
+
+    enabled = Item(beta=True)
+    e2e_conftest._apply_beta_haos_only_skip(enabled, True, marker)
+    assert enabled.markers == []
+
+    ordinary = Item(beta=False)
+    e2e_conftest._apply_beta_haos_only_skip(ordinary, False, marker)
+    assert ordinary.markers == []
+
+
 def test_tls_module_contains_exactly_one_test() -> None:
     """The end-of-queue scheduling guarantee needs a one-test module.
 

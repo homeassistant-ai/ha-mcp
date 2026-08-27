@@ -622,7 +622,7 @@
     },
     "ha_get_app": {
       "title": "Pobierz aplikacje (dodatki)",
-      "description": "Pobierz aplikacje Home Assistant (dawniej znane jako dodatki, a to narzędzie jako ha_get_addon) – wyświetl listę zainstalowanych, dostępnych lub pobierz d"
+      "description": "Pobierz zainstalowane lub dostępne aplikacje (dodatki) Home Assistant albo szczegóły jednej z nich."
     },
     "ha_get_automation_traces": {
       "title": "Pobierz ślady automatyzacji",
@@ -710,7 +710,7 @@
     },
     "ha_manage_app": {
       "title": "Zarządzaj aplikacją (dodatkiem)",
-      "description": "Zarządzaj aplikacją Home Assistant (dawniej znaną jako dodatek, a to narzędzie jako ha_manage_addon) – zaktualizuj jej konfigurację o"
+      "description": "Zarządzaj aplikacjami (dodatkami) Home Assistant lub przekaż zapytanie do API aplikacji."
     },
     "ha_manage_backup": {
       "title": "Zarządzaj kopiami zapasowymi",

@@ -622,7 +622,7 @@
     },
     "ha_get_app": {
       "title": "Akiri programojn (aldonaĵojn)",
-      "description": "Akiri Home Assistant programojn (antaŭe konataj kiel aldonaĵoj, kaj ĉi tiu ilo kiel ha_get_addon) - listigi instalitajn, disponeblajn, aŭ akiri d"
+      "description": "Akiri instalitajn aŭ disponeblajn Home Assistant-aplikaĵojn (aldonaĵojn), aŭ detalojn pri unu."
     },
     "ha_get_automation_traces": {
       "title": "Akiri Aŭtomatigajn Spurojn",
@@ -710,7 +710,7 @@
     },
     "ha_manage_app": {
       "title": "Administri programon (aldonaĵon)",
-      "description": "Administri Home Assistant programon (antaŭe konatan kiel aldonaĵo, kaj ĉi tiu ilo kiel ha_manage_addon) — ĝisdatigi ties agordon o"
+      "description": "Administri Home Assistant-aplikaĵojn (aldonaĵojn) aŭ proksiigi aplikaĵan API-on."
     },
     "ha_manage_backup": {
       "title": "Administri Rezervojn",
