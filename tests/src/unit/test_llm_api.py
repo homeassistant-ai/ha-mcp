@@ -302,6 +302,19 @@ class TestSchemaConversionCompatibility:
 
         assert llm_api.convert_to_voluptuous(schema) == {"probatio": schema}
 
+    def test_reraises_nested_module_not_found(self, monkeypatch):
+        def _import_module(name):
+            assert name == "voluptuous_openapi"
+            raise ModuleNotFoundError(
+                "No module named 'legacy_dependency'",
+                name="legacy_dependency",
+            )
+
+        monkeypatch.setattr(llm_api.importlib, "import_module", _import_module)
+
+        with pytest.raises(ModuleNotFoundError, match="legacy_dependency"):
+            llm_api.convert_to_voluptuous({"type": "object"})
+
     async def test_converter_import_is_warmed_once_off_event_loop(self, monkeypatch):
         main_thread = threading.get_ident()
         imports: list[tuple[str, int]] = []

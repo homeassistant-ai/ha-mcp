@@ -230,7 +230,7 @@ def _import_mcp_sdk() -> None:
 
 
 async def async_probe_mcp_sdk(hass: HomeAssistant) -> bool:
-    """Return True when the mcp client SDK imports (first import off-loop)."""
+    """Return True when lazy LLM dependencies import (first import off-loop)."""
     try:
         await hass.async_add_executor_job(_import_mcp_sdk)
     except ImportError as err:
