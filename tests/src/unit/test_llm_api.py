@@ -96,6 +96,7 @@ def _fake_session(
 
     @asynccontextmanager
     async def fake_mcp_session(url):
+        """Stand in for ``_mcp_session``: record the url, yield the fake session."""
         session.url = url
         if raise_on_open is not None:
             raise raise_on_open
@@ -123,6 +124,7 @@ def _spy_httpx_async_client(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     class _SpyAsyncClient(httpx.AsyncClient):
         def __init__(self, **kwargs: Any) -> None:
+            """Record the constructor kwargs, then build a real client."""
             captured.update(kwargs)
             super().__init__(**kwargs)
 
@@ -805,6 +807,7 @@ class TestLoopbackHttpClientTimeout:
     async def test_sdk_receives_a_dedicated_client_with_generous_timeout(
         self, monkeypatch
     ):
+        """_mcp_session's own client must carry the generous timeout, not httpx's default."""
         # Regression test (kpop-timeout investigation): _mcp_session used to
         # hand the SDK Home Assistant's shared httpx client
         # (helpers.httpx_client.get_async_client). HA never configures that
@@ -825,6 +828,7 @@ class TestLoopbackHttpClientTimeout:
 
         @asynccontextmanager
         async def _canonical_client(url, http_client=None):
+            """Stand in for the SDK's own ``streamable_http_client``; record ``http_client``."""
             opened["url"] = url
             opened["http_client"] = http_client
             yield "read-stream", "write-stream", lambda: None
@@ -833,16 +837,21 @@ class TestLoopbackHttpClientTimeout:
         fake_transport.streamable_http_client = _canonical_client  # type: ignore[attr-defined]
 
         class _FakeClientSession:
+            """Stand in for ``mcp.client.session.ClientSession``."""
+
             def __init__(self, read_stream, write_stream):
-                pass
+                """No-op: this fake needs no stream state."""
 
             async def __aenter__(self):
+                """Enter as-is; no setup needed."""
                 return self
 
             async def __aexit__(self, *exc_info):
+                """Exit without suppressing exceptions."""
                 return False
 
             async def initialize(self):
+                """Return a canned initialize result."""
                 return SimpleNamespace(instructions="hi")
 
         fake_session_mod = ModuleType("mcp.client.session")
@@ -875,6 +884,7 @@ class TestLoopbackHttpClientTimeout:
 
 class TestPreRenameSdkFallback:
     async def test_falls_back_to_deprecated_client_name(self, monkeypatch):
+        """On a pre-rename SDK, _mcp_session must fall back to the deprecated client name."""
         # A pip-spec override can install an older ha-mcp whose fastmcp pins
         # a pre-rename mcp SDK: mcp.client.streamable_http then exposes only
         # streamablehttp_client. _mcp_session must import-fall-back to it and
@@ -888,6 +898,7 @@ class TestPreRenameSdkFallback:
 
         @asynccontextmanager
         async def _old_name_client(url, httpx_client_factory=None):
+            """Stand in for the deprecated ``streamablehttp_client``; record its args."""
             opened["url"] = url
             opened["httpx_client_factory"] = httpx_client_factory
             yield "read-stream", "write-stream", lambda: None
@@ -934,6 +945,7 @@ class TestPreRenameSdkFallback:
     async def test_loopback_factory_builds_a_client_that_ignores_env_proxies(
         self, monkeypatch
     ):
+        """The fallback factory's client must also disable env-proxy trust and TLS setup."""
         constructed_kwargs = _spy_httpx_async_client(monkeypatch)
 
         client = llm_api._loopback_httpx_client_factory()
@@ -947,6 +959,7 @@ class TestPreRenameSdkFallback:
             await client.aclose()
 
     async def test_loopback_factory_zero_args_gets_a_real_timeout_not_none(self):
+        """Calling the factory with no timeout must not build an unbounded client."""
         # Regression (review finding on #2276): the factory forwarded
         # timeout=None straight to httpx.AsyncClient, which disables EVERY
         # timeout rather than applying a sane default — unlike the
@@ -962,6 +975,7 @@ class TestPreRenameSdkFallback:
             await client.aclose()
 
     async def test_loopback_factory_works_on_pre_1_24_sdks(self, monkeypatch):
+        """The factory must not depend on constants absent from pre-1.24 SDKs."""
         # Regression (round-2 review finding on #2276): the first fix
         # imported MCP_DEFAULT_TIMEOUT/MCP_DEFAULT_SSE_READ_TIMEOUT from
         # mcp.shared._httpx_utils to mirror create_mcp_http_client's None
