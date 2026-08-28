@@ -195,7 +195,20 @@ class CoreLogSourcesMixin:
         )
 
         if end_time:
-            end_dt = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+            try:
+                end_dt = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+            except ValueError:
+                # Outside the fetch try-block below, so without this guard the
+                # raw ValueError would bypass the structured ToolError shape.
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid end_time '{end_time}': not an ISO 8601 timestamp",
+                        suggestions=[
+                            "Use ISO format, e.g. end_time='2026-08-28T01:00:00Z'"
+                        ],
+                    )
+                )
         else:
             end_dt = datetime.now(UTC)
 

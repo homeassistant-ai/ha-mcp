@@ -551,8 +551,19 @@ def _attach_error_log_pagination(
     if unreturned_matches > 0:
         total = data.get("total_lines", unreturned_matches)
         suggested = min(total, MAX_LIMIT)
-        data["pagination_hint"] = (
-            f"{unreturned_matches} more matching lines remain inside this "
-            f"window (no older history exists behind it). Repeat the call "
-            f"with limit={suggested} to retrieve them in one response."
-        )
+        if limit is not None and limit >= suggested:
+            # Raising the limit cannot help: it is already at (or past) the
+            # ceiling, so recommending it would repeat the same request.
+            data["pagination_hint"] = (
+                f"{unreturned_matches} more matching lines remain inside this "
+                f"window (no older history exists behind it), but 'limit' is "
+                f"already at its maximum ({MAX_LIMIT}). Narrow the match set — "
+                "a more specific 'search' or a 'level' filter — so the "
+                "remainder fits in one response."
+            )
+        else:
+            data["pagination_hint"] = (
+                f"{unreturned_matches} more matching lines remain inside this "
+                f"window (no older history exists behind it). Repeat the call "
+                f"with limit={suggested} to retrieve them in one response."
+            )

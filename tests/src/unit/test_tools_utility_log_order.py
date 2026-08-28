@@ -6,9 +6,11 @@ time-ordered ``logger`` source. The logbook windowing mirrors the traces
 newest-first fix (#1178).
 """
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import ErrorLogPage, HomeAssistantConnectionError
 from ha_mcp.tools.tools_logs import LogTools
@@ -259,6 +261,23 @@ class TestSystemOrder:
         # The only timestamped entry sorts newest-first; keyless/non-dict
         # entries collapse to 0.0 and trail it.
         assert result["entries"][0]["timestamp"] == 100.0
+
+
+class TestLogbookEndTimeValidation:
+    """source='logbook' — a bad end_time must fail with the structured shape."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_end_time_raises_structured_validation_error(self):
+        """`datetime.fromisoformat` runs before the fetch try-block; without
+        the guard a raw ValueError escapes the ToolError contract."""
+        client = AsyncMock()
+        tools = LogTools(client)
+        with pytest.raises(ToolError) as exc_info:
+            await tools.get_logs(**_call_kwargs(source="logbook", end_time="invalid"))
+        payload = json.loads(str(exc_info.value))
+        assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "end_time" in payload["error"]["message"]
+        client.get_logbook.assert_not_called()
 
 
 class TestSystemMalformedEntries:

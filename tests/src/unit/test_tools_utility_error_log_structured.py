@@ -1123,6 +1123,19 @@ class TestErrorLogPagination:
         assert "limit=50" in result["pagination_hint"]
 
     @pytest.mark.asyncio
+    async def test_terminal_window_at_max_limit_hints_narrowing_instead(self):
+        """At limit=MAX_LIMIT the raise-the-limit hint would repeat the same
+        request verbatim; the hint switches to narrowing the match set."""
+        client = _make_client(_numbered_log(MAX_LIMIT + 100), has_more=False)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](
+            source="error_log", limit=MAX_LIMIT, search="issue"
+        )
+        assert result["has_more"] is False
+        assert "already at its maximum" in result["pagination_hint"]
+        assert f"limit={MAX_LIMIT} to retrieve" not in result["pagination_hint"]
+
+    @pytest.mark.asyncio
     async def test_next_offset_advances_from_the_current_offset(self):
         client = _make_client(_numbered_log(20), has_more=True)
         tools = _register_and_collect(client)
